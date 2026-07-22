@@ -1,0 +1,26 @@
+{
+  "name": "copilot-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project-centric management and observability layer over the GitHub Copilot and Agency CLIs.",
+  "workspaces": [
+    "backend",
+    "ui",
+    "desktop"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,ui -c blue,magenta \"npm:dev:backend\" \"npm:dev:ui\"",
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:ui": "npm run dev --workspace ui",
+    "build": "npm run build --workspace backend && npm run build --workspace ui",
+    "desktop": "npm run build && npm run start --workspace desktop",
+    "desktop:dev": "cross-env CW_DESKTOP_DEV=1 npm run dev --workspace desktop",
+    "test": "npm run test --workspace backend",
+    "test:coverage": "npm run test:coverage --workspace backend",
+    "lint": "npm run lint --workspace backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3"
+  }
+}

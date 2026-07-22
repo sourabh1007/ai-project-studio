@@ -1,0 +1,14 @@
+{
+  "name": "@copilot-workspace/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell for Copilot Workspace.",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.1"
+  }
+}
