@@ -41,3 +41,7 @@ Thumbs.db
 # Vite / TS caches
 .vite/
 *.tsbuildinfo
+
+# Electron packaging output
+desktop/build/
+desktop/release/

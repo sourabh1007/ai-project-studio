@@ -1,0 +1,48 @@
+appId: com.sourabh1007.copilotworkspace
+productName: Copilot Workspace
+copyright: Copyright © 2026 sourabh1007
+
+# Electron is hoisted to the monorepo root, so electron-builder can't infer the
+# version from desktop/node_modules; pin it explicitly.
+electronVersion: 33.2.1
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# The Electron app itself has no production dependencies (the backend and its
+# native node-pty module are shipped as extraResources), so skip app dep rebuild.
+npmRebuild: false
+
+# Only the Electron shell itself is packed into the app bundle; the backend and
+# UI are shipped as extraResources (see below) and staged by scripts/stage-runtime.mjs.
+files:
+  - main.cjs
+  - preload.cjs
+  - package.json
+
+extraResources:
+  - from: build/backend
+    to: backend
+  - from: build/ui
+    to: ui
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+
+# CI builds are unsigned; skip auto-discovery of signing identities.
+dmg:
+  sign: false

@@ -3,12 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron desktop shell for Copilot Workspace.",
+  "author": "sourabh1007",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "stage": "node scripts/stage-runtime.mjs",
+    "pack:dir": "electron-builder --dir --config electron-builder.yml",
+    "dist:win": "electron-builder --win --config electron-builder.yml",
+    "dist:mac": "electron-builder --mac --config electron-builder.yml"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
   }
 }

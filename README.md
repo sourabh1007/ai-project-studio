@@ -1,5 +1,7 @@
 # Copilot Workspace
 
+[![CI](https://github.com/sourabh1007/copilot-workspace/actions/workflows/ci.yml/badge.svg)](https://github.com/sourabh1007/copilot-workspace/actions/workflows/ci.yml)
+
 A project-centric management and observability layer over the GitHub Copilot and Agency CLIs. Copilot Workspace is an IDE-style desktop app that organizes CLI work by **Feature → Session** and surfaces live **credit, token, and AIC** analytics for every run — using the usage telemetry the CLIs already emit, not a home-grown counter.
 
 Built as an npm-workspaces monorepo: a modular **Express** backend, a **React + Vite** UI, and an **Electron** shell that ties them together into a single desktop application.
@@ -91,6 +93,23 @@ npm run build          # build backend and UI
 npm run test:coverage  # backend test suite (100% coverage gate)
 npm run lint           # lint the backend
 ```
+
+## Releases
+
+Every push and pull request runs the **CI** workflow (build + backend/UI tests) so broken code can't land on `main`.
+
+To cut a release, push a version tag — the **Release** workflow builds signed-off installers for both platforms and attaches them to a GitHub Release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+This produces:
+- **Windows** — `.exe` (NSIS installer)
+- **macOS** — `.dmg`
+
+> The packaged app spawns the backend with the system Node runtime, so end users need **Node.js ≥ 22.5** installed. Installers are unsigned; on first launch you may need to bypass the OS gatekeeper.
 
 ## Features
 

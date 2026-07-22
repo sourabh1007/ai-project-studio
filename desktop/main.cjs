@@ -7,7 +7,9 @@ const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = app.isPackaged
+  ? process.resourcesPath
+  : path.resolve(__dirname, '..');
 const BACKEND_ENTRY = path.join(ROOT, 'backend', 'dist', 'main.js');
 const UI_DIST = path.join(ROOT, 'ui', 'dist');
 const HOST = '127.0.0.1';
