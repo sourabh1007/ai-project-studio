@@ -7,7 +7,7 @@ import type { Feature, Session, SessionBreakdown } from '../../lib/types.js';
 import { formatAic, formatCompactNumber } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
-import { Button, EmptyState, ErrorText } from '../../components/ui.js';
+import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import {
   ChevronIcon,
   CheckIcon,
@@ -448,6 +448,13 @@ export function Explorer({
     }
   }
 
+  function closeForm() {
+    setAdding(false);
+    setName('');
+    setDescription('');
+    setFormError(null);
+  }
+
   async function renameFeature(feature: Feature, next: string) {
     await onRenameFeature(feature, next);
     features.reload();
@@ -485,37 +492,40 @@ export function Explorer({
       </div>
 
       {adding && (
-        <div className="new-feature glass">
-          <div className="field">
-            <label htmlFor="new-feature-name">Name</label>
-            <input
-              id="new-feature-name"
-              className="input"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. Checkout redesign"
-            />
+        <Modal title="New feature" onClose={closeForm}>
+          <div className="feature-form">
+            <div className="field">
+              <label htmlFor="new-feature-name">Name</label>
+              <input
+                id="new-feature-name"
+                className="input"
+                autoFocus
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="e.g. Checkout redesign"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="new-feature-desc">Description</label>
+              <textarea
+                id="new-feature-desc"
+                className="textarea textarea-lg"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="What are you building?"
+              />
+            </div>
+            <ErrorText error={formError} />
+            <div className="row modal-actions">
+              <Button variant="ghost" onClick={closeForm}>
+                Cancel
+              </Button>
+              <Button onClick={createFeature} disabled={submitting}>
+                {submitting ? 'Creating…' : 'Create feature'}
+              </Button>
+            </div>
           </div>
-          <div className="field">
-            <label htmlFor="new-feature-desc">Description</label>
-            <textarea
-              id="new-feature-desc"
-              className="textarea"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              placeholder="What are you building?"
-            />
-          </div>
-          <ErrorText error={formError} />
-          <div className="row">
-            <Button onClick={createFeature} disabled={submitting}>
-              {submitting ? 'Creating…' : 'Create'}
-            </Button>
-            <Button variant="ghost" onClick={() => setAdding(false)}>
-              Cancel
-            </Button>
-          </div>
-        </div>
+        </Modal>
       )}
 
       <div className="explorer-body">

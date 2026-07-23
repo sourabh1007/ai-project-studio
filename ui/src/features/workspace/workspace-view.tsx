@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Session } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
@@ -46,6 +46,7 @@ export function WorkspaceView({
   );
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [explorerWidth, setExplorerWidth] = useState(260);
 
   function openTab(tab: Tab) {
     setTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
@@ -116,21 +117,57 @@ export function WorkspaceView({
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeSessionId = active?.kind === 'session' ? active.session.id : null;
 
+  function startResize(event: ReactMouseEvent) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = explorerWidth;
+    function onMove(move: MouseEvent) {
+      const next = Math.min(560, Math.max(200, startWidth + (move.clientX - startX)));
+      setExplorerWidth(next);
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('is-resizing');
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.classList.add('is-resizing');
+  }
+
   return (
-    <div className={`workspace ${sidebarOpen ? '' : 'is-collapsed'}`.trim()}>
+    <div
+      className={`workspace ${sidebarOpen ? '' : 'is-collapsed'}`.trim()}
+      style={
+        sidebarOpen
+          ? ({ '--explorer-width': `${explorerWidth}px` } as CSSProperties)
+          : undefined
+      }
+    >
       {sidebarOpen && (
-        <Explorer
-          live={live}
-          activeSessionId={activeSessionId}
-          names={names}
-          onOpenSession={openSession}
-          onOpenFeature={openFeature}
-          onRenameSession={renameSession}
-          onRenameFeature={renameFeature}
-          onDeleteFeature={deleteFeature}
-          onDeleteSession={deleteSession}
-          onCollapse={onToggleSidebar}
-        />
+        <>
+          <Explorer
+            live={live}
+            activeSessionId={activeSessionId}
+            names={names}
+            onOpenSession={openSession}
+            onOpenFeature={openFeature}
+            onRenameSession={renameSession}
+            onRenameFeature={renameFeature}
+            onDeleteFeature={deleteFeature}
+            onDeleteSession={deleteSession}
+            onCollapse={onToggleSidebar}
+          />
+          <div
+            className="explorer-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            title="Drag to resize · double-click to reset"
+            onMouseDown={startResize}
+            onDoubleClick={() => setExplorerWidth(260)}
+          />
+        </>
       )}
 
       <section className="editor">
