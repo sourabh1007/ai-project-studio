@@ -56,7 +56,6 @@ jobs:
         env:
           # CI builds are unsigned; do not attempt to auto-discover signing certs.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

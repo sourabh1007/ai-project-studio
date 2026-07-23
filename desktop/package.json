@@ -10,8 +10,8 @@
     "dev": "electron .",
     "stage": "node scripts/stage-runtime.mjs",
     "pack:dir": "electron-builder --dir --config electron-builder.yml",
-    "dist:win": "electron-builder --win --config electron-builder.yml",
-    "dist:mac": "electron-builder --mac --config electron-builder.yml"
+    "dist:win": "electron-builder --win --config electron-builder.yml --publish never",
+    "dist:mac": "electron-builder --mac --config electron-builder.yml --publish never"
   },
   "devDependencies": {
     "electron": "^33.2.1",
