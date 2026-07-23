@@ -4,6 +4,9 @@ import type {
   Feature,
   FeatureSummary,
   FeatureUsage,
+  FeatureWorkSummary,
+  ImportableSession,
+  ImportSessionInput,
   ModelInfo,
   ProviderInfo,
   Session,
@@ -103,7 +106,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     getSummary: (featureId: string) =>
       request<FeatureSummary>(`/features/${featureId}/summary`),
+    getFeatureWorkSummary: (featureId: string) =>
+      request<FeatureWorkSummary>(`/features/${featureId}/work-summary`),
     listProviders: () => request<ProviderInfo[]>('/providers'),
+    listImportableSessions: () =>
+      request<ImportableSession[]>('/importable-sessions'),
+    importSession: (featureId: string, input: ImportSessionInput) =>
+      request<Session>(
+        `/features/${featureId}/import-session`,
+        jsonBody(input),
+      ),
     listModels: (providerId: string) =>
       request<ModelInfo[]>(`/providers/${providerId}/models`),
     getConfig: () => request<ConfigResponse>('/config'),

@@ -18,6 +18,12 @@ export type SessionEventMap = {
   'session.started': Session;
   'session.output': { sessionId: string; event: SessionEvent };
   'session.ended': Session;
+  /**
+   * A persisted session snapshot changed out-of-band (e.g. its resolved model
+   * was discovered from usage telemetry) without starting or ending a run.
+   * Lets clients refresh their live view without restarting usage tailers.
+   */
+  'session.updated': Session;
 };
 
 export interface SessionLauncherDeps {

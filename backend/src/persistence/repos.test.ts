@@ -5,6 +5,7 @@ import { createSessionRepo } from './session-repo.js';
 import { createUsageRepo } from './usage-repo.js';
 import { createTranscriptRepo } from './transcript-repo.js';
 import { createSummaryRepo } from './summary-repo.js';
+import { createSessionSummaryRepo } from './session-summary-repo.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
@@ -191,6 +192,32 @@ describe('summary-repo', () => {
     repo.save({ featureId: 'f1', content: 'x', createdAt: '2025-01-01T00:00:00.000Z' });
     repo.delete('f1');
     expect(repo.load('f1')).toBeNull();
+    db.close();
+  });
+});
+
+describe('session-summary-repo', () => {
+  it('saves, overwrites and loads a session summary, null when absent', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionSummaryRepo(db);
+    expect(repo.load('s1')).toBeNull();
+    repo.save({ sessionId: 's1', content: 'first', createdAt: '2025-01-01T00:00:00.000Z' });
+    expect(repo.load('s1')).toEqual({
+      sessionId: 's1',
+      content: 'first',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    });
+    repo.save({ sessionId: 's1', content: 'second', createdAt: '2025-01-02T00:00:00.000Z' });
+    expect(repo.load('s1')?.content).toBe('second');
+    db.close();
+  });
+
+  it('deletes a session summary', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionSummaryRepo(db);
+    repo.save({ sessionId: 's1', content: 'x', createdAt: '2025-01-01T00:00:00.000Z' });
+    repo.delete('s1');
+    expect(repo.load('s1')).toBeNull();
     db.close();
   });
 });

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { join } from 'node:path';
+import { defaultWorkspaceDataDir } from '../workspace/workspace-paths.js';
 
 /** Configuration schema for the persistence (SQLite) module. */
 export const PERSISTENCE_NAMESPACE = 'persistence';
@@ -11,5 +13,5 @@ export const persistenceConfigSchema = z.object({
 export type PersistenceConfig = z.infer<typeof persistenceConfigSchema>;
 
 export const persistenceDefaults: PersistenceConfig = {
-  databasePath: '.copilot-workspace/workspace.db',
+  databasePath: join(defaultWorkspaceDataDir(), 'workspace.db'),
 };

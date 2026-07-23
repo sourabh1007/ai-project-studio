@@ -15,17 +15,19 @@ describe('subscribeStream', () => {
     bus.emit('session.started', { id: 's1' } as never);
     bus.emit('session.output', { sessionId: 's1', event: { type: 'stdout', line: 'x' } });
     bus.emit('session.ended', { id: 's1' } as never);
+    bus.emit('session.updated', { id: 's1' } as never);
     bus.emit('usage.recorded', { sessionId: 's1' } as never);
 
     expect(events.map((e) => e.event)).toEqual([
       'session.started',
       'session.output',
       'session.ended',
+      'session.updated',
       'usage.recorded',
     ]);
 
     off();
     bus.emit('session.started', { id: 's2' } as never);
-    expect(events).toHaveLength(4);
+    expect(events).toHaveLength(5);
   });
 });

@@ -31,7 +31,9 @@ export const summarizerConfigSchema = z.object({
 export type SummarizerConfig = z.infer<typeof summarizerConfigSchema>;
 
 export const summarizerDefaults: SummarizerConfig = {
-  providerId: 'copilot',
+  // Uses the enabled provider that runs meta summary sessions. Keep in sync
+  // with the enabled provider(s) in the provider config (Agency by default).
+  providerId: 'agency',
   model: 'auto',
   sourceKinds: ['dev'],
   promptTemplate: [
@@ -40,8 +42,9 @@ export const summarizerDefaults: SummarizerConfig = {
     'Description: {{featureDescription}}',
     '',
     'Below are the AI development sessions run for this feature.',
-    'Write a concise summary (max 200 words) of what was accomplished,',
-    'key decisions made, and any open follow-ups. Do not invent details.',
+    'Write a concise summary in 4-5 short lines maximum, covering what was',
+    'accomplished, key decisions made, and any open follow-ups. Do not invent',
+    'details.',
     '',
     '{{sessions}}',
   ].join('\n'),

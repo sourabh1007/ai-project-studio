@@ -17,6 +17,12 @@ import { useAsync } from '../../hooks/use-async.js';
 import { formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import type { FeatureUsage } from '../../lib/types.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
+import {
+  ActivityIcon,
+  OverviewIcon,
+  UsageIcon,
+} from '../../components/icons.js';
+import { FeatureWorkSummaryPanel } from './work-summary.js';
 
 const PALETTE = [
   '#818cf8',
@@ -116,6 +122,31 @@ function Kpi({
   );
 }
 
+function Section({
+  icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="dash-section">
+      <header className="dash-section-head">
+        <span className="dash-section-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <h3 className="dash-section-title">{title}</h3>
+        {hint && <span className="dash-section-hint">{hint}</span>}
+      </header>
+      {children}
+    </section>
+  );
+}
+
 export function FeatureDashboard({
   featureId,
   featureName,
@@ -138,6 +169,8 @@ export function FeatureDashboard({
 
       <ErrorText error={error} />
       {loading && <EmptyState message="Loading analytics…" />}
+
+      <FeatureWorkSummaryPanel featureId={featureId} />
 
       {data && data.totals.sessions === 0 && (
         <div className="dash-empty">
@@ -199,184 +232,199 @@ function Charts({ data }: { data: FeatureUsage }) {
 
   return (
     <>
-      <div className="dash-kpis">
-        <Kpi value={totalAic.toFixed(2)} label="AIC used" accent={AIC_COLOR} />
-        <Kpi
-          value={numberFmt.format(totals.inputTokens + totals.outputTokens)}
-          label="Total tokens"
-          accent={TOKEN_IN}
-        />
-        <Kpi value={String(totals.sessions)} label="Sessions" accent={PALETTE[2]} />
-        <Kpi
-          value={formatDuration(timing.totalActiveMs)}
-          label="Time spent"
-          accent={TIME_COLOR}
-        />
-      </div>
+      <Section icon={<OverviewIcon size={15} />} title="Overview">
+        <div className="dash-kpis">
+          <Kpi value={totalAic.toFixed(2)} label="AIC used" accent={AIC_COLOR} />
+          <Kpi
+            value={numberFmt.format(totals.inputTokens + totals.outputTokens)}
+            label="Total tokens"
+            accent={TOKEN_IN}
+          />
+          <Kpi value={String(totals.sessions)} label="Sessions" accent={PALETTE[2]} />
+          <Kpi
+            value={formatDuration(timing.totalActiveMs)}
+            label="Time spent"
+            accent={TIME_COLOR}
+          />
+        </div>
+      </Section>
 
-      <div className="dash-grid">
-        <Panel title="AIC over time" hint={`${totalAic.toFixed(2)} total`} wide>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
-              <defs>
-                <linearGradient id="aicFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={AIC_COLOR} stopOpacity={0.4} />
-                  <stop offset="100%" stopColor={AIC_COLOR} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="day"
-                stroke="var(--text-faint)"
-                tickLine={false}
-                axisLine={false}
-                fontSize={11}
-              />
-              <YAxis
-                stroke="var(--text-faint)"
-                tickLine={false}
-                axisLine={false}
-                fontSize={11}
-                width={40}
-              />
-              <Tooltip
-                content={<ChartTooltip unit="AIC" />}
-                cursor={{ stroke: 'var(--border)' }}
-              />
-              <Area
-                type="monotone"
-                dataKey="aic"
-                name="AIC"
-                stroke={AIC_COLOR}
-                strokeWidth={2}
-                fill="url(#aicFill)"
-                animationDuration={600}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </Panel>
+      <Section
+        icon={<UsageIcon size={15} />}
+        title="Usage & cost"
+        hint={`${totalAic.toFixed(2)} AIC total`}
+      >
+        <div className="dash-grid">
+          <Panel title="AIC over time" hint={`${totalAic.toFixed(2)} total`} wide>
+            <ResponsiveContainer width="100%" height={160}>
+              <AreaChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
+                <defs>
+                  <linearGradient id="aicFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={AIC_COLOR} stopOpacity={0.4} />
+                    <stop offset="100%" stopColor={AIC_COLOR} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="day"
+                  stroke="var(--text-faint)"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                />
+                <YAxis
+                  stroke="var(--text-faint)"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                  width={40}
+                />
+                <Tooltip
+                  content={<ChartTooltip unit="AIC" />}
+                  cursor={{ stroke: 'var(--border)' }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="aic"
+                  name="AIC"
+                  stroke={AIC_COLOR}
+                  strokeWidth={2}
+                  fill="url(#aicFill)"
+                  animationDuration={600}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </Panel>
 
-        <Panel title="AIC by model">
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie
-                data={modelData}
-                dataKey="aic"
-                nameKey="name"
-                innerRadius={48}
-                outerRadius={78}
-                paddingAngle={2}
-                stroke="none"
-                animationDuration={600}
-              >
-                {modelData.map((m, i) => (
-                  <Cell key={m.name} fill={color(i)} />
-                ))}
-              </Pie>
-              <Tooltip content={<ChartTooltip unit="AIC" />} />
-            </PieChart>
-          </ResponsiveContainer>
-          <ul className="dash-legend">
-            {modelData.map((m, i) => (
-              <li key={m.name}>
-                <span className="dash-legend-dot" style={{ background: color(i) }} />
-                <span className="dash-legend-label">{m.name}</span>
-                <span className="dash-legend-value">{m.aic.toFixed(2)}</span>
+          <Panel title="AIC by model">
+            <ResponsiveContainer width="100%" height={160}>
+              <PieChart>
+                <Pie
+                  data={modelData}
+                  dataKey="aic"
+                  nameKey="name"
+                  innerRadius={40}
+                  outerRadius={64}
+                  paddingAngle={2}
+                  stroke="none"
+                  animationDuration={600}
+                >
+                  {modelData.map((m, i) => (
+                    <Cell key={m.name} fill={color(i)} />
+                  ))}
+                </Pie>
+                <Tooltip content={<ChartTooltip unit="AIC" />} />
+              </PieChart>
+            </ResponsiveContainer>
+            <ul className="dash-legend">
+              {modelData.map((m, i) => (
+                <li key={m.name}>
+                  <span className="dash-legend-dot" style={{ background: color(i) }} />
+                  <span className="dash-legend-label">{m.name}</span>
+                  <span className="dash-legend-value">{m.aic.toFixed(2)}</span>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+
+          <Panel title="Tokens over time" hint="input vs output" wide>
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
+                <XAxis
+                  dataKey="day"
+                  stroke="var(--text-faint)"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                />
+                <YAxis
+                  stroke="var(--text-faint)"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                  width={40}
+                />
+                <Tooltip
+                  content={<ChartTooltip unit="tokens" />}
+                  cursor={{ fill: 'var(--item-hover)' }}
+                />
+                <Bar
+                  dataKey="input"
+                  name="input"
+                  fill={TOKEN_IN}
+                  radius={[3, 3, 0, 0]}
+                  animationDuration={600}
+                />
+                <Bar
+                  dataKey="output"
+                  name="output"
+                  fill={TOKEN_OUT}
+                  radius={[3, 3, 0, 0]}
+                  animationDuration={600}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+            <ul className="dash-legend dash-legend-row">
+              <li>
+                <span className="dash-legend-dot" style={{ background: TOKEN_IN }} />
+                <span className="dash-legend-label">input</span>
               </li>
-            ))}
-          </ul>
-        </Panel>
+              <li>
+                <span className="dash-legend-dot" style={{ background: TOKEN_OUT }} />
+                <span className="dash-legend-label">output</span>
+              </li>
+            </ul>
+          </Panel>
+        </div>
+      </Section>
 
-        <Panel title="Tokens over time" hint="input vs output" wide>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
-              <XAxis
-                dataKey="day"
-                stroke="var(--text-faint)"
-                tickLine={false}
-                axisLine={false}
-                fontSize={11}
-              />
-              <YAxis
-                stroke="var(--text-faint)"
-                tickLine={false}
-                axisLine={false}
-                fontSize={11}
-                width={40}
-              />
-              <Tooltip
-                content={<ChartTooltip unit="tokens" />}
-                cursor={{ fill: 'var(--item-hover)' }}
-              />
-              <Bar
-                dataKey="input"
-                name="input"
-                fill={TOKEN_IN}
-                radius={[3, 3, 0, 0]}
-                animationDuration={600}
-              />
-              <Bar
-                dataKey="output"
-                name="output"
-                fill={TOKEN_OUT}
-                radius={[3, 3, 0, 0]}
-                animationDuration={600}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-          <ul className="dash-legend dash-legend-row">
-            <li>
-              <span className="dash-legend-dot" style={{ background: TOKEN_IN }} />
-              <span className="dash-legend-label">input</span>
-            </li>
-            <li>
-              <span className="dash-legend-dot" style={{ background: TOKEN_OUT }} />
-              <span className="dash-legend-label">output</span>
-            </li>
-          </ul>
-        </Panel>
-
-        <Panel title="AIC by session">
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart
-              data={sessionData}
-              layout="vertical"
-              margin={{ top: 4, right: 12, bottom: 4, left: 8 }}
-            >
-              <XAxis type="number" hide />
-              <YAxis
-                type="category"
-                dataKey="name"
-                stroke="var(--text-faint)"
-                tickLine={false}
-                axisLine={false}
-                fontSize={11}
-                width={64}
-              />
-              <Tooltip
-                content={<ChartTooltip unit="AIC" />}
-                cursor={{ fill: 'var(--item-hover)' }}
-              />
-              <Bar
-                dataKey="aic"
-                name="AIC"
-                radius={[0, 4, 4, 0]}
-                animationDuration={600}
+      <Section
+        icon={<ActivityIcon size={15} />}
+        title="Per-session activity"
+        hint={`${formatDuration(timing.totalActiveMs)} active`}
+      >
+        <div className="dash-grid">
+          <Panel title="AIC by session">
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart
+                data={sessionData}
+                layout="vertical"
+                margin={{ top: 4, right: 12, bottom: 4, left: 8 }}
               >
-                {sessionData.map((s, i) => (
-                  <Cell key={s.name} fill={color(i)} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </Panel>
+                <XAxis type="number" hide />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  stroke="var(--text-faint)"
+                  tickLine={false}
+                  axisLine={false}
+                  fontSize={11}
+                  width={64}
+                />
+                <Tooltip
+                  content={<ChartTooltip unit="AIC" />}
+                  cursor={{ fill: 'var(--item-hover)' }}
+                />
+                <Bar
+                  dataKey="aic"
+                  name="AIC"
+                  radius={[0, 4, 4, 0]}
+                  animationDuration={600}
+                >
+                  {sessionData.map((s, i) => (
+                    <Cell key={s.name} fill={color(i)} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Panel>
 
-        <Panel title="Time by session" hint={`${formatDuration(timing.totalActiveMs)} total`}>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart
+          <Panel title="Time by session" hint={`${formatDuration(timing.totalActiveMs)} total`}>
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart
                 data={timeData}
                 layout="vertical"
                 margin={{ top: 4, right: 12, bottom: 4, left: 8 }}
-            >
+              >
                 <XAxis type="number" hide />
                 <YAxis
                   type="category"
@@ -398,10 +446,11 @@ function Charts({ data }: { data: FeatureUsage }) {
                   radius={[0, 4, 4, 0]}
                   animationDuration={600}
                 />
-            </BarChart>
-          </ResponsiveContainer>
-        </Panel>
-      </div>
+              </BarChart>
+            </ResponsiveContainer>
+          </Panel>
+        </div>
+      </Section>
     </>
   );
 }

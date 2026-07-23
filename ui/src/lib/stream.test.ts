@@ -5,6 +5,7 @@ import {
   initialLiveState,
   liveSignal,
   parseServerEvent,
+  resolveSessionMetrics,
   sessionLiveTotals,
   usageKey,
   workspaceLiveTotals,
@@ -74,6 +75,12 @@ describe('parseServerEvent', () => {
     expect(event?.type).toBe('session.ended');
   });
 
+  it('parses session.updated', () => {
+    const updated = { ...session('s1'), resolvedModel: 'claude-opus-4.8' };
+    const event = parseServerEvent('session.updated', JSON.stringify(updated));
+    expect(event).toEqual({ type: 'session.updated', session: updated });
+  });
+
   it('parses a stdout output frame', () => {
     const event = parseServerEvent(
       'session.output',
@@ -140,6 +147,18 @@ describe('applyStreamEvent', () => {
     expect(state.sessions['s1']).toBeDefined();
   });
 
+  it('overwrites a session on session.updated (e.g. resolved model)', () => {
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'session.started',
+      session: session('s1'),
+    });
+    state = applyStreamEvent(state, {
+      type: 'session.updated',
+      session: { ...session('s1'), resolvedModel: 'claude-opus-4.8' },
+    });
+    expect(state.sessions['s1'].resolvedModel).toBe('claude-opus-4.8');
+  });
+
   it('appends output lines per session', () => {
     let state = applyStreamEvent(initialLiveState, {
       type: 'session.output',
@@ -200,6 +219,42 @@ describe('sessionLiveTotals', () => {
       outputTokens: 40,
       nanoAiu: 200,
       turns: 2,
+    });
+  });
+});
+
+describe('resolveSessionMetrics', () => {
+  const liveTotals = {
+    credits: 5,
+    cost: 2,
+    inputTokens: 11,
+    outputTokens: 22,
+    nanoAiu: 999,
+    turns: 3,
+  };
+
+  it('prefers the persisted rollup so rows match the persisted status bar', () => {
+    const persisted = { nanoAiu: 200, inputTokens: 20, outputTokens: 40 };
+    expect(resolveSessionMetrics(persisted, liveTotals)).toEqual({
+      nanoAiu: 200,
+      inputTokens: 20,
+      outputTokens: 40,
+    });
+  });
+
+  it('prefers persisted even when live totals have been observed', () => {
+    // Regression: previously live SSE totals (incomplete after a reconnect)
+    // were preferred over the authoritative rollup, so the explorer AIC drifted
+    // away from the status-bar footer. Persisted must always win when present.
+    const persisted = { nanoAiu: 200, inputTokens: 20, outputTokens: 40 };
+    expect(resolveSessionMetrics(persisted, liveTotals).nanoAiu).toBe(200);
+  });
+
+  it('falls back to live totals for brand-new sessions without a rollup', () => {
+    expect(resolveSessionMetrics(undefined, liveTotals)).toEqual({
+      nanoAiu: 999,
+      inputTokens: 11,
+      outputTokens: 22,
     });
   });
 });

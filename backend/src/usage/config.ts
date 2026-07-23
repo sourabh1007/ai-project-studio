@@ -28,6 +28,11 @@ export const usageConfigSchema = z.object({
   attributeKeys: attributeKeysSchema,
   /** Resource attribute key names carrying feature/session attribution. */
   resourceKeys: resourceKeysSchema,
+  /**
+   * Cadence (ms) for polling the CLI's own usage store while a session runs.
+   * Drives the live credit/token/model meter for interactive terminal sessions.
+   */
+  livePollIntervalMs: z.number().int().positive(),
 });
 
 export type UsageAttributeKeys = z.infer<typeof attributeKeysSchema>;
@@ -52,4 +57,5 @@ export const usageDefaults: UsageConfig = {
     featureId: 'feature.id',
     sessionId: 'session.id',
   },
+  livePollIntervalMs: 1500,
 };

@@ -130,6 +130,16 @@ describe('createApiClient', () => {
     expect(calls[1][1]).toBeUndefined();
   });
 
+  it('reads the feature work summary', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ featureId: 'f1', sessions: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getFeatureWorkSummary('f1');
+    expect(calls[0][0]).toBe('/api/features/f1/work-summary');
+    expect(calls[0][1]).toBeUndefined();
+  });
+
   it('lists providers and models', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
@@ -146,6 +156,20 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getConfig();
     expect(calls[0][0]).toBe('/api/config');
+  });
+
+  it('lists importable sessions and imports one', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.listImportableSessions();
+    await client.importSession('f1', { provider: 'agency', externalId: 's9' });
+    expect(calls[0][0]).toBe('/api/importable-sessions');
+    expect(calls[0][1]).toBeUndefined();
+    expect(calls[1][0]).toBe('/api/features/f1/import-session');
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[1][1]?.body).toBe(
+      JSON.stringify({ provider: 'agency', externalId: 's9' }),
+    );
   });
 
   it('throws ApiError on a non-ok response', async () => {

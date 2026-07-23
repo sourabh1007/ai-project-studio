@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { join } from 'node:path';
+import { defaultWorkspaceDataDir } from '../workspace/workspace-paths.js';
 
 /** Configuration schema for the session orchestration module. */
 export const SESSION_NAMESPACE = 'session';
@@ -16,6 +18,6 @@ export type SessionConfig = z.infer<typeof sessionConfigSchema>;
 
 export const sessionDefaults: SessionConfig = {
   defaultKind: 'dev',
-  usageDir: '.copilot-workspace/usage',
+  usageDir: join(defaultWorkspaceDataDir(), 'usage'),
   usageFileExtension: '.jsonl',
 };

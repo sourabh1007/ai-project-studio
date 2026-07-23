@@ -20,6 +20,22 @@ const STARTUP_TIMEOUT_MS = Number(process.env.CW_STARTUP_TIMEOUT_MS || 30000);
 /** @type {import('node:child_process').ChildProcess | null} */
 let backend = null;
 
+// On Windows, when the app shuts down the stdout/stderr pipe can close before
+// the backend's exit/log handlers run; a raw write then throws EPIPE, which
+// Electron surfaces as an "Uncaught Exception" dialog in the main process.
+// Swallow those stream errors and guard every write so shutdown stays clean.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
+/** Writes to a std stream, ignoring broken-pipe errors during shutdown. */
+function safeWrite(stream, text) {
+  try {
+    stream.write(text);
+  } catch {
+    /* pipe already closed (EPIPE) — nothing to log to */
+  }
+}
+
 /** Finds a free TCP port by binding to port 0 and reading the assigned port. */
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -79,13 +95,13 @@ function startBackend(port) {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  backend.stdout.on('data', (chunk) => process.stdout.write(`[backend] ${chunk}`));
-  backend.stderr.on('data', (chunk) => process.stderr.write(`[backend] ${chunk}`));
+  backend.stdout.on('data', (chunk) => safeWrite(process.stdout, `[backend] ${chunk}`));
+  backend.stderr.on('data', (chunk) => safeWrite(process.stderr, `[backend] ${chunk}`));
   backend.on('error', (error) =>
-    process.stderr.write(`[backend] spawn error: ${error}\n`),
+    safeWrite(process.stderr, `[backend] spawn error: ${error}\n`),
   );
   backend.on('exit', (code) => {
-    process.stdout.write(`[backend] exited with code ${code}\n`);
+    safeWrite(process.stdout, `[backend] exited with code ${code}\n`);
     backend = null;
   });
 }
@@ -164,7 +180,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(bootstrap).catch((error) => {
-    process.stderr.write(`[desktop] Startup failed: ${error}\n`);
+    safeWrite(process.stderr, `[desktop] Startup failed: ${error}\n`);
     stopBackend();
     app.quit();
   });

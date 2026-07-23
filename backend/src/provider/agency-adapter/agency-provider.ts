@@ -1,9 +1,11 @@
 import type {
   IAIProvider,
+  ImportableSession,
   InteractiveCommand,
   SessionSpec,
 } from '../provider-contract.js';
 import type { ProcessSpawner } from '../process-kernel/process-spawner.js';
+import type { CliSessionStore } from '../cli-store/cli-session-store.js';
 import { toRunningSession } from '../process-kernel/running-session.js';
 import { AGENCY_NAMESPACE, type AgencyConfig } from './config.js';
 import { buildAgencyCommand } from './agency-cmd-builder.js';
@@ -14,6 +16,8 @@ import { buildCopilotInteractiveArgs } from '../copilot-adapter/copilot-cmd-buil
 export interface AgencyAdapterDeps {
   spawner: ProcessSpawner;
   baseEnv: Record<string, string | undefined>;
+  /** Source of past CLI sessions available to import into a feature. */
+  importStore: CliSessionStore;
 }
 
 /** Agency CLI provider. Wraps the Copilot CLI via `agency copilot -- ...`. */
@@ -42,6 +46,9 @@ export function createAgencyProvider(
         ],
         env: buildAgencyEnv(spec, deps.baseEnv),
       };
+    },
+    listImportableSessions(): ImportableSession[] {
+      return deps.importStore.listImportable();
     },
   };
 }

@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { CloseIcon } from './icons.js';
+import { CheckIcon, CircleIcon, ClockIcon, CloseIcon } from './icons.js';
 
 export function Modal({
   title,
@@ -96,15 +96,38 @@ export function Button({
 }
 
 export function StatusBadge({ status }: { status: string }) {
+  const normalized = status.trim().toLowerCase();
   const mod =
-    status === 'running'
+    normalized === 'running'
       ? 'badge-running'
-      : status === 'completed'
+      : normalized === 'completed'
         ? 'badge-completed'
-        : status === 'failed'
+        : normalized === 'failed'
           ? 'badge-failed'
           : '';
-  return <span className={`badge ${mod}`.trim()}>{status}</span>;
+  const icon =
+    normalized === 'running' ? (
+      <ClockIcon />
+    ) : normalized === 'completed' ? (
+      <CheckIcon />
+    ) : normalized === 'failed' ? (
+      <CloseIcon />
+    ) : (
+      <CircleIcon />
+    );
+  return (
+    <span
+      className={`badge ${mod}`.trim()}
+      title={status}
+      role="img"
+      aria-label={status}
+    >
+      <span className="badge-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="sr-only">{status}</span>
+    </span>
+  );
 }
 
 export function EmptyState({ message }: { message: string }) {

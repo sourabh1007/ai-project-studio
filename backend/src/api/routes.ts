@@ -3,6 +3,9 @@ import type { ConfigSchemaRegistry } from '../config/config-schema-registry.js';
 import type { Logger } from '../kernel/logger.js';
 import type { FeatureAnalyticsService } from '../aggregation/feature-analytics.js';
 import type { FeatureService } from '../feature/feature-service.js';
+import type { FeatureWorkSummaryService } from '../feature/feature-work-summary-contract.js';
+import type { SessionSummarizer } from '../session-summary/session-summary-contract.js';
+import type { SessionImportService } from '../session-import/session-import-contract.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
 import type { SessionConfig } from '../session/config.js';
@@ -19,6 +22,9 @@ import { createProviderRoutes } from './provider-controller.js';
 import { createSessionRoutes } from './session-controller.js';
 import { createTerminalRoutes } from './terminal-controller.js';
 import { createSummaryRoutes } from './summary-controller.js';
+import { createWorkSummaryRoutes } from './work-summary-controller.js';
+import { createSessionSummaryRoutes } from './session-summary-controller.js';
+import { createSessionImportRoutes } from './session-import-controller.js';
 import type { Route } from './http-contract.js';
 
 export interface ApiRoutesDeps {
@@ -33,6 +39,9 @@ export interface ApiRoutesDeps {
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
   summaries: SummaryStore;
+  workSummaries: FeatureWorkSummaryService;
+  sessionSummaries: SessionSummarizer;
+  imports: SessionImportService;
   configRegistry: ConfigSchemaRegistry;
   currentConfig: ConfigObject;
   logger: Logger;
@@ -60,6 +69,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       summarizer: deps.summarizer,
       summaries: deps.summaries,
     }),
+    ...createWorkSummaryRoutes({ workSummaries: deps.workSummaries }),
+    ...createSessionSummaryRoutes({
+      sessionSummaries: deps.sessionSummaries,
+    }),
+    ...createSessionImportRoutes({ imports: deps.imports }),
     ...createConfigRoutes({
       registry: deps.configRegistry,
       current: deps.currentConfig,

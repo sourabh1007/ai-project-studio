@@ -1,7 +1,7 @@
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
+import { homedir } from 'node:os';
 import express from 'express';
-import chokidar from 'chokidar';
 
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
@@ -72,6 +72,12 @@ import {
   terminalDefaults,
   type TerminalConfig,
 } from './terminal/config.js';
+import {
+  COPILOT_HISTORY_NAMESPACE,
+  copilotHistoryConfigSchema,
+  copilotHistoryDefaults,
+  type CopilotHistoryConfig,
+} from './copilot-history/config.js';
 
 import { createProcessSpawner } from './provider/process-kernel/process-spawner.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
@@ -87,12 +93,8 @@ import { createNodePtySpawner } from './terminal/node-pty-spawner.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
 import { attachTerminalWs } from './terminal/terminal-ws-server.js';
 
-import { readUsageEvents } from './usage/otel-file-reader.js';
-import {
-  createUsageTailer,
-  type FileWatcher,
-} from './usage/otel-file-tailer.js';
 import { createUsageRecorder } from './usage/usage-recorder.js';
+import { createCliUsageTailer } from './usage/cli-usage-tailer.js';
 
 import { createBuiltinCreditStrategies } from './credit/credit-strategies.js';
 import { createCreditCalculator } from './credit/credit-calculator.js';
@@ -103,14 +105,31 @@ import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
 import { createTranscriptRepo } from './persistence/transcript-repo.js';
 import { createSummaryRepo } from './persistence/summary-repo.js';
+import { createSessionSummaryRepo } from './persistence/session-summary-repo.js';
 import { createAggregateRepo } from './persistence/aggregate-repo.js';
 import { createFeatureAnalytics } from './aggregation/feature-analytics.js';
 
 import { createFeatureService } from './feature/feature-service.js';
+import { createFeatureWorkSummaryService } from './feature/feature-work-summary.js';
+import { createCopilotHistoryDb } from './copilot-history/copilot-history-db.js';
+import { createCopilotHistoryReader } from './copilot-history/copilot-history-reader.js';
 import { createWorkspaceAdmin } from './workspace/workspace-admin-service.js';
 
 import { createTranscriptCollector } from './summarizer/transcript-collector.js';
 import { createSummaryRunner } from './summarizer/summary-runner.js';
+import { createSessionSummaryRunner } from './session-summary/session-summary-runner.js';
+import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
+import {
+  createCliUsageStore,
+  toUsageEvent,
+} from './provider/cli-store/cli-usage-store.js';
+import { createSessionImportService } from './session-import/session-import-service.js';
+import {
+  SESSION_IMPORT_NAMESPACE,
+  sessionImportConfigSchema,
+  sessionImportDefaults,
+  type SessionImportConfig,
+} from './session-import/config.js';
 
 import { createApiRoutes } from './api/routes.js';
 import { mountRoutes } from './api/express-adapter.js';
@@ -137,6 +156,8 @@ function main(): void {
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
   registry.register({ namespace: TERMINAL_NAMESPACE, schema: terminalConfigSchema, defaults: terminalDefaults });
+  registry.register({ namespace: COPILOT_HISTORY_NAMESPACE, schema: copilotHistoryConfigSchema, defaults: copilotHistoryDefaults });
+  registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
 
   const config: ConfigObject = buildConfig({
     registry,
@@ -154,6 +175,8 @@ function main(): void {
   const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
   const apiConfig = config[API_NAMESPACE] as ApiConfig;
   const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
+  const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
+  const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
 
   const logLevel = (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? 'info';
   const logger = createLogger(logLevel, (record) => {
@@ -166,6 +189,23 @@ function main(): void {
   const clock = createClock();
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
+
+  const legacyDatabasePath = pathJoin(
+    process.cwd(),
+    '.copilot-workspace',
+    'workspace.db',
+  );
+  if (
+    !existsSync(persistenceConfig.databasePath) &&
+    existsSync(legacyDatabasePath)
+  ) {
+    ensureDir(persistenceConfig.databasePath);
+    copyFileSync(legacyDatabasePath, persistenceConfig.databasePath);
+    logger.info('Migrated legacy workspace database', {
+      from: legacyDatabasePath,
+      to: persistenceConfig.databasePath,
+    });
+  }
 
   // Persistence.
   ensureDir(persistenceConfig.databasePath);
@@ -184,6 +224,7 @@ function main(): void {
   const usageRepo = createUsageRepo(db);
   const transcriptRepo = createTranscriptRepo(db);
   const summaryRepo = createSummaryRepo(db);
+  const sessionSummaryRepo = createSessionSummaryRepo(db);
   const aggregateRepo = createAggregateRepo(db, aggregationConfig);
   const featureAnalytics = createFeatureAnalytics({
     reader: aggregateRepo,
@@ -191,30 +232,72 @@ function main(): void {
     clock,
   });
 
-  // Providers.
+  // Providers. Registration is driven by a descriptor list so adding a new
+  // provider is a one-line change: append a descriptor and toggle its config
+  // `enabled` flag. A provider is registered only when enabled, keeping
+  // disabled adapters intact and instantly re-enable-able via config.
   const spawner = createProcessSpawner(clock);
+  const cliStorePath = pathJoin(
+    homedir(),
+    copilotHistoryConfig.subdir,
+    copilotHistoryConfig.databaseFile,
+  );
+  const agencyImportStore = createCliSessionStore({
+    databasePath: cliStorePath,
+    provider: AGENCY_NAMESPACE,
+    limit: sessionImportConfig.maxSessions,
+    maxTitleChars: sessionImportConfig.maxTitleChars,
+    emptyTitlePlaceholder: sessionImportConfig.emptyTitlePlaceholder,
+  });
+  // Live usage source: the CLI records per-request tokens/credits/model in its
+  // own session-store.db (keyed by the same --session-id we launch with), so we
+  // tail that instead of the OTel file exporter (which the CLI TUI never emits).
+  const cliUsageStore = createCliUsageStore({ databasePath: cliStorePath });
   const providers = createProviderRegistry();
+  const providerDescriptors: Array<{
+    namespace: string;
+    enabled: boolean;
+    defaultModel: string;
+    create: () => IAIProvider;
+  }> = [
+    {
+      namespace: COPILOT_NAMESPACE,
+      enabled: copilotConfig.enabled,
+      defaultModel: copilotConfig.defaultModel,
+      create: () =>
+        createCopilotProvider(copilotConfig, { spawner, baseEnv: process.env }),
+    },
+    {
+      namespace: AGENCY_NAMESPACE,
+      enabled: agencyConfig.enabled,
+      defaultModel: agencyConfig.defaultModel,
+      create: () =>
+        createAgencyProvider(agencyConfig, {
+          spawner,
+          baseEnv: process.env,
+          importStore: agencyImportStore,
+        }),
+    },
+  ];
+
   const enabledProviders: IAIProvider[] = [];
-  if (copilotConfig.enabled) {
-    const p = createCopilotProvider(copilotConfig, { spawner, baseEnv: process.env });
-    providers.register(p);
-    enabledProviders.push(p);
-  }
-  if (agencyConfig.enabled) {
-    const p = createAgencyProvider(agencyConfig, { spawner, baseEnv: process.env });
-    providers.register(p);
-    enabledProviders.push(p);
+  const defaultModelByProvider: Record<string, string> = {};
+  for (const descriptor of providerDescriptors) {
+    if (!descriptor.enabled) {
+      continue;
+    }
+    const provider = descriptor.create();
+    providers.register(provider);
+    enabledProviders.push(provider);
+    defaultModelByProvider[descriptor.namespace] = descriptor.defaultModel;
   }
   if (enabledProviders.length === 0) {
-    throw new Error('No providers are enabled; enable copilot or agency in config.');
+    throw new Error('No providers are enabled; enable at least one provider in config.');
   }
 
   const resolver = createProviderResolver(providers, {
     defaultProvider: enabledProviders[0].id,
-    defaultModelByProvider: {
-      [COPILOT_NAMESPACE]: copilotConfig.defaultModel,
-      [AGENCY_NAMESPACE]: agencyConfig.defaultModel,
-    },
+    defaultModelByProvider,
   });
 
   // Credit engine.
@@ -252,36 +335,44 @@ function main(): void {
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
 
-  // Live usage capture: tail each session's OTel file while it runs.
-  const watcherFactory = (filePath: string): FileWatcher => {
-    const fsWatcher = chokidar.watch(filePath, { ignoreInitial: false });
-    return {
-      onChange(cb) {
-        fsWatcher.on('add', () => void cb());
-        fsWatcher.on('change', () => void cb());
-      },
-      close: () => fsWatcher.close(),
-    };
-  };
-  const tailers = new Map<string, ReturnType<typeof createUsageTailer>>();
+  // Live usage capture: poll the CLI's own usage store for each running session
+  // and feed new per-request usage into the same credit/record pipeline. This
+  // updates the live AIC/token/model meter for both one-shot and interactive
+  // sessions, since the CLI attributes usage to our launch --session-id.
+  const tailers = new Map<string, ReturnType<typeof createCliUsageTailer>>();
   const resolveSessionModel = (sessionId: string, resolvedModel: string) => {
     const stored = sessionRepo.get(sessionId);
     if (stored && stored.resolvedModel !== resolvedModel) {
-      sessionRepo.save({ ...stored, resolvedModel });
+      const updated = { ...stored, resolvedModel };
+      sessionRepo.save(updated);
+      bus.emit('session.updated', updated);
     }
   };
-  bus.on('session.started', (session: Session) => {
-    sessionRepo.save(session);
-    const tailer = createUsageTailer(session.usageFilePath, {
-      watch: watcherFactory,
-      readEvents: (path) => readUsageEvents(path, usageConfig),
+  const makeUsageTailer = (session: Session) =>
+    createCliUsageTailer({
+      intervalMs: usageConfig.livePollIntervalMs,
+      read: () =>
+        cliUsageStore.listBySession(session.id).map((row) =>
+          toUsageEvent(row, {
+            featureId: session.featureId,
+            provider: session.provider,
+            requestedModel: session.requestedModel,
+          }),
+        ),
       onUsage: (event) => {
         resolveSessionModel(event.sessionId, event.resolvedModel);
         usageRecorder.record(event, session.kind);
       },
     });
+  bus.on('session.started', (session: Session) => {
+    sessionRepo.save(session);
+    const tailer = makeUsageTailer(session);
     tailers.set(session.id, tailer);
-    void tailer.start().catch((error) => logger.error('Usage tailer failed', error));
+    try {
+      tailer.start();
+    } catch (error) {
+      logger.error('Usage tailer failed', error);
+    }
   });
   bus.on('session.ended', (session: Session) => {
     sessionRepo.save(session);
@@ -290,22 +381,32 @@ function main(): void {
       return;
     }
     tailers.delete(session.id);
-    void tailer
-      .stop()
-      .then(() => readUsageEvents(session.usageFilePath, usageConfig))
-      .then((events) => {
-        if (events.length > 0) {
-          for (const event of events) {
-            resolveSessionModel(event.sessionId, event.resolvedModel);
-          }
-          usageRecorder.recordAll(events, session.kind);
-        }
-      })
-      .catch((error) => logger.error('Final usage flush failed', error));
+    try {
+      tailer.drain();
+    } catch (error) {
+      logger.error('Final usage flush failed', error);
+    } finally {
+      tailer.stop();
+    }
   });
 
   // Feature + summarizer.
   const featureService = createFeatureService({ repo: featureRepo, ids, clock });
+  const copilotHistoryReader = createCopilotHistoryReader({
+    source: createCopilotHistoryDb({
+      databasePath: pathJoin(
+        homedir(),
+        copilotHistoryConfig.subdir,
+        copilotHistoryConfig.databaseFile,
+      ),
+    }),
+    config: copilotHistoryConfig,
+  });
+  const workSummaryService = createFeatureWorkSummaryService({
+    sessions: sessionRepo,
+    reader: copilotHistoryReader,
+    summaries: sessionSummaryRepo,
+  });
   const workspaceAdmin = createWorkspaceAdmin({
     features: featureService,
     sessions: sessionRepo,
@@ -329,6 +430,23 @@ function main(): void {
     clock,
     config: summarizerConfig,
   });
+  const sessionSummarizer = createSessionSummaryRunner({
+    sessions: sessionRepo,
+    features: featureService,
+    transcripts: transcriptRepo,
+    launcher,
+    store: sessionSummaryRepo,
+    clock,
+    config: summarizerConfig,
+  });
+
+  const sessionImportService = createSessionImportService({
+    providers,
+    sessions: sessionRepo,
+    features: featureService,
+    clock,
+    config: sessionConfig,
+  });
 
   // HTTP API.
   const app = express();
@@ -348,6 +466,9 @@ function main(): void {
       aggregates: featureAnalytics,
       summarizer,
       summaries: summaryRepo,
+      workSummaries: workSummaryService,
+      sessionSummaries: sessionSummarizer,
+      imports: sessionImportService,
       configRegistry: registry,
       currentConfig: config,
       logger,

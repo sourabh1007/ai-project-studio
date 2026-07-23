@@ -12,6 +12,7 @@ const STREAM_EVENT_NAMES = [
   'session.started',
   'session.output',
   'session.ended',
+  'session.updated',
   'usage.recorded',
 ] as const;
 

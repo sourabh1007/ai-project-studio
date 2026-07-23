@@ -55,6 +55,7 @@ describe('buildSummaryPrompt', () => {
     expect(prompt).toContain(config.noSessionsPlaceholder);
     expect(prompt).toContain('Login');
     expect(prompt).toContain('Add login');
+    expect(prompt).toContain('4-5 short lines maximum');
   });
 
   it('renders resolved model and captured output', () => {

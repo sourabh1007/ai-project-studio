@@ -4,6 +4,7 @@ import type { Session, StoredUsage } from './types.js';
 export type StreamEvent =
   | { type: 'session.started'; session: Session }
   | { type: 'session.ended'; session: Session }
+  | { type: 'session.updated'; session: Session }
   | { type: 'session.output'; sessionId: string; line: string }
   | { type: 'usage.recorded'; usage: StoredUsage };
 
@@ -37,6 +38,8 @@ export function parseServerEvent(
       return { type: 'session.started', session: JSON.parse(data) as Session };
     case 'session.ended':
       return { type: 'session.ended', session: JSON.parse(data) as Session };
+    case 'session.updated':
+      return { type: 'session.updated', session: JSON.parse(data) as Session };
     case 'session.output': {
       const payload = JSON.parse(data) as {
         sessionId: string;
@@ -66,6 +69,7 @@ export function applyStreamEvent(
   switch (event.type) {
     case 'session.started':
     case 'session.ended':
+    case 'session.updated':
       return {
         ...state,
         sessions: { ...state.sessions, [event.session.id]: event.session },
@@ -123,6 +127,34 @@ export function sessionLiveTotals(
     }
   }
   return totals;
+}
+
+/** The usage metrics rendered for a single session row. */
+export interface SessionMetrics {
+  nanoAiu: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * Selects the metrics to display for a session row. The persisted rollup is the
+ * authoritative source of truth — every usage event is persisted and emitted on
+ * the backend together, so the rollup is complete across reloads whereas the
+ * live SSE feed only carries events observed since the UI connected. Preferring
+ * persisted keeps the per-session AIC in lockstep with the persisted-based
+ * status bar. Live totals are used only as a fallback for brand-new sessions
+ * whose first events have not yet been folded into the refreshed rollup.
+ */
+export function resolveSessionMetrics(
+  persisted: SessionMetrics | undefined,
+  liveTotals: SessionMetrics,
+): SessionMetrics {
+  const source = persisted ?? liveTotals;
+  return {
+    nanoAiu: source.nanoAiu,
+    inputTokens: source.inputTokens,
+    outputTokens: source.outputTokens,
+  };
 }
 
 /** Aggregates all live usage across every tracked session (status-bar total). */

@@ -1,6 +1,6 @@
 {
   "name": "copilot-workspace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Project-centric management and observability layer over the GitHub Copilot and Agency CLIs.",
   "workspaces": [

@@ -16,6 +16,7 @@ const STREAM_EVENTS: StreamEventName[] = [
   'session.started',
   'session.output',
   'session.ended',
+  'session.updated',
   'usage.recorded',
 ];
 

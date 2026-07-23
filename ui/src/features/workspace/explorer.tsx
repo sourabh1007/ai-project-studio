@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
-import { sessionLiveTotals } from '../../lib/stream.js';
+import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
 import type { Feature, Session, SessionBreakdown } from '../../lib/types.js';
 import { formatAic, formatCompactNumber } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
@@ -13,11 +13,13 @@ import {
   CheckIcon,
   CloseIcon,
   CollapseSidebarIcon,
+  ImportIcon,
   PencilIcon,
   PlusIcon,
   TrashIcon,
 } from '../../components/icons.js';
 import { NewSessionForm } from './new-session-form.js';
+import { ImportSessionPanel } from './import-session-panel.js';
 
 /** Merges a persisted session with any live status/model updates. */
 function mergeLive(session: Session, live: LiveState): Session {
@@ -62,16 +64,14 @@ function SessionRow({
   const name = sessionDisplayName(customName, ordinal);
   const model = session.resolvedModel ?? session.requestedModel;
   const liveTotals = sessionLiveTotals(live, session.id);
-  // Prefer live SSE usage; fall back to persisted rollup so metrics
-  // auto-populate after reloads (SSE does not replay history).
-  const totals =
-    liveTotals.turns > 0
-      ? liveTotals
-      : {
-          nanoAiu: persisted?.nanoAiu ?? 0,
-          inputTokens: persisted?.inputTokens ?? 0,
-          outputTokens: persisted?.outputTokens ?? 0,
-        };
+  // The persisted rollup is the authoritative source of truth: every usage
+  // event is persisted and emitted together on the backend, so the rollup is
+  // complete across reloads, whereas the live SSE feed only carries events
+  // observed since the UI connected. We therefore prefer persisted totals —
+  // the same basis the status bar uses — so the per-session AIC always matches
+  // the workspace footer. Live totals are only a fallback for brand-new
+  // sessions whose first events have not yet been folded into the rollup.
+  const totals = resolveSessionMetrics(persisted, liveTotals);
 
   function startEditing() {
     setDraft(customName ?? name);
@@ -208,6 +208,7 @@ function FeatureNode({
   const api = useApi();
   const [expanded, setExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -217,7 +218,10 @@ function FeatureNode({
   );
   const usage = useAsync(
     () => (expanded ? api.getFeatureUsage(feature.id) : Promise.resolve(null)),
-    [feature.id, expanded],
+    // Re-fetch the authoritative rollup whenever a new usage/session event is
+    // observed so per-session metrics stay in lockstep with the status bar,
+    // which refreshes on the same signal.
+    [feature.id, expanded, liveSignal(live)],
   );
 
   const rows = (sessions.data ?? []).map((s) => mergeLive(s, live));
@@ -303,10 +307,24 @@ function FeatureNode({
           aria-label={`New session in ${feature.name}`}
           onClick={() => {
             setExpanded(true);
+            setImporting(false);
             setCreating(true);
           }}
         >
           <PlusIcon />
+        </button>
+        <button
+          type="button"
+          className="tree-action"
+          title="Import session"
+          aria-label={`Import a session into ${feature.name}`}
+          onClick={() => {
+            setExpanded(true);
+            setCreating(false);
+            setImporting(true);
+          }}
+        >
+          <ImportIcon />
         </button>
         {confirming ? (
           <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -362,9 +380,20 @@ function FeatureNode({
               onCancel={() => setCreating(false)}
             />
           )}
+          {importing && (
+            <ImportSessionPanel
+              featureId={feature.id}
+              onImported={() => {
+                setImporting(false);
+                sessions.reload();
+                usage.reload();
+              }}
+              onCancel={() => setImporting(false)}
+            />
+          )}
           {sessions.loading && <EmptyState message="Loading sessions…" />}
           <ErrorText error={sessions.error} />
-          {!sessions.loading && rows.length === 0 && !creating && (
+          {!sessions.loading && rows.length === 0 && !creating && !importing && (
             <EmptyState message="No sessions yet." />
           )}
           {rows.map((session, index) => (

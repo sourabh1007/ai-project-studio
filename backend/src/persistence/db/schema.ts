@@ -55,6 +55,11 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS session_summaries (
+    session_id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
 ];
 
 /** Applies the schema to a database connection. */

@@ -6,65 +6,14 @@ import { liveSignal } from './lib/stream.js';
 import { formatAic, formatCompactNumber } from './lib/format.js';
 import { WorkspaceView } from './features/workspace/workspace-view.js';
 import { SettingsView } from './features/settings/settings-view.js';
+import {
+  FilesIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+} from './components/icons.js';
 
 type View = 'workspace' | 'settings';
-
-function FilesIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-        d="M4 4h8l2 3h6v13H4z"
-      />
-    </svg>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-      <circle
-        cx="12"
-        cy="12"
-        r="3.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5 5l2.1 2.1M16.9 16.9L19 19M19 5l-2.1 2.1M7.1 16.9L5 19"
-      />
-    </svg>
-  );
-}
-
-function ThemeIcon({ dark }: { dark: boolean }) {
-  return dark ? (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-      <circle cx="12" cy="12" r="4.5" fill="currentColor" />
-      <path
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.5 4.5l1.8 1.8M17.7 17.7l1.8 1.8M19.5 4.5l-1.8 1.8M6.3 17.7l-1.8 1.8"
-      />
-    </svg>
-  ) : (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
-      />
-    </svg>
-  );
-}
 
 export function App() {
   const live = useUsageStream();
@@ -100,7 +49,7 @@ export function App() {
                 }
               }}
             >
-              <FilesIcon />
+              <FilesIcon size={22} />
             </button>
             <button
               type="button"
@@ -109,7 +58,7 @@ export function App() {
               aria-label="Settings"
               onClick={() => setView('settings')}
             >
-              <GearIcon />
+              <SettingsIcon size={22} />
             </button>
           </div>
           <div className="activitybar-group">
@@ -122,7 +71,7 @@ export function App() {
               aria-label="Toggle theme"
               onClick={toggle}
             >
-              <ThemeIcon dark={theme === 'dark'} />
+              {theme === 'dark' ? <SunIcon size={20} /> : <MoonIcon size={20} />}
             </button>
           </div>
         </nav>

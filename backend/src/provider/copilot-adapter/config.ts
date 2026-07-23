@@ -27,7 +27,10 @@ export const copilotConfigSchema = z.object({
 export type CopilotConfig = z.infer<typeof copilotConfigSchema>;
 
 export const copilotDefaults: CopilotConfig = {
-  enabled: true,
+  // Disabled by default: only the Agency provider is active. Flip to `true`
+  // (or set COPILOT_ENABLED=true) to re-enable the Copilot provider — the
+  // adapter code is kept intact so re-enabling is purely a config change.
+  enabled: false,
   executable: 'copilot',
   defaultModel: 'auto',
   allowAllTools: true,

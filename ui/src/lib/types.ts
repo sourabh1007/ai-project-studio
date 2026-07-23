@@ -91,6 +91,27 @@ export interface FeatureSummary {
   createdAt: string;
 }
 
+export interface CheckpointSummary {
+  number: number;
+  title: string;
+  overview: string;
+  createdAt: string;
+}
+
+export interface SessionWorkSummary {
+  sessionId: string;
+  prompt: string;
+  status: SessionStatus;
+  createdAt: string;
+  summary: string | null;
+  checkpoints: CheckpointSummary[];
+}
+
+export interface FeatureWorkSummary {
+  featureId: string;
+  sessions: SessionWorkSummary[];
+}
+
 export interface ProviderInfo {
   id: string;
 }
@@ -112,6 +133,24 @@ export interface StoredUsage extends UsageTotals {
   serviceRequestId: string | null;
   startedAt: string;
   endedAt: string;
+}
+
+export interface ImportableSession {
+  externalId: string;
+  provider: string;
+  title: string;
+  cwd: string | null;
+  repository: string | null;
+  branch: string | null;
+  model: string | null;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImportSessionInput {
+  provider: string;
+  externalId: string;
 }
 
 export type ConfigValue = unknown;

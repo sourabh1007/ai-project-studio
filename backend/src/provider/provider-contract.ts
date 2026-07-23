@@ -48,6 +48,29 @@ export interface RunningSession {
   readonly done: Promise<number | null>;
 }
 
+/**
+ * A past session that lives in a provider's own store (e.g. the CLI's
+ * `session-store.db`) and can be imported into a workspace feature. Kept
+ * provider-agnostic so every provider surfaces its history the same way.
+ */
+export interface ImportableSession {
+  /** The provider-native session id (becomes the imported Session id). */
+  externalId: string;
+  /** Provider that owns this session (filled in by the provider). */
+  provider: string;
+  /** Human-friendly title: the CLI summary, first message, or a fallback. */
+  title: string;
+  cwd: string | null;
+  repository: string | null;
+  branch: string | null;
+  /** Last model used in the session, if known. */
+  model: string | null;
+  /** Number of recorded turns/messages. */
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A pluggable AI provider. Adding one requires only a new implementation. */
 export interface IAIProvider {
   readonly id: string;
@@ -59,4 +82,10 @@ export interface IAIProvider {
    * provider-agnostic (open/closed).
    */
   buildInteractiveCommand(spec: SessionSpec): InteractiveCommand;
+  /**
+   * Optional capability: lists past sessions from this provider's own store
+   * that can be imported into a feature. Providers without an accessible
+   * history simply omit it; the import service skips them.
+   */
+  listImportableSessions?(): ImportableSession[];
 }

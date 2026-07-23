@@ -15,6 +15,9 @@ function deps(): ApiRoutesDeps {
     aggregates: empty,
     summarizer: empty,
     summaries: empty,
+    workSummaries: empty,
+    sessionSummaries: empty,
+    imports: empty,
     configRegistry: empty,
     currentConfig: {},
     logger: empty,
@@ -43,6 +46,11 @@ describe('createApiRoutes', () => {
       'get /usage/workspace',
       'post /features/:featureId/summary',
       'get /features/:featureId/summary',
+      'get /features/:featureId/work-summary',
+      'post /features/:featureId/sessions/:sessionId/summary',
+      'get /features/:featureId/sessions/:sessionId/summary',
+      'get /importable-sessions',
+      'post /features/:featureId/import-session',
       'get /config',
     ]);
   });
