@@ -12,11 +12,14 @@ import type { PtyProcess, PtySpawnRequest, PtySpawner } from './pty-contract.js'
 
 function fakePtyEnv() {
   const requests: PtySpawnRequest[] = [];
+  const writes: string[] = [];
   let dataCb: (d: string) => void = () => {};
   let exitCb: (c: number | null) => void = () => {};
   let kills = 0;
   const pty: PtyProcess = {
-    write: () => {},
+    write: (d) => {
+      writes.push(d);
+    },
     resize: () => {},
     onData: (cb) => {
       dataCb = cb;
@@ -37,6 +40,7 @@ function fakePtyEnv() {
   return {
     spawner,
     requests,
+    writes,
     emitData: (d: string) => dataCb(d),
     emitExit: (c: number | null) => exitCb(c),
     kills: () => kills,
@@ -90,7 +94,7 @@ function sampleSession(): Session {
   };
 }
 
-function makeManager() {
+function makeManager(instructions = '') {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
   const providers = createProviderRegistry();
@@ -100,6 +104,7 @@ function makeManager() {
   const ended: Session[] = [];
   bus.on('session.started', (s) => started.push(s));
   bus.on('session.ended', (s) => ended.push(s));
+  const instructionCalls: string[] = [];
   const manager = createTerminalManager({
     spawner: env.spawner,
     providers,
@@ -107,8 +112,14 @@ function makeManager() {
     clock: createClock(() => 0),
     config: terminalDefaults,
     transcriptStore: ts.store,
+    skills: {
+      instructionsForSession: (id) => {
+        instructionCalls.push(id);
+        return instructions;
+      },
+    },
   });
-  return { manager, env, started, ended, saved: ts.saved };
+  return { manager, env, started, ended, saved: ts.saved, instructionCalls };
 }
 
 describe('createTerminalManager', () => {
@@ -181,6 +192,28 @@ describe('createTerminalManager', () => {
     const { manager, env } = makeManager();
     manager.close('nope');
     expect(env.kills()).toBe(0);
+  });
+
+  it('seeds effective instruction skills as the first PTY input', () => {
+    const { manager, env, instructionCalls } = makeManager('Follow the rules.');
+    manager.getOrLaunch(sampleSession());
+    expect(instructionCalls).toEqual(['sess-1']);
+    expect(env.writes).toEqual([
+      `Follow the rules.${terminalDefaults.instructionSeedSuffix}`,
+    ]);
+  });
+
+  it('does not seed when there are no instruction skills', () => {
+    const { manager, env } = makeManager('');
+    manager.getOrLaunch(sampleSession());
+    expect(env.writes).toEqual([]);
+  });
+
+  it('does not seed instructions for meta sessions', () => {
+    const { manager, env, instructionCalls } = makeManager('Follow the rules.');
+    manager.getOrLaunch({ ...sampleSession(), kind: 'meta' });
+    expect(instructionCalls).toEqual([]);
+    expect(env.writes).toEqual([]);
   });
 
   it('throws when the session references an unknown provider', () => {

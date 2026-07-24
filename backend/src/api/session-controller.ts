@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Logger } from '../kernel/logger.js';
 import type { SessionLauncher } from '../session/session-launcher.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
+import type { SkillsService } from '../skills/skills-service.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
@@ -18,6 +19,7 @@ export interface SessionControllerDeps {
   launcher: SessionLauncher;
   sessions: SessionRepo;
   admin: WorkspaceAdmin;
+  skills: Pick<SkillsService, 'composeFeaturePrompt'>;
   logger: Logger;
 }
 
@@ -29,9 +31,16 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       path: '/features/:featureId/sessions',
       handler: async (req) => {
         const input = parseInput(startSessionSchema, req.body);
+        // Inject feature-tagged instruction skills into dev prompts. Meta
+        // sessions (internal AI overhead) are never augmented.
+        const prompt =
+          input.kind === 'meta'
+            ? input.prompt
+            : deps.skills.composeFeaturePrompt(req.params.featureId, input.prompt);
         const launched = await deps.launcher.start({
           featureId: req.params.featureId,
           ...input,
+          prompt,
         });
         launched.completion.catch((error) =>
           deps.logger.error('Session run failed', error),

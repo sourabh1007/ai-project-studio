@@ -6,6 +6,9 @@ import type { FeatureService } from '../feature/feature-service.js';
 import type { FeatureWorkSummaryService } from '../feature/feature-work-summary-contract.js';
 import type { SessionSummarizer } from '../session-summary/session-summary-contract.js';
 import type { SessionImportService } from '../session-import/session-import-contract.js';
+import type { SkillsService } from '../skills/skills-service.js';
+import type { FeatureTasksService } from '../feature-tasks/feature-tasks-service.js';
+import type { IdeUsageService } from '../ide-usage/ide-usage-service.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
 import type { SessionConfig } from '../session/config.js';
@@ -25,6 +28,9 @@ import { createSummaryRoutes } from './summary-controller.js';
 import { createWorkSummaryRoutes } from './work-summary-controller.js';
 import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
+import { createSkillsRoutes } from './skills-controller.js';
+import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
+import { createIdeUsageRoutes } from './ide-usage-controller.js';
 import type { Route } from './http-contract.js';
 
 export interface ApiRoutesDeps {
@@ -42,6 +48,9 @@ export interface ApiRoutesDeps {
   workSummaries: FeatureWorkSummaryService;
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
+  skills: SkillsService;
+  tasks: FeatureTasksService;
+  ideUsage: IdeUsageService;
   configRegistry: ConfigSchemaRegistry;
   currentConfig: ConfigObject;
   logger: Logger;
@@ -55,6 +64,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       launcher: deps.launcher,
       sessions: deps.sessions,
       admin: deps.admin,
+      skills: deps.skills,
       logger: deps.logger,
     }),
     ...createTerminalRoutes({
@@ -74,6 +84,9 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       sessionSummaries: deps.sessionSummaries,
     }),
     ...createSessionImportRoutes({ imports: deps.imports }),
+    ...createSkillsRoutes({ skills: deps.skills }),
+    ...createFeatureTasksRoutes({ tasks: deps.tasks }),
+    ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createConfigRoutes({
       registry: deps.configRegistry,
       current: deps.currentConfig,

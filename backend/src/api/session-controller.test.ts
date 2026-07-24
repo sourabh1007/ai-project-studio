@@ -60,19 +60,40 @@ function harness(completion: Promise<Session>) {
     deleteFeature: async () => undefined,
     deleteSession: async (id: string) => void deleted.push(id),
   };
-  const routes = createSessionRoutes({ launcher, sessions, admin, logger });
-  return { routes, requests, logs, deleted };
+  const composeCalls: Array<{ featureId: string; prompt: string }> = [];
+  const skills = {
+    composeFeaturePrompt: (featureId: string, prompt: string) => {
+      composeCalls.push({ featureId, prompt });
+      return `[skills:${featureId}]\n${prompt}`;
+    },
+  };
+  const routes = createSessionRoutes({ launcher, sessions, admin, skills, logger });
+  return { routes, requests, logs, deleted, composeCalls };
 }
 
 describe('session-controller', () => {
-  it('starts a session and returns 202', async () => {
+  it('starts a session, injects feature skills, and returns 202', async () => {
     const h = harness(Promise.resolve(session));
     const result = await pick(h.routes, 'post', '/features/:featureId/sessions')(
       req({ params: { featureId: 'f1' }, body: { prompt: 'hello', model: 'gpt-5.4-mini' } }),
     );
     expect(result.status).toBe(202);
     expect(result.body).toBe(session);
-    expect(h.requests[0]).toEqual({ featureId: 'f1', prompt: 'hello', model: 'gpt-5.4-mini' });
+    expect(h.requests[0]).toEqual({
+      featureId: 'f1',
+      prompt: '[skills:f1]\nhello',
+      model: 'gpt-5.4-mini',
+    });
+    expect(h.composeCalls).toEqual([{ featureId: 'f1', prompt: 'hello' }]);
+  });
+
+  it('does not inject skills into meta sessions', async () => {
+    const h = harness(Promise.resolve(session));
+    await pick(h.routes, 'post', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'f1' }, body: { prompt: 'hello', kind: 'meta' } }),
+    );
+    expect(h.requests[0].prompt).toBe('hello');
+    expect(h.composeCalls).toEqual([]);
   });
 
   it('logs when the background run rejects', async () => {

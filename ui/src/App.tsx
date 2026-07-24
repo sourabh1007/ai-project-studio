@@ -2,18 +2,21 @@ import { useState } from 'react';
 import { useUsageStream } from './hooks/use-usage-stream.js';
 import { useTheme } from './hooks/use-theme.js';
 import { useWorkspaceStats } from './hooks/use-workspace-stats.js';
+import { useIdeUsage } from './hooks/use-ide-usage.js';
 import { liveSignal } from './lib/stream.js';
 import { formatAic, formatCompactNumber } from './lib/format.js';
 import { WorkspaceView } from './features/workspace/workspace-view.js';
 import { SettingsView } from './features/settings/settings-view.js';
+import { SkillsManager } from './features/skills/skills-manager.js';
 import {
   FilesIcon,
   MoonIcon,
   SettingsIcon,
+  SkillsIcon,
   SunIcon,
 } from './components/icons.js';
 
-type View = 'workspace' | 'settings';
+type View = 'workspace' | 'skills' | 'settings';
 
 export function App() {
   const live = useUsageStream();
@@ -27,6 +30,7 @@ export function App() {
   const stats = useWorkspaceStats(liveSignal(live));
   const totals = stats?.totals ?? null;
   const activeSessions = stats?.activeSessions ?? 0;
+  const ideUsage = useIdeUsage(liveSignal(live));
 
   return (
     <div className="ide-shell">
@@ -50,6 +54,15 @@ export function App() {
               }}
             >
               <FilesIcon size={22} />
+            </button>
+            <button
+              type="button"
+              className={`activity-item ${view === 'skills' ? 'is-active' : ''}`.trim()}
+              title="Skills"
+              aria-label="Skills"
+              onClick={() => setView('skills')}
+            >
+              <SkillsIcon size={22} />
             </button>
             <button
               type="button"
@@ -83,6 +96,10 @@ export function App() {
               sidebarOpen={sidebarOpen}
               onToggleSidebar={() => setSidebarOpen((v) => !v)}
             />
+          ) : view === 'skills' ? (
+            <div className="settings-pane">
+              <SkillsManager />
+            </div>
           ) : (
             <div className="settings-pane">
               <SettingsView />
@@ -94,11 +111,21 @@ export function App() {
       <footer className="statusbar">
         <div className="statusbar-group">
           <span className="statusbar-item statusbar-accent">
-            {view === 'workspace' ? 'Workspace' : 'Settings'}
+            {view === 'workspace'
+              ? 'Workspace'
+              : view === 'skills'
+                ? 'Skills'
+                : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>
         </div>
         <div className="statusbar-group">
+          <span
+            className="statusbar-item statusbar-ide"
+            title="IDE AI overhead — AIC spent by the assistant's own meta sessions (summaries, task plans). Separate from feature dev cost."
+          >
+            <SkillsIcon size={12} /> {formatAic(ideUsage?.totals.nanoAiu ?? 0)} IDE AI
+          </span>
           <span className="statusbar-item" title="AIC used (github nano_aiu)">
             ◆ {formatAic(totals?.nanoAiu ?? 0)} AIC
           </span>

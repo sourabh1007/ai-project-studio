@@ -118,6 +118,7 @@ import { createWorkspaceAdmin } from './workspace/workspace-admin-service.js';
 import { createTranscriptCollector } from './summarizer/transcript-collector.js';
 import { createSummaryRunner } from './summarizer/summary-runner.js';
 import { createSessionSummaryRunner } from './session-summary/session-summary-runner.js';
+import { createSessionSummaryAutoTrigger } from './session-summary/session-summary-auto.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
 import {
   createCliUsageStore,
@@ -130,6 +131,38 @@ import {
   sessionImportDefaults,
   type SessionImportConfig,
 } from './session-import/config.js';
+import { createSkillsService } from './skills/skills-service.js';
+import { createSkillsRepo } from './persistence/skills-repo.js';
+import {
+  SKILLS_NAMESPACE,
+  skillsConfigSchema,
+  skillsDefaults,
+  type SkillsConfig,
+} from './skills/config.js';
+import { createMetaRunner } from './meta/meta-runner.js';
+import {
+  META_NAMESPACE,
+  metaConfigSchema,
+  metaDefaults,
+  type MetaConfig,
+} from './meta/config.js';
+import { createFeatureTasksService } from './feature-tasks/feature-tasks-service.js';
+import { createTaskPlanRunner } from './feature-tasks/task-plan-runner.js';
+import { createFeatureTasksRepo } from './persistence/feature-tasks-repo.js';
+import {
+  FEATURE_TASKS_NAMESPACE,
+  featureTasksConfigSchema,
+  featureTasksDefaults,
+  type FeatureTasksConfig,
+} from './feature-tasks/config.js';
+import { createIdeUsageService } from './ide-usage/ide-usage-service.js';
+import { createIdeUsageRepo } from './persistence/ide-usage-repo.js';
+import {
+  IDE_USAGE_NAMESPACE,
+  ideUsageConfigSchema,
+  ideUsageDefaults,
+  type IdeUsageConfig,
+} from './ide-usage/config.js';
 
 import { createApiRoutes } from './api/routes.js';
 import { mountRoutes } from './api/express-adapter.js';
@@ -158,6 +191,10 @@ function main(): void {
   registry.register({ namespace: TERMINAL_NAMESPACE, schema: terminalConfigSchema, defaults: terminalDefaults });
   registry.register({ namespace: COPILOT_HISTORY_NAMESPACE, schema: copilotHistoryConfigSchema, defaults: copilotHistoryDefaults });
   registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
+  registry.register({ namespace: SKILLS_NAMESPACE, schema: skillsConfigSchema, defaults: skillsDefaults });
+  registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
+  registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
+  registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
 
   const config: ConfigObject = buildConfig({
     registry,
@@ -177,6 +214,10 @@ function main(): void {
   const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
   const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
   const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
+  const skillsConfig = config[SKILLS_NAMESPACE] as SkillsConfig;
+  const metaConfig = config[META_NAMESPACE] as MetaConfig;
+  const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
+  const ideUsageConfig = config[IDE_USAGE_NAMESPACE] as IdeUsageConfig;
 
   const logLevel = (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? 'info';
   const logger = createLogger(logLevel, (record) => {
@@ -251,6 +292,11 @@ function main(): void {
     reader: aggregateRepo,
     sessions: sessionRepo,
     clock,
+  });
+  // Independent meta-only reader so IDE AI overhead is reported separately and
+  // never affects the dev-cost feature/workspace rollups above.
+  const ideUsageService = createIdeUsageService({
+    reader: createIdeUsageRepo(db, ideUsageConfig),
   });
 
   // Providers. Registration is driven by a descriptor list so adding a new
@@ -353,6 +399,10 @@ function main(): void {
     clock,
     config: terminalConfig,
     transcriptStore: transcriptRepo,
+    // Lazily resolves the skills service (created below) at launch time.
+    skills: {
+      instructionsForSession: (id) => skillsService.instructionsForSession(id),
+    },
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
 
@@ -460,6 +510,16 @@ function main(): void {
     clock,
     config: summarizerConfig,
   });
+  // Auto-generate a concise AI summary when a dev session ends, so the work
+  // summary shows short summaries instead of the raw checkpoint dump without
+  // the user having to trigger it. Guarded against meta recursion + duplicates.
+  const sessionSummaryAuto = createSessionSummaryAutoTrigger({
+    summarizer: sessionSummarizer,
+    logger,
+  });
+  bus.on('session.ended', (session: Session) => {
+    sessionSummaryAuto.onSessionEnded(session);
+  });
 
   const sessionImportService = createSessionImportService({
     providers,
@@ -467,6 +527,39 @@ function main(): void {
     features: featureService,
     clock,
     config: sessionConfig,
+  });
+
+  const skillsService = createSkillsService({
+    repo: createSkillsRepo(db),
+    ids,
+    clock,
+    features: featureService,
+    sessions: sessionRepo,
+    config: skillsConfig,
+  });
+
+  // Shared headless-AI primitive reused by every AI feature (summaries,
+  // task plans, …) so they drive the CLI the same config-driven way.
+  const metaRunner = createMetaRunner({
+    launcher,
+    transcripts: transcriptRepo,
+    config: metaConfig,
+  });
+  const featureTasksRepo = createFeatureTasksRepo(db);
+  const featureTasksService = createFeatureTasksService({
+    repo: featureTasksRepo,
+    runner: createTaskPlanRunner({
+      meta: metaRunner,
+      features: featureService,
+      repo: featureTasksRepo,
+      ids,
+      clock,
+      config: featureTasksConfig,
+    }),
+    features: featureService,
+    ids,
+    clock,
+    config: featureTasksConfig,
   });
 
   // HTTP API.
@@ -490,6 +583,9 @@ function main(): void {
       workSummaries: workSummaryService,
       sessionSummaries: sessionSummarizer,
       imports: sessionImportService,
+      skills: skillsService,
+      tasks: featureTasksService,
+      ideUsage: ideUsageService,
       configRegistry: registry,
       currentConfig: config,
       logger,

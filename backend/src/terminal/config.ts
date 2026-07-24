@@ -14,6 +14,8 @@ export const terminalConfigSchema = z.object({
   defaultRows: z.number().int().positive(),
   /** Max bytes of terminal output retained for replay to late-joining clients. */
   scrollbackBytes: z.number().int().positive(),
+  /** Keystroke appended after seeded skill instructions to submit them. */
+  instructionSeedSuffix: z.string(),
 });
 
 export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
@@ -24,4 +26,5 @@ export const terminalDefaults: TerminalConfig = {
   defaultCols: 120,
   defaultRows: 30,
   scrollbackBytes: 262144,
+  instructionSeedSuffix: '\r',
 };

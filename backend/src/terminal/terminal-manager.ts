@@ -12,6 +12,11 @@ import {
   type TerminalSession,
 } from './terminal-session.js';
 
+/** Supplies the composed instruction block to seed into an interactive session. */
+export interface SessionInstructionsProvider {
+  instructionsForSession(sessionId: string): string;
+}
+
 export interface TerminalManagerDeps {
   spawner: PtySpawner;
   providers: ProviderRegistry;
@@ -19,6 +24,7 @@ export interface TerminalManagerDeps {
   clock: Clock;
   config: TerminalConfig;
   transcriptStore: TranscriptStore;
+  skills: SessionInstructionsProvider;
 }
 
 export interface LaunchOptions {
@@ -98,6 +104,16 @@ export function createTerminalManager(
     });
 
     sessions.set(session.id, terminal);
+
+    // Seed the effective instruction skills as the first input so the
+    // interactive AI follows them. Meta sessions carry no user skills.
+    if (session.kind !== 'meta') {
+      const instructions = deps.skills.instructionsForSession(session.id);
+      if (instructions.length > 0) {
+        terminal.write(`${instructions}${deps.config.instructionSeedSuffix}`);
+      }
+    }
+
     return terminal;
   }
 
