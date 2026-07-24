@@ -172,6 +172,77 @@ describe('createApiClient', () => {
     );
   });
 
+  it('performs the full skills lifecycle over HTTP', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'k1' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.listSkills();
+    await client.getSkill('k1');
+    await client.createSkill({ name: 'A', kind: 'instruction', instructions: 'x' });
+    await client.updateSkill('k1', { name: 'B', instructions: 'y' });
+    await client.deleteSkill('k1');
+    await client.tagSkill('k1', 'feature', 'f1');
+    await client.untagSkill('a1');
+    await client.listFeatureSkills('f1');
+    await client.listSessionSkills('s1');
+    await client.exportSkill('k1');
+    await client.exportSkills();
+    await client.importSkill({
+      schemaVersion: 1,
+      name: 'A',
+      kind: 'instruction',
+      instructions: 'x',
+    });
+
+    expect(calls[0][0]).toBe('/api/skills');
+    expect(calls[1][0]).toBe('/api/skills/k1');
+    expect(calls[2][1]?.method).toBe('POST');
+    expect(calls[3][0]).toBe('/api/skills/k1');
+    expect(calls[3][1]?.method).toBe('PUT');
+    expect(calls[4][1]?.method).toBe('DELETE');
+    expect(calls[5][0]).toBe('/api/skills/k1/attachments');
+    expect(calls[5][1]?.body).toBe(
+      JSON.stringify({ scope: 'feature', targetId: 'f1' }),
+    );
+    expect(calls[6][0]).toBe('/api/skills/attachments/a1');
+    expect(calls[6][1]?.method).toBe('DELETE');
+    expect(calls[7][0]).toBe('/api/features/f1/skills');
+    expect(calls[8][0]).toBe('/api/sessions/s1/skills');
+    expect(calls[9][0]).toBe('/api/skills/k1/export');
+    expect(calls[10][0]).toBe('/api/skills/export');
+    expect(calls[11][0]).toBe('/api/skills/import');
+    expect(calls[11][1]?.method).toBe('POST');
+  });
+
+  it('performs the full feature-tasks lifecycle over HTTP', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 't1' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.listFeatureTasks('f1');
+    await client.generateFeatureTasks('f1');
+    await client.addFeatureTask('f1', { title: 'New', detail: 'd' });
+    await client.toggleFeatureTask('t1');
+    await client.removeFeatureTask('t1');
+
+    expect(calls[0][0]).toBe('/api/features/f1/tasks');
+    expect(calls[1][0]).toBe('/api/features/f1/tasks/generate');
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[2][0]).toBe('/api/features/f1/tasks');
+    expect(calls[2][1]?.method).toBe('POST');
+    expect(calls[2][1]?.body).toBe(JSON.stringify({ title: 'New', detail: 'd' }));
+    expect(calls[3][0]).toBe('/api/tasks/t1');
+    expect(calls[3][1]?.method).toBe('PUT');
+    expect(calls[4][0]).toBe('/api/tasks/t1');
+    expect(calls[4][1]?.method).toBe('DELETE');
+  });
+
+  it('reads IDE AI usage', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ totals: {} }));
+    const client = createApiClient({ fetchImpl });
+    await client.getIdeUsage();
+    expect(calls[0][0]).toBe('/api/usage/ide');
+  });
+
   it('throws ApiError on a non-ok response', async () => {
     const { fetchImpl } = mockFetch(jsonResponse({}, 500));
     const client = createApiClient({ fetchImpl });

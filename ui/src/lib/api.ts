@@ -1,17 +1,27 @@
 import type {
   ConfigResponse,
   CreateFeatureInput,
+  CreateSkillInput,
+  AddFeatureTaskInput,
   Feature,
   FeatureSummary,
+  FeatureTask,
   FeatureUsage,
   FeatureWorkSummary,
+  IdeUsage,
   ImportableSession,
   ImportSessionInput,
   ModelInfo,
   ProviderInfo,
   Session,
+  Skill,
+  SkillAttachment,
+  SkillExport,
+  SkillScope,
   StartSessionInput,
   StartTerminalSessionInput,
+  TaggedSkill,
+  UpdateSkillInput,
   UsageTotals,
   WorkspaceStats,
 } from './types.js';
@@ -99,6 +109,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<FeatureUsage>(`/features/${featureId}/usage`),
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
+    getIdeUsage: () => request<IdeUsage>('/usage/ide'),
     generateSummary: (featureId: string) =>
       request<FeatureSummary>(
         `/features/${featureId}/summary`,
@@ -118,6 +129,39 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     listModels: (providerId: string) =>
       request<ModelInfo[]>(`/providers/${providerId}/models`),
+    listSkills: () => request<Skill[]>('/skills'),
+    getSkill: (id: string) => request<Skill>(`/skills/${id}`),
+    createSkill: (input: CreateSkillInput) =>
+      request<Skill>('/skills', jsonBody(input)),
+    updateSkill: (id: string, input: UpdateSkillInput) =>
+      request<Skill>(`/skills/${id}`, putBody(input)),
+    deleteSkill: (id: string) =>
+      request<{ id: string }>(`/skills/${id}`, del()),
+    tagSkill: (id: string, scope: SkillScope, targetId: string) =>
+      request<SkillAttachment>(
+        `/skills/${id}/attachments`,
+        jsonBody({ scope, targetId }),
+      ),
+    untagSkill: (attachmentId: string) =>
+      request<{ id: string }>(`/skills/attachments/${attachmentId}`, del()),
+    listFeatureSkills: (featureId: string) =>
+      request<TaggedSkill[]>(`/features/${featureId}/skills`),
+    listSessionSkills: (sessionId: string) =>
+      request<TaggedSkill[]>(`/sessions/${sessionId}/skills`),
+    exportSkill: (id: string) => request<SkillExport>(`/skills/${id}/export`),
+    exportSkills: () => request<SkillExport[]>('/skills/export'),
+    importSkill: (payload: SkillExport) =>
+      request<Skill>('/skills/import', jsonBody(payload)),
+    listFeatureTasks: (featureId: string) =>
+      request<FeatureTask[]>(`/features/${featureId}/tasks`),
+    generateFeatureTasks: (featureId: string) =>
+      request<FeatureTask[]>(`/features/${featureId}/tasks/generate`, jsonBody({})),
+    addFeatureTask: (featureId: string, input: AddFeatureTaskInput) =>
+      request<FeatureTask>(`/features/${featureId}/tasks`, jsonBody(input)),
+    toggleFeatureTask: (taskId: string) =>
+      request<FeatureTask>(`/tasks/${taskId}`, putBody({})),
+    removeFeatureTask: (taskId: string) =>
+      request<{ id: string }>(`/tasks/${taskId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
   };
 }

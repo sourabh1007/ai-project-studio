@@ -85,6 +85,13 @@ export interface WorkspaceStats {
   totalSessions: number;
 }
 
+/** The IDE's own AI (meta-session) usage — assistant overhead, not dev cost. */
+export interface IdeUsage {
+  totals: UsageTotals;
+  byModel: ModelBreakdown[];
+  byDay: DailyBreakdown[];
+}
+
 export interface FeatureSummary {
   featureId: string;
   content: string;
@@ -177,4 +184,62 @@ export interface StartTerminalSessionInput {
   providerId?: string;
   model?: string;
   kind?: SessionKind;
+}
+
+export type SkillKind = 'instruction' | 'task-plan';
+export type SkillScope = 'feature' | 'session';
+
+export interface Skill {
+  id: string;
+  name: string;
+  kind: SkillKind;
+  instructions: string;
+  createdAt: string;
+}
+
+export interface SkillAttachment {
+  id: string;
+  skillId: string;
+  scope: SkillScope;
+  targetId: string;
+  createdAt: string;
+}
+
+export interface TaggedSkill extends Skill {
+  attachmentId: string;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  kind: SkillKind;
+  instructions: string;
+}
+
+export interface UpdateSkillInput {
+  name: string;
+  instructions: string;
+}
+
+export interface SkillExport {
+  schemaVersion: number;
+  name: string;
+  kind: SkillKind;
+  instructions: string;
+}
+
+export type FeatureTaskStatus = 'pending' | 'done';
+
+export interface FeatureTask {
+  id: string;
+  featureId: string;
+  title: string;
+  detail: string;
+  status: FeatureTaskStatus;
+  position: number;
+  createdAt: string;
+}
+
+export interface AddFeatureTaskInput {
+  title: string;
+  detail?: string;
 }

@@ -18,6 +18,10 @@ describe('db schema/connection', () => {
         'usage_events',
         'transcripts',
         'summaries',
+        'session_summaries',
+        'skills',
+        'skill_attachments',
+        'feature_tasks',
       ]),
     );
   });

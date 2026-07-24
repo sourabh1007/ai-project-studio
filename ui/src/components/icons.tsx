@@ -7,6 +7,9 @@
 import type { ComponentType } from 'react';
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
   Check,
   ChevronRight,
   Circle,
@@ -17,15 +20,20 @@ import {
   Files,
   Gauge,
   History,
+  ListChecks,
   Moon,
+  MoreHorizontal,
   PanelLeftClose,
   Pencil,
   Plus,
   RefreshCw,
   Settings,
+  Sparkles,
   Sun,
+  Tag,
   Timer,
   Trash2,
+  Upload,
   X,
   type LucideProps,
 } from 'lucide-react';
@@ -76,6 +84,7 @@ export const CollapseSidebarIcon = makeIcon(PanelLeftClose);
 export const CircleIcon = makeIcon(Circle);
 export const ClockIcon = makeIcon(Clock);
 export const RefreshIcon = makeIcon(RefreshCw);
+export const MoreIcon = makeIcon(MoreHorizontal);
 
 // Navigation icons.
 export const FilesIcon = makeIcon(Files);
@@ -86,7 +95,17 @@ export const MoonIcon = makeIcon(Moon);
 // Dashboard section icons.
 export const OverviewIcon = makeIcon(Gauge);
 export const UsageIcon = makeIcon(Coins);
+export const ArrowUpIcon = makeIcon(ArrowUp);
+export const ArrowDownIcon = makeIcon(ArrowDown);
 export const ActivityIcon = makeIcon(Activity);
 export const TimeIcon = makeIcon(Timer);
 export const HistoryIcon = makeIcon(History);
 export const SummaryIcon = makeIcon(FileText);
+
+// Skills icons.
+export const SkillsIcon = makeIcon(Sparkles);
+export const InstructionSkillIcon = makeIcon(BookOpen);
+export const TaskPlanSkillIcon = makeIcon(ListChecks);
+export const TagIcon = makeIcon(Tag);
+export const ExportIcon = makeIcon(Download);
+export const UploadIcon = makeIcon(Upload);

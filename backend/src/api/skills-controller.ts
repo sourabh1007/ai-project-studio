@@ -1,0 +1,128 @@
+import { z } from 'zod';
+import type { SkillsService } from '../skills/skills-service.js';
+import type { Route } from './http-contract.js';
+import { parseInput } from './request-validation.js';
+
+const createSkillSchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['instruction', 'task-plan']),
+  instructions: z.string(),
+});
+
+const updateSkillSchema = z.object({
+  name: z.string().min(1),
+  instructions: z.string(),
+});
+
+const tagSkillSchema = z.object({
+  scope: z.enum(['feature', 'session']),
+  targetId: z.string().min(1),
+});
+
+export interface SkillsControllerDeps {
+  skills: SkillsService;
+}
+
+/**
+ * Routes for the central skills library: CRUD, tag/untag to a feature or
+ * session, list by target, and JSON export/import. More specific paths are
+ * listed before parameterized ones so `/skills/export` is not swallowed by
+ * `/skills/:id`.
+ */
+export function createSkillsRoutes(deps: SkillsControllerDeps): Route[] {
+  return [
+    {
+      method: 'get',
+      path: '/skills/export',
+      handler: () => ({ status: 200, body: deps.skills.exportAll() }),
+    },
+    {
+      method: 'post',
+      path: '/skills/import',
+      handler: (req) => ({
+        status: 201,
+        body: deps.skills.importSkill(req.body),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/skills',
+      handler: () => ({ status: 200, body: deps.skills.listSkills() }),
+    },
+    {
+      method: 'post',
+      path: '/skills',
+      handler: (req) => {
+        const input = parseInput(createSkillSchema, req.body);
+        return { status: 201, body: deps.skills.createSkill(input) };
+      },
+    },
+    {
+      method: 'get',
+      path: '/skills/:id/export',
+      handler: (req) => ({
+        status: 200,
+        body: deps.skills.exportSkill(req.params.id),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/skills/:id',
+      handler: (req) => ({
+        status: 200,
+        body: deps.skills.getSkill(req.params.id),
+      }),
+    },
+    {
+      method: 'put',
+      path: '/skills/:id',
+      handler: (req) => {
+        const input = parseInput(updateSkillSchema, req.body);
+        return { status: 200, body: deps.skills.updateSkill(req.params.id, input) };
+      },
+    },
+    {
+      method: 'delete',
+      path: '/skills/:id',
+      handler: (req) => {
+        deps.skills.deleteSkill(req.params.id);
+        return { status: 200, body: { id: req.params.id } };
+      },
+    },
+    {
+      method: 'post',
+      path: '/skills/:id/attachments',
+      handler: (req) => {
+        const input = parseInput(tagSkillSchema, req.body);
+        return {
+          status: 201,
+          body: deps.skills.tag({ skillId: req.params.id, ...input }),
+        };
+      },
+    },
+    {
+      method: 'delete',
+      path: '/skills/attachments/:attachmentId',
+      handler: (req) => {
+        deps.skills.untag(req.params.attachmentId);
+        return { status: 200, body: { id: req.params.attachmentId } };
+      },
+    },
+    {
+      method: 'get',
+      path: '/features/:featureId/skills',
+      handler: (req) => ({
+        status: 200,
+        body: deps.skills.listForFeature(req.params.featureId),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/sessions/:sessionId/skills',
+      handler: (req) => ({
+        status: 200,
+        body: deps.skills.listForSession(req.params.sessionId),
+      }),
+    },
+  ];
+}

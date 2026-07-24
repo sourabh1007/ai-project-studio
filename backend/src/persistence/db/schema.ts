@@ -60,6 +60,29 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS skill_attachments (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS feature_tasks (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
 ];
 
 /** Applies the schema to a database connection. */

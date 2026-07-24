@@ -7,9 +7,12 @@ import type { Feature, Session, SessionBreakdown } from '../../lib/types.js';
 import { formatAic, formatCompactNumber } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
+import { sessionDotClass } from '../../lib/session-status.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import {
   ChevronIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   CheckIcon,
   CloseIcon,
   CollapseSidebarIcon,
@@ -17,7 +20,10 @@ import {
   PencilIcon,
   PlusIcon,
   TrashIcon,
+  UsageIcon,
 } from '../../components/icons.js';
+import { OverflowMenu } from '../../components/overflow-menu.js';
+import { SkillChips } from '../skills/skill-chips.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 
@@ -52,14 +58,7 @@ function SessionRow({
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
 
-  const dot =
-    session.status === 'running'
-      ? 'dot-running'
-      : session.status === 'failed'
-        ? 'dot-failed'
-        : session.status === 'completed'
-          ? 'dot-completed'
-          : 'dot-idle';
+  const dot = sessionDotClass(session.status);
 
   const name = sessionDisplayName(customName, ordinal);
   const model = session.resolvedModel ?? session.requestedModel;
@@ -85,7 +84,7 @@ function SessionRow({
 
   if (editing) {
     return (
-      <div className="session-item is-editing">
+      <div className="session-card is-editing">
         <span className={`dot ${dot}`} aria-hidden="true" />
         <input
           className="session-name-input"
@@ -107,77 +106,79 @@ function SessionRow({
   }
 
   return (
-    <div className={`session-item ${active ? 'is-active' : ''}`.trim()}>
-      <button
-        type="button"
-        className="session-open"
-        aria-current={active ? 'true' : undefined}
-        onClick={onOpen}
-        onDoubleClick={startEditing}
-      >
-        <span className={`dot ${dot}`} aria-hidden="true" />
-        <span className="session-body">
-          <span className="session-name">{name}</span>
-          <span className="session-meta" title={`${session.provider} · ${model}`}>
-            {session.provider} · {model}
-          </span>
-        </span>
-        <span className="session-metrics" aria-hidden="true">
-          <span className="metric metric-credits" title="AIC used (github nano_aiu)">
-            {formatAic(totals.nanoAiu)}
-          </span>
-          <span className="metric" title="Input tokens">
-            ↑{formatCompactNumber(totals.inputTokens)}
-          </span>
-          <span className="metric" title="Output tokens">
-            ↓{formatCompactNumber(totals.outputTokens)}
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        className="session-rename"
-        title="Rename session"
-        aria-label={`Rename ${name}`}
-        onClick={startEditing}
-      >
-        <PencilIcon />
-      </button>
-      {confirming ? (
-        <span className="row-confirm" role="group" aria-label="Confirm delete">
-          <button
-            type="button"
-            className="row-confirm-yes"
-            title="Confirm delete"
-            aria-label={`Confirm delete ${name}`}
-            onClick={() => {
-              setConfirming(false);
-              onDelete();
-            }}
-          >
-            <CheckIcon />
-          </button>
-          <button
-            type="button"
-            className="row-confirm-no"
-            title="Cancel"
-            aria-label="Cancel delete"
-            onClick={() => setConfirming(false)}
-          >
-            <CloseIcon />
-          </button>
-        </span>
-      ) : (
+    <div className={`session-card ${active ? 'is-active' : ''}`.trim()}>
+      <div className="session-card-head">
         <button
           type="button"
-          className="session-delete"
-          title="Delete session"
-          aria-label={`Delete ${name}`}
-          onClick={() => setConfirming(true)}
+          className="session-open"
+          aria-current={active ? 'true' : undefined}
+          onClick={onOpen}
+          onDoubleClick={startEditing}
         >
-          <TrashIcon />
+          <span className={`dot ${dot}`} aria-hidden="true" />
+          <span className="session-name">{name}</span>
         </button>
-      )}
+        {confirming ? (
+          <span className="row-confirm" role="group" aria-label="Confirm delete">
+            <button
+              type="button"
+              className="row-confirm-yes"
+              title="Confirm delete"
+              aria-label={`Confirm delete ${name}`}
+              onClick={() => {
+                setConfirming(false);
+                onDelete();
+              }}
+            >
+              <CheckIcon />
+            </button>
+            <button
+              type="button"
+              className="row-confirm-no"
+              title="Cancel"
+              aria-label="Cancel delete"
+              onClick={() => setConfirming(false)}
+            >
+              <CloseIcon />
+            </button>
+          </span>
+        ) : (
+          <OverflowMenu
+            label={`Actions for ${name}`}
+            actions={[
+              {
+                label: 'Rename',
+                icon: <PencilIcon />,
+                onSelect: startEditing,
+              },
+              {
+                label: 'Delete',
+                icon: <TrashIcon />,
+                danger: true,
+                onSelect: () => setConfirming(true),
+              },
+            ]}
+          />
+        )}
+      </div>
+
+      <div className="session-meta-row" title={`${session.provider} · ${model}`}>
+        {session.provider} · {model}
+      </div>
+
+      <SkillChips scope="session" targetId={session.id} />
+
+      <div className="session-metrics-row" aria-hidden="true">
+        <span className="metric metric-credits" title="AIC used (github nano_aiu)">
+          <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
+        </span>
+        <span className="metric" title="Input tokens">
+          <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
+        </span>
+        <span className="metric" title="Output tokens">
+          <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
+        </span>
+      </div>
     </div>
   );
 }
@@ -294,15 +295,6 @@ function FeatureNode({
         <button
           type="button"
           className="tree-action"
-          title="Rename feature"
-          aria-label={`Rename ${feature.name}`}
-          onClick={startEditing}
-        >
-          <PencilIcon />
-        </button>
-        <button
-          type="button"
-          className="tree-action"
           title="New session"
           aria-label={`New session in ${feature.name}`}
           onClick={() => {
@@ -312,19 +304,6 @@ function FeatureNode({
           }}
         >
           <PlusIcon />
-        </button>
-        <button
-          type="button"
-          className="tree-action"
-          title="Import session"
-          aria-label={`Import a session into ${feature.name}`}
-          onClick={() => {
-            setExpanded(true);
-            setCreating(false);
-            setImporting(true);
-          }}
-        >
-          <ImportIcon />
         </button>
         {confirming ? (
           <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -351,16 +330,36 @@ function FeatureNode({
             </button>
           </span>
         ) : (
-          <button
-            type="button"
-            className="tree-action tree-action-danger"
-            title="Delete feature"
-            aria-label={`Delete ${feature.name}`}
-            onClick={() => setConfirming(true)}
-          >
-            <TrashIcon />
-          </button>
+          <OverflowMenu
+            label={`Actions for ${feature.name}`}
+            actions={[
+              {
+                label: 'Rename',
+                icon: <PencilIcon />,
+                onSelect: startEditing,
+              },
+              {
+                label: 'Import session',
+                icon: <ImportIcon />,
+                onSelect: () => {
+                  setExpanded(true);
+                  setCreating(false);
+                  setImporting(true);
+                },
+              },
+              {
+                label: 'Delete feature',
+                icon: <TrashIcon />,
+                danger: true,
+                onSelect: () => setConfirming(true),
+              },
+            ]}
+          />
         )}
+      </div>
+
+      <div className="feature-tags">
+        <SkillChips scope="feature" targetId={feature.id} />
       </div>
 
       {expanded && (

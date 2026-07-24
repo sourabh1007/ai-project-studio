@@ -1,0 +1,298 @@
+import { useRef, useState } from 'react';
+import { useApi } from '../../app/api-context.js';
+import { useAsync } from '../../hooks/use-async.js';
+import type { Skill, SkillExport, SkillKind } from '../../lib/types.js';
+import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import {
+  ExportIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+  UploadIcon,
+} from '../../components/icons.js';
+import { SKILL_KINDS, SkillKindIcon, skillKindLabel } from './skill-kind.js';
+
+function downloadJson(name: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: 'application/json',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function SkillForm({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial?: Skill;
+  onSubmit: (input: {
+    name: string;
+    kind: SkillKind;
+    instructions: string;
+  }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [kind, setKind] = useState<SkillKind>(initial?.kind ?? 'instruction');
+  const [instructions, setInstructions] = useState(initial?.instructions ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!name.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit({ name: name.trim(), kind, instructions });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="feature-form">
+      <div className="field">
+        <label htmlFor="skill-name">Name</label>
+        <input
+          id="skill-name"
+          className="input"
+          autoFocus
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. Follow TDD"
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="skill-kind">Kind</label>
+        <select
+          id="skill-kind"
+          className="input"
+          value={kind}
+          disabled={Boolean(initial)}
+          onChange={(event) => setKind(event.target.value as SkillKind)}
+        >
+          {SKILL_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {skillKindLabel(k)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="skill-instructions">Instructions</label>
+        <textarea
+          id="skill-instructions"
+          className="textarea textarea-lg"
+          value={instructions}
+          onChange={(event) => setInstructions(event.target.value)}
+          placeholder="Guidance injected into every session this skill is tagged to…"
+        />
+      </div>
+      <ErrorText error={error} />
+      <div className="row modal-actions">
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button onClick={submit} disabled={busy}>
+          {busy ? 'Saving…' : initial ? 'Save changes' : 'Create skill'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function SkillsManager() {
+  const api = useApi();
+  const skills = useAsync(() => api.listSkills(), []);
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Skill | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  async function create(input: {
+    name: string;
+    kind: SkillKind;
+    instructions: string;
+  }) {
+    await api.createSkill(input);
+    setCreating(false);
+    skills.reload();
+  }
+
+  async function update(
+    id: string,
+    input: { name: string; instructions: string },
+  ) {
+    await api.updateSkill(id, input);
+    setEditing(null);
+    skills.reload();
+  }
+
+  async function remove(skill: Skill) {
+    setError(null);
+    try {
+      await api.deleteSkill(skill.id);
+      skills.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function exportOne(skill: Skill) {
+    const data = await api.exportSkill(skill.id);
+    downloadJson(`${skill.name}.skill.json`, data);
+  }
+
+  async function exportAll() {
+    const data = await api.exportSkills();
+    downloadJson('skills.json', data);
+  }
+
+  async function onUpload(file: File) {
+    setError(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as SkillExport | SkillExport[];
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      for (const payload of list) {
+        await api.importSkill(payload);
+      }
+      skills.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const list = skills.data ?? [];
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Skills</h2>
+          <p className="page-subtitle">
+            Reusable instruction blocks you can tag to a feature or a single
+            session. Tagged skills are injected into every session run.
+          </p>
+        </div>
+        <div className="row">
+          <Button variant="ghost" onClick={() => fileInput.current?.click()}>
+            <span className="btn-icon">
+              <UploadIcon size={15} />
+            </span>
+            Upload
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={exportAll}
+            disabled={list.length === 0}
+          >
+            <span className="btn-icon">
+              <ExportIcon size={15} />
+            </span>
+            Download all
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <span className="btn-icon">
+              <PlusIcon size={15} />
+            </span>
+            New skill
+          </Button>
+        </div>
+      </div>
+
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) {
+            void onUpload(file);
+          }
+          event.target.value = '';
+        }}
+      />
+
+      <ErrorText error={error ?? skills.error} />
+      {skills.loading && <EmptyState message="Loading skills…" />}
+      {!skills.loading && list.length === 0 && (
+        <EmptyState message="No skills yet. Create your first reusable instruction." />
+      )}
+
+      <div className="skill-list">
+        {list.map((skill) => (
+          <div key={skill.id} className="skill-card">
+            <div className="skill-card-head">
+              <span className={`skill-chip skill-chip-${skill.kind}`}>
+                <SkillKindIcon kind={skill.kind} />
+                {skillKindLabel(skill.kind)}
+              </span>
+              <span className="skill-card-name">{skill.name}</span>
+              <div className="skill-card-actions">
+                <button
+                  type="button"
+                  className="tree-action"
+                  title="Edit"
+                  aria-label={`Edit ${skill.name}`}
+                  onClick={() => setEditing(skill)}
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  type="button"
+                  className="tree-action"
+                  title="Download"
+                  aria-label={`Download ${skill.name}`}
+                  onClick={() => void exportOne(skill)}
+                >
+                  <ExportIcon />
+                </button>
+                <button
+                  type="button"
+                  className="tree-action tree-action-danger"
+                  title="Delete"
+                  aria-label={`Delete ${skill.name}`}
+                  onClick={() => void remove(skill)}
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            </div>
+            {skill.instructions && (
+              <p className="skill-card-body">{skill.instructions}</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {creating && (
+        <Modal title="New skill" onClose={() => setCreating(false)}>
+          <SkillForm onSubmit={create} onCancel={() => setCreating(false)} />
+        </Modal>
+      )}
+      {editing && (
+        <Modal title="Edit skill" onClose={() => setEditing(null)}>
+          <SkillForm
+            initial={editing}
+            onSubmit={(input) => update(editing.id, input)}
+            onCancel={() => setEditing(null)}
+          />
+        </Modal>
+      )}
+    </Card>
+  );
+}
