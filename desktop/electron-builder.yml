@@ -1,5 +1,5 @@
-appId: com.sourabh1007.copilotworkspace
-productName: Copilot Workspace
+appId: com.sourabh1007.aiprojectstudio
+productName: AI Project Studio
 copyright: Copyright © 2026 sourabh1007
 
 # Electron is hoisted to the monorepo root, so electron-builder can't infer the

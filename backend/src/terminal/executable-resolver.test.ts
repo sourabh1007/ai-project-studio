@@ -75,8 +75,8 @@ describe('resolveExecutable', () => {
     // Exercises the default fileExists (fs.existsSync), default isWindows
     // (process.platform) and default pathEnv (process.env.PATH). A name that
     // cannot resolve anywhere returns the original command deterministically.
-    expect(resolveExecutable('copilot-workspace-missing-xyz')).toBe(
-      'copilot-workspace-missing-xyz',
+    expect(resolveExecutable('ai-project-studio-missing-xyz')).toBe(
+      'ai-project-studio-missing-xyz',
     );
   });
 

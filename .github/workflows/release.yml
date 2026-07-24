@@ -60,7 +60,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: copilot-workspace-${{ matrix.label }}
+          name: ai-project-studio-${{ matrix.label }}
           path: |
             desktop/release/*.exe
             desktop/release/*.dmg

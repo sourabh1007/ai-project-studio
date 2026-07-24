@@ -120,7 +120,7 @@ function createWindow(loadUrl) {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#0b1020',
-    title: 'Copilot Workspace',
+    title: 'AI Project Studio',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

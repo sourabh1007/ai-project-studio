@@ -1596,6 +1596,10 @@ body.is-resizing {
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--editor-fg-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
   white-space: pre-wrap;
 }
 

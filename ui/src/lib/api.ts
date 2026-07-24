@@ -36,7 +36,7 @@ export class ApiError extends Error {
   }
 }
 
-/** Typed client for the Copilot Workspace backend API. */
+/** Typed client for the AI Project Studio backend API. */
 export function createApiClient(options: ApiClientOptions = {}) {
   const baseUrl = options.baseUrl ?? '/api';
   const doFetch = options.fetchImpl ?? ((input, init) => fetch(input, init));

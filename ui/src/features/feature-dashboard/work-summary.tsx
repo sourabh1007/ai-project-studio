@@ -55,7 +55,9 @@ function SessionCard({
       {open && (
         <div className="work-session-body">
           {session.summary && (
-            <p className="work-session-summary">{session.summary}</p>
+            <p className="work-session-summary" title={session.summary}>
+              {session.summary}
+            </p>
           )}
 
           {session.checkpoints.length > 0 ? (
@@ -69,7 +71,9 @@ function SessionCard({
                     </span>
                   </div>
                   {cp.overview && (
-                    <p className="work-checkpoint-overview">{cp.overview}</p>
+                    <p className="work-checkpoint-overview" title={cp.overview}>
+                      {cp.overview}
+                    </p>
                   )}
                 </li>
               ))}

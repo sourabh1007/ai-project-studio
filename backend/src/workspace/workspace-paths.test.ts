@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { defaultWorkspaceDataDir } from './workspace-paths.js';
 
-const APP_NAME = '@copilot-workspace/desktop';
+const APP_NAME = '@ai-project-studio/desktop';
 const realPlatform = process.platform;
 
 function setPlatform(value: NodeJS.Platform): void {

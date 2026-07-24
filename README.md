@@ -1,8 +1,8 @@
-# Copilot Workspace
+# AI Project Studio
 
-[![CI](https://github.com/sourabh1007/copilot-workspace/actions/workflows/ci.yml/badge.svg)](https://github.com/sourabh1007/copilot-workspace/actions/workflows/ci.yml)
+[![CI](https://github.com/sourabh1007/ai-project-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/sourabh1007/ai-project-studio/actions/workflows/ci.yml)
 
-A project-centric management and observability layer over the GitHub Copilot and Agency CLIs. Copilot Workspace is an IDE-style desktop app that organizes CLI work by **Feature → Session** and surfaces live **credit, token, and AIC** analytics for every run — using the usage telemetry the CLIs already emit, not a home-grown counter.
+A project-centric management and observability layer over the GitHub Copilot and Agency CLIs. AI Project Studio is an IDE-style desktop app that organizes CLI work by **Feature → Session** and surfaces live **credit, token, and AIC** analytics for every run — using the usage telemetry the CLIs already emit, not a home-grown counter.
 
 Built as an npm-workspaces monorepo: a modular **Express** backend, a **React + Vite** UI, and an **Electron** shell that ties them together into a single desktop application.
 
@@ -70,8 +70,8 @@ flowchart TB
 
 ### Install
 ```bash
-git clone https://github.com/sourabh1007/copilot-workspace.git
-cd copilot-workspace
+git clone https://github.com/sourabh1007/ai-project-studio.git
+cd ai-project-studio
 npm install
 ```
 

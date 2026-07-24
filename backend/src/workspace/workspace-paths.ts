@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const APP_NAME = '@copilot-workspace/desktop';
+const APP_NAME = '@ai-project-studio/desktop';
 
 function userDataRoot(): string {
   if (process.platform === 'win32') {

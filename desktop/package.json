@@ -1,8 +1,8 @@
 {
-  "name": "@copilot-workspace/desktop",
-  "version": "0.1.1",
+  "name": "@ai-project-studio/desktop",
+  "version": "0.2.0",
   "private": true,
-  "description": "Electron desktop shell for Copilot Workspace.",
+  "description": "Electron desktop shell for AI Project Studio.",
   "author": "sourabh1007",
   "main": "main.cjs",
   "scripts": {

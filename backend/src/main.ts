@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdirSync, existsSync, copyFileSync, cpSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
 import express from 'express';
@@ -189,6 +189,27 @@ function main(): void {
   const clock = createClock();
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
+
+  // One-time migration from the pre-rebrand storage location. The app's data
+  // directory identifier changed with the "Copilot Workspace" → "AI Project
+  // Studio" rebrand, so on first launch under the new brand copy the previous
+  // brand's data directory (workspace.db + usage/) to preserve existing
+  // features, sessions, and usage history.
+  const currentDataDir = dirname(persistenceConfig.databasePath);
+  const previousBrandDataDir = currentDataDir
+    .split(pathJoin('@ai-project-studio', 'desktop'))
+    .join(pathJoin('@copilot-workspace', 'desktop'));
+  if (
+    previousBrandDataDir !== currentDataDir &&
+    !existsSync(currentDataDir) &&
+    existsSync(previousBrandDataDir)
+  ) {
+    cpSync(previousBrandDataDir, currentDataDir, { recursive: true });
+    logger.info('Migrated data directory from previous brand', {
+      from: previousBrandDataDir,
+      to: currentDataDir,
+    });
+  }
 
   const legacyDatabasePath = pathJoin(
     process.cwd(),
@@ -516,7 +537,7 @@ function main(): void {
 
   const server = app.listen(apiConfig.port, apiConfig.host, () => {
     logger.info(
-      `Copilot Workspace API listening on http://${apiConfig.host}:${apiConfig.port}${apiConfig.basePath}`,
+      `AI Project Studio API listening on http://${apiConfig.host}:${apiConfig.port}${apiConfig.basePath}`,
     );
   });
 

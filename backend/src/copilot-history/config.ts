@@ -24,5 +24,5 @@ export const copilotHistoryDefaults: CopilotHistoryConfig = {
   subdir: '.copilot',
   databaseFile: 'session-store.db',
   maxCheckpointsPerSession: 20,
-  maxOverviewChars: 2000,
+  maxOverviewChars: 600,
 };
