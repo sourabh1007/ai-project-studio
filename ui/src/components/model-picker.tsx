@@ -12,7 +12,7 @@ export function ModelPicker({
   loading: boolean;
 }) {
   return (
-    <div className="field">
+    <div className="field picker-field">
       <label htmlFor="model-picker">Model</label>
       <select
         id="model-picker"

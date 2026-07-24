@@ -10,7 +10,7 @@ export function ProviderPicker({
   onChange: (id: string) => void;
 }) {
   return (
-    <div className="field">
+    <div className="field picker-field">
       <label htmlFor="provider-picker">Provider</label>
       <select
         id="provider-picker"
