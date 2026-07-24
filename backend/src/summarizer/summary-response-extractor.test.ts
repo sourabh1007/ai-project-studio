@@ -42,4 +42,16 @@ describe('extractSummaryText', () => {
     const line = JSON.stringify({ response: '   ', text: 'from text key' });
     expect(extractSummaryText(transcript([line]), config)).toBe('from text key');
   });
+
+  it('clamps summaries longer than maxSummaryChars and appends an ellipsis', () => {
+    const long = 'a'.repeat(config.maxSummaryChars + 50);
+    const result = extractSummaryText(transcript([long]), config);
+    expect(result).toBe(`${'a'.repeat(config.maxSummaryChars)}…`);
+    expect(result.length).toBe(config.maxSummaryChars + 1);
+  });
+
+  it('does not clamp summaries at or under maxSummaryChars', () => {
+    const exact = 'b'.repeat(config.maxSummaryChars);
+    expect(extractSummaryText(transcript([exact]), config)).toBe(exact);
+  });
 });

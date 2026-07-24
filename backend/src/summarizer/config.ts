@@ -26,6 +26,8 @@ export const summarizerConfigSchema = z.object({
   responseTextKeys: z.array(z.string().min(1)).min(1),
   /** Text stored when the meta session yields no extractable summary. */
   emptySummaryPlaceholder: z.string().min(1),
+  /** Hard cap on characters of the final summary text (keeps summaries short). */
+  maxSummaryChars: z.number().int().positive(),
 });
 
 export type SummarizerConfig = z.infer<typeof summarizerConfigSchema>;
@@ -60,4 +62,5 @@ export const summarizerDefaults: SummarizerConfig = {
   maxOutputCharsPerSession: 4000,
   responseTextKeys: ['response', 'text', 'content', 'message', 'result'],
   emptySummaryPlaceholder: '(the summary session produced no output)',
+  maxSummaryChars: 600,
 };

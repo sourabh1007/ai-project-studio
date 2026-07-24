@@ -70,7 +70,7 @@ function SessionCard({
                       {formatDateTime(cp.createdAt)}
                     </span>
                   </div>
-                  {cp.overview && (
+                  {!session.summary && cp.overview && (
                     <p className="work-checkpoint-overview" title={cp.overview}>
                       {cp.overview}
                     </p>
