@@ -23,6 +23,8 @@ import {
   UsageIcon,
 } from '../../components/icons.js';
 import { FeatureWorkSummaryPanel } from './work-summary.js';
+import { FeatureTasksPanel } from './feature-tasks-panel.js';
+import { SkillTagger } from '../skills/skill-tagger.js';
 
 const PALETTE = [
   '#818cf8',
@@ -169,6 +171,10 @@ export function FeatureDashboard({
 
       <ErrorText error={error} />
       {loading && <EmptyState message="Loading analytics…" />}
+
+      <SkillTagger scope="feature" targetId={featureId} label="Feature skills" />
+
+      <FeatureTasksPanel featureId={featureId} />
 
       <FeatureWorkSummaryPanel featureId={featureId} />
 
