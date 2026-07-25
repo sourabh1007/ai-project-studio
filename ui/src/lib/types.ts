@@ -20,6 +20,7 @@ export type SessionKind = 'dev' | 'meta';
 export interface Session {
   id: string;
   featureId: string;
+  name: string | null;
   provider: string;
   requestedModel: string;
   resolvedModel: string | null;

@@ -15,6 +15,7 @@ function session(id: string): Session {
   return {
     id,
     featureId: 'f1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,

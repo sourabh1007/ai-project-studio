@@ -15,6 +15,10 @@ const startSessionSchema = z.object({
   cwd: z.string().min(1).optional(),
 });
 
+const renameSessionSchema = z.object({
+  name: z.string().max(120).nullable(),
+});
+
 export interface SessionControllerDeps {
   launcher: SessionLauncher;
   sessions: SessionRepo;
@@ -64,6 +68,15 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
         if (!session) {
           return { status: 404, body: { error: { kind: 'not_found', message: 'Unknown session' } } };
         }
+        return { status: 200, body: session };
+      },
+    },
+    {
+      method: 'put',
+      path: '/sessions/:id',
+      handler: (req) => {
+        const input = parseInput(renameSessionSchema, req.body);
+        const session = deps.admin.renameSession(req.params.id, input.name);
         return { status: 200, body: session };
       },
     },

@@ -14,6 +14,8 @@ export type SessionStatus =
 export interface Session {
   id: string;
   featureId: string;
+  /** User-editable display name; null falls back to the ordinal label. */
+  name: string | null;
   provider: string;
   /** Model requested by the user (may be 'auto'). */
   requestedModel: string;

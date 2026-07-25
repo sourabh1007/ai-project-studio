@@ -7,6 +7,8 @@ export interface SessionRepo {
   get(id: string): Session | null;
   listByFeature(featureId: string): Session[];
   listAll(): Session[];
+  /** Updates only the display name; null reverts to the ordinal label. */
+  rename(id: string, name: string | null): void;
   delete(id: string): void;
   deleteByFeature(featureId: string): void;
 }

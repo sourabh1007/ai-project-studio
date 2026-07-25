@@ -93,6 +93,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ id: string }>(`/features/${id}`, del()),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),
+    renameSession: (id: string, name: string | null) =>
+      request<Session>(`/sessions/${id}`, putBody({ name })),
     listSessions: (featureId: string) =>
       request<Session[]>(`/features/${featureId}/sessions`),
     startSession: (featureId: string, input: StartSessionInput) =>

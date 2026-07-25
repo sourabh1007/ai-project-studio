@@ -25,6 +25,7 @@ function session(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1',
     featureId: 'f1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -144,6 +145,18 @@ describe('session-repo', () => {
     repo.deleteByFeature('f1');
     expect(repo.listByFeature('f1')).toEqual([]);
     expect(repo.get('s3')).not.toBeNull();
+    db.close();
+  });
+
+  it('persists a name on save and renames it in place', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ name: 'Auth spike' }));
+    expect(repo.get('s1')?.name).toBe('Auth spike');
+    repo.rename('s1', 'Login form');
+    expect(repo.get('s1')?.name).toBe('Login form');
+    repo.rename('s1', null);
+    expect(repo.get('s1')?.name).toBeNull();
     db.close();
   });
 });

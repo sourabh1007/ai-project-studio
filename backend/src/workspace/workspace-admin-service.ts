@@ -1,6 +1,7 @@
 import { NotFoundError } from '../kernel/error-types.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { FeatureService } from '../feature/feature-service.js';
+import type { Session } from '../session/session-contract.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { UsageRepo } from '../usage/usage-repo-port.js';
@@ -13,7 +14,7 @@ export interface TerminalCloser {
 
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
-  sessions: Pick<SessionRepo, 'get' | 'listByFeature' | 'delete' | 'deleteByFeature'>;
+  sessions: Pick<SessionRepo, 'get' | 'listByFeature' | 'delete' | 'deleteByFeature' | 'rename'>;
   usage: Pick<UsageRepo, 'deleteBySession'>;
   transcripts: Pick<TranscriptStore, 'delete'>;
   summaries: Pick<SummaryStore, 'delete'>;
@@ -28,6 +29,7 @@ export interface WorkspaceAdminDeps {
  */
 export interface WorkspaceAdmin {
   renameFeature(id: string, name: string): Feature;
+  renameSession(id: string, name: string | null): Session;
   deleteFeature(id: string): Promise<void>;
   deleteSession(id: string): Promise<void>;
 }
@@ -42,6 +44,17 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
   return {
     renameFeature(id, name) {
       return deps.features.rename(id, name);
+    },
+
+    renameSession(id, name) {
+      const session = deps.sessions.get(id);
+      if (!session) {
+        throw new NotFoundError(`Unknown session: ${id}`);
+      }
+      const trimmed = name?.trim();
+      const next = trimmed ? trimmed : null;
+      deps.sessions.rename(id, next);
+      return { ...session, name: next };
     },
 
     async deleteFeature(id) {

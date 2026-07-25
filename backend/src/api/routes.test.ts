@@ -40,6 +40,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/sessions',
       'get /features/:featureId/sessions',
       'get /sessions/:id',
+      'put /sessions/:id',
       'delete /sessions/:id',
       'post /features/:featureId/terminal-sessions',
       'get /providers',

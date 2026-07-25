@@ -74,6 +74,17 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method).toBe('DELETE');
   });
 
+  it('renames a session with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1', name: 'x' }));
+    const client = createApiClient({ fetchImpl });
+    await client.renameSession('s1', 'x');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/sessions/s1');
+    expect(init?.method).toBe('PUT');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(init?.body).toBe(JSON.stringify({ name: 'x' }));
+  });
+
   it('lists sessions for a feature', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });

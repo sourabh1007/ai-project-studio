@@ -67,18 +67,40 @@ export function WorkspaceView({
     });
   }
 
-  function renameSession(sessionId: string, name: string) {
-    nameStore.set(sessionId, name);
+  function renameSession(sessionId: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    // Optimistic local update so the label changes instantly, then persist to
+    // the backend as the source of truth (survives reloads and other devices).
+    nameStore.set(sessionId, trimmed);
     setNames(nameStore.all());
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.kind === 'session' && tab.session.id === sessionId
+          ? { ...tab, label: trimmed || tab.label }
+          : tab,
+      ),
+    );
+    return api
+      .renameSession(sessionId, trimmed || null)
+      .then((updated) => {
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.kind === 'session' && tab.session.id === sessionId
+              ? { ...tab, session: updated, label: updated.name ?? tab.label }
+              : tab,
+          ),
+        );
+      });
   }
 
   function closeTab(id: string) {
-    setTabs((prev) => {
-      const next = prev.filter((t) => t.id !== id);
-      setActiveId((current) =>
-        current === id ? (next[next.length - 1]?.id ?? null) : current,
-      );
-      return next;
+    setTabs((prev) => prev.filter((t) => t.id !== id));
+    setActiveId((current) => {
+      if (current !== id) {
+        return current;
+      }
+      const remaining = tabs.filter((t) => t.id !== id);
+      return remaining[remaining.length - 1]?.id ?? null;
     });
   }
 
@@ -194,7 +216,9 @@ export function WorkspaceView({
                     aria-hidden="true"
                   />
                   {tab.kind === 'session'
-                    ? names[tab.session.id]?.trim() || tab.label
+                    ? tab.session.name?.trim() ||
+                      names[tab.session.id]?.trim() ||
+                      tab.label
                     : tab.label}
                 </button>
                 <button

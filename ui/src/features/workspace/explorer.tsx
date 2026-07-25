@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
 import type { Feature, Session, SessionBreakdown } from '../../lib/types.js';
-import { formatAic, formatCompactNumber } from '../../lib/format.js';
+import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
@@ -19,6 +19,7 @@ import {
   ImportIcon,
   PencilIcon,
   PlusIcon,
+  TimeIcon,
   TrashIcon,
   UsageIcon,
 } from '../../components/icons.js';
@@ -51,7 +52,7 @@ function SessionRow({
   live: LiveState;
   persisted: SessionBreakdown | undefined;
   onOpen: () => void;
-  onRename: (name: string) => void;
+  onRename: (name: string) => void | Promise<void>;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -60,7 +61,9 @@ function SessionRow({
 
   const dot = sessionDotClass(session.status);
 
-  const name = sessionDisplayName(customName, ordinal);
+  // The persisted name is authoritative; fall back to any legacy localStorage
+  // name (pre-persistence installs) and finally the ordinal label.
+  const name = sessionDisplayName(session.name ?? customName, ordinal);
   const model = session.resolvedModel ?? session.requestedModel;
   const liveTotals = sessionLiveTotals(live, session.id);
   // The persisted rollup is the authoritative source of truth: every usage
@@ -73,7 +76,7 @@ function SessionRow({
   const totals = resolveSessionMetrics(persisted, liveTotals);
 
   function startEditing() {
-    setDraft(customName ?? name);
+    setDraft(session.name ?? customName ?? '');
     setEditing(true);
   }
 
@@ -178,6 +181,9 @@ function SessionRow({
         <span className="metric" title="Output tokens">
           <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
         </span>
+        <span className="metric" title="Active time on this session">
+          <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
+        </span>
       </div>
     </div>
   );
@@ -201,7 +207,7 @@ function FeatureNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onRenameSession: (sessionId: string, name: string) => void;
+  onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
   onDeleteSession: (session: Session) => Promise<void>;
@@ -213,6 +219,7 @@ function FeatureNode({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const sessions = useAsync(
     () => (expanded ? api.listSessions(feature.id) : Promise.resolve([])),
     [feature.id, expanded],
@@ -245,9 +252,29 @@ function FeatureNode({
   }
 
   async function handleDeleteSession(session: Session) {
-    await onDeleteSession(session);
-    sessions.reload();
-    usage.reload();
+    setActionError(null);
+    try {
+      await onDeleteSession(session);
+      sessions.reload();
+      usage.reload();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to delete session.',
+      );
+    }
+  }
+
+  async function handleRenameSession(sessionId: string, name: string) {
+    setActionError(null);
+    try {
+      await onRenameSession(sessionId, name);
+      // Reload so the persisted name from the backend becomes authoritative.
+      sessions.reload();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to rename session.',
+      );
+    }
   }
 
   return (
@@ -410,10 +437,11 @@ function FeatureNode({
                   sessionDisplayName(names[session.id], index + 1),
                 )
               }
-              onRename={(name) => onRenameSession(session.id, name)}
+              onRename={(name) => handleRenameSession(session.id, name)}
               onDelete={() => handleDeleteSession(session)}
             />
           ))}
+          <ErrorText error={actionError} />
         </div>
       )}
     </div>
@@ -442,7 +470,7 @@ export function Explorer({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onRenameSession: (sessionId: string, name: string) => void;
+  onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
   onDeleteSession: (session: Session) => Promise<void>;

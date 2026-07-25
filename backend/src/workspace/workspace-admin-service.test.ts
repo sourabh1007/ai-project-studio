@@ -18,6 +18,7 @@ function session(id: string, featureId = 'f1'): Session {
   return {
     id,
     featureId,
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -58,6 +59,13 @@ function harness(featureSessions: Session[] = []) {
         calls.push(`sessions.listByFeature:${featureId}`);
         return featureSessions.filter((s) => s.featureId === featureId);
       },
+      rename: (id, name) => {
+        calls.push(`sessions.rename:${id}:${name ?? ''}`);
+        const existing = known.get(id);
+        if (existing) {
+          known.set(id, { ...existing, name });
+        }
+      },
       delete: (id) => calls.push(`sessions.delete:${id}`),
       deleteByFeature: (featureId) =>
         calls.push(`sessions.deleteByFeature:${featureId}`),
@@ -86,6 +94,30 @@ describe('workspace-admin-service', () => {
     const result = admin.renameFeature('f1', 'Sign in');
     expect(result.name).toBe('Sign in');
     expect(calls).toEqual(['feature.rename:f1:Sign in']);
+  });
+
+  it('renames a session, trimming and returning the updated record', () => {
+    const { admin, calls } = harness([session('s1')]);
+    const result = admin.renameSession('s1', '  Auth spike  ');
+    expect(result.name).toBe('Auth spike');
+    expect(calls).toEqual(['sessions.rename:s1:Auth spike']);
+  });
+
+  it('clears a session name to null when given blank input', () => {
+    const { admin, calls } = harness([session('s1')]);
+    const result = admin.renameSession('s1', '   ');
+    expect(result.name).toBeNull();
+    expect(calls).toEqual(['sessions.rename:s1:']);
+  });
+
+  it('clears a session name to null when given null', () => {
+    const { admin } = harness([session('s1')]);
+    expect(admin.renameSession('s1', null).name).toBeNull();
+  });
+
+  it('throws NotFound when renaming an unknown session', () => {
+    const { admin } = harness([session('s1')]);
+    expect(() => admin.renameSession('ghost', 'x')).toThrow(NotFoundError);
   });
 
   it('cascades feature deletion across sessions, usage, transcripts and summary', async () => {

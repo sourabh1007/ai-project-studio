@@ -32,6 +32,7 @@ export function createSessionFactory(
       return {
         id,
         featureId: input.featureId,
+        name: null,
         provider: input.provider,
         requestedModel: input.requestedModel,
         resolvedModel: null,

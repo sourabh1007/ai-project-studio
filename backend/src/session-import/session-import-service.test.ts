@@ -116,6 +116,7 @@ describe('session-import-service', () => {
     expect(session).toMatchObject({
       id: 'ext-9',
       featureId: 'f1',
+      name: 'A session',
       provider: 'agency',
       requestedModel: 'gpt-5.4',
       resolvedModel: 'gpt-5.4',

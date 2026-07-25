@@ -22,7 +22,8 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     created_at TEXT NOT NULL,
     started_at TEXT,
     ended_at TEXT,
-    exit_code INTEGER
+    exit_code INTEGER,
+    name TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS usage_events (
     session_id TEXT NOT NULL,
@@ -85,9 +86,36 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   )`,
 ];
 
+/**
+ * Columns added after a table's initial release. `CREATE TABLE IF NOT EXISTS`
+ * never alters an existing table, so these are applied idempotently for
+ * databases created before the column existed.
+ */
+const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] = [
+  { table: 'sessions', column: 'name', ddl: 'ALTER TABLE sessions ADD COLUMN name TEXT' },
+];
+
+/** Adds a column to an existing table when it is missing. */
+function addColumnIfMissing(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  ddl: string,
+): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name: string;
+  }>;
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(ddl);
+  }
+}
+
 /** Applies the schema to a database connection. */
 export function applySchema(db: DatabaseSync): void {
   for (const statement of SCHEMA_STATEMENTS) {
     db.exec(statement);
+  }
+  for (const { table, column, ddl } of ADDED_COLUMNS) {
+    addColumnIfMissing(db, table, column, ddl);
   }
 }

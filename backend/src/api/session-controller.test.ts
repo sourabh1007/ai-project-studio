@@ -11,6 +11,7 @@ import type { HttpRequest, Route } from './http-contract.js';
 const session: Session = {
   id: 's1',
   featureId: 'f1',
+  name: null,
   provider: 'copilot',
   requestedModel: 'auto',
   resolvedModel: null,
@@ -53,9 +54,14 @@ function harness(completion: Promise<Session>) {
     get: (id: string) => (id === 's1' ? session : null),
   } as unknown as SessionRepo;
   const deleted: string[] = [];
+  const renamed: Array<{ id: string; name: string | null }> = [];
   const admin = {
     renameFeature: () => {
       throw new Error('not used');
+    },
+    renameSession: (id: string, name: string | null) => {
+      renamed.push({ id, name });
+      return { ...session, id, name };
     },
     deleteFeature: async () => undefined,
     deleteSession: async (id: string) => void deleted.push(id),
@@ -68,7 +74,7 @@ function harness(completion: Promise<Session>) {
     },
   };
   const routes = createSessionRoutes({ launcher, sessions, admin, skills, logger });
-  return { routes, requests, logs, deleted, composeCalls };
+  return { routes, requests, logs, deleted, renamed, composeCalls };
 }
 
 describe('session-controller', () => {
@@ -147,5 +153,33 @@ describe('session-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: { id: 's1' } });
     expect(h.deleted).toEqual(['s1']);
+  });
+
+  it('renames a session and returns the updated record', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'put', '/sessions/:id')(
+      req({ params: { id: 's1' }, body: { name: 'Auth spike' } }),
+    );
+    expect(result.status).toBe(200);
+    expect((result.body as Session).name).toBe('Auth spike');
+    expect(h.renamed).toEqual([{ id: 's1', name: 'Auth spike' }]);
+  });
+
+  it('accepts a null name to clear a session name', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'put', '/sessions/:id')(
+      req({ params: { id: 's1' }, body: { name: null } }),
+    );
+    expect(result.status).toBe(200);
+    expect(h.renamed).toEqual([{ id: 's1', name: null }]);
+  });
+
+  it('rejects a rename payload missing the name field', () => {
+    const h = harness(Promise.resolve(session));
+    expect(() =>
+      pick(h.routes, 'put', '/sessions/:id')(
+        req({ params: { id: 's1' }, body: {} }),
+      ),
+    ).toThrow();
   });
 });

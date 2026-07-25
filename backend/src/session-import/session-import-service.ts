@@ -62,6 +62,7 @@ export function createSessionImportService(
       const session: Session = {
         id: externalId,
         featureId,
+        name: candidate.title,
         provider,
         requestedModel: candidate.model ?? 'auto',
         resolvedModel: candidate.model,
