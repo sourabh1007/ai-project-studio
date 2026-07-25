@@ -1832,6 +1832,101 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
 }
 
+.dash-donut {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Modern, information-dense per-session table with inline AIC bars. */
+.dash-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dash-border);
+  border-radius: var(--radius-md);
+  background: var(--dash-surface);
+  overflow: hidden;
+}
+
+.dash-table-head,
+.dash-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(140px, 1.6fr) 88px 84px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px var(--space-3);
+}
+
+.dash-table-head {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--editor-fg-muted);
+  border-bottom: 1px solid var(--dash-border);
+}
+
+.dash-table-row {
+  border-top: 1px solid var(--dash-border);
+  font-size: 0.8rem;
+  color: var(--editor-fg);
+}
+
+.dash-table-row:hover {
+  background: var(--item-hover);
+}
+
+.dash-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-cell-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dash-cell-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.dash-cell-aic {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-bar-track {
+  position: relative;
+  flex: 1;
+  min-width: 48px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.dash-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+}
+
+.dash-cell-value {
+  min-width: 40px;
+  text-align: right;
+  color: var(--editor-fg);
+}
+
 .dash-tooltip {
   display: flex;
   flex-direction: column;

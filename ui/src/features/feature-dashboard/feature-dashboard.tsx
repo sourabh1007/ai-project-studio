@@ -14,8 +14,9 @@ import {
 } from 'recharts';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import { formatDuration, nanoAiuToAic } from '../../lib/format.js';
-import type { FeatureUsage } from '../../lib/types.js';
+import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
+import { sessionDisplayName } from '../../lib/session-names.js';
+import type { FeatureUsage, Session } from '../../lib/types.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
 import {
   ActivityIcon,
@@ -45,10 +46,6 @@ const numberFmt = new Intl.NumberFormat('en-US');
 
 function color(i: number): string {
   return PALETTE[i % PALETTE.length];
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? `…${id.slice(-6)}` : id;
 }
 
 function ChartTooltip({
@@ -184,14 +181,33 @@ export function FeatureDashboard({
         </div>
       )}
 
-      {data && data.totals.sessions > 0 && <Charts data={data} />}
+      {data && data.totals.sessions > 0 && (
+        <Charts data={data} featureId={featureId} />
+      )}
     </div>
   );
 }
 
-function Charts({ data }: { data: FeatureUsage }) {
+function Charts({ data, featureId }: { data: FeatureUsage; featureId: string }) {
+  const api = useApi();
   const { totals, byDay, byModel, bySession, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
+
+  // Resolve human session labels (persisted name or "Session #N" in creation
+  // order) so charts never show cryptic truncated ids.
+  const { data: sessions } = useAsync<Session[]>(
+    () => api.listSessions(featureId),
+    [featureId],
+  );
+  const nameById = useMemo(() => {
+    const map = new Map<string, string>();
+    (sessions ?? []).forEach((s, i) => {
+      map.set(s.id, sessionDisplayName(s.name, i + 1));
+    });
+    return map;
+  }, [sessions]);
+  const labelFor = (sessionId: string, fallbackOrdinal: number): string =>
+    nameById.get(sessionId) ?? sessionDisplayName(null, fallbackOrdinal);
 
   const dayData = useMemo(
     () =>
@@ -212,29 +228,19 @@ function Charts({ data }: { data: FeatureUsage }) {
     [byModel],
   );
 
-  const sessionData = useMemo(
-    () =>
-      bySession
-        .map((s) => ({
-          name: shortId(s.sessionId),
-          aic: nanoAiuToAic(s.nanoAiu),
-        }))
-        .sort((a, b) => b.aic - a.aic)
-        .slice(0, 8),
-    [bySession],
-  );
-
-  const timeData = useMemo(
-    () =>
-      bySession
-        .map((s, i) => ({
-          name: `#${i + 1}`,
-          ms: s.activeMs,
-        }))
-        .sort((a, b) => b.ms - a.ms)
-        .slice(0, 8),
-    [bySession],
-  );
+  const sessionRows = useMemo(() => {
+    const rows = bySession.map((s, i) => ({
+      id: s.sessionId,
+      name: labelFor(s.sessionId, i + 1),
+      aic: nanoAiuToAic(s.nanoAiu),
+      tokens: s.inputTokens + s.outputTokens,
+      ms: s.activeMs,
+    }));
+    const maxAic = Math.max(1e-9, ...rows.map((r) => r.aic));
+    return rows
+      .map((r) => ({ ...r, aicPct: Math.round((r.aic / maxAic) * 100) }))
+      .sort((a, b) => b.aic - a.aic);
+  }, [bySession, nameById]);
 
   return (
     <>
@@ -261,8 +267,8 @@ function Charts({ data }: { data: FeatureUsage }) {
         hint={`${totalAic.toFixed(2)} AIC total`}
       >
         <div className="dash-grid">
-          <Panel title="AIC over time" hint={`${totalAic.toFixed(2)} total`} wide>
-            <ResponsiveContainer width="100%" height={160}>
+          <Panel title="AIC over time" hint={`${totalAic.toFixed(2)} total`}>
+            <ResponsiveContainer width="100%" height={132}>
               <AreaChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
                 <defs>
                   <linearGradient id="aicFill" x1="0" y1="0" x2="0" y2="1">
@@ -302,38 +308,40 @@ function Charts({ data }: { data: FeatureUsage }) {
           </Panel>
 
           <Panel title="AIC by model">
-            <ResponsiveContainer width="100%" height={160}>
-              <PieChart>
-                <Pie
-                  data={modelData}
-                  dataKey="aic"
-                  nameKey="name"
-                  innerRadius={40}
-                  outerRadius={64}
-                  paddingAngle={2}
-                  stroke="none"
-                  animationDuration={600}
-                >
-                  {modelData.map((m, i) => (
-                    <Cell key={m.name} fill={color(i)} />
-                  ))}
-                </Pie>
-                <Tooltip content={<ChartTooltip unit="AIC" />} />
-              </PieChart>
-            </ResponsiveContainer>
-            <ul className="dash-legend">
-              {modelData.map((m, i) => (
-                <li key={m.name}>
-                  <span className="dash-legend-dot" style={{ background: color(i) }} />
-                  <span className="dash-legend-label">{m.name}</span>
-                  <span className="dash-legend-value">{m.aic.toFixed(2)}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="dash-donut">
+              <ResponsiveContainer width="100%" height={132}>
+                <PieChart>
+                  <Pie
+                    data={modelData}
+                    dataKey="aic"
+                    nameKey="name"
+                    innerRadius={38}
+                    outerRadius={60}
+                    paddingAngle={2}
+                    stroke="none"
+                    animationDuration={600}
+                  >
+                    {modelData.map((m, i) => (
+                      <Cell key={m.name} fill={color(i)} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<ChartTooltip unit="AIC" />} />
+                </PieChart>
+              </ResponsiveContainer>
+              <ul className="dash-legend">
+                {modelData.map((m, i) => (
+                  <li key={m.name}>
+                    <span className="dash-legend-dot" style={{ background: color(i) }} />
+                    <span className="dash-legend-label">{m.name}</span>
+                    <span className="dash-legend-value">{m.aic.toFixed(2)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </Panel>
 
           <Panel title="Tokens over time" hint="input vs output" wide>
-            <ResponsiveContainer width="100%" height={160}>
+            <ResponsiveContainer width="100%" height={132}>
               <BarChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
                 <XAxis
                   dataKey="day"
@@ -386,75 +394,42 @@ function Charts({ data }: { data: FeatureUsage }) {
       <Section
         icon={<ActivityIcon size={15} />}
         title="Per-session activity"
-        hint={`${formatDuration(timing.totalActiveMs)} active`}
+        hint={`${sessionRows.length} sessions · ${formatDuration(timing.totalActiveMs)} active`}
       >
-        <div className="dash-grid">
-          <Panel title="AIC by session">
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart
-                data={sessionData}
-                layout="vertical"
-                margin={{ top: 4, right: 12, bottom: 4, left: 8 }}
-              >
-                <XAxis type="number" hide />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  stroke="var(--text-faint)"
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={11}
-                  width={64}
+        <div className="dash-table" role="table" aria-label="Per-session activity">
+          <div className="dash-table-head" role="row">
+            <span role="columnheader">Session</span>
+            <span role="columnheader" className="dash-num">AIC</span>
+            <span role="columnheader" className="dash-num">Tokens</span>
+            <span role="columnheader" className="dash-num">Time</span>
+          </div>
+          {sessionRows.map((s, i) => (
+            <div className="dash-table-row" role="row" key={s.id}>
+              <span className="dash-cell-name" role="cell" title={s.name}>
+                <span
+                  className="dash-cell-swatch"
+                  style={{ background: color(i) }}
+                  aria-hidden="true"
                 />
-                <Tooltip
-                  content={<ChartTooltip unit="AIC" />}
-                  cursor={{ fill: 'var(--item-hover)' }}
-                />
-                <Bar
-                  dataKey="aic"
-                  name="AIC"
-                  radius={[0, 4, 4, 0]}
-                  animationDuration={600}
-                >
-                  {sessionData.map((s, i) => (
-                    <Cell key={s.name} fill={color(i)} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Panel>
-
-          <Panel title="Time by session" hint={`${formatDuration(timing.totalActiveMs)} total`}>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart
-                data={timeData}
-                layout="vertical"
-                margin={{ top: 4, right: 12, bottom: 4, left: 8 }}
-              >
-                <XAxis type="number" hide />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  stroke="var(--text-faint)"
-                  tickLine={false}
-                  axisLine={false}
-                  fontSize={11}
-                  width={64}
-                />
-                <Tooltip
-                  content={<ChartTooltip formatValue={formatDuration} />}
-                  cursor={{ fill: 'var(--item-hover)' }}
-                />
-                <Bar
-                  dataKey="ms"
-                  name="active"
-                  fill={TIME_COLOR}
-                  radius={[0, 4, 4, 0]}
-                  animationDuration={600}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </Panel>
+                {s.name}
+              </span>
+              <span className="dash-cell-aic dash-num" role="cell">
+                <span className="dash-bar-track" aria-hidden="true">
+                  <span
+                    className="dash-bar-fill"
+                    style={{ width: `${s.aicPct}%`, background: color(i) }}
+                  />
+                </span>
+                <span className="dash-cell-value">{s.aic.toFixed(2)}</span>
+              </span>
+              <span className="dash-num" role="cell">
+                {formatCompactNumber(s.tokens)}
+              </span>
+              <span className="dash-num" role="cell">
+                {formatDuration(s.ms)}
+              </span>
+            </div>
+          ))}
         </div>
       </Section>
     </>
