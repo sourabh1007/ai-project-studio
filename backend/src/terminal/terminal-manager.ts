@@ -11,6 +11,10 @@ import {
   createTerminalSession,
   type TerminalSession,
 } from './terminal-session.js';
+import { stripAnsi } from './ansi.js';
+
+/** Max bytes of recent (ANSI-stripped) output scanned for the ready prompt. */
+const READY_SCAN_BYTES = 8192;
 
 /** Supplies the composed instruction block to seed into an interactive session. */
 export interface SessionInstructionsProvider {
@@ -110,11 +114,64 @@ export function createTerminalManager(
     if (session.kind !== 'meta') {
       const instructions = deps.skills.instructionsForSession(session.id);
       if (instructions.length > 0) {
-        terminal.write(`${instructions}${deps.config.instructionSeedSuffix}`);
+        seedInstructionsWhenReady(terminal, instructions);
       }
     }
 
     return terminal;
+  }
+
+  /**
+   * Seeds the instruction block once the interactive CLI's prompt is ready,
+   * then submits it with a separate keystroke after a short pause.
+   *
+   * Two timing hazards make a naive `write(text + Enter)` fail:
+   *  - Seeding before the TUI finishes booting lets the submit keystroke be
+   *    swallowed during startup, so the text lands in the composer unsent. We
+   *    therefore wait for a ready marker in the output (with a timeout
+   *    fallback) before seeding.
+   *  - The CLI treats a fast multi-line write as a paste and absorbs an
+   *    immediately-trailing newline as a line break, so the submit keystroke
+   *    is sent on its own once the paste burst settles.
+   */
+  function seedInstructionsWhenReady(
+    terminal: TerminalSession,
+    instructions: string,
+  ): void {
+    const readyPattern = new RegExp(deps.config.instructionSeedReadyPattern);
+    let observed = '';
+    // Assigned before `submit` can run: the terminal was just spawned, so its
+    // scrollback is empty and `attach` replays nothing synchronously.
+    let detach!: () => void;
+    let readyTimer!: ReturnType<typeof setTimeout>;
+
+    const submit = (): void => {
+      clearTimeout(readyTimer);
+      detach();
+      terminal.write(instructions);
+      setTimeout(() => {
+        if (!terminal.exited) {
+          terminal.write(deps.config.instructionSeedSuffix);
+        }
+      }, deps.config.instructionSeedSubmitDelayMs);
+    };
+
+    detach = terminal.attach({
+      send: (data) => {
+        observed = (observed + stripAnsi(data)).slice(-READY_SCAN_BYTES);
+        if (readyPattern.test(observed)) {
+          submit();
+        }
+      },
+      exit: () => {
+        clearTimeout(readyTimer);
+      },
+    });
+
+    readyTimer = setTimeout(
+      submit,
+      deps.config.instructionSeedReadyTimeoutMs,
+    );
   }
 
   return {

@@ -16,6 +16,26 @@ export const terminalConfigSchema = z.object({
   scrollbackBytes: z.number().int().positive(),
   /** Keystroke appended after seeded skill instructions to submit them. */
   instructionSeedSuffix: z.string(),
+  /**
+   * Regex (source) matched against the interactive CLI's output to detect that
+   * its input prompt is ready before seeding skill instructions. Seeding before
+   * the TUI is interactive causes the submit keystroke to be swallowed during
+   * boot, leaving the instructions unsent in the composer.
+   */
+  instructionSeedReadyPattern: z.string().min(1),
+  /**
+   * Fallback (ms) after which skill instructions are seeded even if the ready
+   * pattern was never observed, so a prompt-detection miss never drops them.
+   */
+  instructionSeedReadyTimeoutMs: z.number().int().nonnegative(),
+  /**
+   * Delay (ms) between writing the instruction block and sending the submit
+   * keystroke. The interactive CLI treats a fast multi-line write as a paste
+   * and would absorb an immediately-trailing newline as a line break; sending
+   * the submit keystroke on its own, once the paste burst settles, makes the
+   * CLI submit the seeded message instead of leaving it in the composer.
+   */
+  instructionSeedSubmitDelayMs: z.number().int().nonnegative(),
 });
 
 export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
@@ -27,4 +47,7 @@ export const terminalDefaults: TerminalConfig = {
   defaultRows: 30,
   scrollbackBytes: 262144,
   instructionSeedSuffix: '\r',
+  instructionSeedReadyPattern: '\\?\\s*help|\\bcommands\\b',
+  instructionSeedReadyTimeoutMs: 15000,
+  instructionSeedSubmitDelayMs: 300,
 };

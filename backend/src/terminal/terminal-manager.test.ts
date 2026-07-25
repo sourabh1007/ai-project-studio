@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createTerminalManager } from './terminal-manager.js';
 import { terminalDefaults } from './config.js';
 import { createEventBus } from '../kernel/event-bus.js';
@@ -194,13 +194,76 @@ describe('createTerminalManager', () => {
     expect(env.kills()).toBe(0);
   });
 
-  it('seeds effective instruction skills as the first PTY input', () => {
-    const { manager, env, instructionCalls } = makeManager('Follow the rules.');
-    manager.getOrLaunch(sampleSession());
-    expect(instructionCalls).toEqual(['sess-1']);
-    expect(env.writes).toEqual([
-      `Follow the rules.${terminalDefaults.instructionSeedSuffix}`,
-    ]);
+  it('waits for the ready prompt, then seeds and submits with a discrete Enter', () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env, instructionCalls } =
+        makeManager('Follow the rules.');
+      manager.getOrLaunch(sampleSession());
+      expect(instructionCalls).toEqual(['sess-1']);
+      // Output that does not match the ready prompt must not trigger seeding.
+      env.emitData('booting up the CLI...');
+      expect(env.writes).toEqual([]);
+      // Once the ready prompt appears, the instruction block is written first,
+      // without the submit keystroke, so the CLI does not coalesce a trailing
+      // newline into the paste.
+      env.emitData('type / for commands');
+      expect(env.writes).toEqual(['Follow the rules.']);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+      expect(env.writes).toEqual([
+        'Follow the rules.',
+        terminalDefaults.instructionSeedSuffix,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('seeds instructions after the ready timeout when no prompt is detected', () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env } = makeManager('Follow the rules.');
+      manager.getOrLaunch(sampleSession());
+      env.emitData('still booting, no prompt yet');
+      expect(env.writes).toEqual([]);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+      expect(env.writes).toEqual([
+        'Follow the rules.',
+        terminalDefaults.instructionSeedSuffix,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not seed instructions if the terminal exits before the prompt', () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env } = makeManager('Follow the rules.');
+      manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+      expect(env.writes).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not submit the seeded instructions if the terminal exits mid-seed', () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env } = makeManager('Follow the rules.');
+      manager.getOrLaunch(sampleSession());
+      env.emitData('type / for commands');
+      expect(env.writes).toEqual(['Follow the rules.']);
+      env.emitExit(0);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+      expect(env.writes).toEqual(['Follow the rules.']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not seed when there are no instruction skills', () => {
