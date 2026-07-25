@@ -102,8 +102,10 @@ function makeManager(instructions = '') {
   const ts = fakeTranscriptStore();
   const started: Session[] = [];
   const ended: Session[] = [];
+  const discarded: string[] = [];
   bus.on('session.started', (s) => started.push(s));
   bus.on('session.ended', (s) => ended.push(s));
+  bus.on('session.discarded', (id) => discarded.push(id));
   const instructionCalls: string[] = [];
   const manager = createTerminalManager({
     spawner: env.spawner,
@@ -119,7 +121,7 @@ function makeManager(instructions = '') {
       },
     },
   });
-  return { manager, env, started, ended, saved: ts.saved, instructionCalls };
+  return { manager, env, started, ended, discarded, saved: ts.saved, instructionCalls };
 }
 
 describe('createTerminalManager', () => {
@@ -188,9 +190,31 @@ describe('createTerminalManager', () => {
     expect(env.kills()).toBe(1);
   });
 
+  it('close suppresses session.ended and reports session.discarded on exit', () => {
+    const { manager, env, ended, discarded, saved } = makeManager();
+    manager.getOrLaunch(sampleSession());
+    manager.close('sess-1');
+    // node-pty reports the kill asynchronously via onExit.
+    env.emitExit(0);
+    expect(ended).toHaveLength(0);
+    expect(saved).toHaveLength(0);
+    expect(discarded).toEqual(['sess-1']);
+    expect(manager.get('sess-1')).toBeUndefined();
+  });
+
   it('close is a no-op for an unknown session', () => {
     const { manager, env } = makeManager();
     manager.close('nope');
+    expect(env.kills()).toBe(0);
+  });
+
+  it('close drops a session whose terminal already exited without re-killing', () => {
+    const { manager, env, ended } = makeManager();
+    manager.getOrLaunch(sampleSession());
+    env.emitExit(0);
+    expect(ended).toHaveLength(1);
+    manager.close('sess-1');
+    // Already exited: no second kill, no discard.
     expect(env.kills()).toBe(0);
   });
 

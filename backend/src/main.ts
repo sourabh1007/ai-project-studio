@@ -460,6 +460,16 @@ function main(): void {
       tailer.stop();
     }
   });
+  bus.on('session.discarded', (sessionId: string) => {
+    // The session is being deleted: release its live usage tailer without a
+    // final drain (its usage rows are being purged) and without re-persisting.
+    const tailer = tailers.get(sessionId);
+    if (!tailer) {
+      return;
+    }
+    tailers.delete(sessionId);
+    tailer.stop();
+  });
 
   // Feature + summarizer.
   const featureService = createFeatureService({ repo: featureRepo, ids, clock });

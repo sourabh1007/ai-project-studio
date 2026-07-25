@@ -52,6 +52,10 @@ export function createTerminalManager(
   deps: TerminalManagerDeps,
 ): TerminalManager {
   const sessions = new Map<string, TerminalSession>();
+  // Sessions whose terminals are being killed as part of deletion. Their exit
+  // must not be recorded as `session.ended` (which would re-persist the row we
+  // are deleting); it is reported as `session.discarded` instead.
+  const discarded = new Set<string>();
 
   function launch(session: Session, options: LaunchOptions): TerminalSession {
     const provider = deps.providers.get(session.provider);
@@ -91,6 +95,13 @@ export function createTerminalManager(
       scrollbackBytes: deps.config.scrollbackBytes,
       onExit: (code) => {
         sessions.delete(session.id);
+        if (discarded.has(session.id)) {
+          // Deleted out from under us: drop the terminal without persisting an
+          // ended snapshot, but let listeners release the usage tailer.
+          discarded.delete(session.id);
+          deps.bus.emit('session.discarded', session.id);
+          return;
+        }
         const ended: Session = {
           ...started,
           status: code === 0 ? 'completed' : 'failed',
@@ -184,10 +195,15 @@ export function createTerminalManager(
     },
     get: (sessionId) => sessions.get(sessionId),
     close(sessionId) {
+      // A terminal is only in the map while live: its exit handler removes it.
+      // So a found terminal is always killable, and killing it during deletion
+      // is reported as `session.discarded` (never `session.ended`).
       const terminal = sessions.get(sessionId);
-      if (terminal) {
-        terminal.kill();
+      if (!terminal) {
+        return;
       }
+      discarded.add(sessionId);
+      terminal.kill();
     },
   };
 }

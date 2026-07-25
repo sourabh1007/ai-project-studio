@@ -24,6 +24,13 @@ export type SessionEventMap = {
    * Lets clients refresh their live view without restarting usage tailers.
    */
   'session.updated': Session;
+  /**
+   * A live terminal was deliberately torn down as part of deleting its session.
+   * Unlike `session.ended`, this must NOT persist a session snapshot (the row is
+   * being removed); listeners use it only to release live resources such as the
+   * usage tailer. Carries the session id.
+   */
+  'session.discarded': string;
 };
 
 export interface SessionLauncherDeps {
