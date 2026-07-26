@@ -47,7 +47,6 @@ export default defineConfig({
         // IO/native adapters: exercised via e2e, not unit tests (like main.ts).
         'src/terminal/node-pty-spawner.ts',
         'src/terminal/terminal-ws-server.ts',
-        'src/session-files/fs-directory-watcher.ts',
       ],
       thresholds: {
         lines: 100,

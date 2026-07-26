@@ -115,4 +115,20 @@ describe('agency-provider', () => {
     });
     expect(provider.listImportableSessions?.()).toEqual(importable);
   });
+
+  it('createOutputScanner detects file ops via the reused Copilot scanner', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+    });
+    const scanner = provider.createOutputScanner?.({
+      home: 'C:\\Users\\me',
+      cwd: '/work',
+    });
+    expect(scanner?.feed('Created /work/a.md\n')).toEqual([
+      { path: '/work/a.md', tool: 'create' },
+    ]);
+  });
 });

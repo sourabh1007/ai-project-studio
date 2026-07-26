@@ -85,4 +85,19 @@ describe('copilot-provider', () => {
     expect(ic.env.COPILOT_OTEL_FILE_EXPORTER_PATH).toBe('/tmp/u.jsonl');
     expect(ic.env.PATH).toBe('/bin');
   });
+
+  it('createOutputScanner detects file ops the CLI announces in its output', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner,
+      baseEnv: {},
+    });
+    const scanner = provider.createOutputScanner?.({
+      home: 'C:\\Users\\me',
+      cwd: '/work',
+    });
+    expect(scanner?.feed('Created C:\\Users\\me\\a.md\n')).toEqual([
+      { path: 'C:\\Users\\me\\a.md', tool: 'create' },
+    ]);
+  });
 });

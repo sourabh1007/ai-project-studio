@@ -1,10 +1,17 @@
 /**
- * Contracts for tracking the files a session created or edited. Rather than
- * relying on what a particular CLI happens to log (the plain `copilot`/agency
- * invocations the app spawns do not record file activity), we watch each
- * session's working directory ourselves and persist the touched files. This
- * keeps the feature provider-agnostic — any tool driven through a terminal
- * benefits without special integration.
+ * Contracts for tracking the files a session created or edited.
+ *
+ * The CLI stores nothing structured about file operations for the sessions this
+ * app spawns, and a session can write files anywhere on disk — not just under
+ * its working directory — so watching the filesystem is both incomplete and
+ * prone to mis-attribution. Instead we read the authoritative source: the tool
+ * announces each file it creates/edits in its own output (e.g. `Created
+ * C:\path\file.md`). Each PTY belongs to exactly one session, so parsing that
+ * output attributes every file op to the right session with no ambiguity.
+ *
+ * The parsing patterns are provider-specific and supplied by the provider (see
+ * {@link SessionOutputScannerFactory}), keeping the IDE tool-agnostic: a
+ * provider without a scanner simply contributes no files.
  */
 
 /** How a file was touched within a session. */
@@ -38,40 +45,32 @@ export interface SessionFilesStore {
   deleteBySession(sessionId: string): void;
 }
 
-/** A filesystem change observed under a watched root. */
-export interface DirectoryChange {
-  /** Absolute path of the changed file. */
+/** A file operation detected in a session's terminal output. */
+export interface SessionFileOp {
+  /** Absolute path of the affected file. */
   path: string;
-  /** 'add' for a newly created file, 'change' for a modification. */
-  kind: 'add' | 'change';
-}
-
-/** A handle to a live recursive watch on one directory. */
-export interface DirectoryWatch {
-  close(): void;
+  /** Whether the operation created or edited the file. */
+  tool: SessionFileTool;
 }
 
 /**
- * Creates a recursive watch on `root`, invoking `onChange` for each observed
- * file change. Isolated behind a port so the tracker is testable without real
- * filesystem events; the fs-backed adapter is the only IO-aware piece.
+ * Stateful scanner over a session's terminal output. Fed successive (already
+ * ANSI-stripped) chunks, it buffers partial lines and returns any file
+ * operations completed by each chunk.
  */
-export type DirectoryWatcherFactory = (
-  root: string,
-  onChange: (change: DirectoryChange) => void,
-) => DirectoryWatch;
-
-/**
- * Tracks which session is responsible for filesystem changes under a working
- * directory. Sessions sharing a directory are disambiguated by recency of
- * activity: the session most recently typed into (or, absent input, most
- * recently opened) owns incoming changes.
- */
-export interface SessionFileTracker {
-  /** Begins attributing changes under `root` to `sessionId`. */
-  open(sessionId: string, root: string): void;
-  /** Marks `sessionId` as the active writer for its root (e.g. on input). */
-  markActive(sessionId: string): void;
-  /** Stops attributing changes to `sessionId`, releasing its root if idle. */
-  close(sessionId: string): void;
+export interface SessionOutputScanner {
+  feed(chunk: string): SessionFileOp[];
 }
+
+/** Context a scanner needs to resolve tool-printed paths to absolute paths. */
+export interface SessionOutputScannerContext {
+  /** The user's home directory, for expanding `~`-relative paths. */
+  home: string;
+  /** The session's working directory, for resolving relative paths. */
+  cwd?: string;
+}
+
+/** Builds a {@link SessionOutputScanner} bound to a resolution context. */
+export type SessionOutputScannerFactory = (
+  ctx: SessionOutputScannerContext,
+) => SessionOutputScanner;

@@ -3,6 +3,10 @@ import type {
   InteractiveCommand,
   SessionSpec,
 } from '../provider-contract.js';
+import type {
+  SessionOutputScanner,
+  SessionOutputScannerContext,
+} from '../../session-files/session-files-contract.js';
 import type { ProcessSpawner } from '../process-kernel/process-spawner.js';
 import { toRunningSession } from '../process-kernel/running-session.js';
 import { COPILOT_NAMESPACE, type CopilotConfig } from './config.js';
@@ -12,6 +16,7 @@ import {
 } from './copilot-cmd-builder.js';
 import { buildCopilotEnv } from './copilot-env-mapper.js';
 import { listCopilotModels } from './copilot-model-lister.js';
+import { createCopilotOutputScanner } from './copilot-output-scanner.js';
 
 export interface CopilotAdapterDeps {
   spawner: ProcessSpawner;
@@ -40,6 +45,9 @@ export function createCopilotProvider(
         args: buildCopilotInteractiveArgs(spec, config),
         env: buildCopilotEnv(spec, deps.baseEnv),
       };
+    },
+    createOutputScanner(ctx: SessionOutputScannerContext): SessionOutputScanner {
+      return createCopilotOutputScanner(ctx);
     },
   };
 }

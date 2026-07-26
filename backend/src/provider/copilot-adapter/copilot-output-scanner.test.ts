@@ -1,0 +1,87 @@
+import { describe, it, expect } from 'vitest';
+import { createCopilotOutputScanner } from './copilot-output-scanner.js';
+
+const HOME = 'C:\\Users\\me';
+
+function scan(chunks: string[], ctx = { home: HOME, cwd: undefined as string | undefined }) {
+  const scanner = createCopilotOutputScanner(ctx);
+  return chunks.flatMap((c) => scanner.feed(c));
+}
+
+describe('createCopilotOutputScanner', () => {
+  it('detects a created absolute path and trims trailing punctuation', () => {
+    expect(scan(['● Created  C:\\Users\\me\\Downloads\\new-file.md .\n'])).toEqual([
+      { path: 'C:\\Users\\me\\Downloads\\new-file.md', tool: 'create' },
+    ]);
+  });
+
+  it('matches the verb nearest the path in a tool header line', () => {
+    // "Edit" is followed by "Create", not a path, so only "Create <path>" matches.
+    expect(scan(['● Edit  Create ~\\Downloads\\new-file.md\n'])).toEqual([
+      { path: 'C:\\Users\\me\\Downloads\\new-file.md', tool: 'create' },
+    ]);
+  });
+
+  it('classifies edit verbs and resolves POSIX absolute paths', () => {
+    expect(scan(['Updated /home/u/app.ts\n'])).toEqual([
+      { path: '/home/u/app.ts', tool: 'edit' },
+    ]);
+  });
+
+  it('reads a quoted path that contains spaces', () => {
+    expect(scan(['Wrote "C:\\my docs\\a.md"\n'])).toEqual([
+      { path: 'C:\\my docs\\a.md', tool: 'create' },
+    ]);
+  });
+
+  it('resolves a quoted relative path against cwd, or drops it without a cwd', () => {
+    expect(
+      scan(['Created "todo.md"\n'], { home: HOME, cwd: '/proj/src' }),
+    ).toEqual([{ path: '/proj/src/todo.md', tool: 'create' }]);
+    expect(scan(['Created "todo.md"\n'])).toEqual([]);
+  });
+
+  it('expands ~, ~/ and bare ~ to the home directory', () => {
+    expect(scan(['Created "~"\n'])).toEqual([{ path: HOME, tool: 'create' }]);
+    expect(scan(['Edited "~/"\n'])).toEqual([{ path: HOME, tool: 'edit' }]);
+    expect(scan(['Modified ~/notes/a.md\n'])).toEqual([
+      { path: 'C:\\Users\\me\\notes\\a.md', tool: 'edit' },
+    ]);
+  });
+
+  it('ignores a path not immediately preceded by an action verb', () => {
+    expect(scan(['the file at C:\\a\\b.md is ready\n'])).toEqual([]);
+  });
+
+  it('drops a token that cleans down to nothing', () => {
+    expect(scan(['Created "."\n'])).toEqual([]);
+  });
+
+  it('strips ANSI escape codes wrapping the path', () => {
+    expect(scan(['Created \x1b[36mC:\\a\\b.md\x1b[0m\n'])).toEqual([
+      { path: 'C:\\a\\b.md', tool: 'create' },
+    ]);
+  });
+
+  it('buffers a partial line until a terminator arrives', () => {
+    const scanner = createCopilotOutputScanner({ home: HOME, cwd: undefined });
+    expect(scanner.feed('Created C:\\a')).toEqual([]);
+    expect(scanner.feed('\\b.md\n')).toEqual([
+      { path: 'C:\\a\\b.md', tool: 'create' },
+    ]);
+  });
+
+  it('treats a bare carriage return (TUI redraw) as a line break', () => {
+    expect(scan(['spinner\rCreated C:\\a\\b.md\n'])).toEqual([
+      { path: 'C:\\a\\b.md', tool: 'create' },
+    ]);
+  });
+
+  it('keeps working after truncating an overlong unterminated buffer', () => {
+    const scanner = createCopilotOutputScanner({ home: HOME, cwd: undefined });
+    expect(scanner.feed('x'.repeat(70_000))).toEqual([]);
+    expect(scanner.feed('\nCreated C:\\a\\b.md\n')).toEqual([
+      { path: 'C:\\a\\b.md', tool: 'create' },
+    ]);
+  });
+});

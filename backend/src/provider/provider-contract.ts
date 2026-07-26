@@ -1,5 +1,10 @@
 /** Contract shared by all AI provider adapters (Copilot, Agency, ...). */
 
+import type {
+  SessionOutputScanner,
+  SessionOutputScannerContext,
+} from '../session-files/session-files-contract.js';
+
 /** A model offered by a provider. */
 export interface ModelInfo {
   id: string;
@@ -82,6 +87,13 @@ export interface IAIProvider {
    * provider-agnostic (open/closed).
    */
   buildInteractiveCommand(spec: SessionSpec): InteractiveCommand;
+  /**
+   * Optional capability: builds a scanner that detects files the tool creates
+   * or edits from its interactive terminal output. Providers whose CLI
+   * announces file operations implement it; others omit it and contribute no
+   * tracked files, keeping the terminal module tool-agnostic.
+   */
+  createOutputScanner?(ctx: SessionOutputScannerContext): SessionOutputScanner;
   /**
    * Optional capability: lists past sessions from this provider's own store
    * that can be imported into a feature. Providers without an accessible

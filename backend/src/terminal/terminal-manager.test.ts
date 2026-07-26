@@ -47,8 +47,8 @@ function fakePtyEnv() {
   };
 }
 
-function interactiveProvider(): IAIProvider {
-  return {
+function interactiveProvider(withScanner = false): IAIProvider {
+  const provider: IAIProvider = {
     id: 'copilot',
     listModels: async () => [],
     startSession: () => {
@@ -60,6 +60,16 @@ function interactiveProvider(): IAIProvider {
       env: { OTEL: spec.otelFilePath },
     }),
   };
+  if (withScanner) {
+    // A trivial scanner: each fed chunk names one created file for assertions.
+    provider.createOutputScanner = (ctx) => ({
+      feed: (chunk) =>
+        chunk.startsWith('FILE:')
+          ? [{ path: `${ctx.home}/${chunk.slice(5).trim()}`, tool: 'create' }]
+          : [],
+    });
+  }
+  return provider;
 }
 
 function fakeTranscriptStore() {
@@ -94,11 +104,11 @@ function sampleSession(): Session {
   };
 }
 
-function makeManager(instructions = '') {
+function makeManager(instructions = '', withScanner = false) {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
   const providers = createProviderRegistry();
-  providers.register(interactiveProvider());
+  providers.register(interactiveProvider(withScanner));
   const ts = fakeTranscriptStore();
   const started: Session[] = [];
   const ended: Session[] = [];
@@ -107,6 +117,7 @@ function makeManager(instructions = '') {
   bus.on('session.ended', (s) => ended.push(s));
   bus.on('session.discarded', (id) => discarded.push(id));
   const instructionCalls: string[] = [];
+  const recorded: Array<{ sessionId: string; path: string; tool: string }> = [];
   const manager = createTerminalManager({
     spawner: env.spawner,
     providers,
@@ -120,8 +131,23 @@ function makeManager(instructions = '') {
         return instructions;
       },
     },
+    sessionFiles: {
+      record: (sessionId, path, tool) => {
+        recorded.push({ sessionId, path, tool });
+      },
+    },
+    home: '/home/me',
   });
-  return { manager, env, started, ended, discarded, saved: ts.saved, instructionCalls };
+  return {
+    manager,
+    env,
+    started,
+    ended,
+    discarded,
+    saved: ts.saved,
+    instructionCalls,
+    recorded,
+  };
 }
 
 describe('createTerminalManager', () => {
@@ -308,6 +334,34 @@ describe('createTerminalManager', () => {
     expect(() =>
       manager.getOrLaunch({ ...sampleSession(), provider: 'ghost' }),
     ).toThrow();
+  });
+
+  describe('output-scanner file tracking', () => {
+    it('records files the provider scanner detects in terminal output', () => {
+      const { manager, env, recorded } = makeManager('', true);
+      manager.getOrLaunch(sampleSession());
+      env.emitData('FILE: notes.md');
+      env.emitData('some unrelated output');
+      env.emitData('FILE: src/app.ts');
+      expect(recorded).toEqual([
+        { sessionId: 'sess-1', path: '/home/me/notes.md', tool: 'create' },
+        { sessionId: 'sess-1', path: '/home/me/src/app.ts', tool: 'create' },
+      ]);
+    });
+
+    it('records nothing when the provider exposes no scanner', () => {
+      const { manager, env, recorded } = makeManager('', false);
+      manager.getOrLaunch(sampleSession());
+      env.emitData('FILE: notes.md');
+      expect(recorded).toEqual([]);
+    });
+
+    it('stops recording once the terminal exits', () => {
+      const { manager, env, recorded } = makeManager('', true);
+      manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      expect(recorded).toEqual([]);
+    });
   });
 
   describe('injectInstructions', () => {

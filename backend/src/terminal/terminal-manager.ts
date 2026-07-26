@@ -7,6 +7,7 @@ import type { SessionEventMap } from '../session/session-launcher.js';
 import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { PtySpawner } from './pty-contract.js';
 import type { TerminalConfig } from './config.js';
+import type { SessionFilesStore } from '../session-files/session-files-contract.js';
 import {
   createTerminalSession,
   type TerminalSession,
@@ -29,6 +30,10 @@ export interface TerminalManagerDeps {
   config: TerminalConfig;
   transcriptStore: TranscriptStore;
   skills: SessionInstructionsProvider;
+  /** Records files each session creates/edits, parsed from its own output. */
+  sessionFiles: Pick<SessionFilesStore, 'record'>;
+  /** User home directory, for a scanner to expand `~`-relative tool paths. */
+  home: string;
 }
 
 export interface LaunchOptions {
@@ -128,6 +133,11 @@ export function createTerminalManager(
 
     sessions.set(session.id, terminal);
 
+    // Track files this session creates/edits by parsing the tool's own output.
+    // Each PTY is one session, so attribution is unambiguous — unlike watching
+    // a shared working directory. Providers without a scanner contribute none.
+    attachOutputScanner(terminal, provider, spec);
+
     // Seed the effective instruction skills as the first input so the
     // interactive AI follows them. Meta sessions carry no user skills.
     if (session.kind !== 'meta') {
@@ -138,6 +148,39 @@ export function createTerminalManager(
     }
 
     return terminal;
+  }
+
+  /**
+   * Attaches a provider-supplied scanner that reads the tool's terminal output
+   * and records each file it announces creating/editing. Feeds raw output so
+   * the scanner can strip ANSI per complete line (redraw codes can span
+   * chunks). No-op when the provider exposes no scanner.
+   */
+  function attachOutputScanner(
+    terminal: TerminalSession,
+    provider: ReturnType<ProviderRegistry['get']>,
+    spec: SessionSpec,
+  ): void {
+    if (!provider.createOutputScanner) {
+      return;
+    }
+    const scanner = provider.createOutputScanner({
+      home: deps.home,
+      cwd: spec.cwd,
+    });
+    terminal.attach({
+      send: (data) => {
+        for (const op of scanner.feed(data)) {
+          deps.sessionFiles.record(
+            spec.sessionId,
+            op.path,
+            op.tool,
+            deps.clock.isoNow(),
+          );
+        }
+      },
+      exit: () => {},
+    });
   }
 
   /**
