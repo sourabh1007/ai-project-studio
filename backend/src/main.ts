@@ -1,5 +1,13 @@
-import { mkdirSync, existsSync, copyFileSync, cpSync } from 'node:fs';
-import { dirname, join as pathJoin } from 'node:path';
+import {
+  mkdirSync,
+  existsSync,
+  copyFileSync,
+  cpSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { homedir } from 'node:os';
 import express from 'express';
 
@@ -82,7 +90,11 @@ import {
 import { createProcessSpawner } from './provider/process-kernel/process-spawner.js';
 import { createAgencyBootstrapper } from './agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyDetector } from './agency-bootstrap/agency-detector.js';
-import { agencyInstallPaths } from './agency-bootstrap/agency-install-paths.js';
+import {
+  agencyInstallPaths,
+  resolveAgencyExecutable,
+} from './agency-bootstrap/agency-install-paths.js';
+import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
@@ -312,15 +324,60 @@ function main(): void {
 
   // Ensures the bundled Microsoft `agency` CLI is installed. Detection probes the
   // per-user install location(s); the install is streamed to the UI on first run.
+  // Lists immediate child folders of a directory, degrading to [] when absent so
+  // the versioned-folder probe stays robust on a machine with no agency yet.
+  const listDir = (dir: string): string[] =>
+    existsSync(dir) ? readdirSync(dir) : [];
+  const currentAgencyPaths = (): string[] =>
+    agencyInstallPaths(process.platform, process.env, homedir(), listDir);
   const agencyBootstrapper = createAgencyBootstrapper({
     platform: process.platform,
     detect: createAgencyDetector({
-      paths: agencyInstallPaths(process.platform, process.env, homedir()),
+      paths: currentAgencyPaths,
       pathExists: existsSync,
     }),
     spawner,
     env: process.env as Record<string, string>,
   });
+
+  // Prepends the installed agency executable's directory to this process's PATH.
+  // node-pty resolves the bare `agency` command against the live process PATH at
+  // spawn time, so this lets terminals find agency without an app restart — both
+  // right after a first-run install and when agency lives in a versioned folder
+  // that the registry PATH entry does not yet point at.
+  const refreshAgencyPath = (): void => {
+    const exe = resolveAgencyExecutable(currentAgencyPaths(), existsSync);
+    if (!exe) {
+      return;
+    }
+    const dir = dirname(exe);
+    const current = process.env.PATH ?? '';
+    const alreadyOnPath = current
+      .split(pathDelimiter)
+      .some((entry) => entry === dir);
+    if (!alreadyOnPath) {
+      process.env.PATH = current ? `${dir}${pathDelimiter}${current}` : dir;
+    }
+  };
+  refreshAgencyPath();
+
+  // Force the Copilot CLI's home-screen tab bar off for every session. The CLI
+  // reads ~/.copilot/settings.json at launch and has no flag/env for this, so we
+  // merge-write the setting on startup (before any session spawns), preserving
+  // any other user settings and tolerating a missing/malformed file.
+  try {
+    const copilotSettingsPath = pathJoin(homedir(), '.copilot', 'settings.json');
+    const existing = existsSync(copilotSettingsPath)
+      ? readFileSync(copilotSettingsPath, 'utf8')
+      : null;
+    const next = withTabsDisabled(existing);
+    if (next !== existing) {
+      mkdirSync(dirname(copilotSettingsPath), { recursive: true });
+      writeFileSync(copilotSettingsPath, next);
+    }
+  } catch {
+    // Best-effort: a settings write failure must not block startup.
+  }
 
   const cliStorePath = pathJoin(
     homedir(),
@@ -687,7 +744,10 @@ function main(): void {
     if (!agencyInstall) {
       agencyInstall = agencyBootstrapper
         .install((event) => send(event))
-        .then(() => {
+        .then((status) => {
+          if (status.installed) {
+            refreshAgencyPath();
+          }
           agencyInstall = null;
         });
     } else {
