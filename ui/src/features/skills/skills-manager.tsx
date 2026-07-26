@@ -156,7 +156,6 @@ export function SkillsManager() {
                 <SkillKindIcon kind={skill.kind} />
                 {skillKindLabel(skill.kind)}
               </span>
-              <span className="skill-card-name">{skill.name}</span>
               <div className="skill-card-actions">
                 <button
                   type="button"
@@ -187,6 +186,9 @@ export function SkillsManager() {
                 </button>
               </div>
             </div>
+            <span className="skill-card-name" title={skill.name}>
+              {skill.name}
+            </span>
             {skill.instructions && (
               <p className="skill-card-body">{skill.instructions}</p>
             )}

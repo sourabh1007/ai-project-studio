@@ -29,13 +29,20 @@ export const terminalConfigSchema = z.object({
    */
   instructionSeedReadyTimeoutMs: z.number().int().nonnegative(),
   /**
-   * Delay (ms) between writing the instruction block and sending the submit
-   * keystroke. The interactive CLI treats a fast multi-line write as a paste
-   * and would absorb an immediately-trailing newline as a line break; sending
-   * the submit keystroke on its own, once the paste burst settles, makes the
+   * Quiet period (ms) of no terminal output that must elapse after writing the
+   * instruction block before the submit keystroke is sent. The interactive CLI
+   * treats a fast multi-line write as a paste and would absorb an
+   * immediately-trailing newline as a line break; waiting for the paste echo
+   * (and any in-flight agent response) to settle before submitting makes the
    * CLI submit the seeded message instead of leaving it in the composer.
    */
   instructionSeedSubmitDelayMs: z.number().int().nonnegative(),
+  /**
+   * Upper bound (ms) on how long to wait for the terminal to fall quiet before
+   * submitting the seeded instructions anyway. Guarantees the message is sent
+   * even if the CLI never stops emitting output (e.g. an animated spinner).
+   */
+  instructionSeedSubmitMaxWaitMs: z.number().int().nonnegative(),
 });
 
 export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
@@ -49,5 +56,6 @@ export const terminalDefaults: TerminalConfig = {
   instructionSeedSuffix: '\r',
   instructionSeedReadyPattern: '\\?\\s*help|\\bcommands\\b',
   instructionSeedReadyTimeoutMs: 15000,
-  instructionSeedSubmitDelayMs: 300,
+  instructionSeedSubmitDelayMs: 500,
+  instructionSeedSubmitMaxWaitMs: 10000,
 };

@@ -383,6 +383,50 @@ describe('createTerminalManager', () => {
       }
     });
 
+    it('waits for the terminal to fall quiet before submitting', () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        manager.getOrLaunch(sampleSession());
+        manager.injectInstructions('sess-1', 'Apply this.');
+        expect(env.writes).toEqual(['Apply this.']);
+        // Output just before the quiet window elapses restarts the wait, so the
+        // submit keystroke is deferred rather than lost mid-stream.
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs - 1);
+        env.emitData('streaming response…');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs - 1);
+        expect(env.writes).toEqual(['Apply this.']);
+        // Once output stops for the full quiet window, the submit lands.
+        vi.advanceTimersByTime(1);
+        expect(env.writes).toEqual([
+          'Apply this.',
+          terminalDefaults.instructionSeedSuffix,
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('submits at the max-wait cap even if output never stops', () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        manager.getOrLaunch(sampleSession());
+        manager.injectInstructions('sess-1', 'Apply this.');
+        // Continuous output keeps restarting the quiet window right up to the
+        // cap, at which point the message is submitted regardless.
+        const step = terminalDefaults.instructionSeedSubmitDelayMs - 1;
+        for (let elapsed = 0; elapsed < terminalDefaults.instructionSeedSubmitMaxWaitMs; elapsed += step) {
+          vi.advanceTimersByTime(step);
+          env.emitData('tick');
+        }
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitMaxWaitMs);
+        expect(env.writes).toContain(terminalDefaults.instructionSeedSuffix);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not submit if the terminal exits before the submit delay', () => {
       vi.useFakeTimers();
       try {

@@ -2128,19 +2128,23 @@ body.is-resizing {
   gap: var(--space-2);
 }
 
-.skill-card-name {
-  font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.skill-card-head .skill-chip {
+  flex: none;
 }
 
 .skill-card-actions {
   display: flex;
   gap: 2px;
   flex: none;
+  margin-left: auto;
+}
+
+.skill-card-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skill-card-body {

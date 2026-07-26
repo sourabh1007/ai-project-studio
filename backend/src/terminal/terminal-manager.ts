@@ -185,18 +185,50 @@ export function createTerminalManager(
 
   /**
    * Writes an instruction block into a live terminal and submits it with a
-   * separate keystroke after the paste burst settles. The interactive CLI
-   * treats a fast multi-line write as a paste and would absorb an
+   * separate keystroke once the terminal output has settled. The interactive
+   * CLI treats a fast multi-line write as a paste and would absorb an
    * immediately-trailing newline as a line break, so the submit keystroke is
-   * sent on its own once the write has settled.
+   * sent on its own. Crucially, we wait for a quiet window of *no output* — so
+   * the submit lands only after the paste echo (and any in-flight agent
+   * response, e.g. when a skill is removed mid-turn) has finished. A max-wait
+   * cap guarantees submission even if the CLI never fully stops emitting.
    */
   function seedNow(terminal: TerminalSession, instructions: string): void {
     terminal.write(instructions);
-    setTimeout(() => {
+
+    let quietTimer: ReturnType<typeof setTimeout> | undefined;
+    let detach!: () => void;
+
+    const submit = (): void => {
+      clearTimeout(quietTimer);
+      clearTimeout(capTimer);
+      detach();
+      // Suppressed if the terminal exited while we were waiting for it to fall
+      // quiet — the timers are not cancelled on exit, so this guard is what
+      // prevents a post-exit submit.
       if (!terminal.exited) {
         terminal.write(deps.config.instructionSeedSuffix);
       }
-    }, deps.config.instructionSeedSubmitDelayMs);
+    };
+
+    const arm = (): void => {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(submit, deps.config.instructionSeedSubmitDelayMs);
+    };
+
+    detach = terminal.attach({
+      // Any output (the paste echo, or a streaming agent response) restarts the
+      // quiet window, so the submit keystroke only lands once the terminal has
+      // gone idle. Removing a skill mid-response therefore still submits.
+      send: () => arm(),
+      exit: () => {},
+    });
+
+    const capTimer = setTimeout(
+      submit,
+      deps.config.instructionSeedSubmitMaxWaitMs,
+    );
+    arm();
   }
 
   /**
