@@ -40,6 +40,12 @@ export interface SkillsService {
   effectiveForSession(sessionId: string): Skill[];
   /** Composed instruction block for a session's effective instruction skills. */
   instructionsForSession(sessionId: string): string;
+  /**
+   * Composed instruction block for a single skill, for injecting into a live
+   * session when the skill is tagged after its terminal has already launched.
+   * Empty for unknown or non-instruction (e.g. task-plan) skills.
+   */
+  instructionsForSkill(skillId: string): string;
   /** Composed instruction block for a feature's tagged instruction skills. */
   instructionsForFeature(featureId: string): string;
   /**
@@ -228,6 +234,10 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
     },
     instructionsForSession(sessionId) {
       return composeInstructions(effectiveForSession(sessionId), deps.config);
+    },
+    instructionsForSkill(skillId) {
+      const skill = deps.repo.getSkill(skillId);
+      return skill ? composeInstructions([skill], deps.config) : '';
     },
     composeFeaturePrompt(featureId, prompt) {
       return composeSessionPrompt(

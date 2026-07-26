@@ -21,6 +21,14 @@ const tagSkillSchema = z.object({
 
 export interface SkillsControllerDeps {
   skills: SkillsService;
+  /**
+   * Applies a freshly-tagged session skill to that session's live terminal, if
+   * one is running. Session-scoped skills can only be tagged once the session
+   * is open, so launch-time seeding never sees them; injecting on tag is what
+   * makes them take effect. Optional so the controller stays usable in
+   * contexts without a terminal manager.
+   */
+  injectSessionSkill?: (sessionId: string, skillId: string) => void;
 }
 
 /**
@@ -94,10 +102,11 @@ export function createSkillsRoutes(deps: SkillsControllerDeps): Route[] {
       path: '/skills/:id/attachments',
       handler: (req) => {
         const input = parseInput(tagSkillSchema, req.body);
-        return {
-          status: 201,
-          body: deps.skills.tag({ skillId: req.params.id, ...input }),
-        };
+        const attachment = deps.skills.tag({ skillId: req.params.id, ...input });
+        if (input.scope === 'session') {
+          deps.injectSessionSkill?.(input.targetId, req.params.id);
+        }
+        return { status: 201, body: attachment };
       },
     },
     {

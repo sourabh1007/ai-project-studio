@@ -353,6 +353,32 @@ describe('skills-service effective set + injection', () => {
   it('returns an empty session instruction block when nothing is tagged', () => {
     expect(build().instructionsForSession('s1')).toBe('');
   });
+
+  it('composes a single skill block for live injection', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'SessionRule',
+      kind: 'instruction',
+      instructions: 'Session rule.',
+    });
+    const block = svc.instructionsForSkill(skill.id);
+    expect(block).toContain('Session rule.');
+    expect(block).toContain(skillsDefaults.injectionHeader);
+  });
+
+  it('returns an empty block for an unknown skill id', () => {
+    expect(build().instructionsForSkill('nope')).toBe('');
+  });
+
+  it('returns an empty block for a non-instruction (task-plan) skill', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'Plan',
+      kind: 'task-plan',
+      instructions: 'ignored',
+    });
+    expect(svc.instructionsForSkill(skill.id)).toBe('');
+  });
 });
 
 describe('skills-service portability', () => {

@@ -32,7 +32,7 @@ const attachment: SkillAttachment = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-function harness() {
+function harness(injectSessionSkill?: (sessionId: string, skillId: string) => void) {
   const calls: Record<string, unknown[]> = {};
   const record = (name: string, ...args: unknown[]) => {
     calls[name] = args;
@@ -53,7 +53,10 @@ function harness() {
     exportAll: () => (record('exportAll'), [{ name: 'A' }]),
     importSkill: (payload: unknown) => (record('importSkill', payload), skill),
   } as unknown as SkillsService;
-  return { routes: createSkillsRoutes({ skills }), calls };
+  return {
+    routes: createSkillsRoutes({ skills, injectSessionSkill }),
+    calls,
+  };
 }
 
 describe('skills-controller', () => {
@@ -123,6 +126,36 @@ describe('skills-controller', () => {
     );
     expect(result).toEqual({ status: 201, body: attachment });
     expect(calls.tag).toEqual([{ skillId: 'k1', scope: 'feature', targetId: 'f1' }]);
+  });
+
+  it('injects a session-scoped skill into its live terminal on tag', async () => {
+    const injected: Array<[string, string]> = [];
+    const { routes } = harness((sessionId, skillId) =>
+      injected.push([sessionId, skillId]),
+    );
+    await pick(routes, 'post', '/skills/:id/attachments')(
+      req({ params: { id: 'k1' }, body: { scope: 'session', targetId: 's1' } }),
+    );
+    expect(injected).toEqual([['s1', 'k1']]);
+  });
+
+  it('does not inject when a skill is tagged to a feature', async () => {
+    const injected: Array<[string, string]> = [];
+    const { routes } = harness((sessionId, skillId) =>
+      injected.push([sessionId, skillId]),
+    );
+    await pick(routes, 'post', '/skills/:id/attachments')(
+      req({ params: { id: 'k1' }, body: { scope: 'feature', targetId: 'f1' } }),
+    );
+    expect(injected).toEqual([]);
+  });
+
+  it('tags a session skill without an injector configured', async () => {
+    const { routes } = harness();
+    const result = await pick(routes, 'post', '/skills/:id/attachments')(
+      req({ params: { id: 'k1' }, body: { scope: 'session', targetId: 's1' } }),
+    );
+    expect(result).toEqual({ status: 201, body: attachment });
   });
 
   it('rejects an invalid tag payload', () => {

@@ -52,6 +52,8 @@ export interface ApiRoutesDeps {
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
   skills: SkillsService;
+  /** Applies a freshly-tagged session skill to that session's live terminal. */
+  injectSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
   ideUsage: IdeUsageService;
   configRegistry: ConfigSchemaRegistry;
@@ -88,7 +90,10 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       sessionSummaries: deps.sessionSummaries,
     }),
     ...createSessionImportRoutes({ imports: deps.imports }),
-    ...createSkillsRoutes({ skills: deps.skills }),
+    ...createSkillsRoutes({
+      skills: deps.skills,
+      injectSessionSkill: deps.injectSessionSkill,
+    }),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createConfigRoutes({

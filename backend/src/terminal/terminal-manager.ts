@@ -45,6 +45,14 @@ export interface TerminalManager {
    */
   getOrLaunch(session: Session, options?: LaunchOptions): TerminalSession;
   get(sessionId: string): TerminalSession | undefined;
+  /**
+   * Seeds an instruction block into a session's already-running terminal, as
+   * though it were typed and submitted. Used to apply a skill tagged to a live
+   * session (session-scoped skills can only be tagged once the session — and
+   * thus its terminal — is open, so they are never picked up by launch-time
+   * seeding). Returns false when no live terminal exists or the block is empty.
+   */
+  injectInstructions(sessionId: string, instructions: string): boolean;
   close(sessionId: string): void;
 }
 
@@ -133,6 +141,22 @@ export function createTerminalManager(
   }
 
   /**
+   * Writes an instruction block into a live terminal and submits it with a
+   * separate keystroke after the paste burst settles. The interactive CLI
+   * treats a fast multi-line write as a paste and would absorb an
+   * immediately-trailing newline as a line break, so the submit keystroke is
+   * sent on its own once the write has settled.
+   */
+  function seedNow(terminal: TerminalSession, instructions: string): void {
+    terminal.write(instructions);
+    setTimeout(() => {
+      if (!terminal.exited) {
+        terminal.write(deps.config.instructionSeedSuffix);
+      }
+    }, deps.config.instructionSeedSubmitDelayMs);
+  }
+
+  /**
    * Seeds the instruction block once the interactive CLI's prompt is ready,
    * then submits it with a separate keystroke after a short pause.
    *
@@ -159,12 +183,7 @@ export function createTerminalManager(
     const submit = (): void => {
       clearTimeout(readyTimer);
       detach();
-      terminal.write(instructions);
-      setTimeout(() => {
-        if (!terminal.exited) {
-          terminal.write(deps.config.instructionSeedSuffix);
-        }
-      }, deps.config.instructionSeedSubmitDelayMs);
+      seedNow(terminal, instructions);
     };
 
     detach = terminal.attach({
@@ -194,6 +213,16 @@ export function createTerminalManager(
       return launch(session, options);
     },
     get: (sessionId) => sessions.get(sessionId),
+    injectInstructions(sessionId, instructions) {
+      // A terminal is only in the map while live (its exit handler removes it),
+      // so a found terminal is always writable.
+      const terminal = sessions.get(sessionId);
+      if (!terminal || instructions.length === 0) {
+        return false;
+      }
+      seedNow(terminal, instructions);
+      return true;
+    },
     close(sessionId) {
       // A terminal is only in the map while live: its exit handler removes it.
       // So a found terminal is always killable, and killing it during deletion

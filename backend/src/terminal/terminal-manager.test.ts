@@ -309,4 +309,60 @@ describe('createTerminalManager', () => {
       manager.getOrLaunch({ ...sampleSession(), provider: 'ghost' }),
     ).toThrow();
   });
+
+  describe('injectInstructions', () => {
+    it('writes and submits into a live terminal, returning true', () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        manager.getOrLaunch(sampleSession());
+        const injected = manager.injectInstructions('sess-1', 'Apply this.');
+        expect(injected).toBe(true);
+        expect(env.writes).toEqual(['Apply this.']);
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(env.writes).toEqual([
+          'Apply this.',
+          terminalDefaults.instructionSeedSuffix,
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not submit if the terminal exits before the submit delay', () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        manager.getOrLaunch(sampleSession());
+        manager.injectInstructions('sess-1', 'Apply this.');
+        expect(env.writes).toEqual(['Apply this.']);
+        env.emitExit(0);
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(env.writes).toEqual(['Apply this.']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('returns false when no terminal is running for the session', () => {
+      const { manager, env } = makeManager('');
+      expect(manager.injectInstructions('sess-1', 'Apply this.')).toBe(false);
+      expect(env.writes).toEqual([]);
+    });
+
+    it('returns false for an empty instruction block', () => {
+      const { manager, env } = makeManager('');
+      manager.getOrLaunch(sampleSession());
+      expect(manager.injectInstructions('sess-1', '')).toBe(false);
+      expect(env.writes).toEqual([]);
+    });
+
+    it('returns false once the terminal has exited', () => {
+      const { manager, env } = makeManager('');
+      manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      expect(manager.injectInstructions('sess-1', 'Apply this.')).toBe(false);
+      expect(env.writes).toEqual([]);
+    });
+  });
 });

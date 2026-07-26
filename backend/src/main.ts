@@ -616,6 +616,15 @@ function main(): void {
       sessionSummaries: sessionSummarizer,
       imports: sessionImportService,
       skills: skillsService,
+      // Session-scoped skills can only be tagged after the session (and its
+      // terminal) is open, so launch-time seeding never sees them. Inject them
+      // into the live terminal on tag so they actually take effect.
+      injectSessionSkill: (sessionId, skillId) => {
+        const instructions = skillsService.instructionsForSkill(skillId);
+        if (instructions.length > 0) {
+          terminalManager.injectInstructions(sessionId, instructions);
+        }
+      },
       tasks: featureTasksService,
       ideUsage: ideUsageService,
       configRegistry: registry,
