@@ -19,6 +19,8 @@ import type { SessionRepo } from '../session/session-repo-port.js';
 import type { FeatureSummarizer } from '../summarizer/summarizer-contract.js';
 import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
+import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
+import { createAgencyRoutes } from './agency-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createFeatureRoutes } from './feature-controller.js';
@@ -60,6 +62,8 @@ export interface ApiRoutesDeps {
   ideUsage: IdeUsageService;
   configRegistry: ConfigSchemaRegistry;
   currentConfig: ConfigObject;
+  /** Reports whether the bundled `agency` CLI is installed. */
+  agencyStatus: () => AgencyStatus;
   logger: Logger;
 }
 
@@ -103,5 +107,6 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       registry: deps.configRegistry,
       current: deps.currentConfig,
     }),
+    ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
   ];
 }

@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ApiProvider, apiClient } from './app/api-context.js';
 import { App } from './App.js';
+import { AgencyInstallGate } from './features/bootstrap/agency-install-gate.js';
 import './styles/design-tokens.css';
 import './styles/app.css';
 
@@ -13,7 +14,9 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <ApiProvider value={apiClient}>
-      <App />
+      <AgencyInstallGate>
+        <App />
+      </AgencyInstallGate>
     </ApiProvider>
   </StrictMode>,
 );

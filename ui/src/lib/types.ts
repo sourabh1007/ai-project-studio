@@ -1,5 +1,10 @@
 /** Shared DTO types mirroring the backend API contracts. */
 
+/** Whether the bundled Microsoft `agency` CLI is installed on this machine. */
+export interface AgencyStatus {
+  installed: boolean;
+}
+
 export interface Feature {
   id: string;
   name: string;

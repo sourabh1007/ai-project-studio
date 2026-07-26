@@ -24,6 +24,7 @@ function deps(): ApiRoutesDeps {
     ideUsage: empty,
     configRegistry: empty,
     currentConfig: {},
+    agencyStatus: () => ({ installed: true }),
     logger: empty,
   };
 }
@@ -76,6 +77,7 @@ describe('createApiRoutes', () => {
       'delete /tasks/:taskId',
       'get /usage/ide',
       'get /config',
+      'get /agency/status',
     ]);
   });
 });

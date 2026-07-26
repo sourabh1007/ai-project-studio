@@ -169,6 +169,14 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/config');
   });
 
+  it('gets the agency install status', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ installed: true }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getAgencyStatus();
+    expect(result).toEqual({ installed: true });
+    expect(calls[0][0]).toBe('/api/agency/status');
+  });
+
   it('lists importable sessions and imports one', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });

@@ -80,6 +80,9 @@ import {
 } from './copilot-history/config.js';
 
 import { createProcessSpawner } from './provider/process-kernel/process-spawner.js';
+import { createAgencyBootstrapper } from './agency-bootstrap/agency-bootstrapper.js';
+import { createAgencyDetector } from './agency-bootstrap/agency-detector.js';
+import { agencyInstallPaths } from './agency-bootstrap/agency-install-paths.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
@@ -306,6 +309,19 @@ function main(): void {
   // `enabled` flag. A provider is registered only when enabled, keeping
   // disabled adapters intact and instantly re-enable-able via config.
   const spawner = createProcessSpawner(clock);
+
+  // Ensures the bundled Microsoft `agency` CLI is installed. Detection probes the
+  // per-user install location(s); the install is streamed to the UI on first run.
+  const agencyBootstrapper = createAgencyBootstrapper({
+    platform: process.platform,
+    detect: createAgencyDetector({
+      paths: agencyInstallPaths(process.platform, process.env, homedir()),
+      pathExists: existsSync,
+    }),
+    spawner,
+    env: process.env as Record<string, string>,
+  });
+
   const cliStorePath = pathJoin(
     homedir(),
     copilotHistoryConfig.subdir,
@@ -625,6 +641,7 @@ function main(): void {
       ideUsage: ideUsageService,
       configRegistry: registry,
       currentConfig: config,
+      agencyStatus: () => agencyBootstrapper.status(),
       logger,
     }),
   );
@@ -649,6 +666,40 @@ function main(): void {
     req.on('close', () => {
       clearInterval(heartbeat);
       off();
+      res.end();
+    });
+  });
+
+  // First-run agency install, streamed as SSE so the UI can show live progress.
+  // A shared in-flight promise dedupes concurrent connections (e.g. UI reconnect)
+  // onto a single install run.
+  let agencyInstall: Promise<void> | null = null;
+  app.get(`${apiConfig.basePath}/agency/install`, (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.write(': connected\n\n');
+    const send = (data: unknown): void => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    if (!agencyInstall) {
+      agencyInstall = agencyBootstrapper
+        .install((event) => send(event))
+        .then(() => {
+          agencyInstall = null;
+        });
+    } else {
+      // Already installing from another connection; report current status so a
+      // late subscriber is not left hanging on a stream with no terminal event.
+      send(
+        agencyBootstrapper.status().installed
+          ? { kind: 'done' }
+          : { kind: 'line', line: 'Installation already in progress…' },
+      );
+    }
+    req.on('close', () => {
       res.end();
     });
   });

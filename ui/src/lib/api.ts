@@ -3,6 +3,7 @@ import type {
   CreateFeatureInput,
   CreateSkillInput,
   AddFeatureTaskInput,
+  AgencyStatus,
   Feature,
   FeatureSummary,
   FeatureTask,
@@ -168,6 +169,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     removeFeatureTask: (taskId: string) =>
       request<{ id: string }>(`/tasks/${taskId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
+    getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
   };
 }
 
