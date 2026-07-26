@@ -54,6 +54,16 @@ const OP_PATTERN = new RegExp(
 // eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
+/**
+ * Characters that can never appear inside a real file path but which the
+ * interactive TUI can render directly against one: control codes, characters
+ * illegal in Windows paths (`| " < > ? *`), and the box-drawing / block /
+ * geometric glyphs (U+2500–U+25FF, e.g. `┃ │ ─ ● ▌`) the CLI uses to draw the
+ * bordered "chip" around a path. The path token is cut at the first of these.
+ */
+// eslint-disable-next-line no-control-regex
+const PATH_JUNK_PATTERN = /[\x00-\x1f|"<>?*\u2500-\u25ff]/;
+
 /** Keep the line buffer bounded when output has no line terminators. */
 const MAX_BUFFER = 64 * 1024;
 
@@ -70,6 +80,13 @@ function cleanPath(raw: string): string {
   let path = raw.trim();
   if (path.startsWith('"') && path.endsWith('"')) {
     path = path.slice(1, -1);
+  }
+  // The TUI may draw the path inside a bordered chip whose box glyphs abut the
+  // path with no whitespace, so the greedy path token swallows them. Cut at the
+  // first character that cannot legitimately occur in a path.
+  const junk = path.search(PATH_JUNK_PATTERN);
+  if (junk >= 0) {
+    path = path.slice(0, junk);
   }
   // Drop trailing punctuation the CLI may append after the path in prose.
   path = path.replace(/["'.,;:)\]}]+$/, '');

@@ -57,6 +57,17 @@ describe('createCopilotOutputScanner', () => {
     expect(scan(['Created "."\n'])).toEqual([]);
   });
 
+  it('strips TUI box-border glyphs abutting the path (bordered chip)', () => {
+    // The CLI draws the path inside a bordered chip; its box glyphs (┃ ● ...)
+    // can touch the path with no separating whitespace.
+    expect(
+      scan(['● Created  C:\\Users\\me\\Downloads\\new-file.md\u2503\u2503\u25cf\n']),
+    ).toEqual([{ path: 'C:\\Users\\me\\Downloads\\new-file.md', tool: 'create' }]);
+    expect(scan(['Edit  Create ~\\Downloads\\a.md\u2503\n'])).toEqual([
+      { path: 'C:\\Users\\me\\Downloads\\a.md', tool: 'create' },
+    ]);
+  });
+
   it('strips ANSI escape codes wrapping the path', () => {
     expect(scan(['Created \x1b[36mC:\\a\\b.md\x1b[0m\n'])).toEqual([
       { path: 'C:\\a\\b.md', tool: 'create' },
