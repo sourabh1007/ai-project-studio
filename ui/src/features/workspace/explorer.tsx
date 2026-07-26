@@ -16,6 +16,7 @@ import {
   CheckIcon,
   CloseIcon,
   CollapseSidebarIcon,
+  FilesIcon,
   ImportIcon,
   PencilIcon,
   PlusIcon,
@@ -25,6 +26,7 @@ import {
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
 import { SkillChips } from '../skills/skill-chips.js';
+import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 
@@ -58,6 +60,7 @@ function SessionRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
 
   const dot = sessionDotClass(session.status);
 
@@ -184,6 +187,22 @@ function SessionRow({
         <span className="metric" title="Active time on this session">
           <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
         </span>
+      </div>
+
+      <div className="session-files">
+        <button
+          type="button"
+          className="session-files-toggle"
+          aria-expanded={filesOpen}
+          onClick={() => setFilesOpen((v) => !v)}
+        >
+          <span className="chevron" aria-hidden="true">
+            <ChevronIcon open={filesOpen} size={12} />
+          </span>
+          <FilesIcon size={12} />
+          <span>Files</span>
+        </button>
+        {filesOpen && <SessionFiles sessionId={session.id} />}
       </div>
     </div>
   );

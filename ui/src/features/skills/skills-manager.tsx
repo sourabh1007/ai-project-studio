@@ -10,7 +10,8 @@ import {
   TrashIcon,
   UploadIcon,
 } from '../../components/icons.js';
-import { SKILL_KINDS, SkillKindIcon, skillKindLabel } from './skill-kind.js';
+import { SkillKindIcon, skillKindLabel } from './skill-kind.js';
+import { SkillForm } from './skill-form.js';
 
 function downloadJson(name: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -24,93 +25,6 @@ function downloadJson(name: string, data: unknown) {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-}
-
-function SkillForm({
-  initial,
-  onSubmit,
-  onCancel,
-}: {
-  initial?: Skill;
-  onSubmit: (input: {
-    name: string;
-    kind: SkillKind;
-    instructions: string;
-  }) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(initial?.name ?? '');
-  const [kind, setKind] = useState<SkillKind>(initial?.kind ?? 'instruction');
-  const [instructions, setInstructions] = useState(initial?.instructions ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit() {
-    if (!name.trim()) {
-      setError('Name is required');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await onSubmit({ name: name.trim(), kind, instructions });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="feature-form">
-      <div className="field">
-        <label htmlFor="skill-name">Name</label>
-        <input
-          id="skill-name"
-          className="input"
-          autoFocus
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="e.g. Follow TDD"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="skill-kind">Kind</label>
-        <select
-          id="skill-kind"
-          className="input"
-          value={kind}
-          disabled={Boolean(initial)}
-          onChange={(event) => setKind(event.target.value as SkillKind)}
-        >
-          {SKILL_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {skillKindLabel(k)}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="skill-instructions">Instructions</label>
-        <textarea
-          id="skill-instructions"
-          className="textarea textarea-lg"
-          value={instructions}
-          onChange={(event) => setInstructions(event.target.value)}
-          placeholder="Guidance injected into every session this skill is tagged to…"
-        />
-      </div>
-      <ErrorText error={error} />
-      <div className="row modal-actions">
-        <Button variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button onClick={submit} disabled={busy}>
-          {busy ? 'Saving…' : initial ? 'Save changes' : 'Create skill'}
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 export function SkillsManager() {

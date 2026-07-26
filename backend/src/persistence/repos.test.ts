@@ -6,6 +6,7 @@ import { createUsageRepo } from './usage-repo.js';
 import { createTranscriptRepo } from './transcript-repo.js';
 import { createSummaryRepo } from './summary-repo.js';
 import { createSessionSummaryRepo } from './session-summary-repo.js';
+import { createSessionFilesRepo } from './session-files-repo.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
@@ -231,6 +232,69 @@ describe('session-summary-repo', () => {
     repo.save({ sessionId: 's1', content: 'x', createdAt: '2025-01-01T00:00:00.000Z' });
     repo.delete('s1');
     expect(repo.load('s1')).toBeNull();
+    db.close();
+  });
+});
+
+describe('session-files-repo', () => {
+  it('records, upgrades edit to create, keeps earliest time, lists newest first', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionFilesRepo(db);
+    expect(repo.list('s1')).toEqual([]);
+
+    repo.record('s1', 'C:\\proj\\a.ts', 'edit', '2025-01-01T00:00:01.000Z');
+    repo.record('s1', 'C:\\proj\\sub\\b.ts', 'create', '2025-01-01T00:00:03.000Z');
+    // A second sighting of a.ts as a create upgrades the tool but keeps the
+    // earliest first-seen timestamp.
+    repo.record('s1', 'C:\\proj\\a.ts', 'create', '2025-01-01T00:00:05.000Z');
+    // A later edit does not downgrade an existing create.
+    repo.record('s1', 'C:\\proj\\sub\\b.ts', 'edit', '2025-01-01T00:00:07.000Z');
+
+    const files = repo.list('s1');
+    expect(files).toEqual([
+      {
+        path: 'C:\\proj\\sub\\b.ts',
+        name: 'b.ts',
+        dir: 'C:\\proj\\sub',
+        tool: 'create',
+        firstSeenAt: '2025-01-01T00:00:03.000Z',
+      },
+      {
+        path: 'C:\\proj\\a.ts',
+        name: 'a.ts',
+        dir: 'C:\\proj',
+        tool: 'create',
+        firstSeenAt: '2025-01-01T00:00:01.000Z',
+      },
+    ]);
+    db.close();
+  });
+
+  it('splits posix paths and handles a bare filename with no directory', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionFilesRepo(db);
+    repo.record('s1', '/home/u/notes.md', 'edit', '2025-01-01T00:00:01.000Z');
+    repo.record('s1', 'top.txt', 'edit', '2025-01-01T00:00:02.000Z');
+    const files = repo.list('s1');
+    expect(files.find((f) => f.path === '/home/u/notes.md')).toMatchObject({
+      name: 'notes.md',
+      dir: '/home/u',
+    });
+    expect(files.find((f) => f.path === 'top.txt')).toMatchObject({
+      name: 'top.txt',
+      dir: '',
+    });
+    db.close();
+  });
+
+  it('deletes all files for a session without touching others', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionFilesRepo(db);
+    repo.record('s1', 'C:\\a.ts', 'edit', '2025-01-01T00:00:01.000Z');
+    repo.record('s2', 'C:\\b.ts', 'edit', '2025-01-01T00:00:02.000Z');
+    repo.deleteBySession('s1');
+    expect(repo.list('s1')).toEqual([]);
+    expect(repo.list('s2')).toHaveLength(1);
     db.close();
   });
 });

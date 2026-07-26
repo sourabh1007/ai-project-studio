@@ -113,6 +113,10 @@ import { createFeatureService } from './feature/feature-service.js';
 import { createFeatureWorkSummaryService } from './feature/feature-work-summary.js';
 import { createCopilotHistoryDb } from './copilot-history/copilot-history-db.js';
 import { createCopilotHistoryReader } from './copilot-history/copilot-history-reader.js';
+import { createSessionFilesRepo } from './persistence/session-files-repo.js';
+import { createSessionFileTracker } from './session-files/session-file-tracker.js';
+import { createFsDirectoryWatcher } from './session-files/fs-directory-watcher.js';
+import { shouldIgnore } from './session-files/session-file-path-filter.js';
 import { createWorkspaceAdmin } from './workspace/workspace-admin-service.js';
 
 import { createTranscriptCollector } from './summarizer/transcript-collector.js';
@@ -287,6 +291,7 @@ function main(): void {
   const transcriptRepo = createTranscriptRepo(db);
   const summaryRepo = createSummaryRepo(db);
   const sessionSummaryRepo = createSessionSummaryRepo(db);
+  const sessionFilesRepo = createSessionFilesRepo(db);
   const aggregateRepo = createAggregateRepo(db, aggregationConfig);
   const featureAnalytics = createFeatureAnalytics({
     reader: aggregateRepo,
@@ -406,6 +411,17 @@ function main(): void {
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
 
+  // Records files each session creates/edits by watching its working directory.
+  // Sessions share one cwd, so changes are attributed to the most recently
+  // active session (see the tracker). Provider-agnostic: any terminal-driven
+  // tool is covered without special integration.
+  const sessionFileTracker = createSessionFileTracker({
+    store: sessionFilesRepo,
+    watcherFactory: createFsDirectoryWatcher,
+    now: () => clock.now().toISOString(),
+    ignore: shouldIgnore,
+  });
+
   // Live usage capture: poll the CLI's own usage store for each running session
   // and feed new per-request usage into the same credit/record pipeline. This
   // updates the live AIC/token/model meter for both one-shot and interactive
@@ -437,6 +453,7 @@ function main(): void {
     });
   bus.on('session.started', (session: Session) => {
     sessionRepo.save(session);
+    sessionFileTracker.open(session.id, terminalCwd);
     const tailer = makeUsageTailer(session);
     tailers.set(session.id, tailer);
     try {
@@ -447,6 +464,7 @@ function main(): void {
   });
   bus.on('session.ended', (session: Session) => {
     sessionRepo.save(session);
+    sessionFileTracker.close(session.id);
     const tailer = tailers.get(session.id);
     if (!tailer) {
       return;
@@ -463,6 +481,7 @@ function main(): void {
   bus.on('session.discarded', (sessionId: string) => {
     // The session is being deleted: release its live usage tailer without a
     // final drain (its usage rows are being purged) and without re-persisting.
+    sessionFileTracker.close(sessionId);
     const tailer = tailers.get(sessionId);
     if (!tailer) {
       return;
@@ -473,13 +492,14 @@ function main(): void {
 
   // Feature + summarizer.
   const featureService = createFeatureService({ repo: featureRepo, ids, clock });
+  const cliStoreDatabasePath = pathJoin(
+    homedir(),
+    copilotHistoryConfig.subdir,
+    copilotHistoryConfig.databaseFile,
+  );
   const copilotHistoryReader = createCopilotHistoryReader({
     source: createCopilotHistoryDb({
-      databasePath: pathJoin(
-        homedir(),
-        copilotHistoryConfig.subdir,
-        copilotHistoryConfig.databaseFile,
-      ),
+      databasePath: cliStoreDatabasePath,
     }),
     config: copilotHistoryConfig,
   });
@@ -494,6 +514,7 @@ function main(): void {
     usage: usageRepo,
     transcripts: transcriptRepo,
     summaries: summaryRepo,
+    sessionFiles: sessionFilesRepo,
     terminals: terminalManager,
   });
   const collector = createTranscriptCollector({
@@ -591,6 +612,7 @@ function main(): void {
       summarizer,
       summaries: summaryRepo,
       workSummaries: workSummaryService,
+      sessionFiles: sessionFilesRepo,
       sessionSummaries: sessionSummarizer,
       imports: sessionImportService,
       skills: skillsService,
@@ -654,6 +676,7 @@ function main(): void {
       config: terminalConfig,
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
+      activity: sessionFileTracker,
       logger,
     });
     logger.info(`Interactive terminal WebSocket at ${terminalConfig.wsPath}`);

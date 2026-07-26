@@ -84,6 +84,13 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     position INTEGER NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS session_files (
+    session_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, path)
+  )`,
 ];
 
 /**

@@ -81,6 +81,9 @@ function harness(featureSessions: Session[] = []) {
     summaries: {
       delete: (featureId) => calls.push(`summaries.delete:${featureId}`),
     },
+    sessionFiles: {
+      deleteBySession: (id) => calls.push(`sessionFiles.deleteBySession:${id}`),
+    },
     terminals: {
       close: (id) => calls.push(`terminals.close:${id}`),
     },
@@ -128,9 +131,11 @@ describe('workspace-admin-service', () => {
       'sessions.listByFeature:f1',
       'terminals.close:s1',
       'usage.deleteBySession:s1',
+      'sessionFiles.deleteBySession:s1',
       'transcripts.delete:s1',
       'terminals.close:s2',
       'usage.deleteBySession:s2',
+      'sessionFiles.deleteBySession:s2',
       'transcripts.delete:s2',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
@@ -163,6 +168,7 @@ describe('workspace-admin-service', () => {
     expect(calls).toEqual([
       'terminals.close:s1',
       'usage.deleteBySession:s1',
+      'sessionFiles.deleteBySession:s1',
       'transcripts.delete:s1',
       'sessions.delete:s1',
     ]);

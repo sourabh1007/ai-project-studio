@@ -14,6 +14,7 @@ import type {
   ModelInfo,
   ProviderInfo,
   Session,
+  SessionFile,
   Skill,
   SkillAttachment,
   SkillExport,
@@ -150,6 +151,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<TaggedSkill[]>(`/features/${featureId}/skills`),
     listSessionSkills: (sessionId: string) =>
       request<TaggedSkill[]>(`/sessions/${sessionId}/skills`),
+    listSessionFiles: (sessionId: string) =>
+      request<SessionFile[]>(`/sessions/${sessionId}/files`),
     exportSkill: (id: string) => request<SkillExport>(`/skills/${id}/export`),
     exportSkills: () => request<SkillExport[]>('/skills/export'),
     importSkill: (payload: SkillExport) =>

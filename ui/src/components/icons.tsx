@@ -27,6 +27,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   Sparkles,
   Sun,
@@ -85,6 +86,7 @@ export const CircleIcon = makeIcon(Circle);
 export const ClockIcon = makeIcon(Clock);
 export const RefreshIcon = makeIcon(RefreshCw);
 export const MoreIcon = makeIcon(MoreHorizontal);
+export const SearchIcon = makeIcon(Search);
 
 // Navigation icons.
 export const FilesIcon = makeIcon(Files);
@@ -101,6 +103,7 @@ export const ActivityIcon = makeIcon(Activity);
 export const TimeIcon = makeIcon(Timer);
 export const HistoryIcon = makeIcon(History);
 export const SummaryIcon = makeIcon(FileText);
+export const FileIcon = makeIcon(FileText);
 
 // Skills icons.
 export const SkillsIcon = makeIcon(Sparkles);

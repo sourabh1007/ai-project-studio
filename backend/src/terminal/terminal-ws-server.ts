@@ -5,6 +5,7 @@ import type { Logger } from '../kernel/logger.js';
 import type { Session } from '../session/session-contract.js';
 import type { TerminalConfig } from './config.js';
 import type { TerminalManager } from './terminal-manager.js';
+import type { SessionFileTracker } from '../session-files/session-files-contract.js';
 import {
   decodeClientMessage,
   encodeServerMessage,
@@ -18,6 +19,8 @@ export interface TerminalWsDeps {
   getSession: (id: string) => Session | null;
   /** Working directory the interactive CLI runs in. */
   cwd?: string;
+  /** Notified when a session receives user input, for file attribution. */
+  activity?: Pick<SessionFileTracker, 'markActive'>;
   logger: Logger;
 }
 
@@ -63,6 +66,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
         return;
       }
       if (message.type === 'input') {
+        deps.activity?.markActive(sessionId);
         terminal.write(message.data);
       } else {
         terminal.resize(message.cols, message.rows);

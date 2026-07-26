@@ -4,6 +4,7 @@ import type { Logger } from '../kernel/logger.js';
 import type { FeatureAnalyticsService } from '../aggregation/feature-analytics.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { FeatureWorkSummaryService } from '../feature/feature-work-summary-contract.js';
+import type { SessionFilesStore } from '../session-files/session-files-contract.js';
 import type { SessionSummarizer } from '../session-summary/session-summary-contract.js';
 import type { SessionImportService } from '../session-import/session-import-contract.js';
 import type { SkillsService } from '../skills/skills-service.js';
@@ -26,6 +27,7 @@ import { createSessionRoutes } from './session-controller.js';
 import { createTerminalRoutes } from './terminal-controller.js';
 import { createSummaryRoutes } from './summary-controller.js';
 import { createWorkSummaryRoutes } from './work-summary-controller.js';
+import { createSessionFilesRoutes } from './session-files-controller.js';
 import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
@@ -46,6 +48,7 @@ export interface ApiRoutesDeps {
   summarizer: FeatureSummarizer;
   summaries: SummaryStore;
   workSummaries: FeatureWorkSummaryService;
+  sessionFiles: Pick<SessionFilesStore, 'list'>;
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
   skills: SkillsService;
@@ -80,6 +83,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       summaries: deps.summaries,
     }),
     ...createWorkSummaryRoutes({ workSummaries: deps.workSummaries }),
+    ...createSessionFilesRoutes({ sessionFiles: deps.sessionFiles }),
     ...createSessionSummaryRoutes({
       sessionSummaries: deps.sessionSummaries,
     }),

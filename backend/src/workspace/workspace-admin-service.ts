@@ -6,6 +6,7 @@ import type { SessionRepo } from '../session/session-repo-port.js';
 import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { UsageRepo } from '../usage/usage-repo-port.js';
 import type { SummaryStore } from '../summarizer/summary-store-port.js';
+import type { SessionFilesStore } from '../session-files/session-files-contract.js';
 
 /** Closes a live interactive terminal for a session, if one is running. */
 export interface TerminalCloser {
@@ -18,6 +19,7 @@ export interface WorkspaceAdminDeps {
   usage: Pick<UsageRepo, 'deleteBySession'>;
   transcripts: Pick<TranscriptStore, 'delete'>;
   summaries: Pick<SummaryStore, 'delete'>;
+  sessionFiles: Pick<SessionFilesStore, 'deleteBySession'>;
   terminals: TerminalCloser;
 }
 
@@ -38,6 +40,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
   async function purgeSession(sessionId: string): Promise<void> {
     deps.terminals.close(sessionId);
     deps.usage.deleteBySession(sessionId);
+    deps.sessionFiles.deleteBySession(sessionId);
     await deps.transcripts.delete(sessionId);
   }
 

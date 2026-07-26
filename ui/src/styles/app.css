@@ -1127,6 +1127,116 @@ body.is-resizing {
   background: color-mix(in srgb, var(--accent) 16%, var(--surface-strong));
 }
 
+/* Session → Files disclosure */
+.session-files {
+  padding-left: 16px;
+}
+
+.session-files-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  appearance: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-files-toggle:hover {
+  color: var(--text);
+}
+
+.session-files-toggle .chevron {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+}
+
+.session-files-empty {
+  margin: 2px 0 4px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.session-file-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--text);
+  font-size: 0.68rem;
+  min-width: 0;
+}
+
+.session-file-row.is-interactive {
+  cursor: pointer;
+}
+
+.session-file-row.is-interactive:hover {
+  background: var(--surface-strong);
+}
+
+.session-file-icon {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.session-file-name {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-file-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.session-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.session-file-badge.is-create {
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 18%, transparent);
+}
+
+.session-file-badge.is-edit {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 .session-card.is-editing {
   flex-direction: row;
   align-items: center;

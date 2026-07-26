@@ -13,4 +13,9 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.send('theme:set', mode);
     }
   },
+  revealFile(filePath) {
+    if (typeof filePath === 'string' && filePath.length > 0) {
+      ipcRenderer.send('file:reveal', filePath);
+    }
+  },
 });

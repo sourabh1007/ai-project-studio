@@ -225,6 +225,16 @@ describe('createApiClient', () => {
     expect(calls[11][1]?.method).toBe('POST');
   });
 
+  it('requests the files a session touched', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+
+    await client.listSessionFiles('s1');
+
+    expect(calls[0][0]).toBe('/api/sessions/s1/files');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
   it('performs the full feature-tasks lifecycle over HTTP', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 't1' }));
     const client = createApiClient({ fetchImpl });

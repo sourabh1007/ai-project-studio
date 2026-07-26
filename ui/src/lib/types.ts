@@ -34,6 +34,18 @@ export interface Session {
   exitCode: number | null;
 }
 
+/** How a session touched a file, mirrored from the CLI store. */
+export type SessionFileTool = 'create' | 'edit';
+
+/** A file a session created or edited, surfaced under the session in the tree. */
+export interface SessionFile {
+  path: string;
+  name: string;
+  dir: string;
+  tool: SessionFileTool;
+  firstSeenAt: string;
+}
+
 export interface UsageTotals {
   sessions: number;
   inputTokens: number;

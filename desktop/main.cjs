@@ -148,6 +148,14 @@ async function bootstrap() {
     }
   });
 
+  // Reveal a session-created file in the OS file explorer. Guarded to a non-empty
+  // string so a malformed message can't crash the main process.
+  ipcMain.on('file:reveal', (_event, filePath) => {
+    if (typeof filePath === 'string' && filePath.length > 0) {
+      shell.showItemInFolder(filePath);
+    }
+  });
+
   let loadUrl;
   if (IS_DEV) {
     loadUrl = DEV_URL;
