@@ -9,6 +9,12 @@ function sessionColumns(db: DatabaseSync): string[] {
   );
 }
 
+function skillsColumns(db: DatabaseSync): string[] {
+  return (db.prepare('PRAGMA table_info(skills)').all() as { name: string }[]).map(
+    (c) => c.name,
+  );
+}
+
 describe('db schema/connection', () => {
   it('creates all expected tables', () => {
     const db = createDatabase({ databasePath: ':memory:' });
@@ -65,6 +71,23 @@ describe('db schema/connection', () => {
     applySchema(db);
     expect(sessionColumns(db)).toContain('name');
     // Idempotent: applying again does not attempt to re-add the column.
+    expect(() => applySchema(db)).not.toThrow();
+    db.close();
+  });
+
+  it('adds the skills.removal_instructions column to a legacy database', () => {
+    const db = new DatabaseSync(':memory:');
+    // A pre-removal-reaction skills table, missing the new column.
+    db.exec(`CREATE TABLE skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
+    expect(skillsColumns(db)).not.toContain('removal_instructions');
+    applySchema(db);
+    expect(skillsColumns(db)).toContain('removal_instructions');
     expect(() => applySchema(db)).not.toThrow();
     db.close();
   });

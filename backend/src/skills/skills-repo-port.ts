@@ -9,7 +9,10 @@ export interface SkillsRepo {
   createSkill(skill: Skill): void;
   getSkill(id: string): Skill | null;
   listSkills(): Skill[];
-  updateSkill(id: string, patch: { name: string; instructions: string }): void;
+  updateSkill(
+    id: string,
+    patch: { name: string; instructions: string; removalInstructions: string },
+  ): void;
   deleteSkill(id: string): void;
 
   createAttachment(attachment: SkillAttachment): void;

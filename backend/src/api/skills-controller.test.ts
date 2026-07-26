@@ -21,6 +21,7 @@ const skill: Skill = {
   name: 'Testing',
   kind: 'instruction',
   instructions: 'Write tests.',
+  removalInstructions: '',
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
@@ -32,7 +33,11 @@ const attachment: SkillAttachment = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-function harness(injectSessionSkill?: (sessionId: string, skillId: string) => void) {
+function harness(
+  injectSessionSkill?: (sessionId: string, skillId: string) => void,
+  removeSessionSkill?: (sessionId: string, skillId: string) => void,
+  getAttachmentResult: SkillAttachment | null = attachment,
+) {
   const calls: Record<string, unknown[]> = {};
   const record = (name: string, ...args: unknown[]) => {
     calls[name] = args;
@@ -47,6 +52,7 @@ function harness(injectSessionSkill?: (sessionId: string, skillId: string) => vo
     deleteSkill: (id: string) => record('deleteSkill', id),
     tag: (input: unknown) => (record('tag', input), attachment),
     untag: (id: string) => record('untag', id),
+    getAttachment: (id: string) => (record('getAttachment', id), getAttachmentResult),
     listForFeature: (id: string) => (record('listForFeature', id), [skill]),
     listForSession: (id: string) => (record('listForSession', id), [skill]),
     exportSkill: (id: string) => (record('exportSkill', id), { name: 'A' }),
@@ -54,7 +60,7 @@ function harness(injectSessionSkill?: (sessionId: string, skillId: string) => vo
     importSkill: (payload: unknown) => (record('importSkill', payload), skill),
   } as unknown as SkillsService;
   return {
-    routes: createSkillsRoutes({ skills, injectSessionSkill }),
+    routes: createSkillsRoutes({ skills, injectSessionSkill, removeSessionSkill }),
     calls,
   };
 }
@@ -174,6 +180,48 @@ describe('skills-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: { id: 'a1' } });
     expect(calls.untag).toEqual(['a1']);
+  });
+
+  it('reverses a session-scoped skill on its live terminal when untagged', async () => {
+    const removed: Array<[string, string]> = [];
+    const sessionAttachment: SkillAttachment = {
+      ...attachment,
+      scope: 'session',
+      targetId: 's1',
+    };
+    const { routes } = harness(
+      undefined,
+      (sessionId, skillId) => removed.push([sessionId, skillId]),
+      sessionAttachment,
+    );
+    await pick(routes, 'delete', '/skills/attachments/:attachmentId')(
+      req({ params: { attachmentId: 'a1' } }),
+    );
+    expect(removed).toEqual([['s1', 'k1']]);
+  });
+
+  it('does not reverse when untagging a feature skill', async () => {
+    const removed: Array<[string, string]> = [];
+    const { routes } = harness(undefined, (sessionId, skillId) =>
+      removed.push([sessionId, skillId]),
+    );
+    await pick(routes, 'delete', '/skills/attachments/:attachmentId')(
+      req({ params: { attachmentId: 'a1' } }),
+    );
+    expect(removed).toEqual([]);
+  });
+
+  it('untags a session skill without a remover configured', async () => {
+    const sessionAttachment: SkillAttachment = {
+      ...attachment,
+      scope: 'session',
+      targetId: 's1',
+    };
+    const { routes } = harness(undefined, undefined, sessionAttachment);
+    const result = await pick(routes, 'delete', '/skills/attachments/:attachmentId')(
+      req({ params: { attachmentId: 'a1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: { id: 'a1' } });
   });
 
   it('lists skills for a feature and a session', async () => {

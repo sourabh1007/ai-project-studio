@@ -20,12 +20,16 @@ export function SkillForm({
     name: string;
     kind: SkillKind;
     instructions: string;
+    removalInstructions: string;
   }) => Promise<void>;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [kind, setKind] = useState<SkillKind>(initial?.kind ?? 'instruction');
   const [instructions, setInstructions] = useState(initial?.instructions ?? '');
+  const [removalInstructions, setRemovalInstructions] = useState(
+    initial?.removalInstructions ?? '',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,13 +41,15 @@ export function SkillForm({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ name: name.trim(), kind, instructions });
+      await onSubmit({ name: name.trim(), kind, instructions, removalInstructions });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
   }
+
+  const isPlan = kind === 'task-plan';
 
   return (
     <div className="feature-form">
@@ -83,6 +89,24 @@ export function SkillForm({
           onChange={(event) => setInstructions(event.target.value)}
           placeholder="Guidance injected into every session this skill is tagged to…"
         />
+      </div>
+      <div className="field">
+        <label htmlFor="skill-removal">When removed</label>
+        <textarea
+          id="skill-removal"
+          className="textarea"
+          value={removalInstructions}
+          onChange={(event) => setRemovalInstructions(event.target.value)}
+          placeholder={
+            isPlan
+              ? 'Sent to the live session when this skill is removed. Leave blank to cancel the plan.'
+              : 'Sent to the live session when this skill is removed. Leave blank to reverse the instructions above.'
+          }
+        />
+        <p className="field-hint">
+          Injected into the running session when you remove this skill. Blank uses a
+          sensible default ({isPlan ? 'cancel the plan' : 'stop following the instructions'}).
+        </p>
       </div>
       <ErrorText error={error} />
       <div className="row modal-actions">

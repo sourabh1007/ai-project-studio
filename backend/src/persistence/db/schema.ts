@@ -66,6 +66,7 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     name TEXT NOT NULL,
     kind TEXT NOT NULL,
     instructions TEXT NOT NULL,
+    removal_instructions TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS skill_attachments (
@@ -100,6 +101,11 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
  */
 const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] = [
   { table: 'sessions', column: 'name', ddl: 'ALTER TABLE sessions ADD COLUMN name TEXT' },
+  {
+    table: 'skills',
+    column: 'removal_instructions',
+    ddl: "ALTER TABLE skills ADD COLUMN removal_instructions TEXT NOT NULL DEFAULT ''",
+  },
 ];
 
 /** Adds a column to an existing table when it is missing. */

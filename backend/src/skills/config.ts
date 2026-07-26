@@ -18,6 +18,18 @@ export const skillsConfigSchema = z.object({
   skillSeparator: z.string(),
   /** Separator inserted between the instruction block and the user prompt. */
   promptSeparator: z.string(),
+  /** Header prepended above a removal prompt when a skill is untagged live. */
+  removalHeader: z.string().min(1),
+  /**
+   * Default removal prompt for an `instruction` skill with no custom reaction.
+   * Placeholders: {{name}}, {{instructions}}.
+   */
+  instructionRemovalTemplate: z.string().min(1),
+  /**
+   * Default removal prompt for a `task-plan` skill with no custom reaction.
+   * Placeholder: {{name}}.
+   */
+  taskPlanRemovalTemplate: z.string().min(1),
   /** Suffix appended to a skill name when an imported name collides. */
   importConflictSuffix: z.string().min(1),
 });
@@ -35,5 +47,15 @@ export const skillsDefaults: SkillsConfig = {
   skillTemplate: ['## {{name}}', '{{instructions}}'].join('\n'),
   skillSeparator: '\n\n',
   promptSeparator: '\n\n---\n\n',
+  removalHeader:
+    'A project skill was just removed from this session. Adjust course accordingly:',
+  instructionRemovalTemplate: [
+    'Stop following the "{{name}}" skill. Disregard the guidance below for the',
+    'rest of this session:',
+    '',
+    '{{instructions}}',
+  ].join('\n'),
+  taskPlanRemovalTemplate:
+    'Cancel the "{{name}}" plan. Stop working on it and skip its remaining steps.',
   importConflictSuffix: ' (imported)',
 };

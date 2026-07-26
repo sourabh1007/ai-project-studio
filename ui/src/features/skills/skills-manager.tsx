@@ -39,6 +39,7 @@ export function SkillsManager() {
     name: string;
     kind: SkillKind;
     instructions: string;
+    removalInstructions: string;
   }) {
     await api.createSkill(input);
     setCreating(false);
@@ -47,7 +48,7 @@ export function SkillsManager() {
 
   async function update(
     id: string,
-    input: { name: string; instructions: string },
+    input: { name: string; instructions: string; removalInstructions: string },
   ) {
     await api.updateSkill(id, input);
     setEditing(null);

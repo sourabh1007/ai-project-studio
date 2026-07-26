@@ -54,6 +54,8 @@ export interface ApiRoutesDeps {
   skills: SkillsService;
   /** Applies a freshly-tagged session skill to that session's live terminal. */
   injectSessionSkill?: (sessionId: string, skillId: string) => void;
+  /** Reverses a session skill on its live terminal when it is untagged. */
+  removeSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
   ideUsage: IdeUsageService;
   configRegistry: ConfigSchemaRegistry;
@@ -93,6 +95,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createSkillsRoutes({
       skills: deps.skills,
       injectSessionSkill: deps.injectSessionSkill,
+      removeSessionSkill: deps.removeSessionSkill,
     }),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),

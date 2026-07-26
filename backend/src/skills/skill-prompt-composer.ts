@@ -43,3 +43,22 @@ export function composeSessionPrompt(
   }
   return `${instructions}${config.promptSeparator}${prompt}`;
 }
+
+/**
+ * Composes the prompt injected into a live session when a skill is removed. A
+ * skill's own `removalInstructions` win; otherwise a kind-based default is used
+ * — negating an `instruction` skill or cancelling a `task-plan`.
+ */
+export function composeRemoval(skill: Skill, config: SkillsConfig): string {
+  const custom = skill.removalInstructions.trim();
+  const body =
+    custom.length > 0
+      ? custom
+      : (skill.kind === 'task-plan'
+          ? config.taskPlanRemovalTemplate
+          : config.instructionRemovalTemplate
+        )
+          .replaceAll('{{name}}', skill.name)
+          .replaceAll('{{instructions}}', skill.instructions);
+  return `${config.removalHeader}${config.skillSeparator}${body}`;
+}

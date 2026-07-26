@@ -203,6 +203,7 @@ describe('createApiClient', () => {
       name: 'A',
       kind: 'instruction',
       instructions: 'x',
+      removalInstructions: '',
     });
 
     expect(calls[0][0]).toBe('/api/skills');

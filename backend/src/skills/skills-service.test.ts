@@ -114,6 +114,29 @@ describe('skills-service CRUD', () => {
     expect(svc.listSkills()).toEqual([skill]);
   });
 
+  it('stores a provided removal reaction on create', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'Concise',
+      kind: 'instruction',
+      instructions: 'Be concise.',
+      removalInstructions: 'Write freely again.',
+    });
+    expect(skill.removalInstructions).toBe('Write freely again.');
+  });
+
+  it('rejects an over-long removal reaction', () => {
+    const svc = build();
+    expect(() =>
+      svc.createSkill({
+        name: 'ok',
+        kind: 'instruction',
+        instructions: '',
+        removalInstructions: 'x'.repeat(skillsDefaults.maxInstructionsLength + 1),
+      }),
+    ).toThrow(ValidationError);
+  });
+
   it('rejects an empty name', () => {
     const svc = build();
     expect(() =>
@@ -154,9 +177,26 @@ describe('skills-service CRUD', () => {
       kind: 'instruction',
       instructions: 'old',
     });
-    const updated = svc.updateSkill(skill.id, { name: 'B', instructions: 'new' });
+    const updated = svc.updateSkill(skill.id, {
+      name: 'B',
+      instructions: 'new',
+      removalInstructions: 'stop it',
+    });
     expect(updated.name).toBe('B');
     expect(updated.instructions).toBe('new');
+    expect(updated.removalInstructions).toBe('stop it');
+  });
+
+  it('defaults the removal reaction to empty when omitted on update', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'A',
+      kind: 'instruction',
+      instructions: 'old',
+      removalInstructions: 'was set',
+    });
+    const updated = svc.updateSkill(skill.id, { name: 'A', instructions: 'new' });
+    expect(updated.removalInstructions).toBe('');
   });
 
   it('throws when updating an unknown skill', () => {
@@ -381,6 +421,61 @@ describe('skills-service effective set + injection', () => {
   });
 });
 
+describe('skills-service removal + attachments', () => {
+  it('composes a default removal prompt for an instruction skill', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'Concise',
+      kind: 'instruction',
+      instructions: 'Be concise.',
+    });
+    const prompt = svc.removalPromptForSkill(skill.id);
+    expect(prompt).toContain('Stop following the "Concise" skill');
+    expect(prompt).toContain('Be concise.');
+  });
+
+  it('uses a skill\'s own removal reaction when set', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'Concise',
+      kind: 'instruction',
+      instructions: 'Be concise.',
+      removalInstructions: 'Write at length again.',
+    });
+    expect(svc.removalPromptForSkill(skill.id)).toContain(
+      'Write at length again.',
+    );
+  });
+
+  it('cancels the plan for a task-plan skill by default', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'Push Plan',
+      kind: 'task-plan',
+      instructions: 'steps',
+    });
+    expect(svc.removalPromptForSkill(skill.id)).toContain(
+      'Cancel the "Push Plan" plan',
+    );
+  });
+
+  it('returns an empty removal prompt for an unknown skill', () => {
+    expect(build().removalPromptForSkill('nope')).toBe('');
+  });
+
+  it('resolves an attachment by id, or null when unknown', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'A',
+      kind: 'instruction',
+      instructions: 'x',
+    });
+    const att = svc.tag({ skillId: skill.id, scope: 'session', targetId: 's1' });
+    expect(svc.getAttachment(att.id)).toEqual(att);
+    expect(svc.getAttachment('nope')).toBeNull();
+  });
+});
+
 describe('skills-service portability', () => {
   it('exports a single skill and all skills', () => {
     const svc = build();
@@ -394,6 +489,7 @@ describe('skills-service portability', () => {
       name: 'A',
       kind: 'instruction',
       instructions: 'x',
+      removalInstructions: '',
     });
     expect(svc.exportAll()).toHaveLength(1);
   });
@@ -405,8 +501,10 @@ describe('skills-service portability', () => {
       name: 'Imported',
       kind: 'instruction',
       instructions: 'y',
+      removalInstructions: 'undo y',
     });
     expect(imported.name).toBe('Imported');
+    expect(imported.removalInstructions).toBe('undo y');
     expect(svc.listSkills()).toHaveLength(1);
   });
 

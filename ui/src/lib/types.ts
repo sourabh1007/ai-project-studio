@@ -207,6 +207,8 @@ export interface Skill {
   name: string;
   kind: SkillKind;
   instructions: string;
+  /** Reaction injected when the skill is removed from a live session. */
+  removalInstructions: string;
   createdAt: string;
 }
 
@@ -226,11 +228,13 @@ export interface CreateSkillInput {
   name: string;
   kind: SkillKind;
   instructions: string;
+  removalInstructions?: string;
 }
 
 export interface UpdateSkillInput {
   name: string;
   instructions: string;
+  removalInstructions?: string;
 }
 
 export interface SkillExport {
@@ -238,6 +242,7 @@ export interface SkillExport {
   name: string;
   kind: SkillKind;
   instructions: string;
+  removalInstructions: string;
 }
 
 export type FeatureTaskStatus = 'pending' | 'done';

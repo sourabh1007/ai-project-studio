@@ -613,6 +613,14 @@ function main(): void {
           terminalManager.injectInstructions(sessionId, instructions);
         }
       },
+      // Reverse a session-scoped skill on its live terminal when it is removed,
+      // so its guidance is actively undone (negated / plan cancelled).
+      removeSessionSkill: (sessionId, skillId) => {
+        const prompt = skillsService.removalPromptForSkill(skillId);
+        if (prompt.length > 0) {
+          terminalManager.injectInstructions(sessionId, prompt);
+        }
+      },
       tasks: featureTasksService,
       ideUsage: ideUsageService,
       configRegistry: registry,

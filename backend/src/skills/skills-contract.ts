@@ -10,6 +10,12 @@ export interface Skill {
   kind: SkillKind;
   /** The instruction text injected into sessions (for `instruction` skills). */
   instructions: string;
+  /**
+   * What to tell the AI when this skill is removed from a live session, e.g.
+   * "stop following X" or "cancel the plan". Empty means fall back to a
+   * kind-based default (negate the instructions / cancel the plan).
+   */
+  removalInstructions: string;
   createdAt: string;
 }
 
@@ -31,11 +37,15 @@ export interface CreateSkillInput {
   name: string;
   kind: SkillKind;
   instructions: string;
+  /** Optional reaction injected when the skill is later removed. */
+  removalInstructions?: string;
 }
 
 export interface UpdateSkillInput {
   name: string;
   instructions: string;
+  /** Optional reaction injected when the skill is later removed. */
+  removalInstructions?: string;
 }
 
 export interface TagSkillInput {
@@ -50,4 +60,6 @@ export interface SkillExport {
   name: string;
   kind: SkillKind;
   instructions: string;
+  /** Reaction injected when the skill is removed (defaults to empty). */
+  removalInstructions: string;
 }

@@ -16,7 +16,11 @@ import type {
   UpdateSkillInput,
 } from './skills-contract.js';
 import type { SkillsRepo } from './skills-repo-port.js';
-import { composeInstructions, composeSessionPrompt } from './skill-prompt-composer.js';
+import {
+  composeInstructions,
+  composeRemoval,
+  composeSessionPrompt,
+} from './skill-prompt-composer.js';
 
 export interface SkillsServiceDeps {
   repo: SkillsRepo;
@@ -35,6 +39,8 @@ export interface SkillsService {
   deleteSkill(id: string): void;
   tag(input: TagSkillInput): SkillAttachment;
   untag(attachmentId: string): void;
+  /** The attachment record for an id, or null. Used to resolve untag targets. */
+  getAttachment(attachmentId: string): SkillAttachment | null;
   listForFeature(featureId: string): TaggedSkill[];
   listForSession(sessionId: string): TaggedSkill[];
   effectiveForSession(sessionId: string): Skill[];
@@ -46,6 +52,12 @@ export interface SkillsService {
    * Empty for unknown or non-instruction (e.g. task-plan) skills.
    */
   instructionsForSkill(skillId: string): string;
+  /**
+   * Composed prompt to inject when a skill is removed from a live session — the
+   * skill's own removal reaction, or a kind-based default (negate the
+   * instructions / cancel the plan). Empty for an unknown skill.
+   */
+  removalPromptForSkill(skillId: string): string;
   /** Composed instruction block for a feature's tagged instruction skills. */
   instructionsForFeature(featureId: string): string;
   /**
@@ -65,6 +77,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
     name: z.string().min(1),
     kind: z.enum(['instruction', 'task-plan']),
     instructions: z.string(),
+    removalInstructions: z.string().optional(),
   });
 
   const requireSkill = (id: string): Skill => {
@@ -157,11 +170,14 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
     createSkill(input) {
       validateName(input.name);
       validateInstructions(input.instructions);
+      const removalInstructions = input.removalInstructions ?? '';
+      validateInstructions(removalInstructions);
       const skill: Skill = {
         id: deps.ids.next(),
         name: input.name.trim(),
         kind: input.kind,
         instructions: input.instructions,
+        removalInstructions,
         createdAt: deps.clock.isoNow(),
       };
       deps.repo.createSkill(skill);
@@ -177,9 +193,12 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
       requireSkill(id);
       validateName(input.name);
       validateInstructions(input.instructions);
+      const removalInstructions = input.removalInstructions ?? '';
+      validateInstructions(removalInstructions);
       deps.repo.updateSkill(id, {
         name: input.name.trim(),
         instructions: input.instructions,
+        removalInstructions,
       });
       return requireSkill(id);
     },
@@ -215,6 +234,9 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
       }
       deps.repo.deleteAttachment(attachmentId);
     },
+    getAttachment(attachmentId) {
+      return deps.repo.getAttachment(attachmentId);
+    },
     listForFeature(featureId) {
       deps.features.get(featureId);
       return taggedSkillsForTarget('feature', featureId);
@@ -239,6 +261,10 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
       const skill = deps.repo.getSkill(skillId);
       return skill ? composeInstructions([skill], deps.config) : '';
     },
+    removalPromptForSkill(skillId) {
+      const skill = deps.repo.getSkill(skillId);
+      return skill ? composeRemoval(skill, deps.config) : '';
+    },
     composeFeaturePrompt(featureId, prompt) {
       return composeSessionPrompt(
         composeInstructions(skillsForTarget('feature', featureId), deps.config),
@@ -253,6 +279,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         name: skill.name,
         kind: skill.kind,
         instructions: skill.instructions,
+        removalInstructions: skill.removalInstructions,
       };
     },
     exportAll() {
@@ -261,6 +288,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         name: skill.name,
         kind: skill.kind,
         instructions: skill.instructions,
+        removalInstructions: skill.removalInstructions,
       }));
     },
     importSkill(payload) {
@@ -275,11 +303,14 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
       }
       validateName(parsed.data.name);
       validateInstructions(parsed.data.instructions);
+      const removalInstructions = parsed.data.removalInstructions ?? '';
+      validateInstructions(removalInstructions);
       const skill: Skill = {
         id: deps.ids.next(),
         name: uniqueName(parsed.data.name.trim()),
         kind: parsed.data.kind,
         instructions: parsed.data.instructions,
+        removalInstructions,
         createdAt: deps.clock.isoNow(),
       };
       deps.repo.createSkill(skill);

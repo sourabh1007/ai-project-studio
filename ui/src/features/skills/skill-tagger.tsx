@@ -15,10 +15,12 @@ export function SkillTagger({
   scope,
   targetId,
   label,
+  onChange,
 }: {
   scope: SkillScope;
   targetId: string;
   label?: string;
+  onChange?: () => void;
 }) {
   const api = useApi();
   const library = useAsync(() => api.listSkills(), []);
@@ -41,6 +43,7 @@ export function SkillTagger({
       await api.tagSkill(skillId, scope, targetId);
       setAdding(false);
       tagged.reload();
+      onChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -51,6 +54,7 @@ export function SkillTagger({
     try {
       await api.untagSkill(attachmentId);
       tagged.reload();
+      onChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

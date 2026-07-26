@@ -7,7 +7,6 @@ import { useApi } from '../../app/api-context.js';
 import { EmptyState } from '../../components/ui.js';
 import { TerminalView } from '../../components/terminal-view.js';
 import { FeatureDashboard } from '../feature-dashboard/feature-dashboard.js';
-import { SkillTagger } from '../skills/skill-tagger.js';
 import { Explorer } from './explorer.js';
 
 type Tab =
@@ -236,13 +235,6 @@ export function WorkspaceView({
         <div className="editor-body">
           {active?.kind === 'session' && (
             <div key={active.session.id} className="session-editor">
-              <div className="session-editor-bar">
-                <SkillTagger
-                  scope="session"
-                  targetId={active.session.id}
-                  label="Session skills"
-                />
-              </div>
               <TerminalView sessionId={active.session.id} />
             </div>
           )}

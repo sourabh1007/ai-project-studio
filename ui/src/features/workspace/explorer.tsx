@@ -20,12 +20,14 @@ import {
   ImportIcon,
   PencilIcon,
   PlusIcon,
+  TagIcon,
   TimeIcon,
   TrashIcon,
   UsageIcon,
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
 import { SkillChips } from '../skills/skill-chips.js';
+import { SkillTagger } from '../skills/skill-tagger.js';
 import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
@@ -61,6 +63,8 @@ function SessionRow({
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [managingSkills, setManagingSkills] = useState(false);
+  const [skillSignal, setSkillSignal] = useState(0);
 
   const dot = sessionDotClass(session.status);
 
@@ -158,6 +162,11 @@ function SessionRow({
                 onSelect: startEditing,
               },
               {
+                label: 'Manage skills',
+                icon: <TagIcon />,
+                onSelect: () => setManagingSkills(true),
+              },
+              {
                 label: 'Delete',
                 icon: <TrashIcon />,
                 danger: true,
@@ -168,11 +177,21 @@ function SessionRow({
         )}
       </div>
 
+      {managingSkills && (
+        <Modal title={`Skills · ${name}`} onClose={() => setManagingSkills(false)}>
+          <SkillTagger
+            scope="session"
+            targetId={session.id}
+            onChange={() => setSkillSignal((v) => v + 1)}
+          />
+        </Modal>
+      )}
+
       <div className="session-meta-row" title={`${session.provider} · ${model}`}>
         {session.provider} · {model}
       </div>
 
-      <SkillChips scope="session" targetId={session.id} />
+      <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
 
       <div className="session-metrics-row" aria-hidden="true">
         <span className="metric metric-credits" title="AIC used (github nano_aiu)">

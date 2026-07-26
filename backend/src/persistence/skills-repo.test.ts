@@ -9,6 +9,7 @@ function skill(overrides: Partial<Skill> = {}): Skill {
     name: 'Testing',
     kind: 'instruction',
     instructions: 'Write tests.',
+    removalInstructions: '',
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -36,13 +37,25 @@ describe('skills-repo', () => {
     expect(repo.getSkill('missing')).toBeNull();
     expect(repo.listSkills().map((s) => s.id)).toEqual(['k1', 'k2']);
 
-    repo.updateSkill('k1', { name: 'Renamed', instructions: 'New.' });
+    repo.updateSkill('k1', {
+      name: 'Renamed',
+      instructions: 'New.',
+      removalInstructions: 'Undo.',
+    });
     expect(repo.getSkill('k1')).toEqual(
-      skill({ name: 'Renamed', instructions: 'New.' }),
+      skill({ name: 'Renamed', instructions: 'New.', removalInstructions: 'Undo.' }),
     );
 
     repo.deleteSkill('k2');
     expect(repo.listSkills().map((s) => s.id)).toEqual(['k1']);
+    db.close();
+  });
+
+  it('round-trips a removal reaction supplied on create', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSkillsRepo(db);
+    repo.createSkill(skill({ removalInstructions: 'Stop it.' }));
+    expect(repo.getSkill('k1')?.removalInstructions).toBe('Stop it.');
     db.close();
   });
 
