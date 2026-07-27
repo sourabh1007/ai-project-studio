@@ -243,6 +243,7 @@ export function WorkspaceView({
               key={active.feature.id}
               featureId={active.feature.id}
               featureName={active.feature.name}
+              featureDescription={active.feature.description}
             />
           )}
           {!active && (

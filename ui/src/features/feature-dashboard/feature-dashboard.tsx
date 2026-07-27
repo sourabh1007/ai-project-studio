@@ -24,7 +24,6 @@ import {
   UsageIcon,
 } from '../../components/icons.js';
 import { FeatureWorkSummaryPanel } from './work-summary.js';
-import { FeatureTasksPanel } from './feature-tasks-panel.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
 
 const PALETTE = [
@@ -149,9 +148,11 @@ function Section({
 export function FeatureDashboard({
   featureId,
   featureName,
+  featureDescription,
 }: {
   featureId: string;
   featureName: string;
+  featureDescription?: string;
 }) {
   const api = useApi();
   const { data, loading, error } = useAsync<FeatureUsage>(
@@ -159,21 +160,25 @@ export function FeatureDashboard({
     [featureId],
   );
 
+  const description = featureDescription?.trim();
+
   return (
     <div className="dashboard">
       <header className="dash-header">
         <h2 className="dash-title">{featureName}</h2>
-        <p className="dash-subtitle">Usage, history &amp; AIC analytics</p>
+        <p className="dash-description">{description || 'No description'}</p>
       </header>
 
       <ErrorText error={error} />
       {loading && <EmptyState message="Loading analytics…" />}
 
-      <SkillTagger scope="feature" targetId={featureId} label="Feature skills" />
-
-      <FeatureTasksPanel featureId={featureId} />
-
-      <FeatureWorkSummaryPanel featureId={featureId} />
+      <section className="dash-skills">
+        <SkillTagger
+          scope="feature"
+          targetId={featureId}
+          label="Feature skills"
+        />
+      </section>
 
       {data && data.totals.sessions === 0 && (
         <div className="dash-empty">
@@ -184,6 +189,8 @@ export function FeatureDashboard({
       {data && data.totals.sessions > 0 && (
         <Charts data={data} featureId={featureId} />
       )}
+
+      <FeatureWorkSummaryPanel featureId={featureId} />
     </div>
   );
 }
