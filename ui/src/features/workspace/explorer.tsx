@@ -31,6 +31,7 @@ import { SkillTagger } from '../skills/skill-tagger.js';
 import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
+import { GithubStatusBadge } from '../github/github-status.js';
 
 /** Merges a persisted session with any live status/model updates. */
 function mergeLive(session: Session, live: LiveState): Session {
@@ -643,6 +644,10 @@ export function Explorer({
             onDeleteSession={onDeleteSession}
           />
         ))}
+      </div>
+
+      <div className="explorer-footer">
+        <GithubStatusBadge />
       </div>
     </div>
   );

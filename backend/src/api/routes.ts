@@ -21,6 +21,8 @@ import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
+import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
+import { createGithubRoutes } from './github-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createFeatureRoutes } from './feature-controller.js';
@@ -64,6 +66,8 @@ export interface ApiRoutesDeps {
   currentConfig: ConfigObject;
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
+  /** Reports the IDE's current GitHub authentication status. */
+  githubStatus: () => Promise<GithubAuthStatus>;
   logger: Logger;
 }
 
@@ -108,5 +112,6 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       current: deps.currentConfig,
     }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
+    ...createGithubRoutes({ githubStatus: deps.githubStatus }),
   ];
 }

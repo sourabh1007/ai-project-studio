@@ -25,6 +25,7 @@ function deps(): ApiRoutesDeps {
     configRegistry: empty,
     currentConfig: {},
     agencyStatus: () => ({ installed: true }),
+    githubStatus: () => Promise.resolve({ authenticated: true, login: 'x' }),
     logger: empty,
   };
 }
@@ -78,6 +79,7 @@ describe('createApiRoutes', () => {
       'get /usage/ide',
       'get /config',
       'get /agency/status',
+      'get /github/status',
     ]);
   });
 });

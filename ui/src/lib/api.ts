@@ -9,6 +9,7 @@ import type {
   FeatureTask,
   FeatureUsage,
   FeatureWorkSummary,
+  GithubStatus,
   IdeUsage,
   ImportableSession,
   ImportSessionInput,
@@ -170,6 +171,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ id: string }>(`/tasks/${taskId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
+    getGithubStatus: () => request<GithubStatus>('/github/status'),
   };
 }
 

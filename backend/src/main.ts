@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { homedir } from 'node:os';
+import { execFile, execFileSync } from 'node:child_process';
 import express from 'express';
 
 import { createClock } from './kernel/clock.js';
@@ -95,6 +96,11 @@ import {
   resolveAgencyExecutable,
 } from './agency-bootstrap/agency-install-paths.js';
 import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
+import {
+  createGithubAuth,
+  type GhRunner,
+} from './github-auth/github-auth-service.js';
+import { buildGithubCredentialEnv } from './github-auth/github-credential-env.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
@@ -377,6 +383,40 @@ function main(): void {
     }
   } catch {
     // Best-effort: a settings write failure must not block startup.
+  }
+
+  // Reuse the single GitHub login that agency/`gh` already established and
+  // propagate it to every spawned session, so their git operations authenticate
+  // non-interactively (no "Cannot prompt" failures). The credential env is
+  // injected into this process's env; the session env-mapper copies process.env
+  // into each session, so all sessions inherit the same login automatically.
+  const ghRun: GhRunner = (args) =>
+    new Promise((resolve) => {
+      execFile('gh', args, { windowsHide: true }, (err, stdout, stderr) => {
+        const code =
+          err && typeof (err as { code?: unknown }).code === 'number'
+            ? ((err as { code: number }).code)
+            : err
+              ? 1
+              : 0;
+        resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
+      });
+    });
+  const githubAuth = createGithubAuth({ run: ghRun });
+  try {
+    const token = execFileSync('gh', ['auth', 'token'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim();
+    for (const [key, value] of Object.entries(buildGithubCredentialEnv(token))) {
+      process.env[key] = value;
+    }
+    if (token) {
+      logger.info('GitHub auth propagated to sessions', {});
+    }
+  } catch {
+    // gh missing or not logged in — sessions keep whatever git credentials the
+    // host already provides. The /github/status endpoint surfaces this state.
   }
 
   const cliStorePath = pathJoin(
@@ -699,6 +739,7 @@ function main(): void {
       configRegistry: registry,
       currentConfig: config,
       agencyStatus: () => agencyBootstrapper.status(),
+      githubStatus: () => githubAuth.status(),
       logger,
     }),
   );

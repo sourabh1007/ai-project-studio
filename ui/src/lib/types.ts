@@ -5,6 +5,11 @@ export interface AgencyStatus {
   installed: boolean;
 }
 
+export interface GithubStatus {
+  authenticated: boolean;
+  login: string | null;
+}
+
 export interface Feature {
   id: string;
   name: string;

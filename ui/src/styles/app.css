@@ -566,6 +566,47 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
+.explorer-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--panel-sidebar);
+}
+
+.gh-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.gh-status-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.gh-status-on .gh-status-dot {
+  background: #3fb950;
+  box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.18);
+}
+
+.gh-status-off .gh-status-dot {
+  background: #d29922;
+}
+
+.gh-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .explorer-body {
   flex: 1;
   min-height: 0;
@@ -1578,6 +1619,26 @@ body.is-resizing {
   margin: 2px 0 0;
   font-size: 0.76rem;
   color: var(--editor-fg-muted);
+}
+
+.dash-description {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--editor-fg-muted);
+  max-width: 78ch;
+  white-space: pre-wrap;
+}
+
+/* Skills are a compact, self-contained control between the header and graphs,
+   so keep their vertical footprint small. */
+.dash-skills {
+  margin-bottom: var(--space-4);
+}
+
+.dash-skills .skill-tagger {
+  padding: 6px var(--space-3);
+  gap: 6px;
 }
 
 .dash-empty {

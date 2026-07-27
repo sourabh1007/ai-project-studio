@@ -177,6 +177,16 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/agency/status');
   });
 
+  it('gets the GitHub auth status', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ authenticated: true, login: 'octocat' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getGithubStatus();
+    expect(result).toEqual({ authenticated: true, login: 'octocat' });
+    expect(calls[0][0]).toBe('/api/github/status');
+  });
+
   it('lists importable sessions and imports one', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
