@@ -580,8 +580,17 @@ body.is-resizing {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
   font-size: 0.68rem;
   color: var(--text-muted);
+  cursor: pointer;
+}
+
+.gh-status:disabled {
+  cursor: default;
 }
 
 .gh-status-dot {
@@ -599,6 +608,11 @@ body.is-resizing {
 
 .gh-status-off .gh-status-dot {
   background: #d29922;
+}
+
+.gh-status-checking .gh-status-dot {
+  background: var(--text-muted);
+  opacity: 0.6;
 }
 
 .gh-status-label {
