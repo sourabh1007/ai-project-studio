@@ -29,7 +29,7 @@ export function GithubStatusBadge() {
   }, [reload]);
 
   const authenticated = data?.authenticated ?? false;
-  const state = data ? (authenticated ? 'on' : 'off') : 'checking';
+  const state = data ? (authenticated ? 'on' : 'off') : loading ? 'checking' : 'off';
 
   const label =
     state === 'checking'

@@ -4,6 +4,7 @@ import type {
   CreateSkillInput,
   AddFeatureTaskInput,
   AgencyStatus,
+  AzureDevOpsStatus,
   Feature,
   FeatureSummary,
   FeatureTask,
@@ -172,6 +173,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getConfig: () => request<ConfigResponse>('/config'),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
+    getAzureStatus: (url?: string) =>
+      request<AzureDevOpsStatus>(
+        `/azure-devops/status${url ? `?url=${encodeURIComponent(url)}` : ''}`,
+      ),
+    azureSignIn: (url?: string) =>
+      request<AzureDevOpsStatus>(
+        '/azure-devops/signin',
+        jsonBody(url ? { url } : {}),
+      ),
   };
 }
 

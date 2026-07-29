@@ -101,6 +101,10 @@ import {
   type GhRunner,
 } from './github-auth/github-auth-service.js';
 import { buildGithubCredentialEnv } from './github-auth/github-credential-env.js';
+import {
+  createAzureDevOpsAuth,
+  type GitRunResult,
+} from './azure-auth/azure-devops-auth.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
@@ -418,6 +422,62 @@ function main(): void {
     // gh missing or not logged in — sessions keep whatever git credentials the
     // host already provides. The /github/status endpoint surfaces this state.
   }
+
+  // Azure DevOps auth, handled the way Visual Studio / Git Credential Manager
+  // do: enable the Windows broker (WAM) so GCM can do silent SSO with the
+  // signed-in Microsoft account, and expose an interactive sign-in that primes
+  // GCM's cache once. Spawned sessions then authenticate silently against
+  // dev.azure.com / *.visualstudio.com with no "Cannot prompt" failure.
+  const gitRun = (
+    args: string[],
+    opts: { stdin?: string; interactive?: boolean } = {},
+  ): Promise<GitRunResult> =>
+    new Promise((resolve) => {
+      const child = execFile(
+        'git',
+        args,
+        {
+          windowsHide: true,
+          env: {
+            ...process.env,
+            // The interactive sign-in must be allowed to show the WAM/browser
+            // prompt; the silent status check must never block on a prompt.
+            GCM_INTERACTIVE: opts.interactive ? 'auto' : 'never',
+            GIT_TERMINAL_PROMPT: opts.interactive ? '1' : '0',
+            GCM_MSAUTH_USEBROKER: 'true',
+          },
+        },
+        (err, stdout, stderr) => {
+          const code =
+            err && typeof (err as { code?: unknown }).code === 'number'
+              ? (err as { code: number }).code
+              : err
+                ? 1
+                : 0;
+          resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
+        },
+      );
+      if (opts.stdin !== undefined) {
+        child.stdin?.end(opts.stdin);
+      }
+    });
+  const azureAuth = createAzureDevOpsAuth({
+    config: (args) => gitRun(args),
+    credential: (verb, input, credOpts) =>
+      gitRun(['credential-manager', verb], {
+        stdin: input,
+        interactive: credOpts.interactive,
+      }),
+  });
+  void azureAuth
+    .configureBroker()
+    .then(() =>
+      logger.info('Azure DevOps broker (WAM) SSO configured for sessions', {}),
+    )
+    .catch(() => {
+      // git / GCM missing — Azure DevOps sign-in stays a no-op; sessions keep
+      // whatever git credentials the host already provides.
+    });
 
   const cliStorePath = pathJoin(
     homedir(),
@@ -740,6 +800,8 @@ function main(): void {
       currentConfig: config,
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
+      azureStatus: (target) => azureAuth.status(target),
+      azureSignIn: (target) => azureAuth.signIn(target),
       logger,
     }),
   );

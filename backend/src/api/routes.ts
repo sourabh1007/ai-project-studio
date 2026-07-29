@@ -23,6 +23,11 @@ import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
 import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
 import { createGithubRoutes } from './github-controller.js';
+import type {
+  AzureDevOpsStatus,
+  AzureTarget,
+} from '../azure-auth/azure-devops-auth.js';
+import { createAzureRoutes } from './azure-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createFeatureRoutes } from './feature-controller.js';
@@ -68,6 +73,10 @@ export interface ApiRoutesDeps {
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
   githubStatus: () => Promise<GithubAuthStatus>;
+  /** Reports whether GCM has a cached Azure DevOps credential for a target. */
+  azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
+  azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   logger: Logger;
 }
 
@@ -113,5 +122,9 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
     ...createGithubRoutes({ githubStatus: deps.githubStatus }),
+    ...createAzureRoutes({
+      azureStatus: deps.azureStatus,
+      azureSignIn: deps.azureSignIn,
+    }),
   ];
 }

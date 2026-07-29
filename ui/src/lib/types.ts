@@ -10,6 +10,11 @@ export interface GithubStatus {
   login: string | null;
 }
 
+export interface AzureDevOpsStatus {
+  authenticated: boolean;
+  account: string | null;
+}
+
 export interface Feature {
   id: string;
   name: string;

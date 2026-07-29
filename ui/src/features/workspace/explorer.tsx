@@ -32,6 +32,7 @@ import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 import { GithubStatusBadge } from '../github/github-status.js';
+import { AzureStatusBadge } from '../azure/azure-status.js';
 
 /** Merges a persisted session with any live status/model updates. */
 function mergeLive(session: Session, live: LiveState): Session {
@@ -648,6 +649,7 @@ export function Explorer({
 
       <div className="explorer-footer">
         <GithubStatusBadge />
+        <AzureStatusBadge />
       </div>
     </div>
   );

@@ -26,6 +26,10 @@ function deps(): ApiRoutesDeps {
     currentConfig: {},
     agencyStatus: () => ({ installed: true }),
     githubStatus: () => Promise.resolve({ authenticated: true, login: 'x' }),
+    azureStatus: () =>
+      Promise.resolve({ authenticated: true, account: 'x' }),
+    azureSignIn: () =>
+      Promise.resolve({ authenticated: true, account: 'x' }),
     logger: empty,
   };
 }
@@ -80,6 +84,8 @@ describe('createApiRoutes', () => {
       'get /config',
       'get /agency/status',
       'get /github/status',
+      'get /azure-devops/status',
+      'post /azure-devops/signin',
     ]);
   });
 });

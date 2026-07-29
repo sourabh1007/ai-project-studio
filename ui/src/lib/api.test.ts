@@ -187,6 +187,33 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/github/status');
   });
 
+  it('gets the Azure DevOps status with and without an org url', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ authenticated: true, account: 'alice' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getAzureStatus('dev.azure.com/contoso');
+    await client.getAzureStatus();
+    expect(result).toEqual({ authenticated: true, account: 'alice' });
+    expect(calls[0][0]).toBe(
+      '/api/azure-devops/status?url=dev.azure.com%2Fcontoso',
+    );
+    expect(calls[1][0]).toBe('/api/azure-devops/status');
+  });
+
+  it('triggers an Azure DevOps interactive sign-in', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ authenticated: true, account: 'bob' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.azureSignIn('contoso');
+    await client.azureSignIn();
+    expect(calls[0][0]).toBe('/api/azure-devops/signin');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ url: 'contoso' }));
+    expect(calls[1][1]?.body).toBe(JSON.stringify({}));
+  });
+
   it('lists importable sessions and imports one', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
