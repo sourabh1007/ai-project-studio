@@ -106,6 +106,58 @@ export function TerminalView({
       }
     });
 
+    const writeClipboard = (text: string) => {
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(text).catch(() => {
+          /* clipboard permission denied; ignore */
+        });
+      }
+    };
+
+    const paste = (text: string) => {
+      if (text && ws.readyState === WebSocket.OPEN) {
+        ws.send(encodeClientMessage({ type: 'input', data: text }));
+      }
+    };
+
+    // Terminal clipboard shortcuts. Ctrl/Cmd+C copies when there is a
+    // selection (otherwise it must fall through as SIGINT); Ctrl/Cmd+V pastes.
+    // The explicit Shift variants always copy/paste, matching common terminals.
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== 'keydown') {
+        return true;
+      }
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) {
+        return true;
+      }
+      const key = e.key.toLowerCase();
+
+      if (key === 'c') {
+        if (term.hasSelection()) {
+          writeClipboard(term.getSelection());
+          return false;
+        }
+        // No selection: swallow the explicit Ctrl+Shift+C, let plain Ctrl+C
+        // through so it still sends an interrupt to the running process.
+        return !e.shiftKey;
+      }
+
+      if (key === 'v') {
+        if (navigator.clipboard?.readText) {
+          void navigator.clipboard
+            .readText()
+            .then(paste)
+            .catch(() => {
+              /* clipboard permission denied; ignore */
+            });
+        }
+        return false;
+      }
+
+      return true;
+    });
+
     ws.onopen = () => {
       safeFit();
       sendResize();
