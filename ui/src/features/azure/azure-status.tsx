@@ -3,20 +3,33 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { AzureDevOpsStatus } from '../../lib/types.js';
 
+const ORG_STORAGE_KEY = 'azureDevOpsOrg';
+
+function readSavedOrg(): string {
+  try {
+    return window.localStorage.getItem(ORG_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /**
- * Sidebar badge for IDE-level Azure DevOps auth. Mirrors Visual Studio: the WAM
- * broker is enabled at startup for silent SSO, and clicking "sign in" runs the
- * interactive Microsoft sign-in once to prime Git Credential Manager's cache.
- * After that, every spawned session authenticates silently against Azure
- * DevOps, so this is a status indicator plus a one-time sign-in trigger.
+ * Sidebar control for IDE-level Azure DevOps auth. Azure DevOps requires the
+ * organization to mint a token, so the user provides their org (or a repo URL)
+ * once; clicking "sign in" runs GCM's interactive browser sign-in, and after
+ * that every spawned session authenticates silently for that account. The org
+ * is remembered so the status pill can re-check on its own.
  */
 export function AzureStatusBadge() {
   const api = useApi();
-  const { data, loading, reload } = useAsync<AzureDevOpsStatus>(
-    () => api.getAzureStatus(),
-    [],
-  );
+  const [org, setOrg] = useState(readSavedOrg);
+  const [draft, setDraft] = useState(org);
   const [signingIn, setSigningIn] = useState(false);
+
+  const { data, loading, reload } = useAsync<AzureDevOpsStatus>(
+    () => api.getAzureStatus(org || undefined),
+    [org],
+  );
 
   useEffect(() => {
     const interval = window.setInterval(reload, 30_000);
@@ -39,40 +52,68 @@ export function AzureStatusBadge() {
         : 'off';
 
   const signIn = async () => {
-    if (signingIn) {
+    const target = draft.trim();
+    if (signingIn || !target) {
       return;
     }
+    try {
+      window.localStorage.setItem(ORG_STORAGE_KEY, target);
+    } catch {
+      /* storage unavailable; sign-in still works for this session */
+    }
+    setOrg(target);
     setSigningIn(true);
     try {
-      await api.azureSignIn();
+      await api.azureSignIn(target);
     } finally {
       setSigningIn(false);
       reload();
     }
   };
 
-  const label = signingIn
-    ? 'Azure DevOps · signing in…'
-    : state === 'checking'
-      ? 'Azure DevOps · checking…'
-      : authenticated
-        ? `Azure DevOps · ${data?.account ?? 'signed in'}`
-        : 'Azure DevOps · sign in';
+  if (authenticated) {
+    return (
+      <button
+        type="button"
+        className="gh-status gh-status-on"
+        onClick={reload}
+        disabled={loading}
+        title="Signed in to Azure DevOps. All sessions inherit this login automatically. Click to re-check."
+      >
+        <span className="gh-status-dot" aria-hidden="true" />
+        <span className="gh-status-label">
+          Azure DevOps · {org || data?.account || 'signed in'}
+        </span>
+      </button>
+    );
+  }
 
   return (
-    <button
-      type="button"
-      className={`gh-status gh-status-${state}`}
-      onClick={authenticated ? reload : signIn}
-      disabled={loading || signingIn}
-      title={
-        authenticated
-          ? 'Signed in to Azure DevOps. All sessions inherit this login automatically. Click to re-check.'
-          : 'Click to sign in to Azure DevOps once (Microsoft SSO). All sessions will then authenticate automatically for dev.azure.com and *.visualstudio.com.'
-      }
-    >
+    <div className={`gh-status gh-status-${state} az-signin`}>
       <span className="gh-status-dot" aria-hidden="true" />
-      <span className="gh-status-label">{label}</span>
-    </button>
+      <input
+        className="az-org-input"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            void signIn();
+          }
+        }}
+        placeholder="Azure DevOps org or repo URL"
+        spellCheck={false}
+        disabled={signingIn}
+        aria-label="Azure DevOps organization or repository URL"
+      />
+      <button
+        type="button"
+        className="az-signin-btn"
+        onClick={() => void signIn()}
+        disabled={signingIn || !draft.trim()}
+        title="Sign in to Azure DevOps once via the browser; all sessions then authenticate automatically."
+      >
+        {signingIn ? 'Signing in…' : 'Sign in'}
+      </button>
+    </div>
   );
 }

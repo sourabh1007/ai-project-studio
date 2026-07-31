@@ -424,10 +424,13 @@ function main(): void {
   }
 
   // Azure DevOps auth, handled the way Visual Studio / Git Credential Manager
-  // do: enable the Windows broker (WAM) so GCM can do silent SSO with the
-  // signed-in Microsoft account, and expose an interactive sign-in that primes
-  // GCM's cache once. Spawned sessions then authenticate silently against
-  // dev.azure.com / *.visualstudio.com with no "Cannot prompt" failure.
+  // do, adapted for a background process: use OAuth (org-agnostic Entra tokens)
+  // and GCM's browser sign-in flow rather than the WAM broker. The broker needs
+  // a parent window we don't have when GCM is spawned in the background (it
+  // would hang), whereas the browser flow launches the default browser and
+  // caches a refresh token. The interactive sign-in primes that cache once;
+  // spawned sessions then acquire access tokens silently against dev.azure.com
+  // / *.visualstudio.com with no "Cannot prompt" failure.
   const gitRun = (
     args: string[],
     opts: { stdin?: string; interactive?: boolean } = {},
@@ -438,13 +441,16 @@ function main(): void {
         args,
         {
           windowsHide: true,
+          maxBuffer: 1024 * 1024,
           env: {
             ...process.env,
-            // The interactive sign-in must be allowed to show the WAM/browser
-            // prompt; the silent status check must never block on a prompt.
+            // Sign-in may show the browser prompt; the silent status check must
+            // never block on a prompt. Never use the WAM broker (needs a window
+            // we don't have). OAuth avoids per-org PAT creation.
             GCM_INTERACTIVE: opts.interactive ? 'auto' : 'never',
             GIT_TERMINAL_PROMPT: opts.interactive ? '1' : '0',
-            GCM_MSAUTH_USEBROKER: 'true',
+            GCM_MSAUTH_USEBROKER: 'false',
+            GCM_AZREPOS_CREDENTIALTYPE: 'oauth',
           },
         },
         (err, stdout, stderr) => {
@@ -470,9 +476,9 @@ function main(): void {
       }),
   });
   void azureAuth
-    .configureBroker()
+    .configure()
     .then(() =>
-      logger.info('Azure DevOps broker (WAM) SSO configured for sessions', {}),
+      logger.info('Azure DevOps OAuth sign-in configured for sessions', {}),
     )
     .catch(() => {
       // git / GCM missing — Azure DevOps sign-in stays a no-op; sessions keep

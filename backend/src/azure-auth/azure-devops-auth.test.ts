@@ -138,7 +138,7 @@ describe('parseCredentialOutput', () => {
 });
 
 describe('createAzureDevOpsAuth', () => {
-  it('configureBroker enables the WAM broker and default account', async () => {
+  it('configure enables OAuth credentials and disables the WAM broker', async () => {
     const calls: string[][] = [];
     const auth = createAzureDevOpsAuth({
       credential: async () => ok(''),
@@ -148,11 +148,11 @@ describe('createAzureDevOpsAuth', () => {
       },
     });
 
-    await auth.configureBroker();
+    await auth.configure();
 
     expect(calls).toEqual([
-      ['config', '--global', 'credential.msauthUseBroker', 'true'],
-      ['config', '--global', 'credential.msauthUseDefaultAccount', 'true'],
+      ['config', '--global', 'credential.azreposCredentialType', 'oauth'],
+      ['config', '--global', 'credential.msauthUseBroker', 'false'],
     ]);
   });
 

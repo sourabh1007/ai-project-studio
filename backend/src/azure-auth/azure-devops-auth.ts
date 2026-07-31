@@ -38,11 +38,18 @@ export interface AzureTarget {
 }
 
 export interface AzureDevOpsAuth {
-  /** Enable the WAM broker so GCM can do silent SSO with the default account. */
-  configureBroker(): Promise<void>;
+  /**
+   * Configure GCM for Azure DevOps the way the IDE needs: OAuth credentials
+   * (org-agnostic Entra tokens, no PAT juggling) and the browser sign-in flow
+   * rather than the WAM broker — the broker needs a parent window we don't have
+   * when GCM is spawned from the background, so it would hang. The browser flow
+   * launches the default browser and caches a refresh token, after which every
+   * session acquires access tokens silently.
+   */
+  configure(): Promise<void>;
   /** Whether GCM already has a cached, usable credential for the target. */
   status(target: AzureTarget): Promise<AzureDevOpsStatus>;
-  /** Trigger an interactive sign-in (WAM/browser) and cache the credential. */
+  /** Trigger an interactive browser sign-in and cache the credential. */
   signIn(target: AzureTarget): Promise<AzureDevOpsStatus>;
 }
 
@@ -135,18 +142,21 @@ export function createAzureDevOpsAuth(deps: {
   };
 
   return {
-    async configureBroker() {
+    async configure() {
+      // OAuth = org-agnostic Entra token (no PAT creation, works across orgs).
+      await deps.config([
+        'config',
+        '--global',
+        'credential.azreposCredentialType',
+        'oauth',
+      ]);
+      // Never use the WAM broker: it needs a parent window we don't have when
+      // GCM runs in the background, and would hang. Use the browser flow.
       await deps.config([
         'config',
         '--global',
         'credential.msauthUseBroker',
-        'true',
-      ]);
-      await deps.config([
-        'config',
-        '--global',
-        'credential.msauthUseDefaultAccount',
-        'true',
+        'false',
       ]);
     },
     status(target) {
