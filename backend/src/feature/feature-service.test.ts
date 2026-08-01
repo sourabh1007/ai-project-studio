@@ -47,8 +47,19 @@ describe('feature-service', () => {
       description: 'Build login',
       createdAt: '2025-01-01T00:00:00.000Z',
       summary: null,
+      repoId: null,
     });
     expect(svc.get('feat-1')).toEqual(feature);
+  });
+
+  it('scopes a feature to a repository when a repoId is supplied', () => {
+    const svc = service();
+    const feature = svc.create({
+      name: 'Login',
+      description: 'Build login',
+      repoId: 'repo-9',
+    });
+    expect(feature.repoId).toBe('repo-9');
   });
 
   it('lists created features', () => {

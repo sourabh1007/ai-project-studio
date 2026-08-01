@@ -4,6 +4,7 @@ import {
   createAzureDevOpsAuth,
   parseAzureTarget,
   parseCredentialOutput,
+  parseCredentialPassword,
   type GitRunResult,
 } from './azure-devops-auth.js';
 
@@ -137,6 +138,22 @@ describe('parseCredentialOutput', () => {
   });
 });
 
+describe('parseCredentialPassword', () => {
+  it('returns the token when a password is present', () => {
+    expect(
+      parseCredentialPassword('username=alice\npassword=token123\n'),
+    ).toBe('token123');
+  });
+
+  it('returns null for an empty password value', () => {
+    expect(parseCredentialPassword('password=')).toBeNull();
+  });
+
+  it('returns null when no password line is present', () => {
+    expect(parseCredentialPassword('username=alice\nnoequals')).toBeNull();
+  });
+});
+
 describe('createAzureDevOpsAuth', () => {
   it('configure enables OAuth credentials and disables the WAM broker', async () => {
     const calls: string[][] = [];
@@ -202,5 +219,30 @@ describe('createAzureDevOpsAuth', () => {
     expect(
       await auth.status({ host: 'dev.azure.com', org: null }),
     ).toEqual({ authenticated: false, account: null });
+  });
+
+  it('token returns the cached OAuth password from a non-interactive get', async () => {
+    let interactive = true;
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (_verb, _input, opts) => {
+        interactive = opts.interactive;
+        return ok('username=alice\npassword=bearer-tok');
+      },
+    });
+
+    const token = await auth.token({ host: 'dev.azure.com', org: 'contoso' });
+
+    expect(interactive).toBe(false);
+    expect(token).toBe('bearer-tok');
+  });
+
+  it('token returns null when the credential runner fails', async () => {
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async () => fail(),
+    });
+
+    expect(await auth.token({ host: 'dev.azure.com', org: 'x' })).toBeNull();
   });
 });

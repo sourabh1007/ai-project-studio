@@ -24,12 +24,17 @@ function deps(): ApiRoutesDeps {
     ideUsage: empty,
     configRegistry: empty,
     currentConfig: {},
+    configSecretPaths: [],
     agencyStatus: () => ({ installed: true }),
     githubStatus: () => Promise.resolve({ authenticated: true, login: 'x' }),
     azureStatus: () =>
       Promise.resolve({ authenticated: true, account: 'x' }),
     azureSignIn: () =>
       Promise.resolve({ authenticated: true, account: 'x' }),
+    repos: empty,
+    provisionRepo: () => Promise.resolve(empty),
+    listGithubRepos: () => Promise.resolve([]),
+    listAzureRepos: () => Promise.resolve([]),
     logger: empty,
   };
 }
@@ -86,6 +91,11 @@ describe('createApiRoutes', () => {
       'get /github/status',
       'get /azure-devops/status',
       'post /azure-devops/signin',
+      'get /repos',
+      'post /repos',
+      'delete /repos/:id',
+      'get /providers/github/repos',
+      'get /providers/azure-devops/repos',
     ]);
   });
 });

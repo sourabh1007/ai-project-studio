@@ -44,6 +44,7 @@ function runInteractive(command: string, args: string[]): Promise<RunResult> {
       sessionId: 'integration',
       pty,
       scrollbackBytes: 1 << 16,
+      transcriptBytes: 1 << 20,
       onExit: (exitCode) => {
         clearTimeout(timeout);
         resolve({ output, transcript: session.transcriptText(), exitCode });

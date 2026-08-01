@@ -28,6 +28,11 @@ import type {
   AzureTarget,
 } from '../azure-auth/azure-devops-auth.js';
 import { createAzureRoutes } from './azure-controller.js';
+import type { RepoService } from '../repo/repo-service.js';
+import type { CreateRepositoryInput } from '../repo/repo-contract.js';
+import type { RemoteRepo } from '../repo/remote-repo-contract.js';
+import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
+import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createFeatureRoutes } from './feature-controller.js';
@@ -69,6 +74,11 @@ export interface ApiRoutesDeps {
   ideUsage: IdeUsageService;
   configRegistry: ConfigSchemaRegistry;
   currentConfig: ConfigObject;
+  /**
+   * Dotted config paths whose values were resolved from secret references and
+   * must be redacted from `GET /config`.
+   */
+  configSecretPaths: readonly string[];
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
@@ -77,6 +87,14 @@ export interface ApiRoutesDeps {
   azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** The repository layer the workspace is organized around. */
+  repos: RepoService;
+  /** Clones or attaches an existing checkout, yielding a repo create input. */
+  provisionRepo: (input: ProvisionRepoInput) => Promise<CreateRepositoryInput>;
+  /** Lists the authenticated user's GitHub repositories. */
+  listGithubRepos: () => Promise<RemoteRepo[]>;
+  /** Lists repositories across an Azure DevOps organization's projects. */
+  listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
   logger: Logger;
 }
 
@@ -119,12 +137,19 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createConfigRoutes({
       registry: deps.configRegistry,
       current: deps.currentConfig,
+      secretPaths: deps.configSecretPaths,
     }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
     ...createGithubRoutes({ githubStatus: deps.githubStatus }),
     ...createAzureRoutes({
       azureStatus: deps.azureStatus,
       azureSignIn: deps.azureSignIn,
+    }),
+    ...createRepoRoutes({
+      repos: deps.repos,
+      provision: deps.provisionRepo,
+      listGithubRepos: deps.listGithubRepos,
+      listAzureRepos: deps.listAzureRepos,
     }),
   ];
 }

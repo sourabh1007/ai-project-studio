@@ -8,6 +8,7 @@ interface FeatureRow {
   description: string;
   created_at: string;
   summary: string | null;
+  repo_id: string | null;
 }
 
 function mapFeature(row: FeatureRow): Feature {
@@ -17,13 +18,14 @@ function mapFeature(row: FeatureRow): Feature {
     description: row.description,
     createdAt: row.created_at,
     summary: row.summary,
+    repoId: row.repo_id ?? null,
   };
 }
 
 /** SQLite-backed implementation of the FeatureRepo port. */
 export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const insert = db.prepare(
-    'INSERT INTO features (id, name, description, created_at, summary) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO features (id, name, description, created_at, summary, repo_id) VALUES (?, ?, ?, ?, ?, ?)',
   );
   const selectOne = db.prepare('SELECT * FROM features WHERE id = ?');
   const selectAll = db.prepare('SELECT * FROM features ORDER BY created_at, id');
@@ -39,6 +41,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
         feature.description,
         feature.createdAt,
         feature.summary,
+        feature.repoId ?? null,
       );
     },
     get(id) {

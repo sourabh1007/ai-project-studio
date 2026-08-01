@@ -40,7 +40,7 @@ function fakeRunning() {
   };
 }
 
-function harness() {
+function harness(options: { failSave?: boolean } = {}) {
   const rs = fakeRunning();
   let capturedSpec: SessionSpec | undefined;
   const provider: IAIProvider = {
@@ -66,6 +66,9 @@ function harness() {
   const saved: Transcript[] = [];
   const transcriptStore = {
     save: async (t: Transcript) => {
+      if (options.failSave) {
+        throw new Error('disk full');
+      }
       saved.push(t);
     },
     load: async () => null,
@@ -156,5 +159,15 @@ describe('session-launcher', () => {
     expect(h.getSpec()!.cwd).toBe('/work');
     h.rs.finish(0);
     await launched.completion;
+  });
+
+  it('rejects completion when the transcript save fails, without an unhandled rejection', async () => {
+    const h = harness({ failSave: true });
+    const launched = await h.launcher.start({
+      featureId: 'feat-1',
+      prompt: 'hello',
+    });
+    h.rs.finish(0);
+    await expect(launched.completion).rejects.toThrow('disk full');
   });
 });

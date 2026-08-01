@@ -48,6 +48,7 @@ describe('createTerminalSession', () => {
       sessionId: 's1',
       pty: f.pty,
       scrollbackBytes: 1000,
+      transcriptBytes: 1000,
       onExit: () => {},
     });
     const a = recordingSink();
@@ -65,6 +66,7 @@ describe('createTerminalSession', () => {
       sessionId: 's1',
       pty: f.pty,
       scrollbackBytes: 1000,
+      transcriptBytes: 1000,
       onExit: () => {},
     });
     f.emitData('past output');
@@ -82,6 +84,7 @@ describe('createTerminalSession', () => {
       sessionId: 's1',
       pty: f.pty,
       scrollbackBytes: 4,
+      transcriptBytes: 1000,
       onExit: () => {},
     });
     f.emitData('abcdefgh');
@@ -90,12 +93,27 @@ describe('createTerminalSession', () => {
     expect(a.output).toEqual(['efgh']);
   });
 
+  it('bounds the retained transcript to transcriptBytes', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 's1',
+      pty: f.pty,
+      scrollbackBytes: 1000,
+      transcriptBytes: 4,
+      onExit: () => {},
+    });
+    f.emitData('abcd');
+    f.emitData('efgh');
+    expect(session.transcriptText()).toBe('efgh');
+  });
+
   it('forwards write, resize and kill to the pty', () => {
     const f = fakePty();
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
       scrollbackBytes: 1000,
+      transcriptBytes: 1000,
       onExit: () => {},
     });
     session.write('ls\n');
@@ -113,6 +131,7 @@ describe('createTerminalSession', () => {
       sessionId: 's1',
       pty: f.pty,
       scrollbackBytes: 1000,
+      transcriptBytes: 1000,
       onExit: (c) => exitHook.push(c),
     });
     const live = recordingSink();

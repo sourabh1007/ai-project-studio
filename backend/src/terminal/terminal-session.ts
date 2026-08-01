@@ -12,6 +12,13 @@ export interface TerminalSessionDeps {
   pty: PtyProcess;
   /** Max bytes of raw output retained for replay to late-joining clients. */
   scrollbackBytes: number;
+  /**
+   * Max bytes of ANSI-stripped transcript retained for persistence /
+   * summarization. Bounds heap growth for long-lived interactive sessions the
+   * same way {@link scrollbackBytes} bounds scrollback; the oldest text is
+   * dropped once the cap is exceeded.
+   */
+  transcriptBytes: number;
   /** Invoked once when the underlying process exits. */
   onExit: (code: number | null) => void;
 }
@@ -43,7 +50,7 @@ export interface TerminalSession {
 export function createTerminalSession(
   deps: TerminalSessionDeps,
 ): TerminalSession {
-  const { sessionId, pty, scrollbackBytes } = deps;
+  const { sessionId, pty, scrollbackBytes, transcriptBytes } = deps;
   const sinks = new Set<TerminalOutputSink>();
   let scrollback = '';
   let transcript = '';
@@ -56,6 +63,9 @@ export function createTerminalSession(
       scrollback = scrollback.slice(scrollback.length - scrollbackBytes);
     }
     transcript += stripAnsi(data);
+    if (transcript.length > transcriptBytes) {
+      transcript = transcript.slice(transcript.length - transcriptBytes);
+    }
     for (const sink of sinks) {
       sink.send(data);
     }

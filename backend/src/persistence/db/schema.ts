@@ -92,6 +92,37 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     first_seen_at TEXT NOT NULL,
     PRIMARY KEY (session_id, path)
   )`,
+  `CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    remote_url TEXT NOT NULL,
+    name TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    default_branch TEXT,
+    created_at TEXT NOT NULL
+  )`,
+];
+
+/**
+ * Indexes backing the hot lookups. Filters on foreign-key-like columns
+ * (sessions by feature, attachments by skill/target, tasks by feature) would
+ * otherwise force full table scans as the workspace grows. Applied after
+ * {@link ADDED_COLUMNS} so indexes on retrofitted columns (e.g. features.repo_id)
+ * are created only once the column exists.
+ */
+export const INDEX_STATEMENTS: readonly string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_sessions_feature_id
+    ON sessions (feature_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_features_repo_id
+    ON features (repo_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_usage_events_feature_id
+    ON usage_events (feature_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_skill_attachments_skill_id
+    ON skill_attachments (skill_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_skill_attachments_target
+    ON skill_attachments (scope, target_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_feature_tasks_feature_id
+    ON feature_tasks (feature_id)`,
 ];
 
 /**
@@ -105,6 +136,11 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
     table: 'skills',
     column: 'removal_instructions',
     ddl: "ALTER TABLE skills ADD COLUMN removal_instructions TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: 'features',
+    column: 'repo_id',
+    ddl: 'ALTER TABLE features ADD COLUMN repo_id TEXT',
   },
 ];
 
@@ -130,5 +166,8 @@ export function applySchema(db: DatabaseSync): void {
   }
   for (const { table, column, ddl } of ADDED_COLUMNS) {
     addColumnIfMissing(db, table, column, ddl);
+  }
+  for (const statement of INDEX_STATEMENTS) {
+    db.exec(statement);
   }
 }

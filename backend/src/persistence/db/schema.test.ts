@@ -15,6 +15,12 @@ function skillsColumns(db: DatabaseSync): string[] {
   );
 }
 
+function featureColumns(db: DatabaseSync): string[] {
+  return (db.prepare('PRAGMA table_info(features)').all() as { name: string }[]).map(
+    (c) => c.name,
+  );
+}
+
 describe('db schema/connection', () => {
   it('creates all expected tables', () => {
     const db = createDatabase({ databasePath: ':memory:' });
@@ -35,6 +41,27 @@ describe('db schema/connection', () => {
         'skills',
         'skill_attachments',
         'feature_tasks',
+        'repositories',
+      ]),
+    );
+  });
+
+  it('creates indexes backing hot foreign-key lookups', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const indexes = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    db.close();
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        'idx_sessions_feature_id',
+        'idx_features_repo_id',
+        'idx_usage_events_feature_id',
+        'idx_skill_attachments_skill_id',
+        'idx_skill_attachments_target',
+        'idx_feature_tasks_feature_id',
       ]),
     );
   });
@@ -88,6 +115,23 @@ describe('db schema/connection', () => {
     expect(skillsColumns(db)).not.toContain('removal_instructions');
     applySchema(db);
     expect(skillsColumns(db)).toContain('removal_instructions');
+    expect(() => applySchema(db)).not.toThrow();
+    db.close();
+  });
+
+  it('adds the features.repo_id column to a legacy database', () => {
+    const db = new DatabaseSync(':memory:');
+    // A pre-repository features table, missing the `repo_id` column.
+    db.exec(`CREATE TABLE features (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      summary TEXT
+    )`);
+    expect(featureColumns(db)).not.toContain('repo_id');
+    applySchema(db);
+    expect(featureColumns(db)).toContain('repo_id');
     expect(() => applySchema(db)).not.toThrow();
     db.close();
   });

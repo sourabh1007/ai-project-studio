@@ -118,6 +118,11 @@ export function createSessionLauncher(
         return ended;
       });
 
+      // Guard against an unhandled rejection if a caller does not await
+      // `completion` (e.g. a fire-and-forget interactive launch). Real awaiters
+      // still observe the rejection through their own `await`/`.catch`.
+      completion.catch(() => {});
+
       return { session, running, completion };
     },
   };

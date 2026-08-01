@@ -7,7 +7,9 @@ import { createTranscriptRepo } from './transcript-repo.js';
 import { createSummaryRepo } from './summary-repo.js';
 import { createSessionSummaryRepo } from './session-summary-repo.js';
 import { createSessionFilesRepo } from './session-files-repo.js';
+import { createRepoRepo } from './repo-repo.js';
 import type { Feature } from '../feature/feature-contract.js';
+import type { Repository } from '../repo/repo-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
 
@@ -18,6 +20,7 @@ function feature(overrides: Partial<Feature> = {}): Feature {
     description: 'Build login',
     createdAt: '2025-01-01T00:00:00.000Z',
     summary: null,
+    repoId: null,
     ...overrides,
   };
 }
@@ -65,6 +68,19 @@ function usage(overrides: Partial<StoredUsage> = {}): StoredUsage {
   };
 }
 
+function repository(overrides: Partial<Repository> = {}): Repository {
+  return {
+    id: 'r1',
+    provider: 'github',
+    remoteUrl: 'https://github.com/acme/app.git',
+    name: 'acme/app',
+    localPath: 'C:/work/app',
+    defaultBranch: 'main',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('feature-repo', () => {
   it('creates, reads, lists and sets summary', () => {
     const db = createDatabase({ databasePath: ':memory:' });
@@ -87,6 +103,14 @@ describe('feature-repo', () => {
     expect(repo.get('f1')?.name).toBe('Sign in');
     repo.delete('f1');
     expect(repo.get('f1')).toBeNull();
+    db.close();
+  });
+
+  it('round-trips a repository scope on a feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1', repoId: 'repo-7' }));
+    expect(repo.get('f1')?.repoId).toBe('repo-7');
     db.close();
   });
 });
@@ -300,8 +324,7 @@ describe('session-files-repo', () => {
 });
 
 describe('transcript-repo', () => {
-  it('saves and loads transcripts, returns null when absent', async () => {
-    const db = createDatabase({ databasePath: ':memory:' });
+  it('saves and loads transcripts, returns null when absent', async () => {    const db = createDatabase({ databasePath: ':memory:' });
     const repo = createTranscriptRepo(db);
     expect(await repo.load('s1')).toBeNull();
     await repo.save({ sessionId: 's1', stdout: ['a', 'b'], stderr: ['e'], exitCode: 0 });
@@ -320,6 +343,31 @@ describe('transcript-repo', () => {
     await repo.save({ sessionId: 's1', stdout: ['a'], stderr: [], exitCode: 0 });
     await repo.delete('s1');
     expect(await repo.load('s1')).toBeNull();
+    db.close();
+  });
+});
+
+describe('repo-repo', () => {
+  it('creates, reads, lists and deletes repositories', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createRepoRepo(db);
+    expect(repo.get('missing')).toBeNull();
+    repo.create(repository());
+    repo.create(
+      repository({
+        id: 'r2',
+        provider: 'azure-devops',
+        name: 'proj/api',
+        defaultBranch: null,
+        createdAt: '2025-01-02T00:00:00.000Z',
+      }),
+    );
+    expect(repo.get('r1')).toEqual(repository());
+    expect(repo.get('r2')?.provider).toBe('azure-devops');
+    expect(repo.get('r2')?.defaultBranch).toBeNull();
+    expect(repo.list().map((r) => r.id)).toEqual(['r1', 'r2']);
+    repo.delete('r1');
+    expect(repo.get('r1')).toBeNull();
     db.close();
   });
 });

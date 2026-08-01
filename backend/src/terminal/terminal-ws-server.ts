@@ -9,6 +9,7 @@ import {
   decodeClientMessage,
   encodeServerMessage,
 } from './terminal-protocol.js';
+import { isAllowedTerminalOrigin } from './terminal-origin.js';
 
 export interface TerminalWsDeps {
   server: Server;
@@ -18,6 +19,12 @@ export interface TerminalWsDeps {
   getSession: (id: string) => Session | null;
   /** Working directory the interactive CLI runs in. */
   cwd?: string;
+  /**
+   * Per-session working directory (the local checkout of the session's
+   * repository). Takes precedence over {@link TerminalWsDeps.cwd} when it
+   * returns a path; falls back to `cwd` for repo-less sessions.
+   */
+  resolveCwd?: (session: Session) => string | undefined;
   logger: Logger;
 }
 
@@ -33,6 +40,15 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
   });
 
   wss.on('connection', (socket: WebSocket, req) => {
+    // Reject cross-site browser connections: WebSockets bypass same-origin
+    // policy, so a malicious page could otherwise attach to a live session and
+    // inject keystrokes into the CLI. Only our own localhost origin is allowed.
+    if (!isAllowedTerminalOrigin(req.headers.origin)) {
+      deps.logger.error('Terminal WS rejected: bad origin', req.headers.origin);
+      socket.close(4403, 'Forbidden origin');
+      return;
+    }
+
     const url = new URL(req.url ?? '', 'http://localhost');
     const sessionId = url.searchParams.get('sessionId') ?? '';
     const session = deps.getSession(sessionId);
@@ -43,7 +59,8 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
 
     let terminal;
     try {
-      terminal = deps.manager.getOrLaunch(session, { cwd: deps.cwd });
+      const cwd = deps.resolveCwd?.(session) ?? deps.cwd;
+      terminal = deps.manager.getOrLaunch(session, { cwd });
     } catch (error) {
       deps.logger.error('Terminal launch failed', error);
       socket.close(4500, 'Launch failed');

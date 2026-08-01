@@ -335,4 +335,52 @@ describe('createApiClient', () => {
     expect(spy).toHaveBeenCalledWith('/api/features', undefined);
     spy.mockRestore();
   });
+
+  it('lists workspace repositories', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 'r1' }]));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listRepos();
+    expect(result).toEqual([{ id: 'r1' }]);
+    expect(calls[0][0]).toBe('/api/repos');
+  });
+
+  it('adds a repository with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'r1' }));
+    const client = createApiClient({ fetchImpl });
+    const input = {
+      provider: 'github' as const,
+      remoteUrl: 'https://x/y.git',
+      name: 'x/y',
+      localPath: 'C:\\repos\\y',
+      mode: 'clone' as const,
+    };
+    await client.addRepo(input);
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/repos');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify(input));
+  });
+
+  it('deletes a repository with a DELETE request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'r1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.deleteRepo('r1');
+    expect(result).toEqual({ id: 'r1' });
+    expect(calls[0][0]).toBe('/api/repos/r1');
+    expect(calls[0][1]?.method).toBe('DELETE');
+  });
+
+  it('lists GitHub repositories to pick from', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ name: 'o/r' }]));
+    const client = createApiClient({ fetchImpl });
+    await client.listGithubRepos();
+    expect(calls[0][0]).toBe('/api/providers/github/repos');
+  });
+
+  it('lists Azure DevOps repositories for an org, url-encoding it', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ name: 'p/r' }]));
+    const client = createApiClient({ fetchImpl });
+    await client.listAzureRepos('my org');
+    expect(calls[0][0]).toBe('/api/providers/azure-devops/repos?org=my%20org');
+  });
 });

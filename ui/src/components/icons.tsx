@@ -18,6 +18,7 @@ import {
   Download,
   FileText,
   Files,
+  FolderGit2,
   Gauge,
   History,
   ListChecks,
@@ -90,6 +91,7 @@ export const SearchIcon = makeIcon(Search);
 
 // Navigation icons.
 export const FilesIcon = makeIcon(Files);
+export const RepoIcon = makeIcon(FolderGit2);
 export const SettingsIcon = makeIcon(Settings);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);

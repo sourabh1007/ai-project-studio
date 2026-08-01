@@ -63,6 +63,17 @@ describe('feature-controller', () => {
     expect(h.created).toEqual([{ name: 'Login', description: 'Add login' }]);
   });
 
+  it('forwards repoId when creating a feature under a repository', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features')(
+      req({ body: { name: 'Login', description: 'd', repoId: 'r1' } }),
+    );
+    expect(result.status).toBe(201);
+    expect(h.created).toEqual([
+      { name: 'Login', description: 'd', repoId: 'r1' },
+    ]);
+  });
+
   it('rejects invalid create payloads', () => {
     const h = harness();
     let caught: unknown;

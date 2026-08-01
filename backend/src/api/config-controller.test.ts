@@ -27,6 +27,7 @@ describe('config-controller', () => {
     const routes = createConfigRoutes({
       registry,
       current: { demo: { enabled: false } },
+      secretPaths: [],
     });
     const result = await pick(routes, 'get', '/config')(req());
     expect(result).toEqual({
@@ -36,6 +37,24 @@ describe('config-controller', () => {
         defaults: { demo: { enabled: true } },
         current: { demo: { enabled: false } },
       },
+    });
+  });
+
+  it('redacts values at the supplied secret paths', async () => {
+    const registry = createConfigSchemaRegistry();
+    registry.register({
+      namespace: 'demo',
+      schema: z.object({ token: z.string() }),
+      defaults: { token: '' },
+    });
+    const routes = createConfigRoutes({
+      registry,
+      current: { demo: { token: 'super-secret' } },
+      secretPaths: ['demo.token'],
+    });
+    const result = await pick(routes, 'get', '/config')(req());
+    expect(result.body).toMatchObject({
+      current: { demo: { token: '••••••••' } },
     });
   });
 });

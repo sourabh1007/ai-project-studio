@@ -20,11 +20,14 @@ interface InstallEvent {
 export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
   const api = useApi();
   const [phase, setPhase] = useState<Phase>('checking');
-  const [lines, setLines] = useState<string[]>([]);
+  const [lines, setLines] = useState<{ id: number; text: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [bypassed, setBypassed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const logRef = useRef<HTMLDivElement | null>(null);
+  // Monotonic id for log lines so React keys stay stable and unique even across
+  // resets and duplicate line text (array index keys are an anti-pattern).
+  const nextLineId = useRef(0);
 
   // Probe status first; only start an install when agency is actually missing.
   useEffect(() => {
@@ -69,7 +72,10 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
         return;
       }
       if (event.kind === 'line' && event.line !== undefined) {
-        setLines((prev) => [...prev, event.line as string]);
+        setLines((prev) => [
+          ...prev,
+          { id: nextLineId.current++, text: event.line as string },
+        ]);
       } else if (event.kind === 'done') {
         source.close();
         setPhase('done');
@@ -127,9 +133,9 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
 
         {(phase === 'installing' || phase === 'error') && lines.length > 0 && (
           <div className="bootstrap-log" ref={logRef}>
-            {lines.map((line, index) => (
-              <div key={index} className="bootstrap-log-line">
-                {line}
+            {lines.map((line) => (
+              <div key={line.id} className="bootstrap-log-line">
+                {line.text}
               </div>
             ))}
           </div>

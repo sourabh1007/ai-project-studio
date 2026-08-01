@@ -16,6 +16,9 @@ import type {
   ImportSessionInput,
   ModelInfo,
   ProviderInfo,
+  Repository,
+  RemoteRepo,
+  AddRepositoryInput,
   Session,
   SessionFile,
   Skill,
@@ -87,6 +90,17 @@ export function createApiClient(options: ApiClientOptions = {}) {
   }
 
   return {
+    listRepos: () => request<Repository[]>('/repos'),
+    addRepo: (input: AddRepositoryInput) =>
+      request<Repository>('/repos', jsonBody(input)),
+    deleteRepo: (id: string) =>
+      request<{ id: string }>(`/repos/${id}`, del()),
+    listGithubRepos: () =>
+      request<RemoteRepo[]>('/providers/github/repos'),
+    listAzureRepos: (org: string) =>
+      request<RemoteRepo[]>(
+        `/providers/azure-devops/repos?org=${encodeURIComponent(org)}`,
+      ),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),
     createFeature: (input: CreateFeatureInput) =>

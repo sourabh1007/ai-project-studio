@@ -37,6 +37,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
         description: input.description,
         createdAt: deps.clock.isoNow(),
         summary: null,
+        repoId: input.repoId ?? null,
       };
       deps.repo.create(feature);
       return feature;

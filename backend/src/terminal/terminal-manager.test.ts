@@ -186,6 +186,17 @@ describe('createTerminalManager', () => {
     expect(env.requests).toHaveLength(1);
   });
 
+  it('shutdown kills every live terminal without emitting session.ended', () => {
+    const { manager, env, ended, discarded } = makeManager();
+    manager.getOrLaunch(sampleSession());
+    manager.shutdown();
+    expect(env.kills()).toBe(1);
+    // A subsequent exit from the killed PTY is reported as discarded, not ended.
+    env.emitExit(0);
+    expect(ended).toHaveLength(0);
+    expect(discarded).toEqual(['sess-1']);
+  });
+
   it('on exit emits session.ended (completed) and saves the transcript', () => {
     const { manager, env, ended, saved } = makeManager();
     manager.getOrLaunch(sampleSession());

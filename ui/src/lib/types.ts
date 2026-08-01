@@ -15,12 +15,51 @@ export interface AzureDevOpsStatus {
   account: string | null;
 }
 
+/** The source-control provider a repository was selected from. */
+export type RepoProvider = 'github' | 'azure-devops';
+
+/**
+ * A repository the user has chosen to work on — the top-level unit of the
+ * workspace. Features belong to a repository and every session runs inside the
+ * repository's local checkout.
+ */
+export interface Repository {
+  id: string;
+  provider: RepoProvider;
+  remoteUrl: string;
+  name: string;
+  localPath: string;
+  defaultBranch: string | null;
+  createdAt: string;
+}
+
+/** A repository available to pick from a provider before it is added. */
+export interface RemoteRepo {
+  provider: RepoProvider;
+  name: string;
+  remoteUrl: string;
+  defaultBranch: string | null;
+}
+
+/** How a picked remote repo becomes a workspace repository. */
+export type RepoProvisionMode = 'clone' | 'existing';
+
+export interface AddRepositoryInput {
+  provider: RepoProvider;
+  remoteUrl: string;
+  name: string;
+  defaultBranch?: string | null;
+  localPath: string;
+  mode: RepoProvisionMode;
+}
+
 export interface Feature {
   id: string;
   name: string;
   description: string;
   createdAt: string;
   summary: string | null;
+  repoId: string | null;
 }
 
 export type SessionStatus =
@@ -199,6 +238,7 @@ export interface ConfigResponse {
 export interface CreateFeatureInput {
   name: string;
   description: string;
+  repoId?: string | null;
 }
 
 export interface StartSessionInput {

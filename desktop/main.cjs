@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, shell, nativeTheme, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, nativeTheme, ipcMain, session } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
@@ -113,6 +113,35 @@ function stopBackend() {
   }
 }
 
+/** Origin (scheme://host:port) of the app's own page, used to gate IPC and navigation. */
+let appOrigin = null;
+
+/** Records the trusted app origin from the URL the window loads. */
+function setAppOrigin(loadUrl) {
+  try {
+    appOrigin = new URL(loadUrl).origin;
+  } catch {
+    appOrigin = null;
+  }
+}
+
+/**
+ * True when an IPC message originates from our own top-level app frame. Guards
+ * the main-process handlers so a compromised/injected subframe or unexpected
+ * origin cannot drive privileged actions (reveal file, theme).
+ */
+function isTrustedSender(event) {
+  const frame = event.senderFrame;
+  if (!frame || !appOrigin) {
+    return false;
+  }
+  try {
+    return new URL(frame.url).origin === appOrigin;
+  } catch {
+    return false;
+  }
+}
+
 function createWindow(loadUrl) {
   const win = new BrowserWindow({
     width: 1360,
@@ -124,6 +153,7 @@ function createWindow(loadUrl) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
@@ -134,15 +164,68 @@ function createWindow(loadUrl) {
     return { action: 'deny' };
   });
 
+  // Block any in-page navigation away from the app's own origin. Legitimate
+  // external links go through the window-open handler above; anything else
+  // (e.g. an injected redirect) is denied and sent to the system browser.
+  win.webContents.on('will-navigate', (event, url) => {
+    let sameOrigin = false;
+    try {
+      sameOrigin = appOrigin !== null && new URL(url).origin === appOrigin;
+    } catch {
+      sameOrigin = false;
+    }
+    if (!sameOrigin) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+
   void win.loadURL(loadUrl);
   return win;
+}
+
+/**
+ * Applies a Content-Security-Policy to every document the app loads. Restricts
+ * scripts/connections/frames to the app's own origin so injected content cannot
+ * pull in remote code or exfiltrate over the network. Skipped in dev, where the
+ * Vite HMR client relies on eval and websocket origins CSP would block.
+ */
+function applyContentSecurityPolicy() {
+  if (IS_DEV) {
+    return;
+  }
+  const policy = [
+    "default-src 'self'",
+    // Bundled app scripts are same-origin; 'unsafe-inline' covers Vite's tiny
+    // inline module-preload polyfill while still blocking remote scripts.
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    // Same-origin API + terminal WebSocket only.
+    "connect-src 'self' ws: wss:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [policy],
+      },
+    });
+  });
 }
 
 async function bootstrap() {
   // Native chrome (title bar + menu bar) follows the app theme. Default to dark
   // so it matches the dark launch background; the renderer syncs the real value.
   nativeTheme.themeSource = 'dark';
-  ipcMain.on('theme:set', (_event, mode) => {
+  ipcMain.on('theme:set', (event, mode) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
     if (mode === 'light' || mode === 'dark') {
       nativeTheme.themeSource = mode;
     }
@@ -150,11 +233,16 @@ async function bootstrap() {
 
   // Reveal a session-created file in the OS file explorer. Guarded to a non-empty
   // string so a malformed message can't crash the main process.
-  ipcMain.on('file:reveal', (_event, filePath) => {
+  ipcMain.on('file:reveal', (event, filePath) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
     if (typeof filePath === 'string' && filePath.length > 0) {
       shell.showItemInFolder(filePath);
     }
   });
+
+  applyContentSecurityPolicy();
 
   let loadUrl;
   if (IS_DEV) {
@@ -170,6 +258,7 @@ async function bootstrap() {
     await waitForBackend(port);
     loadUrl = `http://${HOST}:${port}/`;
   }
+  setAppOrigin(loadUrl);
   createWindow(loadUrl);
 }
 

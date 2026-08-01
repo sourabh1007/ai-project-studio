@@ -1,4 +1,4 @@
-/** A feature: the top-level unit of AI-assisted work in the workspace. */
+/** A feature: a unit of AI-assisted work, optionally scoped to a repository. */
 export interface Feature {
   id: string;
   name: string;
@@ -6,9 +6,13 @@ export interface Feature {
   createdAt: string;
   /** AI-generated cross-session summary; null until generated. */
   summary: string | null;
+  /** The repository this feature belongs to; null for repo-less features. */
+  repoId?: string | null;
 }
 
 export interface CreateFeatureInput {
   name: string;
   description: string;
+  /** Repository to scope the feature (and its sessions) to. */
+  repoId?: string | null;
 }

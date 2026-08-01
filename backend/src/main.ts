@@ -19,7 +19,8 @@ import { createEventBus } from './kernel/event-bus.js';
 
 import { createConfigSchemaRegistry } from './config/config-schema-registry.js';
 import { buildConfig } from './config/config-validator.js';
-import { envSource } from './config/config-loader.js';
+import { envSource, mergeSources } from './config/config-loader.js';
+import { collectSecretPaths } from './config/config-redactor.js';
 
 import {
   COPILOT_NAMESPACE,
@@ -126,6 +127,15 @@ import { createCreditCalculator } from './credit/credit-calculator.js';
 
 import { createDatabase } from './persistence/db/connection.js';
 import { createFeatureRepo } from './persistence/feature-repo.js';
+import { createRepoRepo } from './persistence/repo-repo.js';
+import { createRepoService } from './repo/repo-service.js';
+import { provisionRepo } from './repo/repo-provisioner.js';
+import { listGithubRepos } from './repo/github-repo-lister.js';
+import {
+  listAzureRepos,
+  type AzureHttpResponse,
+} from './repo/azure-repo-lister.js';
+import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
 import { createTranscriptRepo } from './persistence/transcript-repo.js';
@@ -228,6 +238,15 @@ function main(): void {
     secretLookup: (name) => process.env[name],
   });
 
+  // Paths whose (pre-resolution) values reference a secret, so `GET /config`
+  // can redact their resolved values instead of leaking them.
+  const configSecretPaths = collectSecretPaths(
+    mergeSources([
+      { origin: 'defaults', data: registry.defaults() },
+      envSource(process.env, ENV_PREFIX),
+    ]),
+  );
+
   const copilotConfig = config[COPILOT_NAMESPACE] as CopilotConfig;
   const agencyConfig = config[AGENCY_NAMESPACE] as AgencyConfig;
   const sessionConfig = config[SESSION_NAMESPACE] as SessionConfig;
@@ -299,6 +318,7 @@ function main(): void {
   ensureDir(persistenceConfig.databasePath);
   const db = createDatabase({ databasePath: persistenceConfig.databasePath });
   const featureRepo = createFeatureRepo(db);
+  const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
   const sessionRepo = createSessionRepo(db);
   const reconciledCount = createSessionReconciler({
     sessions: sessionRepo,
@@ -484,6 +504,47 @@ function main(): void {
       // git / GCM missing — Azure DevOps sign-in stays a no-op; sessions keep
       // whatever git credentials the host already provides.
     });
+
+  // Repository layer wiring. Repos are cloned/attached with the same git + auth
+  // the IDE already configured, and listed from each provider using the login
+  // the IDE holds (GitHub via `gh`, Azure DevOps via the GCM OAuth token against
+  // the REST API — no `az login` needed).
+  const cloneRepo = (request: { remoteUrl: string; targetPath: string }) =>
+    gitRun(['clone', request.remoteUrl, request.targetPath], {
+      interactive: false,
+    });
+  const provisionRepoInput = (input: Parameters<typeof provisionRepo>[1]) =>
+    provisionRepo({ clone: cloneRepo, pathExists: existsSync }, input);
+  const listGithubReposFor = () => listGithubRepos(ghRun);
+  const azureHttpGet = async (
+    url: string,
+    token: string,
+  ): Promise<AzureHttpResponse> => {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    const body = response.ok ? await response.json() : null;
+    return { status: response.status, body };
+  };
+  const listAzureReposFor = (org: string) =>
+    listAzureRepos(
+      {
+        token: (o) => azureAuth.token(parseAzureTarget(o)),
+        httpGet: azureHttpGet,
+      },
+      org,
+    );
+  // Resolves the working directory a session's terminal runs in: the local
+  // checkout of the repository its feature belongs to, falling back to the
+  // workspace cwd for repo-less (legacy) features.
+  const resolveSessionCwd = (featureId: string): string | undefined => {
+    const feature = featureRepo.get(featureId);
+    const repoId = feature?.repoId;
+    if (!repoId) {
+      return undefined;
+    }
+    return repoService.list().find((r) => r.id === repoId)?.localPath;
+  };
 
   const cliStorePath = pathJoin(
     homedir(),
@@ -804,10 +865,15 @@ function main(): void {
       ideUsage: ideUsageService,
       configRegistry: registry,
       currentConfig: config,
+      configSecretPaths,
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
       azureStatus: (target) => azureAuth.status(target),
       azureSignIn: (target) => azureAuth.signIn(target),
+      repos: repoService,
+      provisionRepo: provisionRepoInput,
+      listGithubRepos: listGithubReposFor,
+      listAzureRepos: listAzureReposFor,
       logger,
     }),
   );
@@ -857,6 +923,21 @@ function main(): void {
           if (status.installed) {
             refreshAgencyPath();
           }
+        })
+        .catch((error) => {
+          // Surface the failure to the subscriber and log it, instead of
+          // leaving an unhandled rejection.
+          logger.error('Agency install failed', error);
+          try {
+            send({ kind: 'error', line: 'Installation failed. Please retry.' });
+          } catch {
+            /* subscriber already disconnected — nothing to notify */
+          }
+        })
+        .finally(() => {
+          // Always clear the in-flight marker so a failed install can be
+          // retried; otherwise every later connection would wedge forever on
+          // the "already in progress" branch.
           agencyInstall = null;
         });
     } else {
@@ -901,10 +982,36 @@ function main(): void {
       config: terminalConfig,
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
+      resolveCwd: (session) => resolveSessionCwd(session.featureId),
       logger,
     });
     logger.info(`Interactive terminal WebSocket at ${terminalConfig.wsPath}`);
   }
+
+  // Graceful shutdown: stop usage tailers, tear down live PTYs, stop accepting
+  // connections and close the database so SQLite is not left mid-write when the
+  // desktop shell kills the backend process.
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    logger.info(`Received ${signal}, shutting down…`);
+    for (const tailer of tailers.values()) {
+      tailer.stop();
+    }
+    terminalManager.shutdown();
+    server.close();
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    process.exit(0);
+  };
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main();

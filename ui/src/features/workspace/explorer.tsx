@@ -3,7 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
-import type { Feature, Session, SessionBreakdown } from '../../lib/types.js';
+import type { Feature, Repository, Session, SessionBreakdown } from '../../lib/types.js';
 import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
@@ -20,6 +20,7 @@ import {
   ImportIcon,
   PencilIcon,
   PlusIcon,
+  RepoIcon,
   TagIcon,
   TimeIcon,
   TrashIcon,
@@ -31,6 +32,7 @@ import { SkillTagger } from '../skills/skill-tagger.js';
 import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
+import { RepoPicker } from './repo-picker.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
 
@@ -488,10 +490,151 @@ function FeatureNode({
   );
 }
 
+/** A collapsible top-level repository (or the "No repository" group when
+ * `repo` is null) that holds the features scoped to it. */
+function RepoNode({
+  repo,
+  features,
+  defaultExpanded,
+  live,
+  activeSessionId,
+  names,
+  onOpenSession,
+  onOpenFeature,
+  onRenameSession,
+  onRenameFeature,
+  onDeleteFeature,
+  onDeleteSession,
+  onAddFeature,
+  onDeleteRepo,
+}: {
+  repo: Repository | null;
+  features: Feature[];
+  defaultExpanded: boolean;
+  live: LiveState;
+  activeSessionId: string | null;
+  names: Record<string, string>;
+  onOpenSession: (session: Session, label: string) => void;
+  onOpenFeature: (feature: Feature) => void;
+  onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
+  onRenameFeature: (feature: Feature, name: string) => Promise<void>;
+  onDeleteFeature: (feature: Feature) => Promise<void>;
+  onDeleteSession: (session: Session) => Promise<void>;
+  onAddFeature: (repoId: string | null) => void;
+  onDeleteRepo: (repo: Repository) => void;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [confirming, setConfirming] = useState(false);
+  const title = repo ? repo.name : 'No repository';
+  const providerLabel = repo?.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
+
+  return (
+    <div className={`repo-node ${repo ? '' : 'repo-node-orphan'}`.trim()}>
+      <div className="tree-branch repo-branch">
+        <button
+          type="button"
+          className="tree-toggle"
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${title}` : `Expand ${title}`}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <span className="chevron" aria-hidden="true">
+            <ChevronIcon open={expanded} />
+          </span>
+        </button>
+        <span className="repo-icon" aria-hidden="true">
+          <RepoIcon size={14} />
+        </span>
+        <span
+          className="repo-branch-label"
+          title={repo ? `${providerLabel} · ${repo.localPath}` : 'Features without a repository'}
+        >
+          {title}
+        </span>
+        {repo && <span className="repo-provider-chip">{providerLabel}</span>}
+        <button
+          type="button"
+          className="tree-action"
+          title="New feature"
+          aria-label={`New feature in ${title}`}
+          onClick={() => {
+            setExpanded(true);
+            onAddFeature(repo?.id ?? null);
+          }}
+        >
+          <PlusIcon />
+        </button>
+        {repo &&
+          (confirming ? (
+            <span className="row-confirm" role="group" aria-label="Confirm delete">
+              <button
+                type="button"
+                className="row-confirm-yes"
+                title="Confirm remove"
+                aria-label={`Confirm remove ${title}`}
+                onClick={() => {
+                  setConfirming(false);
+                  onDeleteRepo(repo);
+                }}
+              >
+                <CheckIcon />
+              </button>
+              <button
+                type="button"
+                className="row-confirm-no"
+                title="Cancel"
+                aria-label="Cancel remove"
+                onClick={() => setConfirming(false)}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          ) : (
+            <OverflowMenu
+              label={`Actions for ${title}`}
+              actions={[
+                {
+                  label: 'Remove repository',
+                  icon: <TrashIcon />,
+                  danger: true,
+                  onSelect: () => setConfirming(true),
+                },
+              ]}
+            />
+          ))}
+      </div>
+
+      {expanded && (
+        <div className="tree-children repo-children">
+          {features.length === 0 && (
+            <EmptyState message="No features yet." />
+          )}
+          {features.map((feature) => (
+            <FeatureNode
+              key={feature.id}
+              feature={feature}
+              live={live}
+              activeSessionId={activeSessionId}
+              names={names}
+              onOpenSession={onOpenSession}
+              onOpenFeature={onOpenFeature}
+              onRenameSession={onRenameSession}
+              onRenameFeature={onRenameFeature}
+              onDeleteFeature={onDeleteFeature}
+              onDeleteSession={onDeleteSession}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
- * IDE-style Explorer: Features are the "projects" and Sessions are their
- * "files". Create Features inline and launch Sessions per Feature; selecting a
- * session opens its live terminal in the editor pane.
+ * IDE-style Explorer with a Repository → Feature → Session hierarchy.
+ * Repositories are the top-level "projects"; features group the work done on a
+ * repo and sessions run inside its local checkout. Add a repo from the header,
+ * create features under it, and launch sessions per feature.
  */
 export function Explorer({
   live,
@@ -517,12 +660,23 @@ export function Explorer({
   onCollapse: () => void;
 }) {
   const api = useApi();
+  const repos = useAsync(() => api.listRepos(), []);
   const features = useAsync(() => api.listFeatures(), []);
+  const [addingRepo, setAddingRepo] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  function openFeatureForm(repoId: string | null) {
+    setTargetRepoId(repoId);
+    setName('');
+    setDescription('');
+    setFormError(null);
+    setAdding(true);
+  }
 
   async function createFeature() {
     if (!name.trim()) {
@@ -532,7 +686,11 @@ export function Explorer({
     setSubmitting(true);
     setFormError(null);
     try {
-      await api.createFeature({ name: name.trim(), description });
+      await api.createFeature({
+        name: name.trim(),
+        description,
+        repoId: targetRepoId,
+      });
       setName('');
       setDescription('');
       setAdding(false);
@@ -561,6 +719,18 @@ export function Explorer({
     features.reload();
   }
 
+  async function deleteRepo(repo: Repository) {
+    await api.deleteRepo(repo.id);
+    repos.reload();
+    features.reload();
+  }
+
+  const allFeatures = features.data ?? [];
+  const repoList = repos.data ?? [];
+  const orphanFeatures = allFeatures.filter(
+    (f) => !f.repoId || !repoList.some((r) => r.id === f.repoId),
+  );
+
   return (
     <div className="explorer">
       <div className="explorer-header">
@@ -569,9 +739,9 @@ export function Explorer({
           <button
             type="button"
             className="tree-action"
-            title="New feature"
-            aria-label="New feature"
-            onClick={() => setAdding((v) => !v)}
+            title="Add repository"
+            aria-label="Add repository"
+            onClick={() => setAddingRepo(true)}
           >
             <PlusIcon />
           </button>
@@ -586,6 +756,16 @@ export function Explorer({
           </button>
         </div>
       </div>
+
+      {addingRepo && (
+        <RepoPicker
+          onClose={() => setAddingRepo(false)}
+          onAdded={() => {
+            setAddingRepo(false);
+            repos.reload();
+          }}
+        />
+      )}
 
       {adding && (
         <Modal title="New feature" onClose={closeForm}>
@@ -625,15 +805,23 @@ export function Explorer({
       )}
 
       <div className="explorer-body">
-        {features.loading && <EmptyState message="Loading features…" />}
-        <ErrorText error={features.error} />
-        {features.data && features.data.length === 0 && !adding && (
-          <EmptyState message="No features yet. Create your first one." />
+        {(repos.loading || features.loading) && (
+          <EmptyState message="Loading workspace…" />
         )}
-        {features.data?.map((feature) => (
-          <FeatureNode
-            key={feature.id}
-            feature={feature}
+        <ErrorText error={repos.error} />
+        <ErrorText error={features.error} />
+        {!repos.loading &&
+          !features.loading &&
+          repoList.length === 0 &&
+          orphanFeatures.length === 0 && (
+            <EmptyState message="No repositories yet. Add one to get started." />
+          )}
+        {repoList.map((repo) => (
+          <RepoNode
+            key={repo.id}
+            repo={repo}
+            features={allFeatures.filter((f) => f.repoId === repo.id)}
+            defaultExpanded
             live={live}
             activeSessionId={activeSessionId}
             names={names}
@@ -643,8 +831,28 @@ export function Explorer({
             onRenameFeature={renameFeature}
             onDeleteFeature={deleteFeature}
             onDeleteSession={onDeleteSession}
+            onAddFeature={openFeatureForm}
+            onDeleteRepo={deleteRepo}
           />
         ))}
+        {orphanFeatures.length > 0 && (
+          <RepoNode
+            repo={null}
+            features={orphanFeatures}
+            defaultExpanded={repoList.length === 0}
+            live={live}
+            activeSessionId={activeSessionId}
+            names={names}
+            onOpenSession={onOpenSession}
+            onOpenFeature={onOpenFeature}
+            onRenameSession={onRenameSession}
+            onRenameFeature={renameFeature}
+            onDeleteFeature={deleteFeature}
+            onDeleteSession={onDeleteSession}
+            onAddFeature={openFeatureForm}
+            onDeleteRepo={deleteRepo}
+          />
+        )}
       </div>
 
       <div className="explorer-footer">

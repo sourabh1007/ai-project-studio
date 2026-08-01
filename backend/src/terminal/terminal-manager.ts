@@ -59,6 +59,12 @@ export interface TerminalManager {
    */
   injectInstructions(sessionId: string, instructions: string): boolean;
   close(sessionId: string): void;
+  /**
+   * Kills every live terminal without emitting `session.ended` /
+   * `session.discarded`. Used for process shutdown, where the goal is to tear
+   * down child PTYs promptly rather than record lifecycle transitions.
+   */
+  shutdown(): void;
 }
 
 export function createTerminalManager(
@@ -106,6 +112,7 @@ export function createTerminalManager(
       sessionId: session.id,
       pty,
       scrollbackBytes: deps.config.scrollbackBytes,
+      transcriptBytes: deps.config.transcriptBytes,
       onExit: (code) => {
         sessions.delete(session.id);
         if (discarded.has(session.id)) {
@@ -308,6 +315,12 @@ export function createTerminalManager(
       }
       discarded.add(sessionId);
       terminal.kill();
+    },
+    shutdown() {
+      for (const terminal of sessions.values()) {
+        discarded.add(terminal.sessionId);
+        terminal.kill();
+      }
     },
   };
 }

@@ -51,6 +51,11 @@ export interface AzureDevOpsAuth {
   status(target: AzureTarget): Promise<AzureDevOpsStatus>;
   /** Trigger an interactive browser sign-in and cache the credential. */
   signIn(target: AzureTarget): Promise<AzureDevOpsStatus>;
+  /**
+   * The cached OAuth access token for the target (used as a Bearer token for
+   * Azure DevOps REST calls), or null when not signed in.
+   */
+  token(target: AzureTarget): Promise<string | null>;
 }
 
 /**
@@ -123,6 +128,18 @@ export function parseCredentialOutput(stdout: string): AzureDevOpsStatus {
   };
 }
 
+/** Parses the `password` (OAuth access token) from GCM's credential output. */
+export function parseCredentialPassword(stdout: string): string | null {
+  for (const line of stdout.split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq > 0 && line.slice(0, eq).trim() === 'password') {
+      const value = line.slice(eq + 1);
+      return value.length > 0 ? value : null;
+    }
+  }
+  return null;
+}
+
 /** Builds the Azure DevOps auth facade from injected process runners. */
 export function createAzureDevOpsAuth(deps: {
   credential: GitCredentialRunner;
@@ -164,6 +181,15 @@ export function createAzureDevOpsAuth(deps: {
     },
     signIn(target) {
       return check(target, true);
+    },
+    async token(target) {
+      const res = await deps.credential('get', buildCredentialQuery(target), {
+        interactive: false,
+      });
+      if (res.code !== 0) {
+        return null;
+      }
+      return parseCredentialPassword(res.stdout);
     },
   };
 }

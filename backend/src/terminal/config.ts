@@ -14,6 +14,12 @@ export const terminalConfigSchema = z.object({
   defaultRows: z.number().int().positive(),
   /** Max bytes of terminal output retained for replay to late-joining clients. */
   scrollbackBytes: z.number().int().positive(),
+  /**
+   * Max bytes of the ANSI-stripped transcript retained per session for
+   * persistence / summarization. Bounds heap growth for long-lived interactive
+   * sessions; the oldest text is dropped once exceeded.
+   */
+  transcriptBytes: z.number().int().positive(),
   /** Keystroke appended after seeded skill instructions to submit them. */
   instructionSeedSuffix: z.string(),
   /**
@@ -53,6 +59,7 @@ export const terminalDefaults: TerminalConfig = {
   defaultCols: 120,
   defaultRows: 30,
   scrollbackBytes: 262144,
+  transcriptBytes: 1048576,
   instructionSeedSuffix: '\r',
   instructionSeedReadyPattern: '\\?\\s*help|\\bcommands\\b',
   instructionSeedReadyTimeoutMs: 15000,
