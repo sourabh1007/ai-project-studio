@@ -13,6 +13,7 @@ import type { RunningSession } from '../provider/provider-contract.js';
 const metaSession: Session = {
   id: 'meta1',
   featureId: 'f1',
+  name: null,
   provider: 'agency',
   requestedModel: 'auto',
   resolvedModel: null,

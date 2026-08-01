@@ -90,6 +90,7 @@ function sampleSession(): Session {
   return {
     id: 'sess-1',
     featureId: 'feat-1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'gpt-5.4',
     resolvedModel: null,

@@ -8,6 +8,7 @@ function session(overrides: Partial<Session>): Session {
   return {
     id: 's',
     featureId: 'f1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -46,6 +47,12 @@ function fakeRepo(initial: Session[]): {
         if (s.featureId === featureId) {
           store.delete(id);
         }
+      }
+    },
+    rename: (id, name) => {
+      const s = store.get(id);
+      if (s) {
+        store.set(id, { ...s, name });
       }
     },
   };

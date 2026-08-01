@@ -7,7 +7,7 @@ import type {
   ProcessHandle,
   ProcessSpawner,
   SpawnRequest,
-} from '../process-kernel/process-spawner.js';
+} from '../provider/process-kernel/process-spawner.js';
 
 /** A spawner whose single handle streams the given lines then exits with code. */
 function scriptedSpawner(script: {

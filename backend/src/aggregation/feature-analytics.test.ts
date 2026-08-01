@@ -18,6 +18,7 @@ function session(overrides: Partial<Session>): Session {
   return {
     id: 's',
     featureId: 'f1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,

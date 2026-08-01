@@ -29,6 +29,7 @@ function sampleSession(id: string): Session {
   return {
     id,
     featureId: 'feat-1',
+    name: null,
     provider: 'agency',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -152,6 +153,8 @@ describe('attachTerminalWs (integration)', () => {
       },
       get: () => undefined,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, () => null);
     const ws = new WebSocket(`${url}?sessionId=missing`);
@@ -166,6 +169,8 @@ describe('attachTerminalWs (integration)', () => {
       },
       get: () => undefined,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
     const ws = new WebSocket(`${url}?sessionId=sess-1`);
@@ -179,6 +184,8 @@ describe('attachTerminalWs (integration)', () => {
       getOrLaunch: () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
     const ws = new WebSocket(`${url}?sessionId=sess-1`);
@@ -202,6 +209,8 @@ describe('attachTerminalWs (integration)', () => {
       getOrLaunch: () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
     const ws = new WebSocket(`${url}?sessionId=sess-1`);
@@ -226,6 +235,8 @@ describe('attachTerminalWs (integration)', () => {
       getOrLaunch: () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
     const ws = new WebSocket(`${url}?sessionId=sess-1`);
@@ -244,6 +255,8 @@ describe('attachTerminalWs (integration)', () => {
       getOrLaunch: () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
     const ws = new WebSocket(`${url}?sessionId=sess-1`);

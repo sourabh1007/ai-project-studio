@@ -31,6 +31,7 @@ const feature: Feature = {
 const devSession: Session = {
   id: 'dev1',
   featureId: 'f1',
+  name: null,
   provider: 'copilot',
   requestedModel: 'auto',
   resolvedModel: 'gpt-5.4-mini',

@@ -47,6 +47,12 @@ function fakeSessions(seed: Session[] = []) {
     listAll: () => [...map.values()],
     delete: () => {},
     deleteByFeature: () => {},
+    rename: (id, name) => {
+      const s = map.get(id);
+      if (s) {
+        map.set(id, { ...s, name });
+      }
+    },
   };
   return { repo, map };
 }

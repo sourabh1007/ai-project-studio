@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createFeatureRoutes } from './feature-controller.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { Feature } from '../feature/feature-contract.js';
+import type { Session } from '../session/session-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
 
 const feature: Feature = {
@@ -41,6 +42,8 @@ function harness() {
       renamed.push({ id, name });
       return { ...feature, id, name };
     },
+    renameSession: (id: string, name: string | null) =>
+      ({ ...feature, id, name } as unknown as Session),
     deleteFeature: async (id: string) => void deleted.push(id),
     deleteSession: async () => undefined,
   };

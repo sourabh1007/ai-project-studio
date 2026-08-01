@@ -12,6 +12,7 @@ function session(overrides: Partial<Session>): Session {
   return {
     id: 'sid',
     featureId: 'f1',
+    name: null,
     provider: 'copilot',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -35,6 +36,7 @@ function repoOf(sessions: Session[]): SessionRepo {
     listAll: () => sessions,
     delete: () => undefined,
     deleteByFeature: () => undefined,
+    rename: () => undefined,
   };
 }
 

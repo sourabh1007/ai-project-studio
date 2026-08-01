@@ -28,6 +28,7 @@ const feature: Feature = {
 const metaSession: Session = {
   id: 'meta1',
   featureId: 'f1',
+  name: null,
   provider: 'copilot',
   requestedModel: 'auto',
   resolvedModel: 'gpt-5.4-mini',

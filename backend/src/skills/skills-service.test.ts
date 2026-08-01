@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createSkillsService } from './skills-service.js';
 import { skillsDefaults } from './config.js';
 import type { SkillsRepo } from './skills-repo-port.js';
-import type { Skill, SkillAttachment, SkillScope } from './skills-contract.js';
+import type { Skill, SkillAttachment } from './skills-contract.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { Session } from '../session/session-contract.js';
@@ -46,7 +46,7 @@ function inMemoryRepo(): SkillsRepo {
 function fakeFeatures(ids: string[]): FeatureService {
   const set = new Set(ids);
   return {
-    get: (id) => {
+    get: (id: string) => {
       if (!set.has(id)) {
         throw new NotFoundError(`Unknown feature: ${id}`);
       }
@@ -64,7 +64,7 @@ function fakeFeatures(ids: string[]): FeatureService {
 function fakeSessions(sessions: Session[]): SessionRepo {
   const byId = new Map(sessions.map((s) => [s.id, s]));
   return {
-    get: (id) => byId.get(id) ?? null,
+    get: (id: string) => byId.get(id) ?? null,
   } as unknown as SessionRepo;
 }
 
@@ -72,6 +72,7 @@ function session(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1',
     featureId: 'f1',
+    name: null,
     provider: 'agency',
     requestedModel: 'auto',
     resolvedModel: null,
@@ -93,7 +94,10 @@ function build(options: { features?: string[]; sessions?: Session[] } = {}) {
   const service = createSkillsService({
     repo,
     ids: { next: () => `id-${(counter += 1)}` },
-    clock: { isoNow: () => '2026-01-01T00:00:00.000Z' },
+    clock: {
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+      isoNow: () => '2026-01-01T00:00:00.000Z',
+    },
     features: fakeFeatures(options.features ?? ['f1']),
     sessions: fakeSessions(options.sessions ?? [session()]),
     config: skillsDefaults,

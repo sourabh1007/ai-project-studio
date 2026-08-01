@@ -11,6 +11,7 @@ function session(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1',
     featureId: 'f1',
+    name: null,
     provider: 'agency',
     requestedModel: 'auto',
     resolvedModel: null,
