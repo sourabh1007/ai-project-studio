@@ -32,6 +32,7 @@ import type { RepoService } from '../repo/repo-service.js';
 import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
+import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
@@ -95,6 +96,8 @@ export interface ApiRoutesDeps {
   listGithubRepos: () => Promise<RemoteRepo[]>;
   /** Lists repositories across an Azure DevOps organization's projects. */
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
+  /** Lists a repo's pull requests and turns one into a review feature. */
+  prFeatures: PrFeatureService;
   logger: Logger;
 }
 
@@ -150,6 +153,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       provision: deps.provisionRepo,
       listGithubRepos: deps.listGithubRepos,
       listAzureRepos: deps.listAzureRepos,
+      prFeatures: deps.prFeatures,
     }),
   ];
 }

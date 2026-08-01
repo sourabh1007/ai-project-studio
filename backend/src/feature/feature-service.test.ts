@@ -48,6 +48,7 @@ describe('feature-service', () => {
       createdAt: '2025-01-01T00:00:00.000Z',
       summary: null,
       repoId: null,
+      checkoutPath: null,
     });
     expect(svc.get('feat-1')).toEqual(feature);
   });
@@ -60,6 +61,17 @@ describe('feature-service', () => {
       repoId: 'repo-9',
     });
     expect(feature.repoId).toBe('repo-9');
+  });
+
+  it('records a checkout path override when supplied', () => {
+    const svc = service();
+    const feature = svc.create({
+      name: 'Review PR #3',
+      description: 'https://github.com/a/b/pull/3',
+      repoId: 'repo-9',
+      checkoutPath: 'C:/wt/app-pr-3',
+    });
+    expect(feature.checkoutPath).toBe('C:/wt/app-pr-3');
   });
 
   it('lists created features', () => {

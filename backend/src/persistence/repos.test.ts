@@ -21,6 +21,7 @@ function feature(overrides: Partial<Feature> = {}): Feature {
     createdAt: '2025-01-01T00:00:00.000Z',
     summary: null,
     repoId: null,
+    checkoutPath: null,
     ...overrides,
   };
 }
@@ -111,6 +112,14 @@ describe('feature-repo', () => {
     const repo = createFeatureRepo(db);
     repo.create(feature({ id: 'f1', repoId: 'repo-7' }));
     expect(repo.get('f1')?.repoId).toBe('repo-7');
+    db.close();
+  });
+
+  it('round-trips a checkout path override on a feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1', checkoutPath: 'C:/wt/app-pr-3' }));
+    expect(repo.get('f1')?.checkoutPath).toBe('C:/wt/app-pr-3');
     db.close();
   });
 });

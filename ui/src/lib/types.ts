@@ -41,6 +41,23 @@ export interface RemoteRepo {
   defaultBranch: string | null;
 }
 
+/**
+ * An open pull request on a repository's provider. The user picks one to
+ * review; the backend checks its branch out into a dedicated git worktree and
+ * creates a feature whose sessions run there.
+ */
+export interface RemotePullRequest {
+  provider: RepoProvider;
+  /** Provider-native PR identifier (GitHub PR number / Azure pullRequestId). */
+  number: number;
+  title: string;
+  url: string;
+  /** Head/source branch name. */
+  sourceBranch: string;
+  /** Author's display name or login, when known. */
+  author: string | null;
+}
+
 /** How a picked remote repo becomes a workspace repository. */
 export type RepoProvisionMode = 'clone' | 'existing';
 
@@ -60,6 +77,8 @@ export interface Feature {
   createdAt: string;
   summary: string | null;
   repoId: string | null;
+  /** Overrides the session working directory (e.g. a PR review worktree). */
+  checkoutPath: string | null;
 }
 
 export type SessionStatus =

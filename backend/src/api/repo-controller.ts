@@ -3,6 +3,7 @@ import type { RepoService } from '../repo/repo-service.js';
 import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
+import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 
@@ -15,6 +16,10 @@ const createRepoSchema = z.object({
   mode: z.enum(['clone', 'existing']),
 });
 
+const reviewPullSchema = z.object({
+  number: z.number().int().positive(),
+});
+
 export interface RepoControllerDeps {
   repos: RepoService;
   /** Clones or attaches an existing checkout, yielding a create input. */
@@ -23,6 +28,8 @@ export interface RepoControllerDeps {
   listGithubRepos: () => Promise<RemoteRepo[]>;
   /** Lists repositories across an Azure DevOps organization's projects. */
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
+  /** Lists a repo's pull requests and turns one into a review feature. */
+  prFeatures: PrFeatureService;
 }
 
 /**
@@ -67,6 +74,26 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       handler: async (req) => {
         const org = typeof req.query.org === 'string' ? req.query.org : '';
         return { status: 200, body: await deps.listAzureRepos(org) };
+      },
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/pulls',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.prFeatures.listPulls(req.params.id),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/repos/:id/pulls',
+      handler: async (req) => {
+        const input = parseInput(reviewPullSchema, req.body);
+        const feature = await deps.prFeatures.createFromPull(
+          req.params.id,
+          input.number,
+        );
+        return { status: 201, body: feature };
       },
     },
   ];

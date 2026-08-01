@@ -142,6 +142,11 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
     column: 'repo_id',
     ddl: 'ALTER TABLE features ADD COLUMN repo_id TEXT',
   },
+  {
+    table: 'features',
+    column: 'checkout_path',
+    ddl: 'ALTER TABLE features ADD COLUMN checkout_path TEXT',
+  },
 ];
 
 /** Adds a column to an existing table when it is missing. */

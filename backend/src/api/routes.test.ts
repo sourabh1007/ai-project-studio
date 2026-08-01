@@ -35,6 +35,7 @@ function deps(): ApiRoutesDeps {
     provisionRepo: () => Promise.resolve(empty),
     listGithubRepos: () => Promise.resolve([]),
     listAzureRepos: () => Promise.resolve([]),
+    prFeatures: empty,
     logger: empty,
   };
 }
@@ -96,6 +97,8 @@ describe('createApiRoutes', () => {
       'delete /repos/:id',
       'get /providers/github/repos',
       'get /providers/azure-devops/repos',
+      'get /repos/:id/pulls',
+      'post /repos/:id/pulls',
     ]);
   });
 });

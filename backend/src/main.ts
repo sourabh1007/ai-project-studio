@@ -16,6 +16,7 @@ import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
 import { createLogger, type LogLevel } from './kernel/logger.js';
 import { createEventBus } from './kernel/event-bus.js';
+import { ValidationError } from './kernel/error-types.js';
 
 import { createConfigSchemaRegistry } from './config/config-schema-registry.js';
 import { buildConfig } from './config/config-validator.js';
@@ -131,10 +132,20 @@ import { createRepoRepo } from './persistence/repo-repo.js';
 import { createRepoService } from './repo/repo-service.js';
 import { provisionRepo } from './repo/repo-provisioner.js';
 import { listGithubRepos } from './repo/github-repo-lister.js';
+import { listGithubPulls, getGithubPull } from './repo/github-pr-lister.js';
 import {
   listAzureRepos,
   type AzureHttpResponse,
 } from './repo/azure-repo-lister.js';
+import {
+  listAzurePulls,
+  getAzurePull,
+  parseAzureRepoUrl,
+} from './repo/azure-pr-lister.js';
+import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
+import { createPrFeatureService } from './repo/pr-feature-service.js';
+import type { Repository } from './repo/repo-contract.js';
+import type { RemotePullRequest } from './repo/remote-pr-contract.js';
 import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
@@ -534,11 +545,54 @@ function main(): void {
       },
       org,
     );
-  // Resolves the working directory a session's terminal runs in: the local
-  // checkout of the repository its feature belongs to, falling back to the
-  // workspace cwd for repo-less (legacy) features.
+
+  // Pull-request review wiring. PRs are listed and fetched with the same
+  // provider logins the IDE already holds (GitHub via `gh`, Azure DevOps via the
+  // GCM OAuth token against the REST API). The chosen PR is checked out into a
+  // dedicated git worktree so a review runs isolated from the main checkout and
+  // multiple reviews can run at once. The provider dispatch lives here (the
+  // composition root) so the review service stays pure and unit-tested.
+  const azurePullDeps = {
+    token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+    httpGet: azureHttpGet,
+  };
+  const listPullsFor = (repo: Repository): Promise<RemotePullRequest[]> => {
+    if (repo.provider === 'github') {
+      return listGithubPulls(ghRun, repo.name);
+    }
+    const target = parseAzureRepoUrl(repo.remoteUrl);
+    if (!target) {
+      throw new ValidationError(
+        `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+      );
+    }
+    return listAzurePulls(azurePullDeps, target);
+  };
+  const getPullFor = (
+    repo: Repository,
+    number: number,
+  ): Promise<RemotePullRequest | null> => {
+    if (repo.provider === 'github') {
+      return getGithubPull(ghRun, repo.name, number);
+    }
+    const target = parseAzureRepoUrl(repo.remoteUrl);
+    if (!target) {
+      throw new ValidationError(
+        `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+      );
+    }
+    return getAzurePull(azurePullDeps, target, number);
+  };
+
+  // Resolves the working directory a session's terminal runs in: a PR review's
+  // dedicated worktree when set, otherwise the local checkout of the repository
+  // its feature belongs to, falling back to the workspace cwd for repo-less
+  // (legacy) features.
   const resolveSessionCwd = (featureId: string): string | undefined => {
     const feature = featureRepo.get(featureId);
+    if (feature?.checkoutPath) {
+      return feature.checkoutPath;
+    }
     const repoId = feature?.repoId;
     if (!repoId) {
       return undefined;
@@ -720,6 +774,22 @@ function main(): void {
 
   // Feature + summarizer.
   const featureService = createFeatureService({ repo: featureRepo, ids, clock });
+  const prFeatureService = createPrFeatureService({
+    repos: repoService,
+    listPulls: listPullsFor,
+    getPull: getPullFor,
+    provisionWorktree: (repo, pull) =>
+      provisionPrWorktree(
+        { git: (args) => gitRun(args), pathExists: existsSync },
+        {
+          repoLocalPath: repo.localPath,
+          provider: repo.provider,
+          number: pull.number,
+          sourceBranch: pull.sourceBranch,
+        },
+      ),
+    features: featureService,
+  });
   const cliStoreDatabasePath = pathJoin(
     homedir(),
     copilotHistoryConfig.subdir,
@@ -874,6 +944,7 @@ function main(): void {
       provisionRepo: provisionRepoInput,
       listGithubRepos: listGithubReposFor,
       listAzureRepos: listAzureReposFor,
+      prFeatures: prFeatureService,
       logger,
     }),
   );

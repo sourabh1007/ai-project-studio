@@ -383,4 +383,24 @@ describe('createApiClient', () => {
     await client.listAzureRepos('my org');
     expect(calls[0][0]).toBe('/api/providers/azure-devops/repos?org=my%20org');
   });
+
+  it("lists a repository's open pull requests", async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ number: 7 }]));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listRepoPulls('r1');
+    expect(result).toEqual([{ number: 7 }]);
+    expect(calls[0][0]).toBe('/api/repos/r1/pulls');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('creates a review feature from a pull request via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createPrFeature('r1', 42);
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/repos/r1/pulls');
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(init?.body).toBe(JSON.stringify({ number: 42 }));
+  });
 });

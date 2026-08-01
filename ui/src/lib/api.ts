@@ -18,6 +18,7 @@ import type {
   ProviderInfo,
   Repository,
   RemoteRepo,
+  RemotePullRequest,
   AddRepositoryInput,
   Session,
   SessionFile,
@@ -101,6 +102,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<RemoteRepo[]>(
         `/providers/azure-devops/repos?org=${encodeURIComponent(org)}`,
       ),
+    listRepoPulls: (repoId: string) =>
+      request<RemotePullRequest[]>(`/repos/${repoId}/pulls`),
+    createPrFeature: (repoId: string, number: number) =>
+      request<Feature>(`/repos/${repoId}/pulls`, jsonBody({ number })),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),
     createFeature: (input: CreateFeatureInput) =>

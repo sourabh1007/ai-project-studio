@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
@@ -33,6 +33,7 @@ import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 import { RepoPicker } from './repo-picker.js';
+import { PrReviewPicker } from './pr-review-picker.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
 
@@ -490,6 +491,94 @@ function FeatureNode({
   );
 }
 
+/**
+ * The "+" affordance on a repository row. Opens a small menu offering the two
+ * ways to start work on a repo: reviewing an existing pull request or creating
+ * a fresh feature. Closes on outside click, Escape, or after a choice.
+ */
+function RepoAddMenu({
+  title,
+  onNewFeature,
+  onReviewPr,
+}: {
+  title: string;
+  onNewFeature: () => void;
+  onReviewPr: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function onDocClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="overflow-menu" ref={ref}>
+      <button
+        type="button"
+        className="tree-action"
+        title={`Add to ${title}`}
+        aria-label={`Add to ${title}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <PlusIcon />
+      </button>
+      {open && (
+        <div className="overflow-pop" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            className="overflow-item"
+            onClick={() => {
+              setOpen(false);
+              onReviewPr();
+            }}
+          >
+            <span className="overflow-item-icon" aria-hidden="true">
+              <TagIcon />
+            </span>
+            Start review a PR
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="overflow-item"
+            onClick={() => {
+              setOpen(false);
+              onNewFeature();
+            }}
+          >
+            <span className="overflow-item-icon" aria-hidden="true">
+              <PlusIcon />
+            </span>
+            New feature
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** A collapsible top-level repository (or the "No repository" group when
  * `repo` is null) that holds the features scoped to it. */
 function RepoNode({
@@ -506,6 +595,7 @@ function RepoNode({
   onDeleteFeature,
   onDeleteSession,
   onAddFeature,
+  onStartReview,
   onDeleteRepo,
 }: {
   repo: Repository | null;
@@ -521,6 +611,7 @@ function RepoNode({
   onDeleteFeature: (feature: Feature) => Promise<void>;
   onDeleteSession: (session: Session) => Promise<void>;
   onAddFeature: (repoId: string | null) => void;
+  onStartReview: (repo: Repository) => void;
   onDeleteRepo: (repo: Repository) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -552,18 +643,29 @@ function RepoNode({
           {title}
         </span>
         {repo && <span className="repo-provider-chip">{providerLabel}</span>}
-        <button
-          type="button"
-          className="tree-action"
-          title="New feature"
-          aria-label={`New feature in ${title}`}
-          onClick={() => {
-            setExpanded(true);
-            onAddFeature(repo?.id ?? null);
-          }}
-        >
-          <PlusIcon />
-        </button>
+        {repo ? (
+          <RepoAddMenu
+            title={title}
+            onNewFeature={() => {
+              setExpanded(true);
+              onAddFeature(repo.id);
+            }}
+            onReviewPr={() => onStartReview(repo)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="tree-action"
+            title="New feature"
+            aria-label={`New feature in ${title}`}
+            onClick={() => {
+              setExpanded(true);
+              onAddFeature(null);
+            }}
+          >
+            <PlusIcon />
+          </button>
+        )}
         {repo &&
           (confirming ? (
             <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -663,6 +765,7 @@ export function Explorer({
   const repos = useAsync(() => api.listRepos(), []);
   const features = useAsync(() => api.listFeatures(), []);
   const [addingRepo, setAddingRepo] = useState(false);
+  const [reviewRepo, setReviewRepo] = useState<Repository | null>(null);
   const [adding, setAdding] = useState(false);
   const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -767,6 +870,18 @@ export function Explorer({
         />
       )}
 
+      {reviewRepo && (
+        <PrReviewPicker
+          repo={reviewRepo}
+          onClose={() => setReviewRepo(null)}
+          onCreated={(feature) => {
+            setReviewRepo(null);
+            features.reload();
+            onOpenFeature(feature);
+          }}
+        />
+      )}
+
       {adding && (
         <Modal title="New feature" onClose={closeForm}>
           <div className="feature-form">
@@ -832,6 +947,7 @@ export function Explorer({
             onDeleteFeature={deleteFeature}
             onDeleteSession={onDeleteSession}
             onAddFeature={openFeatureForm}
+            onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
           />
         ))}
@@ -850,6 +966,7 @@ export function Explorer({
             onDeleteFeature={deleteFeature}
             onDeleteSession={onDeleteSession}
             onAddFeature={openFeatureForm}
+            onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
           />
         )}
