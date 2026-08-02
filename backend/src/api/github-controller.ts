@@ -11,6 +11,8 @@ export interface GithubControllerDeps {
   githubSignInStart: () => Promise<DeviceCodeStart>;
   /** Polls once for device-flow completion. */
   githubSignInPoll: (deviceCode: string) => Promise<DevicePollResult>;
+  /** Logs the IDE's GitHub account out and returns the resulting status. */
+  githubSignOut: () => Promise<GithubAuthStatus>;
 }
 
 /**
@@ -50,6 +52,14 @@ export function createGithubRoutes(deps: GithubControllerDeps): Route[] {
         }
         return { status: 200, body: await deps.githubSignInPoll(deviceCode) };
       },
+    },
+    {
+      method: 'post',
+      path: '/github/signout',
+      handler: async () => ({
+        status: 200,
+        body: await deps.githubSignOut(),
+      }),
     },
   ];
 }

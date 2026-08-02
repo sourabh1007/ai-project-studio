@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { Spinner } from '../../components/loading.js';
 import type { GithubStatus } from '../../lib/types.js';
 import { GithubSignInModal } from './github-signin.js';
 
@@ -16,6 +17,7 @@ import { GithubSignInModal } from './github-signin.js';
 export function GithubStatusBadge() {
   const api = useApi();
   const [signInOpen, setSignInOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const { data, loading, reload } = useAsync<GithubStatus>(
     () => api.getGithubStatus(),
     [],
@@ -32,6 +34,17 @@ export function GithubStatusBadge() {
 
   const authenticated = data?.authenticated ?? false;
   const state = data ? (authenticated ? 'on' : 'off') : loading ? 'checking' : 'off';
+
+  const signOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await api.githubSignOut();
+    } finally {
+      setSigningOut(false);
+      reload();
+    }
+  };
 
   const label =
     state === 'checking'
@@ -56,6 +69,21 @@ export function GithubStatusBadge() {
         <span className="gh-status-dot" aria-hidden="true" />
         <span className="gh-status-label">{label}</span>
       </button>
+      {authenticated && (
+        <button
+          type="button"
+          className="az-signin-btn gh-signout-btn"
+          onClick={signOut}
+          disabled={signingOut}
+          title="Sign out of GitHub on this device"
+        >
+          {signingOut ? (
+            <Spinner size={12} label="Signing out" />
+          ) : (
+            'Sign out'
+          )}
+        </button>
+      )}
       {!authenticated && state !== 'checking' && (
         <button
           type="button"

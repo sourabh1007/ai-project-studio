@@ -37,6 +37,8 @@ function deps(): ApiRoutesDeps {
         expiresIn: 900,
       }),
     githubSignInPoll: () => Promise.resolve({ status: 'success' as const }),
+    githubSignOut: () =>
+      Promise.resolve({ authenticated: false, login: null }),
     azureStatus: () =>
       Promise.resolve({ authenticated: true, account: 'x', message: null }),
     azureSignIn: () =>
@@ -106,6 +108,7 @@ describe('createApiRoutes', () => {
       'get /github/status',
       'post /github/signin/start',
       'post /github/signin/poll',
+      'post /github/signout',
       'get /azure-devops/status',
       'post /azure-devops/signin',
       'get /repos',

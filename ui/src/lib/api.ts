@@ -238,6 +238,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
         '/github/signin/poll',
         jsonBody({ deviceCode }),
       ),
+    githubSignOut: () =>
+      request<GithubStatus>('/github/signout', jsonBody({})),
     getAzureStatus: (url?: string) =>
       request<AzureDevOpsStatus>(
         `/azure-devops/status${url ? `?url=${encodeURIComponent(url)}` : ''}`,

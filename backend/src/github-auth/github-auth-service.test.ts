@@ -71,4 +71,20 @@ describe('createGithubAuth', () => {
     });
     expect(await empty.token()).toBeNull();
   });
+
+  it('signs out via gh auth logout and reports the resulting status', async () => {
+    const calls: string[][] = [];
+    const auth = createGithubAuth({
+      run: (args: string[]) => {
+        calls.push(args);
+        if (args.join(' ') === 'auth status') {
+          return Promise.resolve({ code: 1, stdout: '', stderr: 'not logged in' });
+        }
+        return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+      },
+    });
+    expect(await auth.signOut()).toEqual({ authenticated: false, login: null });
+    expect(calls).toContainEqual(['auth', 'logout', '--hostname', 'github.com']);
+    expect(calls).toContainEqual(['auth', 'status']);
+  });
 });

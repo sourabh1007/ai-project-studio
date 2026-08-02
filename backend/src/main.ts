@@ -577,6 +577,13 @@ function main(): void {
     }
     return result;
   };
+  // Sign out via `gh auth logout`, then immediately clear the propagated
+  // credential from sessions rather than waiting for the hourly refresh.
+  const githubSignOut = async () => {
+    const status = await githubAuth.signOut();
+    refreshGithubCredentialEnv();
+    return status;
+  };
 
   // Azure DevOps auth, handled the way Visual Studio / Git Credential Manager
   // do, adapted for a background process: use OAuth (org-agnostic Entra tokens)
@@ -1166,6 +1173,7 @@ function main(): void {
       githubStatus: () => githubAuth.status(),
       githubSignInStart: () => githubDeviceAuth.start(),
       githubSignInPoll,
+      githubSignOut,
       azureStatus: (target) => azureAuth.status(target),
       azureSignIn: (target) => azureAuth.signIn(target),
       repos: repoService,

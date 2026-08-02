@@ -32,6 +32,8 @@ function routes() {
           ? { status: 'success' }
           : { status: 'error', message: 'unknown device' },
       ),
+    githubSignOut: () =>
+      Promise.resolve({ authenticated: false, login: null }),
   });
 }
 
@@ -71,5 +73,13 @@ describe('github-controller', () => {
   it('defaults a missing poll body to a validation error', async () => {
     const result = await pick(routes(), 'post', '/github/signin/poll')(req());
     expect(result.status).toBe(400);
+  });
+
+  it('signs out and returns the resulting status', async () => {
+    const result = await pick(routes(), 'post', '/github/signout')(req());
+    expect(result).toEqual({
+      status: 200,
+      body: { authenticated: false, login: null },
+    });
   });
 });

@@ -464,6 +464,17 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.body).toBe(JSON.stringify({ deviceCode: 'dev-code' }));
   });
 
+  it('signs out of GitHub', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ authenticated: false, login: null }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.githubSignOut();
+    expect(result).toEqual({ authenticated: false, login: null });
+    expect(calls[0][0]).toBe('/api/github/signout');
+    expect(calls[0][1]?.method).toBe('POST');
+  });
+
   it('surfaces the server error message on ApiError', async () => {
     const { fetchImpl } = mockFetch(
       jsonResponse({ error: { message: 'no access to org' } }, 403),

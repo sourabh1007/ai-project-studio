@@ -24,6 +24,11 @@ export interface GithubAuth {
   status(): Promise<GithubAuthStatus>;
   /** The current GitHub token, or null when unavailable / not logged in. */
   token(): Promise<string | null>;
+  /**
+   * Logs the IDE's GitHub account out via `gh auth logout` and returns the
+   * resulting (unauthenticated) status. Succeeds even when already logged out.
+   */
+  signOut(): Promise<GithubAuthStatus>;
 }
 
 /**
@@ -52,6 +57,10 @@ export function createGithubAuth(deps: { run: GhRunner }): GithubAuth {
       const res = await deps.run(['auth', 'token']);
       const token = res.stdout.trim();
       return res.code === 0 && token.length > 0 ? token : null;
+    },
+    async signOut() {
+      await deps.run(['auth', 'logout', '--hostname', 'github.com']);
+      return this.status();
     },
   };
 }

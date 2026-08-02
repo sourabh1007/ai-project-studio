@@ -97,6 +97,8 @@ export interface ApiRoutesDeps {
   githubSignInStart: () => Promise<DeviceCodeStart>;
   /** Polls an in-app GitHub device-flow sign-in for completion. */
   githubSignInPoll: (deviceCode: string) => Promise<DevicePollResult>;
+  /** Logs the IDE's GitHub account out and returns the resulting status. */
+  githubSignOut: () => Promise<GithubAuthStatus>;
   /** Reports whether GCM has a cached Azure DevOps credential for a target. */
   azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
@@ -164,6 +166,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       githubStatus: deps.githubStatus,
       githubSignInStart: deps.githubSignInStart,
       githubSignInPoll: deps.githubSignInPoll,
+      githubSignOut: deps.githubSignOut,
     }),
     ...createAzureRoutes({
       azureStatus: deps.azureStatus,

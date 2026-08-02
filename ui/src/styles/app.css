@@ -1339,6 +1339,18 @@ body.is-resizing {
   cursor: default;
 }
 
+.gh-signout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted, #9aa4b2);
+}
+
+.gh-signout-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--danger, #d9534f);
+}
+
 .explorer-body {
   flex: 1;
   min-height: 0;
