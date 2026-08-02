@@ -521,16 +521,33 @@ function main(): void {
   // --with-token` so the rest of the app picks it up transparently.
   const githubDeviceAuth = createGithubDeviceAuth({
     httpPost: async (url, form) => {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-        },
-        body: new URLSearchParams(form).toString(),
-      });
-      const body = await res.json().catch(() => null);
-      return { status: res.status, body };
+      // Never let a stalled network call hang sign-in: abort after 15s so the
+      // UI surfaces a clear "check your connection" error instead of an
+      // indefinitely spinning modal.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15_000);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: new URLSearchParams(form).toString(),
+          signal: controller.signal,
+        });
+        const body = await res.json().catch(() => null);
+        return { status: res.status, body };
+      } catch (err) {
+        const timedOut = controller.signal.aborted;
+        throw new Error(
+          timedOut
+            ? 'GitHub did not respond in time. Check your network connection and try again.'
+            : `Could not reach GitHub: ${err instanceof Error ? err.message : 'network error'}. Check your connection and try again.`,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     },
     ghLogin: (token) =>
       new Promise((resolve) => {
