@@ -111,6 +111,46 @@ describe('createCliUsageStore', () => {
   });
 });
 
+describe('createCliUsageStore with sub-agent rows', () => {
+  let subDir: string;
+  let subDbPath: string;
+
+  beforeAll(() => {
+    subDir = mkdtempSync(join(tmpdir(), 'cw-usage-sub-'));
+    subDbPath = join(subDir, 'session-store.db');
+    const db = new DatabaseSync(subDbPath);
+    db.exec(`
+      CREATE TABLE assistant_usage_events (
+        id INTEGER PRIMARY KEY, session_id TEXT, turn_index INTEGER,
+        parent_tool_call_id TEXT,
+        model TEXT, input_tokens INTEGER, output_tokens INTEGER,
+        reasoning_tokens INTEGER, total_nano_aiu INTEGER,
+        request_multiplier REAL, created_at TEXT
+      );
+      -- Two primary-agent rows (parent NULL) and one nested sub-agent row.
+      INSERT INTO assistant_usage_events
+        (id, session_id, turn_index, parent_tool_call_id, model, input_tokens,
+         output_tokens, reasoning_tokens, total_nano_aiu, request_multiplier, created_at)
+      VALUES
+        (1, 's1', 0, NULL, 'gpt-5.3-codex', 100, 20, 5, 3000000000, 1, '2025-01-01T00:00:01Z'),
+        (2, 's1', 1, 'tool_abc', 'gpt-5.3-codex', 999, 99, 9, 9000000000, 1, '2025-01-01T00:00:02Z'),
+        (3, 's1', 2, NULL, 'gpt-5.3-codex', 200, 40, 0, 5000000000, 1, '2025-01-01T00:00:03Z');
+    `);
+    db.close();
+  });
+
+  afterAll(() => {
+    rmSync(subDir, { recursive: true, force: true });
+  });
+
+  it('excludes nested sub-agent rows so totals match the CLI figure', () => {
+    const store = createCliUsageStore({ databasePath: subDbPath });
+    const rows = store.listBySession('s1');
+    expect(rows.map((r) => r.totalNanoAiu)).toEqual([3000000000, 5000000000]);
+    expect(rows.map((r) => r.turnIndex)).toEqual([0, 1]);
+  });
+});
+
 describe('toUsageEvent', () => {
   const base: CliUsageRow = {
     sessionId: 's1',

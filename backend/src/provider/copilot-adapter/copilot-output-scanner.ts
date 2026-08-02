@@ -41,12 +41,25 @@ const EDIT_VERBS = new Set([
 
 const ALL_VERBS = [...CREATE_VERBS, ...EDIT_VERBS];
 
-/** verb (immediately) followed by a quoted, Windows, UNC, `~`- or POSIX-path. */
+/**
+ * verb (immediately) followed by a path token, tried in this order:
+ *   - a quoted path (may contain spaces)
+ *   - a drive-letter absolute path (`C:\…` / `C:/…`)
+ *   - a UNC path (`\\server\…`)
+ *   - a `~`-relative path
+ *   - a POSIX absolute path (`/…`)
+ *   - a *relative* path with at least one internal separator
+ *     (`Product\Backend\docs\file.md`, `src/index.ts`) — the CLI prints the
+ *     path relative to the session's cwd in its Edit/Create tool headers. The
+ *     leading segment must be filename-like and the token must not contain `:`
+ *     so URLs (`https://…`) and drive paths don't leak into this alternative.
+ */
 const OP_PATTERN = new RegExp(
   String.raw`\b(` +
     ALL_VERBS.join('|') +
     String.raw`)\b[\s:]+` +
-    String.raw`("[^"]+"|[A-Za-z]:[\\/]\S+|\\\\\S+|~[\\/]\S+|/\S+)`,
+    String.raw`("[^"]+"|[A-Za-z]:[\\/]\S+|\\\\\S+|~[\\/]\S+|/\S+|` +
+    String.raw`[\w.][\w.\-]*[\\/][^\s"<>|?*:]+)`,
   'gi',
 );
 
@@ -97,6 +110,12 @@ function cleanPath(raw: string): string {
 function resolvePath(raw: string, ctx: SessionOutputScannerContext): string | null {
   const cleaned = cleanPath(raw);
   if (cleaned.length === 0) {
+    return null;
+  }
+  // The interactive TUI truncates over-long tool-header paths with a horizontal
+  // ellipsis (…). Such a token is not a real path, so ignore it rather than
+  // record a wrong, truncated one.
+  if (cleaned.includes('\u2026')) {
     return null;
   }
   if (cleaned === '~' || cleaned.startsWith('~/') || cleaned.startsWith('~\\')) {

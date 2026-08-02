@@ -71,13 +71,23 @@ export function createCliUsageStore(deps: CliUsageStoreDeps): CliUsageStore {
       return [];
     }
     try {
+      // The CLI records a row per inference, including nested `sub-agent`
+      // requests (identified by a non-null `parent_tool_call_id`). Its own
+      // per-session "AIC used" figure counts only the primary agent's turns, so
+      // we exclude sub-agent rows to keep our session meter in lockstep with the
+      // CLI. Guarded by a column check so older CLI schemas still work.
+      const hasParent = db
+        .prepare(`PRAGMA table_info(assistant_usage_events)`)
+        .all()
+        .some((c) => (c as { name: string }).name === 'parent_tool_call_id');
+      const parentFilter = hasParent ? ' AND parent_tool_call_id IS NULL' : '';
       const result = db
         .prepare(
           `SELECT session_id, model, input_tokens, output_tokens,
                   reasoning_tokens, total_nano_aiu, request_multiplier,
                   created_at
              FROM assistant_usage_events
-             WHERE session_id = ?
+             WHERE session_id = ?${parentFilter}
              ORDER BY id ASC`,
         )
         .all(sessionId) as unknown as RawUsageRow[];

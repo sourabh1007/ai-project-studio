@@ -41,6 +41,38 @@ describe('createCopilotOutputScanner', () => {
     expect(scan(['Created "todo.md"\n'])).toEqual([]);
   });
 
+  it('resolves an unquoted relative path (Edit/Create header) against cwd', () => {
+    // The CLI renders the touched path relative to the session cwd, e.g.
+    // `● Edit  Create Product\Backend\docs\report.md`.
+    expect(
+      scan(['\u25cf Edit  Create Product\\Backend\\docs\\report.md\n'], {
+        home: HOME,
+        cwd: 'Q:\\src\\CosmosDB',
+      }),
+    ).toEqual([{ path: 'Q:\\src\\CosmosDB\\Product\\Backend\\docs\\report.md', tool: 'create' }]);
+    expect(
+      scan(['Updated src/app/index.ts\n'], { home: HOME, cwd: '/proj' }),
+    ).toEqual([{ path: '/proj/src/app/index.ts', tool: 'edit' }]);
+  });
+
+  it('drops an unquoted relative path when the session has no cwd', () => {
+    expect(scan(['Created src/index.ts\n'])).toEqual([]);
+  });
+
+  it('does not treat a slash inside prose or a URL as a relative path', () => {
+    expect(scan(['Updated the read/write flag\n'], { home: HOME, cwd: '/p' })).toEqual([]);
+    expect(scan(['Created https://example.com/x\n'], { home: HOME, cwd: '/p' })).toEqual([]);
+  });
+
+  it('ignores a truncated path token ending in an ellipsis', () => {
+    expect(
+      scan(['\u25cf Edit  Create Product\\Backend\\docs\\EN20260603_ad1cc74a\u2026\n'], {
+        home: HOME,
+        cwd: 'Q:\\src\\CosmosDB',
+      }),
+    ).toEqual([]);
+  });
+
   it('expands ~, ~/ and bare ~ to the home directory', () => {
     expect(scan(['Created "~"\n'])).toEqual([{ path: HOME, tool: 'create' }]);
     expect(scan(['Edited "~/"\n'])).toEqual([{ path: HOME, tool: 'edit' }]);
