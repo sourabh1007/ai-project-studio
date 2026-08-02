@@ -7,6 +7,8 @@ import type { RemotePullRequest } from '../repo/remote-pr-contract.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
+import type { RepositoryContext } from '../repository-context/repository-context-contract.js';
+import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 
 const repo: Repository = {
   id: 'r1',
@@ -37,6 +39,21 @@ const reviewFeature: Feature = {
   checkoutPath: 'C:/wt/app-pr-12',
 };
 
+const repositoryContext: RepositoryContext = {
+  repositoryId: 'r1',
+  status: 'ready',
+  content: 'context',
+  sourceRevision: 'a'.repeat(40),
+  timestamps: {
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:01:00.000Z',
+    generationStartedAt: '2025-01-01T00:00:10.000Z',
+    generatedAt: '2025-01-01T00:01:00.000Z',
+  },
+  steps: [],
+  failure: null,
+};
+
 function pick(routes: Route[], method: string, path: string) {
   const route = routes.find((r) => r.method === method && r.path === path);
   if (!route) {
@@ -54,6 +71,11 @@ function harness() {
   const provisioned: unknown[] = [];
   const removed: string[] = [];
   const reviewed: Array<{ repoId: string; number: number }> = [];
+  const listedFilters: string[] = [];
+  const initialized: string[] = [];
+  const loaded: string[] = [];
+  const refreshed: string[] = [];
+  const contextRemoved: string[] = [];
   let azureOrg = '';
   const service = {
     list: () => [repo],
@@ -72,8 +94,9 @@ function harness() {
     },
   ];
   const prFeatures: PrFeatureService = {
-    listPulls: async (repoId) => {
+    listPulls: async (repoId, filter = 'all') => {
       reviewed.push({ repoId, number: 0 });
+      listedFilters.push(filter);
       return [pull];
     },
     createFromPull: async (repoId, number) => {
@@ -81,8 +104,27 @@ function harness() {
       return reviewFeature;
     },
   };
+  const repositoryContexts: RepositoryContextCoordinator = {
+    get: () => repositoryContext,
+    load: async (id) => {
+      loaded.push(id);
+      return repositoryContext;
+    },
+    ensureFresh: async () => repositoryContext,
+    initialize: (id) => {
+      initialized.push(id);
+      return { ...repositoryContext, status: 'pending' };
+    },
+    refresh: (id) => {
+      refreshed.push(id);
+      return { ...repositoryContext, status: 'generating' };
+    },
+    synchronizeSaved: async () => undefined,
+    remove: (id) => void contextRemoved.push(id),
+  };
   const routes = createRepoRoutes({
     repos: service,
+    repositoryContexts,
     provision: async (input) => {
       provisioned.push(input);
       return {
@@ -106,6 +148,11 @@ function harness() {
     provisioned,
     removed,
     reviewed,
+    listedFilters,
+    initialized,
+    loaded,
+    refreshed,
+    contextRemoved,
     getAzureOrg: () => azureOrg,
   };
 }
@@ -131,6 +178,7 @@ describe('repo-controller', () => {
     expect(result.body).toBe(repo);
     expect(h.provisioned).toEqual([{ ...body, defaultBranch: undefined }]);
     expect(h.created).toHaveLength(1);
+    expect(h.initialized).toEqual(['r1']);
   });
 
   it('rejects invalid create payloads', async () => {
@@ -147,6 +195,39 @@ describe('repo-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: { id: 'r1' } });
     expect(h.removed).toEqual(['r1']);
+    expect(h.contextRemoved).toEqual(['r1']);
+  });
+
+  it('gets repository context', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/context')(
+      req({ params: { id: 'r1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: repositoryContext });
+    expect(h.loaded).toEqual(['r1']);
+  });
+
+  it('accepts an empty refresh body and returns the generating context', async () => {
+    const h = harness();
+    const result = await pick(
+      h.routes,
+      'post',
+      '/repos/:id/context/refresh',
+    )(req({ params: { id: 'r1' }, body: {} }));
+    expect(result).toEqual({
+      status: 202,
+      body: { ...repositoryContext, status: 'generating' },
+    });
+    expect(h.refreshed).toEqual(['r1']);
+  });
+
+  it('rejects unexpected repository context refresh input', async () => {
+    const h = harness();
+    expect(() =>
+      pick(h.routes, 'post', '/repos/:id/context/refresh')(
+        req({ params: { id: 'r1' }, body: { force: true } }),
+      ),
+    ).toThrow('Invalid request');
   });
 
   it('lists GitHub repositories', async () => {
@@ -178,6 +259,21 @@ describe('repo-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: [pull] });
     expect(h.reviewed[0].repoId).toBe('r1');
+    expect(h.listedFilters[0]).toBe('all');
+  });
+
+  it('passes the mine / assigned filter through, ignoring unknown values', async () => {
+    const h = harness();
+    await pick(h.routes, 'get', '/repos/:id/pulls')(
+      req({ params: { id: 'r1' }, query: { filter: 'mine' } }),
+    );
+    await pick(h.routes, 'get', '/repos/:id/pulls')(
+      req({ params: { id: 'r1' }, query: { filter: 'assigned' } }),
+    );
+    await pick(h.routes, 'get', '/repos/:id/pulls')(
+      req({ params: { id: 'r1' }, query: { filter: 'bogus' } }),
+    );
+    expect(h.listedFilters).toEqual(['mine', 'assigned', 'all']);
   });
 
   it('creates a review feature from a pull request', async () => {

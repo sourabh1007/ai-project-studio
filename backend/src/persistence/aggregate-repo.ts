@@ -48,13 +48,23 @@ export function createAggregateRepo(
 ): AggregateReader {
   const kinds = config.rollupKinds;
   const kindsPlaceholders = kinds.map(() => '?').join(', ');
-  const featureFilter = `feature_id = ? AND kind IN (${kindsPlaceholders})`;
+  // Session scope is persisted once on launch. Joining it here avoids copying
+  // visibility onto every usage row while keeping internal meta usage available
+  // to the separate IDE AI reader.
+  const visibleUsage = `NOT EXISTS (
+    SELECT 1 FROM sessions
+    WHERE sessions.id = usage_events.session_id
+      AND sessions.scope = 'internal'
+  )`;
+  const featureFilter = `feature_id = ? AND kind IN (${kindsPlaceholders})
+    AND ${visibleUsage}`;
 
   const featureTotalsStmt = db.prepare(
     `SELECT ${TOTALS_COLUMNS} FROM usage_events WHERE ${featureFilter}`,
   );
   const workspaceTotalsStmt = db.prepare(
-    `SELECT ${TOTALS_COLUMNS} FROM usage_events WHERE kind IN (${kindsPlaceholders})`,
+    `SELECT ${TOTALS_COLUMNS} FROM usage_events
+     WHERE kind IN (${kindsPlaceholders}) AND ${visibleUsage}`,
   );
   const byModelStmt = db.prepare(
     `SELECT resolved_model AS model, ${TOTALS_COLUMNS} FROM usage_events

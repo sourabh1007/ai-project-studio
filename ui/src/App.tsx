@@ -3,6 +3,7 @@ import { useUsageStream } from './hooks/use-usage-stream.js';
 import { useTheme } from './hooks/use-theme.js';
 import { useWorkspaceStats } from './hooks/use-workspace-stats.js';
 import { useIdeUsage } from './hooks/use-ide-usage.js';
+import { useActivity } from './hooks/use-activity.js';
 import { liveSignal } from './lib/stream.js';
 import { formatAic, formatCompactNumber } from './lib/format.js';
 import { WorkspaceView } from './features/workspace/workspace-view.js';
@@ -31,6 +32,7 @@ export function App() {
   const totals = stats?.totals ?? null;
   const activeSessions = stats?.activeSessions ?? 0;
   const ideUsage = useIdeUsage(liveSignal(live));
+  const activity = useActivity();
 
   return (
     <div className="ide-shell">
@@ -118,6 +120,30 @@ export function App() {
                 : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>
+          <span
+            className={`statusbar-activity ${
+              activity.error
+                ? 'is-error'
+                : activity.pending > 0
+                  ? 'is-busy'
+                  : 'is-idle'
+            }`}
+            title={
+              activity.error ?? (activity.pending > 0 ? activity.label ?? '' : 'Ready')
+            }
+            aria-live="polite"
+          >
+            {activity.error ? (
+              <span className="statusbar-activity-dot" aria-hidden="true" />
+            ) : activity.pending > 0 ? (
+              <span className="spinner statusbar-spinner" aria-hidden="true" />
+            ) : (
+              <span className="statusbar-activity-dot" aria-hidden="true" />
+            )}
+            <span className="statusbar-activity-label">
+              {activity.error ?? (activity.pending > 0 ? activity.label : 'Ready')}
+            </span>
+          </span>
         </div>
         <div className="statusbar-group">
           <span

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildCredentialQuery,
   createAzureDevOpsAuth,
+  describeAzureFailure,
   parseAzureTarget,
   parseCredentialOutput,
   parseCredentialPassword,
@@ -9,7 +10,11 @@ import {
 } from './azure-devops-auth.js';
 
 const ok = (stdout: string): GitRunResult => ({ code: 0, stdout, stderr: '' });
-const fail = (): GitRunResult => ({ code: 1, stdout: '', stderr: 'no cred' });
+const fail = (stderr = 'no cred'): GitRunResult => ({
+  code: 1,
+  stdout: '',
+  stderr,
+});
 
 describe('parseAzureTarget', () => {
   it('defaults to account-level dev.azure.com for empty input', () => {
@@ -113,13 +118,18 @@ describe('parseCredentialOutput', () => {
       parseCredentialOutput(
         'protocol=https\nhost=dev.azure.com\nusername=alice@contoso.com\npassword=token123\n',
       ),
-    ).toEqual({ authenticated: true, account: 'alice@contoso.com' });
+    ).toEqual({
+      authenticated: true,
+      account: 'alice@contoso.com',
+      message: null,
+    });
   });
 
   it('reports authenticated with null account when username is absent', () => {
     expect(parseCredentialOutput('password=token123')).toEqual({
       authenticated: true,
       account: null,
+      message: null,
     });
   });
 
@@ -127,6 +137,7 @@ describe('parseCredentialOutput', () => {
     expect(parseCredentialOutput('username=alice\n\nnoequalshere')).toEqual({
       authenticated: false,
       account: null,
+      message: null,
     });
   });
 
@@ -134,6 +145,7 @@ describe('parseCredentialOutput', () => {
     expect(parseCredentialOutput('password=')).toEqual({
       authenticated: false,
       account: null,
+      message: null,
     });
   });
 });
@@ -151,6 +163,40 @@ describe('parseCredentialPassword', () => {
 
   it('returns null when no password line is present', () => {
     expect(parseCredentialPassword('username=alice\nnoequals')).toBeNull();
+  });
+});
+
+describe('describeAzureFailure', () => {
+  it('detects a missing Git Credential Manager', () => {
+    expect(
+      describeAzureFailure("'git-credential-manager' is not recognized"),
+    ).toMatch(/not installed/);
+    expect(describeAzureFailure('spawn ENOENT')).toMatch(/not installed/);
+  });
+
+  it('detects a cancelled sign-in', () => {
+    expect(describeAzureFailure('The user canceled authentication')).toMatch(
+      /cancelled/,
+    );
+  });
+
+  it('detects an access / permission failure', () => {
+    expect(describeAzureFailure('AADSTS50020: no access')).toMatch(
+      /does not have access/,
+    );
+    expect(describeAzureFailure('HTTP 403 Forbidden')).toMatch(
+      /does not have access/,
+    );
+  });
+
+  it('falls back to a generic message when stderr is empty', () => {
+    expect(describeAzureFailure('   ')).toMatch(/did not complete/);
+  });
+
+  it('surfaces the first line of an unrecognized error', () => {
+    expect(describeAzureFailure('weird failure\nstack line 2')).toBe(
+      'Azure DevOps sign-in failed: weird failure',
+    );
   });
 });
 
@@ -191,7 +237,11 @@ describe('createAzureDevOpsAuth', () => {
       input: 'protocol=https\nhost=dev.azure.com\npath=contoso\n\n',
       interactive: false,
     });
-    expect(result).toEqual({ authenticated: true, account: 'alice' });
+    expect(result).toEqual({
+      authenticated: true,
+      account: 'alice',
+      message: null,
+    });
   });
 
   it('signIn runs an interactive credential get', async () => {
@@ -207,7 +257,19 @@ describe('createAzureDevOpsAuth', () => {
     const result = await auth.signIn({ host: 'dev.azure.com', org: null });
 
     expect(interactive).toBe(true);
-    expect(result).toEqual({ authenticated: true, account: 'bob' });
+    expect(result).toEqual({ authenticated: true, account: 'bob', message: null });
+  });
+
+  it('signIn surfaces a reason when the interactive get fails', async () => {
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async () => fail('fatal: AADSTS50020 no access'),
+    });
+
+    const result = await auth.signIn({ host: 'dev.azure.com', org: 'contoso' });
+
+    expect(result.authenticated).toBe(false);
+    expect(result.message).toMatch(/does not have access/);
   });
 
   it('reports unauthenticated when the credential runner fails', async () => {
@@ -218,7 +280,7 @@ describe('createAzureDevOpsAuth', () => {
 
     expect(
       await auth.status({ host: 'dev.azure.com', org: null }),
-    ).toEqual({ authenticated: false, account: null });
+    ).toEqual({ authenticated: false, account: null, message: null });
   });
 
   it('token returns the cached OAuth password from a non-interactive get', async () => {

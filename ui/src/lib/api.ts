@@ -5,6 +5,8 @@ import type {
   AddFeatureTaskInput,
   AgencyStatus,
   AzureDevOpsStatus,
+  DeviceCodeStart,
+  DevicePollResult,
   Feature,
   FeatureSummary,
   FeatureTask,
@@ -17,8 +19,11 @@ import type {
   ModelInfo,
   ProviderInfo,
   Repository,
+  RepositoryContext,
   RemoteRepo,
   RemotePullRequest,
+  PullFilter,
+  PrReview,
   AddRepositoryInput,
   Session,
   SessionFile,
@@ -59,13 +64,31 @@ export function createApiClient(options: ApiClientOptions = {}) {
   const baseUrl = options.baseUrl ?? '/api';
   const doFetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
 
+  async function errorMessage(
+    response: Response,
+    path: string,
+  ): Promise<string> {
+    try {
+      const body = (await response.json()) as {
+        error?: { message?: unknown };
+      };
+      const message = body?.error?.message;
+      if (typeof message === 'string' && message.trim().length > 0) {
+        return message;
+      }
+    } catch {
+      // Non-JSON or empty error body; fall back to a generic message below.
+    }
+    return `Request failed: ${path}`;
+  }
+
   async function request<T>(
     path: string,
     init?: RequestInit,
   ): Promise<T> {
     const response = await doFetch(`${baseUrl}${path}`, init);
     if (!response.ok) {
-      throw new ApiError(response.status, `Request failed: ${path}`);
+      throw new ApiError(response.status, await errorMessage(response, path));
     }
     return (await response.json()) as T;
   }
@@ -96,16 +119,32 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Repository>('/repos', jsonBody(input)),
     deleteRepo: (id: string) =>
       request<{ id: string }>(`/repos/${id}`, del()),
+    getRepositoryContext: (id: string) =>
+      request<RepositoryContext>(`/repos/${id}/context`),
+    refreshRepositoryContext: (id: string) =>
+      request<RepositoryContext>(
+        `/repos/${id}/context/refresh`,
+        jsonBody({}),
+      ),
     listGithubRepos: () =>
       request<RemoteRepo[]>('/providers/github/repos'),
     listAzureRepos: (org: string) =>
       request<RemoteRepo[]>(
         `/providers/azure-devops/repos?org=${encodeURIComponent(org)}`,
       ),
-    listRepoPulls: (repoId: string) =>
-      request<RemotePullRequest[]>(`/repos/${repoId}/pulls`),
+    listRepoPulls: (repoId: string, filter: PullFilter = 'all') =>
+      request<RemotePullRequest[]>(
+        `/repos/${repoId}/pulls?filter=${filter}`,
+      ),
     createPrFeature: (repoId: string, number: number) =>
       request<Feature>(`/repos/${repoId}/pulls`, jsonBody({ number })),
+    getPrReview: (featureId: string) =>
+      request<PrReview>(`/features/${featureId}/pr-review`),
+    refreshPrReview: (featureId: string) =>
+      request<PrReview>(
+        `/features/${featureId}/pr-review/refresh`,
+        jsonBody({}),
+      ),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),
     createFeature: (input: CreateFeatureInput) =>
@@ -192,6 +231,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getConfig: () => request<ConfigResponse>('/config'),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
+    githubSignInStart: () =>
+      request<DeviceCodeStart>('/github/signin/start', jsonBody({})),
+    githubSignInPoll: (deviceCode: string) =>
+      request<DevicePollResult>(
+        '/github/signin/poll',
+        jsonBody({ deviceCode }),
+      ),
     getAzureStatus: (url?: string) =>
       request<AzureDevOpsStatus>(
         `/azure-devops/status${url ? `?url=${encodeURIComponent(url)}` : ''}`,

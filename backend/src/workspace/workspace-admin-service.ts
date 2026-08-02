@@ -13,6 +13,11 @@ export interface TerminalCloser {
   close(sessionId: string): void;
 }
 
+/** Removes any PR review artifact tied to a feature being deleted. */
+export interface PrReviewRemover {
+  removeForFeature(featureId: string): void;
+}
+
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
   sessions: Pick<SessionRepo, 'get' | 'listByFeature' | 'delete' | 'deleteByFeature' | 'rename'>;
@@ -21,6 +26,8 @@ export interface WorkspaceAdminDeps {
   summaries: Pick<SummaryStore, 'delete'>;
   sessionFiles: Pick<SessionFilesStore, 'deleteBySession'>;
   terminals: TerminalCloser;
+  /** Optional: purges a feature's PR review when the feature is deleted. */
+  prReviews?: PrReviewRemover;
 }
 
 /**
@@ -67,6 +74,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       }
       deps.sessions.deleteByFeature(id);
       deps.summaries.delete(id);
+      deps.prReviews?.removeForFeature(id);
       deps.features.remove(id);
     },
 

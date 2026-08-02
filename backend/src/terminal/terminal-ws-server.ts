@@ -39,7 +39,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     path: deps.config.wsPath,
   });
 
-  wss.on('connection', (socket: WebSocket, req) => {
+  wss.on('connection', async (socket: WebSocket, req) => {
     // Reject cross-site browser connections: WebSockets bypass same-origin
     // policy, so a malicious page could otherwise attach to a live session and
     // inject keystrokes into the CLI. Only our own localhost origin is allowed.
@@ -60,7 +60,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     let terminal;
     try {
       const cwd = deps.resolveCwd?.(session) ?? deps.cwd;
-      terminal = deps.manager.getOrLaunch(session, { cwd });
+      terminal = await deps.manager.getOrLaunch(session, { cwd });
     } catch (error) {
       deps.logger.error('Terminal launch failed', error);
       socket.close(4500, 'Launch failed');
@@ -73,6 +73,32 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
         socket.send(encodeServerMessage({ type: 'output', data })),
       exit: (code) => socket.send(encodeServerMessage({ type: 'exit', code })),
     });
+    const bufferedInput: string[] = [];
+    let bufferedInputBytes = 0;
+    let connected = true;
+
+    const writeInput = (data: string): boolean => {
+      try {
+        terminal.write(data);
+        return true;
+      } catch (error) {
+        deps.logger.error('Terminal input forwarding failed', error);
+        return false;
+      }
+    };
+
+    const flushInput = (state: 'ready' | 'closed'): void => {
+      if (state === 'ready' && connected) {
+        for (const data of bufferedInput) {
+          if (!writeInput(data)) {
+            break;
+          }
+        }
+      }
+      bufferedInput.length = 0;
+      bufferedInputBytes = 0;
+    };
+    const detachReadiness = terminal.onInputReadiness(flushInput);
 
     socket.on('message', (raw: { toString(): string }) => {
       const message = decodeClientMessage(raw.toString());
@@ -80,13 +106,30 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
         return;
       }
       if (message.type === 'input') {
-        terminal.write(message.data);
+        if (terminal.inputReadiness === 'ready') {
+          writeInput(message.data);
+        } else if (terminal.inputReadiness === 'pending') {
+          const bytes = Buffer.byteLength(message.data);
+          if (
+            bytes <=
+            deps.config.bootstrapInputBufferBytes - bufferedInputBytes
+          ) {
+            bufferedInput.push(message.data);
+            bufferedInputBytes += bytes;
+          }
+        }
       } else {
         terminal.resize(message.cols, message.rows);
       }
     });
 
-    socket.on('close', () => detach());
+    socket.on('close', () => {
+      connected = false;
+      bufferedInput.length = 0;
+      bufferedInputBytes = 0;
+      detachReadiness();
+      detach();
+    });
   });
 
   return wss;

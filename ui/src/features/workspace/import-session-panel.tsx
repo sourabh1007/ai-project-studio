@@ -3,6 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { ImportableSession, Session } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import { formatDateTime } from '../../lib/format.js';
 
 /**
@@ -69,7 +70,7 @@ export function ImportSessionPanel({
         />
       </div>
       <ErrorText error={importable.error ?? error} />
-      {importable.loading && <EmptyState message="Loading sessions…" />}
+      {importable.loading && <Loader label="Loading sessions" />}
       {!importable.loading && rows.length === 0 && (
         <EmptyState message="No importable sessions found." />
       )}

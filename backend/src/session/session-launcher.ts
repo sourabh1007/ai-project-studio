@@ -12,11 +12,19 @@ import { assertTransition } from './session-state-machine.js';
 import { createTranscriptCapture } from './transcript-capture.js';
 import type { TranscriptStore } from './transcript-store-port.js';
 import type { Session, StartSessionRequest } from './session-contract.js';
+import {
+  composeBootstrappedPrompt,
+  type SessionBootstrap,
+} from '../session-bootstrap/session-bootstrap.js';
 
 /** Events published by the session orchestrator onto the kernel event bus. */
 export type SessionEventMap = {
   'session.started': Session;
-  'session.output': { sessionId: string; event: SessionEvent };
+  'session.output': {
+    sessionId: string;
+    scope: NonNullable<Session['scope']>;
+    event: SessionEvent;
+  };
   'session.ended': Session;
   /**
    * A persisted session snapshot changed out-of-band (e.g. its resolved model
@@ -40,6 +48,10 @@ export interface SessionLauncherDeps {
   bus: EventBus<SessionEventMap>;
   clock: Clock;
   config: SessionConfig;
+  bootstrap: Pick<
+    SessionBootstrap,
+    'assertFeatureReady' | 'composeForSession'
+  >;
 }
 
 /** Handle returned when a session is launched. */
@@ -65,19 +77,29 @@ export function createSessionLauncher(
 ): SessionLauncher {
   return {
     async start(request) {
+      const kind = request.kind ?? deps.config.defaultKind;
+      const scope = request.scope ?? 'feature';
+      if (kind === 'dev' && scope !== 'internal') {
+        await deps.bootstrap.assertFeatureReady(request.featureId);
+      }
       const selection = await deps.resolver.resolve({
         providerId: request.providerId,
         model: request.model,
       });
-      const kind = request.kind ?? deps.config.defaultKind;
 
       const created = deps.factory.build({
         featureId: request.featureId,
         provider: selection.provider.id,
         requestedModel: selection.model,
         kind,
+        scope,
         prompt: request.prompt,
       });
+      const bootstrap =
+        created.kind === 'dev' && created.scope !== 'internal'
+          ? await deps.bootstrap.composeForSession(created)
+          : '';
+      const launchPrompt = composeBootstrappedPrompt(bootstrap, request.prompt);
 
       assertTransition(created.status, 'running');
       const session: Session = {
@@ -90,7 +112,8 @@ export function createSessionLauncher(
       const spec: SessionSpec = {
         sessionId: session.id,
         featureId: session.featureId,
-        prompt: session.prompt,
+        prompt: launchPrompt,
+        attachments: request.attachments,
         model: session.requestedModel,
         kind: session.kind,
         otelFilePath: session.usageFilePath,
@@ -101,7 +124,11 @@ export function createSessionLauncher(
       const capture = createTranscriptCapture(session.id);
       running.onEvent((event) => {
         capture.record(event);
-        deps.bus.emit('session.output', { sessionId: session.id, event });
+        deps.bus.emit('session.output', {
+          sessionId: session.id,
+          scope,
+          event,
+        });
       });
 
       const completion = running.done.then(async (code) => {

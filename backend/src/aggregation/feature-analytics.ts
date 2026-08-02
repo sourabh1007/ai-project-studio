@@ -128,11 +128,13 @@ export function createFeatureAnalytics(
     },
     workspaceStats() {
       const all = sessions.listAll();
+      const visible = all.filter((session) => session.scope !== 'internal');
       return {
         totals: reader.workspaceTotals(),
-        activeSessions: all.filter((session) => session.status === 'running')
-          .length,
-        totalSessions: all.length,
+        activeSessions: visible.filter(
+          (session) => session.status === 'running',
+        ).length,
+        totalSessions: visible.length,
       };
     },
   };

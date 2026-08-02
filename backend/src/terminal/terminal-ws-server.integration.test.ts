@@ -50,9 +50,34 @@ function fakeTerminal(sessionId: string, scrollback: string) {
   const resizes: Array<[number, number]> = [];
   let sink: TerminalOutputSink | undefined;
   let detached = false;
+  let inputReadiness: TerminalSession['inputReadiness'] = 'ready';
+  const readinessListeners = new Set<
+    (state: 'ready' | 'closed') => void
+  >();
   const terminal: TerminalSession = {
     sessionId,
     write: (data) => writes.push(data),
+    get inputReadiness() {
+      return inputReadiness;
+    },
+    onInputReadiness: (listener) => {
+      if (inputReadiness !== 'pending') {
+        listener(inputReadiness);
+        return () => {};
+      }
+      readinessListeners.add(listener);
+      return () => readinessListeners.delete(listener);
+    },
+    markInputReady: () => {
+      if (inputReadiness !== 'pending') {
+        return;
+      }
+      inputReadiness = 'ready';
+      for (const listener of readinessListeners) {
+        listener('ready');
+      }
+      readinessListeners.clear();
+    },
     resize: (cols, rows) => resizes.push([cols, rows]),
     attach: (s) => {
       sink = s;
@@ -76,6 +101,20 @@ function fakeTerminal(sessionId: string, scrollback: string) {
     pushOutput: (data: string) => sink?.send(data),
     pushExit: (code: number | null) => sink?.exit(code),
     isDetached: () => detached,
+    holdInput: () => {
+      inputReadiness = 'pending';
+    },
+    releaseInput: () => terminal.markInputReady(),
+    closeInput: () => {
+      if (inputReadiness !== 'pending') {
+        return;
+      }
+      inputReadiness = 'closed';
+      for (const listener of readinessListeners) {
+        listener('closed');
+      }
+      readinessListeners.clear();
+    },
   };
 }
 
@@ -148,7 +187,7 @@ afterEach(async () => {
 describe('attachTerminalWs (integration)', () => {
   it('closes with 4404 when the session is unknown', async () => {
     const manager: TerminalManager = {
-      getOrLaunch: () => {
+      getOrLaunch: async () => {
         throw new Error('should not launch');
       },
       get: () => undefined,
@@ -164,7 +203,7 @@ describe('attachTerminalWs (integration)', () => {
 
   it('closes with 4500 when launching the terminal throws', async () => {
     const manager: TerminalManager = {
-      getOrLaunch: () => {
+      getOrLaunch: async () => {
         throw new Error('spawn failed');
       },
       get: () => undefined,
@@ -181,7 +220,7 @@ describe('attachTerminalWs (integration)', () => {
   it('sends ready, replays scrollback and streams live output', async () => {
     const fake = fakeTerminal('sess-1', 'SCROLLBACK');
     const manager: TerminalManager = {
-      getOrLaunch: () => fake.terminal,
+      getOrLaunch: async () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
@@ -206,7 +245,7 @@ describe('attachTerminalWs (integration)', () => {
   it('forwards client input and resize to the terminal', async () => {
     const fake = fakeTerminal('sess-1', '');
     const manager: TerminalManager = {
-      getOrLaunch: () => fake.terminal,
+      getOrLaunch: async () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
@@ -229,10 +268,118 @@ describe('attachTerminalWs (integration)', () => {
     ws.close();
   });
 
+  it('buffers early input and releases it in order after bootstrap completes', async () => {
+    const fake = fakeTerminal('sess-1', '');
+    fake.holdInput();
+    const manager: TerminalManager = {
+      getOrLaunch: async () => fake.terminal,
+      get: () => fake.terminal,
+      close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
+    };
+    const url = await startServer(manager, (id) => sampleSession(id));
+    const ws = new WebSocket(`${url}?sessionId=sess-1`);
+    const rx = makeReader(ws);
+    await rx.next();
+
+    ws.send(encodeClient({ type: 'input', data: 'first' }));
+    ws.send(encodeClient({ type: 'input', data: 'second' }));
+    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
+    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
+    expect(fake.writes).toEqual([]);
+
+    fake.terminal.write('BOOTSTRAP');
+    fake.terminal.write('\r');
+    fake.releaseInput();
+    expect(fake.writes).toEqual(['BOOTSTRAP', '\r', 'first', 'second']);
+    ws.send(encodeClient({ type: 'input', data: 'third' }));
+    await expect
+      .poll(() => fake.writes)
+      .toEqual(['BOOTSTRAP', '\r', 'first', 'second', 'third']);
+    ws.close();
+  });
+
+  it('bounds pending input without delaying later input that fits', async () => {
+    const fake = fakeTerminal('sess-1', '');
+    fake.holdInput();
+    const manager: TerminalManager = {
+      getOrLaunch: async () => fake.terminal,
+      get: () => fake.terminal,
+      close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
+    };
+    const url = await startServer(manager, (id) => sampleSession(id));
+    const ws = new WebSocket(`${url}?sessionId=sess-1`);
+    const rx = makeReader(ws);
+    await rx.next();
+
+    ws.send(
+      encodeClient({
+        type: 'input',
+        data: 'x'.repeat(terminalDefaults.bootstrapInputBufferBytes + 1),
+      }),
+    );
+    ws.send(encodeClient({ type: 'input', data: 'kept' }));
+    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
+    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
+    fake.releaseInput();
+    expect(fake.writes).toEqual(['kept']);
+    ws.close();
+  });
+
+  it('discards buffered input when the terminal exits before bootstrap', async () => {
+    const fake = fakeTerminal('sess-1', '');
+    fake.holdInput();
+    const manager: TerminalManager = {
+      getOrLaunch: async () => fake.terminal,
+      get: () => fake.terminal,
+      close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
+    };
+    const url = await startServer(manager, (id) => sampleSession(id));
+    const ws = new WebSocket(`${url}?sessionId=sess-1`);
+    const rx = makeReader(ws);
+    await rx.next();
+    ws.send(encodeClient({ type: 'input', data: 'discard me' }));
+    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
+    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
+
+    fake.closeInput();
+    expect(fake.writes).toEqual([]);
+    ws.close();
+  });
+
+  it('discards buffered input when the socket disconnects', async () => {
+    const fake = fakeTerminal('sess-1', '');
+    fake.holdInput();
+    const manager: TerminalManager = {
+      getOrLaunch: async () => fake.terminal,
+      get: () => fake.terminal,
+      close: () => {},
+      injectInstructions: () => false,
+      shutdown: () => {},
+    };
+    const url = await startServer(manager, (id) => sampleSession(id));
+    const ws = new WebSocket(`${url}?sessionId=sess-1`);
+    const rx = makeReader(ws);
+    await rx.next();
+    ws.send(encodeClient({ type: 'input', data: 'discard me' }));
+    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
+    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
+    ws.close();
+    await expect.poll(() => fake.isDetached()).toBe(true);
+
+    fake.releaseInput();
+    expect(fake.writes).toEqual([]);
+  });
+
   it('forwards the process exit code to the client', async () => {
     const fake = fakeTerminal('sess-1', '');
     const manager: TerminalManager = {
-      getOrLaunch: () => fake.terminal,
+      getOrLaunch: async () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
@@ -252,7 +399,7 @@ describe('attachTerminalWs (integration)', () => {
   it('detaches the client sink when the socket closes', async () => {
     const fake = fakeTerminal('sess-1', '');
     const manager: TerminalManager = {
-      getOrLaunch: () => fake.terminal,
+      getOrLaunch: async () => fake.terminal,
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,

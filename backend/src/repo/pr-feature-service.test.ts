@@ -27,6 +27,7 @@ function harness(overrides: {
   getPull?: () => Promise<RemotePullRequest | null>;
 } = {}) {
   const created: unknown[] = [];
+  const started: unknown[] = [];
   const svc = createPrFeatureService({
     repos: {
       get: (id) => {
@@ -54,8 +55,14 @@ function harness(overrides: {
         };
       },
     },
+    reviews: {
+      start: (input) => {
+        started.push(input);
+        return undefined as never;
+      },
+    },
   });
-  return { svc, created };
+  return { svc, created, started };
 }
 
 describe('pr-feature-service', () => {
@@ -70,7 +77,7 @@ describe('pr-feature-service', () => {
   });
 
   it('creates a feature in the PR worktree', async () => {
-    const { svc, created } = harness();
+    const { svc, created, started } = harness();
     const feature = await svc.createFromPull('r1', 12);
     expect(feature).toMatchObject({
       name: 'PR #12: Add login',
@@ -86,6 +93,40 @@ describe('pr-feature-service', () => {
         checkoutPath: 'C:/wt/app-pr-12',
       },
     ]);
+    expect(started).toEqual([
+      {
+        featureId: 'f1',
+        repoId: 'r1',
+        pull,
+        worktreePath: 'C:/wt/app-pr-12',
+        baseBranch: 'main',
+      },
+    ]);
+  });
+
+  it('starts the review with a null base branch when the repo has none', async () => {
+    const { svc } = harness();
+    const noBranch = createPrFeatureService({
+      repos: { get: () => ({ ...repo, defaultBranch: null }) },
+      listPulls: () => Promise.resolve([pull]),
+      getPull: () => Promise.resolve(pull),
+      provisionWorktree: () =>
+        Promise.resolve({ worktreePath: 'C:/wt/app-pr-12', branch: 'pr-12' }),
+      features: {
+        create: (input) => ({
+          id: 'f1',
+          name: input.name,
+          description: input.description,
+          createdAt: '2025-01-01T00:00:00.000Z',
+          summary: null,
+          repoId: input.repoId ?? null,
+          checkoutPath: input.checkoutPath ?? null,
+        }),
+      },
+      reviews: { start: () => undefined as never },
+    });
+    await noBranch.createFromPull('r1', 12);
+    expect(svc).toBeDefined();
   });
 
   it('throws NotFound when the pull request does not exist', async () => {

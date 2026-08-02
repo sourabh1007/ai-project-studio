@@ -19,6 +19,7 @@ const metaSession: Session = {
   resolvedModel: null,
   status: 'completed',
   kind: 'meta',
+  scope: 'internal',
   prompt: 'p',
   usageFilePath: 'u',
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -27,22 +28,36 @@ const metaSession: Session = {
   exitCode: 0,
 };
 
-function harness(transcript: Transcript | null) {
+function harness(
+  transcript: Transcript | null,
+  options: {
+    completionError?: Error;
+    loadError?: Error;
+    ended?: Partial<Session>;
+  } = {},
+) {
   const requests: StartSessionRequest[] = [];
   const launcher: SessionLauncher = {
     start: async (request) => {
       requests.push(request);
       const launched: LaunchedSession = {
-        session: metaSession,
+        session: { ...metaSession, ...options.ended },
         running: {} as unknown as RunningSession,
-        completion: Promise.resolve(metaSession),
+        completion: options.completionError
+          ? Promise.reject(options.completionError)
+          : Promise.resolve({ ...metaSession, ...options.ended }),
       };
       return launched;
     },
   };
   const transcripts: TranscriptStore = {
     save: async () => undefined,
-    load: async () => transcript,
+    load: async () => {
+      if (options.loadError) {
+        throw options.loadError;
+      }
+      return transcript;
+    },
     delete: async () => undefined,
   };
   const runner = createMetaRunner({
@@ -74,8 +89,130 @@ describe('meta-runner', () => {
     });
   });
 
+  it('forwards repository cwd, internal scope, and attachments to the shared launcher', async () => {
+    const h = harness({
+      sessionId: 'meta1',
+      stdout: [JSON.stringify({ response: 'repository context' })],
+      stderr: [],
+      exitCode: 0,
+    });
+
+    await expect(
+      h.runner.run({
+        featureId: 'repository:repo-1',
+        prompt: 'analyze',
+        attachments: ['C:\\Temp\\aps-a\\p.pdf'],
+        cwd: 'C:\\work\\repo',
+        scope: 'internal',
+      }),
+    ).resolves.toBe('repository context');
+
+    expect(h.requests[0]).toMatchObject({
+      featureId: 'repository:repo-1',
+      cwd: 'C:\\work\\repo',
+      scope: 'internal',
+      attachments: ['C:\\Temp\\aps-a\\p.pdf'],
+      kind: 'meta',
+    });
+  });
+
   it('returns an empty string when the meta session captured nothing', async () => {
     const h = harness(null);
     expect(await h.runner.run({ featureId: 'f1', prompt: 'do it' })).toBe('');
+  });
+
+  it('propagates session and transcript failures', async () => {
+    await expect(
+      harness(null, { completionError: new Error('provider failed') }).runner.run({
+        featureId: 'f1',
+        prompt: 'do it',
+      }),
+    ).rejects.toThrow('provider failed');
+
+    await expect(
+      harness(null, { loadError: new Error('transcript failed') }).runner.run({
+        featureId: 'f1',
+        prompt: 'do it',
+      }),
+    ).rejects.toThrow('transcript failed');
+  });
+
+  it('surfaces concise failed-session stderr instead of extracting stdout', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: ['[]'],
+        stderr: [
+          'warning',
+          '\u001b[31m--attachment file type not supported: C:\\very\\long\\p.md\u001b[0m',
+        ],
+        exitCode: 1,
+      },
+      { ended: { status: 'failed', exitCode: 1 } },
+    );
+
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow(
+      'Provider failed (exit code 1): --attachment file type not supported',
+    );
+  });
+
+  it('prefers the final session.error and safely caps provider failures', async () => {
+    const long = `specific ${'x'.repeat(600)}`;
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [
+          JSON.stringify({ type: 'session.error', data: { message: 'old' } }),
+          JSON.stringify({ type: 'session.error', data: { error: long } }),
+        ],
+        stderr: ['generic stderr'],
+        exitCode: 2,
+      },
+      { ended: { status: 'completed', exitCode: 2 } },
+    );
+
+    let failure: Error | undefined;
+    try {
+      await h.runner.run({ featureId: 'f1', prompt: 'do it' });
+    } catch (error) {
+      failure = error as Error;
+    }
+    expect(failure?.message).toContain('specific');
+    expect(failure?.message).not.toContain('generic stderr');
+    expect(failure?.message.endsWith('…')).toBe(true);
+    expect(failure!.message.length).toBeLessThanOrEqual(532);
+  });
+
+  it('uses a generic provider failure when no diagnostic was captured', async () => {
+    const h = harness(null, { ended: { status: 'failed', exitCode: null } });
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('Provider failed');
+  });
+
+  it('accepts only valid session.error diagnostics', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [
+          'not json',
+          JSON.stringify({ type: 'session.start', data: {} }),
+          JSON.stringify({ type: 'session.error', data: null }),
+          JSON.stringify({ type: 'session.error', data: { message: 42 } }),
+          JSON.stringify({
+            type: 'session.error',
+            data: { message: '', content: 'final safe detail' },
+          }),
+        ],
+        stderr: [],
+        exitCode: 1,
+      },
+      { ended: { status: 'failed', exitCode: 1 } },
+    );
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('final safe detail');
   });
 });

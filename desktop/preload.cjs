@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.send('file:reveal', filePath);
     }
   },
+  openExternal(url) {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      ipcRenderer.send('link:open', url);
+    }
+  },
 });

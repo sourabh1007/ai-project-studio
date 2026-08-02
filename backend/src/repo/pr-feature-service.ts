@@ -3,13 +3,20 @@ import type { Feature } from '../feature/feature-contract.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { Repository } from './repo-contract.js';
 import type { RepoService } from './repo-service.js';
-import type { RemotePullRequest } from './remote-pr-contract.js';
+import type {
+  RemotePullRequest,
+  PullFilter,
+} from './remote-pr-contract.js';
 import type { ProvisionedWorktree } from './pr-worktree-provisioner.js';
+import type { PrReviewService } from '../pr-review/pr-review-service.js';
 
 export interface PrFeatureServiceDeps {
   repos: Pick<RepoService, 'get'>;
-  /** Lists the open pull requests of a repository (provider-dispatched). */
-  listPulls: (repo: Repository) => Promise<RemotePullRequest[]>;
+  /** Lists a subset of a repository's open pull requests (provider-dispatched). */
+  listPulls: (
+    repo: Repository,
+    filter: PullFilter,
+  ) => Promise<RemotePullRequest[]>;
   /** Fetches a single pull request by number (provider-dispatched). */
   getPull: (
     repo: Repository,
@@ -21,6 +28,8 @@ export interface PrFeatureServiceDeps {
     pull: RemotePullRequest,
   ) => Promise<ProvisionedWorktree>;
   features: Pick<FeatureService, 'create'>;
+  /** Kicks off the automated AI review for the new PR feature. */
+  reviews: Pick<PrReviewService, 'start'>;
 }
 
 /**
@@ -30,7 +39,7 @@ export interface PrFeatureServiceDeps {
  * the PR's code, isolated from the repository's primary checkout.
  */
 export interface PrFeatureService {
-  listPulls(repoId: string): Promise<RemotePullRequest[]>;
+  listPulls(repoId: string, filter?: PullFilter): Promise<RemotePullRequest[]>;
   createFromPull(repoId: string, number: number): Promise<Feature>;
 }
 
@@ -38,9 +47,9 @@ export function createPrFeatureService(
   deps: PrFeatureServiceDeps,
 ): PrFeatureService {
   return {
-    async listPulls(repoId) {
+    async listPulls(repoId, filter = 'all') {
       const repo = deps.repos.get(repoId);
-      return deps.listPulls(repo);
+      return deps.listPulls(repo, filter);
     },
 
     async createFromPull(repoId, number) {
@@ -52,12 +61,20 @@ export function createPrFeatureService(
         );
       }
       const worktree = await deps.provisionWorktree(repo, pull);
-      return deps.features.create({
+      const feature = await deps.features.create({
         name: `PR #${pull.number}: ${pull.title}`,
         description: pull.url,
         repoId: repo.id,
         checkoutPath: worktree.worktreePath,
       });
+      deps.reviews.start({
+        featureId: feature.id,
+        repoId: repo.id,
+        pull,
+        worktreePath: worktree.worktreePath,
+        baseBranch: repo.defaultBranch ?? null,
+      });
+      return feature;
     },
   };
 }

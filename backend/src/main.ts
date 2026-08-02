@@ -15,7 +15,7 @@ import express from 'express';
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
 import { createLogger, type LogLevel } from './kernel/logger.js';
-import { createEventBus } from './kernel/event-bus.js';
+import { createEventBus, type EventBus } from './kernel/event-bus.js';
 import { ValidationError } from './kernel/error-types.js';
 
 import { createConfigSchemaRegistry } from './config/config-schema-registry.js';
@@ -103,6 +103,7 @@ import {
   type GhRunner,
 } from './github-auth/github-auth-service.js';
 import { buildGithubCredentialEnv } from './github-auth/github-credential-env.js';
+import { createGithubDeviceAuth } from './github-auth/github-device-auth.js';
 import {
   createAzureDevOpsAuth,
   type GitRunResult,
@@ -141,11 +142,15 @@ import {
   listAzurePulls,
   getAzurePull,
   parseAzureRepoUrl,
+  fetchAzureUser,
 } from './repo/azure-pr-lister.js';
 import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
 import { createPrFeatureService } from './repo/pr-feature-service.js';
 import type { Repository } from './repo/repo-contract.js';
-import type { RemotePullRequest } from './repo/remote-pr-contract.js';
+import type {
+  RemotePullRequest,
+  PullFilter,
+} from './repo/remote-pr-contract.js';
 import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
@@ -210,6 +215,34 @@ import {
   ideUsageDefaults,
   type IdeUsageConfig,
 } from './ide-usage/config.js';
+import {
+  REPOSITORY_CONTEXT_NAMESPACE,
+  repositoryContextConfigSchema,
+  repositoryContextDefaults,
+  type RepositoryContextConfig,
+} from './repository-context/config.js';
+import { createGitRepositoryAdapter } from './repository-context/git-repository-adapter.js';
+import { createFilesystemEvidenceCollector } from './repository-context/filesystem-evidence-adapter.js';
+import { createRepositoryEvidenceService } from './repository-context/repository-evidence-service.js';
+import { createRepositoryAnalysisExecutor } from './repository-context/repository-analysis-executor.js';
+import { createTemporaryPromptFileFactory } from './repository-context/temporary-prompt-file-adapter.js';
+import { createRepositoryContextGenerator } from './repository-context/repository-context-generator.js';
+import {
+  createRepositoryContextCoordinator,
+  type RepositoryContextEventMap,
+} from './repository-context/repository-context-coordinator.js';
+import { createRepositoryContextRepo } from './persistence/repository-context-repo.js';
+import { createSessionBootstrap } from './session-bootstrap/session-bootstrap.js';
+import {
+  PR_REVIEW_NAMESPACE,
+  prReviewConfigSchema,
+  prReviewDefaults,
+  type PrReviewConfig,
+} from './pr-review/config.js';
+import { createPrReviewService } from './pr-review/pr-review-service.js';
+import { createPrDiffCollector } from './pr-review/pr-diff-collector.js';
+import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
+import { createPrReviewRepo } from './persistence/pr-review-repo.js';
 
 import { createApiRoutes } from './api/routes.js';
 import { mountRoutes } from './api/express-adapter.js';
@@ -242,6 +275,16 @@ function main(): void {
   registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
   registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
+  registry.register({
+    namespace: REPOSITORY_CONTEXT_NAMESPACE,
+    schema: repositoryContextConfigSchema,
+    defaults: repositoryContextDefaults,
+  });
+  registry.register({
+    namespace: PR_REVIEW_NAMESPACE,
+    schema: prReviewConfigSchema,
+    defaults: prReviewDefaults,
+  });
 
   const config: ConfigObject = buildConfig({
     registry,
@@ -274,6 +317,10 @@ function main(): void {
   const metaConfig = config[META_NAMESPACE] as MetaConfig;
   const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
   const ideUsageConfig = config[IDE_USAGE_NAMESPACE] as IdeUsageConfig;
+  const repositoryContextConfig = config[
+    REPOSITORY_CONTEXT_NAMESPACE
+  ] as RepositoryContextConfig;
+  const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
 
   const logLevel = (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? 'info';
   const logger = createLogger(logLevel, (record) => {
@@ -330,6 +377,7 @@ function main(): void {
   const db = createDatabase({ databasePath: persistenceConfig.databasePath });
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
+  const repositoryContextRepo = createRepositoryContextRepo(db);
   const sessionRepo = createSessionRepo(db);
   const reconciledCount = createSessionReconciler({
     sessions: sessionRepo,
@@ -438,21 +486,80 @@ function main(): void {
       });
     });
   const githubAuth = createGithubAuth({ run: ghRun });
-  try {
-    const token = execFileSync('gh', ['auth', 'token'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    }).trim();
-    for (const [key, value] of Object.entries(buildGithubCredentialEnv(token))) {
-      process.env[key] = value;
+  // Capture the current `gh` token into this process's env so every spawned
+  // session's git operations authenticate non-interactively. `gh` rotates the
+  // underlying OAuth token, so we re-read it periodically (and right after an
+  // in-app sign-in) — spawned sessions read the live process.env, so a refresh
+  // reaches every future session without a restart.
+  const refreshGithubCredentialEnv = (): void => {
+    try {
+      const token = execFileSync('gh', ['auth', 'token'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 15_000,
+      }).trim();
+      for (const [key, value] of Object.entries(
+        buildGithubCredentialEnv(token),
+      )) {
+        process.env[key] = value;
+      }
+      if (token) {
+        logger.info('GitHub auth propagated to sessions', {});
+      }
+    } catch {
+      // gh missing or not logged in — sessions keep whatever git credentials the
+      // host already provides. The /github/status endpoint surfaces this state.
     }
-    if (token) {
-      logger.info('GitHub auth propagated to sessions', {});
+  };
+  refreshGithubCredentialEnv();
+  // Re-read the token hourly so a long-running IDE never spawns sessions with an
+  // expired GitHub token.
+  setInterval(refreshGithubCredentialEnv, 60 * 60 * 1000).unref();
+
+  // In-app GitHub sign-in via the OAuth device flow, for users who have never
+  // run `gh auth login`. The minted token is handed to `gh auth login
+  // --with-token` so the rest of the app picks it up transparently.
+  const githubDeviceAuth = createGithubDeviceAuth({
+    httpPost: async (url, form) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+        body: new URLSearchParams(form).toString(),
+      });
+      const body = await res.json().catch(() => null);
+      return { status: res.status, body };
+    },
+    ghLogin: (token) =>
+      new Promise((resolve) => {
+        const child = execFile(
+          'gh',
+          ['auth', 'login', '--with-token'],
+          { windowsHide: true, timeout: 20_000 },
+          (err, _stdout, stderr) => {
+            const code =
+              err && typeof (err as { code?: unknown }).code === 'number'
+                ? (err as { code: number }).code
+                : err
+                  ? 1
+                  : 0;
+            resolve({ code, stderr: stderr ?? '' });
+          },
+        );
+        child.stdin?.end(`${token}\n`);
+      }),
+  });
+  // On a successful in-app sign-in, immediately propagate the new token to
+  // sessions rather than waiting for the hourly refresh.
+  const githubSignInPoll = async (deviceCode: string) => {
+    const result = await githubDeviceAuth.poll(deviceCode);
+    if (result.status === 'success') {
+      refreshGithubCredentialEnv();
     }
-  } catch {
-    // gh missing or not logged in — sessions keep whatever git credentials the
-    // host already provides. The /github/status endpoint surfaces this state.
-  }
+    return result;
+  };
 
   // Azure DevOps auth, handled the way Visual Studio / Git Credential Manager
   // do, adapted for a background process: use OAuth (org-agnostic Entra tokens)
@@ -473,6 +580,10 @@ function main(): void {
         {
           windowsHide: true,
           maxBuffer: 1024 * 1024,
+          // A silent status check must never hang the sidebar "checking…" pill;
+          // an interactive sign-in legitimately waits on the browser, so only
+          // the non-interactive path is time-boxed.
+          timeout: opts.interactive ? 0 : 20_000,
           env: {
             ...process.env,
             // Sign-in may show the browser prompt; the silent status check must
@@ -556,9 +667,16 @@ function main(): void {
     token: (o: string) => azureAuth.token(parseAzureTarget(o)),
     httpGet: azureHttpGet,
   };
-  const listPullsFor = (repo: Repository): Promise<RemotePullRequest[]> => {
+  const listPullsFor = async (
+    repo: Repository,
+    filter: PullFilter,
+  ): Promise<RemotePullRequest[]> => {
     if (repo.provider === 'github') {
-      return listGithubPulls(ghRun, repo.name);
+      const status = await githubAuth.status();
+      return listGithubPulls(ghRun, repo.name, {
+        currentUser: status.login ?? undefined,
+        filter,
+      });
     }
     const target = parseAzureRepoUrl(repo.remoteUrl);
     if (!target) {
@@ -566,7 +684,9 @@ function main(): void {
         `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
       );
     }
-    return listAzurePulls(azurePullDeps, target);
+    const currentUser =
+      (await fetchAzureUser(azurePullDeps, target.org)) ?? undefined;
+    return listAzurePulls(azurePullDeps, target, { currentUser, filter });
   };
   const getPullFor = (
     repo: Repository,
@@ -684,6 +804,12 @@ function main(): void {
     bus: bus as unknown as Parameters<typeof createSessionLauncher>[0]['bus'],
     clock,
     config: sessionConfig,
+    bootstrap: {
+      assertFeatureReady: (featureId) =>
+        sessionBootstrap.assertFeatureReady(featureId),
+      composeForSession: (session) =>
+        sessionBootstrap.composeForSession(session),
+    },
   });
 
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
@@ -695,9 +821,10 @@ function main(): void {
     clock,
     config: terminalConfig,
     transcriptStore: transcriptRepo,
-    // Lazily resolves the skills service (created below) at launch time.
-    skills: {
-      instructionsForSession: (id) => skillsService.instructionsForSession(id),
+    // Lazily composes current repository, feature-memory, and skill context.
+    bootstrap: {
+      composeForSession: (session) =>
+        sessionBootstrap.composeForSession(session),
     },
     // Records the files each session creates/edits by parsing the tool's own
     // terminal output (per-session PTY = unambiguous attribution), replacing
@@ -774,22 +901,6 @@ function main(): void {
 
   // Feature + summarizer.
   const featureService = createFeatureService({ repo: featureRepo, ids, clock });
-  const prFeatureService = createPrFeatureService({
-    repos: repoService,
-    listPulls: listPullsFor,
-    getPull: getPullFor,
-    provisionWorktree: (repo, pull) =>
-      provisionPrWorktree(
-        { git: (args) => gitRun(args), pathExists: existsSync },
-        {
-          repoLocalPath: repo.localPath,
-          provider: repo.provider,
-          number: pull.number,
-          sourceBranch: pull.sourceBranch,
-        },
-      ),
-    features: featureService,
-  });
   const cliStoreDatabasePath = pathJoin(
     homedir(),
     copilotHistoryConfig.subdir,
@@ -805,15 +916,6 @@ function main(): void {
     sessions: sessionRepo,
     reader: copilotHistoryReader,
     summaries: sessionSummaryRepo,
-  });
-  const workspaceAdmin = createWorkspaceAdmin({
-    features: featureService,
-    sessions: sessionRepo,
-    usage: usageRepo,
-    transcripts: transcriptRepo,
-    summaries: summaryRepo,
-    sessionFiles: sessionFilesRepo,
-    terminals: terminalManager,
   });
   const collector = createTranscriptCollector({
     features: featureService,
@@ -874,6 +976,112 @@ function main(): void {
     transcripts: transcriptRepo,
     config: metaConfig,
   });
+  const gitRepository = createGitRepositoryAdapter();
+  const repositoryEvidence = createRepositoryEvidenceService({
+    revisionLookup: gitRepository,
+    collector: createFilesystemEvidenceCollector({
+      trackedFiles: gitRepository,
+    }),
+    config: repositoryContextConfig,
+  });
+  const repositoryContextCoordinator = createRepositoryContextCoordinator({
+    repositories: repoService,
+    contexts: repositoryContextRepo,
+    revisions: gitRepository,
+    evidence: repositoryEvidence,
+    generator: createRepositoryContextGenerator({
+      executor: createRepositoryAnalysisExecutor(
+        metaRunner,
+        createTemporaryPromptFileFactory(),
+      ),
+      config: repositoryContextConfig,
+    }),
+    clock,
+    bus: bus as unknown as EventBus<RepositoryContextEventMap>,
+  });
+  // PR review: when a PR review feature is created, generate an AI summary and
+  // core analysis from the ready repository context plus the PR's diff, and
+  // stream the result to the review panel.
+  const prReviewRepo = createPrReviewRepo(db);
+  const prDiffCollector = createPrDiffCollector({
+    git: {
+      run: (args, cwd) =>
+        new Promise((resolve) => {
+          execFile(
+            'git',
+            args,
+            {
+              cwd,
+              windowsHide: true,
+              maxBuffer: 16 * 1024 * 1024,
+              timeout: 20_000,
+            },
+            (err, stdout, stderr) => {
+              const code =
+                err && typeof (err as { code?: unknown }).code === 'number'
+                  ? (err as { code: number }).code
+                  : err
+                    ? 1
+                    : 0;
+              resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
+            },
+          );
+        }),
+    },
+    config: prReviewConfig,
+  });
+  const prReviewService = createPrReviewService({
+    reviews: prReviewRepo,
+    diffs: prDiffCollector,
+    context: {
+      readyContent: (repoId) => {
+        const ctx = repositoryContextRepo.get(repoId);
+        return ctx && ctx.status === 'ready' ? ctx.content : null;
+      },
+    },
+    ai: metaRunner,
+    clock,
+    bus: bus as unknown as EventBus<PrReviewEventMap>,
+    config: prReviewConfig,
+  });
+  const prFeatureService = createPrFeatureService({
+    repos: repoService,
+    listPulls: listPullsFor,
+    getPull: getPullFor,
+    provisionWorktree: (repo, pull) =>
+      provisionPrWorktree(
+        { git: (args) => gitRun(args), pathExists: existsSync },
+        {
+          repoLocalPath: repo.localPath,
+          provider: repo.provider,
+          number: pull.number,
+          sourceBranch: pull.sourceBranch,
+        },
+      ),
+    features: featureService,
+    reviews: prReviewService,
+  });
+  const workspaceAdmin = createWorkspaceAdmin({
+    features: featureService,
+    sessions: sessionRepo,
+    usage: usageRepo,
+    transcripts: transcriptRepo,
+    summaries: summaryRepo,
+    sessionFiles: sessionFilesRepo,
+    terminals: terminalManager,
+    prReviews: prReviewService,
+  });
+  const sessionBootstrap = createSessionBootstrap({
+    features: featureService,
+    sessions: sessionRepo,
+    summaries: sessionSummaryRepo,
+    skills: skillsService,
+    contexts: repositoryContextCoordinator,
+    config: repositoryContextConfig,
+  });
+  void repositoryContextCoordinator.synchronizeSaved().catch((error) => {
+    logger.error('Repository context startup check failed', error);
+  });
   const featureTasksRepo = createFeatureTasksRepo(db);
   const featureTasksService = createFeatureTasksService({
     repo: featureTasksRepo,
@@ -914,6 +1122,7 @@ function main(): void {
       sessionSummaries: sessionSummarizer,
       imports: sessionImportService,
       skills: skillsService,
+      sessionBootstrap,
       // Session-scoped skills can only be tagged after the session (and its
       // terminal) is open, so launch-time seeding never sees them. Inject them
       // into the live terminal on tag so they actually take effect.
@@ -938,13 +1147,17 @@ function main(): void {
       configSecretPaths,
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
+      githubSignInStart: () => githubDeviceAuth.start(),
+      githubSignInPoll,
       azureStatus: (target) => azureAuth.status(target),
       azureSignIn: (target) => azureAuth.signIn(target),
       repos: repoService,
+      repositoryContexts: repositoryContextCoordinator,
       provisionRepo: provisionRepoInput,
       listGithubRepos: listGithubReposFor,
       listAzureRepos: listAzureReposFor,
       prFeatures: prFeatureService,
+      prReviews: prReviewService,
       logger,
     }),
   );

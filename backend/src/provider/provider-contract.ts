@@ -18,6 +18,8 @@ export interface SessionSpec {
   sessionId: string;
   featureId: string;
   prompt: string;
+  /** Absolute paths attached to the session's initial prompt. */
+  attachments?: readonly string[];
   /** Model id, or 'auto' to let the provider choose. */
   model: string;
   kind: SessionKind;

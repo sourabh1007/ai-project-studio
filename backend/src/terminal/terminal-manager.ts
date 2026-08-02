@@ -13,14 +13,10 @@ import {
   type TerminalSession,
 } from './terminal-session.js';
 import { stripAnsi } from './ansi.js';
+import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 
 /** Max bytes of recent (ANSI-stripped) output scanned for the ready prompt. */
 const READY_SCAN_BYTES = 8192;
-
-/** Supplies the composed instruction block to seed into an interactive session. */
-export interface SessionInstructionsProvider {
-  instructionsForSession(sessionId: string): string;
-}
 
 export interface TerminalManagerDeps {
   spawner: PtySpawner;
@@ -29,7 +25,7 @@ export interface TerminalManagerDeps {
   clock: Clock;
   config: TerminalConfig;
   transcriptStore: TranscriptStore;
-  skills: SessionInstructionsProvider;
+  bootstrap: Pick<SessionBootstrap, 'composeForSession'>;
   /** Records files each session creates/edits, parsed from its own output. */
   sessionFiles: Pick<SessionFilesStore, 'record'>;
   /** User home directory, for a scanner to expand `~`-relative tool paths. */
@@ -48,7 +44,10 @@ export interface TerminalManager {
    * PTY if one is not already running. Reuses the same Session/usage pipeline as
    * one-shot runs by emitting `session.started` / `session.ended`.
    */
-  getOrLaunch(session: Session, options?: LaunchOptions): TerminalSession;
+  getOrLaunch(
+    session: Session,
+    options?: LaunchOptions,
+  ): Promise<TerminalSession>;
   get(sessionId: string): TerminalSession | undefined;
   /**
    * Seeds an instruction block into a session's already-running terminal, as
@@ -76,7 +75,16 @@ export function createTerminalManager(
   // are deleting); it is reported as `session.discarded` instead.
   const discarded = new Set<string>();
 
-  function launch(session: Session, options: LaunchOptions): TerminalSession {
+  async function launch(
+    session: Session,
+    options: LaunchOptions,
+  ): Promise<TerminalSession> {
+    // Compose first so repository-context readiness is enforced before any
+    // lifecycle event is emitted or provider process is spawned.
+    const bootstrap =
+      session.kind === 'dev' && session.scope !== 'internal'
+        ? await deps.bootstrap.composeForSession(session)
+        : '';
     const provider = deps.providers.get(session.provider);
     const spec: SessionSpec = {
       sessionId: session.id,
@@ -111,6 +119,7 @@ export function createTerminalManager(
     terminal = createTerminalSession({
       sessionId: session.id,
       pty,
+      inputReady: bootstrap.length === 0,
       scrollbackBytes: deps.config.scrollbackBytes,
       transcriptBytes: deps.config.transcriptBytes,
       onExit: (code) => {
@@ -145,13 +154,8 @@ export function createTerminalManager(
     // a shared working directory. Providers without a scanner contribute none.
     attachOutputScanner(terminal, provider, spec);
 
-    // Seed the effective instruction skills as the first input so the
-    // interactive AI follows them. Meta sessions carry no user skills.
-    if (session.kind !== 'meta') {
-      const instructions = deps.skills.instructionsForSession(session.id);
-      if (instructions.length > 0) {
-        seedInstructionsWhenReady(terminal, instructions);
-      }
+    if (bootstrap.length > 0) {
+      seedInstructionsWhenReady(terminal, bootstrap);
     }
 
     return terminal;
@@ -200,8 +204,17 @@ export function createTerminalManager(
    * response, e.g. when a skill is removed mid-turn) has finished. A max-wait
    * cap guarantees submission even if the CLI never fully stops emitting.
    */
-  function seedNow(terminal: TerminalSession, instructions: string): void {
-    terminal.write(instructions);
+  function seedNow(
+    terminal: TerminalSession,
+    instructions: string,
+    onComplete: () => void = () => {},
+  ): void {
+    try {
+      terminal.write(instructions);
+    } catch {
+      onComplete();
+      return;
+    }
 
     let quietTimer: ReturnType<typeof setTimeout> | undefined;
     let detach!: () => void;
@@ -210,12 +223,15 @@ export function createTerminalManager(
       clearTimeout(quietTimer);
       clearTimeout(capTimer);
       detach();
-      // Suppressed if the terminal exited while we were waiting for it to fall
-      // quiet — the timers are not cancelled on exit, so this guard is what
-      // prevents a post-exit submit.
+      // Suppress the submit if the terminal exited while waiting for quiet.
       if (!terminal.exited) {
-        terminal.write(deps.config.instructionSeedSuffix);
+        try {
+          terminal.write(deps.config.instructionSeedSuffix);
+        } catch {
+          // Input readiness must still settle if the PTY rejects the submit.
+        }
       }
+      onComplete();
     };
 
     const arm = (): void => {
@@ -228,7 +244,7 @@ export function createTerminalManager(
       // quiet window, so the submit keystroke only lands once the terminal has
       // gone idle. Removing a skill mid-response therefore still submits.
       send: () => arm(),
-      exit: () => {},
+      exit: () => submit(),
     });
 
     const capTimer = setTimeout(
@@ -257,15 +273,15 @@ export function createTerminalManager(
   ): void {
     const readyPattern = new RegExp(deps.config.instructionSeedReadyPattern);
     let observed = '';
-    // Assigned before `submit` can run: the terminal was just spawned, so its
-    // scrollback is empty and `attach` replays nothing synchronously.
-    let detach!: () => void;
-    let readyTimer!: ReturnType<typeof setTimeout>;
+    let detach = (): void => {};
+    let readyTimer: ReturnType<typeof setTimeout> | undefined;
+    let submitted = false;
 
     const submit = (): void => {
+      submitted = true;
       clearTimeout(readyTimer);
       detach();
-      seedNow(terminal, instructions);
+      seedNow(terminal, instructions, () => terminal.markInputReady());
     };
 
     detach = terminal.attach({
@@ -277,22 +293,27 @@ export function createTerminalManager(
       },
       exit: () => {
         clearTimeout(readyTimer);
+        detach();
       },
     });
 
-    readyTimer = setTimeout(
-      submit,
-      deps.config.instructionSeedReadyTimeoutMs,
-    );
+    if (submitted) {
+      detach();
+    } else {
+      readyTimer = setTimeout(
+        submit,
+        deps.config.instructionSeedReadyTimeoutMs,
+      );
+    }
   }
 
   return {
-    getOrLaunch(session, options = {}) {
+    async getOrLaunch(session, options = {}) {
       const existing = sessions.get(session.id);
       if (existing && !existing.exited) {
         return existing;
       }
-      return launch(session, options);
+      return await launch(session, options);
     },
     get: (sessionId) => sessions.get(sessionId),
     injectInstructions(sessionId, instructions) {

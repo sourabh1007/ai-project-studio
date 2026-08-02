@@ -10,6 +10,8 @@ export interface TerminalOutputSink {
 export interface TerminalSessionDeps {
   sessionId: string;
   pty: PtyProcess;
+  /** Whether browser input may be forwarded immediately. */
+  inputReady: boolean;
   /** Max bytes of raw output retained for replay to late-joining clients. */
   scrollbackBytes: number;
   /**
@@ -25,8 +27,19 @@ export interface TerminalSessionDeps {
 
 export interface TerminalSession {
   readonly sessionId: string;
-  /** Sends user keystrokes to the terminal. */
+  /** Writes raw bytes to the terminal; transports enforce input readiness. */
   write(data: string): void;
+  /**
+   * Current input readiness. Bootstrap seeding uses raw writes while browser
+   * input waits for this state to become `ready`.
+   */
+  readonly inputReadiness: 'pending' | 'ready' | 'closed';
+  /** Observes the transition out of `pending`; settled states fire immediately. */
+  onInputReadiness(
+    listener: (state: 'ready' | 'closed') => void,
+  ): () => void;
+  /** Allows browser input after launch-time bootstrap injection completes. */
+  markInputReady(): void;
   /** Resizes the terminal viewport. */
   resize(cols: number, rows: number): void;
   /**
@@ -56,6 +69,23 @@ export function createTerminalSession(
   let transcript = '';
   let exited = false;
   let exitCode: number | null = null;
+  let inputReadiness: 'pending' | 'ready' | 'closed' = deps.inputReady
+    ? 'ready'
+    : 'pending';
+  const readinessListeners = new Set<
+    (state: 'ready' | 'closed') => void
+  >();
+
+  const settleInputReadiness = (state: 'ready' | 'closed'): void => {
+    if (inputReadiness !== 'pending') {
+      return;
+    }
+    inputReadiness = state;
+    for (const listener of readinessListeners) {
+      listener(state);
+    }
+    readinessListeners.clear();
+  };
 
   pty.onData((data) => {
     scrollback += data;
@@ -74,6 +104,7 @@ export function createTerminalSession(
   pty.onExit((code) => {
     exited = true;
     exitCode = code;
+    settleInputReadiness('closed');
     for (const sink of sinks) {
       sink.exit(code);
     }
@@ -83,6 +114,18 @@ export function createTerminalSession(
   return {
     sessionId,
     write: (data) => pty.write(data),
+    get inputReadiness() {
+      return inputReadiness;
+    },
+    onInputReadiness(listener) {
+      if (inputReadiness !== 'pending') {
+        listener(inputReadiness);
+        return () => {};
+      }
+      readinessListeners.add(listener);
+      return () => readinessListeners.delete(listener);
+    },
+    markInputReady: () => settleInputReadiness('ready'),
     resize: (cols, rows) => pty.resize(cols, rows),
     attach(sink) {
       if (scrollback.length > 0) {

@@ -8,6 +8,7 @@ import type {
   Repository,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import { RepoIcon } from '../../components/icons.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
@@ -135,7 +136,7 @@ export function RepoPicker({
         )}
 
         <div className="repo-list">
-          {remote.loading && <EmptyState message="Loading repositories…" />}
+          {remote.loading && <Loader label="Loading repositories" />}
           <ErrorText error={remote.error} />
           {provider === 'azure-devops' && !org && !remote.loading && (
             <EmptyState message="Enter an organization to list repositories." />

@@ -1,5 +1,13 @@
 import type { GhRunner } from '../github-auth/github-auth-service.js';
-import type { RemotePullRequest } from './remote-pr-contract.js';
+import type {
+  RemotePullRequest,
+  PullFilter,
+} from './remote-pr-contract.js';
+
+interface GhReviewRequest {
+  login?: string;
+  slug?: string;
+}
 
 interface GhPullJson {
   number?: number;
@@ -7,18 +15,27 @@ interface GhPullJson {
   url?: string;
   headRefName?: string;
   author?: { login?: string; name?: string } | null;
+  reviewRequests?: GhReviewRequest[] | null;
 }
 
 /** The `--json` fields requested from `gh` for a pull request. */
-const PULL_JSON_FIELDS = 'number,title,url,headRefName,author';
+const PULL_JSON_FIELDS = 'number,title,url,headRefName,author,reviewRequests';
 
-function mapPull(item: GhPullJson): RemotePullRequest | null {
+function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | null {
   const number = item?.number;
   const sourceBranch = item?.headRefName;
   if (typeof number !== 'number' || !sourceBranch) {
     return null;
   }
-  const author = item.author?.name || item.author?.login || null;
+  const login = item.author?.login ?? null;
+  const author = item.author?.name || login || null;
+  const me = currentUser?.toLowerCase();
+  const isAuthor = me != null && login != null && login.toLowerCase() === me;
+  const isReviewer =
+    me != null &&
+    (item.reviewRequests ?? []).some(
+      (r) => (r.login ?? '').toLowerCase() === me,
+    );
   return {
     provider: 'github',
     number,
@@ -26,11 +43,16 @@ function mapPull(item: GhPullJson): RemotePullRequest | null {
     url: item.url ?? '',
     sourceBranch,
     author,
+    isAuthor,
+    isReviewer,
   };
 }
 
 /** Parses the JSON array `gh pr list --json ...` writes to stdout. */
-export function parseGithubPulls(stdout: string): RemotePullRequest[] {
+export function parseGithubPulls(
+  stdout: string,
+  currentUser?: string,
+): RemotePullRequest[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -42,7 +64,7 @@ export function parseGithubPulls(stdout: string): RemotePullRequest[] {
   }
   const pulls: RemotePullRequest[] = [];
   for (const item of parsed as GhPullJson[]) {
-    const pull = mapPull(item);
+    const pull = mapPull(item, currentUser);
     if (pull) {
       pulls.push(pull);
     }
@@ -67,21 +89,29 @@ export function parseGithubPull(stdout: string): RemotePullRequest | null {
 /**
  * Lists the open pull requests of a GitHub repository via the `gh` CLI (the same
  * login the IDE already uses). `repo` is the `owner/name` slug. The runner is
- * injected so this stays testable.
+ * injected so this stays testable. When `currentUser` is supplied each PR is
+ * flagged as authored-by / review-requested-of that login so the UI can group
+ * them into "My PRs" / "Assigned to me".
  */
 export async function listGithubPulls(
   run: GhRunner,
   repo: string,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; currentUser?: string; filter?: PullFilter } = {},
 ): Promise<RemotePullRequest[]> {
   const limit = opts.limit ?? 100;
+  const filter = opts.filter ?? 'all';
+  const scope: string[] =
+    filter === 'mine'
+      ? ['--state', 'open', '--author', '@me']
+      : filter === 'assigned'
+        ? ['--search', 'is:open review-requested:@me']
+        : ['--state', 'open'];
   const res = await run([
     'pr',
     'list',
     '--repo',
     repo,
-    '--state',
-    'open',
+    ...scope,
     '--limit',
     String(limit),
     '--json',
@@ -90,7 +120,7 @@ export async function listGithubPulls(
   if (res.code !== 0) {
     throw new Error(res.stderr.trim() || 'Failed to list pull requests');
   }
-  return parseGithubPulls(res.stdout);
+  return parseGithubPulls(res.stdout, opts.currentUser);
 }
 
 /** Fetches a single GitHub pull request by number, or null when not found. */

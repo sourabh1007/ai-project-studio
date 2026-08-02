@@ -4,6 +4,7 @@ import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
+import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 
@@ -20,8 +21,11 @@ const reviewPullSchema = z.object({
   number: z.number().int().positive(),
 });
 
+const refreshContextSchema = z.object({}).strict().optional();
+
 export interface RepoControllerDeps {
   repos: RepoService;
+  repositoryContexts: RepositoryContextCoordinator;
   /** Clones or attaches an existing checkout, yielding a create input. */
   provision: (input: ProvisionRepoInput) => Promise<CreateRepositoryInput>;
   /** Lists the authenticated user's GitHub repositories. */
@@ -49,7 +53,28 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       handler: async (req) => {
         const input = parseInput(createRepoSchema, req.body);
         const createInput = await deps.provision(input);
-        return { status: 201, body: deps.repos.create(createInput) };
+        const repository = deps.repos.create(createInput);
+        deps.repositoryContexts.initialize(repository.id);
+        return { status: 201, body: repository };
+      },
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/context',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.repositoryContexts.load(req.params.id),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/repos/:id/context/refresh',
+      handler: (req) => {
+        parseInput(refreshContextSchema, req.body);
+        return {
+          status: 202,
+          body: deps.repositoryContexts.refresh(req.params.id),
+        };
       },
     },
     {
@@ -57,6 +82,7 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       path: '/repos/:id',
       handler: (req) => {
         deps.repos.remove(req.params.id);
+        deps.repositoryContexts.remove(req.params.id);
         return { status: 200, body: { id: req.params.id } };
       },
     },
@@ -79,10 +105,15 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
     {
       method: 'get',
       path: '/repos/:id/pulls',
-      handler: async (req) => ({
-        status: 200,
-        body: await deps.prFeatures.listPulls(req.params.id),
-      }),
+      handler: async (req) => {
+        const raw = req.query.filter;
+        const filter =
+          raw === 'mine' || raw === 'assigned' ? raw : 'all';
+        return {
+          status: 200,
+          body: await deps.prFeatures.listPulls(req.params.id, filter),
+        };
+      },
     },
     {
       method: 'post',

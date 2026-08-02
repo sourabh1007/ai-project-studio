@@ -1,5 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Session, SessionStatus } from '../session/session-contract.js';
+import type {
+  Session,
+  SessionScope,
+  SessionStatus,
+} from '../session/session-contract.js';
 import type { SessionKind } from '../provider/provider-contract.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 
@@ -11,6 +15,7 @@ interface SessionRow {
   resolved_model: string | null;
   status: string;
   kind: string;
+  scope: string;
   prompt: string;
   usage_file_path: string;
   created_at: string;
@@ -30,6 +35,7 @@ function mapSession(row: SessionRow): Session {
     resolvedModel: row.resolved_model,
     status: row.status as SessionStatus,
     kind: row.kind as SessionKind,
+    scope: row.scope as SessionScope,
     prompt: row.prompt,
     usageFilePath: row.usage_file_path,
     createdAt: row.created_at,
@@ -56,12 +62,14 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
   const upsert = db.prepare(
     `INSERT OR REPLACE INTO sessions
       (id, feature_id, provider, requested_model, resolved_model, status, kind,
-       prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const selectOne = db.prepare('SELECT * FROM sessions WHERE id = ?');
   const selectByFeature = db.prepare(
-    'SELECT * FROM sessions WHERE feature_id = ? ORDER BY created_at, id',
+    `SELECT * FROM sessions
+     WHERE feature_id = ? AND scope = 'feature'
+     ORDER BY created_at, id`,
   );
   const selectAll = db.prepare('SELECT * FROM sessions ORDER BY created_at, id');
   const updateName = db.prepare('UPDATE sessions SET name = ? WHERE id = ?');
@@ -78,6 +86,7 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
         textOrNull(session.resolvedModel),
         session.status,
         session.kind,
+        session.scope ?? 'feature',
         session.prompt,
         session.usageFilePath,
         session.createdAt,

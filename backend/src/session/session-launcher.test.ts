@@ -40,7 +40,12 @@ function fakeRunning() {
   };
 }
 
-function harness(options: { failSave?: boolean } = {}) {
+function harness(options: {
+  failSave?: boolean;
+  bootstrap?: string;
+  readinessError?: Error;
+  composeError?: Error;
+} = {}) {
   const rs = fakeRunning();
   let capturedSpec: SessionSpec | undefined;
   const provider: IAIProvider = {
@@ -77,7 +82,12 @@ function harness(options: { failSave?: boolean } = {}) {
   const bus = createEventBus<SessionEventMap>();
   const started: Session[] = [];
   const ended: Session[] = [];
-  const outputs: { sessionId: string; event: SessionEvent }[] = [];
+  const outputs: {
+    sessionId: string;
+    scope: 'feature' | 'internal';
+    event: SessionEvent;
+  }[] = [];
+  const bootstrapCalls: string[] = [];
   bus.on('session.started', (s) => started.push(s));
   bus.on('session.ended', (s) => ended.push(s));
   bus.on('session.output', (o) => outputs.push(o));
@@ -93,9 +103,29 @@ function harness(options: { failSave?: boolean } = {}) {
     bus,
     clock: createClock(() => Date.parse('2025-01-01T00:00:05.000Z')),
     config: sessionDefaults,
+    bootstrap: {
+      assertFeatureReady: async (featureId) => {
+        bootstrapCalls.push(`ready:${featureId}`);
+        if (options.readinessError) throw options.readinessError;
+      },
+      composeForSession: async (session) => {
+        bootstrapCalls.push(`compose:${session.id}`);
+        if (options.composeError) throw options.composeError;
+        return session.kind === 'dev' ? (options.bootstrap ?? 'BOOTSTRAP') : '';
+      },
+    },
   });
 
-  return { rs, launcher, saved, started, ended, outputs, getSpec: () => capturedSpec };
+  return {
+    rs,
+    launcher,
+    saved,
+    started,
+    ended,
+    outputs,
+    bootstrapCalls,
+    getSpec: () => capturedSpec,
+  };
 }
 
 describe('session-launcher', () => {
@@ -115,6 +145,8 @@ describe('session-launcher', () => {
     expect(spec.sessionId).toBe('sess-1');
     expect(spec.model).toBe('gpt-5.4');
     expect(spec.otelFilePath).toContain('sess-1.jsonl');
+    expect(spec.prompt).toBe('BOOTSTRAP\n\n## User Request\n\nhello');
+    expect(launched.session.prompt).toBe('hello');
 
     h.rs.emit({ type: 'stdout', line: 'hi there' });
     h.rs.finish(0);
@@ -124,8 +156,16 @@ describe('session-launcher', () => {
     expect(final.exitCode).toBe(0);
     expect(final.endedAt).toBe('2025-01-01T00:00:05.000Z');
     expect(h.outputs).toEqual([
-      { sessionId: 'sess-1', event: { type: 'stdout', line: 'hi there' } },
-      { sessionId: 'sess-1', event: { type: 'exit', code: 0 } },
+      {
+        sessionId: 'sess-1',
+        scope: 'feature',
+        event: { type: 'stdout', line: 'hi there' },
+      },
+      {
+        sessionId: 'sess-1',
+        scope: 'feature',
+        event: { type: 'exit', code: 0 },
+      },
     ]);
     expect(h.saved).toEqual([
       { sessionId: 'sess-1', stdout: ['hi there'], stderr: [], exitCode: 0 },
@@ -148,17 +188,40 @@ describe('session-launcher', () => {
     expect(final.exitCode).toBe(1);
   });
 
-  it('applies the default kind and forwards cwd', async () => {
+  it('applies the default kind and forwards cwd and attachments', async () => {
     const h = harness();
     const launched = await h.launcher.start({
       featureId: 'feat-1',
       prompt: 'hello',
       cwd: '/work',
+      attachments: ['C:\\Temp\\aps-a\\p.md'],
     });
     expect(launched.session.kind).toBe('dev');
     expect(h.getSpec()!.cwd).toBe('/work');
+    expect(h.getSpec()!.attachments).toEqual(['C:\\Temp\\aps-a\\p.md']);
     h.rs.finish(0);
     await launched.completion;
+  });
+
+  it('keeps internal scope on the session lifecycle and output events', async () => {
+    const h = harness();
+    const launched = await h.launcher.start({
+      featureId: 'repository:repo-1',
+      prompt: 'analyze',
+      kind: 'meta',
+      scope: 'internal',
+      cwd: 'C:\\work\\repo',
+    });
+    expect(launched.session.scope).toBe('internal');
+    expect(h.started[0].scope).toBe('internal');
+    expect(h.getSpec()!.cwd).toBe('C:\\work\\repo');
+    expect(h.getSpec()!.prompt).toBe('analyze');
+
+    h.rs.emit({ type: 'stdout', line: 'result' });
+    h.rs.finish(0);
+    const ended = await launched.completion;
+    expect(ended.scope).toBe('internal');
+    expect(h.outputs[0].scope).toBe('internal');
   });
 
   it('rejects completion when the transcript save fails, without an unhandled rejection', async () => {
@@ -169,5 +232,37 @@ describe('session-launcher', () => {
     });
     h.rs.finish(0);
     await expect(launched.completion).rejects.toThrow('disk full');
+  });
+
+  it('rejects before creating or launching a new dev session when freshness fails', async () => {
+    const h = harness({ readinessError: new Error('context stale') });
+    await expect(
+      h.launcher.start({ featureId: 'feat-1', prompt: 'hello' }),
+    ).rejects.toThrow('context stale');
+    expect(h.bootstrapCalls).toEqual(['ready:feat-1']);
+    expect(h.started).toEqual([]);
+    expect(h.getSpec()).toBeUndefined();
+  });
+
+  it('rechecks freshness while composing immediately before provider launch', async () => {
+    const h = harness({ composeError: new Error('HEAD changed') });
+    await expect(
+      h.launcher.start({ featureId: 'feat-1', prompt: 'hello' }),
+    ).rejects.toThrow('HEAD changed');
+    expect(h.bootstrapCalls).toEqual(['ready:feat-1', 'compose:sess-1']);
+    expect(h.started).toEqual([]);
+    expect(h.getSpec()).toBeUndefined();
+  });
+
+  it('does not freshness-gate provider-neutral meta sessions', async () => {
+    const h = harness({ readinessError: new Error('unused') });
+    const launched = await h.launcher.start({
+      featureId: 'feat-1',
+      prompt: 'analyze',
+      kind: 'meta',
+    });
+    expect(h.bootstrapCalls).toEqual([]);
+    h.rs.finish(0);
+    await launched.completion;
   });
 });

@@ -8,6 +8,7 @@ import type {
   SessionWorkSummary,
 } from '../../lib/types.js';
 import { EmptyState, ErrorText, StatusBadge } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import {
   ChevronIcon,
   RefreshIcon,
@@ -134,7 +135,7 @@ export function FeatureWorkSummaryPanel({ featureId }: { featureId: string }) {
       </header>
 
       <ErrorText error={error} />
-      {loading && !data && <EmptyState message="Loading work summary…" />}
+      {loading && !data && <Loader label="Loading work summary" />}
 
       {data && data.sessions.length === 0 && (
         <EmptyState message="No sessions yet. Start a session to build this feature's history." />

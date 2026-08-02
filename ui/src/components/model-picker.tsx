@@ -1,4 +1,5 @@
 import type { ModelInfo } from '../lib/types.js';
+import { Spinner } from './loading.js';
 
 export function ModelPicker({
   models,
@@ -13,7 +14,9 @@ export function ModelPicker({
 }) {
   return (
     <div className="field picker-field">
-      <label htmlFor="model-picker">Model</label>
+      <label htmlFor="model-picker">
+        Model {loading && <Spinner size={12} label="Loading models" />}
+      </label>
       <select
         id="model-picker"
         className="select"
@@ -21,7 +24,7 @@ export function ModelPicker({
         onChange={(event) => onChange(event.target.value)}
         disabled={loading || models.length === 0}
       >
-        {loading && <option>Loading models…</option>}
+        {loading && <option value="" />}
         {!loading &&
           models.map((model) => (
             <option key={model.id} value={model.id}>

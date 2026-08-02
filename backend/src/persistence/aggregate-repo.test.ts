@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createDatabase } from './db/connection.js';
 import { createUsageRepo } from './usage-repo.js';
 import { createAggregateRepo } from './aggregate-repo.js';
+import { createSessionRepo } from './session-repo.js';
 import { aggregationDefaults } from '../aggregation/config.js';
+import type { Session } from '../session/session-contract.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
 
 function usage(overrides: Partial<StoredUsage>): StoredUsage {
@@ -28,8 +30,38 @@ function usage(overrides: Partial<StoredUsage>): StoredUsage {
   };
 }
 
+function session(
+  id: string,
+  featureId: string,
+  scope: Session['scope'] = 'feature',
+): Session {
+  return {
+    id,
+    featureId,
+    name: null,
+    provider: 'github',
+    requestedModel: 'auto',
+    resolvedModel: null,
+    status: 'completed',
+    kind: id.startsWith('s3') || id.startsWith('s5') ? 'meta' : 'dev',
+    scope,
+    prompt: 'p',
+    usageFilePath: `usage/${id}.jsonl`,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    startedAt: '2025-01-01T00:00:00.000Z',
+    endedAt: '2025-01-01T00:01:00.000Z',
+    exitCode: 0,
+  };
+}
+
 function seed() {
   const db = createDatabase({ databasePath: ':memory:' });
+  const sessions = createSessionRepo(db);
+  sessions.save(session('s1', 'f1'));
+  sessions.save(session('s2', 'f1'));
+  sessions.save(session('s3', 'f1'));
+  sessions.save(session('s4', 'f2'));
+  sessions.save(session('s5', 'f1', 'internal'));
   const repo = createUsageRepo(db);
   repo.saveAll([
     usage({ sessionId: 's1', turnIndex: 0, resolvedModel: 'gpt-5.4-mini', provider: 'github', inputTokens: 100, credits: 0.33, startedAt: '2025-01-01T00:00:00.000Z' }),
@@ -39,6 +71,15 @@ function seed() {
     usage({ sessionId: 's3', turnIndex: 0, kind: 'meta', credits: 99, inputTokens: 999, startedAt: '2025-01-03T00:00:00.000Z' }),
     // different feature
     usage({ sessionId: 's4', featureId: 'f2', turnIndex: 0, credits: 5, startedAt: '2025-01-01T00:00:00.000Z' }),
+    // internal repository analysis — IDE AI usage, never development analytics.
+    usage({
+      sessionId: 's5',
+      turnIndex: 0,
+      kind: 'meta',
+      credits: 500,
+      inputTokens: 5000,
+      startedAt: '2025-02-01T00:00:00.000Z',
+    }),
   ]);
   return { db, reader: createAggregateRepo(db, aggregationDefaults) };
 }
@@ -90,6 +131,15 @@ describe('aggregate-repo', () => {
     const { db, reader } = seed();
     const totals = reader.workspaceTotals();
     expect(totals.credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 5);
+    db.close();
+  });
+
+  it('excludes internal meta sessions from every development rollup', () => {
+    const { db, reader } = seed();
+    expect(reader.featureTotals('f1').credits).not.toBe(500);
+    expect(reader.bySession('f1').map((row) => row.sessionId)).not.toContain('s5');
+    expect(reader.byDay('f1').map((row) => row.day)).not.toContain('2025-02-01');
+    expect(reader.workspaceTotals().credits).not.toBe(500);
     db.close();
   });
 });

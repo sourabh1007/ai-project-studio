@@ -16,8 +16,8 @@ The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST),
 
 | Area | Purpose | Mounted? |
 | --- | --- | --- |
-| `workspace/` | IDE shell: `workspace-view.tsx`, `explorer.tsx`, `new-session-form.tsx`, `import-session-panel.tsx`. | ✅ |
-| `feature-dashboard/` | Feature analytics: charts, `feature-tasks-panel.tsx`, `work-summary.tsx`. | ✅ (within workspace) |
+| `workspace/` | IDE shell: `workspace-view.tsx`, `explorer.tsx`, repository-context status/viewer, `new-session-form.tsx`, `import-session-panel.tsx`. | ✅ |
+| `feature-dashboard/` | Feature analytics: charts, `feature-tasks-panel.tsx`, `pr-review-panel.tsx`, `work-summary.tsx`. | ✅ (within workspace) |
 | `skills/` | `skills-manager.tsx`, `skill-tagger.tsx`, `skill-chips.tsx`, `skill-kind.tsx`. | ✅ |
 | `settings/` | `settings-view.tsx`. | ✅ |
 | `usage-dashboard/` | Charts/rollups for usage & credits by model/provider/day. | ✅ (within workspace) |
@@ -34,6 +34,30 @@ The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST),
 | `hooks/` | Data + live-stream hooks: `use-usage-stream.ts`, `use-workspace-stats.ts`, `use-ide-usage.ts`, `use-async.ts`. |
 | `lib/` | API client + helpers: `api.ts`, `stream.ts`, `types.ts`, `format.ts`. Tested; UI coverage gate targets `lib/`. |
 | `styles/` | `design-tokens.css`, `app.css`. Use existing CSS variables/tokens; avoid undefined vars. |
+
+## Repository context UX
+
+Each saved repository row in the Explorer shows a live context badge:
+
+| Backend status | UI label | Behavior |
+| --- | --- | --- |
+| `pending` | Pending | Spinner; new repository-backed sessions are disabled. |
+| `generating` | Analyzing | Spinner; sessions remain disabled. |
+| `ready` | Ready | Sessions are enabled. |
+| `stale` | Refreshing | Spinner; the checkout changed and sessions remain disabled until regeneration succeeds. |
+| `failed` | Failed | Failure text is shown; sessions remain disabled and the viewer offers **Retry**. |
+
+Click the badge, or choose **View context** from repository actions, to open `workspace/repository-context.tsx`. The viewer shows source revision, generated/updated timestamps, lifecycle state, failure details, and the generated summary. While analysis is in flight it shows an animated "Analyzing repository" banner (`role="status"`) plus a step checklist (`collect-evidence` → `analyze` → `persist`) that marks each step running/ok/failed/skipped in real time, so it is clear what the app is doing and exactly which step failed. If a later attempt fails, the last successful summary remains visible with an explicit warning. **Refresh** starts a background generation request; while the request is being accepted the button is disabled and inline API errors are shown. A failed state changes the action label to **Retry**.
+
+The Explorer initially fetches `GET /repos/:id/context` for every repository. It then consumes `repository.context.updated` from the shared SSE stream and keeps the newest record by `updatedAt`, so pending/analyzing/stale/ready/failed transitions appear without polling. Adding a repository triggers generation on the backend; manual refresh uses `POST /repos/:id/context/refresh`.
+
+For a feature attached to a repository, the new-session `+` button is disabled unless context is `ready`. A status message explains whether analysis is pending, running, refreshing after a checkout change, or failed. If readiness changes while the new-session form is open, the form closes. The backend repeats this readiness check, so stale UI state cannot launch an unbootstrapped development session. Features without a repository are not gated; importing past sessions is also unaffected.
+
+When a development session launches, the UI does not assemble context itself. The backend supplies a fresh bootstrap containing repository context, feature details, prior completed development-session summaries, and effective skills. Repository-analysis runs are hidden from Explorer/session SSE, while their usage appears in the existing **IDE AI** accounting view.
+
+## PR review UX
+
+A feature created from a pull request renders a **PR review panel** (`feature-dashboard/pr-review-panel.tsx`) inside its dashboard. On mount it fetches `GET /features/:id/pr-review`; a `404` means the feature is not a PR review and the panel renders nothing. While generation is in flight it shows an animated "Analyzing pull request…" banner (reusing the repository-context spinner/dots). When ready it shows the **PR Summary** and **Core Analysis** sections; on failure it shows the failure detail and a **Retry** control. The panel consumes `pr.review.updated` from the shared SSE stream and prefers live state over the initial fetch, so lifecycle transitions appear without polling. **Refresh** calls `POST /features/:id/pr-review/refresh` to regenerate the review; the previous summary is retained for viewing if a later attempt fails.
 
 ## Conventions
 

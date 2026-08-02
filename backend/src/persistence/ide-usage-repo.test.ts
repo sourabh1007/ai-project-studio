@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { createDatabase } from './db/connection.js';
 import { createUsageRepo } from './usage-repo.js';
 import { createIdeUsageRepo } from './ide-usage-repo.js';
+import { createSessionRepo } from './session-repo.js';
 import { ideUsageDefaults } from '../ide-usage/config.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
+import type { Session } from '../session/session-contract.js';
 
 function usage(overrides: Partial<StoredUsage>): StoredUsage {
   return {
@@ -30,6 +32,26 @@ function usage(overrides: Partial<StoredUsage>): StoredUsage {
 
 function seed() {
   const db = createDatabase({ databasePath: ':memory:' });
+  const sessions = createSessionRepo(db);
+  const internalMeta = (id: string): Session => ({
+    id,
+    featureId: 'repository:repo-1',
+    name: null,
+    provider: 'github',
+    requestedModel: 'auto',
+    resolvedModel: null,
+    status: 'completed',
+    kind: 'meta',
+    scope: 'internal',
+    prompt: 'analyze',
+    usageFilePath: `usage/${id}.jsonl`,
+    createdAt: '2025-02-01T00:00:00.000Z',
+    startedAt: '2025-02-01T00:00:00.000Z',
+    endedAt: '2025-02-01T00:01:00.000Z',
+    exitCode: 0,
+  });
+  sessions.save(internalMeta('m1'));
+  sessions.save(internalMeta('m2'));
   const repo = createUsageRepo(db);
   repo.saveAll([
     // dev usage — must be excluded from IDE (meta) totals.
@@ -70,7 +92,7 @@ function seed() {
 }
 
 describe('ide-usage-repo', () => {
-  it('totals only meta-kind usage across sessions', () => {
+  it('totals internal meta usage across sessions', () => {
     const { db, reader } = seed();
     const totals = reader.totals();
     expect(totals.sessions).toBe(2);

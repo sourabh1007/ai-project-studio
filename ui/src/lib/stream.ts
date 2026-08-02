@@ -1,4 +1,9 @@
-import type { Session, StoredUsage } from './types.js';
+import type {
+  PrReview,
+  RepositoryContext,
+  Session,
+  StoredUsage,
+} from './types.js';
 
 /** Normalized live events consumed by the reducer. */
 export type StreamEvent =
@@ -6,18 +11,24 @@ export type StreamEvent =
   | { type: 'session.ended'; session: Session }
   | { type: 'session.updated'; session: Session }
   | { type: 'session.output'; sessionId: string; line: string }
-  | { type: 'usage.recorded'; usage: StoredUsage };
+  | { type: 'usage.recorded'; usage: StoredUsage }
+  | { type: 'repository.context.updated'; context: RepositoryContext }
+  | { type: 'pr.review.updated'; review: PrReview };
 
 export interface LiveState {
   sessions: Record<string, Session>;
   usageByKey: Record<string, StoredUsage>;
   outputBySession: Record<string, string[]>;
+  repositoryContexts: Record<string, RepositoryContext>;
+  prReviews: Record<string, PrReview>;
 }
 
 export const initialLiveState: LiveState = {
   sessions: {},
   usageByKey: {},
   outputBySession: {},
+  repositoryContexts: {},
+  prReviews: {},
 };
 
 /** Stable key that dedupes usage events by session + turn. */
@@ -56,6 +67,16 @@ export function parseServerEvent(
     }
     case 'usage.recorded':
       return { type: 'usage.recorded', usage: JSON.parse(data) as StoredUsage };
+    case 'repository.context.updated':
+      return {
+        type: 'repository.context.updated',
+        context: JSON.parse(data) as RepositoryContext,
+      };
+    case 'pr.review.updated':
+      return {
+        type: 'pr.review.updated',
+        review: JSON.parse(data) as PrReview,
+      };
     default:
       return null;
   }
@@ -91,6 +112,22 @@ export function applyStreamEvent(
         usageByKey: { ...state.usageByKey, [key]: event.usage },
       };
     }
+    case 'repository.context.updated':
+      return {
+        ...state,
+        repositoryContexts: {
+          ...state.repositoryContexts,
+          [event.context.repositoryId]: event.context,
+        },
+      };
+    case 'pr.review.updated':
+      return {
+        ...state,
+        prReviews: {
+          ...state.prReviews,
+          [event.review.featureId]: event.review,
+        },
+      };
   }
 }
 

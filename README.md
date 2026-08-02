@@ -145,10 +145,16 @@ git push origin v0.3.0
 ```
 
 Produces:
-- **Windows** — `.exe` (NSIS installer)
-- **macOS** — `.dmg`
+- **Windows** — `.exe` (NSIS installer), **code-signed with [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)** so it installs without the "Unknown Publisher" SmartScreen warning.
+- **macOS** — `.dmg` (currently **unsigned** — no Apple Developer Program membership).
 
-> The packaged app spawns the backend with the system Node runtime, so end users need **Node.js ≥ 22.5** installed. Installers are unsigned; on first launch you may need to bypass the OS gatekeeper.
+> The packaged app spawns the backend with the system Node runtime, so end users need **Node.js ≥ 22.5** installed.
+
+**Windows signing** activates automatically when the Azure Trusted Signing secrets are configured on the repo (see [docs/development.md → Code signing](docs/development.md#code-signing)); if they're absent the Release workflow still succeeds and just emits an unsigned installer.
+
+**macOS (unsigned) — bypass Gatekeeper on first launch.** Because the `.dmg` isn't signed/notarized, macOS shows *"AI Project Studio can't be opened because Apple cannot check it for malicious software."* To run it:
+> - **Right-click** the app in Finder → **Open** → **Open** (only needed the first time), or
+> - clear the quarantine flag: `xattr -dr com.apple.quarantine "/Applications/AI Project Studio.app"`.
 
 ## Project Structure
 

@@ -244,6 +244,7 @@ export function WorkspaceView({
               featureId={active.feature.id}
               featureName={active.feature.name}
               featureDescription={active.feature.description}
+              prReview={live.prReviews[active.feature.id]}
             />
           )}
           {!active && (

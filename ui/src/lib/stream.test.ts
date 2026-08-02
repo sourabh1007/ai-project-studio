@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Session, StoredUsage } from './types.js';
+import type { PrReview, RepositoryContext, Session, StoredUsage } from './types.js';
 import {
   applyStreamEvent,
   initialLiveState,
@@ -50,6 +50,43 @@ function usage(sessionId: string, turnIndex: number): StoredUsage {
     cost: 0.5,
     credits: 1,
     nanoAiu: 100,
+  };
+}
+
+function repositoryContext(status: RepositoryContext['status']): RepositoryContext {
+  return {
+    repositoryId: 'r1',
+    status,
+    content: status === 'ready' ? 'summary' : null,
+    sourceRevision: 'abc123',
+    timestamps: {
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:01Z',
+      generationStartedAt: null,
+      generatedAt: status === 'ready' ? '2025-01-01T00:00:01Z' : null,
+    },
+    steps: [],
+    failure: null,
+  };
+}
+
+function prReview(status: PrReview['status']): PrReview {
+  return {
+    featureId: 'f1',
+    repoId: 'r1',
+    pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
+    worktreePath: 'C:\\wt',
+    baseBranch: 'main',
+    status,
+    summary: status === 'ready' ? 'Adds retry.' : null,
+    coreAnalysis: status === 'ready' ? '- wraps client' : null,
+    changedFiles: status === 'ready' ? 3 : null,
+    timestamps: {
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:01Z',
+      generatedAt: status === 'ready' ? '2025-01-01T00:00:01Z' : null,
+    },
+    failure: null,
   };
 }
 
@@ -126,6 +163,20 @@ describe('parseServerEvent', () => {
     expect(event?.type).toBe('usage.recorded');
   });
 
+  it('parses repository context updates', () => {
+    const context = repositoryContext('generating');
+    expect(
+      parseServerEvent('repository.context.updated', JSON.stringify(context)),
+    ).toEqual({ type: 'repository.context.updated', context });
+  });
+
+  it('parses PR review updates', () => {
+    const review = prReview('generating');
+    expect(
+      parseServerEvent('pr.review.updated', JSON.stringify(review)),
+    ).toEqual({ type: 'pr.review.updated', review });
+  });
+
   it('returns null for unknown event names', () => {
     expect(parseServerEvent('mystery', '{}')).toBeNull();
   });
@@ -185,6 +236,30 @@ describe('applyStreamEvent', () => {
     });
     expect(Object.keys(state.usageByKey)).toHaveLength(1);
     expect(state.usageByKey['s1:0'].credits).toBe(99);
+  });
+
+  it('keeps the latest repository context by repository id', () => {
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'repository.context.updated',
+      context: repositoryContext('generating'),
+    });
+    state = applyStreamEvent(state, {
+      type: 'repository.context.updated',
+      context: repositoryContext('ready'),
+    });
+    expect(state.repositoryContexts['r1'].status).toBe('ready');
+  });
+
+  it('keeps the latest PR review by feature id', () => {
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'pr.review.updated',
+      review: prReview('generating'),
+    });
+    state = applyStreamEvent(state, {
+      type: 'pr.review.updated',
+      review: prReview('ready'),
+    });
+    expect(state.prReviews['f1'].status).toBe('ready');
   });
 });
 

@@ -22,10 +22,10 @@ describe('azure-controller', () => {
       createAzureRoutes({
         azureStatus: (target) => {
           seen = target;
-          return Promise.resolve({ authenticated: true, account: 'alice' });
+          return Promise.resolve({ authenticated: true, account: 'alice', message: null });
         },
         azureSignIn: () =>
-          Promise.resolve({ authenticated: false, account: null }),
+          Promise.resolve({ authenticated: false, account: null, message: null }),
       }),
       'get',
       '/azure-devops/status',
@@ -34,7 +34,7 @@ describe('azure-controller', () => {
     expect(seen).toEqual({ host: 'dev.azure.com', org: 'contoso' });
     expect(result).toEqual({
       status: 200,
-      body: { authenticated: true, account: 'alice' },
+      body: { authenticated: true, account: 'alice', message: null },
     });
   });
 
@@ -44,10 +44,10 @@ describe('azure-controller', () => {
       createAzureRoutes({
         azureStatus: (target) => {
           seen = target;
-          return Promise.resolve({ authenticated: false, account: null });
+          return Promise.resolve({ authenticated: false, account: null, message: null });
         },
         azureSignIn: () =>
-          Promise.resolve({ authenticated: false, account: null }),
+          Promise.resolve({ authenticated: false, account: null, message: null }),
       }),
       'get',
       '/azure-devops/status',
@@ -61,10 +61,10 @@ describe('azure-controller', () => {
     const result = await pick(
       createAzureRoutes({
         azureStatus: () =>
-          Promise.resolve({ authenticated: false, account: null }),
+          Promise.resolve({ authenticated: false, account: null, message: null }),
         azureSignIn: (target) => {
           seen = target;
-          return Promise.resolve({ authenticated: true, account: 'bob' });
+          return Promise.resolve({ authenticated: true, account: 'bob', message: null });
         },
       }),
       'post',
@@ -74,7 +74,7 @@ describe('azure-controller', () => {
     expect(seen).toEqual({ host: 'dev.azure.com', org: 'contoso' });
     expect(result).toEqual({
       status: 200,
-      body: { authenticated: true, account: 'bob' },
+      body: { authenticated: true, account: 'bob', message: null },
     });
   });
 
@@ -83,10 +83,10 @@ describe('azure-controller', () => {
     await pick(
       createAzureRoutes({
         azureStatus: () =>
-          Promise.resolve({ authenticated: false, account: null }),
+          Promise.resolve({ authenticated: false, account: null, message: null }),
         azureSignIn: (target) => {
           seen = target;
-          return Promise.resolve({ authenticated: false, account: null });
+          return Promise.resolve({ authenticated: false, account: null, message: null });
         },
       }),
       'post',
@@ -96,3 +96,4 @@ describe('azure-controller', () => {
     expect(seen).toEqual({ host: 'dev.azure.com', org: null });
   });
 });
+

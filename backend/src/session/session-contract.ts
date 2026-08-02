@@ -2,6 +2,12 @@ import type { SessionKind } from '../provider/provider-contract.js';
 
 export type { SessionKind };
 
+/**
+ * Controls whether a persisted session belongs to the user-facing feature
+ * timeline. Internal sessions still use `kind` for usage accounting.
+ */
+export type SessionScope = 'feature' | 'internal';
+
 /** Lifecycle status of a session. */
 export type SessionStatus =
   | 'created'
@@ -23,6 +29,8 @@ export interface Session {
   resolvedModel: string | null;
   status: SessionStatus;
   kind: SessionKind;
+  /** Defaults to `feature` for records created before scoped sessions. */
+  scope?: SessionScope;
   prompt: string;
   /** Absolute/relative path of this session's OTel usage file. */
   usageFilePath: string;
@@ -38,6 +46,9 @@ export interface StartSessionRequest {
   providerId?: string;
   model?: string;
   prompt: string;
+  /** Absolute paths attached to the provider's initial prompt. */
+  attachments?: readonly string[];
   kind?: SessionKind;
+  scope?: SessionScope;
   cwd?: string;
 }

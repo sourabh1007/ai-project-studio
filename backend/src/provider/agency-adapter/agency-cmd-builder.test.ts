@@ -44,4 +44,22 @@ describe('agency-cmd-builder', () => {
     expect(cmd.args).not.toContain('-s');
     expect(cmd.args.slice(-2)).toEqual(['--effort', 'high']);
   });
+
+  it('passes repeated attachment flags through without a large prompt argument', () => {
+    const attachmentContent = 'repository evidence '.repeat(2_000);
+    const cmd = buildAgencyCommand(
+      {
+        ...spec,
+        prompt: 'Analyze the attached request.',
+        attachments: ['C:\\Temp\\aps-a\\p.md', 'C:\\Temp\\aps-b\\p.md'],
+      },
+      agencyDefaults,
+    );
+
+    expect(cmd.args.filter((arg) => arg === '--attachment')).toHaveLength(2);
+    expect(cmd.args).toContain('C:\\Temp\\aps-a\\p.md');
+    expect(cmd.args).toContain('C:\\Temp\\aps-b\\p.md');
+    expect(attachmentContent.length).toBeGreaterThan(32_768);
+    expect(cmd.args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
+  });
 });

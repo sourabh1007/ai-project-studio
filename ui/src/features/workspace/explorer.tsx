@@ -3,12 +3,19 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
-import type { Feature, Repository, Session, SessionBreakdown } from '../../lib/types.js';
+import type {
+  Feature,
+  Repository,
+  RepositoryContext,
+  Session,
+  SessionBreakdown,
+} from '../../lib/types.js';
 import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import {
   ChevronIcon,
   ArrowDownIcon,
@@ -36,6 +43,11 @@ import { RepoPicker } from './repo-picker.js';
 import { PrReviewPicker } from './pr-review-picker.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
+import {
+  RepositoryContextBadge,
+  RepositoryContextViewer,
+  repositoryContextBlockReason,
+} from './repository-context.js';
 
 /** Merges a persisted session with any live status/model updates. */
 function mergeLive(session: Session, live: LiveState): Session {
@@ -234,6 +246,7 @@ function SessionRow({
 
 function FeatureNode({
   feature,
+  repositoryContext,
   live,
   activeSessionId,
   names,
@@ -245,6 +258,7 @@ function FeatureNode({
   onDeleteSession,
 }: {
   feature: Feature;
+  repositoryContext?: RepositoryContext | null;
   live: LiveState;
   activeSessionId: string | null;
   names: Record<string, string>;
@@ -280,6 +294,15 @@ function FeatureNode({
     (usage.data?.bySession ?? []).map((s) => [s.sessionId, s]),
   );
   const accent = featureColor(feature.id);
+  const contextBlockReason = feature.repoId
+    ? repositoryContextBlockReason(repositoryContext)
+    : null;
+
+  useEffect(() => {
+    if (contextBlockReason) {
+      setCreating(false);
+    }
+  }, [contextBlockReason]);
 
   function startEditing() {
     setDraft(feature.name);
@@ -365,8 +388,12 @@ function FeatureNode({
         <button
           type="button"
           className="tree-action"
-          title="New session"
+          title={contextBlockReason ?? 'New session'}
           aria-label={`New session in ${feature.name}`}
+          aria-describedby={
+            contextBlockReason ? `session-blocked-${feature.id}` : undefined
+          }
+          disabled={Boolean(contextBlockReason)}
           onClick={() => {
             setExpanded(true);
             setImporting(false);
@@ -431,6 +458,15 @@ function FeatureNode({
       <div className="feature-tags">
         <SkillChips scope="feature" targetId={feature.id} />
       </div>
+      {contextBlockReason && (
+        <span
+          id={`session-blocked-${feature.id}`}
+          className="session-context-blocked"
+          role="status"
+        >
+          {contextBlockReason}
+        </span>
+      )}
 
       {expanded && (
         <div className="tree-children">
@@ -460,7 +496,7 @@ function FeatureNode({
               onCancel={() => setImporting(false)}
             />
           )}
-          {sessions.loading && <EmptyState message="Loading sessions…" />}
+          {sessions.loading && <Loader label="Loading sessions" />}
           <ErrorText error={sessions.error} />
           {!sessions.loading && rows.length === 0 && !creating && !importing && (
             <EmptyState message="No sessions yet." />
@@ -583,6 +619,7 @@ function RepoAddMenu({
  * `repo` is null) that holds the features scoped to it. */
 function RepoNode({
   repo,
+  repositoryContext,
   features,
   defaultExpanded,
   live,
@@ -597,8 +634,10 @@ function RepoNode({
   onAddFeature,
   onStartReview,
   onDeleteRepo,
+  onContextUpdated,
 }: {
   repo: Repository | null;
+  repositoryContext?: RepositoryContext | null;
   features: Feature[];
   defaultExpanded: boolean;
   live: LiveState;
@@ -613,9 +652,11 @@ function RepoNode({
   onAddFeature: (repoId: string | null) => void;
   onStartReview: (repo: Repository) => void;
   onDeleteRepo: (repo: Repository) => void;
+  onContextUpdated: (context: RepositoryContext) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [confirming, setConfirming] = useState(false);
+  const [viewingContext, setViewingContext] = useState(false);
   const title = repo ? repo.name : 'No repository';
   const providerLabel = repo?.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
 
@@ -643,6 +684,12 @@ function RepoNode({
           {title}
         </span>
         {repo && <span className="repo-provider-chip">{providerLabel}</span>}
+        {repo && (
+          <RepositoryContextBadge
+            context={repositoryContext}
+            onClick={() => setViewingContext(true)}
+          />
+        )}
         {repo ? (
           <RepoAddMenu
             title={title}
@@ -696,6 +743,11 @@ function RepoNode({
               label={`Actions for ${title}`}
               actions={[
                 {
+                  label: 'View context',
+                  icon: <FilesIcon />,
+                  onSelect: () => setViewingContext(true),
+                },
+                {
                   label: 'Remove repository',
                   icon: <TrashIcon />,
                   danger: true,
@@ -706,6 +758,15 @@ function RepoNode({
           ))}
       </div>
 
+      {repo && viewingContext && repositoryContext && (
+        <RepositoryContextViewer
+          repo={repo}
+          context={repositoryContext}
+          onClose={() => setViewingContext(false)}
+          onUpdated={onContextUpdated}
+        />
+      )}
+
       {expanded && (
         <div className="tree-children repo-children">
           {features.length === 0 && (
@@ -715,6 +776,7 @@ function RepoNode({
             <FeatureNode
               key={feature.id}
               feature={feature}
+              repositoryContext={repositoryContext}
               live={live}
               activeSessionId={activeSessionId}
               names={names}
@@ -772,6 +834,9 @@ export function Explorer({
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [repositoryContexts, setRepositoryContexts] = useState<
+    Record<string, RepositoryContext>
+  >({});
 
   function openFeatureForm(repoId: string | null) {
     setTargetRepoId(repoId);
@@ -830,6 +895,70 @@ export function Explorer({
 
   const allFeatures = features.data ?? [];
   const repoList = repos.data ?? [];
+  const repoIds = repoList.map((repo) => repo.id).join(',');
+
+  useEffect(() => {
+    if (!repoIds) {
+      return;
+    }
+    let active = true;
+    Promise.allSettled(
+      repoList.map((repo) => api.getRepositoryContext(repo.id)),
+    ).then((results) => {
+      if (!active) {
+        return;
+      }
+      setRepositoryContexts((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            next[result.value.repositoryId] = result.value;
+          }
+        });
+        return next;
+      });
+    });
+    return () => {
+      active = false;
+    };
+    // Fetch once when repository membership changes; SSE owns later updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, repoIds]);
+
+  function contextFor(repo: Repository): RepositoryContext {
+    const repoId = repo.id;
+    const fetched = repositoryContexts[repoId];
+    const streamed = live.repositoryContexts[repoId];
+    if (!fetched && !streamed) {
+      return {
+        repositoryId: repoId,
+        status: 'pending',
+        content: null,
+        sourceRevision: null,
+        timestamps: {
+          createdAt: repo.createdAt,
+          updatedAt: repo.createdAt,
+          generationStartedAt: null,
+          generatedAt: null,
+        },
+        steps: [],
+        failure: null,
+      };
+    }
+    if (!fetched) return streamed!;
+    if (!streamed) return fetched;
+    return Date.parse(streamed.timestamps.updatedAt) >=
+      Date.parse(fetched.timestamps.updatedAt)
+      ? streamed
+      : fetched;
+  }
+
+  function updateContext(context: RepositoryContext) {
+    setRepositoryContexts((current) => ({
+      ...current,
+      [context.repositoryId]: context,
+    }));
+  }
   const orphanFeatures = allFeatures.filter(
     (f) => !f.repoId || !repoList.some((r) => r.id === f.repoId),
   );
@@ -921,7 +1050,7 @@ export function Explorer({
 
       <div className="explorer-body">
         {(repos.loading || features.loading) && (
-          <EmptyState message="Loading workspace…" />
+          <Loader label="Loading workspace" />
         )}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
@@ -935,6 +1064,7 @@ export function Explorer({
           <RepoNode
             key={repo.id}
             repo={repo}
+            repositoryContext={contextFor(repo)}
             features={allFeatures.filter((f) => f.repoId === repo.id)}
             defaultExpanded
             live={live}
@@ -949,11 +1079,13 @@ export function Explorer({
             onAddFeature={openFeatureForm}
             onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
+            onContextUpdated={updateContext}
           />
         ))}
         {orphanFeatures.length > 0 && (
           <RepoNode
             repo={null}
+            repositoryContext={null}
             features={orphanFeatures}
             defaultExpanded={repoList.length === 0}
             live={live}
@@ -968,6 +1100,7 @@ export function Explorer({
             onAddFeature={openFeatureForm}
             onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
+            onContextUpdated={updateContext}
           />
         )}
       </div>

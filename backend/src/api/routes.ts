@@ -22,6 +22,10 @@ import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
 import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
+import type {
+  DeviceCodeStart,
+  DevicePollResult,
+} from '../github-auth/github-device-auth.js';
 import { createGithubRoutes } from './github-controller.js';
 import type {
   AzureDevOpsStatus,
@@ -33,6 +37,8 @@ import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
+import type { PrReviewService } from '../pr-review/pr-review-service.js';
+import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createConfigRoutes } from './config-controller.js';
@@ -47,8 +53,10 @@ import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
+import { createPrReviewRoutes } from './pr-review-controller.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
 import type { Route } from './http-contract.js';
+import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 
 export interface ApiRoutesDeps {
   features: FeatureService;
@@ -67,6 +75,7 @@ export interface ApiRoutesDeps {
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
   skills: SkillsService;
+  sessionBootstrap: SessionBootstrap;
   /** Applies a freshly-tagged session skill to that session's live terminal. */
   injectSessionSkill?: (sessionId: string, skillId: string) => void;
   /** Reverses a session skill on its live terminal when it is untagged. */
@@ -84,12 +93,17 @@ export interface ApiRoutesDeps {
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
   githubStatus: () => Promise<GithubAuthStatus>;
+  /** Begins an in-app GitHub device-flow sign-in. */
+  githubSignInStart: () => Promise<DeviceCodeStart>;
+  /** Polls an in-app GitHub device-flow sign-in for completion. */
+  githubSignInPoll: (deviceCode: string) => Promise<DevicePollResult>;
   /** Reports whether GCM has a cached Azure DevOps credential for a target. */
   azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** The repository layer the workspace is organized around. */
   repos: RepoService;
+  repositoryContexts: RepositoryContextCoordinator;
   /** Clones or attaches an existing checkout, yielding a repo create input. */
   provisionRepo: (input: ProvisionRepoInput) => Promise<CreateRepositoryInput>;
   /** Lists the authenticated user's GitHub repositories. */
@@ -98,6 +112,8 @@ export interface ApiRoutesDeps {
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
   /** Lists a repo's pull requests and turns one into a review feature. */
   prFeatures: PrFeatureService;
+  /** Automated AI reviews for PR review features. */
+  prReviews: PrReviewService;
   logger: Logger;
 }
 
@@ -109,7 +125,6 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       launcher: deps.launcher,
       sessions: deps.sessions,
       admin: deps.admin,
-      skills: deps.skills,
       logger: deps.logger,
     }),
     ...createTerminalRoutes({
@@ -117,6 +132,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       factory: deps.factory,
       sessions: deps.sessions,
       config: deps.sessionConfig,
+      bootstrap: deps.sessionBootstrap,
     }),
     ...createProviderRoutes({ registry: deps.providers }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
@@ -136,6 +152,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       removeSessionSkill: deps.removeSessionSkill,
     }),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
+    ...createPrReviewRoutes({ prReviews: deps.prReviews }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createConfigRoutes({
       registry: deps.configRegistry,
@@ -143,13 +160,18 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       secretPaths: deps.configSecretPaths,
     }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
-    ...createGithubRoutes({ githubStatus: deps.githubStatus }),
+    ...createGithubRoutes({
+      githubStatus: deps.githubStatus,
+      githubSignInStart: deps.githubSignInStart,
+      githubSignInPoll: deps.githubSignInPoll,
+    }),
     ...createAzureRoutes({
       azureStatus: deps.azureStatus,
       azureSignIn: deps.azureSignIn,
     }),
     ...createRepoRoutes({
       repos: deps.repos,
+      repositoryContexts: deps.repositoryContexts,
       provision: deps.provisionRepo,
       listGithubRepos: deps.listGithubRepos,
       listAzureRepos: deps.listAzureRepos,

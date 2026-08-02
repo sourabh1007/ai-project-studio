@@ -47,6 +47,30 @@ describe('copilot-cmd-builder', () => {
     expect(args.slice(-2)).toEqual(['--effort', 'high']);
   });
 
+  it('maps initial attachments to repeated documented flags without inlining content', () => {
+    const attachmentContent = 'x'.repeat(40_000);
+    const args = buildCopilotArgs(
+      {
+        ...spec,
+        prompt: 'Analyze the attached request.',
+        attachments: ['C:\\Temp\\aps-a\\p.md', 'C:\\Temp\\aps-b\\p.md'],
+      },
+      copilotDefaults,
+    );
+
+    expect(args).toContain('Analyze the attached request.');
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '--attachment',
+        'C:\\Temp\\aps-a\\p.md',
+        'C:\\Temp\\aps-b\\p.md',
+      ]),
+    );
+    expect(args.filter((arg) => arg === '--attachment')).toHaveLength(2);
+    expect(attachmentContent.length).toBeGreaterThan(32_768);
+    expect(args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
+  });
+
   it('buildCopilotCommand pairs executable with args', () => {
     const config = { ...copilotDefaults, executable: '/opt/copilot' };
     const cmd = buildCopilotCommand(spec, config);
@@ -77,5 +101,14 @@ describe('copilot-cmd-builder', () => {
     const args = buildCopilotInteractiveArgs(spec, config);
     expect(args).not.toContain('--allow-all-tools');
     expect(args.at(-1)).toBe('--banner');
+  });
+
+  it('includes initial attachments in interactive args', () => {
+    const args = buildCopilotInteractiveArgs(
+      { ...spec, attachments: ['C:\\Temp\\aps-a\\p.md'] },
+      copilotDefaults,
+    );
+    expect(args).toContain('--attachment');
+    expect(args).toContain('C:\\Temp\\aps-a\\p.md');
   });
 });

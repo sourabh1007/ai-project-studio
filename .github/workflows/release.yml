@@ -23,10 +23,8 @@ jobs:
         include:
           - os: windows-latest
             label: Windows
-            builder: dist:win
           - os: macos-latest
             label: macOS
-            builder: dist:mac
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -50,11 +48,42 @@ jobs:
         working-directory: desktop/build/backend
         run: npm install --omit=dev --no-audit --no-fund
 
-      - name: Build installer
+      - name: Build Windows installer (Azure Trusted Signing)
+        if: runner.os == 'Windows'
         working-directory: desktop
-        run: npm run ${{ matrix.builder }}
+        shell: pwsh
+        run: |
+          $signArgs = @()
+          if ($env:AZURE_CODE_SIGNING_ENDPOINT) {
+            Write-Host 'Azure Trusted Signing configured — producing a signed installer.'
+            $signArgs = @(
+              "-c.win.azureSignOptions.endpoint=$env:AZURE_CODE_SIGNING_ENDPOINT",
+              "-c.win.azureSignOptions.codeSigningAccountName=$env:AZURE_CODE_SIGNING_ACCOUNT",
+              "-c.win.azureSignOptions.certificateProfileName=$env:AZURE_CODE_SIGNING_PROFILE"
+            )
+          } else {
+            Write-Warning 'AZURE_CODE_SIGNING_* secrets are not set — building an UNSIGNED Windows installer.'
+          }
+          npm run dist:win -- @signArgs
         env:
-          # CI builds are unsigned; do not attempt to auto-discover signing certs.
+          # Microsoft Entra ID service-principal credentials for Azure Trusted
+          # Signing (azure.identity EnvironmentCredential). Absent secrets fall
+          # back to an unsigned build above rather than failing the release.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Non-secret Trusted Signing account identifiers.
+          AZURE_CODE_SIGNING_ENDPOINT: ${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CODE_SIGNING_PROFILE: ${{ secrets.AZURE_CODE_SIGNING_PROFILE }}
+
+      - name: Build macOS installer (unsigned)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: npm run dist:mac
+        env:
+          # No Apple Developer Program membership yet; skip signing-cert
+          # auto-discovery so the build doesn't fail hunting for an identity.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload build artifacts

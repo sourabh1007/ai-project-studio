@@ -16,14 +16,16 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
-import type { FeatureUsage, Session } from '../../lib/types.js';
+import type { FeatureUsage, PrReview, Session } from '../../lib/types.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import {
   ActivityIcon,
   OverviewIcon,
   UsageIcon,
 } from '../../components/icons.js';
 import { FeatureWorkSummaryPanel } from './work-summary.js';
+import { PrReviewPanel } from './pr-review-panel.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
 
 const PALETTE = [
@@ -149,10 +151,12 @@ export function FeatureDashboard({
   featureId,
   featureName,
   featureDescription,
+  prReview,
 }: {
   featureId: string;
   featureName: string;
   featureDescription?: string;
+  prReview?: PrReview;
 }) {
   const api = useApi();
   const { data, loading, error } = useAsync<FeatureUsage>(
@@ -170,7 +174,9 @@ export function FeatureDashboard({
       </header>
 
       <ErrorText error={error} />
-      {loading && <EmptyState message="Loading analytics…" />}
+      {loading && <Loader label="Loading analytics" />}
+
+      <PrReviewPanel featureId={featureId} liveReview={prReview} />
 
       <section className="dash-skills">
         <SkillTagger

@@ -36,6 +36,7 @@ function session(overrides: Partial<Session> = {}): Session {
     resolvedModel: null,
     status: 'running',
     kind: 'dev',
+    scope: 'feature',
     prompt: 'do it',
     usageFilePath: 'usage/s1.jsonl',
     createdAt: '2025-01-01T00:00:00.000Z',
@@ -179,6 +180,26 @@ describe('session-repo', () => {
     repo.deleteByFeature('f1');
     expect(repo.listByFeature('f1')).toEqual([]);
     expect(repo.get('s3')).not.toBeNull();
+    db.close();
+  });
+
+  it('hides internal sessions from feature lists but retains them internally', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ id: 'visible' }));
+    repo.save(session({ id: 'analysis', scope: 'internal', kind: 'meta' }));
+
+    expect(repo.listByFeature('f1').map((s) => s.id)).toEqual(['visible']);
+    expect(repo.listAll().map((s) => s.id)).toEqual(['analysis', 'visible']);
+    expect(repo.get('analysis')?.scope).toBe('internal');
+    db.close();
+  });
+
+  it('defaults a missing scope to "feature" on save', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ id: 'noscope', scope: undefined as unknown as Session['scope'] }));
+    expect(repo.get('noscope')?.scope).toBe('feature');
     db.close();
   });
 

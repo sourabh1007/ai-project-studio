@@ -5,6 +5,7 @@ import type { SessionFactory } from '../session/session-factory.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
+import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 
 const createTerminalSessionSchema = z.object({
   providerId: z.string().min(1).optional(),
@@ -17,6 +18,7 @@ export interface TerminalControllerDeps {
   factory: SessionFactory;
   sessions: SessionRepo;
   config: SessionConfig;
+  bootstrap: Pick<SessionBootstrap, 'assertFeatureReady'>;
 }
 
 /**
@@ -32,6 +34,10 @@ export function createTerminalRoutes(deps: TerminalControllerDeps): Route[] {
       path: '/features/:featureId/terminal-sessions',
       handler: async (req) => {
         const input = parseInput(createTerminalSessionSchema, req.body);
+        const kind = input.kind ?? deps.config.defaultKind;
+        if (kind === 'dev') {
+          await deps.bootstrap.assertFeatureReady(req.params.featureId);
+        }
         const selection = await deps.resolver.resolve({
           providerId: input.providerId,
           model: input.model,
@@ -40,7 +46,7 @@ export function createTerminalRoutes(deps: TerminalControllerDeps): Route[] {
           featureId: req.params.featureId,
           provider: selection.provider.id,
           requestedModel: selection.model,
-          kind: input.kind ?? deps.config.defaultKind,
+          kind,
           prompt: '',
         });
         deps.sessions.save(session);

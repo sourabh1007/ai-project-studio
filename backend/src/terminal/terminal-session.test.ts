@@ -47,6 +47,7 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 1000,
       transcriptBytes: 1000,
       onExit: () => {},
@@ -65,6 +66,7 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 1000,
       transcriptBytes: 1000,
       onExit: () => {},
@@ -83,6 +85,7 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 4,
       transcriptBytes: 1000,
       onExit: () => {},
@@ -98,6 +101,7 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 1000,
       transcriptBytes: 4,
       onExit: () => {},
@@ -112,6 +116,7 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 1000,
       transcriptBytes: 1000,
       onExit: () => {},
@@ -130,10 +135,12 @@ describe('createTerminalSession', () => {
     const session = createTerminalSession({
       sessionId: 's1',
       pty: f.pty,
+      inputReady: true,
       scrollbackBytes: 1000,
       transcriptBytes: 1000,
       onExit: (c) => exitHook.push(c),
     });
+
     const live = recordingSink();
     session.attach(live.sink);
     f.emitData('bye');
@@ -147,5 +154,46 @@ describe('createTerminalSession', () => {
     session.attach(late.sink);
     expect(late.output).toEqual(['bye']);
     expect(late.exits).toEqual([0]);
+  });
+
+  it('settles pending input readiness as ready or closed exactly once', () => {
+    const readyPty = fakePty();
+    const session = createTerminalSession({
+      sessionId: 's1',
+      pty: readyPty.pty,
+      inputReady: false,
+      scrollbackBytes: 1000,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    const states: string[] = [];
+    const detach = session.onInputReadiness((state) => states.push(state));
+    expect(session.inputReadiness).toBe('pending');
+    session.markInputReady();
+    session.markInputReady();
+    expect(states).toEqual(['ready']);
+    expect(session.inputReadiness).toBe('ready');
+    detach();
+
+    const immediate: string[] = [];
+    session.onInputReadiness((state) => immediate.push(state));
+    expect(immediate).toEqual(['ready']);
+
+    const closedPty = fakePty();
+    const closed = createTerminalSession({
+      sessionId: 's2',
+      pty: closedPty.pty,
+      inputReady: false,
+      scrollbackBytes: 1000,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    const closedStates: string[] = [];
+    closed.onInputReadiness((state) => closedStates.push(state));
+    closedPty.emitExit(1);
+    expect(closedStates).toEqual(['closed']);
+    expect(closed.inputReadiness).toBe('closed');
+    closed.markInputReady();
+    expect(closed.inputReadiness).toBe('closed');
   });
 });

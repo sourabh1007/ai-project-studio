@@ -242,6 +242,18 @@ async function bootstrap() {
     }
   });
 
+  // Open an external https link (e.g. the GitHub device-flow verification page)
+  // in the user's default browser. Restricted to http/https so the renderer
+  // can't ask the OS to launch arbitrary protocols.
+  ipcMain.on('link:open', (event, url) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+  });
+
   applyContentSecurityPolicy();
 
   let loadUrl;

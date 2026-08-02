@@ -10,6 +10,7 @@ import type { IAIProvider } from '../provider/provider-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { HttpRequest, Route } from './http-contract.js';
+import { ConflictError } from '../kernel/error-types.js';
 
 function provider(): IAIProvider {
   return {
@@ -36,7 +37,7 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
 }
 
-function harness() {
+function harness(ready = true) {
   const registry = createProviderRegistry();
   registry.register(provider());
   const resolver = createProviderResolver(registry, {
@@ -59,6 +60,13 @@ function harness() {
     factory,
     sessions,
     config: sessionDefaults,
+    bootstrap: {
+      assertFeatureReady: async () => {
+        if (!ready) {
+          throw new ConflictError('Repository context is stale');
+        }
+      },
+    },
   });
   return { routes, saved };
 }
@@ -97,7 +105,7 @@ describe('terminal-controller', () => {
   });
 
   it('honours an explicit kind', async () => {
-    const h = harness();
+    const h = harness(false);
     const result = await pick(
       h.routes,
       'post',
@@ -105,6 +113,16 @@ describe('terminal-controller', () => {
     )(req({ params: { featureId: 'feat-1' }, body: { kind: 'meta' } }));
 
     expect((result.body as Session).kind).toBe('meta');
+  });
+
+  it('rejects dev session creation when repository context is not ready', async () => {
+    const h = harness(false);
+    await expect(
+      pick(h.routes, 'post', '/features/:featureId/terminal-sessions')(
+        req({ params: { featureId: 'feat-1' }, body: {} }),
+      ),
+    ).rejects.toMatchObject({ kind: 'conflict' });
+    expect(h.saved).toEqual([]);
   });
 
   it('rejects an invalid model type', async () => {

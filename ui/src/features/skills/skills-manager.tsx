@@ -3,6 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Skill, SkillExport, SkillKind } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import {
   ExportIcon,
   PencilIcon,
@@ -143,7 +144,7 @@ export function SkillsManager() {
       />
 
       <ErrorText error={error ?? skills.error} />
-      {skills.loading && <EmptyState message="Loading skills…" />}
+      {skills.loading && <Loader label="Loading skills" />}
       {!skills.loading && list.length === 0 && (
         <EmptyState message="No skills yet. Create your first reusable instruction." />
       )}

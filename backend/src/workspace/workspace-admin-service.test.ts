@@ -33,7 +33,10 @@ function session(id: string, featureId = 'f1'): Session {
   };
 }
 
-function harness(featureSessions: Session[] = []) {
+function harness(
+  featureSessions: Session[] = [],
+  options: { withPrReviews?: boolean } = {},
+) {
   const calls: string[] = [];
   const known = new Map<string, Session>(
     featureSessions.map((s) => [s.id, s]),
@@ -87,6 +90,9 @@ function harness(featureSessions: Session[] = []) {
     terminals: {
       close: (id) => calls.push(`terminals.close:${id}`),
     },
+    prReviews: options.withPrReviews
+      ? { removeForFeature: (id) => calls.push(`prReviews.removeForFeature:${id}`) }
+      : undefined,
   });
   return { admin, calls };
 }
@@ -151,6 +157,19 @@ describe('workspace-admin-service', () => {
       'sessions.listByFeature:f1',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
+      'feature.remove:f1',
+    ]);
+  });
+
+  it('purges a feature PR review when a remover is wired', async () => {
+    const { admin, calls } = harness([], { withPrReviews: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeature:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'prReviews.removeForFeature:f1',
       'feature.remove:f1',
     ]);
   });

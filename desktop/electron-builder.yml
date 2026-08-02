@@ -27,6 +27,13 @@ extraResources:
   - from: build/ui
     to: ui
 
+# Windows installers are code-signed in CI with Azure Trusted Signing so users
+# don't hit the "Unknown Publisher" SmartScreen error on install. The signing
+# provider is enabled by the `win.azureSignOptions.*` overrides the Release
+# workflow injects at build time (endpoint / account / certificate-profile), with
+# Entra ID credentials supplied via AZURE_* env vars — see
+# .github/workflows/release.yml and docs/development.md. No signing config is
+# committed here, so a local `npm run dist:win` still produces an unsigned build.
 win:
   target:
     - nsis
@@ -43,6 +50,8 @@ mac:
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
 
-# CI builds are unsigned; skip auto-discovery of signing identities.
+# macOS artifacts are unsigned (no Apple Developer Program membership yet), so
+# skip signing-identity auto-discovery to keep CI green. Users bypass Gatekeeper
+# on first launch — see the "Releases" section of README.md.
 dmg:
   sign: false

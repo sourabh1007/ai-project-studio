@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { GithubStatus } from '../../lib/types.js';
+import { GithubSignInModal } from './github-signin.js';
 
 /**
  * Sidebar badge showing the IDE's single GitHub login. Authentication is done
@@ -14,6 +15,7 @@ import type { GithubStatus } from '../../lib/types.js';
  */
 export function GithubStatusBadge() {
   const api = useApi();
+  const [signInOpen, setSignInOpen] = useState(false);
   const { data, loading, reload } = useAsync<GithubStatus>(
     () => api.getGithubStatus(),
     [],
@@ -39,19 +41,40 @@ export function GithubStatusBadge() {
         : 'GitHub · sign in required';
 
   return (
-    <button
-      type="button"
-      className={`gh-status gh-status-${state}`}
-      onClick={reload}
-      disabled={loading}
-      title={
-        authenticated
-          ? 'Signed in to GitHub. All sessions inherit this login automatically. Click to re-check.'
-          : 'Not signed in. Run `gh auth login` (or start an agency session) once; all sessions will then authenticate automatically. Click to re-check.'
-      }
-    >
-      <span className="gh-status-dot" aria-hidden="true" />
-      <span className="gh-status-label">{label}</span>
-    </button>
+    <div className="gh-status-wrap">
+      <button
+        type="button"
+        className={`gh-status gh-status-${state}`}
+        onClick={reload}
+        disabled={loading}
+        title={
+          authenticated
+            ? 'Signed in to GitHub. All sessions inherit this login automatically. Click to re-check.'
+            : 'Not signed in. Click “Sign in” to authorize this device, or re-check if you signed in elsewhere.'
+        }
+      >
+        <span className="gh-status-dot" aria-hidden="true" />
+        <span className="gh-status-label">{label}</span>
+      </button>
+      {!authenticated && state !== 'checking' && (
+        <button
+          type="button"
+          className="az-signin-btn gh-signin-btn"
+          onClick={() => setSignInOpen(true)}
+          title="Sign in to GitHub on this device"
+        >
+          Sign in
+        </button>
+      )}
+      {signInOpen && (
+        <GithubSignInModal
+          onClose={() => setSignInOpen(false)}
+          onAuthenticated={() => {
+            setSignInOpen(false);
+            reload();
+          }}
+        />
+      )}
+    </div>
   );
 }

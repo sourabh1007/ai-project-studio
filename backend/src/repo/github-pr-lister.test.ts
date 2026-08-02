@@ -45,6 +45,8 @@ describe('parseGithubPulls', () => {
         url: 'https://github.com/acme/app/pull/12',
         sourceBranch: 'feature/login',
         author: 'Mona',
+        isAuthor: false,
+        isReviewer: false,
       },
       {
         provider: 'github',
@@ -53,8 +55,42 @@ describe('parseGithubPulls', () => {
         url: 'https://github.com/acme/app/pull/8',
         sourceBranch: 'fix/bug',
         author: 'hubot',
+        isAuthor: false,
+        isReviewer: false,
       },
     ]);
+  });
+
+  it('flags the current user as author or requested reviewer', () => {
+    const json = JSON.stringify([
+      {
+        number: 1,
+        title: 'Mine',
+        url: 'u1',
+        headRefName: 'a',
+        author: { login: 'Octocat' },
+      },
+      {
+        number: 2,
+        title: 'Review me',
+        url: 'u2',
+        headRefName: 'b',
+        author: { login: 'someone' },
+        reviewRequests: [{ slug: 'a-team' }, { login: 'octocat' }],
+      },
+      {
+        number: 3,
+        title: 'No author',
+        url: 'u3',
+        headRefName: 'c',
+        author: null,
+        reviewRequests: [{ login: 'octocat' }],
+      },
+    ]);
+    const pulls = parseGithubPulls(json, 'octocat');
+    expect(pulls[0]).toMatchObject({ isAuthor: true, isReviewer: false });
+    expect(pulls[1]).toMatchObject({ isAuthor: false, isReviewer: true });
+    expect(pulls[2]).toMatchObject({ isAuthor: false, isReviewer: true });
   });
 
   it('returns an empty array for invalid JSON', () => {
@@ -81,6 +117,8 @@ describe('parseGithubPulls', () => {
         url: '',
         sourceBranch: 'a',
         author: null,
+        isAuthor: false,
+        isReviewer: false,
       },
     ]);
   });
@@ -132,7 +170,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,author',
+      'number,title,url,headRefName,author,reviewRequests',
     ]);
   });
 
@@ -144,6 +182,50 @@ describe('listGithubPulls', () => {
       { limit: 5 },
     );
     expect(calls[0]).toContain('5');
+  });
+
+  it('scopes to the current user for the "mine" filter', async () => {
+    const calls: string[][] = [];
+    await listGithubPulls(
+      runner({ code: 0, stdout: '[]', stderr: '' }, calls),
+      'acme/app',
+      { filter: 'mine' },
+    );
+    expect(calls[0]).toEqual([
+      'pr',
+      'list',
+      '--repo',
+      'acme/app',
+      '--state',
+      'open',
+      '--author',
+      '@me',
+      '--limit',
+      '100',
+      '--json',
+      'number,title,url,headRefName,author,reviewRequests',
+    ]);
+  });
+
+  it('searches review-requested for the "assigned" filter', async () => {
+    const calls: string[][] = [];
+    await listGithubPulls(
+      runner({ code: 0, stdout: '[]', stderr: '' }, calls),
+      'acme/app',
+      { filter: 'assigned' },
+    );
+    expect(calls[0]).toEqual([
+      'pr',
+      'list',
+      '--repo',
+      'acme/app',
+      '--search',
+      'is:open review-requested:@me',
+      '--limit',
+      '100',
+      '--json',
+      'number,title,url,headRefName,author,reviewRequests',
+    ]);
   });
 
   it('throws the stderr message on failure', async () => {
@@ -182,7 +264,7 @@ describe('getGithubPull', () => {
       '--repo',
       'acme/app',
       '--json',
-      'number,title,url,headRefName,author',
+      'number,title,url,headRefName,author,reviewRequests',
     ]);
   });
 

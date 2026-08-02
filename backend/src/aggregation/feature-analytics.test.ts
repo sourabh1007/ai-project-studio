@@ -24,6 +24,7 @@ function session(overrides: Partial<Session>): Session {
     resolvedModel: null,
     status: 'running',
     kind: 'dev',
+    scope: 'feature',
     prompt: 'p',
     usageFilePath: '/tmp/u.jsonl',
     createdAt: '2025-01-01T00:00:00.000Z',
@@ -183,6 +184,7 @@ describe('createFeatureAnalytics', () => {
       session({ id: 'r1', status: 'running' }),
       session({ id: 'r2', status: 'running' }),
       session({ id: 'done', status: 'completed' }),
+      session({ id: 'analysis', status: 'running', scope: 'internal', kind: 'meta' }),
     ];
     const analytics = harness({ members: [], usages: [], all });
     const stats = analytics.workspaceStats();

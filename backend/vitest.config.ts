@@ -47,6 +47,9 @@ export default defineConfig({
         // IO/native adapters: exercised via e2e, not unit tests (like main.ts).
         'src/terminal/node-pty-spawner.ts',
         'src/terminal/terminal-ws-server.ts',
+        'src/repository-context/git-repository-adapter.ts',
+        'src/repository-context/filesystem-evidence-adapter.ts',
+        'src/repository-context/temporary-prompt-file-adapter.ts',
       ],
       thresholds: {
         lines: 100,

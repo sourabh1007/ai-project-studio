@@ -58,6 +58,9 @@
   --panel-activitybar: #dbe1f2;
   --panel-sidebar: #f4f6fc;
   --panel-editor: #0a0f1e;
+  --panel: #ffffff;
+  --panel-inset: #eef2fb;
+  --panel-hover: rgba(79, 70, 229, 0.08);
   --statusbar-bg: #4f46e5;
   --statusbar-fg: #eef2ff;
   --item-hover: rgba(79, 70, 229, 0.08);
@@ -105,6 +108,9 @@
   --panel-activitybar: #0d1223;
   --panel-sidebar: #141a2e;
   --panel-editor: #0a0f1e;
+  --panel: #171e33;
+  --panel-inset: #10162a;
+  --panel-hover: rgba(255, 255, 255, 0.05);
   --statusbar-bg: #312e81;
   --statusbar-fg: #dfe3ff;
   --item-hover: rgba(255, 255, 255, 0.05);

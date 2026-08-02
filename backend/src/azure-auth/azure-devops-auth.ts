@@ -29,6 +29,12 @@ export type GitConfigRunner = (args: string[]) => Promise<GitRunResult>;
 export interface AzureDevOpsStatus {
   authenticated: boolean;
   account: string | null;
+  /**
+   * A human-readable reason a sign-in did not authenticate (e.g. GCM missing,
+   * no access, or the browser flow was cancelled). Null when authenticated or
+   * for a silent status check, where "not signed in" is the normal state.
+   */
+  message: string | null;
 }
 
 /** A resolved Azure DevOps credential target (host + optional organization). */
@@ -125,6 +131,7 @@ export function parseCredentialOutput(stdout: string): AzureDevOpsStatus {
   return {
     authenticated,
     account: authenticated ? (fields.get('username') ?? null) : null,
+    message: null,
   };
 }
 
@@ -140,6 +147,41 @@ export function parseCredentialPassword(stdout: string): string | null {
   return null;
 }
 
+/**
+ * Turns Git Credential Manager's stderr into a concise, user-facing reason a
+ * sign-in did not complete. GCM is missing, the account lacks access, or the
+ * browser flow was cancelled all read very differently in raw output.
+ */
+export function describeAzureFailure(stderr: string): string {
+  const text = stderr.trim();
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('is not recognized') ||
+    lower.includes('command not found') ||
+    lower.includes('no such file') ||
+    lower.includes('enoent')
+  ) {
+    return 'Git Credential Manager is not installed. Install Git for Windows (which bundles it) and try again.';
+  }
+  if (lower.includes('cancel') || lower.includes('user canceled')) {
+    return 'Sign-in was cancelled before it finished.';
+  }
+  if (
+    lower.includes('aadsts') ||
+    lower.includes('forbidden') ||
+    lower.includes('unauthorized') ||
+    lower.includes('403')
+  ) {
+    return 'Your account does not have access to this Azure DevOps organization. Check the org name or request access.';
+  }
+  if (!text) {
+    return 'Azure DevOps sign-in did not complete. Please try again.';
+  }
+  // Keep the surfaced reason short — GCM can emit multi-line stack traces.
+  const firstLine = text.split(/\r?\n/)[0];
+  return `Azure DevOps sign-in failed: ${firstLine}`;
+}
+
 /** Builds the Azure DevOps auth facade from injected process runners. */
 export function createAzureDevOpsAuth(deps: {
   credential: GitCredentialRunner;
@@ -153,7 +195,13 @@ export function createAzureDevOpsAuth(deps: {
       interactive,
     });
     if (res.code !== 0) {
-      return { authenticated: false, account: null };
+      // A silent status check failing just means "not signed in yet"; surface a
+      // reason only for an interactive sign-in the user explicitly triggered.
+      return {
+        authenticated: false,
+        account: null,
+        message: interactive ? describeAzureFailure(res.stderr) : null,
+      };
     }
     return parseCredentialOutput(res.stdout);
   };

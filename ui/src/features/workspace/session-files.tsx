@@ -2,6 +2,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { SessionFile } from '../../lib/types.js';
 import { ErrorText } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 import { FileIcon, PencilIcon, PlusIcon } from '../../components/icons.js';
 
 interface DesktopBridge {
@@ -25,7 +26,11 @@ export function SessionFiles({ sessionId }: { sessionId: string }) {
   const bridge = desktopBridge();
 
   if (files.loading) {
-    return <p className="session-files-empty">Loading files…</p>;
+    return (
+      <div className="session-files-loading">
+        <Loader label="Loading files" />
+      </div>
+    );
   }
 
   const rows = files.data ?? [];

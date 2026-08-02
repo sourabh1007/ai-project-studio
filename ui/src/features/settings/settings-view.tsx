@@ -3,6 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { ConfigValue } from '../../lib/types.js';
 import { Card, EmptyState, ErrorText } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 
 function renderValue(value: ConfigValue): string {
   if (typeof value === 'string') {
@@ -50,7 +51,7 @@ export function SettingsView() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
-      {loading && <EmptyState message="Loading configuration…" />}
+      {loading && <Loader label="Loading configuration" />}
       <ErrorText error={error} />
       {data && namespaces.length === 0 && (
         <EmptyState message="No matching settings." />

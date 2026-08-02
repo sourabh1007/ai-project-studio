@@ -8,13 +8,55 @@ function readString(source: Record<string, unknown>, key: string): string | null
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function directResponse(
+  record: Record<string, unknown>,
+  responseTextKeys: readonly string[],
+): string | null {
+  for (const key of responseTextKeys) {
+    const found = readString(record, key);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function eventContent(record: Record<string, unknown>): string | null {
+  const data = asRecord(record.data);
+  if (!data) return null;
+  return (
+    readString(data, 'content') ??
+    readString(data, 'delta') ??
+    readString(data, 'message')
+  );
+}
+
+function eventDelta(record: Record<string, unknown>): string | null {
+  const data = asRecord(record.data);
+  if (!data) return null;
+  for (const key of ['content', 'delta', 'message']) {
+    const value = data[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function isDeltaEvent(type: unknown): boolean {
+  return (
+    type === 'assistant.message_delta' ||
+    type === 'assistant.message.delta' ||
+    type === 'message.delta'
+  );
+}
+
 /**
  * Extracts the assistant's response text from a meta session transcript. The
- * CLI emits JSON when `--output-format json` is set, so we first try to read a
- * configured response key from parsed JSON, then fall back to the raw captured
- * stdout. Returns an empty string when nothing usable was captured. Unlike the
- * summarizer's extractor this performs no length clamping — callers that need
- * structured output (e.g. task plans) rely on the full text being preserved.
+ * CLI emits either one legacy JSON object or an NDJSON event stream when
+ * `--output-format json` is set. Telemetry events are never returned as text.
  */
 export function extractResponseText(
   transcript: Transcript | null,
@@ -32,19 +74,48 @@ export function extractResponseText(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return raw;
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return raw;
-  }
-
-  const record = parsed as Record<string, unknown>;
-  for (const key of responseTextKeys) {
-    const found = readString(record, key);
-    if (found !== null) {
-      return found;
+    const records: Record<string, unknown>[] = [];
+    let hasJsonEvent = false;
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.trim().length === 0) continue;
+      try {
+        const record = asRecord(JSON.parse(line));
+        if (record) {
+          records.push(record);
+          if (typeof record.type === 'string') hasJsonEvent = true;
+        }
+      } catch {
+        // A provider may mix diagnostics with NDJSON; ignore them once events exist.
+      }
     }
+    if (!hasJsonEvent) return raw;
+
+    let finalMessage: string | null = null;
+    const deltas: string[] = [];
+    for (const record of records) {
+      if (record.type === 'assistant.message') {
+        finalMessage = eventContent(record);
+      } else if (isDeltaEvent(record.type)) {
+        const delta = eventDelta(record);
+        if (delta !== null) deltas.push(delta);
+      }
+    }
+    return finalMessage ?? deltas.join('');
   }
-  return raw;
+
+  const record = asRecord(parsed);
+  if (!record) {
+    return raw;
+  }
+  const direct = directResponse(record, responseTextKeys);
+  if (direct !== null) {
+    return direct;
+  }
+  if (record.type === 'assistant.message') {
+    return eventContent(record) ?? '';
+  }
+  if (isDeltaEvent(record.type)) {
+    return eventDelta(record) ?? '';
+  }
+  return typeof record.type === 'string' ? '' : raw;
 }

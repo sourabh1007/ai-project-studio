@@ -13,7 +13,24 @@ export interface GithubStatus {
 export interface AzureDevOpsStatus {
   authenticated: boolean;
   account: string | null;
+  /** Why a sign-in did not complete (surfaced to the user); null otherwise. */
+  message?: string | null;
 }
+
+/** The one-time device code shown to the user during GitHub device-flow sign-in. */
+export interface DeviceCodeStart {
+  userCode: string;
+  verificationUri: string;
+  deviceCode: string;
+  interval: number;
+  expiresIn: number;
+}
+
+/** Result of a single device-flow poll. */
+export type DevicePollResult =
+  | { status: 'pending' }
+  | { status: 'success' }
+  | { status: 'error'; message: string };
 
 /** The source-control provider a repository was selected from. */
 export type RepoProvider = 'github' | 'azure-devops';
@@ -31,6 +48,82 @@ export interface Repository {
   localPath: string;
   defaultBranch: string | null;
   createdAt: string;
+}
+
+export type RepositoryContextStatus =
+  | 'pending'
+  | 'generating'
+  | 'ready'
+  | 'stale'
+  | 'failed';
+
+export type RepositoryContextStepStatus =
+  | 'pending'
+  | 'running'
+  | 'ok'
+  | 'failed'
+  | 'skipped';
+
+export interface RepositoryContextStep {
+  key: string;
+  label: string;
+  status: RepositoryContextStepStatus;
+  detail: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface RepositoryContextFailure {
+  code: string;
+  message: string;
+  failedAt: string;
+  retryable: boolean;
+  step: string | null;
+}
+
+export interface RepositoryContext {
+  repositoryId: string;
+  status: RepositoryContextStatus;
+  content: string | null;
+  sourceRevision: string | null;
+  timestamps: {
+    createdAt: string;
+    updatedAt: string;
+    generationStartedAt: string | null;
+    generatedAt: string | null;
+  };
+  steps: RepositoryContextStep[];
+  failure: RepositoryContextFailure | null;
+}
+
+export type PrReviewStatus = 'pending' | 'generating' | 'ready' | 'failed';
+
+export interface PrReviewFailure {
+  message: string;
+  failedAt: string;
+}
+
+/** An AI-generated review of a pull request, keyed by its review feature. */
+export interface PrReview {
+  featureId: string;
+  repoId: string;
+  pull: {
+    number: number;
+    title: string;
+    url: string;
+  };
+  worktreePath: string;
+  baseBranch: string | null;
+  status: PrReviewStatus;
+  summary: string | null;
+  coreAnalysis: string | null;
+  changedFiles: number | null;
+  timestamps: {
+    createdAt: string;
+    updatedAt: string;
+    generatedAt: string | null;
+  };
+  failure: PrReviewFailure | null;
 }
 
 /** A repository available to pick from a provider before it is added. */
@@ -56,7 +149,14 @@ export interface RemotePullRequest {
   sourceBranch: string;
   /** Author's display name or login, when known. */
   author: string | null;
+  /** True when the signed-in user opened this pull request. */
+  isAuthor?: boolean;
+  /** True when the signed-in user is a requested reviewer. */
+  isReviewer?: boolean;
 }
+
+/** Server-side scope for listing pull requests. */
+export type PullFilter = 'mine' | 'assigned' | 'all';
 
 /** How a picked remote repo becomes a workspace repository. */
 export type RepoProvisionMode = 'clone' | 'existing';

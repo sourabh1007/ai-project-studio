@@ -4,6 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import { formatDateTime } from '../../lib/format.js';
 import type { FeatureSummary } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText } from '../../components/ui.js';
+import { Loader } from '../../components/loading.js';
 
 export function FeatureSummaryView({ featureId }: { featureId: string }) {
   const api = useApi();
@@ -41,7 +42,7 @@ export function FeatureSummaryView({ featureId }: { featureId: string }) {
         </Button>
       </div>
       <ErrorText error={error ?? genError} />
-      {loading && <EmptyState message="Loading summary…" />}
+      {loading && <Loader label="Loading summary" />}
       {!loading && !data && (
         <EmptyState message="No summary yet. Generate one from your sessions." />
       )}

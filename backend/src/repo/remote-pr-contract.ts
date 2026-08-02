@@ -16,4 +16,11 @@ export interface RemotePullRequest {
   sourceBranch: string;
   /** Author's display name or login, when known. */
   author: string | null;
+  /** True when the authenticated IDE user opened this pull request. */
+  isAuthor?: boolean;
+  /** True when the authenticated IDE user is a requested reviewer. */
+  isReviewer?: boolean;
 }
+
+/** Which subset of a repository's pull requests to list. */
+export type PullFilter = 'mine' | 'assigned' | 'all';

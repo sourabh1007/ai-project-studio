@@ -43,6 +43,7 @@ function runInteractive(command: string, args: string[]): Promise<RunResult> {
     const session = createTerminalSession({
       sessionId: 'integration',
       pty,
+      inputReady: true,
       scrollbackBytes: 1 << 16,
       transcriptBytes: 1 << 20,
       onExit: (exitCode) => {

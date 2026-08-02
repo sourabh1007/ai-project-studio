@@ -31,6 +31,9 @@ export function buildCopilotArgs(
     'json',
     '--no-color',
   ];
+  for (const attachment of spec.attachments ?? []) {
+    args.push('--attachment', attachment);
+  }
   if (config.allowAllTools) {
     args.push('--allow-all-tools');
   }
@@ -56,6 +59,9 @@ export function buildCopilotInteractiveArgs(
   config: CopilotFlagOptions,
 ): string[] {
   const args = ['--model', spec.model, '--session-id', spec.sessionId];
+  for (const attachment of spec.attachments ?? []) {
+    args.push('--attachment', attachment);
+  }
   if (config.allowAllTools) {
     args.push('--allow-all-tools');
   }

@@ -2,7 +2,11 @@ import type { Clock } from '../kernel/clock.js';
 import type { IdGenerator } from '../kernel/id-generator.js';
 import type { SessionConfig } from './config.js';
 import { buildUsageFilePath } from './session-paths.js';
-import type { Session, SessionKind } from './session-contract.js';
+import type {
+  Session,
+  SessionKind,
+  SessionScope,
+} from './session-contract.js';
 
 export interface SessionFactoryDeps {
   ids: IdGenerator;
@@ -15,6 +19,7 @@ export interface BuildSessionInput {
   provider: string;
   requestedModel: string;
   kind: SessionKind;
+  scope?: SessionScope;
   prompt: string;
 }
 
@@ -38,6 +43,7 @@ export function createSessionFactory(
         resolvedModel: null,
         status: 'created',
         kind: input.kind,
+        scope: input.scope ?? 'feature',
         prompt: input.prompt,
         usageFilePath: buildUsageFilePath(deps.config, id),
         createdAt: deps.clock.isoNow(),

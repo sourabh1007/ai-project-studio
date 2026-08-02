@@ -74,6 +74,20 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method).toBe('DELETE');
   });
 
+  it('reads and refreshes repository context', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ repositoryId: 'r1', status: 'ready' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getRepositoryContext('r1');
+    await client.refreshRepositoryContext('r1');
+    expect(calls[0][0]).toBe('/api/repos/r1/context');
+    expect(calls[0][1]).toBeUndefined();
+    expect(calls[1][0]).toBe('/api/repos/r1/context/refresh');
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[1][1]?.body).toBe(JSON.stringify({}));
+  });
+
   it('renames a session with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1', name: 'x' }));
     const client = createApiClient({ fetchImpl });
@@ -389,8 +403,15 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     const result = await client.listRepoPulls('r1');
     expect(result).toEqual([{ number: 7 }]);
-    expect(calls[0][0]).toBe('/api/repos/r1/pulls');
+    expect(calls[0][0]).toBe('/api/repos/r1/pulls?filter=all');
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('passes a filter through to the pull-request list endpoint', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.listRepoPulls('r1', 'mine');
+    expect(calls[0][0]).toBe('/api/repos/r1/pulls?filter=mine');
   });
 
   it('creates a review feature from a pull request via a JSON POST', async () => {
@@ -402,5 +423,70 @@ describe('createApiClient', () => {
     expect(init?.method).toBe('POST');
     expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
     expect(init?.body).toBe(JSON.stringify({ number: 42 }));
+  });
+
+  it('reads a PR review for a feature', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getPrReview('f1');
+    expect(result).toEqual({ featureId: 'f1' });
+    expect(calls[0][0]).toBe('/api/features/f1/pr-review');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('refreshes a PR review via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.refreshPrReview('f1');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/refresh');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('starts a GitHub device-flow sign-in via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ userCode: 'ABCD-1234' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.githubSignInStart();
+    expect(result).toEqual({ userCode: 'ABCD-1234' });
+    expect(calls[0][0]).toBe('/api/github/signin/start');
+    expect(calls[0][1]?.method).toBe('POST');
+  });
+
+  it('polls a GitHub device-flow sign-in with the device code', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ status: 'success' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.githubSignInPoll('dev-code');
+    expect(result).toEqual({ status: 'success' });
+    expect(calls[0][0]).toBe('/api/github/signin/poll');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ deviceCode: 'dev-code' }));
+  });
+
+  it('surfaces the server error message on ApiError', async () => {
+    const { fetchImpl } = mockFetch(
+      jsonResponse({ error: { message: 'no access to org' } }, 403),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(client.listRepoPulls('r1')).rejects.toMatchObject({
+      status: 403,
+      message: 'no access to org',
+    });
+  });
+
+  it('falls back to a generic message when the error body has no message', async () => {
+    const response = {
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error('not json');
+      },
+    } as unknown as Response;
+    const client = createApiClient({ fetchImpl: async () => response });
+    await expect(client.listFeatures()).rejects.toMatchObject({
+      status: 500,
+      message: 'Request failed: /features',
+    });
   });
 });
