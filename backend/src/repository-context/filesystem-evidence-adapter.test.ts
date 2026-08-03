@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { createFilesystemEvidenceCollector } from './filesystem-evidence-adapter.js';
 import type { RepositoryEvidenceCollectionRequest } from './repository-evidence-port.js';
 
@@ -128,10 +129,13 @@ describe('filesystem repository evidence adapter', () => {
     expect(result.files).toEqual([
       { path: 'text.txt', content: 'abcde', sizeBytes: 50 },
     ]);
-    expect(read).toHaveBeenCalledWith('C:\\repo\\binary.dat', 4);
-    expect(read).toHaveBeenCalledWith('C:\\repo\\text.txt', 5);
-    expect(read).not.toHaveBeenCalledWith('C:\\repo\\large.txt', expect.anything());
-    expect(size).not.toHaveBeenCalledWith('C:\\repo\\zz-later.txt');
+    expect(read).toHaveBeenCalledWith(join(request.repositoryPath, 'binary.dat'), 4);
+    expect(read).toHaveBeenCalledWith(join(request.repositoryPath, 'text.txt'), 5);
+    expect(read).not.toHaveBeenCalledWith(
+      join(request.repositoryPath, 'large.txt'),
+      expect.anything(),
+    );
+    expect(size).not.toHaveBeenCalledWith(join(request.repositoryPath, 'zz-later.txt'));
   });
 
   it('rejects control-heavy binary data and propagates filesystem failures', async () => {

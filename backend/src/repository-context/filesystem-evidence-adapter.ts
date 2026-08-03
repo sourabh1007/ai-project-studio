@@ -1,5 +1,5 @@
 import { lstat, open } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { join, win32 } from 'node:path';
 import type {
   RepositoryEvidenceCollector,
   RepositoryEvidenceFileSystem,
@@ -85,7 +85,7 @@ export function createFilesystemEvidenceCollector(deps: {
         .filter(
           (path) =>
             path.length > 0 &&
-            !isAbsolute(path) &&
+            !win32.isAbsolute(path) &&
             !path.split('/').includes('..') &&
             !isIgnored(path, request.ignoredDirectories),
         )

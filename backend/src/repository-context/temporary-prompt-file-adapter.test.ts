@@ -1,5 +1,5 @@
 import { access, readFile } from 'node:fs/promises';
-import { relative } from 'node:path';
+import { isAbsolute, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createTemporaryPromptFileFactory } from './temporary-prompt-file-adapter.js';
 
@@ -15,7 +15,12 @@ describe('temporary-prompt-file-adapter', () => {
     expect(temporary.path.endsWith('p.pdf')).toBe(true);
     expect(pdf.subarray(0, 8).toString('ascii')).toBe('%PDF-1.4');
     expect(pdf.toString('latin1')).toContain('(repository evidence: caf\\351) Tj');
-    expect(relative(process.cwd(), temporary.path).startsWith('..')).toBe(true);
+    // The prompt file must live outside the checkout. `path.relative` yields a
+    // `..`-prefixed path normally, but on Windows a temp dir on a different
+    // drive than the checkout is returned as an absolute path (no `..`); both
+    // mean "outside", so accept either.
+    const location = relative(process.cwd(), temporary.path);
+    expect(location.startsWith('..') || isAbsolute(location)).toBe(true);
 
     await temporary.cleanup();
     await expect(access(temporary.path)).rejects.toMatchObject({ code: 'ENOENT' });
