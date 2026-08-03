@@ -254,6 +254,15 @@ async function bootstrap() {
     }
   });
 
+  ipcMain.on('app:relaunch', (event) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
+    stopBackend();
+    app.relaunch();
+    app.exit(0);
+  });
+
   applyContentSecurityPolicy();
 
   let loadUrl;

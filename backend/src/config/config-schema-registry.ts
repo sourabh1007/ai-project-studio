@@ -13,6 +13,10 @@ export interface ConfigSchemaRegistry {
   namespaces(): string[];
   combinedSchema(): ZodType<ConfigObject>;
   defaults(): ConfigObject;
+  /** The zod schema for a single namespace, or undefined if unregistered. */
+  schemaFor(namespace: string): ZodType | undefined;
+  /** The compiled defaults for a single namespace, or undefined. */
+  defaultsFor(namespace: string): unknown;
 }
 
 export function createConfigSchemaRegistry(): ConfigSchemaRegistry {
@@ -46,6 +50,14 @@ export function createConfigSchemaRegistry(): ConfigSchemaRegistry {
         out[namespace] = module.defaults;
       }
       return out;
+    },
+
+    schemaFor(namespace) {
+      return modules.get(namespace)?.schema;
+    },
+
+    defaultsFor(namespace) {
+      return modules.get(namespace)?.defaults;
     },
   };
 }

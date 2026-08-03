@@ -1,4 +1,6 @@
 import type {
+  ContextStatus,
+  ContextStatusPhase,
   PrReview,
   RepositoryContext,
   Session,
@@ -13,7 +15,13 @@ export type StreamEvent =
   | { type: 'session.output'; sessionId: string; line: string }
   | { type: 'usage.recorded'; usage: StoredUsage }
   | { type: 'repository.context.updated'; context: RepositoryContext }
-  | { type: 'pr.review.updated'; review: PrReview };
+  | { type: 'pr.review.updated'; review: PrReview }
+  | { type: 'context.status'; status: ContextStatus };
+
+/** Stable key for a context-status entry: one live phase per scope target. */
+export function contextStatusKey(scope: string, scopeId: string): string {
+  return `${scope}:${scopeId}`;
+}
 
 export interface LiveState {
   sessions: Record<string, Session>;
@@ -21,6 +29,7 @@ export interface LiveState {
   outputBySession: Record<string, string[]>;
   repositoryContexts: Record<string, RepositoryContext>;
   prReviews: Record<string, PrReview>;
+  contextStatus: Record<string, ContextStatusPhase>;
 }
 
 export const initialLiveState: LiveState = {
@@ -29,6 +38,7 @@ export const initialLiveState: LiveState = {
   outputBySession: {},
   repositoryContexts: {},
   prReviews: {},
+  contextStatus: {},
 };
 
 /** Stable key that dedupes usage events by session + turn. */
@@ -76,6 +86,11 @@ export function parseServerEvent(
       return {
         type: 'pr.review.updated',
         review: JSON.parse(data) as PrReview,
+      };
+    case 'context.status':
+      return {
+        type: 'context.status',
+        status: JSON.parse(data) as ContextStatus,
       };
     default:
       return null;
@@ -126,6 +141,15 @@ export function applyStreamEvent(
         prReviews: {
           ...state.prReviews,
           [event.review.featureId]: event.review,
+        },
+      };
+    case 'context.status':
+      return {
+        ...state,
+        contextStatus: {
+          ...state.contextStatus,
+          [contextStatusKey(event.status.scope, event.status.scopeId)]:
+            event.status.phase,
         },
       };
   }

@@ -54,6 +54,20 @@ const CORE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'feature_groups',
+    ddl: `CREATE TABLE IF NOT EXISTS feature_groups (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL,
+    parent_group_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('subcategory', 'pr')),
+    name TEXT NOT NULL,
+    pr_number INTEGER,
+    pr_url TEXT,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  )`,
+  },
+  {
     name: 'repositories',
     ddl: `CREATE TABLE IF NOT EXISTS repositories (
     id TEXT PRIMARY KEY,
@@ -109,6 +123,32 @@ const CORE_TABLES: readonly TableSchema[] = [
     scope TEXT NOT NULL,
     target_id TEXT NOT NULL,
     created_at TEXT NOT NULL
+  )`,
+  },
+  {
+    // Central, layered shared-context documents (workspace/repo/feature). A
+    // single curated markdown blob per scope, mirroring `repository_contexts`.
+    // Kept in the core catalog since it is small and read on every launch.
+    name: 'context_documents',
+    ddl: `CREATE TABLE IF NOT EXISTS context_documents (
+    scope TEXT NOT NULL CHECK (scope IN ('workspace', 'repo', 'feature')),
+    scope_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL CHECK (updated_by IN ('merge', 'manual', 'import')),
+    PRIMARY KEY (scope, scope_id)
+  )`,
+  },
+  {
+    // Persisted, user-editable configuration overrides keyed by namespace. Each
+    // row stores a partial JSON patch that is deep-merged over the module's
+    // compiled defaults at startup, so the Settings UI can reconfigure any
+    // module without touching code or environment variables.
+    name: 'config_overrides',
+    ddl: `CREATE TABLE IF NOT EXISTS config_overrides (
+    namespace TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   )`,
   },
 ];
@@ -254,6 +294,10 @@ const INDEXES: readonly IndexSchema[] = [
   },
   {
     schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_feature_groups_feature_id ON feature_groups (feature_id)',
+  },
+  {
+    schema: 'main',
     ddl: 'CREATE INDEX IF NOT EXISTS main.idx_features_repo_id ON features (repo_id)',
   },
   {
@@ -287,6 +331,16 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
   { table: 'sessions', column: 'name', ddl: 'ALTER TABLE sessions ADD COLUMN name TEXT' },
   {
     table: 'sessions',
+    column: 'group_id',
+    ddl: 'ALTER TABLE sessions ADD COLUMN group_id TEXT',
+  },
+  {
+    table: 'sessions',
+    column: 'order_index',
+    ddl: 'ALTER TABLE sessions ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    table: 'sessions',
     column: 'scope',
     ddl: "ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'feature'",
   },
@@ -304,6 +358,11 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
     table: 'features',
     column: 'checkout_path',
     ddl: 'ALTER TABLE features ADD COLUMN checkout_path TEXT',
+  },
+  {
+    table: 'features',
+    column: 'order_index',
+    ddl: 'ALTER TABLE features ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0',
   },
   {
     table: 'repository_contexts',

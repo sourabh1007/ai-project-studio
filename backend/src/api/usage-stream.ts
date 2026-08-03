@@ -3,12 +3,14 @@ import type { SessionEventMap } from '../session/session-launcher.js';
 import type { UsageRecordedMap } from '../usage/usage-recorder.js';
 import type { RepositoryContextEventMap } from '../repository-context/repository-context-coordinator.js';
 import type { PrReviewEventMap } from '../pr-review/pr-review-contract.js';
+import type { ContextStatusEventMap } from '../context-store/context-status.js';
 
 /** Combined event map streamed to clients over SSE. */
 export type StreamEventMap = SessionEventMap &
   UsageRecordedMap &
   RepositoryContextEventMap &
-  PrReviewEventMap;
+  PrReviewEventMap &
+  ContextStatusEventMap;
 
 export type StreamEventName = keyof StreamEventMap;
 
@@ -25,6 +27,7 @@ const STREAM_EVENTS: StreamEventName[] = [
   'usage.recorded',
   'repository.context.updated',
   'pr.review.updated',
+  'context.status',
 ];
 
 /**

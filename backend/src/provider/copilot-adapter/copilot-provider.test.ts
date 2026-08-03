@@ -100,4 +100,16 @@ describe('copilot-provider', () => {
       { path: 'C:\\Users\\me\\a.md', tool: 'create' },
     ]);
   });
+
+  it('createModelChangeScanner detects a mid-session model switch', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner,
+      baseEnv: {},
+    });
+    const scanner = provider.createModelChangeScanner?.();
+    expect(scanner?.feed('Model changed from auto to claude-opus-4.8\n')).toEqual(
+      ['claude-opus-4.8'],
+    );
+  });
 });

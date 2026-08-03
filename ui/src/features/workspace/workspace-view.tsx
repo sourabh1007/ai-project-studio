@@ -245,6 +245,9 @@ export function WorkspaceView({
               featureName={active.feature.name}
               featureDescription={active.feature.description}
               prReview={live.prReviews[active.feature.id]}
+              contextPhase={
+                live.contextStatus[`feature:${active.feature.id}`]
+              }
             />
           )}
           {!active && (

@@ -1,14 +1,23 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
 import type {
   Feature,
+  MoveNodeInput,
   Repository,
   RepositoryContext,
   Session,
   SessionBreakdown,
+  TreeGroup,
 } from '../../lib/types.js';
 import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
@@ -24,9 +33,11 @@ import {
   CloseIcon,
   CollapseSidebarIcon,
   FilesIcon,
+  FolderIcon,
   ImportIcon,
   PencilIcon,
   PlusIcon,
+  PullRequestIcon,
   RepoIcon,
   TagIcon,
   TimeIcon,
@@ -34,11 +45,19 @@ import {
   UsageIcon,
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
+import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { SkillChips } from '../skills/skill-chips.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
 import { SessionFiles } from './session-files.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
+import {
+  APPEND_INDEX,
+  FeatureTree,
+  NodeDragStoreProvider,
+  useNodeDragStore,
+} from './feature-tree.js';
+import { GroupPrPicker, type PickedPull } from './group-pr-picker.js';
 import { RepoPicker } from './repo-picker.js';
 import { PrReviewPicker } from './pr-review-picker.js';
 import { GithubStatusBadge } from '../github/github-status.js';
@@ -81,6 +100,7 @@ function SessionRow({
   const [confirming, setConfirming] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [managingSkills, setManagingSkills] = useState(false);
+  const [viewingUsage, setViewingUsage] = useState(false);
   const [skillSignal, setSkillSignal] = useState(0);
 
   const dot = sessionDotClass(session.status);
@@ -210,20 +230,35 @@ function SessionRow({
 
       <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
 
-      <div className="session-metrics-row" aria-hidden="true">
-        <span className="metric metric-credits" title="AIC used (github nano_aiu)">
-          <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
-        </span>
-        <span className="metric" title="Input tokens">
-          <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
-        </span>
-        <span className="metric" title="Output tokens">
-          <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
-        </span>
-        <span className="metric" title="Active time on this session">
-          <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
-        </span>
+      <div className="session-metrics-row">
+        <button
+          type="button"
+          className="session-metrics-open"
+          title="View how this session's credits and tokens were used"
+          aria-label={`Usage breakdown for ${name}`}
+          onClick={() => setViewingUsage(true)}
+        >
+          <span className="metric metric-credits">
+            <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
+          </span>
+          <span className="metric">
+            <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
+          </span>
+          <span className="metric">
+            <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
+          </span>
+          <span className="metric">
+            <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
+          </span>
+        </button>
       </div>
+
+      {viewingUsage && (
+        <UsageBreakdownModal
+          scope={{ kind: 'session', id: session.id, label: name }}
+          onClose={() => setViewingUsage(false)}
+        />
+      )}
 
       <div className="session-files">
         <button
@@ -256,6 +291,10 @@ function FeatureNode({
   onRenameFeature,
   onDeleteFeature,
   onDeleteSession,
+  onFeatureDragStart,
+  onFeatureDragEnd,
+  treeRevision,
+  onMoveNode,
 }: {
   feature: Feature;
   repositoryContext?: RepositoryContext | null;
@@ -268,18 +307,32 @@ function FeatureNode({
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
   onDeleteSession: (session: Session) => Promise<void>;
+  onFeatureDragStart: (feature: Feature) => void;
+  onFeatureDragEnd: () => void;
+  treeRevision: number;
+  onMoveNode: (input: MoveNodeInput) => Promise<void>;
 }) {
   const api = useApi();
+  const nodeStore = useNodeDragStore();
   const [expanded, setExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [viewingUsage, setViewingUsage] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [nodeDropTarget, setNodeDropTarget] = useState(false);
+  const [prPickerParent, setPrPickerParent] = useState<string | null | false>(
+    false,
+  );
   const sessions = useAsync(
     () => (expanded ? api.listSessions(feature.id) : Promise.resolve([])),
-    [feature.id, expanded],
+    [feature.id, expanded, treeRevision],
+  );
+  const groups = useAsync(
+    () => (expanded ? api.listGroups(feature.id) : Promise.resolve([])),
+    [feature.id, expanded, treeRevision],
   );
   const usage = useAsync(
     () => (expanded ? api.getFeatureUsage(feature.id) : Promise.resolve(null)),
@@ -290,6 +343,9 @@ function FeatureNode({
   );
 
   const rows = (sessions.data ?? []).map((s) => mergeLive(s, live));
+  // Stable per-session ordinals (by fetch order) so fallback names don't jump
+  // around as the tree is rearranged.
+  const ordinals = new Map(rows.map((s, index) => [s.id, index + 1]));
   const persistedBySession = new Map(
     (usage.data?.bySession ?? []).map((s) => [s.sessionId, s]),
   );
@@ -343,9 +399,124 @@ function FeatureNode({
     }
   }
 
+  async function runTreeAction(
+    action: () => Promise<unknown>,
+    failure: string,
+  ) {
+    setActionError(null);
+    try {
+      await action();
+      groups.reload();
+      sessions.reload();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : failure);
+    }
+  }
+
+  function handleMove(input: MoveNodeInput) {
+    setActionError(null);
+    onMoveNode(input).catch((error) =>
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to move item.',
+      ),
+    );
+  }
+
+  function handleAddSubcategory(parentGroupId: string | null) {
+    const name = window.prompt('New group name');
+    if (name === null) {
+      return;
+    }
+    void runTreeAction(
+      () =>
+        api.createGroup(feature.id, {
+          parentGroupId,
+          kind: 'subcategory',
+          name,
+        }),
+      'Failed to create group.',
+    );
+  }
+
+  function handleAttachPr(pull: PickedPull, parentGroupId: string | null) {
+    setPrPickerParent(false);
+    void runTreeAction(
+      () =>
+        api.createGroup(feature.id, {
+          parentGroupId,
+          kind: 'pr',
+          name: pull.title,
+          prNumber: pull.number,
+          prUrl: pull.url,
+        }),
+      'Failed to attach pull request.',
+    );
+  }
+
+  function handleRenameGroup(group: TreeGroup, name: string) {
+    void runTreeAction(
+      () => api.renameGroup(group.id, name),
+      'Failed to rename group.',
+    );
+  }
+
+  function handleDeleteGroup(group: TreeGroup) {
+    void runTreeAction(
+      () => api.deleteGroup(group.id),
+      'Failed to delete group.',
+    );
+  }
+
+  function handleNodeDrop() {
+    const node = nodeStore?.dragging;
+    if (!node) {
+      return;
+    }
+    setNodeDropTarget(false);
+    setExpanded(true);
+    handleMove({
+      type: node.type,
+      id: node.id,
+      targetFeatureId: feature.id,
+      targetParentGroupId: null,
+      targetIndex: APPEND_INDEX,
+    });
+    nodeStore?.setDragging(null);
+  }
+
+  const canAcceptNode = Boolean(nodeStore?.dragging);
+
   return (
     <div className="tree-node" style={{ '--feature-accent': accent } as CSSProperties}>
-      <div className="tree-branch">
+      <div
+        className={`tree-branch ${
+          nodeDropTarget && canAcceptNode ? 'is-drop-target' : ''
+        }`.trim()}
+        draggable={!editing}
+        onDragStart={(event) => {
+          event.stopPropagation();
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+          }
+          onFeatureDragStart(feature);
+        }}
+        onDragEnd={onFeatureDragEnd}
+        onDragOver={(event) => {
+          if (canAcceptNode) {
+            event.preventDefault();
+            setNodeDropTarget(true);
+          }
+        }}
+        onDragLeave={() => setNodeDropTarget(false)}
+        onDrop={(event) => {
+          if (!canAcceptNode) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          handleNodeDrop();
+        }}
+      >
         <button
           type="button"
           className="tree-toggle"
@@ -436,6 +607,22 @@ function FeatureNode({
                 onSelect: startEditing,
               },
               {
+                label: 'Add subcategory',
+                icon: <FolderIcon size={14} />,
+                onSelect: () => {
+                  setExpanded(true);
+                  handleAddSubcategory(null);
+                },
+              },
+              {
+                label: 'Attach pull request',
+                icon: <PullRequestIcon size={14} />,
+                onSelect: () => {
+                  setExpanded(true);
+                  setPrPickerParent(null);
+                },
+              },
+              {
                 label: 'Import session',
                 icon: <ImportIcon />,
                 onSelect: () => {
@@ -443,6 +630,11 @@ function FeatureNode({
                   setCreating(false);
                   setImporting(true);
                 },
+              },
+              {
+                label: 'Usage breakdown',
+                icon: <UsageIcon />,
+                onSelect: () => setViewingUsage(true),
               },
               {
                 label: 'Delete feature',
@@ -458,6 +650,13 @@ function FeatureNode({
       <div className="feature-tags">
         <SkillChips scope="feature" targetId={feature.id} />
       </div>
+
+      {viewingUsage && (
+        <UsageBreakdownModal
+          scope={{ kind: 'feature', id: feature.id, label: feature.name }}
+          onClose={() => setViewingUsage(false)}
+        />
+      )}
       {contextBlockReason && (
         <span
           id={`session-blocked-${feature.id}`}
@@ -498,30 +697,50 @@ function FeatureNode({
           )}
           {sessions.loading && <Loader label="Loading sessions" />}
           <ErrorText error={sessions.error} />
-          {!sessions.loading && rows.length === 0 && !creating && !importing && (
-            <EmptyState message="No sessions yet." />
-          )}
-          {rows.map((session, index) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              ordinal={index + 1}
-              customName={names[session.id]}
-              active={session.id === activeSessionId}
-              live={live}
-              persisted={persistedBySession.get(session.id)}
-              onOpen={() =>
-                onOpenSession(
-                  session,
-                  sessionDisplayName(names[session.id], index + 1),
-                )
-              }
-              onRename={(name) => handleRenameSession(session.id, name)}
-              onDelete={() => handleDeleteSession(session)}
-            />
-          ))}
+          <ErrorText error={groups.error} />
+          {!sessions.loading &&
+            rows.length === 0 &&
+            (groups.data?.length ?? 0) === 0 &&
+            !creating &&
+            !importing && <EmptyState message="No sessions yet." />}
+          <FeatureTree
+            featureId={feature.id}
+            groups={groups.data ?? []}
+            sessions={rows}
+            ordinals={ordinals}
+            onMove={handleMove}
+            onAddSubcategory={handleAddSubcategory}
+            onAttachPr={(parentGroupId) => setPrPickerParent(parentGroupId)}
+            onRenameGroup={handleRenameGroup}
+            onDeleteGroup={handleDeleteGroup}
+            renderSession={(session, ordinal) => (
+              <SessionRow
+                session={session}
+                ordinal={ordinal}
+                customName={names[session.id]}
+                active={session.id === activeSessionId}
+                live={live}
+                persisted={persistedBySession.get(session.id)}
+                onOpen={() =>
+                  onOpenSession(
+                    session,
+                    sessionDisplayName(names[session.id], ordinal),
+                  )
+                }
+                onRename={(name) => handleRenameSession(session.id, name)}
+                onDelete={() => handleDeleteSession(session)}
+              />
+            )}
+          />
           <ErrorText error={actionError} />
         </div>
+      )}
+      {prPickerParent !== false && feature.repoId && (
+        <GroupPrPicker
+          repoId={feature.repoId}
+          onClose={() => setPrPickerParent(false)}
+          onPick={(pull) => handleAttachPr(pull, prPickerParent)}
+        />
       )}
     </div>
   );
@@ -617,6 +836,63 @@ function RepoAddMenu({
 
 /** A collapsible top-level repository (or the "No repository" group when
  * `repo` is null) that holds the features scoped to it. */
+/**
+ * A thin drop zone between feature rows. Dropping a dragged feature here moves
+ * it into `repoId`'s group at position `index` (adjusting for the feature's own
+ * position when reordered within the same group).
+ */
+function FeatureDropSlot({
+  dragging,
+  repoId,
+  index,
+  features,
+  onMoveFeature,
+}: {
+  dragging: Feature | null;
+  repoId: string | null;
+  index: number;
+  features: Feature[];
+  onMoveFeature: (
+    feature: Feature,
+    targetRepoId: string | null,
+    targetIndex: number,
+  ) => void;
+}) {
+  const [over, setOver] = useState(false);
+  if (!dragging) {
+    return null;
+  }
+
+  function handleDrop(event: DragEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    setOver(false);
+    if (!dragging) {
+      return;
+    }
+    const sameGroup = (dragging.repoId ?? null) === repoId;
+    const currentIndex = features.findIndex((f) => f.id === dragging.id);
+    const targetIndex =
+      sameGroup && currentIndex !== -1 && currentIndex < index
+        ? index - 1
+        : index;
+    onMoveFeature(dragging, repoId, targetIndex);
+  }
+
+  return (
+    <div
+      className={`tree-drop-slot ${over ? 'is-over' : ''}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={handleDrop}
+      aria-hidden="true"
+    />
+  );
+}
+
 function RepoNode({
   repo,
   repositoryContext,
@@ -635,6 +911,12 @@ function RepoNode({
   onStartReview,
   onDeleteRepo,
   onContextUpdated,
+  draggingFeature,
+  onFeatureDragStart,
+  onFeatureDragEnd,
+  onMoveFeature,
+  treeRevision,
+  onMoveNode,
 }: {
   repo: Repository | null;
   repositoryContext?: RepositoryContext | null;
@@ -653,16 +935,53 @@ function RepoNode({
   onStartReview: (repo: Repository) => void;
   onDeleteRepo: (repo: Repository) => void;
   onContextUpdated: (context: RepositoryContext) => void;
+  draggingFeature: Feature | null;
+  onFeatureDragStart: (feature: Feature) => void;
+  onFeatureDragEnd: () => void;
+  onMoveFeature: (
+    feature: Feature,
+    targetRepoId: string | null,
+    targetIndex: number,
+  ) => void;
+  treeRevision: number;
+  onMoveNode: (input: MoveNodeInput) => Promise<void>;
 }) {
+  const repoId = repo?.id ?? null;
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [confirming, setConfirming] = useState(false);
   const [viewingContext, setViewingContext] = useState(false);
+  const [viewingUsage, setViewingUsage] = useState(false);
+  const [headerDropTarget, setHeaderDropTarget] = useState(false);
   const title = repo ? repo.name : 'No repository';
   const providerLabel = repo?.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
+  // A feature dragged from another repository group can be dropped on this
+  // repo's header to append it to the end of this group.
+  const canAcceptDrop =
+    draggingFeature !== null && (draggingFeature.repoId ?? null) !== repoId;
 
   return (
     <div className={`repo-node ${repo ? '' : 'repo-node-orphan'}`.trim()}>
-      <div className="tree-branch repo-branch">
+      <div
+        className={`tree-branch repo-branch ${
+          headerDropTarget && canAcceptDrop ? 'is-drop-target' : ''
+        }`.trim()}
+        onDragOver={(event) => {
+          if (canAcceptDrop) {
+            event.preventDefault();
+            setHeaderDropTarget(true);
+          }
+        }}
+        onDragLeave={() => setHeaderDropTarget(false)}
+        onDrop={(event) => {
+          if (!canAcceptDrop || !draggingFeature) {
+            return;
+          }
+          event.preventDefault();
+          setHeaderDropTarget(false);
+          setExpanded(true);
+          onMoveFeature(draggingFeature, repoId, features.length);
+        }}
+      >
         <button
           type="button"
           className="tree-toggle"
@@ -748,6 +1067,11 @@ function RepoNode({
                   onSelect: () => setViewingContext(true),
                 },
                 {
+                  label: 'Usage breakdown',
+                  icon: <UsageIcon />,
+                  onSelect: () => setViewingUsage(true),
+                },
+                {
                   label: 'Remove repository',
                   icon: <TrashIcon />,
                   danger: true,
@@ -767,26 +1091,52 @@ function RepoNode({
         />
       )}
 
+      {repo && viewingUsage && (
+        <UsageBreakdownModal
+          scope={{ kind: 'repo', id: repo.id, label: repo.name }}
+          onClose={() => setViewingUsage(false)}
+        />
+      )}
+
       {expanded && (
         <div className="tree-children repo-children">
           {features.length === 0 && (
             <EmptyState message="No features yet." />
           )}
-          {features.map((feature) => (
-            <FeatureNode
-              key={feature.id}
-              feature={feature}
-              repositoryContext={repositoryContext}
-              live={live}
-              activeSessionId={activeSessionId}
-              names={names}
-              onOpenSession={onOpenSession}
-              onOpenFeature={onOpenFeature}
-              onRenameSession={onRenameSession}
-              onRenameFeature={onRenameFeature}
-              onDeleteFeature={onDeleteFeature}
-              onDeleteSession={onDeleteSession}
-            />
+          <FeatureDropSlot
+            dragging={draggingFeature}
+            repoId={repoId}
+            index={0}
+            features={features}
+            onMoveFeature={onMoveFeature}
+          />
+          {features.map((feature, index) => (
+            <Fragment key={feature.id}>
+              <FeatureNode
+                feature={feature}
+                repositoryContext={repositoryContext}
+                live={live}
+                activeSessionId={activeSessionId}
+                names={names}
+                onOpenSession={onOpenSession}
+                onOpenFeature={onOpenFeature}
+                onRenameSession={onRenameSession}
+                onRenameFeature={onRenameFeature}
+                onDeleteFeature={onDeleteFeature}
+                onDeleteSession={onDeleteSession}
+                onFeatureDragStart={onFeatureDragStart}
+                onFeatureDragEnd={onFeatureDragEnd}
+                treeRevision={treeRevision}
+                onMoveNode={onMoveNode}
+              />
+              <FeatureDropSlot
+                dragging={draggingFeature}
+                repoId={repoId}
+                index={index + 1}
+                features={features}
+                onMoveFeature={onMoveFeature}
+              />
+            </Fragment>
           ))}
         </div>
       )}
@@ -837,6 +1187,15 @@ export function Explorer({
   const [repositoryContexts, setRepositoryContexts] = useState<
     Record<string, RepositoryContext>
   >({});
+  const [draggingFeature, setDraggingFeature] = useState<Feature | null>(null);
+  const [treeRevision, setTreeRevision] = useState(0);
+
+  /** Moves a session or group (possibly to a different feature) and refreshes
+   * every expanded feature so both the source and target reflect the change. */
+  async function moveNode(input: MoveNodeInput) {
+    await api.moveNode(input);
+    setTreeRevision((v) => v + 1);
+  }
 
   function openFeatureForm(repoId: string | null) {
     setTargetRepoId(repoId);
@@ -885,6 +1244,19 @@ export function Explorer({
   async function deleteFeature(feature: Feature) {
     await onDeleteFeature(feature);
     features.reload();
+  }
+
+  async function moveFeature(
+    feature: Feature,
+    nextRepoId: string | null,
+    targetIndex: number,
+  ) {
+    setDraggingFeature(null);
+    try {
+      await api.moveFeature({ id: feature.id, targetRepoId: nextRepoId, targetIndex });
+    } finally {
+      features.reload();
+    }
   }
 
   async function deleteRepo(repo: Repository) {
@@ -1060,6 +1432,7 @@ export function Explorer({
           orphanFeatures.length === 0 && (
             <EmptyState message="No repositories yet. Add one to get started." />
           )}
+        <NodeDragStoreProvider>
         {repoList.map((repo) => (
           <RepoNode
             key={repo.id}
@@ -1080,6 +1453,12 @@ export function Explorer({
             onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
+            draggingFeature={draggingFeature}
+            onFeatureDragStart={setDraggingFeature}
+            onFeatureDragEnd={() => setDraggingFeature(null)}
+            onMoveFeature={moveFeature}
+            treeRevision={treeRevision}
+            onMoveNode={moveNode}
           />
         ))}
         {orphanFeatures.length > 0 && (
@@ -1101,8 +1480,15 @@ export function Explorer({
             onStartReview={setReviewRepo}
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
+            draggingFeature={draggingFeature}
+            onFeatureDragStart={setDraggingFeature}
+            onFeatureDragEnd={() => setDraggingFeature(null)}
+            onMoveFeature={moveFeature}
+            treeRevision={treeRevision}
+            onMoveNode={moveNode}
           />
         )}
+        </NodeDragStoreProvider>
       </div>
 
       <div className="explorer-footer">

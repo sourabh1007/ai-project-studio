@@ -68,10 +68,13 @@ function harness(options: {
   maxChars?: number;
   maxOutputChars?: number;
   checkoutPath?: string | null;
+  sharedContext?: string;
 } = {}) {
   const loads: string[] = [];
   const instructions: string[] = [];
   const contextIds: string[] = [];
+  const composeInputs: { repoId?: string | null; featureId?: string | null }[] =
+    [];
   const allSessions = options.sessions ?? [];
   const bootstrap = createSessionBootstrap({
     features: {
@@ -118,6 +121,12 @@ function harness(options: {
         return options.context ?? readyContext;
       },
     },
+    sharedContext: {
+      composeLayered: (input) => {
+        composeInputs.push(input);
+        return options.sharedContext ?? '';
+      },
+    },
     config: {
       ...repositoryContextDefaults,
       maxFeatureMemoryItems: options.maxItems ?? 12,
@@ -126,7 +135,7 @@ function harness(options: {
         options.maxOutputChars ?? repositoryContextDefaults.maxOutputChars,
     },
   });
-  return { bootstrap, loads, instructions, contextIds };
+  return { bootstrap, loads, instructions, contextIds, composeInputs };
 }
 
 describe('session bootstrap', () => {
@@ -282,6 +291,30 @@ describe('session bootstrap', () => {
     expect(
       await h.bootstrap.composeForSession({ ...baseSession, scope: 'internal' }),
     ).toBe('');
+  });
+
+  it('injects the layered shared context between repository and feature', async () => {
+    const h = harness({
+      sharedContext: '## Shared Context\n\n### Feature\n\n- Curated fact',
+    });
+    const result = await h.bootstrap.composeForSession(baseSession);
+    expect(result).toContain('- Curated fact');
+    expect(result.indexOf('## Repository Context')).toBeLessThan(
+      result.indexOf('## Shared Context'),
+    );
+    expect(result.indexOf('## Shared Context')).toBeLessThan(
+      result.indexOf('## Feature'),
+    );
+    expect(h.composeInputs).toEqual([
+      { repoId: 'repo-1', featureId: 'feature-1' },
+    ]);
+  });
+
+  it('omits the shared context block when no layer has content', async () => {
+    const h = harness();
+    expect(await h.bootstrap.composeForSession(baseSession)).not.toContain(
+      '## Shared Context',
+    );
   });
 
   it('keeps the original user request in a distinct final section', async () => {

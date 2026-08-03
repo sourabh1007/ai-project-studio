@@ -13,6 +13,19 @@ export interface ModelInfo {
 
 export type SessionKind = 'dev' | 'meta';
 
+/**
+ * Stateful scanner over a session's terminal output that detects when the
+ * active model changes mid-session inside the interactive CLI. Fed successive
+ * (raw) output chunks, it buffers partial lines and returns the model id(s)
+ * newly announced by each chunk, in order. The announcement format is a
+ * CLI-specific detail, so this is provided by the provider; providers whose CLI
+ * emits no such line omit the hook and the resolved model is only derived from
+ * usage rows.
+ */
+export interface ModelChangeScanner {
+  feed(chunk: string): string[];
+}
+
 /** Everything needed to launch one AI session through a provider. */
 export interface SessionSpec {
   sessionId: string;
@@ -78,6 +91,30 @@ export interface ImportableSession {
   updatedAt: string;
 }
 
+/**
+ * Optional MCP (Model Context Protocol) capability for a provider. Because the
+ * MCP config file's location and format are CLI-specific, providers that expose
+ * MCP servers implement this so the core MCP module stays provider-agnostic.
+ * The file path is discovered at runtime through a provider meta-session rather
+ * than hardcoded; {@link defaultConfigPath} is only a documented fallback used
+ * when that discovery yields nothing.
+ */
+export interface McpSupport {
+  /**
+   * Prompt asking this provider's own CLI (run headlessly) to print the
+   * absolute path of its MCP configuration file. Keeping the phrasing on the
+   * provider avoids guessing where each CLI stores its config.
+   */
+  readonly configPathPrompt: string;
+  /**
+   * Extracts an absolute config-file path from the CLI's meta-session reply, or
+   * null when no path can be found (the caller then falls back).
+   */
+  parseConfigPath(reply: string): string | null;
+  /** Documented default config path used when dynamic discovery yields nothing. */
+  defaultConfigPath(): string;
+}
+
 /** A pluggable AI provider. Adding one requires only a new implementation. */
 export interface IAIProvider {
   readonly id: string;
@@ -97,9 +134,23 @@ export interface IAIProvider {
    */
   createOutputScanner?(ctx: SessionOutputScannerContext): SessionOutputScanner;
   /**
+   * Optional capability: builds a scanner that detects mid-session model
+   * switches from the interactive terminal output (e.g. the CLI's
+   * `Model changed … to <model>` status line), so the resolved model shown in
+   * the UI tracks the CLI immediately rather than only after the next usage row
+   * is recorded. Providers whose CLI emits no such line omit it.
+   */
+  createModelChangeScanner?(): ModelChangeScanner;
+  /**
    * Optional capability: lists past sessions from this provider's own store
    * that can be imported into a feature. Providers without an accessible
    * history simply omit it; the import service skips them.
    */
   listImportableSessions?(): ImportableSession[];
+  /**
+   * Optional capability: exposes the provider's MCP server configuration so the
+   * IDE can list and edit it. Providers without MCP support omit it and are
+   * hidden from the MCP management surface.
+   */
+  readonly mcp?: McpSupport;
 }

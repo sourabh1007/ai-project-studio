@@ -14,6 +14,11 @@ const renameFeatureSchema = z.object({
   name: z.string().min(1),
 });
 
+const moveFeatureSchema = z.object({
+  targetRepoId: z.string().nullable(),
+  targetIndex: z.number().int().nonnegative(),
+});
+
 export interface FeatureControllerDeps {
   features: FeatureService;
   admin: WorkspaceAdmin;
@@ -52,6 +57,19 @@ export function createFeatureRoutes(deps: FeatureControllerDeps): Route[] {
           status: 200,
           body: deps.admin.renameFeature(req.params.id, input.name),
         };
+      },
+    },
+    {
+      method: 'post',
+      path: '/features/:id/move',
+      handler: (req) => {
+        const input = parseInput(moveFeatureSchema, req.body);
+        deps.features.moveFeature({
+          id: req.params.id,
+          targetRepoId: input.targetRepoId,
+          targetIndex: input.targetIndex,
+        });
+        return { status: 200, body: deps.features.get(req.params.id) };
       },
     },
     {

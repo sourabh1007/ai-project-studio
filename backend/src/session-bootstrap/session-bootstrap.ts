@@ -6,6 +6,7 @@ import type { Session } from '../session/session-contract.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
 import type { SkillsService } from '../skills/skills-service.js';
+import type { ContextService } from '../context-store/context-service.js';
 
 export interface SessionBootstrapDeps {
   features: Pick<FeatureService, 'get'>;
@@ -16,6 +17,7 @@ export interface SessionBootstrapDeps {
     'instructionsForFeature' | 'instructionsForSession'
   >;
   contexts: Pick<RepositoryContextCoordinator, 'ensureFresh'>;
+  sharedContext: Pick<ContextService, 'composeLayered'>;
   config: RepositoryContextConfig;
 }
 
@@ -104,6 +106,10 @@ export function createSessionBootstrap(
 
       const feature = deps.features.get(session.featureId);
       const context = await repositoryContext(deps, session.featureId);
+      const shared = deps.sharedContext.composeLayered({
+        repoId: feature.repoId,
+        featureId: session.featureId,
+      });
       const memory = priorSessionMemory(deps, session);
       const skills = deps.sessions.get(session.id)
         ? deps.skills.instructionsForSession(session.id)
@@ -111,6 +117,7 @@ export function createSessionBootstrap(
 
       const sections = [
         context ? section('Repository Context', context) : '',
+        shared,
         section(
           'Feature',
           `Name: ${feature.name}\n\nDescription:\n${feature.description}`,

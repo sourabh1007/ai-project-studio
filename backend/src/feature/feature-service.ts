@@ -1,13 +1,19 @@
 import { NotFoundError } from '../kernel/error-types.js';
 import type { Clock } from '../kernel/clock.js';
 import type { IdGenerator } from '../kernel/id-generator.js';
-import type { Feature, CreateFeatureInput } from './feature-contract.js';
+import type {
+  Feature,
+  CreateFeatureInput,
+  MoveFeatureInput,
+} from './feature-contract.js';
 import type { FeatureRepo } from './feature-repo-port.js';
 
 export interface FeatureServiceDeps {
   repo: FeatureRepo;
   ids: IdGenerator;
   clock: Clock;
+  /** Validates a target repository exists (throws NotFoundError otherwise). */
+  repos: { get(id: string): unknown };
 }
 
 export interface FeatureService {
@@ -16,6 +22,8 @@ export interface FeatureService {
   list(): Feature[];
   attachSummary(id: string, summary: string): Feature;
   rename(id: string, name: string): Feature;
+  /** Reorders a feature within, or moves it between, repository groups. */
+  moveFeature(input: MoveFeatureInput): void;
   remove(id: string): void;
 }
 
@@ -58,6 +66,37 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
       requireFeature(id);
       deps.repo.rename(id, name);
       return requireFeature(id);
+    },
+    moveFeature(input) {
+      requireFeature(input.id);
+      const targetRepoId = input.targetRepoId ?? null;
+      if (targetRepoId !== null) {
+        deps.repos.get(targetRepoId);
+      }
+      const siblings = deps.repo
+        .list()
+        .filter(
+          (feature) =>
+            (feature.repoId ?? null) === targetRepoId && feature.id !== input.id,
+        )
+        .sort(
+          (left, right) =>
+            (left.orderIndex ?? 0) - (right.orderIndex ?? 0) ||
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.id.localeCompare(right.id),
+        );
+      const index = Math.max(0, Math.min(input.targetIndex, siblings.length));
+      const ordered = [
+        ...siblings.slice(0, index),
+        { id: input.id },
+        ...siblings.slice(index),
+      ];
+      ordered.forEach((feature, position) => {
+        deps.repo.updatePlacement(feature.id, {
+          repoId: targetRepoId,
+          orderIndex: position,
+        });
+      });
     },
     remove(id) {
       requireFeature(id);

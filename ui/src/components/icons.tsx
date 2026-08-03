@@ -18,7 +18,9 @@ import {
   Download,
   FileText,
   Files,
+  Folder,
   FolderGit2,
+  GitPullRequest,
   Gauge,
   History,
   ListChecks,
@@ -26,6 +28,7 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
+  Plug,
   Plus,
   RefreshCw,
   Search,
@@ -92,6 +95,8 @@ export const SearchIcon = makeIcon(Search);
 // Navigation icons.
 export const FilesIcon = makeIcon(Files);
 export const RepoIcon = makeIcon(FolderGit2);
+export const FolderIcon = makeIcon(Folder);
+export const PullRequestIcon = makeIcon(GitPullRequest);
 export const SettingsIcon = makeIcon(Settings);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);
@@ -109,6 +114,7 @@ export const FileIcon = makeIcon(FileText);
 
 // Skills icons.
 export const SkillsIcon = makeIcon(Sparkles);
+export const McpIcon = makeIcon(Plug);
 export const InstructionSkillIcon = makeIcon(BookOpen);
 export const TaskPlanSkillIcon = makeIcon(ListChecks);
 export const TagIcon = makeIcon(Tag);

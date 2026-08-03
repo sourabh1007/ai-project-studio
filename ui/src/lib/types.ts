@@ -179,6 +179,15 @@ export interface Feature {
   repoId: string | null;
   /** Overrides the session working directory (e.g. a PR review worktree). */
   checkoutPath: string | null;
+  /** Sort position among sibling features in the same repository group. */
+  orderIndex?: number;
+}
+
+/** Request to move a feature to a repository group and position (drag-and-drop). */
+export interface MoveFeatureInput {
+  id: string;
+  targetRepoId: string | null;
+  targetIndex: number;
 }
 
 export type SessionStatus =
@@ -205,6 +214,47 @@ export interface Session {
   startedAt: string | null;
   endedAt: string | null;
   exitCode: number | null;
+  /** Container group this session lives in; null = directly under the feature. */
+  groupId?: string | null;
+  /** Sort position among its siblings (sessions and groups share the space). */
+  orderIndex?: number;
+}
+
+/** What a tree group represents: a plain folder or a pull-request container. */
+export type TreeGroupKind = 'subcategory' | 'pr';
+
+/** A container node under a feature (subcategory folder or PR). */
+export interface TreeGroup {
+  id: string;
+  featureId: string;
+  parentGroupId: string | null;
+  kind: TreeGroupKind;
+  name: string;
+  prNumber: number | null;
+  prUrl: string | null;
+  orderIndex: number;
+  createdAt: string;
+}
+
+/** Request to create a new group under a feature (optionally nested). */
+export interface CreateGroupInput {
+  parentGroupId?: string | null;
+  kind: TreeGroupKind;
+  name: string;
+  prNumber?: number | null;
+  prUrl?: string | null;
+}
+
+/** The two kinds of movable tree node. */
+export type TreeNodeType = 'session' | 'group';
+
+/** Request to move a session or group to a new container and position. */
+export interface MoveNodeInput {
+  type: TreeNodeType;
+  id: string;
+  targetFeatureId: string;
+  targetParentGroupId: string | null;
+  targetIndex: number;
 }
 
 /** How a session touched a file, mirrored from the CLI store. */
@@ -217,6 +267,35 @@ export interface SessionFile {
   dir: string;
   tool: SessionFileTool;
   firstSeenAt: string;
+}
+
+/** The three layers of the shared-context store, most general to most specific. */
+export type ContextScope = 'workspace' | 'repo' | 'feature';
+
+/** How a shared-context document's current content was last produced. */
+export type ContextUpdatedBy = 'merge' | 'manual' | 'import';
+
+/**
+ * Lifecycle phase of an in-flight shared-context update, streamed live so the UI
+ * can animate the otherwise-invisible background merge (generate → save →
+ * live-push). `idle` is the terminal frame.
+ */
+export type ContextStatusPhase = 'generating' | 'saving' | 'sharing' | 'idle';
+
+/** A single live status frame for a scope's context document. */
+export interface ContextStatus {
+  scope: ContextScope;
+  scopeId: string;
+  phase: ContextStatusPhase;
+}
+
+/** A single curated shared-context document for one scope. */
+export interface SharedContextDoc {
+  scope: ContextScope;
+  scopeId: string;
+  content: string;
+  updatedAt: string;
+  updatedBy: ContextUpdatedBy;
 }
 
 export interface UsageTotals {
@@ -314,6 +393,26 @@ export interface ModelInfo {
   label: string;
 }
 
+/** One MCP server entry; `spec` round-trips the provider config verbatim. */
+export interface McpServerEntry {
+  name: string;
+  spec: Record<string, unknown>;
+}
+
+/** MCP configuration currently seen for a provider. */
+export interface ProviderMcpConfig {
+  providerId: string;
+  configPath: string;
+  exists: boolean;
+  servers: McpServerEntry[];
+}
+
+/** Add/update payload for a single MCP server entry (upsert by name). */
+export interface McpServerInput {
+  name: string;
+  spec: Record<string, unknown>;
+}
+
 export interface StoredUsage extends UsageTotals {
   sessionId: string;
   featureId: string;
@@ -352,6 +451,15 @@ export interface ConfigResponse {
   namespaces: string[];
   defaults: Record<string, Record<string, ConfigValue>>;
   current: Record<string, Record<string, ConfigValue>>;
+  overrides: Record<string, Record<string, ConfigValue>>;
+}
+
+/** Result of persisting or resetting one namespace's overrides. */
+export interface ConfigUpdateResult {
+  namespace: string;
+  effective: Record<string, ConfigValue>;
+  override: Record<string, ConfigValue>;
+  requiresRestart: boolean;
 }
 
 export interface CreateFeatureInput {

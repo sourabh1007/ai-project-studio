@@ -10,6 +10,7 @@ interface FeatureRow {
   summary: string | null;
   repo_id: string | null;
   checkout_path: string | null;
+  order_index: number;
 }
 
 function mapFeature(row: FeatureRow): Feature {
@@ -21,18 +22,24 @@ function mapFeature(row: FeatureRow): Feature {
     summary: row.summary,
     repoId: row.repo_id ?? null,
     checkoutPath: row.checkout_path ?? null,
+    orderIndex: row.order_index,
   };
 }
 
 /** SQLite-backed implementation of the FeatureRepo port. */
 export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const insert = db.prepare(
-    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const selectOne = db.prepare('SELECT * FROM features WHERE id = ?');
-  const selectAll = db.prepare('SELECT * FROM features ORDER BY created_at, id');
+  const selectAll = db.prepare(
+    'SELECT * FROM features ORDER BY order_index, created_at, id',
+  );
   const updateSummary = db.prepare('UPDATE features SET summary = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE features SET name = ? WHERE id = ?');
+  const updatePlacement = db.prepare(
+    'UPDATE features SET repo_id = ?, order_index = ? WHERE id = ?',
+  );
   const deleteOne = db.prepare('DELETE FROM features WHERE id = ?');
 
   return {
@@ -45,6 +52,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
         feature.summary,
         feature.repoId ?? null,
         feature.checkoutPath ?? null,
+        feature.orderIndex ?? 0,
       );
     },
     get(id) {
@@ -59,6 +67,9 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
     },
     rename(id, name) {
       updateName.run(name, id);
+    },
+    updatePlacement(id, placement) {
+      updatePlacement.run(placement.repoId ?? null, placement.orderIndex, id);
     },
     delete(id) {
       deleteOne.run(id);

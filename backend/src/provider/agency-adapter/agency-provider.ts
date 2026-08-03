@@ -2,6 +2,7 @@ import type {
   IAIProvider,
   ImportableSession,
   InteractiveCommand,
+  ModelChangeScanner,
   SessionSpec,
 } from '../provider-contract.js';
 import type {
@@ -17,6 +18,8 @@ import { buildAgencyEnv } from './agency-env-mapper.js';
 import { listAgencyModels } from './agency-model-lister.js';
 import { buildCopilotInteractiveArgs } from '../copilot-adapter/copilot-cmd-builder.js';
 import { createCopilotOutputScanner } from '../copilot-adapter/copilot-output-scanner.js';
+import { createCopilotModelScanner } from '../copilot-adapter/copilot-model-scanner.js';
+import { createCopilotMcpSupport } from '../copilot-adapter/copilot-mcp-support.js';
 
 export interface AgencyAdapterDeps {
   spawner: ProcessSpawner;
@@ -57,8 +60,16 @@ export function createAgencyProvider(
       // same way; reuse Copilot's scanner rather than duplicating the patterns.
       return createCopilotOutputScanner(ctx);
     },
+    createModelChangeScanner(): ModelChangeScanner {
+      // Same Copilot CLI underneath, so the "Model changed …" line is identical;
+      // reuse Copilot's model scanner.
+      return createCopilotModelScanner();
+    },
     listImportableSessions(): ImportableSession[] {
       return deps.importStore.listImportable();
     },
+    // Agency runs the Copilot CLI underneath, so it exposes the same
+    // mcp-config.json; reuse Copilot's MCP support.
+    mcp: createCopilotMcpSupport(),
   };
 }

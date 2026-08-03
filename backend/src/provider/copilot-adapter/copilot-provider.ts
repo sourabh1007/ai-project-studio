@@ -1,6 +1,7 @@
 import type {
   IAIProvider,
   InteractiveCommand,
+  ModelChangeScanner,
   SessionSpec,
 } from '../provider-contract.js';
 import type {
@@ -17,6 +18,7 @@ import {
 import { buildCopilotEnv } from './copilot-env-mapper.js';
 import { listCopilotModels } from './copilot-model-lister.js';
 import { createCopilotOutputScanner } from './copilot-output-scanner.js';
+import { createCopilotModelScanner } from './copilot-model-scanner.js';
 
 export interface CopilotAdapterDeps {
   spawner: ProcessSpawner;
@@ -48,6 +50,9 @@ export function createCopilotProvider(
     },
     createOutputScanner(ctx: SessionOutputScannerContext): SessionOutputScanner {
       return createCopilotOutputScanner(ctx);
+    },
+    createModelChangeScanner(): ModelChangeScanner {
+      return createCopilotModelScanner();
     },
   };
 }

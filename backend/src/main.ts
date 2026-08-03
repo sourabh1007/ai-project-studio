@@ -15,6 +15,17 @@ import express from 'express';
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
 import { createLogger, type LogLevel } from './kernel/logger.js';
+import {
+  LOGGING_NAMESPACE,
+  loggingConfigSchema,
+  loggingDefaults,
+  dailyLogFileName,
+  type LoggingConfig,
+} from './logging/config.js';
+import {
+  createFileLogSink,
+  combineSinks,
+} from './logging/log-file-sink.js';
 import { createEventBus, type EventBus } from './kernel/event-bus.js';
 import { ValidationError } from './kernel/error-types.js';
 
@@ -159,6 +170,7 @@ import { createSummaryRepo } from './persistence/summary-repo.js';
 import { createSessionSummaryRepo } from './persistence/session-summary-repo.js';
 import { createAggregateRepo } from './persistence/aggregate-repo.js';
 import { createFeatureAnalytics } from './aggregation/feature-analytics.js';
+import { createUsageDetailService } from './usage-detail/usage-detail-service.js';
 
 import { createFeatureService } from './feature/feature-service.js';
 import { createFeatureWorkSummaryService } from './feature/feature-work-summary.js';
@@ -171,6 +183,20 @@ import { createTranscriptCollector } from './summarizer/transcript-collector.js'
 import { createSummaryRunner } from './summarizer/summary-runner.js';
 import { createSessionSummaryRunner } from './session-summary/session-summary-runner.js';
 import { createSessionSummaryAutoTrigger } from './session-summary/session-summary-auto.js';
+import {
+  CONTEXT_NAMESPACE,
+  contextConfigSchema,
+  contextDefaults,
+  type ContextConfig,
+} from './context-store/config.js';
+import { createContextService } from './context-store/context-service.js';
+import { createContextBroadcaster } from './context-store/context-broadcaster.js';
+import { createContextMergeRunner } from './context-store/context-merge-runner.js';
+import { createContextMergeAutoTrigger } from './context-store/context-merge-auto.js';
+import { createContextRepo } from './persistence/context-repo.js';
+import { createConfigOverrideRepo } from './persistence/config-override-repo.js';
+import { createConfigOverrideService } from './config/config-override-service.js';
+import { overridesToConfig } from './config/config-override-store.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
 import {
   createCliUsageStore,
@@ -198,6 +224,14 @@ import {
   metaDefaults,
   type MetaConfig,
 } from './meta/config.js';
+import { createMcpService } from './mcp/mcp-service.js';
+import { createMcpConfigFileStore } from './mcp/mcp-config-file-adapter.js';
+import {
+  MCP_NAMESPACE,
+  mcpConfigSchema,
+  mcpDefaults,
+  type McpConfig,
+} from './mcp/config.js';
 import { createFeatureTasksService } from './feature-tasks/feature-tasks-service.js';
 import { createTaskPlanRunner } from './feature-tasks/task-plan-runner.js';
 import { createFeatureTasksRepo } from './persistence/feature-tasks-repo.js';
@@ -207,6 +241,14 @@ import {
   featureTasksDefaults,
   type FeatureTasksConfig,
 } from './feature-tasks/config.js';
+import { createFeatureTreeService } from './feature-tree/feature-tree-service.js';
+import { createFeatureGroupsRepo } from './persistence/feature-groups-repo.js';
+import {
+  FEATURE_TREE_NAMESPACE,
+  featureTreeConfigSchema,
+  featureTreeDefaults,
+  type FeatureTreeConfig,
+} from './feature-tree/config.js';
 import { createIdeUsageService } from './ide-usage/ide-usage-service.js';
 import { createIdeUsageRepo } from './persistence/ide-usage-repo.js';
 import {
@@ -232,6 +274,14 @@ import {
   type RepositoryContextEventMap,
 } from './repository-context/repository-context-coordinator.js';
 import { createRepositoryContextRepo } from './persistence/repository-context-repo.js';
+import {
+  REPO_INSIGHTS_NAMESPACE,
+  repoInsightsConfigSchema,
+  repoInsightsDefaults,
+  type RepoInsightsConfig,
+} from './repo-insights/config.js';
+import { createRepoInsightsService } from './repo-insights/repo-insights-service.js';
+import { createRepoInsightsGitAdapter } from './repo-insights/repo-insights-git-adapter.js';
 import { createSessionBootstrap } from './session-bootstrap/session-bootstrap.js';
 import {
   PR_REVIEW_NAMESPACE,
@@ -266,6 +316,7 @@ function main(): void {
   registry.register({ namespace: CREDIT_NAMESPACE, schema: creditConfigSchema, defaults: creditDefaults });
   registry.register({ namespace: AGGREGATION_NAMESPACE, schema: aggregationConfigSchema, defaults: aggregationDefaults });
   registry.register({ namespace: PERSISTENCE_NAMESPACE, schema: persistenceConfigSchema, defaults: persistenceDefaults });
+  registry.register({ namespace: LOGGING_NAMESPACE, schema: loggingConfigSchema, defaults: loggingDefaults });
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
   registry.register({ namespace: TERMINAL_NAMESPACE, schema: terminalConfigSchema, defaults: terminalDefaults });
@@ -273,12 +324,20 @@ function main(): void {
   registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
   registry.register({ namespace: SKILLS_NAMESPACE, schema: skillsConfigSchema, defaults: skillsDefaults });
   registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
+  registry.register({ namespace: MCP_NAMESPACE, schema: mcpConfigSchema, defaults: mcpDefaults });
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
+  registry.register({ namespace: FEATURE_TREE_NAMESPACE, schema: featureTreeConfigSchema, defaults: featureTreeDefaults });
   registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
+  registry.register({ namespace: CONTEXT_NAMESPACE, schema: contextConfigSchema, defaults: contextDefaults });
   registry.register({
     namespace: REPOSITORY_CONTEXT_NAMESPACE,
     schema: repositoryContextConfigSchema,
     defaults: repositoryContextDefaults,
+  });
+  registry.register({
+    namespace: REPO_INSIGHTS_NAMESPACE,
+    schema: repoInsightsConfigSchema,
+    defaults: repoInsightsDefaults,
   });
   registry.register({
     namespace: PR_REVIEW_NAMESPACE,
@@ -286,50 +345,41 @@ function main(): void {
     defaults: prReviewDefaults,
   });
 
-  const config: ConfigObject = buildConfig({
+  // Phase 1 (bootstrap): resolve just enough config from defaults + environment
+  // to locate on-disk storage and configure logging. Persisted overrides live
+  // inside the workspace database, which we cannot open until we know its path,
+  // so persistence and logging are intentionally env/default-only here.
+  const bootConfig: ConfigObject = buildConfig({
     registry,
     sources: [envSource(process.env, ENV_PREFIX)],
     secretLookup: (name) => process.env[name],
   });
+  const persistenceConfig = bootConfig[PERSISTENCE_NAMESPACE] as PersistenceConfig;
+  const loggingConfig = bootConfig[LOGGING_NAMESPACE] as LoggingConfig;
 
-  // Paths whose (pre-resolution) values reference a secret, so `GET /config`
-  // can redact their resolved values instead of leaking them.
-  const configSecretPaths = collectSecretPaths(
-    mergeSources([
-      { origin: 'defaults', data: registry.defaults() },
-      envSource(process.env, ENV_PREFIX),
-    ]),
+  const logLevel =
+    (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? loggingConfig.level;
+  const logFilePath = pathJoin(
+    loggingConfig.directory,
+    dailyLogFileName(loggingConfig.filePrefix, new Date()),
   );
-
-  const copilotConfig = config[COPILOT_NAMESPACE] as CopilotConfig;
-  const agencyConfig = config[AGENCY_NAMESPACE] as AgencyConfig;
-  const sessionConfig = config[SESSION_NAMESPACE] as SessionConfig;
-  const usageConfig = config[USAGE_NAMESPACE] as UsageConfig;
-  const creditConfig = config[CREDIT_NAMESPACE] as CreditConfig;
-  const aggregationConfig = config[AGGREGATION_NAMESPACE] as AggregationConfig;
-  const persistenceConfig = config[PERSISTENCE_NAMESPACE] as PersistenceConfig;
-  const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
-  const apiConfig = config[API_NAMESPACE] as ApiConfig;
-  const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
-  const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
-  const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
-  const skillsConfig = config[SKILLS_NAMESPACE] as SkillsConfig;
-  const metaConfig = config[META_NAMESPACE] as MetaConfig;
-  const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
-  const ideUsageConfig = config[IDE_USAGE_NAMESPACE] as IdeUsageConfig;
-  const repositoryContextConfig = config[
-    REPOSITORY_CONTEXT_NAMESPACE
-  ] as RepositoryContextConfig;
-  const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
-
-  const logLevel = (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? 'info';
-  const logger = createLogger(logLevel, (record) => {
+  const consoleSink = (record: {
+    level: Exclude<LogLevel, 'none'>;
+    message: string;
+    data?: unknown;
+  }): void => {
     // eslint-disable-next-line no-console
     console[record.level === 'debug' ? 'log' : record.level](
       `[${record.level}] ${record.message}`,
       record.data ?? '',
     );
-  });
+  };
+  const logger = createLogger(
+    logLevel,
+    loggingConfig.toFile
+      ? combineSinks(consoleSink, createFileLogSink({ filePath: logFilePath }))
+      : consoleSink,
+  );
   const clock = createClock();
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
@@ -375,6 +425,62 @@ function main(): void {
   // Persistence.
   ensureDir(persistenceConfig.databasePath);
   const db = createDatabase({ databasePath: persistenceConfig.databasePath });
+
+  // Phase 2 (effective): now that the database is open, layer persisted,
+  // user-editable overrides beneath the environment and rebuild the config.
+  // Overrides win over defaults; the environment still wins over both.
+  const configOverrideRepo = createConfigOverrideRepo(db);
+  const overridesSource = {
+    origin: 'overrides',
+    data: overridesToConfig(configOverrideRepo.all()),
+  };
+  const config: ConfigObject = buildConfig({
+    registry,
+    sources: [overridesSource, envSource(process.env, ENV_PREFIX)],
+    secretLookup: (name) => process.env[name],
+  });
+  const configOverrideService = createConfigOverrideService({
+    store: configOverrideRepo,
+    registry,
+    clock,
+    onChanged: (namespace) =>
+      logger.info('Configuration override changed', { namespace }),
+  });
+
+  // Paths whose (pre-resolution) values reference a secret, so `GET /config`
+  // can redact their resolved values instead of leaking them.
+  const configSecretPaths = collectSecretPaths(
+    mergeSources([
+      { origin: 'defaults', data: registry.defaults() },
+      overridesSource,
+      envSource(process.env, ENV_PREFIX),
+    ]),
+  );
+
+  const copilotConfig = config[COPILOT_NAMESPACE] as CopilotConfig;
+  const agencyConfig = config[AGENCY_NAMESPACE] as AgencyConfig;
+  const sessionConfig = config[SESSION_NAMESPACE] as SessionConfig;
+  const usageConfig = config[USAGE_NAMESPACE] as UsageConfig;
+  const creditConfig = config[CREDIT_NAMESPACE] as CreditConfig;
+  const aggregationConfig = config[AGGREGATION_NAMESPACE] as AggregationConfig;
+  const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
+  const contextConfig = config[CONTEXT_NAMESPACE] as ContextConfig;
+  const apiConfig = config[API_NAMESPACE] as ApiConfig;
+  const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
+  const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
+  const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
+  const skillsConfig = config[SKILLS_NAMESPACE] as SkillsConfig;
+  const metaConfig = config[META_NAMESPACE] as MetaConfig;
+  const mcpConfig = config[MCP_NAMESPACE] as McpConfig;
+  const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
+  const featureTreeConfig = config[FEATURE_TREE_NAMESPACE] as FeatureTreeConfig;
+  const ideUsageConfig = config[IDE_USAGE_NAMESPACE] as IdeUsageConfig;
+  const repositoryContextConfig = config[
+    REPOSITORY_CONTEXT_NAMESPACE
+  ] as RepositoryContextConfig;
+  const repoInsightsConfig = config[REPO_INSIGHTS_NAMESPACE] as RepoInsightsConfig;
+  const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
+
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
   const repositoryContextRepo = createRepositoryContextRepo(db);
@@ -393,6 +499,7 @@ function main(): void {
   const summaryRepo = createSummaryRepo(db);
   const sessionSummaryRepo = createSessionSummaryRepo(db);
   const sessionFilesRepo = createSessionFilesRepo(db);
+  const contextRepo = createContextRepo(db);
   const aggregateRepo = createAggregateRepo(db, aggregationConfig);
   const featureAnalytics = createFeatureAnalytics({
     reader: aggregateRepo,
@@ -595,7 +702,7 @@ function main(): void {
   // / *.visualstudio.com with no "Cannot prompt" failure.
   const gitRun = (
     args: string[],
-    opts: { stdin?: string; interactive?: boolean } = {},
+    opts: { stdin?: string; interactive?: boolean; longRunning?: boolean } = {},
   ): Promise<GitRunResult> =>
     new Promise((resolve) => {
       const child = execFile(
@@ -603,11 +710,16 @@ function main(): void {
         args,
         {
           windowsHide: true,
-          maxBuffer: 1024 * 1024,
+          // Quick auth/status checks stay small; a worktree checkout of a large
+          // monorepo streams megabytes of "Updating files: X%" progress to
+          // stderr, which would blow a 1 MB cap (ENOBUFS kills the process), so
+          // long-running git operations get a much larger buffer.
+          maxBuffer: opts.longRunning ? 512 * 1024 * 1024 : 1024 * 1024,
           // A silent status check must never hang the sidebar "checking…" pill;
-          // an interactive sign-in legitimately waits on the browser, so only
-          // the non-interactive path is time-boxed.
-          timeout: opts.interactive ? 0 : 20_000,
+          // an interactive sign-in legitimately waits on the browser, and a
+          // worktree checkout of a huge repo legitimately runs for minutes — so
+          // only the plain non-interactive path is time-boxed.
+          timeout: opts.interactive || opts.longRunning ? 0 : 20_000,
           env: {
             ...process.env,
             // Sign-in may show the browser prompt; the silent status check must
@@ -836,6 +948,19 @@ function main(): void {
     },
   });
 
+  // Reconciles a session's persisted resolved model with a freshly-observed
+  // one (from a usage row or a CLI model-change announcement), persisting and
+  // broadcasting only on a real change so the UI's per-session model label
+  // stays in lockstep with the CLI.
+  const resolveSessionModel = (sessionId: string, resolvedModel: string) => {
+    const stored = sessionRepo.get(sessionId);
+    if (stored && stored.resolvedModel !== resolvedModel) {
+      const updated = { ...stored, resolvedModel };
+      sessionRepo.save(updated);
+      bus.emit('session.updated', updated);
+    }
+  };
+
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
   // reusing the same usage-capture pipeline via session.started/ended events.
   const terminalManager = createTerminalManager({
@@ -854,6 +979,10 @@ function main(): void {
     // terminal output (per-session PTY = unambiguous attribution), replacing
     // brittle filesystem watching of a shared working directory.
     sessionFiles: sessionFilesRepo,
+    // Mirror mid-session model switches the CLI prints (e.g. "Model changed …
+    // to <model>") onto the session's resolved model, so the UI updates as soon
+    // as the user changes model in the CLI, not just on the next usage row.
+    onModelResolved: resolveSessionModel,
     home: homedir(),
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
@@ -863,14 +992,6 @@ function main(): void {
   // updates the live AIC/token/model meter for both one-shot and interactive
   // sessions, since the CLI attributes usage to our launch --session-id.
   const tailers = new Map<string, ReturnType<typeof createCliUsageTailer>>();
-  const resolveSessionModel = (sessionId: string, resolvedModel: string) => {
-    const stored = sessionRepo.get(sessionId);
-    if (stored && stored.resolvedModel !== resolvedModel) {
-      const updated = { ...stored, resolvedModel };
-      sessionRepo.save(updated);
-      bus.emit('session.updated', updated);
-    }
-  };
   const makeUsageTailer = (session: Session) =>
     createCliUsageTailer({
       intervalMs: usageConfig.livePollIntervalMs,
@@ -924,7 +1045,54 @@ function main(): void {
   });
 
   // Feature + summarizer.
-  const featureService = createFeatureService({ repo: featureRepo, ids, clock });
+  const featureService = createFeatureService({
+    repo: featureRepo,
+    ids,
+    clock,
+    repos: repoService,
+  });
+  // Layered shared-context store: durable, curated instructions injected at
+  // launch and live-pushed into running sessions. The broadcaster fans context
+  // writes out to affected running terminals; the merge runner curates a
+  // feature's document from each completed dev session.
+  const contextBroadcaster = createContextBroadcaster({
+    features: featureService,
+    sessions: sessionRepo,
+    inject: (sessionId, instructions) =>
+      terminalManager.injectInstructions(sessionId, instructions),
+    config: contextConfig,
+  });
+  const contextService = createContextService({
+    store: contextRepo,
+    clock,
+    config: contextConfig,
+    onUpdated: (doc) => contextBroadcaster.onUpdated(doc),
+  });
+  const contextMerger = createContextMergeRunner({
+    sessions: sessionRepo,
+    features: featureService,
+    transcripts: transcriptRepo,
+    launcher,
+    service: contextService,
+    summarizerConfig,
+    config: contextConfig,
+    onStatus: (status) => bus.emit('context.status', status),
+  });
+  const contextMergeAuto = createContextMergeAutoTrigger({
+    merger: contextMerger,
+    config: contextConfig,
+    logger,
+  });
+  bus.on('session.ended', (session: Session) => {
+    contextMergeAuto.onSessionEnded(session);
+  });
+  // Per-turn usage drill-down: exposes every credit/token event at the
+  // session, feature, and repository scopes for the UI breakdown modal.
+  const usageDetailService = createUsageDetailService({
+    usage: usageRepo,
+    sessions: sessionRepo,
+    features: featureService,
+  });
   const cliStoreDatabasePath = pathJoin(
     homedir(),
     copilotHistoryConfig.subdir,
@@ -1000,6 +1168,14 @@ function main(): void {
     transcripts: transcriptRepo,
     config: metaConfig,
   });
+  // Provider-agnostic MCP server management. The provider's own CLI reports
+  // where its MCP config lives (via a meta-session), so no path is hardcoded.
+  const mcpService = createMcpService({
+    registry: providers,
+    meta: metaRunner,
+    files: createMcpConfigFileStore(),
+    config: mcpConfig,
+  });
   const gitRepository = createGitRepositoryAdapter();
   const repositoryEvidence = createRepositoryEvidenceService({
     revisionLookup: gitRepository,
@@ -1022,6 +1198,12 @@ function main(): void {
     }),
     clock,
     bus: bus as unknown as EventBus<RepositoryContextEventMap>,
+  });
+  const repoInsightsService = createRepoInsightsService({
+    repos: repoService,
+    git: createRepoInsightsGitAdapter(),
+    clock,
+    config: repoInsightsConfig,
   });
   // PR review: when a PR review feature is created, generate an AI summary and
   // core analysis from the ready repository context plus the PR's diff, and
@@ -1074,7 +1256,7 @@ function main(): void {
     getPull: getPullFor,
     provisionWorktree: (repo, pull) =>
       provisionPrWorktree(
-        { git: (args) => gitRun(args), pathExists: existsSync },
+        { git: (args) => gitRun(args, { longRunning: true }), pathExists: existsSync },
         {
           repoLocalPath: repo.localPath,
           provider: repo.provider,
@@ -1094,6 +1276,7 @@ function main(): void {
     sessionFiles: sessionFilesRepo,
     terminals: terminalManager,
     prReviews: prReviewService,
+    sharedContext: contextService,
   });
   const sessionBootstrap = createSessionBootstrap({
     features: featureService,
@@ -1101,6 +1284,7 @@ function main(): void {
     summaries: sessionSummaryRepo,
     skills: skillsService,
     contexts: repositoryContextCoordinator,
+    sharedContext: contextService,
     config: repositoryContextConfig,
   });
   void repositoryContextCoordinator.synchronizeSaved().catch((error) => {
@@ -1121,6 +1305,14 @@ function main(): void {
     ids,
     clock,
     config: featureTasksConfig,
+  });
+  const featureTreeService = createFeatureTreeService({
+    groups: createFeatureGroupsRepo(db),
+    sessions: sessionRepo,
+    features: featureService,
+    ids,
+    clock,
+    config: featureTreeConfig,
   });
 
   // HTTP API.
@@ -1165,10 +1357,14 @@ function main(): void {
         }
       },
       tasks: featureTasksService,
+      tree: featureTreeService,
       ideUsage: ideUsageService,
+      usageDetail: usageDetailService,
+      mcp: mcpService,
       configRegistry: registry,
       currentConfig: config,
       configSecretPaths,
+      configOverrides: configOverrideService,
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
       githubSignInStart: () => githubDeviceAuth.start(),
@@ -1178,11 +1374,13 @@ function main(): void {
       azureSignIn: (target) => azureAuth.signIn(target),
       repos: repoService,
       repositoryContexts: repositoryContextCoordinator,
+      repoInsights: repoInsightsService,
       provisionRepo: provisionRepoInput,
       listGithubRepos: listGithubReposFor,
       listAzureRepos: listAzureReposFor,
       prFeatures: prFeatureService,
       prReviews: prReviewService,
+      context: contextService,
       logger,
     }),
   );

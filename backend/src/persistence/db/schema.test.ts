@@ -63,6 +63,7 @@ describe('db schema/connection', () => {
       expect.arrayContaining([
         'features',
         'sessions',
+        'feature_groups',
         'usage_events',
         'transcripts',
         'summaries',
@@ -72,6 +73,8 @@ describe('db schema/connection', () => {
         'feature_tasks',
         'repositories',
         'repository_contexts',
+        'context_documents',
+        'config_overrides',
       ]),
     );
   });
@@ -107,6 +110,7 @@ describe('db schema/connection', () => {
     expect(indexes).toEqual(
       expect.arrayContaining([
         'idx_sessions_feature_id',
+        'idx_feature_groups_feature_id',
         'idx_features_repo_id',
         'idx_usage_events_feature_id',
         'idx_skill_attachments_skill_id',
@@ -235,6 +239,39 @@ describe('db schema/connection', () => {
     db.close();
   });
 
+  it('adds tree placement columns to legacy sessions', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      feature_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      requested_model TEXT NOT NULL,
+      resolved_model TEXT,
+      status TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      usage_file_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      name TEXT
+    )`);
+    db.exec(`INSERT INTO sessions
+      (id, feature_id, provider, requested_model, status, kind, prompt,
+       usage_file_path, created_at)
+      VALUES ('s1', 'f1', 'copilot', 'auto', 'completed', 'dev', 'p', 'u', 'now')`);
+
+    expect(sessionColumns(db)).not.toContain('group_id');
+    applySchema(db);
+    expect(sessionColumns(db)).toContain('group_id');
+    expect(sessionColumns(db)).toContain('order_index');
+    expect(
+      db.prepare("SELECT group_id, order_index FROM sessions WHERE id = 's1'").get(),
+    ).toEqual({ group_id: null, order_index: 0 });
+    db.close();
+  });
+
   it('adds the skills.removal_instructions column to a legacy database', () => {
     const db = new DatabaseSync(':memory:');
     // A pre-removal-reaction skills table, missing the new column.
@@ -265,6 +302,28 @@ describe('db schema/connection', () => {
     expect(featureColumns(db)).not.toContain('repo_id');
     applySchema(db);
     expect(featureColumns(db)).toContain('repo_id');
+    expect(() => applySchema(db)).not.toThrow();
+    db.close();
+  });
+
+  it('adds the features.order_index column to a legacy database', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE features (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      summary TEXT
+    )`);
+    db.exec(
+      "INSERT INTO features (id, name, description, created_at) VALUES ('f1', 'Login', 'd', 'now')",
+    );
+    expect(featureColumns(db)).not.toContain('order_index');
+    applySchema(db);
+    expect(featureColumns(db)).toContain('order_index');
+    expect(
+      db.prepare("SELECT order_index FROM features WHERE id = 'f1'").get(),
+    ).toEqual({ order_index: 0 });
     expect(() => applySchema(db)).not.toThrow();
     db.close();
   });

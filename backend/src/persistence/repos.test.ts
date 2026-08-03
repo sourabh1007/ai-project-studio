@@ -8,10 +8,27 @@ import { createSummaryRepo } from './summary-repo.js';
 import { createSessionSummaryRepo } from './session-summary-repo.js';
 import { createSessionFilesRepo } from './session-files-repo.js';
 import { createRepoRepo } from './repo-repo.js';
+import { createFeatureGroupsRepo } from './feature-groups-repo.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { Repository } from '../repo/repo-contract.js';
 import type { Session } from '../session/session-contract.js';
+import type { TreeGroup } from '../feature-tree/feature-tree-contract.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
+
+function treeGroup(overrides: Partial<TreeGroup> = {}): TreeGroup {
+  return {
+    id: 'g1',
+    featureId: 'f1',
+    parentGroupId: null,
+    kind: 'subcategory',
+    name: 'Docs',
+    prNumber: null,
+    prUrl: null,
+    orderIndex: 0,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 function feature(overrides: Partial<Feature> = {}): Feature {
   return {
@@ -22,6 +39,7 @@ function feature(overrides: Partial<Feature> = {}): Feature {
     summary: null,
     repoId: null,
     checkoutPath: null,
+    orderIndex: 0,
     ...overrides,
   };
 }
@@ -37,6 +55,8 @@ function session(overrides: Partial<Session> = {}): Session {
     status: 'running',
     kind: 'dev',
     scope: 'feature',
+    groupId: null,
+    orderIndex: 0,
     prompt: 'do it',
     usageFilePath: 'usage/s1.jsonl',
     createdAt: '2025-01-01T00:00:00.000Z',
@@ -123,6 +143,40 @@ describe('feature-repo', () => {
     expect(repo.get('f1')?.checkoutPath).toBe('C:/wt/app-pr-3');
     db.close();
   });
+
+  it('re-homes a feature to a repository group and sort position', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1' }));
+    repo.updatePlacement('f1', { repoId: 'repo-7', orderIndex: 3 });
+    const moved = repo.get('f1');
+    expect(moved?.repoId).toBe('repo-7');
+    expect(moved?.orderIndex).toBe(3);
+    repo.updatePlacement('f1', { repoId: null, orderIndex: 0 });
+    expect(repo.get('f1')?.repoId).toBeNull();
+    db.close();
+  });
+
+  it('defaults order_index to 0 when a feature omits it on create', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1', orderIndex: undefined }));
+    expect(repo.get('f1')?.orderIndex).toBe(0);
+    db.close();
+  });
+
+  it('orders features by order_index then creation time', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(
+      feature({ id: 'f1', createdAt: '2025-01-01T00:00:00.000Z', orderIndex: 2 }),
+    );
+    repo.create(
+      feature({ id: 'f2', createdAt: '2025-01-02T00:00:00.000Z', orderIndex: 1 }),
+    );
+    expect(repo.list().map((f) => f.id)).toEqual(['f2', 'f1']);
+    db.close();
+  });
 });
 
 describe('session-repo', () => {
@@ -154,6 +208,7 @@ describe('session-repo', () => {
         startedAt: undefined as unknown as string | null,
         endedAt: undefined as unknown as string | null,
         exitCode: undefined as unknown as number | null,
+        orderIndex: undefined as unknown as number,
       }),
     );
     const saved = repo.get('s1');
@@ -161,6 +216,7 @@ describe('session-repo', () => {
     expect(saved?.startedAt).toBeNull();
     expect(saved?.endedAt).toBeNull();
     expect(saved?.exitCode).toBeNull();
+    expect(saved?.orderIndex).toBe(0);
 
     repo.save(session({ exitCode: Number.NaN }));
     expect(repo.get('s1')?.exitCode).toBeNull();
@@ -212,6 +268,94 @@ describe('session-repo', () => {
     expect(repo.get('s1')?.name).toBe('Login form');
     repo.rename('s1', null);
     expect(repo.get('s1')?.name).toBeNull();
+    db.close();
+  });
+
+  it('re-homes a session to a group and sets its sort position', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session());
+    repo.updatePlacement('s1', { featureId: 'f2', groupId: 'g9', orderIndex: 3 });
+    const moved = repo.get('s1');
+    expect(moved?.featureId).toBe('f2');
+    expect(moved?.groupId).toBe('g9');
+    expect(moved?.orderIndex).toBe(3);
+    repo.updatePlacement('s1', {
+      featureId: 'f2',
+      groupId: null,
+      orderIndex: Number.NaN,
+    });
+    const detached = repo.get('s1');
+    expect(detached?.groupId).toBeNull();
+    expect(detached?.orderIndex).toBe(0);
+    db.close();
+  });
+});
+
+describe('feature-groups-repo', () => {
+  it('upserts, reads and lists groups by feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureGroupsRepo(db);
+    expect(repo.get('missing')).toBeNull();
+    repo.save(treeGroup());
+    expect(repo.get('g1')).toEqual(treeGroup());
+    repo.save(treeGroup({ id: 'g2', featureId: 'f1', orderIndex: 1 }));
+    repo.save(treeGroup({ id: 'g3', featureId: 'f2' }));
+    expect(
+      repo
+        .listByFeature('f1')
+        .map((g) => g.id)
+        .sort(),
+    ).toEqual(['g1', 'g2']);
+    db.close();
+  });
+
+  it('round-trips pull-request metadata', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureGroupsRepo(db);
+    repo.save(
+      treeGroup({
+        id: 'pr',
+        kind: 'pr',
+        name: 'PR #7',
+        prNumber: 7,
+        prUrl: 'https://example/pr/7',
+      }),
+    );
+    const stored = repo.get('pr');
+    expect(stored).toMatchObject({ kind: 'pr', prNumber: 7, prUrl: 'https://example/pr/7' });
+    db.close();
+  });
+
+  it('renames and re-homes a group', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureGroupsRepo(db);
+    repo.save(treeGroup());
+    repo.updateName('g1', 'Renamed');
+    expect(repo.get('g1')?.name).toBe('Renamed');
+    repo.updatePlacement('g1', {
+      featureId: 'f2',
+      parentGroupId: 'p9',
+      orderIndex: 4,
+    });
+    const moved = repo.get('g1');
+    expect(moved?.featureId).toBe('f2');
+    expect(moved?.parentGroupId).toBe('p9');
+    expect(moved?.orderIndex).toBe(4);
+    db.close();
+  });
+
+  it('deletes a single group and all groups for a feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureGroupsRepo(db);
+    repo.save(treeGroup({ id: 'g1' }));
+    repo.save(treeGroup({ id: 'g2' }));
+    repo.save(treeGroup({ id: 'g3', featureId: 'f2' }));
+    repo.delete('g1');
+    expect(repo.get('g1')).toBeNull();
+    repo.deleteByFeature('f1');
+    expect(repo.listByFeature('f1')).toEqual([]);
+    expect(repo.get('g3')).not.toBeNull();
     db.close();
   });
 });

@@ -261,6 +261,30 @@ describe('applyStreamEvent', () => {
     });
     expect(state.prReviews['f1'].status).toBe('ready');
   });
+
+  it('tracks the latest context-status phase per scope target', () => {
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'context.status',
+      status: { scope: 'feature', scopeId: 'f1', phase: 'generating' },
+    });
+    expect(state.contextStatus['feature:f1']).toBe('generating');
+    state = applyStreamEvent(state, {
+      type: 'context.status',
+      status: { scope: 'feature', scopeId: 'f1', phase: 'idle' },
+    });
+    expect(state.contextStatus['feature:f1']).toBe('idle');
+  });
+
+  it('parses a context.status frame', () => {
+    const parsed = parseServerEvent(
+      'context.status',
+      JSON.stringify({ scope: 'feature', scopeId: 'f1', phase: 'sharing' }),
+    );
+    expect(parsed).toEqual({
+      type: 'context.status',
+      status: { scope: 'feature', scopeId: 'f1', phase: 'sharing' },
+    });
+  });
 });
 
 describe('sessionLiveTotals', () => {

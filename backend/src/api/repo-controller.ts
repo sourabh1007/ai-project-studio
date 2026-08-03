@@ -5,6 +5,7 @@ import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
+import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 
@@ -26,6 +27,7 @@ const refreshContextSchema = z.object({}).strict().optional();
 export interface RepoControllerDeps {
   repos: RepoService;
   repositoryContexts: RepositoryContextCoordinator;
+  repoInsights: RepoInsightsService;
   /** Clones or attaches an existing checkout, yielding a create input. */
   provision: (input: ProvisionRepoInput) => Promise<CreateRepositoryInput>;
   /** Lists the authenticated user's GitHub repositories. */
@@ -64,6 +66,14 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       handler: async (req) => ({
         status: 200,
         body: await deps.repositoryContexts.load(req.params.id),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/insights',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.repoInsights.load(req.params.id),
       }),
     },
     {

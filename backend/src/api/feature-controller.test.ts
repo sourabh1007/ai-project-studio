@@ -27,6 +27,7 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
 
 function harness() {
   const created: unknown[] = [];
+  const moved: unknown[] = [];
   const service = {
     create: (input: unknown) => {
       created.push(input);
@@ -34,6 +35,9 @@ function harness() {
     },
     list: () => [feature],
     get: (id: string) => ({ ...feature, id }),
+    moveFeature: (input: unknown) => {
+      moved.push(input);
+    },
   } as unknown as FeatureService;
   const renamed: { id: string; name: string }[] = [];
   const deleted: string[] = [];
@@ -50,6 +54,7 @@ function harness() {
   return {
     routes: createFeatureRoutes({ features: service, admin }),
     created,
+    moved,
     renamed,
     deleted,
   };
@@ -133,5 +138,47 @@ describe('feature-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: { id: 'f1' } });
     expect(h.deleted).toEqual(['f1']);
+  });
+
+  it('moves a feature and returns the updated feature', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features/:id/move')(
+      req({
+        params: { id: 'f1' },
+        body: { targetRepoId: 'r2', targetIndex: 1 },
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect((result.body as Feature).id).toBe('f1');
+    expect(h.moved).toEqual([
+      { id: 'f1', targetRepoId: 'r2', targetIndex: 1 },
+    ]);
+  });
+
+  it('moves a feature to the repo-less group with a null target', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features/:id/move')(
+      req({
+        params: { id: 'f1' },
+        body: { targetRepoId: null, targetIndex: 0 },
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(h.moved).toEqual([
+      { id: 'f1', targetRepoId: null, targetIndex: 0 },
+    ]);
+  });
+
+  it('rejects invalid move payloads', () => {
+    const h = harness();
+    let caught: unknown;
+    try {
+      pick(h.routes, 'post', '/features/:id/move')(
+        req({ params: { id: 'f1' }, body: { targetIndex: -1 } }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ kind: 'validation' });
   });
 });

@@ -7,6 +7,7 @@ import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { UsageRepo } from '../usage/usage-repo-port.js';
 import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { SessionFilesStore } from '../session-files/session-files-contract.js';
+import type { ContextService } from '../context-store/context-service.js';
 
 /** Closes a live interactive terminal for a session, if one is running. */
 export interface TerminalCloser {
@@ -28,6 +29,8 @@ export interface WorkspaceAdminDeps {
   terminals: TerminalCloser;
   /** Optional: purges a feature's PR review when the feature is deleted. */
   prReviews?: PrReviewRemover;
+  /** Optional: purges a feature's shared-context document when it is deleted. */
+  sharedContext?: Pick<ContextService, 'remove'>;
 }
 
 /**
@@ -75,6 +78,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       deps.sessions.deleteByFeature(id);
       deps.summaries.delete(id);
       deps.prReviews?.removeForFeature(id);
+      deps.sharedContext?.remove('feature', id);
       deps.features.remove(id);
     },
 

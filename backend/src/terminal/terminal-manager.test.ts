@@ -62,7 +62,7 @@ function fakePtyEnv() {
   };
 }
 
-function interactiveProvider(withScanner = false): IAIProvider {
+function interactiveProvider(withScanner = false, withModelScanner = false): IAIProvider {
   const provider: IAIProvider = {
     id: 'copilot',
     listModels: async () => [],
@@ -82,6 +82,13 @@ function interactiveProvider(withScanner = false): IAIProvider {
         chunk.startsWith('FILE:')
           ? [{ path: `${ctx.home}/${chunk.slice(5).trim()}`, tool: 'create' }]
           : [],
+    });
+  }
+  if (withModelScanner) {
+    // A trivial scanner: a `MODEL:` chunk names one newly-selected model.
+    provider.createModelChangeScanner = () => ({
+      feed: (chunk) =>
+        chunk.startsWith('MODEL:') ? [chunk.slice(6).trim()] : [],
     });
   }
   return provider;
@@ -124,11 +131,14 @@ function makeManager(
   instructions = '',
   withScanner = false,
   bootstrapError?: Error,
+  modelOpts: { withModelScanner?: boolean; trackModel?: boolean } = {},
 ) {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
   const providers = createProviderRegistry();
-  providers.register(interactiveProvider(withScanner));
+  providers.register(
+    interactiveProvider(withScanner, modelOpts.withModelScanner ?? false),
+  );
   const ts = fakeTranscriptStore();
   const started: Session[] = [];
   const ended: Session[] = [];
@@ -138,6 +148,7 @@ function makeManager(
   bus.on('session.discarded', (id) => discarded.push(id));
   const instructionCalls: string[] = [];
   const recorded: Array<{ sessionId: string; path: string; tool: string }> = [];
+  const modelResolved: Array<{ sessionId: string; model: string }> = [];
   const manager = createTerminalManager({
     spawner: env.spawner,
     providers,
@@ -159,6 +170,12 @@ function makeManager(
         recorded.push({ sessionId, path, tool });
       },
     },
+    onModelResolved:
+      modelOpts.trackModel === false
+        ? undefined
+        : (sessionId, model) => {
+            modelResolved.push({ sessionId, model });
+          },
     home: '/home/me',
   });
   return {
@@ -170,6 +187,7 @@ function makeManager(
     saved: ts.saved,
     instructionCalls,
     recorded,
+    modelResolved,
   };
 }
 
@@ -457,6 +475,48 @@ describe('createTerminalManager', () => {
       await manager.getOrLaunch(sampleSession());
       env.emitExit(0);
       expect(recorded).toEqual([]);
+    });
+  });
+
+  describe('model-change tracking', () => {
+    it('reports each model switch the provider scanner detects', async () => {
+      const { manager, env, modelResolved } = makeManager('', false, undefined, {
+        withModelScanner: true,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MODEL: claude-opus-4.8');
+      env.emitData('some unrelated output');
+      env.emitData('MODEL: gpt-5.4');
+      expect(modelResolved).toEqual([
+        { sessionId: 'sess-1', model: 'claude-opus-4.8' },
+        { sessionId: 'sess-1', model: 'gpt-5.4' },
+      ]);
+    });
+
+    it('reports nothing when the provider exposes no model scanner', async () => {
+      const { manager, env, modelResolved } = makeManager('', false);
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MODEL: gpt-5.4');
+      expect(modelResolved).toEqual([]);
+    });
+
+    it('does not attach a model scanner when no resolver is wired', async () => {
+      const { manager, env, modelResolved } = makeManager('', false, undefined, {
+        withModelScanner: true,
+        trackModel: false,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MODEL: gpt-5.4');
+      expect(modelResolved).toEqual([]);
+    });
+
+    it('detaches the model scanner once the terminal exits', async () => {
+      const { manager, env, modelResolved } = makeManager('', false, undefined, {
+        withModelScanner: true,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      expect(modelResolved).toEqual([]);
     });
   });
 

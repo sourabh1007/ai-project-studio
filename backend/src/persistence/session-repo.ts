@@ -23,6 +23,8 @@ interface SessionRow {
   ended_at: string | null;
   exit_code: number | null;
   name: string | null;
+  group_id: string | null;
+  order_index: number;
 }
 
 function mapSession(row: SessionRow): Session {
@@ -36,6 +38,8 @@ function mapSession(row: SessionRow): Session {
     status: row.status as SessionStatus,
     kind: row.kind as SessionKind,
     scope: row.scope as SessionScope,
+    groupId: row.group_id,
+    orderIndex: row.order_index,
     prompt: row.prompt,
     usageFilePath: row.usage_file_path,
     createdAt: row.created_at,
@@ -62,8 +66,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
   const upsert = db.prepare(
     `INSERT OR REPLACE INTO sessions
       (id, feature_id, provider, requested_model, resolved_model, status, kind,
-       scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name,
+       group_id, order_index)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const selectOne = db.prepare('SELECT * FROM sessions WHERE id = ?');
   const selectByFeature = db.prepare(
@@ -73,6 +78,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
   );
   const selectAll = db.prepare('SELECT * FROM sessions ORDER BY created_at, id');
   const updateName = db.prepare('UPDATE sessions SET name = ? WHERE id = ?');
+  const updatePlacement = db.prepare(
+    'UPDATE sessions SET feature_id = ?, group_id = ?, order_index = ? WHERE id = ?',
+  );
   const deleteOne = db.prepare('DELETE FROM sessions WHERE id = ?');
   const deleteByFeature = db.prepare('DELETE FROM sessions WHERE feature_id = ?');
 
@@ -94,6 +102,8 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
         textOrNull(session.endedAt),
         intOrNull(session.exitCode),
         textOrNull(session.name),
+        textOrNull(session.groupId),
+        intOrNull(session.orderIndex) ?? 0,
       );
     },
     get(id) {
@@ -108,6 +118,14 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
     },
     rename(id, name) {
       updateName.run(textOrNull(name), id);
+    },
+    updatePlacement(id, placement) {
+      updatePlacement.run(
+        placement.featureId,
+        textOrNull(placement.groupId),
+        intOrNull(placement.orderIndex) ?? 0,
+        id,
+      );
     },
     delete(id) {
       deleteOne.run(id);

@@ -50,6 +50,8 @@ export default defineConfig({
         'src/repository-context/git-repository-adapter.ts',
         'src/repository-context/filesystem-evidence-adapter.ts',
         'src/repository-context/temporary-prompt-file-adapter.ts',
+        'src/repo-insights/repo-insights-git-adapter.ts',
+        'src/mcp/mcp-config-file-adapter.ts',
       ],
       thresholds: {
         lines: 100,

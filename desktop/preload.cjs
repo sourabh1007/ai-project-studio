@@ -23,4 +23,7 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.send('link:open', url);
     }
   },
+  relaunch() {
+    ipcRenderer.send('app:relaunch');
+  },
 });

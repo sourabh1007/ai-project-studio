@@ -65,6 +65,18 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method).toBe('DELETE');
   });
 
+  it('moves a feature with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.moveFeature({ id: 'f1', targetRepoId: 'r2', targetIndex: 2 });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/move');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ targetRepoId: 'r2', targetIndex: 2 }),
+    );
+  });
+
   it('deletes a session with a DELETE request', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
     const client = createApiClient({ fetchImpl });
@@ -106,6 +118,61 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/features/f1/sessions');
   });
 
+  it('lists a feature tree groups', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.listGroups('f1');
+    expect(calls[0][0]).toBe('/api/features/f1/groups');
+  });
+
+  it('creates a group with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'g1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createGroup('f1', { kind: 'subcategory', name: 'Docs' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/groups');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ kind: 'subcategory', name: 'Docs' }),
+    );
+  });
+
+  it('renames a group with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'g1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.renameGroup('g1', 'Renamed');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/groups/g1');
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(JSON.stringify({ name: 'Renamed' }));
+  });
+
+  it('deletes a group with a DELETE request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'g1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.deleteGroup('g1');
+    expect(result).toEqual({ id: 'g1' });
+    expect(calls[0][0]).toBe('/api/groups/g1');
+    expect(calls[0][1]?.method).toBe('DELETE');
+  });
+
+  it('moves a tree node with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ moved: true }));
+    const client = createApiClient({ fetchImpl });
+    const input = {
+      type: 'session' as const,
+      id: 's1',
+      targetFeatureId: 'f1',
+      targetParentGroupId: null,
+      targetIndex: 0,
+    };
+    const result = await client.moveNode(input);
+    expect(result).toEqual({ moved: true });
+    expect(calls[0][0]).toBe('/api/tree/move');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(JSON.stringify(input));
+  });
+
   it('starts a session', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
     const client = createApiClient({ fetchImpl });
@@ -128,6 +195,27 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getFeatureUsage('f1');
     expect(calls[0][0]).toBe('/api/features/f1/usage');
+  });
+
+  it('reads per-turn session usage events', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.getSessionUsageEvents('s1');
+    expect(calls[0][0]).toBe('/api/sessions/s1/usage');
+  });
+
+  it('reads per-turn feature usage events', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.getFeatureUsageEvents('f1');
+    expect(calls[0][0]).toBe('/api/features/f1/usage/events');
+  });
+
+  it('reads per-turn repository usage events', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.getRepoUsageEvents('r1');
+    expect(calls[0][0]).toBe('/api/repos/r1/usage/events');
   });
 
   it('reads workspace totals', async () => {
@@ -174,13 +262,91 @@ describe('createApiClient', () => {
     expect(calls[1][0]).toBe('/api/providers/copilot/models');
   });
 
+  it('lists MCP providers', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 'agency' }]));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listMcpProviders();
+    expect(result).toEqual([{ id: 'agency' }]);
+    expect(calls[0][0]).toBe('/api/mcp/providers');
+  });
+
+  it('gets MCP servers for a provider, encoding the id', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        providerId: 'a/b',
+        configPath: '/x',
+        exists: true,
+        servers: [],
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getMcpServers('a/b');
+    expect(calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers');
+  });
+
+  it('adds/updates an MCP server with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        providerId: 'agency',
+        configPath: '/x',
+        exists: true,
+        servers: [],
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.putMcpServer('agency', {
+      name: 'fs',
+      spec: { command: 'npx' },
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/mcp/providers/agency/servers');
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(
+      JSON.stringify({ name: 'fs', spec: { command: 'npx' } }),
+    );
+  });
+
   it('reads the effective config', async () => {
     const { fetchImpl, calls } = mockFetch(
-      jsonResponse({ namespaces: [], defaults: {}, current: {} }),
+      jsonResponse({ namespaces: [], defaults: {}, current: {}, overrides: {} }),
     );
     const client = createApiClient({ fetchImpl });
     await client.getConfig();
     expect(calls[0][0]).toBe('/api/config');
+  });
+
+  it('updates a namespace override with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        namespace: 'logging',
+        effective: {},
+        override: { level: 'debug' },
+        requiresRestart: true,
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.updateConfig('logging', { level: 'debug' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/config/logging');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      values: { level: 'debug' },
+    });
+  });
+
+  it('resets a namespace override with a DELETE request', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        namespace: 'logging',
+        effective: {},
+        override: {},
+        requiresRestart: true,
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.resetConfig('logging');
+    expect(calls[0][0]).toBe('/api/config/logging');
+    expect(calls[0][1]?.method).toBe('DELETE');
   });
 
   it('gets the agency install status', async () => {
@@ -293,6 +459,74 @@ describe('createApiClient', () => {
 
     expect(calls[0][0]).toBe('/api/sessions/s1/files');
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('reads workspace shared context without a scopeId query', async () => {
+    const doc = {
+      scope: 'workspace',
+      scopeId: '',
+      content: '- rule',
+      updatedAt: 't',
+      updatedBy: 'manual',
+    };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(doc));
+    const client = createApiClient({ fetchImpl });
+
+    const result = await client.getSharedContext('workspace', '');
+
+    expect(result).toEqual(doc);
+    expect(calls[0][0]).toBe('/api/context/workspace');
+  });
+
+  it('reads scoped shared context with an encoded scopeId query', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ scope: 'feature' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.getSharedContext('feature', 'f 1');
+
+    expect(calls[0][0]).toBe('/api/context/feature?scopeId=f%201');
+  });
+
+  it('returns null when shared context is absent', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({}, 404));
+    const client = createApiClient({ fetchImpl });
+
+    expect(await client.getSharedContext('repo', 'r1')).toBeNull();
+  });
+
+  it('propagates non-404 errors when reading shared context', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({}, 500));
+    const client = createApiClient({ fetchImpl });
+
+    await expect(client.getSharedContext('repo', 'r1')).rejects.toBeInstanceOf(
+      ApiError,
+    );
+  });
+
+  it('saves shared context with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ scope: 'repo' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.saveSharedContext('repo', 'r1', 'new content');
+
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/context/repo');
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(
+      JSON.stringify({ scopeId: 'r1', content: 'new content' }),
+    );
+  });
+
+  it('appends a shared-context fact with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ scope: 'feature' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.rememberSharedContext('feature', 'f1', 'be nice');
+
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/context/feature/remember');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ scopeId: 'f1', text: 'be nice' }));
   });
 
   it('performs the full feature-tasks lifecycle over HTTP', async () => {

@@ -31,6 +31,10 @@ export interface Session {
   kind: SessionKind;
   /** Defaults to `feature` for records created before scoped sessions. */
   scope?: SessionScope;
+  /** Container group within the feature; null = directly under the feature. */
+  groupId?: string | null;
+  /** Sort position within its container (the feature root or a group). */
+  orderIndex?: number;
   prompt: string;
   /** Absolute/relative path of this session's OTel usage file. */
   usageFilePath: string;

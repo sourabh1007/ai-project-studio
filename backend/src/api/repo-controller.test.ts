@@ -9,6 +9,7 @@ import type { Feature } from '../feature/feature-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
 import type { RepositoryContext } from '../repository-context/repository-context-contract.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
+import type { RepoInsights } from '../repo-insights/repo-insights-contract.js';
 
 const repo: Repository = {
   id: 'r1',
@@ -54,6 +55,16 @@ const repositoryContext: RepositoryContext = {
   failure: null,
 };
 
+const repoInsights: RepoInsights = {
+  repositoryId: 'r1',
+  branch: 'main',
+  agents: [],
+  skills: [],
+  readiness: [],
+  agentReady: true,
+  generatedAt: '2025-01-01T00:02:00.000Z',
+};
+
 function pick(routes: Route[], method: string, path: string) {
   const route = routes.find((r) => r.method === method && r.path === path);
   if (!route) {
@@ -76,6 +87,7 @@ function harness() {
   const loaded: string[] = [];
   const refreshed: string[] = [];
   const contextRemoved: string[] = [];
+  const insightsLoaded: string[] = [];
   let azureOrg = '';
   const service = {
     list: () => [repo],
@@ -125,6 +137,12 @@ function harness() {
   const routes = createRepoRoutes({
     repos: service,
     repositoryContexts,
+    repoInsights: {
+      load: async (id) => {
+        insightsLoaded.push(id);
+        return repoInsights;
+      },
+    },
     provision: async (input) => {
       provisioned.push(input);
       return {
@@ -153,6 +171,7 @@ function harness() {
     loaded,
     refreshed,
     contextRemoved,
+    insightsLoaded,
     getAzureOrg: () => azureOrg,
   };
 }
@@ -205,6 +224,15 @@ describe('repo-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: repositoryContext });
     expect(h.loaded).toEqual(['r1']);
+  });
+
+  it('gets repository insights', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/insights')(
+      req({ params: { id: 'r1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: repoInsights });
+    expect(h.insightsLoaded).toEqual(['r1']);
   });
 
   it('accepts an empty refresh body and returns the generating context', async () => {

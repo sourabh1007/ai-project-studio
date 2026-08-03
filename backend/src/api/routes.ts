@@ -1,5 +1,6 @@
 import type { ConfigObject } from '../config/config-contract.js';
 import type { ConfigSchemaRegistry } from '../config/config-schema-registry.js';
+import type { ConfigOverrideService } from '../config/config-override-service.js';
 import type { Logger } from '../kernel/logger.js';
 import type { FeatureAnalyticsService } from '../aggregation/feature-analytics.js';
 import type { FeatureService } from '../feature/feature-service.js';
@@ -9,7 +10,10 @@ import type { SessionSummarizer } from '../session-summary/session-summary-contr
 import type { SessionImportService } from '../session-import/session-import-contract.js';
 import type { SkillsService } from '../skills/skills-service.js';
 import type { FeatureTasksService } from '../feature-tasks/feature-tasks-service.js';
+import type { FeatureTreeService } from '../feature-tree/feature-tree-service.js';
 import type { IdeUsageService } from '../ide-usage/ide-usage-service.js';
+import type { UsageDetailService } from '../usage-detail/usage-detail-service.js';
+import type { McpService } from '../mcp/mcp-service.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
 import type { SessionConfig } from '../session/config.js';
@@ -39,11 +43,14 @@ import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
+import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
+import { createUsageDetailRoutes } from './usage-detail-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createFeatureRoutes } from './feature-controller.js';
 import { createProviderRoutes } from './provider-controller.js';
+import { createMcpRoutes } from './mcp-controller.js';
 import { createSessionRoutes } from './session-controller.js';
 import { createTerminalRoutes } from './terminal-controller.js';
 import { createSummaryRoutes } from './summary-controller.js';
@@ -53,10 +60,13 @@ import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
+import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
+import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
+import type { ContextService } from '../context-store/context-service.js';
 
 export interface ApiRoutesDeps {
   features: FeatureService;
@@ -81,7 +91,10 @@ export interface ApiRoutesDeps {
   /** Reverses a session skill on its live terminal when it is untagged. */
   removeSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
+  tree: FeatureTreeService;
   ideUsage: IdeUsageService;
+  usageDetail: UsageDetailService;
+  mcp: McpService;
   configRegistry: ConfigSchemaRegistry;
   currentConfig: ConfigObject;
   /**
@@ -89,6 +102,8 @@ export interface ApiRoutesDeps {
    * must be redacted from `GET /config`.
    */
   configSecretPaths: readonly string[];
+  /** Persisted, per-namespace config override editing. */
+  configOverrides: ConfigOverrideService;
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
@@ -106,6 +121,7 @@ export interface ApiRoutesDeps {
   /** The repository layer the workspace is organized around. */
   repos: RepoService;
   repositoryContexts: RepositoryContextCoordinator;
+  repoInsights: RepoInsightsService;
   /** Clones or attaches an existing checkout, yielding a repo create input. */
   provisionRepo: (input: ProvisionRepoInput) => Promise<CreateRepositoryInput>;
   /** Lists the authenticated user's GitHub repositories. */
@@ -116,6 +132,8 @@ export interface ApiRoutesDeps {
   prFeatures: PrFeatureService;
   /** Automated AI reviews for PR review features. */
   prReviews: PrReviewService;
+  /** The layered shared-context store surfaced in the IDE. */
+  context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
   logger: Logger;
 }
 
@@ -137,7 +155,9 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       bootstrap: deps.sessionBootstrap,
     }),
     ...createProviderRoutes({ registry: deps.providers }),
+    ...createMcpRoutes({ mcp: deps.mcp }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
+    ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
     ...createSummaryRoutes({
       summarizer: deps.summarizer,
       summaries: deps.summaries,
@@ -154,12 +174,15 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       removeSessionSkill: deps.removeSessionSkill,
     }),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
+    ...createFeatureTreeRoutes({ tree: deps.tree }),
     ...createPrReviewRoutes({ prReviews: deps.prReviews }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
+    ...createContextRoutes({ context: deps.context }),
     ...createConfigRoutes({
       registry: deps.configRegistry,
       current: deps.currentConfig,
       secretPaths: deps.configSecretPaths,
+      overrides: deps.configOverrides,
     }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
     ...createGithubRoutes({
@@ -175,6 +198,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createRepoRoutes({
       repos: deps.repos,
       repositoryContexts: deps.repositoryContexts,
+      repoInsights: deps.repoInsights,
       provision: deps.provisionRepo,
       listGithubRepos: deps.listGithubRepos,
       listAzureRepos: deps.listAzureRepos,

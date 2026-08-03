@@ -28,6 +28,12 @@ export interface TerminalManagerDeps {
   bootstrap: Pick<SessionBootstrap, 'composeForSession'>;
   /** Records files each session creates/edits, parsed from its own output. */
   sessionFiles: Pick<SessionFilesStore, 'record'>;
+  /**
+   * Reports a mid-session model switch parsed from the tool's own terminal
+   * output, so the resolved model shown for the session tracks the CLI. Omitted
+   * when the caller does not track resolved models.
+   */
+  onModelResolved?: (sessionId: string, model: string) => void;
   /** User home directory, for a scanner to expand `~`-relative tool paths. */
   home: string;
 }
@@ -154,6 +160,10 @@ export function createTerminalManager(
     // a shared working directory. Providers without a scanner contribute none.
     attachOutputScanner(terminal, provider, spec);
 
+    // Track mid-session model switches the CLI announces in its output, so the
+    // resolved model shown in the UI follows the CLI immediately.
+    attachModelScanner(terminal, provider, session.id);
+
     if (bootstrap.length > 0) {
       seedInstructionsWhenReady(terminal, bootstrap);
     }
@@ -188,6 +198,33 @@ export function createTerminalManager(
             op.tool,
             deps.clock.isoNow(),
           );
+        }
+      },
+      exit: () => {},
+    });
+  }
+
+  /**
+   * Attaches a provider-supplied scanner that watches the tool's terminal
+   * output for the CLI's own model-change announcements and reports each newly
+   * selected model, so the session's resolved model tracks the CLI even before
+   * the next usage row is recorded. No-op when the provider exposes no model
+   * scanner or the caller tracks no resolved model.
+   */
+  function attachModelScanner(
+    terminal: TerminalSession,
+    provider: ReturnType<ProviderRegistry['get']>,
+    sessionId: string,
+  ): void {
+    const onModelResolved = deps.onModelResolved;
+    if (!provider.createModelChangeScanner || !onModelResolved) {
+      return;
+    }
+    const scanner = provider.createModelChangeScanner();
+    terminal.attach({
+      send: (data) => {
+        for (const model of scanner.feed(data)) {
+          onModelResolved(sessionId, model);
         }
       },
       exit: () => {},

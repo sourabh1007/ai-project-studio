@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -16,8 +16,14 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
-import type { FeatureUsage, PrReview, Session } from '../../lib/types.js';
+import type {
+  ContextStatusPhase,
+  FeatureUsage,
+  PrReview,
+  Session,
+} from '../../lib/types.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
+import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { Loader } from '../../components/loading.js';
 import {
   ActivityIcon,
@@ -27,6 +33,7 @@ import {
 import { FeatureWorkSummaryPanel } from './work-summary.js';
 import { PrReviewPanel } from './pr-review-panel.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
+import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 
 const PALETTE = [
   '#818cf8',
@@ -108,18 +115,33 @@ function Kpi({
   value,
   label,
   accent,
+  onClick,
 }: {
   value: string;
   label: string;
   accent: string;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="dash-kpi">
+  const content = (
+    <>
       <span className="dash-kpi-bar" style={{ background: accent }} />
       <span className="dash-kpi-value">{value}</span>
       <span className="dash-kpi-label">{label}</span>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className="dash-kpi dash-kpi-button"
+        title={`View how each credit and token was used (${label})`}
+        onClick={onClick}
+      >
+        {content}
+      </button>
+    );
+  }
+  return <div className="dash-kpi">{content}</div>;
 }
 
 function Section({
@@ -152,11 +174,13 @@ export function FeatureDashboard({
   featureName,
   featureDescription,
   prReview,
+  contextPhase,
 }: {
   featureId: string;
   featureName: string;
   featureDescription?: string;
   prReview?: PrReview;
+  contextPhase?: ContextStatusPhase;
 }) {
   const api = useApi();
   const { data, loading, error } = useAsync<FeatureUsage>(
@@ -193,16 +217,35 @@ export function FeatureDashboard({
       )}
 
       {data && data.totals.sessions > 0 && (
-        <Charts data={data} featureId={featureId} />
+        <Charts data={data} featureId={featureId} featureName={featureName} />
       )}
+
+      <section className="dash-shared-context">
+        <SharedContextPanel
+          scope="feature"
+          scopeId={featureId}
+          title="Shared context"
+          hint="Durable knowledge injected into every session for this feature. Auto-curated after each session; edit freely."
+          livePhase={contextPhase}
+        />
+      </section>
 
       <FeatureWorkSummaryPanel featureId={featureId} />
     </div>
   );
 }
 
-function Charts({ data, featureId }: { data: FeatureUsage; featureId: string }) {
+function Charts({
+  data,
+  featureId,
+  featureName,
+}: {
+  data: FeatureUsage;
+  featureId: string;
+  featureName: string;
+}) {
   const api = useApi();
+  const [viewingUsage, setViewingUsage] = useState(false);
   const { totals, byDay, byModel, bySession, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
 
@@ -259,11 +302,17 @@ function Charts({ data, featureId }: { data: FeatureUsage; featureId: string }) 
     <>
       <Section icon={<OverviewIcon size={15} />} title="Overview">
         <div className="dash-kpis">
-          <Kpi value={totalAic.toFixed(2)} label="AIC used" accent={AIC_COLOR} />
+          <Kpi
+            value={totalAic.toFixed(2)}
+            label="AIC used"
+            accent={AIC_COLOR}
+            onClick={() => setViewingUsage(true)}
+          />
           <Kpi
             value={numberFmt.format(totals.inputTokens + totals.outputTokens)}
             label="Total tokens"
             accent={TOKEN_IN}
+            onClick={() => setViewingUsage(true)}
           />
           <Kpi value={String(totals.sessions)} label="Sessions" accent={PALETTE[2]} />
           <Kpi
@@ -445,6 +494,13 @@ function Charts({ data, featureId }: { data: FeatureUsage; featureId: string }) 
           ))}
         </div>
       </Section>
+
+      {viewingUsage && (
+        <UsageBreakdownModal
+          scope={{ kind: 'feature', id: featureId, label: featureName }}
+          onClose={() => setViewingUsage(false)}
+        />
+      )}
     </>
   );
 }

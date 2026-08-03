@@ -15,6 +15,7 @@ const STREAM_EVENT_NAMES = [
   'session.updated',
   'usage.recorded',
   'repository.context.updated',
+  'context.status',
 ] as const;
 
 function reducer(state: LiveState, event: StreamEvent): LiveState {

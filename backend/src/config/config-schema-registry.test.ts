@@ -39,4 +39,18 @@ describe('config-schema-registry', () => {
       reg.register({ namespace: 'dup', schema: z.object({}), defaults: {} }),
     ).toThrow(ConfigError);
   });
+
+  it('exposes the schema and defaults for a single namespace', () => {
+    const reg = createConfigSchemaRegistry();
+    const schema = z.object({ n: z.number() });
+    reg.register({ namespace: 'alpha', schema, defaults: { n: 1 } });
+    expect(reg.schemaFor('alpha')).toBe(schema);
+    expect(reg.defaultsFor('alpha')).toEqual({ n: 1 });
+  });
+
+  it('returns undefined for an unregistered namespace', () => {
+    const reg = createConfigSchemaRegistry();
+    expect(reg.schemaFor('ghost')).toBeUndefined();
+    expect(reg.defaultsFor('ghost')).toBeUndefined();
+  });
 });

@@ -1,6 +1,8 @@
 import type {
   ConfigResponse,
+  ConfigUpdateResult,
   CreateFeatureInput,
+  CreateGroupInput,
   CreateSkillInput,
   AddFeatureTaskInput,
   AgencyStatus,
@@ -17,7 +19,11 @@ import type {
   ImportableSession,
   ImportSessionInput,
   ModelInfo,
+  MoveFeatureInput,
+  MoveNodeInput,
+  McpServerInput,
   ProviderInfo,
+  ProviderMcpConfig,
   Repository,
   RepositoryContext,
   RemoteRepo,
@@ -27,6 +33,8 @@ import type {
   AddRepositoryInput,
   Session,
   SessionFile,
+  ContextScope,
+  SharedContextDoc,
   Skill,
   SkillAttachment,
   SkillExport,
@@ -34,8 +42,10 @@ import type {
   StartSessionInput,
   StartTerminalSessionInput,
   TaggedSkill,
+  TreeGroup,
   UpdateSkillInput,
   UsageTotals,
+  StoredUsage,
   WorkspaceStats,
 } from './types.js';
 
@@ -153,12 +163,27 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Feature>(`/features/${id}`, putBody({ name })),
     deleteFeature: (id: string) =>
       request<{ id: string }>(`/features/${id}`, del()),
+    moveFeature: (input: MoveFeatureInput) =>
+      request<Feature>(`/features/${input.id}/move`, jsonBody({
+        targetRepoId: input.targetRepoId,
+        targetIndex: input.targetIndex,
+      })),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),
     renameSession: (id: string, name: string | null) =>
       request<Session>(`/sessions/${id}`, putBody({ name })),
     listSessions: (featureId: string) =>
       request<Session[]>(`/features/${featureId}/sessions`),
+    listGroups: (featureId: string) =>
+      request<TreeGroup[]>(`/features/${featureId}/groups`),
+    createGroup: (featureId: string, input: CreateGroupInput) =>
+      request<TreeGroup>(`/features/${featureId}/groups`, jsonBody(input)),
+    renameGroup: (groupId: string, name: string) =>
+      request<TreeGroup>(`/groups/${groupId}`, putBody({ name })),
+    deleteGroup: (groupId: string) =>
+      request<{ id: string }>(`/groups/${groupId}`, del()),
+    moveNode: (input: MoveNodeInput) =>
+      request<{ moved: boolean }>('/tree/move', jsonBody(input)),
     startSession: (featureId: string, input: StartSessionInput) =>
       request<Session>(`/features/${featureId}/sessions`, jsonBody(input)),
     createTerminalSession: (
@@ -171,6 +196,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     getFeatureUsage: (featureId: string) =>
       request<FeatureUsage>(`/features/${featureId}/usage`),
+    getSessionUsageEvents: (sessionId: string) =>
+      request<StoredUsage[]>(`/sessions/${sessionId}/usage`),
+    getFeatureUsageEvents: (featureId: string) =>
+      request<StoredUsage[]>(`/features/${featureId}/usage/events`),
+    getRepoUsageEvents: (repoId: string) =>
+      request<StoredUsage[]>(`/repos/${repoId}/usage/events`),
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
@@ -193,6 +224,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     listModels: (providerId: string) =>
       request<ModelInfo[]>(`/providers/${providerId}/models`),
+    listMcpProviders: () => request<ProviderInfo[]>('/mcp/providers'),
+    getMcpServers: (providerId: string) =>
+      request<ProviderMcpConfig>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
+      ),
+    putMcpServer: (providerId: string, input: McpServerInput) =>
+      request<ProviderMcpConfig>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
+        putBody(input),
+      ),
     listSkills: () => request<Skill[]>('/skills'),
     getSkill: (id: string) => request<Skill>(`/skills/${id}`),
     createSkill: (input: CreateSkillInput) =>
@@ -214,6 +255,27 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<TaggedSkill[]>(`/sessions/${sessionId}/skills`),
     listSessionFiles: (sessionId: string) =>
       request<SessionFile[]>(`/sessions/${sessionId}/files`),
+    getSharedContext: async (scope: ContextScope, scopeId: string) => {
+      const query = scopeId ? `?scopeId=${encodeURIComponent(scopeId)}` : '';
+      try {
+        return await request<SharedContextDoc>(`/context/${scope}${query}`);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    saveSharedContext: (scope: ContextScope, scopeId: string, content: string) =>
+      request<SharedContextDoc>(
+        `/context/${scope}`,
+        putBody({ scopeId, content }),
+      ),
+    rememberSharedContext: (scope: ContextScope, scopeId: string, text: string) =>
+      request<SharedContextDoc>(
+        `/context/${scope}/remember`,
+        jsonBody({ scopeId, text }),
+      ),
     exportSkill: (id: string) => request<SkillExport>(`/skills/${id}/export`),
     exportSkills: () => request<SkillExport[]>('/skills/export'),
     importSkill: (payload: SkillExport) =>
@@ -229,6 +291,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
     removeFeatureTask: (taskId: string) =>
       request<{ id: string }>(`/tasks/${taskId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
+    updateConfig: (namespace: string, values: Record<string, unknown>) =>
+      request<ConfigUpdateResult>(
+        `/config/${encodeURIComponent(namespace)}`,
+        putBody({ values }),
+      ),
+    resetConfig: (namespace: string) =>
+      request<ConfigUpdateResult>(
+        `/config/${encodeURIComponent(namespace)}`,
+        del(),
+      ),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>

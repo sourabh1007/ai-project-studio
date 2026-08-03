@@ -29,6 +29,11 @@ describe('subscribeStream', () => {
       featureId: 'f1',
       status: 'ready',
     } as never);
+    bus.emit('context.status', {
+      scope: 'feature',
+      scopeId: 'f1',
+      phase: 'generating',
+    });
 
     expect(events.map((e) => e.event)).toEqual([
       'session.started',
@@ -38,11 +43,12 @@ describe('subscribeStream', () => {
       'usage.recorded',
       'repository.context.updated',
       'pr.review.updated',
+      'context.status',
     ]);
 
     off();
     bus.emit('session.started', { id: 's2' } as never);
-    expect(events).toHaveLength(7);
+    expect(events).toHaveLength(8);
   });
 
   it('does not stream internal session lifecycle or output events', () => {

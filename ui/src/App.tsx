@@ -9,15 +9,17 @@ import { formatAic, formatCompactNumber } from './lib/format.js';
 import { WorkspaceView } from './features/workspace/workspace-view.js';
 import { SettingsView } from './features/settings/settings-view.js';
 import { SkillsManager } from './features/skills/skills-manager.js';
+import { McpManager } from './features/mcp/mcp-manager.js';
 import {
   FilesIcon,
+  McpIcon,
   MoonIcon,
   SettingsIcon,
   SkillsIcon,
   SunIcon,
 } from './components/icons.js';
 
-type View = 'workspace' | 'skills' | 'settings';
+type View = 'workspace' | 'skills' | 'mcp' | 'settings';
 
 export function App() {
   const live = useUsageStream();
@@ -68,6 +70,15 @@ export function App() {
             </button>
             <button
               type="button"
+              className={`activity-item ${view === 'mcp' ? 'is-active' : ''}`.trim()}
+              title="MCP Servers"
+              aria-label="MCP Servers"
+              onClick={() => setView('mcp')}
+            >
+              <McpIcon size={22} />
+            </button>
+            <button
+              type="button"
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
               title="Settings"
               aria-label="Settings"
@@ -102,6 +113,10 @@ export function App() {
             <div className="settings-pane">
               <SkillsManager />
             </div>
+          ) : view === 'mcp' ? (
+            <div className="settings-pane">
+              <McpManager />
+            </div>
           ) : (
             <div className="settings-pane">
               <SettingsView />
@@ -117,7 +132,9 @@ export function App() {
               ? 'Workspace'
               : view === 'skills'
                 ? 'Skills'
-                : 'Settings'}
+                : view === 'mcp'
+                  ? 'MCP Servers'
+                  : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>
           <span

@@ -35,7 +35,7 @@ function session(id: string, featureId = 'f1'): Session {
 
 function harness(
   featureSessions: Session[] = [],
-  options: { withPrReviews?: boolean } = {},
+  options: { withPrReviews?: boolean; withContext?: boolean } = {},
 ) {
   const calls: string[] = [];
   const known = new Map<string, Session>(
@@ -92,6 +92,9 @@ function harness(
     },
     prReviews: options.withPrReviews
       ? { removeForFeature: (id) => calls.push(`prReviews.removeForFeature:${id}`) }
+      : undefined,
+    sharedContext: options.withContext
+      ? { remove: (scope, id) => calls.push(`context.remove:${scope}:${id}`) }
       : undefined,
   });
   return { admin, calls };
@@ -157,6 +160,19 @@ describe('workspace-admin-service', () => {
       'sessions.listByFeature:f1',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
+      'feature.remove:f1',
+    ]);
+  });
+
+  it('purges a feature shared-context document when a remover is wired', async () => {
+    const { admin, calls } = harness([], { withContext: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeature:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'context.remove:feature:f1',
       'feature.remove:f1',
     ]);
   });

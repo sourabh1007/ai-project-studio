@@ -131,4 +131,33 @@ describe('agency-provider', () => {
       { path: '/work/a.md', tool: 'create' },
     ]);
   });
+
+  it('createModelChangeScanner detects a model switch via the reused Copilot scanner', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+    });
+    const scanner = provider.createModelChangeScanner?.();
+    expect(scanner?.feed('Model changed to claude-opus-4.8\n')).toEqual([
+      'claude-opus-4.8',
+    ]);
+  });
+
+  it('exposes Copilot MCP support', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+    });
+    expect(provider.mcp).toBeDefined();
+    expect(provider.mcp?.parseConfigPath('/h/.copilot/mcp-config.json')).toBe(
+      '/h/.copilot/mcp-config.json',
+    );
+    expect(provider.mcp?.defaultConfigPath().endsWith('mcp-config.json')).toBe(
+      true,
+    );
+  });
 });
