@@ -96,6 +96,38 @@ export interface RepositoryContext {
   failure: RepositoryContextFailure | null;
 }
 
+/** Whether a single agent-readiness parameter is satisfied by the repository. */
+export type ReadinessStatus = 'pass' | 'fail';
+
+/** A repo-native skill or custom-agent definition discovered on the branch. */
+export interface RepoDefinitionEntry {
+  name: string;
+  description: string;
+  author: string;
+  path: string;
+}
+
+/** One evaluated agent-readiness parameter and how the repository measured up. */
+export interface ReadinessCheck {
+  key: string;
+  label: string;
+  requirement: string;
+  status: ReadinessStatus;
+  detail: string | null;
+}
+
+/** Aggregated, on-demand insights for a repository's default branch. */
+export interface RepoInsights {
+  repositoryId: string;
+  branch: string;
+  agents: RepoDefinitionEntry[];
+  skills: RepoDefinitionEntry[];
+  readiness: ReadinessCheck[];
+  /** True when every readiness parameter passes. */
+  agentReady: boolean;
+  generatedAt: string;
+}
+
 export type PrReviewStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
 export interface PrReviewFailure {

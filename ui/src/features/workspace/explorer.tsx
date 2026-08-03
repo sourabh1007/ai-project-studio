@@ -39,6 +39,7 @@ import {
   PlusIcon,
   PullRequestIcon,
   RepoIcon,
+  SkillsIcon,
   TagIcon,
   TimeIcon,
   TrashIcon,
@@ -293,6 +294,7 @@ function FeatureNode({
   onDeleteSession,
   onFeatureDragStart,
   onFeatureDragEnd,
+  onStartReview,
   treeRevision,
   onMoveNode,
 }: {
@@ -309,6 +311,8 @@ function FeatureNode({
   onDeleteSession: (session: Session) => Promise<void>;
   onFeatureDragStart: (feature: Feature) => void;
   onFeatureDragEnd: () => void;
+  /** Starts the PR-review flow for this feature's repository, when it has one. */
+  onStartReview?: () => void;
   treeRevision: number;
   onMoveNode: (input: MoveNodeInput) => Promise<void>;
 }) {
@@ -614,14 +618,15 @@ function FeatureNode({
                   handleAddSubcategory(null);
                 },
               },
-              {
-                label: 'Attach pull request',
-                icon: <PullRequestIcon size={14} />,
-                onSelect: () => {
-                  setExpanded(true);
-                  setPrPickerParent(null);
-                },
-              },
+              ...(onStartReview
+                ? [
+                    {
+                      label: 'Start PR review',
+                      icon: <PullRequestIcon size={14} />,
+                      onSelect: onStartReview,
+                    },
+                  ]
+                : []),
               {
                 label: 'Import session',
                 icon: <ImportIcon />,
@@ -903,6 +908,7 @@ function RepoNode({
   names,
   onOpenSession,
   onOpenFeature,
+  onOpenRepo,
   onRenameSession,
   onRenameFeature,
   onDeleteFeature,
@@ -927,6 +933,7 @@ function RepoNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
+  onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
@@ -996,12 +1003,23 @@ function RepoNode({
         <span className="repo-icon" aria-hidden="true">
           <RepoIcon size={14} />
         </span>
-        <span
-          className="repo-branch-label"
-          title={repo ? `${providerLabel} · ${repo.localPath}` : 'Features without a repository'}
-        >
-          {title}
-        </span>
+        {repo ? (
+          <button
+            type="button"
+            className="repo-branch-label repo-branch-label-button"
+            title={`Open ${title} dashboard`}
+            onClick={() => onOpenRepo(repo)}
+          >
+            {title}
+          </button>
+        ) : (
+          <span
+            className="repo-branch-label"
+            title="Features without a repository"
+          >
+            {title}
+          </span>
+        )}
         {repo && <span className="repo-provider-chip">{providerLabel}</span>}
         {repo && (
           <RepositoryContextBadge
@@ -1072,6 +1090,11 @@ function RepoNode({
                   onSelect: () => setViewingUsage(true),
                 },
                 {
+                  label: 'Agent readiness',
+                  icon: <SkillsIcon />,
+                  onSelect: () => (repo ? onOpenRepo(repo) : undefined),
+                },
+                {
                   label: 'Remove repository',
                   icon: <TrashIcon />,
                   danger: true,
@@ -1126,6 +1149,7 @@ function RepoNode({
                 onDeleteSession={onDeleteSession}
                 onFeatureDragStart={onFeatureDragStart}
                 onFeatureDragEnd={onFeatureDragEnd}
+                onStartReview={repo ? () => onStartReview(repo) : undefined}
                 treeRevision={treeRevision}
                 onMoveNode={onMoveNode}
               />
@@ -1156,6 +1180,7 @@ export function Explorer({
   names,
   onOpenSession,
   onOpenFeature,
+  onOpenRepo,
   onRenameSession,
   onRenameFeature,
   onDeleteFeature,
@@ -1167,6 +1192,7 @@ export function Explorer({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
+  onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
@@ -1445,6 +1471,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
+            onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}
             onDeleteFeature={deleteFeature}
@@ -1472,6 +1499,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
+            onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}
             onDeleteFeature={deleteFeature}

@@ -77,15 +77,6 @@ export const repoInsightsDefaults: RepoInsightsConfig = {
       },
     },
     {
-      key: 'copilot-setup-steps',
-      label: 'Cloud agent setup',
-      requirement: '.github/workflows/copilot-setup-steps.yml is present.',
-      test: {
-        kind: 'anyFileExists',
-        paths: ['.github/workflows/copilot-setup-steps.yml'],
-      },
-    },
-    {
       key: 'custom-agent',
       label: 'Custom agent defined',
       requirement: 'At least one custom agent exists under .github/agents.',

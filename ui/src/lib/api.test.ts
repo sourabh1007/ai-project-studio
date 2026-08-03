@@ -86,6 +86,16 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method).toBe('DELETE');
   });
 
+  it('gets repository insights', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ repositoryId: 'r1', agentReady: true }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getRepoInsights('r1');
+    expect(calls[0][0]).toBe('/api/repos/r1/insights');
+    expect(calls[0][1]).toBeUndefined();
+  });
+
   it('reads and refreshes repository context', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ repositoryId: 'r1', status: 'ready' }),

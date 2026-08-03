@@ -120,13 +120,6 @@ describe('createRepoInsightsService', () => {
         detail: 'AGENTS.md',
       },
       {
-        key: 'copilot-setup-steps',
-        label: 'Cloud agent setup',
-        requirement: '.github/workflows/copilot-setup-steps.yml is present.',
-        status: 'pass',
-        detail: '.github/workflows/copilot-setup-steps.yml',
-      },
-      {
         key: 'custom-agent',
         label: 'Custom agent defined',
         requirement: 'At least one custom agent exists under .github/agents.',
@@ -148,7 +141,6 @@ describe('createRepoInsightsService', () => {
     expect(insights.agents).toEqual([]);
     expect(insights.skills).toEqual([]);
     expect(insights.readiness.map((check) => check.status)).toEqual([
-      'fail',
       'fail',
       'fail',
     ]);

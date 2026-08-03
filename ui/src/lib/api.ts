@@ -26,6 +26,7 @@ import type {
   ProviderMcpConfig,
   Repository,
   RepositoryContext,
+  RepoInsights,
   RemoteRepo,
   RemotePullRequest,
   PullFilter,
@@ -136,6 +137,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/repos/${id}/context/refresh`,
         jsonBody({}),
       ),
+    getRepoInsights: (id: string) =>
+      request<RepoInsights>(`/repos/${id}/insights`),
     listGithubRepos: () =>
       request<RemoteRepo[]>('/providers/github/repos'),
     listAzureRepos: (org: string) =>

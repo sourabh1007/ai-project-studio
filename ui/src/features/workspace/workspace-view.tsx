@@ -1,25 +1,35 @@
 import { useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
-import type { Feature, Session } from '../../lib/types.js';
+import type { Feature, Repository, Session } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { useApi } from '../../app/api-context.js';
 import { EmptyState } from '../../components/ui.js';
 import { TerminalView } from '../../components/terminal-view.js';
 import { FeatureDashboard } from '../feature-dashboard/feature-dashboard.js';
+import { RepoDashboard } from '../repo-dashboard/repo-dashboard.js';
 import { Explorer } from './explorer.js';
 
 type Tab =
   | { kind: 'session'; id: string; label: string; session: Session }
-  | { kind: 'feature'; id: string; label: string; feature: Feature };
+  | { kind: 'feature'; id: string; label: string; feature: Feature }
+  | { kind: 'repo'; id: string; label: string; repo: Repository };
 
 function featureTabId(featureId: string): string {
   return `feature:${featureId}`;
 }
 
+function repoTabId(repoId: string): string {
+  return `repo:${repoId}`;
+}
+
 /** The feature id a tab belongs to, for color-coding session and feature tabs. */
 function tabFeatureId(tab: Tab): string {
-  return tab.kind === 'session' ? tab.session.featureId : tab.feature.id;
+  return tab.kind === 'session'
+    ? tab.session.featureId
+    : tab.kind === 'feature'
+      ? tab.feature.id
+      : tab.repo.id;
 }
 
 /**
@@ -63,6 +73,15 @@ export function WorkspaceView({
       id: featureTabId(feature.id),
       label: feature.name,
       feature,
+    });
+  }
+
+  function openRepo(repo: Repository) {
+    openTab({
+      kind: 'repo',
+      id: repoTabId(repo.id),
+      label: repo.name,
+      repo,
     });
   }
 
@@ -174,6 +193,7 @@ export function WorkspaceView({
             names={names}
             onOpenSession={openSession}
             onOpenFeature={openFeature}
+            onOpenRepo={openRepo}
             onRenameSession={renameSession}
             onRenameFeature={renameFeature}
             onDeleteFeature={deleteFeature}
@@ -249,6 +269,9 @@ export function WorkspaceView({
                 live.contextStatus[`feature:${active.feature.id}`]
               }
             />
+          )}
+          {active?.kind === 'repo' && (
+            <RepoDashboard key={active.repo.id} repo={active.repo} />
           )}
           {!active && (
             <div className="editor-empty">

@@ -48,6 +48,7 @@ function api(contextValue: RepositoryContext): ApiClient {
     listRepos: vi.fn().mockResolvedValue([repo]),
     listFeatures: vi.fn().mockResolvedValue([feature]),
     getRepositoryContext: vi.fn().mockResolvedValue(contextValue),
+    getRepoInsights: vi.fn().mockResolvedValue(null),
     listFeatureSkills: vi.fn().mockResolvedValue([]),
     getGithubStatus: vi.fn().mockResolvedValue({ authenticated: false, login: null }),
     getAzureStatus: vi.fn().mockResolvedValue({ authenticated: false, account: null }),
@@ -57,6 +58,7 @@ function api(contextValue: RepositoryContext): ApiClient {
 const callbacks = {
   onOpenSession: vi.fn(),
   onOpenFeature: vi.fn(),
+  onOpenRepo: vi.fn(),
   onRenameSession: vi.fn(),
   onRenameFeature: vi.fn(),
   onDeleteFeature: vi.fn(),

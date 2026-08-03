@@ -607,6 +607,20 @@ body.is-resizing {
   white-space: nowrap;
 }
 
+.repo-branch-label-button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.repo-branch-label-button:hover {
+  background: var(--item-hover);
+}
+
 .repo-node-orphan .repo-branch-label {
   font-weight: 600;
   color: var(--text-muted);
@@ -795,6 +809,107 @@ body.is-resizing {
   40% {
     opacity: 1;
   }
+}
+
+.repo-readiness-list,
+.repo-insights-defs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.repo-readiness-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-inset);
+  font-size: 0.74rem;
+}
+
+.repo-readiness-glyph {
+  flex: none;
+  display: inline-flex;
+}
+
+.repo-readiness-pass .repo-readiness-glyph {
+  color: var(--success);
+}
+
+.repo-readiness-fail .repo-readiness-glyph {
+  color: var(--danger);
+}
+
+.repo-readiness-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.repo-readiness-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.repo-readiness-req {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.repo-readiness-detail {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.repo-insights-def {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-inset);
+}
+
+.repo-insights-def-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.repo-insights-def-name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.repo-insights-def-author {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.repo-insights-def-desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.repo-insights-def-path {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
 }
 
 .pr-review {
@@ -2418,6 +2533,12 @@ body.is-resizing {
   background: var(--feature-accent, var(--accent));
 }
 
+.tab-dot-repo {
+  border-radius: 2px;
+  background: transparent;
+  border: 1.5px solid var(--feature-accent, var(--accent));
+}
+
 .tab-label {
   appearance: none;
   border: none;
@@ -2593,6 +2714,68 @@ body.is-resizing {
   color: var(--editor-fg-muted);
   max-width: 78ch;
   white-space: pre-wrap;
+}
+
+.dash-header-actions {
+  margin-top: var(--space-2);
+}
+
+.dash-refresh,
+.repo-dash-usage-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  background: var(--panel-inset);
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 600;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.dash-refresh:hover:not(:disabled),
+.repo-dash-usage-btn:hover {
+  border-color: var(--accent);
+}
+
+.dash-refresh:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.repo-dash-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: var(--space-3);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-inset);
+  color: var(--text-muted);
+}
+
+.repo-dash-search:focus-within {
+  border-color: var(--accent);
+}
+
+.repo-dash-search-input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.repo-dash-search-input::placeholder {
+  color: var(--text-faint);
 }
 
 /* Skills are a compact, self-contained control between the header and graphs,

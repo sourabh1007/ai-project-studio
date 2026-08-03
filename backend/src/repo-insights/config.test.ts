@@ -12,7 +12,7 @@ describe('repo-insights config', () => {
       repoInsightsDefaults,
     );
     expect(repoInsightsDefaults.readinessChecks.map((check) => check.key)).toEqual(
-      ['agent-instructions', 'copilot-setup-steps', 'custom-agent'],
+      ['agent-instructions', 'custom-agent'],
     );
   });
 
