@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   createFeatureAnalytics,
   sessionActiveMs,
+  type GroupLister,
   type SessionLister,
 } from './feature-analytics.js';
 import { createClock } from '../kernel/clock.js';
 import type { Session } from '../session/session-contract.js';
+import type { TreeGroup } from '../feature-tree/feature-tree-contract.js';
 import type {
   AggregateReader,
   SessionUsage,
@@ -59,10 +61,26 @@ function usage(sessionId: string, overrides: Partial<SessionUsage> = {}): Sessio
   };
 }
 
+function group(overrides: Partial<TreeGroup> = {}): TreeGroup {
+  return {
+    id: 'g1',
+    featureId: 'f1',
+    parentGroupId: null,
+    kind: 'subcategory',
+    name: 'Group 1',
+    prNumber: null,
+    prUrl: null,
+    orderIndex: 0,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function harness(opts: {
   members: Session[];
   usages: SessionUsage[];
   all?: Session[];
+  groups?: TreeGroup[];
 }) {
   const reader: AggregateReader = {
     featureTotals: () => ({ ...zero, sessions: 1, credits: 9, nanoAiu: 42 }),
@@ -73,11 +91,14 @@ function harness(opts: {
     workspaceTotals: () => ({ ...zero, credits: 77 }),
   };
   const sessions: SessionLister = {
-    listByFeature: () => opts.members,
+    listByFeatureAll: () => opts.members,
     listAll: () => opts.all ?? opts.members,
   };
+  const groups: GroupLister = {
+    listByFeature: () => opts.groups ?? [],
+  };
   const clock = createClock(() => NOW);
-  return createFeatureAnalytics({ reader, sessions, clock });
+  return createFeatureAnalytics({ reader, sessions, groups, clock });
 }
 
 describe('sessionActiveMs', () => {
@@ -131,6 +152,7 @@ describe('createFeatureAnalytics', () => {
         startedAt: '2025-01-01T00:00:00.000Z',
         endedAt: '2025-01-01T00:30:00.000Z',
         status: 'completed',
+        groupId: 'g1',
       }),
       session({
         id: 'c',
@@ -140,7 +162,11 @@ describe('createFeatureAnalytics', () => {
         kind: 'meta',
       }),
     ];
-    const analytics = harness({ members, usages: [usage('a')] });
+    const analytics = harness({
+      members,
+      usages: [usage('a')],
+      groups: [group({ id: 'g1', name: 'Backend' })],
+    });
     const result = analytics.forFeature('f1');
 
     expect(result.bySession.map((s) => s.sessionId)).toEqual(['a', 'b', 'c']);
@@ -150,11 +176,19 @@ describe('createFeatureAnalytics', () => {
     const [a, b, c] = result.bySession;
     expect(a.inputTokens).toBe(100);
     expect(a.activeMs).toBe(30 * 60 * 1000);
+    expect(a.groupId).toBe('g1');
+    expect(a.origin).toBe('user');
     expect(b.inputTokens).toBe(0);
     expect(b.activeMs).toBe(50 * 60 * 1000);
+    expect(b.groupId).toBeNull();
     expect(c.provider).toBe('agency');
     expect(c.kind).toBe('meta');
+    expect(c.origin).toBe('ide');
     expect(c.activeMs).toBe(0);
+
+    expect(result.groups).toEqual([
+      { id: 'g1', name: 'Backend', kind: 'subcategory', parentGroupId: null },
+    ]);
 
     expect(result.timing.totalActiveMs).toBe(
       30 * 60 * 1000 + 50 * 60 * 1000,
@@ -162,6 +196,30 @@ describe('createFeatureAnalytics', () => {
     expect(result.byModel).toEqual([{ model: 'm', ...zero }]);
     expect(result.byProvider).toEqual([{ provider: 'github', ...zero }]);
     expect(result.byDay).toEqual([{ day: '2025-01-01', ...zero }]);
+  });
+
+  it('tags IDE metasessions and nests PR groups', () => {
+    const members = [
+      session({ id: 'meta', kind: 'meta', scope: 'internal', groupId: 'pr1' }),
+    ];
+    const analytics = harness({
+      members,
+      usages: [],
+      groups: [
+        group({
+          id: 'pr1',
+          name: 'PR #42',
+          kind: 'pr',
+          parentGroupId: 'root',
+        }),
+      ],
+    });
+    const result = analytics.forFeature('f1');
+    expect(result.bySession[0].origin).toBe('ide');
+    expect(result.bySession[0].groupId).toBe('pr1');
+    expect(result.groups).toEqual([
+      { id: 'pr1', name: 'PR #42', kind: 'pr', parentGroupId: 'root' },
+    ]);
   });
 
   it('orders sessions with unparseable start dates last', () => {

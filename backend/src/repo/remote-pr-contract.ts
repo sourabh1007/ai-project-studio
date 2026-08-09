@@ -12,6 +12,12 @@ export interface RemotePullRequest {
   title: string;
   /** Web URL of the pull request. */
   url: string;
+  /**
+   * The PR's description/body as authored, or null when the provider reports
+   * none. Populated on single-PR fetch (`getPull`); list fetches leave it
+   * undefined to stay lean. The problem-statement metasession distils this.
+   */
+  body?: string | null;
   /** Head/source branch name (no `refs/heads/` prefix). */
   sourceBranch: string;
   /** Author's display name or login, when known. */

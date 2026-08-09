@@ -1,0 +1,424 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  basename,
+  BOX_GAP,
+  BOX_PAD,
+  BOX_TITLE_H,
+  buildFocusedChangeGraphLayout,
+  buildChangeGraphLayout,
+  findNode,
+  LABEL_CHAR_W,
+  MAX_ROW_WIDTH,
+  NODE_GAP,
+  NODE_H,
+  NODE_LABEL_PAD,
+  NODE_MIN_W,
+  nodeCenter,
+  TITLE_CHAR_W,
+} from './change-graph-layout.js';
+import type {
+  ChangeGraphEdge,
+  ChangeGraphNode,
+  ChangeGraphStep,
+} from './types.js';
+
+function step(overrides: Partial<ChangeGraphStep>): ChangeGraphStep {
+  return {
+    status: 'ready',
+    metaSessionId: null,
+    usage: null,
+    failure: null,
+    activity: [],
+    generatedAt: null,
+    projects: [],
+    nodes: [],
+    edges: [],
+    ...overrides,
+  };
+}
+
+function node(
+  overrides: Partial<ChangeGraphNode> & { path: string; projectId: string },
+): ChangeGraphNode {
+  return {
+    module: 'App',
+    category: 'code',
+    kind: 'changed',
+    changeKind: 'modified',
+    diff: '',
+    whatItDoes: 'x',
+    whatChanged: 'y',
+    review: ['z'],
+    ...overrides,
+  };
+}
+
+function edge(
+  from: string,
+  to: string,
+  calls: ChangeGraphEdge['calls'] = [],
+): ChangeGraphEdge {
+  return { from, to, calls };
+}
+
+describe('basename', () => {
+  it('returns the trailing segment for posix and windows paths', () => {
+    expect(basename('src/lib/api.ts')).toBe('api.ts');
+    expect(basename('src\\lib\\api.ts')).toBe('api.ts');
+  });
+
+  it('falls back to the raw string when there is no segment', () => {
+    expect(basename('')).toBe('');
+    expect(basename('/')).toBe('/');
+  });
+});
+
+describe('nodeCenter', () => {
+  it('returns the centre of a placed node cell', () => {
+    expect(
+      nodeCenter({
+        path: 'a',
+        projectId: 'p',
+        label: 'a',
+        kind: 'changed',
+        x: 10,
+        y: 20,
+        width: NODE_MIN_W,
+      }),
+    ).toEqual({ x: 10 + NODE_MIN_W / 2, y: 20 + NODE_H / 2 });
+  });
+});
+
+describe('buildChangeGraphLayout', () => {
+  it('groups the category into project boxes with placed nodes and an edge', () => {
+    const built = step({
+      projects: [
+        { id: 'src/App.csproj', name: 'App', path: 'src/App.csproj' },
+      ],
+      nodes: [
+        node({ path: 'src/Service.cs', projectId: 'src/App.csproj' }),
+        node({ path: 'src/Store.cs', projectId: 'src/App.csproj' }),
+      ],
+      edges: [edge('src/Service.cs', 'src/Store.cs')],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+
+    expect(layout.boxes).toHaveLength(1);
+    expect(layout.boxes[0]).toMatchObject({
+      id: 'src/App.csproj',
+      name: 'App',
+      count: 2,
+      x: 0,
+      y: 0,
+    });
+    expect(layout.nodes.map((n) => n.path)).toEqual([
+      'src/Service.cs',
+      'src/Store.cs',
+    ]);
+    // Two files => 2 columns, 1 row: nodes share a row inside the box.
+    expect(layout.nodes[0]).toMatchObject({
+      x: BOX_PAD,
+      y: BOX_TITLE_H + BOX_PAD,
+    });
+    expect(layout.nodes[1].x).toBe(BOX_PAD + NODE_MIN_W + NODE_GAP);
+    expect(layout.nodes[0].width).toBe(NODE_MIN_W);
+    expect(layout.edges).toEqual([
+      {
+        from: 'src/Service.cs',
+        to: 'src/Store.cs',
+        calls: [],
+        highlightsChanges: false,
+        x1: layout.nodes[0].x + NODE_MIN_W / 2,
+        y1: layout.nodes[0].y + NODE_H / 2,
+        x2: layout.nodes[1].x + NODE_MIN_W / 2,
+        y2: layout.nodes[1].y + NODE_H / 2,
+      },
+    ]);
+    expect(layout.width).toBe(layout.boxes[0].width);
+    expect(layout.height).toBe(layout.boxes[0].height);
+  });
+
+  it('places a node into a second grid row and names unknown projects by id', () => {
+    // Three files => 2 columns, 2 rows; the third wraps to the next row.
+    const built = step({
+      nodes: [
+        node({ path: 'a.cs', projectId: 'proj' }),
+        node({ path: 'b.cs', projectId: 'proj' }),
+        node({ path: 'c.cs', projectId: 'proj' }),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+
+    // No declared project => the box falls back to the raw project id.
+    expect(layout.boxes[0].name).toBe('proj');
+    const third = layout.nodes[2];
+    expect(third.x).toBe(BOX_PAD);
+    expect(third.y).toBe(BOX_TITLE_H + BOX_PAD + NODE_H + NODE_GAP);
+  });
+
+  it('wraps boxes onto a second row when they exceed the max row width', () => {
+    // Each single-file box is one column wide; enough of them overflow the row.
+    const boxWidth = NODE_MIN_W + BOX_PAD * 2;
+    const perRow = Math.floor((MAX_ROW_WIDTH + BOX_GAP) / (boxWidth + BOX_GAP));
+    const count = perRow + 1;
+    const nodes: ChangeGraphNode[] = [];
+    const projects = [];
+    for (let i = 0; i < count; i += 1) {
+      projects.push({ id: `p${i}`, name: `P${i}`, path: null });
+      nodes.push(node({ path: `f${i}.cs`, projectId: `p${i}` }));
+    }
+
+    const layout = buildChangeGraphLayout(step({ projects, nodes }), 'code');
+
+    // The last box wrapped to a new row: its y is below the first row.
+    const first = layout.boxes[0];
+    const last = layout.boxes[count - 1];
+    expect(last.x).toBe(0);
+    expect(last.y).toBe(first.height + BOX_GAP);
+    expect(layout.height).toBe(first.height * 2 + BOX_GAP);
+  });
+
+  it('widens nodes to fit long file labels so text never overflows', () => {
+    const path = 'src/SingleTenantComputeProcessRGEnforcer.cs';
+    const label = basename(path);
+    const layout = buildChangeGraphLayout(
+      step({ nodes: [node({ path, projectId: 'p' })] }),
+      'code',
+    );
+    const expectedWidth = Math.ceil(label.length * LABEL_CHAR_W) + NODE_LABEL_PAD;
+    expect(expectedWidth).toBeGreaterThan(NODE_MIN_W);
+    expect(layout.nodes[0].width).toBe(expectedWidth);
+    // One column, so the box is exactly one node wide plus padding.
+    expect(layout.boxes[0].width).toBe(expectedWidth + BOX_PAD * 2);
+  });
+
+  it('widens a box to fit a long project title', () => {
+    const name = 'Microsoft.Azure.Cosmos.ComputeV2.RgServer.Core';
+    const layout = buildChangeGraphLayout(
+      step({
+        projects: [{ id: 'proj', name, path: null }],
+        nodes: [node({ path: 'a.cs', projectId: 'proj' })],
+      }),
+      'code',
+    );
+    const gridWidth = NODE_MIN_W + BOX_PAD * 2;
+    const titleWidth = Math.ceil((name.length + 4) * TITLE_CHAR_W) + BOX_PAD * 2;
+    expect(titleWidth).toBeGreaterThan(gridWidth);
+    expect(layout.boxes[0].width).toBe(titleWidth);
+  });
+
+  it('restricts nodes and edges to the requested category', () => {
+    const built = step({
+      projects: [
+        { id: 'src/App.csproj', name: 'App', path: 'src/App.csproj' },
+        { id: 'tests/T.csproj', name: 'T', path: 'tests/T.csproj' },
+      ],
+      nodes: [
+        node({ path: 'src/Service.cs', projectId: 'src/App.csproj' }),
+        node({
+          path: 'tests/StoreTests.cs',
+          projectId: 'tests/T.csproj',
+          category: 'test',
+        }),
+      ],
+      // An edge whose endpoints straddle categories is never placed.
+      edges: [edge('src/Service.cs', 'tests/StoreTests.cs')],
+    });
+
+    const code = buildChangeGraphLayout(built, 'code');
+    expect(code.nodes.map((n) => n.path)).toEqual(['src/Service.cs']);
+    expect(code.edges).toEqual([]);
+
+    const test = buildChangeGraphLayout(built, 'test');
+    expect(test.nodes.map((n) => n.path)).toEqual(['tests/StoreTests.cs']);
+    expect(test.edges).toEqual([]);
+  });
+
+  it('propagates each node kind so callers can be coloured', () => {
+    const built = step({
+      projects: [{ id: 'src/App.csproj', name: 'App', path: 'src/App.csproj' }],
+      nodes: [
+        node({ path: 'src/Store.cs', projectId: 'src/App.csproj' }),
+        node({
+          path: 'src/Caller.cs',
+          projectId: 'src/App.csproj',
+          kind: 'boundary',
+          changeKind: null,
+        }),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+    const byPath = new Map(layout.nodes.map((n) => [n.path, n.kind]));
+    expect(byPath.get('src/Store.cs')).toBe('changed');
+    expect(byPath.get('src/Caller.cs')).toBe('boundary');
+  });
+
+  it('is empty when no changed file matches the category', () => {
+    const layout = buildChangeGraphLayout(step({}), 'code');
+    expect(layout).toEqual({
+      boxes: [],
+      nodes: [],
+      edges: [],
+      width: 0,
+      height: 0,
+    });
+  });
+
+  it('preserves edge calls and marks call-backed edges as change highlights', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'src/Service.cs', projectId: 'p' }),
+        node({ path: 'src/Store.cs', projectId: 'p' }),
+      ],
+      edges: [
+        edge('src/Service.cs', 'src/Store.cs', [
+          { symbol: 'Store', caller: 'Run' },
+        ]),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+
+    expect(layout.edges[0]).toMatchObject({
+      calls: [{ symbol: 'Store', caller: 'Run' }],
+      highlightsChanges: true,
+    });
+  });
+
+  it('treats legacy edges without call data as unhighlighted references', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'src/Service.cs', projectId: 'p' }),
+        node({ path: 'src/Store.cs', projectId: 'p' }),
+      ],
+      edges: [{ from: 'src/Service.cs', to: 'src/Store.cs' }],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+
+    expect(layout.edges[0]).toMatchObject({
+      calls: [],
+      highlightsChanges: false,
+    });
+  });
+});
+
+describe('findNode', () => {
+  it('finds a node by path and returns null when absent', () => {
+    const built = step({
+      nodes: [node({ path: 'src/Store.cs', projectId: 'p' })],
+    });
+    expect(findNode(built, 'src/Store.cs')?.path).toBe('src/Store.cs');
+    expect(findNode(built, 'missing')).toBeNull();
+  });
+});
+
+describe('buildFocusedChangeGraphLayout', () => {
+  it('places callers on the left, the focused file in the middle and callees on the right', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'src/Caller.cs', projectId: 'p', kind: 'boundary' }),
+        node({ path: 'src/Focus.cs', projectId: 'p' }),
+        node({ path: 'src/Callee.cs', projectId: 'p' }),
+        node({ path: 'src/Unrelated.cs', projectId: 'p' }),
+      ],
+      edges: [
+        edge('src/Caller.cs', 'src/Focus.cs', [
+          { symbol: 'Focus', caller: 'Run' },
+        ]),
+        edge('src/Focus.cs', 'src/Callee.cs', [
+          { symbol: 'Callee', caller: 'Save' },
+        ]),
+        edge('src/Caller.cs', 'src/Callee.cs', [
+          { symbol: 'Callee', caller: 'Ignored' },
+        ]),
+      ],
+    });
+
+    const layout = buildFocusedChangeGraphLayout(built, 'code', 'src/Focus.cs');
+    const byPath = new Map(layout.nodes.map((n) => [n.path, n]));
+
+    expect(layout.boxes).toEqual([]);
+    expect(layout.nodes.map((n) => n.path)).toEqual([
+      'src/Caller.cs',
+      'src/Focus.cs',
+      'src/Callee.cs',
+    ]);
+    expect(byPath.get('src/Caller.cs')?.x).toBeLessThan(
+      byPath.get('src/Focus.cs')?.x ?? 0,
+    );
+    expect(byPath.get('src/Callee.cs')?.x).toBeGreaterThan(
+      byPath.get('src/Focus.cs')?.x ?? Number.MAX_SAFE_INTEGER,
+    );
+    expect(layout.edges.map((e) => `${e.from}->${e.to}`)).toEqual([
+      'src/Caller.cs->src/Focus.cs',
+      'src/Focus.cs->src/Callee.cs',
+    ]);
+    expect(layout.edges[0]).toMatchObject({
+      calls: [{ symbol: 'Focus', caller: 'Run' }],
+      highlightsChanges: true,
+    });
+    expect(layout.width).toBeGreaterThan(0);
+    expect(layout.height).toBeGreaterThan(0);
+  });
+
+  it('returns a single focused node when there are no incident edges', () => {
+    const built = step({
+      nodes: [node({ path: 'src/Focus.cs', projectId: 'p' })],
+    });
+
+    const layout = buildFocusedChangeGraphLayout(built, 'code', 'src/Focus.cs');
+
+    expect(layout.nodes.map((n) => n.path)).toEqual(['src/Focus.cs']);
+    expect(layout.edges).toEqual([]);
+    expect(layout.width).toBe(layout.nodes[0].width);
+    expect(layout.height).toBe(NODE_H);
+  });
+
+  it('returns an empty layout for a missing focus or category mismatch', () => {
+    const built = step({
+      nodes: [node({ path: 'src/Focus.cs', projectId: 'p', category: 'test' })],
+    });
+
+    expect(buildFocusedChangeGraphLayout(built, 'code', 'missing')).toEqual({
+      boxes: [],
+      nodes: [],
+      edges: [],
+      width: 0,
+      height: 0,
+    });
+    expect(buildFocusedChangeGraphLayout(built, 'code', 'src/Focus.cs')).toEqual({
+      boxes: [],
+      nodes: [],
+      edges: [],
+      width: 0,
+      height: 0,
+    });
+  });
+
+  it('places bidirectional neighbours once on the outgoing side and draws both edges', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'src/Focus.cs', projectId: 'p' }),
+        node({ path: 'src/Peer.cs', projectId: 'p' }),
+      ],
+      edges: [
+        edge('src/Peer.cs', 'src/Focus.cs'),
+        edge('src/Focus.cs', 'src/Peer.cs'),
+      ],
+    });
+
+    const layout = buildFocusedChangeGraphLayout(built, 'code', 'src/Focus.cs');
+
+    expect(layout.nodes.map((n) => n.path)).toEqual([
+      'src/Focus.cs',
+      'src/Peer.cs',
+    ]);
+    expect(layout.edges).toHaveLength(2);
+    expect(layout.edges.every((edge) => edge.highlightsChanges)).toBe(false);
+  });
+});

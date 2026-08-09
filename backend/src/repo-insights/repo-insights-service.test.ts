@@ -25,7 +25,6 @@ function fakeGit(data: FakeGitData): RepoInsightsGit {
     lastCommitAuthor: async (_path, _ref, file) => data.authors?.[file] ?? null,
   };
 }
-
 function repo(overrides: Partial<Repository> = {}): Repository {
   return {
     id: 'r1',
@@ -110,6 +109,7 @@ describe('createRepoInsightsService', () => {
         path: '.github/skills/z.md',
       },
     ]);
+    expect(insights.docs).toEqual([]);
 
     expect(insights.readiness).toEqual([
       {
@@ -128,6 +128,78 @@ describe('createRepoInsightsService', () => {
       },
     ]);
     expect(insights.agentReady).toBe(true);
+  });
+
+  it('discovers repo-native skills and docs outside .github, deduping overlaps', async () => {
+    const git = fakeGit({
+      defaultBranch: 'main',
+      files: {
+        'skills': [
+          'skills/nested/custom.md',
+          '.github/skills/shared.md',
+          'skills/readme.txt',
+        ],
+        '.github/skills': ['.github/skills/shared.md'],
+        'skills-dup': [],
+        'docs': ['docs/tsg/outage.md', 'docs/guide.md'],
+        '.github/docs': ['.github/docs/shared.md'],
+      },
+      contents: {
+        'skills/nested/custom.md': '---\nname: Custom Skill\n---\nDoes X',
+        '.github/skills/shared.md': '---\nname: Shared\n---\nShared skill',
+        'docs/tsg/outage.md': '# Outage TSG\n\nHow to recover.',
+        'docs/guide.md': 'Getting started guide.',
+        '.github/docs/shared.md': 'Shared doc',
+      },
+    });
+
+    const insights = await serviceWith(git, repo()).load('r1');
+
+    expect(insights.skills.map((s) => s.path)).toEqual([
+      '.github/skills/shared.md',
+      'skills/nested/custom.md',
+    ]);
+    expect(insights.docs.map((d) => ({ name: d.name, path: d.path }))).toEqual([
+      { name: 'shared', path: '.github/docs/shared.md' },
+      { name: 'guide', path: 'docs/guide.md' },
+      { name: 'outage', path: 'docs/tsg/outage.md' },
+    ]);
+  });
+
+  it('reads a discovered definition file from the default branch', async () => {
+    const git = fakeGit({
+      defaultBranch: 'main',
+      contents: { 'docs/guide.md': '# Guide\n\nHello' },
+    });
+    const result = await serviceWith(git, repo()).readDefinition(
+      'r1',
+      'docs/guide.md',
+    );
+    expect(result).toEqual({
+      path: 'docs/guide.md',
+      branch: 'main',
+      content: '# Guide\n\nHello',
+    });
+  });
+
+  it.each([
+    'secrets.md',
+    '../outside/evil.md',
+    'docs/../../etc/passwd.md',
+    '/etc/hosts.md',
+    'docs/guide.txt',
+  ])('rejects reading an unsafe path %s', async (path) => {
+    const git = fakeGit({ defaultBranch: 'main' });
+    await expect(
+      serviceWith(git, repo()).readDefinition('r1', path),
+    ).rejects.toMatchObject({ kind: 'validation' });
+  });
+
+  it('throws NotFound when a readable path is absent on the branch', async () => {
+    const git = fakeGit({ defaultBranch: 'main', contents: {} });
+    await expect(
+      serviceWith(git, repo()).readDefinition('r1', 'docs/missing.md'),
+    ).rejects.toMatchObject({ kind: 'not_found' });
   });
 
   it('falls back to the stored default branch and reports failures', async () => {

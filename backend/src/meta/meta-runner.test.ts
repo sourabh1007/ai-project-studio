@@ -8,7 +8,7 @@ import type {
 import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { Session, StartSessionRequest } from '../session/session-contract.js';
 import type { Transcript } from '../session/transcript-capture.js';
-import type { RunningSession } from '../provider/provider-contract.js';
+import type { RunningSession, SessionEvent } from '../provider/provider-contract.js';
 
 const metaSession: Session = {
   id: 'meta1',
@@ -34,18 +34,33 @@ function harness(
     completionError?: Error;
     loadError?: Error;
     ended?: Partial<Session>;
+    hangs?: boolean;
+    kill?: () => void;
+    timeoutMs?: number;
+    events?: SessionEvent[];
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
   const launcher: SessionLauncher = {
     start: async (request) => {
       requests.push(request);
+      const running = {
+        kill: options.kill ?? (() => undefined),
+        onEvent: (handler: (event: SessionEvent) => void) => {
+          for (const event of options.events ?? []) {
+            handler(event);
+          }
+        },
+      } as unknown as RunningSession;
+      const completion = options.hangs
+        ? new Promise<Session>(() => {})
+        : options.completionError
+          ? Promise.reject(options.completionError)
+          : Promise.resolve({ ...metaSession, ...options.ended });
       const launched: LaunchedSession = {
         session: { ...metaSession, ...options.ended },
-        running: {} as unknown as RunningSession,
-        completion: options.completionError
-          ? Promise.reject(options.completionError)
-          : Promise.resolve({ ...metaSession, ...options.ended }),
+        running,
+        completion,
       };
       return launched;
     },
@@ -63,7 +78,7 @@ function harness(
   const runner = createMetaRunner({
     launcher,
     transcripts,
-    config: metaDefaults,
+    config: { ...metaDefaults, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) },
   });
   return { runner, requests };
 }
@@ -104,6 +119,7 @@ describe('meta-runner', () => {
         attachments: ['C:\\Temp\\aps-a\\p.pdf'],
         cwd: 'C:\\work\\repo',
         scope: 'internal',
+        noTools: true,
       }),
     ).resolves.toBe('repository context');
 
@@ -113,6 +129,7 @@ describe('meta-runner', () => {
       scope: 'internal',
       attachments: ['C:\\Temp\\aps-a\\p.pdf'],
       kind: 'meta',
+      noTools: true,
     });
   });
 
@@ -214,5 +231,156 @@ describe('meta-runner', () => {
     await expect(
       h.runner.run({ featureId: 'f1', prompt: 'do it' }),
     ).rejects.toThrow('final safe detail');
+  });
+
+  it('reports the session id on start and streams described activity lines', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'done' })],
+        stderr: [],
+        exitCode: 0,
+      },
+      {
+        events: [
+          { type: 'stdout', line: JSON.stringify({ type: 'assistant.message', data: { content: 'hi' } }) },
+          { type: 'stdout', line: JSON.stringify({ type: 'assistant.message_delta', data: { content: 'x' } }) },
+          { type: 'stderr', line: 'a diagnostic' },
+          { type: 'exit', code: 0 },
+        ],
+      },
+    );
+
+    const started: string[] = [];
+    const activity: string[] = [];
+    await h.runner.runDetailed({
+      featureId: 'f1',
+      prompt: 'do it',
+      onStart: (id) => started.push(id),
+      onActivity: (line) => activity.push(line),
+    });
+
+    expect(started).toEqual(['meta1']);
+    // The delta is dropped; the assistant message and stderr diagnostic remain.
+    expect(activity).toEqual(['💬 hi', '· a diagnostic']);
+  });
+
+  it('kills the provider and fails when a session exceeds the timeout', async () => {
+    let killed = 0;
+    const h = harness(null, {
+      hangs: true,
+      timeoutMs: 5,
+      kill: () => {
+        killed += 1;
+      },
+    });
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('Provider timed out after 5ms');
+    expect(killed).toBe(1);
+  });
+
+  it('honors a per-request timeout override over the configured ceiling', async () => {
+    let killed = 0;
+    const h = harness(null, {
+      hangs: true,
+      timeoutMs: 100_000,
+      kill: () => {
+        killed += 1;
+      },
+    });
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it', timeoutMs: 5 }),
+    ).rejects.toThrow('Provider timed out after 5ms');
+    expect(killed).toBe(1);
+  });
+
+  it('still times out gracefully when killing the wedged process throws', async () => {
+    const h = harness(null, {
+      hangs: true,
+      timeoutMs: 5,
+      kill: () => {
+        throw new Error('already dead');
+      },
+    });
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('Provider timed out after 5ms');
+  });
+
+  it('finishes as soon as the CLI emits its terminal result event', async () => {
+    let killed = 0;
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'the answer' })],
+        stderr: [],
+        exitCode: 143,
+      },
+      {
+        // The process is killed by the terminal-event fast path, so completion
+        // resolves with a non-zero (killed) exit code that must NOT be treated
+        // as a provider failure.
+        ended: { status: 'completed', exitCode: 143 },
+        kill: () => {
+          killed += 1;
+        },
+        events: [
+          { type: 'stdout', line: '' },
+          { type: 'stdout', line: 'plain diagnostic' },
+          { type: 'stdout', line: '{ not json' },
+          { type: 'stdout', line: JSON.stringify({ type: 'assistant.idle' }) },
+          { type: 'stderr', line: JSON.stringify({ type: 'result' }) },
+          { type: 'stdout', line: JSON.stringify({ type: 'result', data: {} }) },
+          { type: 'exit', code: 143 },
+        ],
+      },
+    );
+
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).resolves.toBe('the answer');
+    // The terminal `result` line triggers exactly one kill; the `result` on
+    // stderr and the non-result stdout lines do not.
+    expect(killed).toBe(1);
+  });
+
+  it('finishes the turn even when killing after the terminal event throws', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'the answer' })],
+        stderr: [],
+        exitCode: 143,
+      },
+      {
+        ended: { status: 'completed', exitCode: 143 },
+        kill: () => {
+          throw new Error('already exiting');
+        },
+        events: [{ type: 'stdout', line: JSON.stringify({ type: 'result', data: {} }) }],
+      },
+    );
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).resolves.toBe('the answer');
+  });
+
+  it('still fails a non-zero exit when no terminal result event was seen', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: ['[]'],
+        stderr: ['boom'],
+        exitCode: 1,
+      },
+      {
+        ended: { status: 'completed', exitCode: 1 },
+        events: [{ type: 'stdout', line: JSON.stringify({ type: 'assistant.message', data: {} }) }],
+      },
+    );
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('Provider failed (exit code 1): boom');
   });
 });

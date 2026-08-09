@@ -264,8 +264,32 @@ describe('getGithubPull', () => {
       '--repo',
       'acme/app',
       '--json',
-      'number,title,url,headRefName,author,reviewRequests',
+      'number,title,url,headRefName,author,reviewRequests,body',
     ]);
+  });
+
+  it('keeps a non-empty body and nulls a whitespace-only body', async () => {
+    const withBody = await getGithubPull(
+      runner({
+        code: 0,
+        stdout: JSON.stringify({ number: 4, headRefName: 'x', body: 'Fixes the bug' }),
+        stderr: '',
+      }),
+      'acme/app',
+      4,
+    );
+    expect(withBody?.body).toBe('Fixes the bug');
+
+    const blankBody = await getGithubPull(
+      runner({
+        code: 0,
+        stdout: JSON.stringify({ number: 5, headRefName: 'x', body: '   ' }),
+        stderr: '',
+      }),
+      'acme/app',
+      5,
+    );
+    expect(blankBody?.body).toBeNull();
   });
 
   it('returns null when the command fails', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrReview, RepositoryContext, Session, StoredUsage } from './types.js';
+import type { PrReview, PrReviewStepStatus, RepositoryContext, Session, StoredUsage } from './types.js';
 import {
   applyStreamEvent,
   initialLiveState,
@@ -70,23 +70,57 @@ function repositoryContext(status: RepositoryContext['status']): RepositoryConte
   };
 }
 
-function prReview(status: PrReview['status']): PrReview {
+function prReview(status: PrReviewStepStatus): PrReview {
+  const step = {
+    status,
+    metaSessionId: status === 'pending' ? null : 'meta1',
+    usage: null,
+    failure: null,
+    activity: [],
+    generatedAt: status === 'ready' ? '2025-01-01T00:00:01Z' : null,
+  };
   return {
     featureId: 'f1',
     repoId: 'r1',
     pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
     worktreePath: 'C:\\wt',
     baseBranch: 'main',
-    status,
-    summary: status === 'ready' ? 'Adds retry.' : null,
-    coreAnalysis: status === 'ready' ? '- wraps client' : null,
+    description: 'Adds retry to the client.',
+    problemStatement: {
+      ...step,
+      content: status === 'ready' ? 'Requests are not retried.' : null,
+      sufficient: true,
+    },
+    changeGraph: {
+      ...step,
+      projects:
+        status === 'ready'
+          ? [{ id: 'src/App.csproj', name: 'App', path: 'src/App.csproj' }]
+          : [],
+      nodes:
+        status === 'ready'
+          ? [
+              {
+                path: 'src/client.ts',
+                projectId: 'src/App.csproj',
+                module: 'Core',
+                category: 'code',
+                kind: 'changed',
+                changeKind: 'modified',
+                diff: '',
+                whatItDoes: 'HTTP client wrapper.',
+                whatChanged: 'Adds retry logic.',
+                review: ['Looks correct.'],
+              },
+            ]
+          : [],
+      edges: [],
+    },
     changedFiles: status === 'ready' ? 3 : null,
     timestamps: {
       createdAt: '2025-01-01T00:00:00Z',
       updatedAt: '2025-01-01T00:00:01Z',
-      generatedAt: status === 'ready' ? '2025-01-01T00:00:01Z' : null,
     },
-    failure: null,
   };
 }
 
@@ -259,7 +293,7 @@ describe('applyStreamEvent', () => {
       type: 'pr.review.updated',
       review: prReview('ready'),
     });
-    expect(state.prReviews['f1'].status).toBe('ready');
+    expect(state.prReviews['f1'].changeGraph.status).toBe('ready');
   });
 
   it('tracks the latest context-status phase per scope target', () => {

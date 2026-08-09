@@ -18,4 +18,15 @@ describe('meta config', () => {
       metaConfigSchema.parse({ ...metaDefaults, responseTextKeys: [] }),
     ).toThrow();
   });
+
+  it('carries warm-pool defaults and rejects a non-positive size', () => {
+    expect(metaDefaults.warmPool.enabled).toBe(false);
+    expect(metaDefaults.warmPool.size).toBeGreaterThan(0);
+    expect(() =>
+      metaConfigSchema.parse({
+        ...metaDefaults,
+        warmPool: { ...metaDefaults.warmPool, size: 0 },
+      }),
+    ).toThrow();
+  });
 });

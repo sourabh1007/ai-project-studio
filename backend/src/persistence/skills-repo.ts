@@ -3,6 +3,7 @@ import type {
   Skill,
   SkillAttachment,
   SkillKind,
+  SkillRecommendedScope,
   SkillScope,
 } from '../skills/skills-contract.js';
 import type { SkillsRepo } from '../skills/skills-repo-port.js';
@@ -13,6 +14,7 @@ interface SkillRow {
   kind: string;
   instructions: string;
   removal_instructions: string;
+  recommended_scope: string;
   created_at: string;
 }
 
@@ -31,6 +33,7 @@ function mapSkill(row: SkillRow): Skill {
     kind: row.kind as SkillKind,
     instructions: row.instructions,
     removalInstructions: row.removal_instructions,
+    recommendedScope: row.recommended_scope as SkillRecommendedScope,
     createdAt: row.created_at,
   };
 }
@@ -48,12 +51,12 @@ function mapAttachment(row: AttachmentRow): SkillAttachment {
 /** SQLite-backed implementation of the SkillsRepo port. */
 export function createSkillsRepo(db: DatabaseSync): SkillsRepo {
   const insertSkill = db.prepare(
-    'INSERT INTO skills (id, name, kind, instructions, removal_instructions, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO skills (id, name, kind, instructions, removal_instructions, recommended_scope, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   const selectSkill = db.prepare('SELECT * FROM skills WHERE id = ?');
   const selectSkills = db.prepare('SELECT * FROM skills ORDER BY created_at, id');
   const updateSkillRow = db.prepare(
-    'UPDATE skills SET name = ?, instructions = ?, removal_instructions = ? WHERE id = ?',
+    'UPDATE skills SET name = ?, instructions = ?, removal_instructions = ?, recommended_scope = ? WHERE id = ?',
   );
   const deleteSkillRow = db.prepare('DELETE FROM skills WHERE id = ?');
 
@@ -80,6 +83,7 @@ export function createSkillsRepo(db: DatabaseSync): SkillsRepo {
         skill.kind,
         skill.instructions,
         skill.removalInstructions,
+        skill.recommendedScope,
         skill.createdAt,
       );
     },
@@ -91,7 +95,13 @@ export function createSkillsRepo(db: DatabaseSync): SkillsRepo {
       return (selectSkills.all() as unknown as SkillRow[]).map(mapSkill);
     },
     updateSkill(id, patch) {
-      updateSkillRow.run(patch.name, patch.instructions, patch.removalInstructions, id);
+      updateSkillRow.run(
+        patch.name,
+        patch.instructions,
+        patch.removalInstructions,
+        patch.recommendedScope,
+        id,
+      );
     },
     deleteSkill(id) {
       deleteSkillRow.run(id);

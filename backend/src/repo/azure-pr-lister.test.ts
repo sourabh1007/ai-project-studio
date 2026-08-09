@@ -446,6 +446,36 @@ describe('getAzurePull', () => {
     expect(pull?.sourceBranch).toBe('topic/raw');
   });
 
+  it('keeps a non-empty description and nulls a whitespace-only one', async () => {
+    const withBody = await getAzurePull(
+      {
+        token,
+        httpGet: http(200, {
+          pullRequestId: 3,
+          sourceRefName: 'refs/heads/main',
+          description: 'Implements the feature',
+        }),
+      },
+      target,
+      3,
+    );
+    expect(withBody?.body).toBe('Implements the feature');
+
+    const blankBody = await getAzurePull(
+      {
+        token,
+        httpGet: http(200, {
+          pullRequestId: 4,
+          sourceRefName: 'refs/heads/main',
+          description: '   ',
+        }),
+      },
+      target,
+      4,
+    );
+    expect(blankBody?.body).toBeNull();
+  });
+
   it('throws when not signed in', async () => {
     await expect(
       getAzurePull({ token: noToken, httpGet: http(200, {}) }, target, 1),

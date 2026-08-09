@@ -1,24 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import {
   listAzureRepos,
-  projectsUrl,
-  projectRepoUrl,
-  PROJECTS_PAGE_SIZE,
+  repositoriesUrl,
+  repoCloneUrl,
   type AzureHttpResponse,
 } from './azure-repo-lister.js';
 
 const okBody = (body: unknown): AzureHttpResponse => ({ status: 200, body });
 
 describe('azure repo lister url helpers', () => {
-  it('builds a paginated projects REST url with encoding', () => {
-    expect(projectsUrl('my org', 200, 400)).toBe(
-      'https://dev.azure.com/my%20org/_apis/projects?api-version=7.1&$top=200&$skip=400',
+  it('builds the org-wide repositories REST url with encoding', () => {
+    expect(repositoriesUrl('my org')).toBe(
+      'https://dev.azure.com/my%20org/_apis/git/repositories?api-version=7.1',
     );
   });
 
-  it('builds the default-repo clone url for a project', () => {
-    expect(projectRepoUrl('org', 'Team Proj')).toBe(
-      'https://dev.azure.com/org/Team%20Proj/_git/Team%20Proj',
+  it('builds a clone url for a project/repo with encoding', () => {
+    expect(repoCloneUrl('org', 'Team Proj', 'my repo')).toBe(
+      'https://dev.azure.com/org/Team%20Proj/_git/my%20repo',
     );
   });
 });
@@ -32,27 +31,83 @@ describe('listAzureRepos', () => {
     httpGet: async (url: string) => responder(url),
   });
 
-  it('maps each project to its default repository', async () => {
+  it('lists every repository across projects, labelled project/repo', async () => {
     const repos = await listAzureRepos(
       deps('tok', () =>
-        okBody({ value: [{ name: 'HDInsight' }, { name: 'A365' }] }),
+        okBody({
+          value: [
+            {
+              name: 'geneva_config',
+              project: { name: 'CosmosDB' },
+              defaultBranch: 'refs/heads/master',
+              webUrl: 'https://dev.azure.com/msdata/CosmosDB/_git/geneva_config',
+            },
+            {
+              name: 'A365',
+              project: { name: 'A365' },
+              defaultBranch: 'refs/heads/main',
+              webUrl: 'https://dev.azure.com/msdata/A365/_git/A365',
+            },
+          ],
+        }),
       ),
       'msdata',
+    );
+    // Sorted alphabetically by "project/repo".
+    expect(repos).toEqual([
+      {
+        provider: 'azure-devops',
+        name: 'A365/A365',
+        remoteUrl: 'https://dev.azure.com/msdata/A365/_git/A365',
+        defaultBranch: 'main',
+      },
+      {
+        provider: 'azure-devops',
+        name: 'CosmosDB/geneva_config',
+        remoteUrl: 'https://dev.azure.com/msdata/CosmosDB/_git/geneva_config',
+        defaultBranch: 'master',
+      },
+    ]);
+  });
+
+  it('falls back to a constructed clone url and null branch when fields are missing', async () => {
+    const repos = await listAzureRepos(
+      deps('tok', () =>
+        okBody({
+          value: [
+            { name: 'no_web_url', project: { name: 'Proj' }, webUrl: '   ' },
+          ],
+        }),
+      ),
+      'org',
     );
     expect(repos).toEqual([
       {
         provider: 'azure-devops',
-        name: 'HDInsight',
-        remoteUrl: 'https://dev.azure.com/msdata/HDInsight/_git/HDInsight',
-        defaultBranch: null,
-      },
-      {
-        provider: 'azure-devops',
-        name: 'A365',
-        remoteUrl: 'https://dev.azure.com/msdata/A365/_git/A365',
+        name: 'Proj/no_web_url',
+        remoteUrl: 'https://dev.azure.com/org/Proj/_git/no_web_url',
         defaultBranch: null,
       },
     ]);
+  });
+
+  it('keeps a default branch that is not refs/heads-prefixed as-is', async () => {
+    const repos = await listAzureRepos(
+      deps('tok', () =>
+        okBody({
+          value: [
+            {
+              name: 'repo',
+              project: { name: 'Proj' },
+              defaultBranch: 'develop',
+              webUrl: 'https://dev.azure.com/org/Proj/_git/repo',
+            },
+          ],
+        }),
+      ),
+      'org',
+    );
+    expect(repos[0]?.defaultBranch).toBe('develop');
   });
 
   it('throws when the org is blank', async () => {
@@ -67,22 +122,39 @@ describe('listAzureRepos', () => {
     ).rejects.toThrow('Not signed in');
   });
 
-  it('throws when the first projects page is not 200', async () => {
+  it('throws when the repositories request is not 200', async () => {
     await expect(
       listAzureRepos(deps('tok', () => ({ status: 403, body: null })), 'org'),
     ).rejects.toThrow('HTTP 403');
   });
 
-  it('skips nameless projects and a non-array body', async () => {
+  it('skips repos missing a name or project, and disabled repos', async () => {
     const repos = await listAzureRepos(
-      deps('tok', () => okBody({ value: [{}, { name: 'Good' }] })),
+      deps('tok', () =>
+        okBody({
+          value: [
+            { project: { name: 'Proj' } },
+            { name: 'Orphan' },
+            {
+              name: 'Disabled',
+              project: { name: 'Proj' },
+              isDisabled: true,
+            },
+            {
+              name: 'Good',
+              project: { name: 'Proj' },
+              webUrl: 'https://dev.azure.com/org/Proj/_git/Good',
+            },
+          ],
+        }),
+      ),
       'org',
     );
     expect(repos).toEqual([
       {
         provider: 'azure-devops',
-        name: 'Good',
-        remoteUrl: 'https://dev.azure.com/org/Good/_git/Good',
+        name: 'Proj/Good',
+        remoteUrl: 'https://dev.azure.com/org/Proj/_git/Good',
         defaultBranch: null,
       },
     ]);
@@ -94,43 +166,5 @@ describe('listAzureRepos', () => {
       'org',
     );
     expect(repos).toEqual([]);
-  });
-
-  it('paginates until a short page and stops on a later non-200', async () => {
-    const firstPage = {
-      value: Array.from({ length: PROJECTS_PAGE_SIZE }, (_, i) => ({
-        name: `P${i}`,
-      })),
-    };
-    let calls = 0;
-    const repos = await listAzureRepos(
-      deps('tok', () => {
-        calls += 1;
-        // First full page keeps paging; the second call fails but, being past
-        // the first page, we keep what we already collected instead of throwing.
-        return calls === 1 ? okBody(firstPage) : { status: 500, body: null };
-      }),
-      'org',
-    );
-    expect(repos).toHaveLength(PROJECTS_PAGE_SIZE);
-    expect(calls).toBe(2);
-  });
-
-  it('stops paging when a full page is followed by a short page', async () => {
-    const full = {
-      value: Array.from({ length: PROJECTS_PAGE_SIZE }, (_, i) => ({
-        name: `P${i}`,
-      })),
-    };
-    let calls = 0;
-    const repos = await listAzureRepos(
-      deps('tok', () => {
-        calls += 1;
-        return calls === 1 ? okBody(full) : okBody({ value: [{ name: 'Last' }] });
-      }),
-      'org',
-    );
-    expect(repos).toHaveLength(PROJECTS_PAGE_SIZE + 1);
-    expect(calls).toBe(2);
   });
 });

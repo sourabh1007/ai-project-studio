@@ -39,8 +39,20 @@ export interface RepoInsights {
   branch: string;
   agents: RepoDefinitionEntry[];
   skills: RepoDefinitionEntry[];
+  /** Documentation / troubleshooting-guide files discovered on the branch. */
+  docs: RepoDefinitionEntry[];
   readiness: ReadinessCheck[];
   /** True when every readiness parameter passes. */
   agentReady: boolean;
   generatedAt: string;
+}
+
+/** The full, read-only content of a single discovered definition or doc file. */
+export interface RepoDefinitionContent {
+  /** Repository-relative path of the file. */
+  path: string;
+  /** The branch the content was read from. */
+  branch: string;
+  /** The file's full text at that branch. */
+  content: string;
 }

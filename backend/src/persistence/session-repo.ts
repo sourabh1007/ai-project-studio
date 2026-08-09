@@ -76,6 +76,11 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
      WHERE feature_id = ? AND scope = 'feature'
      ORDER BY created_at, id`,
   );
+  const selectByFeatureAll = db.prepare(
+    `SELECT * FROM sessions
+     WHERE feature_id = ?
+     ORDER BY created_at, id`,
+  );
   const selectAll = db.prepare('SELECT * FROM sessions ORDER BY created_at, id');
   const updateName = db.prepare('UPDATE sessions SET name = ? WHERE id = ?');
   const updatePlacement = db.prepare(
@@ -112,6 +117,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
     },
     listByFeature(featureId) {
       return (selectByFeature.all(featureId) as unknown as SessionRow[]).map(mapSession);
+    },
+    listByFeatureAll(featureId) {
+      return (selectByFeatureAll.all(featureId) as unknown as SessionRow[]).map(mapSession);
     },
     listAll() {
       return (selectAll.all() as unknown as SessionRow[]).map(mapSession);

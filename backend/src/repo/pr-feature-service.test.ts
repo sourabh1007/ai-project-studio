@@ -25,9 +25,20 @@ const pull: RemotePullRequest = {
 
 function harness(overrides: {
   getPull?: () => Promise<RemotePullRequest | null>;
+  findByPull?: (repoId: string, pullNumber: number) => string | null;
 } = {}) {
   const created: unknown[] = [];
   const started: unknown[] = [];
+  const provisioned: unknown[] = [];
+  const existingFeature = {
+    id: 'existing-f',
+    name: 'PR #12: Add login',
+    description: 'https://github.com/acme/app/pull/12',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    summary: null,
+    repoId: repo.id,
+    checkoutPath: 'C:/wt/app-pr-12',
+  };
   const svc = createPrFeatureService({
     repos: {
       get: (id) => {
@@ -39,8 +50,10 @@ function harness(overrides: {
     },
     listPulls: () => Promise.resolve([pull]),
     getPull: overrides.getPull ?? (() => Promise.resolve(pull)),
-    provisionWorktree: () =>
-      Promise.resolve({ worktreePath: 'C:/wt/app-pr-12', branch: 'pr-12' }),
+    provisionWorktree: () => {
+      provisioned.push(true);
+      return Promise.resolve({ worktreePath: 'C:/wt/app-pr-12', branch: 'pr-12' });
+    },
     features: {
       create: (input) => {
         created.push(input);
@@ -54,15 +67,17 @@ function harness(overrides: {
           checkoutPath: input.checkoutPath ?? null,
         };
       },
+      get: () => existingFeature,
     },
     reviews: {
       start: (input) => {
         started.push(input);
         return undefined as never;
       },
+      findByPull: overrides.findByPull ?? (() => null),
     },
   });
-  return { svc, created, started };
+  return { svc, created, started, provisioned, existingFeature };
 }
 
 describe('pr-feature-service', () => {
@@ -122,11 +137,25 @@ describe('pr-feature-service', () => {
           repoId: input.repoId ?? null,
           checkoutPath: input.checkoutPath ?? null,
         }),
+        get: () => {
+          throw new Error('should not be called');
+        },
       },
-      reviews: { start: () => undefined as never },
+      reviews: { start: () => undefined as never, findByPull: () => null },
     });
     await noBranch.createFromPull('r1', 12);
     expect(svc).toBeDefined();
+  });
+
+  it('reuses the existing review feature when the PR is already open', async () => {
+    const { svc, created, started, provisioned, existingFeature } = harness({
+      findByPull: () => 'existing-f',
+    });
+    const feature = await svc.createFromPull('r1', 12);
+    expect(feature).toBe(existingFeature);
+    expect(created).toEqual([]);
+    expect(started).toEqual([]);
+    expect(provisioned).toEqual([]);
   });
 
   it('throws NotFound when the pull request does not exist', async () => {

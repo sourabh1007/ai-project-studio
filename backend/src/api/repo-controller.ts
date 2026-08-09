@@ -77,6 +77,17 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       }),
     },
     {
+      method: 'get',
+      path: '/repos/:id/insights/file',
+      handler: async (req) => {
+        const path = typeof req.query.path === 'string' ? req.query.path : '';
+        return {
+          status: 200,
+          body: await deps.repoInsights.readDefinition(req.params.id, path),
+        };
+      },
+    },
+    {
       method: 'post',
       path: '/repos/:id/context/refresh',
       handler: (req) => {

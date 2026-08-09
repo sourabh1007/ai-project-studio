@@ -55,4 +55,6 @@ export interface StartSessionRequest {
   kind?: SessionKind;
   scope?: SessionScope;
   cwd?: string;
+  /** Restrict the run to zero tools (pure prompt→text completion). */
+  noTools?: boolean;
 }

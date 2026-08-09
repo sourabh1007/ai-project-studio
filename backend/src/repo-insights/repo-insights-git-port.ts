@@ -11,13 +11,15 @@ export interface RepoInsightsGit {
    */
   resolveDefaultBranch(repositoryPath: string): Promise<string | null>;
   /**
-   * Repository-relative paths of the files directly under `directory` at `ref`.
+   * Repository-relative paths of the files under `directory` at `ref`. When
+   * `recursive` is true, files in nested subdirectories are included too.
    * Empty when the directory does not exist on the branch.
    */
   listFiles(
     repositoryPath: string,
     ref: string,
     directory: string,
+    recursive?: boolean,
   ): Promise<string[]>;
   /** File text at `ref`, or null when the path does not exist there. */
   readFile(

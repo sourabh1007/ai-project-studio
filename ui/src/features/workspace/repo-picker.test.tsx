@@ -44,4 +44,34 @@ describe('RepoPicker context add flow', () => {
     await waitFor(() => expect(onAdded).toHaveBeenCalledWith(added));
     expect(addRepo).toHaveBeenCalledTimes(1);
   });
+
+  it('filters the repository list by the search box', async () => {
+    const client = {
+      listGithubRepos: vi.fn().mockResolvedValue([
+        { provider: 'github', name: 'acme/app', remoteUrl: 'https://github.com/acme/app' },
+        { provider: 'github', name: 'acme/tools', remoteUrl: 'https://github.com/acme/tools' },
+      ]),
+      addRepo: vi.fn(),
+    } as unknown as ApiClient;
+    render(
+      <ApiProvider value={client}>
+        <RepoPicker onClose={() => {}} onAdded={() => {}} />
+      </ApiProvider>,
+    );
+
+    await screen.findByRole('button', { name: /acme\/app/i });
+    expect(screen.getByRole('button', { name: /acme\/tools/i })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Search repositories'), {
+      target: { value: 'tools' },
+    });
+
+    expect(screen.queryByRole('button', { name: /acme\/app/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /acme\/tools/i })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Search repositories'), {
+      target: { value: 'nomatch' },
+    });
+    expect(screen.getByText('No repositories match your search.')).toBeTruthy();
+  });
 });

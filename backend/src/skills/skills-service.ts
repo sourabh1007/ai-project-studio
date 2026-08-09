@@ -78,6 +78,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
     kind: z.enum(['instruction', 'task-plan']),
     instructions: z.string(),
     removalInstructions: z.string().optional(),
+    recommendedScope: z.enum(['feature', 'session', 'any']).optional(),
   });
 
   const requireSkill = (id: string): Skill => {
@@ -178,6 +179,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         kind: input.kind,
         instructions: input.instructions,
         removalInstructions,
+        recommendedScope: input.recommendedScope ?? 'any',
         createdAt: deps.clock.isoNow(),
       };
       deps.repo.createSkill(skill);
@@ -199,6 +201,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         name: input.name.trim(),
         instructions: input.instructions,
         removalInstructions,
+        recommendedScope: input.recommendedScope ?? 'any',
       });
       return requireSkill(id);
     },
@@ -280,6 +283,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         kind: skill.kind,
         instructions: skill.instructions,
         removalInstructions: skill.removalInstructions,
+        recommendedScope: skill.recommendedScope,
       };
     },
     exportAll() {
@@ -289,6 +293,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         kind: skill.kind,
         instructions: skill.instructions,
         removalInstructions: skill.removalInstructions,
+        recommendedScope: skill.recommendedScope,
       }));
     },
     importSkill(payload) {
@@ -311,6 +316,7 @@ export function createSkillsService(deps: SkillsServiceDeps): SkillsService {
         kind: parsed.data.kind,
         instructions: parsed.data.instructions,
         removalInstructions,
+        recommendedScope: parsed.data.recommendedScope ?? 'any',
         createdAt: deps.clock.isoNow(),
       };
       deps.repo.createSkill(skill);

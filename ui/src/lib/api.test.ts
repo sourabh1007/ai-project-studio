@@ -96,6 +96,18 @@ describe('createApiClient', () => {
     expect(calls[0][1]).toBeUndefined();
   });
 
+  it('gets a repository definition file', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ path: 'docs/tsg/a b.md', branch: 'main', content: '# hi' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getRepoDefinition('r1', 'docs/tsg/a b.md');
+    expect(calls[0][0]).toBe(
+      '/api/repos/r1/insights/file?path=docs%2Ftsg%2Fa%20b.md',
+    );
+    expect(calls[0][1]).toBeUndefined();
+  });
+
   it('reads and refreshes repository context', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ repositoryId: 'r1', status: 'ready' }),
@@ -439,6 +451,7 @@ describe('createApiClient', () => {
       kind: 'instruction',
       instructions: 'x',
       removalInstructions: '',
+      recommendedScope: 'feature',
     });
 
     expect(calls[0][0]).toBe('/api/skills');
@@ -686,6 +699,61 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/features/f1/pr-review/refresh');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('retries a single PR review step via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.retryPrReviewStep('f1', 'changeGraph');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/steps/changeGraph/retry');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('explains a PR review file via a JSON POST with the path', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.explainPrReviewFile('f1', 'src/a.ts');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/files/explain');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ path: 'src/a.ts' }));
+  });
+
+  it('lists PR review comments for a feature', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    const threads = await client.listPrReviewComments('f1');
+    expect(threads).toEqual([]);
+    expect(calls[0][0]).toBe('/api/features/f1/pr-review/comments');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('adds a PR review comment via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 't1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.addPrReviewComment('f1', {
+      path: 'src/a.ts',
+      line: 4,
+      body: 'nit',
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/comments');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ path: 'src/a.ts', line: 4, body: 'nit' }),
+    );
+  });
+
+  it('sets a PR review comment status via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 't1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.setPrReviewCommentStatus('f1', 't1', 'resolved');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/comments/t1/status');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ status: 'resolved' }));
   });
 
   it('starts a GitHub device-flow sign-in via a JSON POST', async () => {

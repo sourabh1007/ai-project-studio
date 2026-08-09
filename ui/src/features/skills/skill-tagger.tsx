@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { SkillScope } from '../../lib/types.js';
 import { ErrorText } from '../../components/ui.js';
 import { CloseIcon, PlusIcon, TagIcon } from '../../components/icons.js';
-import { SkillKindIcon } from './skill-kind.js';
+import { SkillKindIcon, SkillScopeBadge } from './skill-kind.js';
 
 /**
  * Compact control to tag/untag skills from the central library to a single
@@ -35,7 +35,13 @@ export function SkillTagger({
   const [error, setError] = useState<string | null>(null);
 
   const taggedIds = new Set((tagged.data ?? []).map((s) => s.id));
-  const available = (library.data ?? []).filter((s) => !taggedIds.has(s.id));
+  // Only offer skills recommended for this scope (feature/session). Skills
+  // marked 'any' fit both, so they appear in every picker.
+  const available = (library.data ?? []).filter(
+    (s) =>
+      !taggedIds.has(s.id) &&
+      (s.recommendedScope === scope || s.recommendedScope === 'any'),
+  );
 
   async function tag(skillId: string) {
     setError(null);
@@ -110,6 +116,7 @@ export function SkillTagger({
             >
               <SkillKindIcon kind={skill.kind} />
               {skill.name}
+              <SkillScopeBadge scope={skill.recommendedScope} />
             </button>
           ))}
         </div>

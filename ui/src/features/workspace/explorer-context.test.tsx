@@ -58,6 +58,7 @@ function api(contextValue: RepositoryContext): ApiClient {
 const callbacks = {
   onOpenSession: vi.fn(),
   onOpenFeature: vi.fn(),
+  onOpenPrReview: vi.fn(),
   onOpenRepo: vi.fn(),
   onRenameSession: vi.fn(),
   onRenameFeature: vi.fn(),

@@ -1,0 +1,383 @@
+import type {
+  ChangeGraphCategory,
+  ChangeGraphEdgeCall,
+  ChangeGraphNode,
+  ChangeGraphNodeKind,
+  ChangeGraphStep,
+} from './types.js';
+
+/** A changed-file node placed on the canvas, in absolute coordinates. */
+export interface PlacedNode {
+  /** Repo-relative path (stable id and lookup key). */
+  path: string;
+  /** The project box this node belongs to. */
+  projectId: string;
+  /** Compact label (the file's basename). */
+  label: string;
+  /** Whether this is a changed file (orange) or a boundary caller (blue). */
+  kind: ChangeGraphNodeKind;
+  /** Absolute top-left of the node's cell. */
+  x: number;
+  y: number;
+  /** Node cell width, sized to its label so text never overflows. */
+  width: number;
+}
+
+/** A project box grouping the changed files that belong to one project. */
+export interface PlacedBox {
+  /** Stable project id. */
+  id: string;
+  /** Display name shown on the box header. */
+  name: string;
+  /** Number of changed files in this box for the rendered category. */
+  count: number;
+  /** Absolute top-left of the box and its size. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A reference edge placed between two node centres, in absolute coordinates. */
+export interface PlacedEdge {
+  from: string;
+  to: string;
+  calls: ChangeGraphEdgeCall[];
+  highlightsChanges: boolean;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** A fully placed change graph for one category, ready to render as SVG. */
+export interface ChangeGraphLayout {
+  boxes: PlacedBox[];
+  nodes: PlacedNode[];
+  edges: PlacedEdge[];
+  /** Total canvas size spanned by the placed boxes. */
+  width: number;
+  height: number;
+}
+
+/** Layout geometry constants (kept here so the render stays declarative). */
+export const NODE_MIN_W = 132;
+export const NODE_H = 40;
+export const NODE_GAP = 14;
+export const BOX_PAD = 16;
+export const BOX_TITLE_H = 30;
+export const BOX_GAP = 28;
+/** Approx. width of one monospace label glyph at the node font size. */
+export const LABEL_CHAR_W = 7.7;
+/** Horizontal padding inside a node cell, added around its label. */
+export const NODE_LABEL_PAD = 24;
+/** Approx. width of one title glyph, used to keep long box titles unclipped. */
+export const TITLE_CHAR_W = 8;
+/** The width the box flow wraps at, matched to the SVG viewBox width. */
+export const MAX_ROW_WIDTH = 1600;
+const FOCUSED_COL_GAP = 96;
+const FOCUSED_ROW_GAP = 34;
+
+/** The trailing path segment used as a compact node label. */
+export function basename(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts[parts.length - 1] : path;
+}
+
+/** The node cell width needed to fit a label without overflow. */
+function nodeWidthFor(label: string): number {
+  return Math.max(
+    NODE_MIN_W,
+    Math.ceil(label.length * LABEL_CHAR_W) + NODE_LABEL_PAD,
+  );
+}
+
+/** The centre point of a placed node, where its edges connect. */
+export function nodeCenter(node: PlacedNode): { x: number; y: number } {
+  return { x: node.x + node.width / 2, y: node.y + NODE_H / 2 };
+}
+
+function edgeCalls(edge: { calls?: ChangeGraphEdgeCall[] }): ChangeGraphEdgeCall[] {
+  return edge.calls ?? [];
+}
+
+interface BoxPlan {
+  id: string;
+  name: string;
+  paths: string[];
+  cols: number;
+  nodeWidth: number;
+  width: number;
+  height: number;
+}
+
+/** Plans one box's grid dimensions from the files it owns. */
+function planBox(id: string, name: string, paths: string[]): BoxPlan {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(paths.length)));
+  const rows = Math.max(1, Math.ceil(paths.length / cols));
+  // Every cell in a box shares one width (the widest label) so the grid stays
+  // aligned and no label spills into its neighbour.
+  const nodeWidth = paths.reduce(
+    (max, path) => Math.max(max, nodeWidthFor(basename(path))),
+    NODE_MIN_W,
+  );
+  const gridWidth = cols * nodeWidth + (cols - 1) * NODE_GAP + BOX_PAD * 2;
+  // Keep the box at least as wide as its title (plus the count suffix).
+  const titleWidth = Math.ceil((name.length + 4) * TITLE_CHAR_W) + BOX_PAD * 2;
+  const width = Math.max(gridWidth, titleWidth);
+  const height =
+    BOX_TITLE_H + rows * NODE_H + (rows - 1) * NODE_GAP + BOX_PAD * 2;
+  return { id, name, paths, cols, nodeWidth, width, height };
+}
+
+/**
+ * Deterministically lays out one category of a PR's change graph: every changed
+ * file becomes a node, nodes are grouped into their project's square box, boxes
+ * flow left-to-right and wrap, and reference edges connect node centres. Pure
+ * geometry so the render stays stable across re-renders. Only nodes of the given
+ * `category` are placed, and only edges whose *both* endpoints are placed are
+ * drawn, so the two graphs (code, test) stay independent.
+ */
+export function buildChangeGraphLayout(
+  step: ChangeGraphStep,
+  category: ChangeGraphCategory,
+): ChangeGraphLayout {
+  const nodesInCategory = step.nodes.filter(
+    (node) => node.category === category,
+  );
+
+  // Group the category's nodes by project, preserving each project's first
+  // appearance order.
+  const pathsByProject = new Map<string, string[]>();
+  for (const node of nodesInCategory) {
+    const bucket = pathsByProject.get(node.projectId);
+    if (bucket) {
+      bucket.push(node.path);
+    } else {
+      pathsByProject.set(node.projectId, [node.path]);
+    }
+  }
+
+  const projectName = new Map<string, string>();
+  for (const project of step.projects) {
+    projectName.set(project.id, project.name);
+  }
+
+  const kindByPath = new Map<string, ChangeGraphNodeKind>();
+  for (const node of nodesInCategory) {
+    kindByPath.set(node.path, node.kind);
+  }
+
+  const plans: BoxPlan[] = [];
+  for (const [projectId, paths] of pathsByProject) {
+    plans.push(
+      planBox(projectId, projectName.get(projectId) ?? projectId, paths),
+    );
+  }
+
+  const boxes: PlacedBox[] = [];
+  const nodes: PlacedNode[] = [];
+
+  let rowX = 0;
+  let rowY = 0;
+  let rowHeight = 0;
+  let canvasWidth = 0;
+
+  for (const plan of plans) {
+    if (rowX > 0 && rowX + plan.width > MAX_ROW_WIDTH) {
+      rowY += rowHeight + BOX_GAP;
+      rowX = 0;
+      rowHeight = 0;
+    }
+    const boxX = rowX;
+    const boxY = rowY;
+    boxes.push({
+      id: plan.id,
+      name: plan.name,
+      count: plan.paths.length,
+      x: boxX,
+      y: boxY,
+      width: plan.width,
+      height: plan.height,
+    });
+    plan.paths.forEach((path, i) => {
+      const col = i % plan.cols;
+      const row = Math.floor(i / plan.cols);
+      nodes.push({
+        path,
+        projectId: plan.id,
+        label: basename(path),
+        kind: kindByPath.get(path) as ChangeGraphNodeKind,
+        x: boxX + BOX_PAD + col * (plan.nodeWidth + NODE_GAP),
+        y: boxY + BOX_TITLE_H + BOX_PAD + row * (NODE_H + NODE_GAP),
+        width: plan.nodeWidth,
+      });
+    });
+    rowX += plan.width + BOX_GAP;
+    rowHeight = Math.max(rowHeight, plan.height);
+    canvasWidth = Math.max(canvasWidth, rowX - BOX_GAP);
+  }
+
+  const nodeByPath = new Map<string, PlacedNode>();
+  for (const node of nodes) {
+    nodeByPath.set(node.path, node);
+  }
+  const edges: PlacedEdge[] = [];
+  for (const edge of step.edges) {
+    const from = nodeByPath.get(edge.from);
+    const to = nodeByPath.get(edge.to);
+    if (!from || !to) {
+      continue;
+    }
+    const a = nodeCenter(from);
+    const b = nodeCenter(to);
+    edges.push({
+      from: edge.from,
+      to: edge.to,
+      calls: edgeCalls(edge),
+      highlightsChanges: edgeCalls(edge).length > 0,
+      x1: a.x,
+      y1: a.y,
+      x2: b.x,
+      y2: b.y,
+    });
+  }
+
+  const height = plans.length > 0 ? rowY + rowHeight : 0;
+  return { boxes, nodes, edges, width: canvasWidth, height };
+}
+
+function placedNodeFor(
+  node: ChangeGraphNode,
+  x: number,
+  y: number,
+): PlacedNode {
+  const label = basename(node.path);
+  return {
+    path: node.path,
+    projectId: node.projectId,
+    label,
+    kind: node.kind,
+    x,
+    y,
+    width: nodeWidthFor(label),
+  };
+}
+
+/**
+ * Builds a compact one-hop layout for a single file: the focused file is placed
+ * in the middle, files that call it are placed on the left, and files it calls
+ * are placed on the right. Only same-category incident edges are included.
+ */
+export function buildFocusedChangeGraphLayout(
+  step: ChangeGraphStep,
+  category: ChangeGraphCategory,
+  focusPath: string,
+): ChangeGraphLayout {
+  const focus = step.nodes.find(
+    (node) => node.path === focusPath && node.category === category,
+  );
+  if (!focus) {
+    return { boxes: [], nodes: [], edges: [], width: 0, height: 0 };
+  }
+
+  const nodeByPath = new Map(
+    step.nodes
+      .filter((node) => node.category === category)
+      .map((node) => [node.path, node]),
+  );
+  const incidentEdges = step.edges.filter(
+    (edge) =>
+      (edge.from === focusPath || edge.to === focusPath) &&
+      nodeByPath.has(edge.from) &&
+      nodeByPath.has(edge.to),
+  );
+
+  const leftPaths = new Set<string>();
+  const rightPaths = new Set<string>();
+  for (const edge of incidentEdges) {
+    if (edge.to === focusPath) {
+      leftPaths.add(edge.from);
+    }
+    if (edge.from === focusPath) {
+      rightPaths.add(edge.to);
+    }
+  }
+  for (const path of leftPaths) {
+    if (rightPaths.has(path)) {
+      leftPaths.delete(path);
+    }
+  }
+
+  const ordered = step.nodes.map((node) => node.path);
+  const left = ordered.filter((path) => leftPaths.has(path));
+  const right = ordered.filter((path) => rightPaths.has(path));
+  const leftWidth = left.reduce(
+    (max, path) => Math.max(max, nodeWidthFor(basename(path))),
+    0,
+  );
+  const focusWidth = nodeWidthFor(basename(focus.path));
+  const rightWidth = right.reduce(
+    (max, path) => Math.max(max, nodeWidthFor(basename(path))),
+    0,
+  );
+  const sideRows = Math.max(left.length, right.length, 1);
+  const height = Math.max(
+    NODE_H,
+    sideRows * NODE_H + (sideRows - 1) * FOCUSED_ROW_GAP,
+  );
+  const focusX = leftWidth > 0 ? leftWidth + FOCUSED_COL_GAP : 0;
+  const rightX = focusX + focusWidth + (rightWidth > 0 ? FOCUSED_COL_GAP : 0);
+  const focusY = Math.round((height - NODE_H) / 2);
+  const nodes: PlacedNode[] = [];
+
+  left.forEach((path, i) => {
+    nodes.push(
+      placedNodeFor(
+        nodeByPath.get(path) as ChangeGraphNode,
+        0,
+        i * (NODE_H + FOCUSED_ROW_GAP),
+      ),
+    );
+  });
+  nodes.push(placedNodeFor(focus, focusX, focusY));
+  right.forEach((path, i) => {
+    nodes.push(
+      placedNodeFor(
+        nodeByPath.get(path) as ChangeGraphNode,
+        rightX,
+        i * (NODE_H + FOCUSED_ROW_GAP),
+      ),
+    );
+  });
+
+  const placedByPath = new Map(nodes.map((node) => [node.path, node]));
+  const edges: PlacedEdge[] = [];
+  for (const edge of incidentEdges) {
+    const from = placedByPath.get(edge.from) as PlacedNode;
+    const to = placedByPath.get(edge.to) as PlacedNode;
+    const a = nodeCenter(from);
+    const b = nodeCenter(to);
+    edges.push({
+      from: edge.from,
+      to: edge.to,
+      calls: edgeCalls(edge),
+      highlightsChanges: edgeCalls(edge).length > 0,
+      x1: a.x,
+      y1: a.y,
+      x2: b.x,
+      y2: b.y,
+    });
+  }
+
+  const width = rightWidth > 0 ? rightX + rightWidth : focusX + focusWidth;
+  return { boxes: [], nodes, edges, width, height };
+}
+
+/** Looks up a node in a step by path, for the selection panel. */
+export function findNode(
+  step: ChangeGraphStep,
+  path: string,
+): ChangeGraphNode | null {
+  return step.nodes.find((node) => node.path === path) ?? null;
+}

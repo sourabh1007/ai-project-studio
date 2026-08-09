@@ -1,17 +1,29 @@
 import type { Clock } from '../kernel/clock.js';
 import type { Session } from '../session/session-contract.js';
+import type { TreeGroup } from '../feature-tree/feature-tree-contract.js';
 import type {
   AggregateReader,
   FeatureAnalytics,
+  GroupInfo,
   SessionBreakdown,
+  UsageOrigin,
   UsageTotals,
   WorkspaceStats,
 } from './aggregation-contract.js';
 
 /** Membership/timing source for feature analytics. */
 export interface SessionLister {
-  listByFeature(featureId: string): Session[];
+  /**
+   * Every session for a feature including internal-scope metasessions, so
+   * headless IDE AI work (PR review, summaries) is counted in analytics.
+   */
+  listByFeatureAll(featureId: string): Session[];
   listAll(): Session[];
+}
+
+/** Group-membership source so sessions can be nested under their group. */
+export interface GroupLister {
+  listByFeature(featureId: string): TreeGroup[];
 }
 
 /** Feature-level analytics: usage rollups joined with session timing. */
@@ -24,7 +36,14 @@ export interface FeatureAnalyticsService {
 export interface FeatureAnalyticsDeps {
   reader: AggregateReader;
   sessions: SessionLister;
+  groups: GroupLister;
   clock: Clock;
+}
+
+/** IDE metasessions are headless AI the IDE runs for the user; dev sessions are
+ * interactive user sessions. Tag each so the dashboard can label its origin. */
+function originOf(session: Session): UsageOrigin {
+  return session.kind === 'meta' ? 'ide' : 'user';
 }
 
 /**
@@ -68,7 +87,7 @@ function sortKey(session: Session): number {
 export function createFeatureAnalytics(
   deps: FeatureAnalyticsDeps,
 ): FeatureAnalyticsService {
-  const { reader, sessions, clock } = deps;
+  const { reader, sessions, groups, clock } = deps;
   return {
     forFeature(featureId) {
       const nowMs = clock.now().getTime();
@@ -76,7 +95,7 @@ export function createFeatureAnalytics(
         reader.bySession(featureId).map((usage) => [usage.sessionId, usage]),
       );
       const members = sessions
-        .listByFeature(featureId)
+        .listByFeatureAll(featureId)
         .slice()
         .sort((a, b) => sortKey(a) - sortKey(b));
 
@@ -101,9 +120,20 @@ export function createFeatureAnalytics(
           startedAt: session.startedAt,
           endedAt: session.endedAt,
           activeMs: sessionActiveMs(session.startedAt, session.endedAt, nowMs),
+          groupId: session.groupId ?? null,
+          origin: originOf(session),
           ...totals,
         };
       });
+
+      const featureGroups: GroupInfo[] = groups
+        .listByFeature(featureId)
+        .map((group) => ({
+          id: group.id,
+          name: group.name,
+          kind: group.kind,
+          parentGroupId: group.parentGroupId ?? null,
+        }));
 
       const totals: UsageTotals = {
         ...reader.featureTotals(featureId),
@@ -120,6 +150,7 @@ export function createFeatureAnalytics(
         byProvider: reader.byProvider(featureId),
         byDay: reader.byDay(featureId),
         bySession,
+        groups: featureGroups,
         timing: { totalActiveMs },
       };
     },

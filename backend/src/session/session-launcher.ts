@@ -118,6 +118,7 @@ export function createSessionLauncher(
         kind: session.kind,
         otelFilePath: session.usageFilePath,
         cwd: request.cwd,
+        noTools: request.noTools,
       };
 
       const running = selection.provider.startSession(spec);

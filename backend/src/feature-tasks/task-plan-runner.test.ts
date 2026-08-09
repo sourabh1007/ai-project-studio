@@ -64,6 +64,10 @@ function fakeMeta(response: string) {
       requests.push(request);
       return response;
     },
+    runDetailed: async (request) => {
+      requests.push(request);
+      return { text: response, sessionId: 'meta-1' };
+    },
   };
   return { meta, requests };
 }

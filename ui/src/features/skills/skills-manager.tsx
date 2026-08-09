@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import type { Skill, SkillExport, SkillKind } from '../../lib/types.js';
+import type { Skill, SkillExport, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
 import {
@@ -11,7 +11,7 @@ import {
   TrashIcon,
   UploadIcon,
 } from '../../components/icons.js';
-import { SkillKindIcon, skillKindLabel } from './skill-kind.js';
+import { SkillKindIcon, skillKindLabel, SkillScopeBadge } from './skill-kind.js';
 import { SkillForm } from './skill-form.js';
 
 function downloadJson(name: string, data: unknown) {
@@ -41,6 +41,7 @@ export function SkillsManager() {
     kind: SkillKind;
     instructions: string;
     removalInstructions: string;
+    recommendedScope: SkillRecommendedScope;
   }) {
     await api.createSkill(input);
     setCreating(false);
@@ -49,7 +50,12 @@ export function SkillsManager() {
 
   async function update(
     id: string,
-    input: { name: string; instructions: string; removalInstructions: string },
+    input: {
+      name: string;
+      instructions: string;
+      removalInstructions: string;
+      recommendedScope: SkillRecommendedScope;
+    },
   ) {
     await api.updateSkill(id, input);
     setEditing(null);
@@ -157,6 +163,7 @@ export function SkillsManager() {
                 <SkillKindIcon kind={skill.kind} />
                 {skillKindLabel(skill.kind)}
               </span>
+              <SkillScopeBadge scope={skill.recommendedScope} />
               <div className="skill-card-actions">
                 <button
                   type="button"

@@ -113,6 +113,7 @@ export interface AzureUserIdentity {
 interface AdoPull {
   pullRequestId?: number;
   title?: string;
+  description?: string;
   sourceRefName?: string;
   createdBy?: AdoIdentity | null;
   reviewers?: AdoIdentity[] | null;
@@ -172,6 +173,9 @@ function mapPull(
     author: pull.createdBy?.displayName ?? null,
     isAuthor,
     isReviewer,
+    ...(pull.description === undefined
+      ? {}
+      : { body: pull.description.trim() ? pull.description : null }),
   };
 }
 

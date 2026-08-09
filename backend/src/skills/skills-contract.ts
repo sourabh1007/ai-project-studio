@@ -4,6 +4,14 @@ export type SkillKind = 'instruction' | 'task-plan';
 /** Where a skill is tagged: to a whole feature or to a single session. */
 export type SkillScope = 'feature' | 'session';
 
+/**
+ * The scope a skill is *recommended* for — a soft hint surfaced as a badge and
+ * used to order the tag picker. `feature` suits project-wide context (coding
+ * standards, system design); `session` suits one-off task context; `any` fits
+ * both. It never restricts where a skill can actually be tagged.
+ */
+export type SkillRecommendedScope = 'feature' | 'session' | 'any';
+
 export interface Skill {
   id: string;
   name: string;
@@ -16,6 +24,8 @@ export interface Skill {
    * kind-based default (negate the instructions / cancel the plan).
    */
   removalInstructions: string;
+  /** Soft hint for which scope this skill is best tagged at. */
+  recommendedScope: SkillRecommendedScope;
   createdAt: string;
 }
 
@@ -39,6 +49,8 @@ export interface CreateSkillInput {
   instructions: string;
   /** Optional reaction injected when the skill is later removed. */
   removalInstructions?: string;
+  /** Optional recommended scope hint (defaults to `any`). */
+  recommendedScope?: SkillRecommendedScope;
 }
 
 export interface UpdateSkillInput {
@@ -46,6 +58,8 @@ export interface UpdateSkillInput {
   instructions: string;
   /** Optional reaction injected when the skill is later removed. */
   removalInstructions?: string;
+  /** Optional recommended scope hint (defaults to `any`). */
+  recommendedScope?: SkillRecommendedScope;
 }
 
 export interface TagSkillInput {
@@ -62,4 +76,6 @@ export interface SkillExport {
   instructions: string;
   /** Reaction injected when the skill is removed (defaults to empty). */
   removalInstructions: string;
+  /** Recommended scope hint (defaults to `any` for legacy files). */
+  recommendedScope: SkillRecommendedScope;
 }

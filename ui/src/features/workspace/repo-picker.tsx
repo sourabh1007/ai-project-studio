@@ -49,6 +49,7 @@ export function RepoPicker({
   const [org, setOrg] = useState(readSavedOrg);
   const [orgDraft, setOrgDraft] = useState(org);
   const [selected, setSelected] = useState<RemoteRepo | null>(null);
+  const [filter, setFilter] = useState('');
 
   const remote = useAsync<RemoteRepo[]>(
     () =>
@@ -70,6 +71,7 @@ export function RepoPicker({
     } catch {
       /* storage unavailable; listing still works for this session */
     }
+    setFilter('');
     setOrg(next);
   }
 
@@ -84,6 +86,11 @@ export function RepoPicker({
     );
   }
 
+  const query = filter.trim().toLowerCase();
+  const filtered = query
+    ? (remote.data ?? []).filter((repo) => repo.name.toLowerCase().includes(query))
+    : (remote.data ?? []);
+
   return (
     <Modal title="Add repository" onClose={onClose}>
       <div className="repo-picker">
@@ -96,6 +103,7 @@ export function RepoPicker({
             onClick={() => {
               setProvider('github');
               setSelected(null);
+              setFilter('');
             }}
           >
             GitHub
@@ -108,6 +116,7 @@ export function RepoPicker({
             onClick={() => {
               setProvider('azure-devops');
               setSelected(null);
+              setFilter('');
             }}
           >
             Azure DevOps
@@ -135,6 +144,20 @@ export function RepoPicker({
           </div>
         )}
 
+        {(remote.data?.length ?? 0) > 0 && (
+          <div className="repo-search">
+            <input
+              className="input"
+              type="search"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Search repositories"
+              aria-label="Search repositories"
+              spellCheck={false}
+            />
+          </div>
+        )}
+
         <div className="repo-list">
           {remote.loading && <Loader label="Loading repositories" />}
           <ErrorText error={remote.error} />
@@ -144,7 +167,10 @@ export function RepoPicker({
           {!remote.loading && (remote.data?.length ?? 0) === 0 && (org || provider === 'github') && (
             <EmptyState message="No repositories found." />
           )}
-          {remote.data?.map((repo) => (
+          {!remote.loading && (remote.data?.length ?? 0) > 0 && filtered.length === 0 && (
+            <EmptyState message="No repositories match your search." />
+          )}
+          {filtered.map((repo) => (
             <button
               type="button"
               key={`${repo.provider}:${repo.remoteUrl}`}

@@ -11,12 +11,32 @@ export interface GitCommandExecutor {
   ): Promise<{ stdout: string | Buffer }>;
 }
 
+/**
+ * Environment that isolates these read-only insight scans from the user's global
+ * and system git config. They never need identity or credentials, so depending
+ * on `~/.gitconfig` only makes them fail when Git Credential Manager is briefly
+ * rewriting (and locking) that file during a token refresh — git treats the
+ * resulting config-read "Permission denied" as fatal. Pointing config at the
+ * null device removes that coupling; `GIT_TERMINAL_PROMPT=0` prevents any auth
+ * prompt from stalling a background scan.
+ */
+const ISOLATED_CONFIG_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_TERMINAL_PROMPT: '0',
+} as const;
+
 const defaultExecutor: GitCommandExecutor = {
   async run(executable, args) {
-    return execFile(executable, [...args], {
+    // Global config is bypassed, so also opt out of the ownership check (whose
+    // allow-list lives there) to avoid a "dubious ownership" fatal on mapped or
+    // differently-owned drives.
+    return execFile(executable, ['-c', 'safe.directory=*', ...args], {
       encoding: 'buffer',
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, ...ISOLATED_CONFIG_ENV },
     });
   },
 };
@@ -63,10 +83,11 @@ export function createRepoInsightsGitAdapter(
       return name && name !== 'HEAD' ? name : null;
     },
 
-    async listFiles(repositoryPath, ref, directory) {
+    async listFiles(repositoryPath, ref, directory, recursive = false) {
       const output = await run(repositoryPath, [
         'ls-tree',
         '--name-only',
+        ...(recursive ? ['-r'] : []),
         ref,
         `${directory.replace(/\/+$/, '')}/`,
       ]);

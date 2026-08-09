@@ -251,6 +251,21 @@ describe('session-repo', () => {
     db.close();
   });
 
+  it('listByFeatureAll includes internal metasessions for analytics', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ id: 'visible' }));
+    repo.save(session({ id: 'meta', scope: 'internal', kind: 'meta' }));
+    repo.save(session({ id: 'other', featureId: 'f2', scope: 'internal', kind: 'meta' }));
+
+    expect(repo.listByFeatureAll('f1').map((s) => s.id)).toEqual([
+      'meta',
+      'visible',
+    ]);
+    expect(repo.listByFeatureAll('f2').map((s) => s.id)).toEqual(['other']);
+    db.close();
+  });
+
   it('defaults a missing scope to "feature" on save', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const repo = createSessionRepo(db);

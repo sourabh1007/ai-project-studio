@@ -21,6 +21,7 @@ import {
   TrashIcon,
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
+import { beginDragFx, endDragFx } from './drag-fx.js';
 
 /** A node currently being dragged in the feature tree. */
 export interface DragNode {
@@ -217,9 +218,13 @@ function DraggableSession({
         if (event.dataTransfer) {
           event.dataTransfer.effectAllowed = 'move';
         }
+        beginDragFx(event.currentTarget);
         setDragging({ type: 'session', id: session.id });
       }}
-      onDragEnd={() => setDragging(null)}
+      onDragEnd={(event) => {
+        endDragFx(event.currentTarget, event);
+        setDragging(null);
+      }}
     >
       {children}
     </div>
@@ -284,9 +289,13 @@ function GroupNode({ group }: { group: TreeGroup }) {
           if (event.dataTransfer) {
             event.dataTransfer.effectAllowed = 'move';
           }
+          beginDragFx(event.currentTarget);
           setDragging({ type: 'group', id: group.id });
         }}
-        onDragEnd={() => setDragging(null)}
+        onDragEnd={(event) => {
+          endDragFx(event.currentTarget, event);
+          setDragging(null);
+        }}
         onDragOver={(event) => {
           if (dragging) {
             event.preventDefault();

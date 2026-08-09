@@ -34,7 +34,12 @@ export function buildCopilotArgs(
   for (const attachment of spec.attachments ?? []) {
     args.push('--attachment', attachment);
   }
-  if (config.allowAllTools) {
+  if (spec.noTools) {
+    // Restrict the agent to zero tools: a pure prompt→text completion with no
+    // agentic tool loops (fast, and it can never wedge waiting on a tool).
+    // Takes precedence over the provider's blanket allow-all-tools default.
+    args.push('--available-tools');
+  } else if (config.allowAllTools) {
     args.push('--allow-all-tools');
   }
   if (config.silent) {

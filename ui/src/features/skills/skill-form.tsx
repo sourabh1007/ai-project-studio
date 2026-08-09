@@ -1,7 +1,12 @@
 import { useState } from 'react';
-import type { Skill, SkillKind } from '../../lib/types.js';
+import type { Skill, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { SKILL_KINDS, skillKindLabel } from './skill-kind.js';
+import {
+  SKILL_KINDS,
+  skillKindLabel,
+  SKILL_RECOMMENDED_SCOPES,
+  skillScopeLabel,
+} from './skill-kind.js';
 
 /**
  * Create/edit form for a reusable skill. Extracted so it can be reused both by
@@ -21,6 +26,7 @@ export function SkillForm({
     kind: SkillKind;
     instructions: string;
     removalInstructions: string;
+    recommendedScope: SkillRecommendedScope;
   }) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -29,6 +35,9 @@ export function SkillForm({
   const [instructions, setInstructions] = useState(initial?.instructions ?? '');
   const [removalInstructions, setRemovalInstructions] = useState(
     initial?.removalInstructions ?? '',
+  );
+  const [recommendedScope, setRecommendedScope] = useState<SkillRecommendedScope>(
+    initial?.recommendedScope ?? 'any',
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +50,13 @@ export function SkillForm({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ name: name.trim(), kind, instructions, removalInstructions });
+      await onSubmit({
+        name: name.trim(),
+        kind,
+        instructions,
+        removalInstructions,
+        recommendedScope,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -79,6 +94,27 @@ export function SkillForm({
             </option>
           ))}
         </select>
+      </div>
+      <div className="field">
+        <label htmlFor="skill-scope">Recommended for</label>
+        <select
+          id="skill-scope"
+          className="input"
+          value={recommendedScope}
+          onChange={(event) =>
+            setRecommendedScope(event.target.value as SkillRecommendedScope)
+          }
+        >
+          {SKILL_RECOMMENDED_SCOPES.map((s) => (
+            <option key={s} value={s}>
+              {skillScopeLabel(s)}
+            </option>
+          ))}
+        </select>
+        <p className="field-hint">
+          A hint for where this skill is most useful. It still can be tagged
+          anywhere.
+        </p>
       </div>
       <div className="field">
         <label htmlFor="skill-instructions">Instructions</label>

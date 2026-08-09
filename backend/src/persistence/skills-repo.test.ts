@@ -10,6 +10,7 @@ function skill(overrides: Partial<Skill> = {}): Skill {
     kind: 'instruction',
     instructions: 'Write tests.',
     removalInstructions: '',
+    recommendedScope: 'any',
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -41,13 +42,27 @@ describe('skills-repo', () => {
       name: 'Renamed',
       instructions: 'New.',
       removalInstructions: 'Undo.',
+      recommendedScope: 'feature',
     });
     expect(repo.getSkill('k1')).toEqual(
-      skill({ name: 'Renamed', instructions: 'New.', removalInstructions: 'Undo.' }),
+      skill({
+        name: 'Renamed',
+        instructions: 'New.',
+        removalInstructions: 'Undo.',
+        recommendedScope: 'feature',
+      }),
     );
 
     repo.deleteSkill('k2');
     expect(repo.listSkills().map((s) => s.id)).toEqual(['k1']);
+    db.close();
+  });
+
+  it('round-trips a recommendedScope supplied on create', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSkillsRepo(db);
+    repo.createSkill(skill({ recommendedScope: 'session' }));
+    expect(repo.getSkill('k1')?.recommendedScope).toBe('session');
     db.close();
   });
 

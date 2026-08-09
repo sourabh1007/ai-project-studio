@@ -112,6 +112,7 @@ const CORE_TABLES: readonly TableSchema[] = [
     kind TEXT NOT NULL,
     instructions TEXT NOT NULL,
     removal_instructions TEXT NOT NULL DEFAULT '',
+    recommended_scope TEXT NOT NULL DEFAULT 'any',
     created_at TEXT NOT NULL
   )`,
   },
@@ -233,7 +234,8 @@ const CONTENT_TABLES: readonly TableSchema[] = [
     updated_at TEXT NOT NULL,
     generated_at TEXT,
     failure_message TEXT,
-    failed_at TEXT
+    failed_at TEXT,
+    document TEXT
   )`,
   },
 ];
@@ -327,7 +329,12 @@ export const INDEX_STATEMENTS: readonly string[] = INDEXES.map((index) => index.
  * databases created before the column existed. Every retrofitted table lives in
  * the `main` file, so plain (unqualified) ALTER statements target it directly.
  */
-const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] = [
+const ADDED_COLUMNS: readonly {
+  table: string;
+  column: string;
+  ddl: string;
+  schema?: string;
+}[] = [
   { table: 'sessions', column: 'name', ddl: 'ALTER TABLE sessions ADD COLUMN name TEXT' },
   {
     table: 'sessions',
@@ -348,6 +355,11 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
     table: 'skills',
     column: 'removal_instructions',
     ddl: "ALTER TABLE skills ADD COLUMN removal_instructions TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: 'skills',
+    column: 'recommended_scope',
+    ddl: "ALTER TABLE skills ADD COLUMN recommended_scope TEXT NOT NULL DEFAULT 'any'",
   },
   {
     table: 'features',
@@ -373,6 +385,14 @@ const ADDED_COLUMNS: readonly { table: string; column: string; ddl: string }[] =
     table: 'repository_contexts',
     column: 'steps',
     ddl: "ALTER TABLE repository_contexts ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'",
+  },
+  {
+    // pr_reviews lives in the content database; qualify the migration so the
+    // structured per-step review document is added to the right attached file.
+    table: 'pr_reviews',
+    column: 'document',
+    schema: 'content',
+    ddl: 'ALTER TABLE content.pr_reviews ADD COLUMN document TEXT',
   },
 ];
 
@@ -435,8 +455,10 @@ function addColumnIfMissing(
   table: string,
   column: string,
   ddl: string,
+  schema?: string,
 ): void {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+  const info = schema ? `${schema}.table_info(${table})` : `table_info(${table})`;
+  const columns = db.prepare(`PRAGMA ${info}`).all() as Array<{
     name: string;
   }>;
   if (!columns.some((c) => c.name === column)) {
@@ -457,8 +479,8 @@ export function applySchema(db: DatabaseSync): void {
       }
     }
   }
-  for (const { table, column, ddl } of ADDED_COLUMNS) {
-    addColumnIfMissing(db, table, column, ddl);
+  for (const { table, column, ddl, schema } of ADDED_COLUMNS) {
+    addColumnIfMissing(db, table, column, ddl, schema);
   }
   for (const index of INDEXES) {
     db.exec(index.ddl);

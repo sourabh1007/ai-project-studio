@@ -1,6 +1,7 @@
 import type {
   Skill,
   SkillAttachment,
+  SkillRecommendedScope,
   SkillScope,
 } from './skills-contract.js';
 
@@ -11,7 +12,12 @@ export interface SkillsRepo {
   listSkills(): Skill[];
   updateSkill(
     id: string,
-    patch: { name: string; instructions: string; removalInstructions: string },
+    patch: {
+      name: string;
+      instructions: string;
+      removalInstructions: string;
+      recommendedScope: SkillRecommendedScope;
+    },
   ): void;
   deleteSkill(id: string): void;
 

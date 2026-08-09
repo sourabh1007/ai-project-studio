@@ -16,10 +16,15 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
+import {
+  buildUsageTree,
+  type FeatureUsageTreeNode,
+  type GroupUsageTreeNode,
+  type UsageTreeNode,
+} from '../../lib/usage-tree.js';
 import type {
   ContextStatusPhase,
   FeatureUsage,
-  PrReview,
   Session,
 } from '../../lib/types.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
@@ -31,7 +36,6 @@ import {
   UsageIcon,
 } from '../../components/icons.js';
 import { FeatureWorkSummaryPanel } from './work-summary.js';
-import { PrReviewPanel } from './pr-review-panel.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 
@@ -169,17 +173,106 @@ function Section({
   );
 }
 
+function nodeTokens(node: UsageTreeNode): number {
+  return (
+    node.totals.inputTokens +
+    node.totals.outputTokens +
+    node.totals.reasoningOutputTokens
+  );
+}
+
+function originLabel(origin: 'ide' | 'user'): string {
+  if (origin === 'ide') {
+    return 'IDE metasession';
+  }
+  return 'User session';
+}
+
+function UsageTreeRows({
+  node,
+  depth,
+  maxAic,
+  colorIndex,
+  labelFor,
+}: {
+  node: FeatureUsageTreeNode | GroupUsageTreeNode;
+  depth: number;
+  maxAic: number;
+  colorIndex: (id: string) => number;
+  labelFor: (sessionId: string) => string;
+}) {
+  return (
+    <>
+      {node.children.map((child) => {
+        const aic = nanoAiuToAic(child.totals.nanoAiu);
+        const pct = Math.round((aic / maxAic) * 100);
+        const swatch = color(colorIndex(child.id));
+        const isSession = child.type === 'session';
+        const name = isSession ? labelFor(child.id) : child.name;
+        return (
+          <div key={`${child.type}-${child.id}`} className="dash-tree-branch">
+            <div
+              className={`dash-table-row dash-tree-row dash-tree-${child.type}`}
+              role="row"
+              style={{ '--usage-depth': depth } as React.CSSProperties}
+            >
+              <span className="dash-cell-name dash-tree-name" role="cell" title={name}>
+                <span
+                  className="dash-cell-swatch"
+                  style={{ background: swatch }}
+                  aria-hidden="true"
+                />
+                <span className="dash-tree-label">{name}</span>
+                {child.type === 'group' && child.kind === 'pr' && (
+                  <span className="dash-pr-badge">PR</span>
+                )}
+                {isSession && (
+                  <span className={`dash-origin-tag dash-origin-${child.origin}`}>
+                    {originLabel(child.origin)}
+                  </span>
+                )}
+              </span>
+              <span className="dash-cell-aic dash-num" role="cell">
+                <span className="dash-bar-track" aria-hidden="true">
+                  <span
+                    className="dash-bar-fill"
+                    style={{ width: `${pct}%`, background: swatch }}
+                  />
+                </span>
+                <span className="dash-cell-value">{aic.toFixed(2)}</span>
+              </span>
+              <span className="dash-num" role="cell">
+                {formatCompactNumber(nodeTokens(child))}
+              </span>
+              <span className="dash-num" role="cell">
+                {formatDuration(child.totals.activeMs)}
+              </span>
+            </div>
+            {child.type !== 'session' && (
+              <UsageTreeRows
+                node={child}
+                depth={depth + 1}
+                maxAic={maxAic}
+                colorIndex={colorIndex}
+                labelFor={labelFor}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function FeatureDashboard({
   featureId,
   featureName,
   featureDescription,
-  prReview,
   contextPhase,
 }: {
   featureId: string;
   featureName: string;
   featureDescription?: string;
-  prReview?: PrReview;
   contextPhase?: ContextStatusPhase;
 }) {
   const api = useApi();
@@ -199,8 +292,6 @@ export function FeatureDashboard({
 
       <ErrorText error={error} />
       {loading && <Loader label="Loading analytics" />}
-
-      <PrReviewPanel featureId={featureId} liveReview={prReview} />
 
       <section className="dash-skills">
         <SkillTagger
@@ -246,7 +337,7 @@ function Charts({
 }) {
   const api = useApi();
   const [viewingUsage, setViewingUsage] = useState(false);
-  const { totals, byDay, byModel, bySession, timing } = data;
+  const { totals, groups, byDay, byModel, bySession, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
 
   // Resolve human session labels (persisted name or "Session #N" in creation
@@ -262,8 +353,17 @@ function Charts({
     });
     return map;
   }, [sessions]);
-  const labelFor = (sessionId: string, fallbackOrdinal: number): string =>
-    nameById.get(sessionId) ?? sessionDisplayName(null, fallbackOrdinal);
+  const ordinalById = useMemo(() => {
+    const map = new Map<string, number>();
+    bySession.forEach((s, i) => {
+      map.set(s.sessionId, i + 1);
+    });
+    return map;
+  }, [bySession]);
+  const labelFor = (sessionId: string): string => {
+    const ordinal = ordinalById.get(sessionId) ?? 1;
+    return nameById.get(sessionId) ?? sessionDisplayName(null, ordinal);
+  };
 
   const dayData = useMemo(
     () =>
@@ -284,19 +384,25 @@ function Charts({
     [byModel],
   );
 
-  const sessionRows = useMemo(() => {
-    const rows = bySession.map((s, i) => ({
-      id: s.sessionId,
-      name: labelFor(s.sessionId, i + 1),
-      aic: nanoAiuToAic(s.nanoAiu),
-      tokens: s.inputTokens + s.outputTokens,
-      ms: s.activeMs,
-    }));
-    const maxAic = Math.max(1e-9, ...rows.map((r) => r.aic));
-    return rows
-      .map((r) => ({ ...r, aicPct: Math.round((r.aic / maxAic) * 100) }))
-      .sort((a, b) => b.aic - a.aic);
-  }, [bySession, nameById]);
+  const usageTree = useMemo(
+    () => buildUsageTree(groups, bySession),
+    [groups, bySession],
+  );
+  const maxAic = useMemo(
+    () => Math.max(1e-9, ...bySession.map((s) => nanoAiuToAic(s.nanoAiu))),
+    [bySession],
+  );
+  const colorIndex = (id: string): number => {
+    const index = bySession.findIndex((s) => s.sessionId === id);
+    if (index >= 0) {
+      return index;
+    }
+    const groupIndex = groups.findIndex((g) => g.id === id);
+    if (groupIndex >= 0) {
+      return groupIndex + bySession.length;
+    }
+    return 0;
+  };
 
   return (
     <>
@@ -455,44 +561,51 @@ function Charts({
 
       <Section
         icon={<ActivityIcon size={15} />}
-        title="Per-session activity"
-        hint={`${sessionRows.length} sessions · ${formatDuration(timing.totalActiveMs)} active`}
+        title="Usage tree"
+        hint={`${bySession.length} sessions · ${formatDuration(timing.totalActiveMs)} active`}
       >
-        <div className="dash-table" role="table" aria-label="Per-session activity">
+      <div className="dash-table dash-usage-tree" role="table" aria-label="Nested usage activity">
           <div className="dash-table-head" role="row">
-            <span role="columnheader">Session</span>
+          <span role="columnheader">Feature / group / session</span>
             <span role="columnheader" className="dash-num">AIC</span>
             <span role="columnheader" className="dash-num">Tokens</span>
             <span role="columnheader" className="dash-num">Time</span>
           </div>
-          {sessionRows.map((s, i) => (
-            <div className="dash-table-row" role="row" key={s.id}>
-              <span className="dash-cell-name" role="cell" title={s.name}>
-                <span
-                  className="dash-cell-swatch"
-                  style={{ background: color(i) }}
-                  aria-hidden="true"
-                />
-                {s.name}
+        <div className="dash-table-row dash-tree-row dash-tree-feature" role="row">
+          <span className="dash-cell-name dash-tree-name" role="cell">
+            <span
+              className="dash-cell-swatch"
+              style={{ background: AIC_COLOR }}
+              aria-hidden="true"
+            />
+            <span className="dash-tree-label">{featureName}</span>
+          </span>
+          <span className="dash-cell-aic dash-num" role="cell">
+            <span className="dash-bar-track" aria-hidden="true">
+              <span
+                className="dash-bar-fill"
+                style={{ width: '100%', background: AIC_COLOR }}
+              />
+            </span>
+            <span className="dash-cell-value">
+              {nanoAiuToAic(usageTree.totals.nanoAiu).toFixed(2)}
               </span>
-              <span className="dash-cell-aic dash-num" role="cell">
-                <span className="dash-bar-track" aria-hidden="true">
-                  <span
-                    className="dash-bar-fill"
-                    style={{ width: `${s.aicPct}%`, background: color(i) }}
-                  />
-                </span>
-                <span className="dash-cell-value">{s.aic.toFixed(2)}</span>
-              </span>
-              <span className="dash-num" role="cell">
-                {formatCompactNumber(s.tokens)}
-              </span>
-              <span className="dash-num" role="cell">
-                {formatDuration(s.ms)}
-              </span>
-            </div>
-          ))}
+          </span>
+          <span className="dash-num" role="cell">
+            {formatCompactNumber(nodeTokens(usageTree))}
+          </span>
+          <span className="dash-num" role="cell">
+            {formatDuration(usageTree.totals.activeMs)}
+          </span>
         </div>
+        <UsageTreeRows
+          node={usageTree}
+          depth={1}
+          maxAic={maxAic}
+          colorIndex={colorIndex}
+          labelFor={labelFor}
+        />
+      </div>
       </Section>
 
       {viewingUsage && (

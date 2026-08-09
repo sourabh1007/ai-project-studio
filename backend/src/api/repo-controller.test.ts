@@ -60,6 +60,7 @@ const repoInsights: RepoInsights = {
   branch: 'main',
   agents: [],
   skills: [],
+  docs: [],
   readiness: [],
   agentReady: true,
   generatedAt: '2025-01-01T00:02:00.000Z',
@@ -88,6 +89,7 @@ function harness() {
   const refreshed: string[] = [];
   const contextRemoved: string[] = [];
   const insightsLoaded: string[] = [];
+  const definitionReads: Array<{ id: string; path: string }> = [];
   let azureOrg = '';
   const service = {
     list: () => [repo],
@@ -142,6 +144,10 @@ function harness() {
         insightsLoaded.push(id);
         return repoInsights;
       },
+      readDefinition: async (id, path) => {
+        definitionReads.push({ id, path });
+        return { path, branch: 'main', content: `content of ${path}` };
+      },
     },
     provision: async (input) => {
       provisioned.push(input);
@@ -172,6 +178,7 @@ function harness() {
     refreshed,
     contextRemoved,
     insightsLoaded,
+    definitionReads,
     getAzureOrg: () => azureOrg,
   };
 }
@@ -233,6 +240,26 @@ describe('repo-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: repoInsights });
     expect(h.insightsLoaded).toEqual(['r1']);
+  });
+
+  it('reads a definition file by path query', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/insights/file')(
+      req({ params: { id: 'r1' }, query: { path: 'docs/guide.md' } }),
+    );
+    expect(result).toEqual({
+      status: 200,
+      body: { path: 'docs/guide.md', branch: 'main', content: 'content of docs/guide.md' },
+    });
+    expect(h.definitionReads).toEqual([{ id: 'r1', path: 'docs/guide.md' }]);
+  });
+
+  it('defaults a missing file path query to an empty string', async () => {
+    const h = harness();
+    await pick(h.routes, 'get', '/repos/:id/insights/file')(
+      req({ params: { id: 'r1' } }),
+    );
+    expect(h.definitionReads).toEqual([{ id: 'r1', path: '' }]);
   });
 
   it('accepts an empty refresh body and returns the generating context', async () => {

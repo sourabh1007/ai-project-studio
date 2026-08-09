@@ -39,6 +39,13 @@ export interface SessionSpec {
   /** Absolute path where the provider must write its OTel usage JSONL. */
   otelFilePath: string;
   cwd?: string;
+  /**
+   * Restrict the run to zero tools, turning it into a pure prompt→text
+   * completion with no agentic tool loops. Used by lightweight analysis steps
+   * (e.g. PR review) that already embed everything the model needs in the
+   * prompt, so they return fast and can never wedge waiting on a tool.
+   */
+  noTools?: boolean;
 }
 
 /** Streaming events emitted while a session runs. */

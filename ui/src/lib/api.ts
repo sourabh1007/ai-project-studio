@@ -27,10 +27,15 @@ import type {
   Repository,
   RepositoryContext,
   RepoInsights,
+  RepoDefinitionContent,
   RemoteRepo,
   RemotePullRequest,
   PullFilter,
   PrReview,
+  PrReviewStepKey,
+  PrCommentThread,
+  PrCommentThreadStatus,
+  AddPrCommentInput,
   AddRepositoryInput,
   Session,
   SessionFile,
@@ -139,6 +144,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     getRepoInsights: (id: string) =>
       request<RepoInsights>(`/repos/${id}/insights`),
+    getRepoDefinition: (id: string, path: string) =>
+      request<RepoDefinitionContent>(
+        `/repos/${id}/insights/file?path=${encodeURIComponent(path)}`,
+      ),
     listGithubRepos: () =>
       request<RemoteRepo[]>('/providers/github/repos'),
     listAzureRepos: (org: string) =>
@@ -157,6 +166,34 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrReview>(
         `/features/${featureId}/pr-review/refresh`,
         jsonBody({}),
+      ),
+    retryPrReviewStep: (featureId: string, step: PrReviewStepKey) =>
+      request<PrReview>(
+        `/features/${featureId}/pr-review/steps/${step}/retry`,
+        jsonBody({}),
+      ),
+    explainPrReviewFile: (featureId: string, path: string) =>
+      request<PrReview>(
+        `/features/${featureId}/pr-review/files/explain`,
+        jsonBody({ path }),
+      ),
+    listPrReviewComments: (featureId: string) =>
+      request<PrCommentThread[]>(
+        `/features/${featureId}/pr-review/comments`,
+      ),
+    addPrReviewComment: (featureId: string, input: AddPrCommentInput) =>
+      request<PrCommentThread>(
+        `/features/${featureId}/pr-review/comments`,
+        jsonBody(input),
+      ),
+    setPrReviewCommentStatus: (
+      featureId: string,
+      threadId: string,
+      status: PrCommentThreadStatus,
+    ) =>
+      request<PrCommentThread>(
+        `/features/${featureId}/pr-review/comments/${threadId}/status`,
+        jsonBody({ status }),
       ),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),

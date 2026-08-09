@@ -129,6 +129,41 @@ describe('skills-service CRUD', () => {
     expect(skill.removalInstructions).toBe('Write freely again.');
   });
 
+  it('defaults recommendedScope to any, and stores a provided one', () => {
+    const svc = build();
+    const def = svc.createSkill({
+      name: 'Default scope',
+      kind: 'instruction',
+      instructions: 'x',
+    });
+    expect(def.recommendedScope).toBe('any');
+    const scoped = svc.createSkill({
+      name: 'Feature scope',
+      kind: 'instruction',
+      instructions: 'x',
+      recommendedScope: 'feature',
+    });
+    expect(scoped.recommendedScope).toBe('feature');
+  });
+
+  it('updates the recommendedScope, defaulting to any when omitted', () => {
+    const svc = build();
+    const skill = svc.createSkill({
+      name: 'A',
+      kind: 'instruction',
+      instructions: 'x',
+      recommendedScope: 'session',
+    });
+    const updated = svc.updateSkill(skill.id, {
+      name: 'A',
+      instructions: 'x',
+      recommendedScope: 'feature',
+    });
+    expect(updated.recommendedScope).toBe('feature');
+    const reset = svc.updateSkill(skill.id, { name: 'A', instructions: 'x' });
+    expect(reset.recommendedScope).toBe('any');
+  });
+
   it('rejects an over-long removal reaction', () => {
     const svc = build();
     expect(() =>
@@ -494,6 +529,7 @@ describe('skills-service portability', () => {
       kind: 'instruction',
       instructions: 'x',
       removalInstructions: '',
+      recommendedScope: 'any',
     });
     expect(svc.exportAll()).toHaveLength(1);
   });
@@ -509,7 +545,21 @@ describe('skills-service portability', () => {
     });
     expect(imported.name).toBe('Imported');
     expect(imported.removalInstructions).toBe('undo y');
+    // Legacy files without a scope default to 'any'.
+    expect(imported.recommendedScope).toBe('any');
     expect(svc.listSkills()).toHaveLength(1);
+  });
+
+  it('imports a skill preserving its recommendedScope', () => {
+    const svc = build();
+    const imported = svc.importSkill({
+      schemaVersion: skillsDefaults.exportSchemaVersion,
+      name: 'Scoped',
+      kind: 'instruction',
+      instructions: 'y',
+      recommendedScope: 'session',
+    });
+    expect(imported.recommendedScope).toBe('session');
   });
 
   it('rejects a malformed payload', () => {

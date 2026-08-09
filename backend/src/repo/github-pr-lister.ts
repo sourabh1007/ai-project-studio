@@ -14,12 +14,16 @@ interface GhPullJson {
   title?: string;
   url?: string;
   headRefName?: string;
+  body?: string;
   author?: { login?: string; name?: string } | null;
   reviewRequests?: GhReviewRequest[] | null;
 }
 
 /** The `--json` fields requested from `gh` for a pull request. */
 const PULL_JSON_FIELDS = 'number,title,url,headRefName,author,reviewRequests';
+
+/** Single-PR fetch also pulls the description body for the problem statement. */
+const PULL_VIEW_JSON_FIELDS = `${PULL_JSON_FIELDS},body`;
 
 function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | null {
   const number = item?.number;
@@ -45,6 +49,10 @@ function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | nu
     author,
     isAuthor,
     isReviewer,
+    // Only present on single-PR fetches (list requests omit the body field).
+    ...(item.body === undefined
+      ? {}
+      : { body: item.body.trim() ? item.body : null }),
   };
 }
 
@@ -136,7 +144,7 @@ export async function getGithubPull(
     '--repo',
     repo,
     '--json',
-    PULL_JSON_FIELDS,
+    PULL_VIEW_JSON_FIELDS,
   ]);
   if (res.code !== 0) {
     return null;

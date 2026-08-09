@@ -122,40 +122,201 @@ export interface RepoInsights {
   branch: string;
   agents: RepoDefinitionEntry[];
   skills: RepoDefinitionEntry[];
+  /** Documentation / troubleshooting-guide files discovered on the branch. */
+  docs: RepoDefinitionEntry[];
   readiness: ReadinessCheck[];
   /** True when every readiness parameter passes. */
   agentReady: boolean;
   generatedAt: string;
 }
 
-export type PrReviewStatus = 'pending' | 'generating' | 'ready' | 'failed';
+/** The full, read-only content of a discovered skill/agent/doc file. */
+export interface RepoDefinitionContent {
+  path: string;
+  branch: string;
+  content: string;
+}
 
+/** Lifecycle of a single analysis step within a PR review. */
+export type PrReviewStepStatus = 'pending' | 'generating' | 'ready' | 'failed';
+
+/** A retryable generation failure surfaced for one step. */
 export interface PrReviewFailure {
   message: string;
   failedAt: string;
 }
 
-/** An AI-generated review of a pull request, keyed by its review feature. */
+/**
+ * Usage attributed to the metasession that produced one analysis step, so the
+ * review page can highlight the exact tokens and credits each metasession spent.
+ */
+export interface MetaUsage {
+  sessionId: string;
+  inputTokens: number;
+  outputTokens: number;
+  nanoAiu: number;
+  credits: number;
+}
+
+/** Fields shared by every AI analysis step. */
+export interface PrReviewStepBase {
+  status: PrReviewStepStatus;
+  metaSessionId: string | null;
+  usage: MetaUsage | null;
+  failure: PrReviewFailure | null;
+  /** Live, human-readable activity lines streamed from this step's metasession. */
+  activity: string[];
+  generatedAt: string | null;
+}
+
+/** The problem statement distilled from the PR description by a metasession. */
+export interface ProblemStatementStep extends PrReviewStepBase {
+  content: string | null;
+  /** False when the description carried too little to derive a problem. */
+  sufficient: boolean;
+}
+
+/**
+ * A project the PR's changed files belong to — the square box files are grouped
+ * into. Resolved deterministically by walking up to the nearest project manifest
+ * (C#: the closest `.csproj`); files with no manifest share a "No project" box.
+ */
+export interface ChangeGraphProject {
+  /** Stable id (the manifest's repo-relative path, or `__none__`). */
+  id: string;
+  /** Human-readable name shown on the box (manifest file name, sans extension). */
+  name: string;
+  /** Repo-relative path of the manifest file, or null for the synthetic box. */
+  path: string | null;
+}
+
+/** How a file was changed by the PR. Drives node colour coding. */
+export type PrChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
+
+/** Whether a changed file is production code or a test. */
+export type ChangeGraphCategory = 'code' | 'test';
+
+/** Whether a node is a changed file (orange) or a boundary caller (blue). */
+export type ChangeGraphNodeKind = 'changed' | 'boundary';
+
+/**
+ * One file in the reference graph. A node is either a file the PR changed
+ * (`kind: 'changed'`, orange) or the nearest unchanged caller of a changed file
+ * (`kind: 'boundary'`, blue — "who is calling the change").
+ */
+export interface ChangeGraphNode {
+  /** Repository-relative path (the node label and stable id). */
+  path: string;
+  /** The `id` of the project box this file belongs to. */
+  projectId: string;
+  /** Finer-grained grouping label (C#: namespace); null when unknown. */
+  module: string | null;
+  /** Production code vs test — selects which graph the file appears in. */
+  category: ChangeGraphCategory;
+  /** Whether this is a changed file (orange) or a boundary caller (blue). */
+  kind: ChangeGraphNodeKind;
+  /** How the PR changed this file; null for boundary callers (unchanged). */
+  changeKind: PrChangeKind | null;
+  /** The per-file unified diff; empty for boundary callers. */
+  diff: string;
+  /** What this file does in the codebase, independent of this PR; lazy on click. */
+  whatItDoes: string;
+  /** What this PR changes in this file; lazy on click. Empty for boundary callers. */
+  whatChanged: string;
+  /**
+   * Syntactic review findings for the change; lazy on click. Each entry is one
+   * finding. Empty means no issues were found (or a boundary caller).
+   */
+  review: string[];
+}
+
+/**
+ * One concrete reference an edge represents: the type in the `to` file that is
+ * used, and the calling function/member in the `from` file where it appears.
+ */
+export interface ChangeGraphEdgeCall {
+  symbol: string;
+  caller: string | null;
+}
+
+/**
+ * A directed reference edge `from → to`: the `from` file statically references a
+ * type declared by the `to` file. Either both endpoints are changed files, or
+ * `from` is a boundary caller of the changed file `to`. Same category.
+ */
+export interface ChangeGraphEdge {
+  /** Repo-relative path of the referencing file. */
+  from: string;
+  /** Repo-relative path of the declaring file. */
+  to: string;
+  /** The concrete calls this edge aggregates; absent only on legacy payloads. */
+  calls?: ChangeGraphEdgeCall[];
+}
+
+/**
+ * The change-graph step: a deterministic reference graph of the PR's changed
+ * files. Nodes are changed files grouped into project boxes; edges are static
+ * type references between changed files. Built with no AI.
+ */
+export interface ChangeGraphStep extends PrReviewStepBase {
+  projects: ChangeGraphProject[];
+  nodes: ChangeGraphNode[];
+  edges: ChangeGraphEdge[];
+}
+
+/** The two analysis steps that make up a review, in execution order. */
+export type PrReviewStepKey = 'problemStatement' | 'changeGraph';
+
+/** Minimal pull-request identity captured with a review. */
+export interface PrReviewPull {
+  number: number;
+  title: string;
+  url: string;
+}
+
+/** A multi-step AI review of a pull request, keyed by its review feature. */
 export interface PrReview {
   featureId: string;
   repoId: string;
-  pull: {
-    number: number;
-    title: string;
-    url: string;
-  };
+  pull: PrReviewPull;
   worktreePath: string;
   baseBranch: string | null;
-  status: PrReviewStatus;
-  summary: string | null;
-  coreAnalysis: string | null;
+  /** The raw PR description as fetched, before AI distillation; null when none. */
+  description: string | null;
+  problemStatement: ProblemStatementStep;
+  changeGraph: ChangeGraphStep;
   changedFiles: number | null;
   timestamps: {
     createdAt: string;
     updatedAt: string;
-    generatedAt: string | null;
   };
-  failure: PrReviewFailure | null;
+}
+
+/** Whether a PR review thread is open (`active`) or resolved. */
+export type PrCommentThreadStatus = 'active' | 'resolved';
+
+/** A single comment within a review thread on the pull request. */
+export interface PrComment {
+  id: string;
+  author: string | null;
+  body: string;
+  createdAt: string | null;
+}
+
+/** A review thread on the PR, anchored to a file + line when inline. */
+export interface PrCommentThread {
+  id: string;
+  path: string | null;
+  line: number | null;
+  status: PrCommentThreadStatus;
+  comments: PrComment[];
+}
+
+/** Payload posting a new inline comment from the file popup. */
+export interface AddPrCommentInput {
+  path: string;
+  line: number;
+  body: string;
 }
 
 /** A repository available to pick from a provider before it is added. */
@@ -340,6 +501,15 @@ export interface UsageTotals {
   nanoAiu: number;
 }
 
+export type UsageOrigin = 'ide' | 'user';
+
+export interface GroupInfo {
+  id: string;
+  name: string;
+  kind: TreeGroupKind;
+  parentGroupId: string | null;
+}
+
 export interface ModelBreakdown extends UsageTotals {
   model: string;
 }
@@ -354,6 +524,8 @@ export interface DailyBreakdown extends UsageTotals {
 
 export interface SessionBreakdown extends UsageTotals {
   sessionId: string;
+  groupId: string | null;
+  origin: UsageOrigin;
   provider: string;
   kind: SessionKind;
   status: SessionStatus;
@@ -369,6 +541,7 @@ export interface FeatureTiming {
 
 export interface FeatureUsage {
   totals: UsageTotals;
+  groups: GroupInfo[];
   byModel: ModelBreakdown[];
   byProvider: ProviderBreakdown[];
   byDay: DailyBreakdown[];
@@ -515,6 +688,7 @@ export interface StartTerminalSessionInput {
 
 export type SkillKind = 'instruction' | 'task-plan';
 export type SkillScope = 'feature' | 'session';
+export type SkillRecommendedScope = 'feature' | 'session' | 'any';
 
 export interface Skill {
   id: string;
@@ -523,6 +697,8 @@ export interface Skill {
   instructions: string;
   /** Reaction injected when the skill is removed from a live session. */
   removalInstructions: string;
+  /** Soft hint about where the skill is most useful (feature/session/any). */
+  recommendedScope: SkillRecommendedScope;
   createdAt: string;
 }
 
@@ -543,12 +719,14 @@ export interface CreateSkillInput {
   kind: SkillKind;
   instructions: string;
   removalInstructions?: string;
+  recommendedScope?: SkillRecommendedScope;
 }
 
 export interface UpdateSkillInput {
   name: string;
   instructions: string;
   removalInstructions?: string;
+  recommendedScope?: SkillRecommendedScope;
 }
 
 export interface SkillExport {
@@ -557,6 +735,7 @@ export interface SkillExport {
   kind: SkillKind;
   instructions: string;
   removalInstructions: string;
+  recommendedScope: SkillRecommendedScope;
 }
 
 export type FeatureTaskStatus = 'pending' | 'done';

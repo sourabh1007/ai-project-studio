@@ -8,12 +8,14 @@ const createSkillSchema = z.object({
   kind: z.enum(['instruction', 'task-plan']),
   instructions: z.string(),
   removalInstructions: z.string().optional(),
+  recommendedScope: z.enum(['feature', 'session', 'any']).optional(),
 });
 
 const updateSkillSchema = z.object({
   name: z.string().min(1),
   instructions: z.string(),
   removalInstructions: z.string().optional(),
+  recommendedScope: z.enum(['feature', 'session', 'any']).optional(),
 });
 
 const tagSkillSchema = z.object({

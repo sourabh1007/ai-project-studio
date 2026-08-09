@@ -22,4 +22,10 @@ describe('pr-review config', () => {
       prReviewConfigSchema.parse({ ...prReviewDefaults, maxPatchChars: -1 }),
     ).toThrow();
   });
+
+  it('rejects a non-positive step timeout', () => {
+    expect(() =>
+      prReviewConfigSchema.parse({ ...prReviewDefaults, stepTimeoutMs: 0 }),
+    ).toThrow();
+  });
 });

@@ -22,6 +22,7 @@ const skill: Skill = {
   kind: 'instruction',
   instructions: 'Write tests.',
   removalInstructions: '',
+  recommendedScope: 'any',
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
@@ -79,6 +80,18 @@ describe('skills-controller', () => {
     const body = { name: 'A', kind: 'instruction', instructions: 'x' };
     const result = await pick(routes, 'post', '/skills')(req({ body }));
     expect(result).toEqual({ status: 201, body: skill });
+    expect(calls.createSkill).toEqual([body]);
+  });
+
+  it('forwards a recommendedScope on create', async () => {
+    const { routes, calls } = harness();
+    const body = {
+      name: 'A',
+      kind: 'instruction',
+      instructions: 'x',
+      recommendedScope: 'feature',
+    };
+    await pick(routes, 'post', '/skills')(req({ body }));
     expect(calls.createSkill).toEqual([body]);
   });
 

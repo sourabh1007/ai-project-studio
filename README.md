@@ -96,10 +96,35 @@ See **[docs/architecture.md](docs/architecture.md)** for the detailed data flow 
 - **Skills** — reusable instruction blocks you tag onto features/sessions; automatically seeded into a session's first prompt.
 - **AI feature task plans** — generate a structured task breakdown for a feature and track progress.
 - **Automatic summaries** — per-session summaries on session end, plus feature-level work summaries.
+- **PR review workspace** — an "Open a PR" flow with a dedicated review page: problem statement, blind proposal, syntactic + business-logic review, 0–100 scoring, and a per-file **change graph** that highlights PR-modified functions and their connections.
+- **Live PR comments** — read and post review comments inline against the exact file/line while reviewing; comments sync back to the PR (GitHub & Azure DevOps) and render with **Markdown/GFM** support.
+- **Generic nested usage tracking** — usage rolls up across **Feature → Group → Session**, with every AI call tagged as an **IDE metasession** or a **user session**, so internal steps (including PR reviews) are itemized and clearly attributed.
 - **Session import** — pull in past provider-native sessions (Copilot/Agency history) as workspace sessions.
 - **Multi-provider by design** — a pluggable provider registry; Copilot and Agency ship today, new CLIs slot in behind one interface.
 - **Local-first persistence** — features, sessions, usage, transcripts, and summaries in SQLite (`node:sqlite`).
 - **Light & dark themes** with native window chrome.
+
+## Copilot App vs. AI Project Studio
+
+The GitHub Copilot app/CLI is a single-conversation coding assistant. AI Project Studio wraps that same CLI in a project-centric, observable workspace — it doesn't replace the CLI, it organizes and instruments it.
+
+| Feature | Copilot App / CLI | AI Project Studio |
+| --- | --- | --- |
+| **Primary unit of work** | A single chat/session | **Feature → Session** hierarchy grouping many runs |
+| **Interface** | Terminal or editor chat pane | **IDE-style desktop app** (Electron) with an embedded `xterm.js` terminal |
+| **Usage & cost visibility** | Per-response, ephemeral | **Live credit (AIC), token, cost & time** streamed over SSE and persisted per session/feature |
+| **Analytics dashboards** | None | **Feature dashboard**: AIC-over-time, AIC-by-model, time-by-session charts + KPI cards |
+| **Reusable instructions** | Manual copy/paste each session | **Skills** — instruction blocks tagged to features/sessions and auto-seeded into a session's first prompt |
+| **Task planning** | Ad hoc, in-conversation | **AI-generated feature task plans** with progress tracking |
+| **Summaries** | None persisted | **Automatic per-session and feature-level summaries** |
+| **PR review** | Manual prompting | **"Open a PR"** flow: dedicated review page with problem statement, blind proposal, syntactic + business-logic review, and 0–100 scoring |
+| **Metasession attribution** | N/A | Internal AI steps run as **metasessions** with **itemized, clearly-labeled** credit/token usage |
+| **History** | Provider-native store only | **Imports** provider-native (Copilot/Agency) history as workspace sessions |
+| **Provider support** | GitHub Copilot only | **Pluggable provider registry** — Copilot and Agency today, more behind one interface |
+| **Persistence** | CLI's own session store | **Local-first SQLite** (`node:sqlite`): features, sessions, usage, transcripts, summaries |
+| **Configuration** | CLI flags / config file | **Namespaced, editable config** surfaced in a Settings UI |
+
+In short: the Copilot app is the *engine*; AI Project Studio is the *cockpit* — it turns raw CLI runs into an organized, measurable, multi-provider workflow.
 
 ## Getting Started
 
@@ -140,8 +165,8 @@ Every push and pull request runs the **CI** workflow (build + backend/UI coverag
 To cut a release, push a version tag — the **Release** workflow builds installers for both platforms and attaches them to a GitHub Release:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.8.0
+git push origin v0.8.0
 ```
 
 Produces:

@@ -27,9 +27,9 @@ export interface PrFeatureServiceDeps {
     repo: Repository,
     pull: RemotePullRequest,
   ) => Promise<ProvisionedWorktree>;
-  features: Pick<FeatureService, 'create'>;
+  features: Pick<FeatureService, 'create' | 'get'>;
   /** Kicks off the automated AI review for the new PR feature. */
-  reviews: Pick<PrReviewService, 'start'>;
+  reviews: Pick<PrReviewService, 'start' | 'findByPull'>;
 }
 
 /**
@@ -54,6 +54,12 @@ export function createPrFeatureService(
 
     async createFromPull(repoId, number) {
       const repo = deps.repos.get(repoId);
+      // Opening a PR that already has a review must not create a duplicate: reuse
+      // its existing review feature (and its checked-out worktree) instead.
+      const existingFeatureId = deps.reviews.findByPull(repo.id, number);
+      if (existingFeatureId) {
+        return deps.features.get(existingFeatureId);
+      }
       const pull = await deps.getPull(repo, number);
       if (!pull) {
         throw new NotFoundError(

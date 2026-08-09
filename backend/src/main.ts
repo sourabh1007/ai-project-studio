@@ -10,6 +10,7 @@ import {
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile, execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 
 import { createClock } from './kernel/clock.js';
@@ -157,6 +158,13 @@ import {
 } from './repo/azure-pr-lister.js';
 import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
 import { createPrFeatureService } from './repo/pr-feature-service.js';
+import { createGithubCommentsGateway } from './repo/github-pr-comments.js';
+import { createAzureCommentsGateway } from './repo/azure-pr-comments.js';
+import { createPrCommentsService } from './pr-review/pr-comments-service.js';
+import type {
+  PrCommentsGateway,
+  PrCommentsGatewayResolver,
+} from './pr-review/pr-comments-contract.js';
 import type { Repository } from './repo/repo-contract.js';
 import type {
   RemotePullRequest,
@@ -210,6 +218,7 @@ import {
   type SessionImportConfig,
 } from './session-import/config.js';
 import { createSkillsService } from './skills/skills-service.js';
+import { seedBuiltinSkills } from './skills/skill-seed.js';
 import { createSkillsRepo } from './persistence/skills-repo.js';
 import {
   SKILLS_NAMESPACE,
@@ -218,6 +227,10 @@ import {
   type SkillsConfig,
 } from './skills/config.js';
 import { createMetaRunner } from './meta/meta-runner.js';
+import { MetaSessionPool } from './meta/acp/acp-pool.js';
+import { AcpClient } from './meta/acp/acp-client.js';
+import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
+import { createAcpMetaRunner } from './meta/acp/acp-meta-runner.js';
 import {
   META_NAMESPACE,
   metaConfigSchema,
@@ -290,6 +303,11 @@ import {
   type PrReviewConfig,
 } from './pr-review/config.js';
 import { createPrReviewService } from './pr-review/pr-review-service.js';
+import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
+import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
+import { nodeChangeGraphFs } from './pr-review/change-graph-fs.js';
+import { createPrReviewReconciler } from './pr-review/pr-review-reconciler.js';
+import { createMetaUsageReader } from './pr-review/meta-usage-reader.js';
 import { createPrDiffCollector } from './pr-review/pr-diff-collector.js';
 import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
 import { createPrReviewRepo } from './persistence/pr-review-repo.js';
@@ -504,6 +522,7 @@ function main(): void {
   const featureAnalytics = createFeatureAnalytics({
     reader: aggregateRepo,
     sessions: sessionRepo,
+    groups: createFeatureGroupsRepo(db),
     clock,
   });
   // Independent meta-only reader so IDE AI overhead is reported separately and
@@ -784,6 +803,36 @@ function main(): void {
     const body = response.ok ? await response.json() : null;
     return { status: response.status, body };
   };
+  const azureHttpSend = async (
+    method: 'POST' | 'PATCH',
+    url: string,
+    token: string,
+    payload: unknown,
+  ): Promise<AzureHttpResponse> => {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    return { status: response.status, body };
+  };
+  const azureHttpPost = (url: string, token: string, payload: unknown) =>
+    azureHttpSend('POST', url, token, payload);
+  const azureHttpPatch = (url: string, token: string, payload: unknown) =>
+    azureHttpSend('PATCH', url, token, payload);
   const listAzureReposFor = (org: string) =>
     listAzureRepos(
       {
@@ -1160,6 +1209,9 @@ function main(): void {
     sessions: sessionRepo,
     config: skillsConfig,
   });
+  // Populate the curated starter skills on first run (no-op once any skill
+  // exists), so the Skills view is useful out of the box.
+  seedBuiltinSkills(skillsService);
 
   // Shared headless-AI primitive reused by every AI feature (summaries,
   // task plans, …) so they drive the CLI the same config-driven way.
@@ -1209,6 +1261,18 @@ function main(): void {
   // core analysis from the ready repository context plus the PR's diff, and
   // stream the result to the review panel.
   const prReviewRepo = createPrReviewRepo(db);
+  // Fail any review left mid-generation by a previous run: its metasessions died
+  // with the process, so without this the review page would spin on "Analyzing…"
+  // forever. Marking orphaned steps failed surfaces a Retry instead.
+  const prReviewsReconciled = createPrReviewReconciler({
+    reviews: prReviewRepo,
+    clock,
+  }).reconcileOrphans();
+  if (prReviewsReconciled > 0) {
+    logger.info('Reconciled orphaned PR reviews from previous run', {
+      count: prReviewsReconciled,
+    });
+  }
   const prDiffCollector = createPrDiffCollector({
     git: {
       run: (args, cwd) =>
@@ -1219,16 +1283,27 @@ function main(): void {
             {
               cwd,
               windowsHide: true,
-              maxBuffer: 16 * 1024 * 1024,
+              // A large PR diff can be tens of MB. Buffer generously so it does
+              // not error, and treat an overflow past even this as a truncated
+              // success below (the collector only keeps a bounded slice anyway).
+              maxBuffer: 64 * 1024 * 1024,
               timeout: 20_000,
             },
             (err, stdout, stderr) => {
+              // Node reports a maxBuffer overflow with a non-numeric string code
+              // and still hands back the captured (truncated) stdout. The diff
+              // collector clamps the patch to its own budget, so a truncated but
+              // present diff is fine — surface it as success instead of a bogus
+              // "git diff failed: exit 1".
+              const overflowed =
+                (err as { code?: unknown } | null)?.code ===
+                'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER';
               const code =
-                err && typeof (err as { code?: unknown }).code === 'number'
-                  ? (err as { code: number }).code
-                  : err
-                    ? 1
-                    : 0;
+                overflowed || !err
+                  ? 0
+                  : typeof (err as { code?: unknown }).code === 'number'
+                    ? (err as { code: number }).code
+                    : 1;
               resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
             },
           );
@@ -1236,19 +1311,83 @@ function main(): void {
     },
     config: prReviewConfig,
   });
+  // Warm ACP metasession pool (opt-in). When enabled it keeps a few live
+  // `copilot --acp` sessions ready so PR review steps lease a warm session
+  // instead of cold-spawning a CLI (MCP proxies + auth) per request. The cold
+  // `metaRunner` remains the fallback and the default for every other feature.
+  const warmPoolCfg = metaConfig.warmPool;
+  const warmExecutable =
+    warmPoolCfg.executable === 'copilot'
+      ? copilotConfig.executable
+      : warmPoolCfg.executable;
+  let warmMetaRunner: Pick<typeof metaRunner, 'runDetailed'> | null = null;
+  if (warmPoolCfg.enabled) {
+    const pool = new MetaSessionPool({
+      size: warmPoolCfg.size,
+      createClient: () =>
+        new AcpClient(
+          new AcpProcessAdapter({ executable: warmExecutable }),
+          {
+            initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
+            turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
+          },
+        ),
+    });
+    pool.start().catch((error: unknown) => {
+      logger.error('Warm ACP pool failed to start; falling back to cold path', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    warmMetaRunner = createAcpMetaRunner({
+      pool,
+      newSessionId: () => `acp-${randomUUID()}`,
+    });
+  }
   const prReviewService = createPrReviewService({
     reviews: prReviewRepo,
     diffs: prDiffCollector,
-    context: {
-      readyContent: (repoId) => {
-        const ctx = repositoryContextRepo.get(repoId);
-        return ctx && ctx.status === 'ready' ? ctx.content : null;
-      },
-    },
-    ai: metaRunner,
+    analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+    changeGraphFs: nodeChangeGraphFs,
+    ai: warmMetaRunner ?? metaRunner,
+    inlinePrompts: warmMetaRunner !== null,
+    metaUsage: createMetaUsageReader({ usage: usageRepo }),
+    temporaryPrompts: createTemporaryPromptFileFactory(),
     clock,
     bus: bus as unknown as EventBus<PrReviewEventMap>,
     config: prReviewConfig,
+  });
+  // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
+  // Azure DevOps (REST) gateway from the repo's provider, so the comments
+  // service stays pure and every operation posts against the real pull request.
+  const prCommentsGateways: PrCommentsGatewayResolver = {
+    resolve: (repo, pull): PrCommentsGateway => {
+      if (repo.provider === 'github') {
+        return createGithubCommentsGateway(ghRun, {
+          repo: repo.name,
+          number: pull.number,
+        });
+      }
+      const target = parseAzureRepoUrl(repo.remoteUrl);
+      if (!target) {
+        throw new ValidationError(
+          `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+        );
+      }
+      return createAzureCommentsGateway(
+        {
+          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          httpGet: azureHttpGet,
+          httpPost: azureHttpPost,
+          httpPatch: azureHttpPatch,
+        },
+        { ...target, pullRequestId: pull.number },
+      );
+    },
+  };
+  const prCommentsService = createPrCommentsService({
+    reviews: { get: (featureId) => prReviewService.find(featureId) },
+    repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
+    gateways: prCommentsGateways,
   });
   const prFeatureService = createPrFeatureService({
     repos: repoService,
@@ -1380,6 +1519,7 @@ function main(): void {
       listAzureRepos: listAzureReposFor,
       prFeatures: prFeatureService,
       prReviews: prReviewService,
+      prComments: prCommentsService,
       context: contextService,
       logger,
     }),

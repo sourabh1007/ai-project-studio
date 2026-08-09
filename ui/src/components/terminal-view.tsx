@@ -9,6 +9,78 @@ import {
   encodeClientMessage,
 } from '../lib/terminal-protocol.js';
 
+/** The subset of the Electron preload bridge this component uses. */
+interface DesktopClipboard {
+  copyText?: (text: string) => void;
+  readText?: () => Promise<string>;
+}
+
+function desktopBridge(): DesktopClipboard | undefined {
+  return (window as unknown as { desktop?: DesktopClipboard }).desktop;
+}
+
+/**
+ * Writes text to the OS clipboard as robustly as possible. In the packaged
+ * desktop app this routes through Electron's native clipboard (reliable), then
+ * falls back to the async Clipboard API and finally a synchronous
+ * `execCommand('copy')` for plain browsers — so a copy never silently no-ops.
+ */
+function copyToClipboard(text: string): void {
+  if (!text) {
+    return;
+  }
+  const bridge = desktopBridge();
+  if (bridge?.copyText) {
+    bridge.copyText(text);
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {
+      legacyCopy(text);
+    });
+    return;
+  }
+  legacyCopy(text);
+}
+
+/** Synchronous clipboard write via a transient textarea (browser fallback). */
+function legacyCopy(text: string): void {
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    area.style.pointerEvents = 'none';
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    document.body.removeChild(area);
+  } catch {
+    /* nothing else we can do */
+  }
+}
+
+/** Reads text from the OS clipboard, preferring the native desktop bridge. */
+async function readClipboard(): Promise<string> {
+  const bridge = desktopBridge();
+  if (bridge?.readText) {
+    try {
+      return await bridge.readText();
+    } catch {
+      return '';
+    }
+  }
+  if (navigator.clipboard?.readText) {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 /**
  * Embeds a live interactive CLI terminal for a single session. Renders an
  * xterm.js terminal, opens a WebSocket to the backend PTY bridge, and pipes
@@ -33,7 +105,12 @@ export function TerminalView({
     }
 
     const term = new Terminal({
-      cursorBlink: true,
+      // The hosted CLI is a full-screen TUI that draws and blinks its own
+      // cursor via escape sequences. Letting xterm ALSO run its own blink timer
+      // fights those continuous redraws (spinners/streaming output reset the
+      // timer), which shows up as a rapid, erratic cursor flicker. Disable
+      // xterm's blink so the application owns the cursor — steady and IDE-like.
+      cursorBlink: false,
       fontFamily:
         'JetBrains Mono, SFMono-Regular, Menlo, Consolas, monospace',
       fontSize: 13,
@@ -107,11 +184,7 @@ export function TerminalView({
     });
 
     const writeClipboard = (text: string) => {
-      if (navigator.clipboard?.writeText) {
-        void navigator.clipboard.writeText(text).catch(() => {
-          /* clipboard permission denied; ignore */
-        });
-      }
+      copyToClipboard(text);
     };
 
     const paste = (text: string) => {
@@ -144,19 +217,25 @@ export function TerminalView({
       }
 
       if (key === 'v') {
-        if (navigator.clipboard?.readText) {
-          void navigator.clipboard
-            .readText()
-            .then(paste)
-            .catch(() => {
-              /* clipboard permission denied; ignore */
-            });
-        }
+        void readClipboard().then(paste);
         return false;
       }
 
       return true;
     });
+
+    // Right-click acts as copy-when-selected / paste-otherwise, the familiar
+    // Windows-terminal convention, so text can be copied without a shortcut.
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      if (term.hasSelection()) {
+        writeClipboard(term.getSelection());
+        term.clearSelection();
+      } else {
+        void readClipboard().then(paste);
+      }
+    };
+    host.addEventListener('contextmenu', onContextMenu);
 
     ws.onopen = () => {
       safeFit();
@@ -189,6 +268,7 @@ export function TerminalView({
 
     return () => {
       window.removeEventListener('resize', applyFit);
+      host.removeEventListener('contextmenu', onContextMenu);
       observer?.disconnect();
       for (const id of rafIds) {
         cancelAnimationFrame(id);

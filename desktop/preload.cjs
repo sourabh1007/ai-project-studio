@@ -23,6 +23,14 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.send('link:open', url);
     }
   },
+  copyText(text) {
+    if (typeof text === 'string') {
+      ipcRenderer.send('clipboard:write', text);
+    }
+  },
+  readText() {
+    return ipcRenderer.invoke('clipboard:read');
+  },
   relaunch() {
     ipcRenderer.send('app:relaunch');
   },

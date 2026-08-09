@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, shell, nativeTheme, ipcMain, session } = require('electron');
+const { app, BrowserWindow, shell, nativeTheme, ipcMain, session, clipboard } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
@@ -180,6 +180,37 @@ function createWindow(loadUrl) {
     }
   });
 
+  // If the very first load hits a transient failure (backend not fully serving
+  // yet, a navigation blip, etc.) the window would otherwise stay blank forever
+  // because nothing reloads it. Retry the load a few times with a short backoff
+  // so the window recovers on its own instead of showing a blank page.
+  const MAX_LOAD_RETRIES = 20;
+  let loadRetries = 0;
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // -3 (ERR_ABORTED) fires for benign in-page navigations; ignore it. Only
+    // retry main-frame failures for our own app URL.
+    if (!isMainFrame || errorCode === -3) {
+      return;
+    }
+    if (loadRetries >= MAX_LOAD_RETRIES || win.isDestroyed()) {
+      safeWrite(
+        process.stderr,
+        `[desktop] Giving up loading ${loadUrl} after ${loadRetries} retries: ${errorCode} ${errorDescription}\n`,
+      );
+      return;
+    }
+    loadRetries += 1;
+    safeWrite(
+      process.stderr,
+      `[desktop] Load failed (${errorCode} ${errorDescription}); retry ${loadRetries}/${MAX_LOAD_RETRIES}\n`,
+    );
+    setTimeout(() => {
+      if (!win.isDestroyed()) {
+        void win.loadURL(loadUrl);
+      }
+    }, 300);
+  });
+
   void win.loadURL(loadUrl);
   return win;
 }
@@ -261,6 +292,26 @@ async function bootstrap() {
     stopBackend();
     app.relaunch();
     app.exit(0);
+  });
+
+  // Native clipboard bridge. The renderer's async `navigator.clipboard` API is
+  // unreliable under Electron's sandbox (writes silently reject when the
+  // document isn't considered focused), so terminal copy/paste is routed
+  // through the main process's native clipboard module instead.
+  ipcMain.on('clipboard:write', (event, text) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
+    if (typeof text === 'string' && text.length > 0) {
+      clipboard.writeText(text);
+    }
+  });
+
+  ipcMain.handle('clipboard:read', (event) => {
+    if (!isTrustedSender(event)) {
+      return '';
+    }
+    return clipboard.readText();
   });
 
   applyContentSecurityPolicy();

@@ -289,6 +289,24 @@ describe('db schema/connection', () => {
     db.close();
   });
 
+  it('adds the skills.recommended_scope column to a legacy database', () => {
+    const db = new DatabaseSync(':memory:');
+    // A pre-recommended-scope skills table, missing the new column.
+    db.exec(`CREATE TABLE skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      instructions TEXT NOT NULL,
+      removal_instructions TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )`);
+    expect(skillsColumns(db)).not.toContain('recommended_scope');
+    applySchema(db);
+    expect(skillsColumns(db)).toContain('recommended_scope');
+    expect(() => applySchema(db)).not.toThrow();
+    db.close();
+  });
+
   it('adds the features.repo_id column to a legacy database', () => {
     const db = new DatabaseSync(':memory:');
     // A pre-repository features table, missing the `repo_id` column.

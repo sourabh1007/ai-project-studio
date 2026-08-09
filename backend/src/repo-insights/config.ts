@@ -32,10 +32,14 @@ const readinessCheckSchema = z.object({
 export type ReadinessCheckDefinition = z.infer<typeof readinessCheckSchema>;
 
 export const repoInsightsConfigSchema = z.object({
-  /** Directory holding custom-agent definition files. */
-  agentsDirectory: z.string().min(1),
-  /** Directory holding repo-native skill definition files. */
-  skillsDirectory: z.string().min(1),
+  /** Directories holding custom-agent definition files (scanned in order). */
+  agentsDirectories: z.array(z.string().min(1)).min(1),
+  /** Directories holding repo-native skill definition files (scanned in order). */
+  skillsDirectories: z.array(z.string().min(1)).min(1),
+  /** Directories holding documentation / TSG files (scanned in order). */
+  docsDirectories: z.array(z.string().min(1)).min(1),
+  /** When true, directories are scanned recursively (nested files included). */
+  recursiveScan: z.boolean(),
   /** Extension (with leading dot) a definition file must have. */
   definitionExtension: z.string().min(1),
   /** Frontmatter key read for a definition's display name. */
@@ -57,8 +61,10 @@ export const repoInsightsConfigSchema = z.object({
 export type RepoInsightsConfig = z.infer<typeof repoInsightsConfigSchema>;
 
 export const repoInsightsDefaults: RepoInsightsConfig = {
-  agentsDirectory: '.github/agents',
-  skillsDirectory: '.github/skills',
+  agentsDirectories: ['.github/agents', 'agents'],
+  skillsDirectories: ['.github/skills', 'skills'],
+  docsDirectories: ['docs', '.github/docs'],
+  recursiveScan: true,
   definitionExtension: '.md',
   nameKey: 'name',
   descriptionKey: 'description',

@@ -12,7 +12,10 @@ import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
 import type {
   Feature,
+  MetaUsage,
   MoveNodeInput,
+  PrReview,
+  PrReviewStepStatus,
   Repository,
   RepositoryContext,
   Session,
@@ -37,6 +40,7 @@ import {
   ImportIcon,
   PencilIcon,
   PlusIcon,
+  PrReviewIcon,
   PullRequestIcon,
   RepoIcon,
   SkillsIcon,
@@ -50,6 +54,7 @@ import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { SkillChips } from '../skills/skill-chips.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
 import { SessionFiles } from './session-files.js';
+import { beginDragFx, endDragFx } from './drag-fx.js';
 import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 import {
@@ -280,6 +285,116 @@ function SessionRow({
   );
 }
 
+/** Sum of the metasession usage a PR review spent across its four steps. */
+interface PrReviewUsageTotals {
+  nanoAiu: number;
+  inputTokens: number;
+  outputTokens: number;
+  credits: number;
+  /** How many of the steps have reported metasession usage. */
+  metaSessions: number;
+}
+
+/** Aggregates the per-step metasession usage of a review into one total. */
+function aggregatePrReviewUsage(review: PrReview): PrReviewUsageTotals {
+  const steps = [review.problemStatement, review.changeGraph];
+  return steps.reduce<PrReviewUsageTotals>(
+    (acc, step) => {
+      const usage: MetaUsage | null = step.usage;
+      if (usage) {
+        acc.nanoAiu += usage.nanoAiu;
+        acc.inputTokens += usage.inputTokens;
+        acc.outputTokens += usage.outputTokens;
+        acc.credits += usage.credits;
+        acc.metaSessions += 1;
+      }
+      return acc;
+    },
+    { nanoAiu: 0, inputTokens: 0, outputTokens: 0, credits: 0, metaSessions: 0 },
+  );
+}
+
+/** Wall-clock span of a review, in ms, from its create/update timestamps. */
+function prReviewElapsedMs(review: PrReview): number {
+  const start = Date.parse(review.timestamps.createdAt);
+  const end = Date.parse(review.timestamps.updatedAt);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return 0;
+  }
+  return end - start;
+}
+
+function PrReviewChild({
+  feature,
+  active,
+  status,
+  review,
+  onOpen,
+}: {
+  feature: Feature;
+  active: boolean;
+  status?: PrReviewStepStatus | 'mixed';
+  review?: PrReview;
+  onOpen: () => void;
+}) {
+  const working = status === 'pending' || status === 'generating' || status === 'mixed';
+  const usage = review ? aggregatePrReviewUsage(review) : null;
+  const hasUsage = !!usage && usage.metaSessions > 0;
+  return (
+    <div className={`session-card pr-review-child ${active ? 'is-active' : ''}`.trim()}>
+      <div className="session-card-head">
+        <button
+          type="button"
+          className="session-open"
+          aria-current={active ? 'true' : undefined}
+          onClick={onOpen}
+          title={`PR Review for ${feature.name}`}
+        >
+          <span className="pr-review-child-icon" aria-hidden="true">
+            <PrReviewIcon size={14} />
+          </span>
+          <span className="session-name">PR Review</span>
+          {working && (
+            <span className="pr-review-child-working" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+
+      {hasUsage && usage && review && (
+        <>
+          <div
+            className="session-meta-row"
+            title={`${usage.metaSessions} metasession${
+              usage.metaSessions === 1 ? '' : 's'
+            } powering this review`}
+          >
+            {usage.metaSessions} metasession{usage.metaSessions === 1 ? '' : 's'}
+          </div>
+          <div className="session-metrics-row">
+            <span
+              className="session-metrics-open pr-review-child-metrics"
+              title="Credits and tokens the review's metasessions spent"
+            >
+              <span className="metric metric-credits">
+                <UsageIcon size={11} /> {formatAic(usage.nanoAiu)}
+              </span>
+              <span className="metric">
+                <ArrowUpIcon size={11} /> {formatCompactNumber(usage.inputTokens)}
+              </span>
+              <span className="metric">
+                <ArrowDownIcon size={11} /> {formatCompactNumber(usage.outputTokens)}
+              </span>
+              <span className="metric">
+                <TimeIcon size={11} /> {formatDuration(prReviewElapsedMs(review))}
+              </span>
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function FeatureNode({
   feature,
   repositoryContext,
@@ -288,6 +403,7 @@ function FeatureNode({
   names,
   onOpenSession,
   onOpenFeature,
+  onOpenPrReview,
   onRenameSession,
   onRenameFeature,
   onDeleteFeature,
@@ -305,6 +421,7 @@ function FeatureNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
+  onOpenPrReview: (feature: Feature) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
@@ -330,6 +447,10 @@ function FeatureNode({
   const [prPickerParent, setPrPickerParent] = useState<string | null | false>(
     false,
   );
+  const [subcategoryParent, setSubcategoryParent] = useState<
+    string | null | false
+  >(false);
+  const [subcategoryName, setSubcategoryName] = useState('');
   const sessions = useAsync(
     () => (expanded ? api.listSessions(feature.id) : Promise.resolve([])),
     [feature.id, expanded, treeRevision],
@@ -427,10 +548,22 @@ function FeatureNode({
   }
 
   function handleAddSubcategory(parentGroupId: string | null) {
-    const name = window.prompt('New group name');
-    if (name === null) {
+    setActionError(null);
+    setSubcategoryName('');
+    setSubcategoryParent(parentGroupId);
+  }
+
+  function submitSubcategory() {
+    if (subcategoryParent === false) {
       return;
     }
+    const name = subcategoryName.trim();
+    if (!name) {
+      return;
+    }
+    const parentGroupId = subcategoryParent;
+    setSubcategoryParent(false);
+    setSubcategoryName('');
     void runTreeAction(
       () =>
         api.createGroup(feature.id, {
@@ -502,9 +635,13 @@ function FeatureNode({
           if (event.dataTransfer) {
             event.dataTransfer.effectAllowed = 'move';
           }
+          beginDragFx(event.currentTarget);
           onFeatureDragStart(feature);
         }}
-        onDragEnd={onFeatureDragEnd}
+        onDragEnd={(event) => {
+          endDragFx(event.currentTarget, event);
+          onFeatureDragEnd();
+        }}
         onDragOver={(event) => {
           if (canAcceptNode) {
             event.preventDefault();
@@ -621,7 +758,7 @@ function FeatureNode({
               ...(onStartReview
                 ? [
                     {
-                      label: 'Start PR review',
+                      label: 'Open a PR',
                       icon: <PullRequestIcon size={14} />,
                       onSelect: onStartReview,
                     },
@@ -674,6 +811,24 @@ function FeatureNode({
 
       {expanded && (
         <div className="tree-children">
+          {(feature.checkoutPath !== null || live.prReviews[feature.id]) && (
+            <PrReviewChild
+              feature={feature}
+              active={false}
+              status={
+                live.prReviews[feature.id]
+                  ? [
+                        live.prReviews[feature.id].problemStatement.status,
+                        live.prReviews[feature.id].changeGraph.status,
+                      ].some((s) => s === 'pending' || s === 'generating')
+                    ? 'generating'
+                    : 'ready'
+                  : undefined
+              }
+              onOpen={() => onOpenPrReview(feature)}
+              review={live.prReviews[feature.id]}
+            />
+          )}
           {creating && (
             <NewSessionForm
               featureId={feature.id}
@@ -747,6 +902,45 @@ function FeatureNode({
           onPick={(pull) => handleAttachPr(pull, prPickerParent)}
         />
       )}
+      {subcategoryParent !== false && (
+        <Modal
+          title="New group"
+          onClose={() => setSubcategoryParent(false)}
+        >
+          <div className="feature-form">
+            <div className="field">
+              <label htmlFor="new-subcategory-name">Name</label>
+              <input
+                id="new-subcategory-name"
+                className="input"
+                autoFocus
+                value={subcategoryName}
+                onChange={(event) => setSubcategoryName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    submitSubcategory();
+                  }
+                }}
+                placeholder="e.g. Backend tasks"
+              />
+            </div>
+            <div className="row modal-actions">
+              <Button
+                variant="ghost"
+                onClick={() => setSubcategoryParent(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={submitSubcategory}
+                disabled={!subcategoryName.trim()}
+              >
+                Create group
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -817,7 +1011,7 @@ function RepoAddMenu({
             <span className="overflow-item-icon" aria-hidden="true">
               <TagIcon />
             </span>
-            Start review a PR
+            Open a PR
           </button>
           <button
             type="button"
@@ -908,6 +1102,7 @@ function RepoNode({
   names,
   onOpenSession,
   onOpenFeature,
+  onOpenPrReview,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -933,6 +1128,7 @@ function RepoNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
+  onOpenPrReview: (feature: Feature) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -959,7 +1155,7 @@ function RepoNode({
   const [viewingContext, setViewingContext] = useState(false);
   const [viewingUsage, setViewingUsage] = useState(false);
   const [headerDropTarget, setHeaderDropTarget] = useState(false);
-  const title = repo ? repo.name : 'No repository';
+  const title = repo ? repo.name : 'Scratchpad';
   const providerLabel = repo?.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
   // A feature dragged from another repository group can be dropped on this
   // repo's header to append it to the end of this group.
@@ -1027,29 +1223,6 @@ function RepoNode({
             onClick={() => setViewingContext(true)}
           />
         )}
-        {repo ? (
-          <RepoAddMenu
-            title={title}
-            onNewFeature={() => {
-              setExpanded(true);
-              onAddFeature(repo.id);
-            }}
-            onReviewPr={() => onStartReview(repo)}
-          />
-        ) : (
-          <button
-            type="button"
-            className="tree-action"
-            title="New feature"
-            aria-label={`New feature in ${title}`}
-            onClick={() => {
-              setExpanded(true);
-              onAddFeature(null);
-            }}
-          >
-            <PlusIcon />
-          </button>
-        )}
         {repo &&
           (confirming ? (
             <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -1103,6 +1276,29 @@ function RepoNode({
               ]}
             />
           ))}
+        {repo ? (
+          <RepoAddMenu
+            title={title}
+            onNewFeature={() => {
+              setExpanded(true);
+              onAddFeature(repo.id);
+            }}
+            onReviewPr={() => onStartReview(repo)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="tree-action"
+            title="New feature"
+            aria-label={`New feature in ${title}`}
+            onClick={() => {
+              setExpanded(true);
+              onAddFeature(null);
+            }}
+          >
+            <PlusIcon />
+          </button>
+        )}
       </div>
 
       {repo && viewingContext && repositoryContext && (
@@ -1143,6 +1339,7 @@ function RepoNode({
                 names={names}
                 onOpenSession={onOpenSession}
                 onOpenFeature={onOpenFeature}
+                onOpenPrReview={onOpenPrReview}
                 onRenameSession={onRenameSession}
                 onRenameFeature={onRenameFeature}
                 onDeleteFeature={onDeleteFeature}
@@ -1180,6 +1377,7 @@ export function Explorer({
   names,
   onOpenSession,
   onOpenFeature,
+  onOpenPrReview,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -1192,6 +1390,7 @@ export function Explorer({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
+  onOpenPrReview: (feature: Feature) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -1404,7 +1603,7 @@ export function Explorer({
           onCreated={(feature) => {
             setReviewRepo(null);
             features.reload();
-            onOpenFeature(feature);
+            onOpenPrReview(feature);
           }}
         />
       )}
@@ -1471,6 +1670,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
+            onOpenPrReview={onOpenPrReview}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}
@@ -1499,6 +1699,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
+            onOpenPrReview={onOpenPrReview}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}

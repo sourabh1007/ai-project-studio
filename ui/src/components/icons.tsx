@@ -31,6 +31,7 @@ import {
   Plug,
   Plus,
   RefreshCw,
+  ScanSearch,
   Search,
   Settings,
   Sparkles,
@@ -97,6 +98,7 @@ export const FilesIcon = makeIcon(Files);
 export const RepoIcon = makeIcon(FolderGit2);
 export const FolderIcon = makeIcon(Folder);
 export const PullRequestIcon = makeIcon(GitPullRequest);
+export const PrReviewIcon = makeIcon(ScanSearch);
 export const SettingsIcon = makeIcon(Settings);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);

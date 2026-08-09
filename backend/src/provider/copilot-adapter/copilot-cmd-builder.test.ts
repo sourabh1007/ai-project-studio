@@ -71,6 +71,12 @@ describe('copilot-cmd-builder', () => {
     expect(args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
   });
 
+  it('restricts to zero tools and skips allow-all when noTools is set', () => {
+    const args = buildCopilotArgs({ ...spec, noTools: true }, copilotDefaults);
+    expect(args).toContain('--available-tools');
+    expect(args).not.toContain('--allow-all-tools');
+  });
+
   it('buildCopilotCommand pairs executable with args', () => {
     const config = { ...copilotDefaults, executable: '/opt/copilot' };
     const cmd = buildCopilotCommand(spec, config);

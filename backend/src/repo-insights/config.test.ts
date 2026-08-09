@@ -16,14 +16,42 @@ describe('repo-insights config', () => {
     );
   });
 
-  it.each(['agentsDirectory', 'skillsDirectory', 'definitionExtension'] as const)(
-    'rejects an empty %s',
+  it.each([
+    'agentsDirectories',
+    'skillsDirectories',
+    'docsDirectories',
+  ] as const)('rejects an empty %s array', (key) => {
+    expect(() =>
+      repoInsightsConfigSchema.parse({ ...repoInsightsDefaults, [key]: [] }),
+    ).toThrow();
+  });
+
+  it.each(['agentsDirectories', 'skillsDirectories', 'docsDirectories'] as const)(
+    'rejects a blank entry in %s',
     (key) => {
       expect(() =>
-        repoInsightsConfigSchema.parse({ ...repoInsightsDefaults, [key]: '' }),
+        repoInsightsConfigSchema.parse({ ...repoInsightsDefaults, [key]: [''] }),
       ).toThrow();
     },
   );
+
+  it('rejects an empty definitionExtension', () => {
+    expect(() =>
+      repoInsightsConfigSchema.parse({
+        ...repoInsightsDefaults,
+        definitionExtension: '',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a non-boolean recursiveScan', () => {
+    expect(() =>
+      repoInsightsConfigSchema.parse({
+        ...repoInsightsDefaults,
+        recursiveScan: 'yes',
+      }),
+    ).toThrow();
+  });
 
   it('rejects a non-positive maxDescriptionChars', () => {
     expect(() =>

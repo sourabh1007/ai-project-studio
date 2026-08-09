@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { SkillKind } from '../../lib/types.js';
+import type { SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import {
   InstructionSkillIcon,
   TaskPlanSkillIcon,
@@ -30,4 +30,31 @@ export function SkillKindIcon({
 }) {
   const Icon = (KINDS[kind] ?? KINDS.instruction).icon;
   return <Icon size={size} />;
+}
+
+const SCOPE_LABELS: Record<SkillRecommendedScope, string> = {
+  feature: 'Feature',
+  session: 'Session',
+  any: 'Any',
+};
+
+export const SKILL_RECOMMENDED_SCOPES: SkillRecommendedScope[] = [
+  'any',
+  'feature',
+  'session',
+];
+
+export function skillScopeLabel(scope: SkillRecommendedScope): string {
+  return SCOPE_LABELS[scope] ?? scope;
+}
+
+export function SkillScopeBadge({ scope }: { scope: SkillRecommendedScope }) {
+  return (
+    <span
+      className={`skill-scope-badge skill-scope-badge-${scope}`}
+      title={`Recommended for: ${skillScopeLabel(scope)}`}
+    >
+      {skillScopeLabel(scope)}
+    </span>
+  );
 }

@@ -5,18 +5,25 @@ import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { useApi } from '../../app/api-context.js';
 import { EmptyState } from '../../components/ui.js';
+import { ErrorBoundary } from '../../components/error-boundary.js';
 import { TerminalView } from '../../components/terminal-view.js';
 import { FeatureDashboard } from '../feature-dashboard/feature-dashboard.js';
+import { PrReviewPage } from '../pr-review-page/pr-review-page.js';
 import { RepoDashboard } from '../repo-dashboard/repo-dashboard.js';
 import { Explorer } from './explorer.js';
 
 type Tab =
   | { kind: 'session'; id: string; label: string; session: Session }
   | { kind: 'feature'; id: string; label: string; feature: Feature }
+  | { kind: 'pr-review'; id: string; label: string; feature: Feature }
   | { kind: 'repo'; id: string; label: string; repo: Repository };
 
 function featureTabId(featureId: string): string {
   return `feature:${featureId}`;
+}
+
+function prReviewTabId(featureId: string): string {
+  return `pr-review:${featureId}`;
 }
 
 function repoTabId(repoId: string): string {
@@ -27,9 +34,9 @@ function repoTabId(repoId: string): string {
 function tabFeatureId(tab: Tab): string {
   return tab.kind === 'session'
     ? tab.session.featureId
-    : tab.kind === 'feature'
-      ? tab.feature.id
-      : tab.repo.id;
+    : tab.kind === 'repo'
+      ? tab.repo.id
+      : tab.feature.id;
 }
 
 /**
@@ -72,6 +79,15 @@ export function WorkspaceView({
       kind: 'feature',
       id: featureTabId(feature.id),
       label: feature.name,
+      feature,
+    });
+  }
+
+  function openPrReview(feature: Feature) {
+    openTab({
+      kind: 'pr-review',
+      id: prReviewTabId(feature.id),
+      label: `PR Review · ${feature.name}`,
       feature,
     });
   }
@@ -139,6 +155,7 @@ export function WorkspaceView({
       const next = prev.filter(
         (tab) =>
           !(tab.kind === 'feature' && tab.feature.id === feature.id) &&
+          !(tab.kind === 'pr-review' && tab.feature.id === feature.id) &&
           !(tab.kind === 'session' && tab.session.featureId === feature.id),
       );
       setActiveId((current) =>
@@ -193,6 +210,7 @@ export function WorkspaceView({
             names={names}
             onOpenSession={openSession}
             onOpenFeature={openFeature}
+            onOpenPrReview={openPrReview}
             onOpenRepo={openRepo}
             onRenameSession={renameSession}
             onRenameFeature={renameFeature}
@@ -264,11 +282,19 @@ export function WorkspaceView({
               featureId={active.feature.id}
               featureName={active.feature.name}
               featureDescription={active.feature.description}
-              prReview={live.prReviews[active.feature.id]}
               contextPhase={
                 live.contextStatus[`feature:${active.feature.id}`]
               }
             />
+          )}
+          {active?.kind === 'pr-review' && (
+            <ErrorBoundary label="PR Review">
+              <PrReviewPage
+                key={active.feature.id}
+                featureId={active.feature.id}
+                liveReview={live.prReviews[active.feature.id]}
+              />
+            </ErrorBoundary>
           )}
           {active?.kind === 'repo' && (
             <RepoDashboard key={active.repo.id} repo={active.repo} />

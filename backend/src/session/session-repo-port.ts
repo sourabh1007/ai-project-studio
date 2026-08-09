@@ -6,6 +6,12 @@ export interface SessionRepo {
   save(session: Session): void;
   get(id: string): Session | null;
   listByFeature(featureId: string): Session[];
+  /**
+   * Every session for a feature including internal-scope ones (e.g. PR review
+   * metasessions). Used by analytics so headless AI work is counted, unlike
+   * {@link listByFeature} which hides internal sessions from feature views.
+   */
+  listByFeatureAll(featureId: string): Session[];
   listAll(): Session[];
   /** Updates only the display name; null reverts to the ordinal label. */
   rename(id: string, name: string | null): void;
