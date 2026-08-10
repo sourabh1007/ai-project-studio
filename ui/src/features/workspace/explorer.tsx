@@ -1,7 +1,6 @@
 import {
   Fragment,
   useEffect,
-  useRef,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -959,77 +958,16 @@ function RepoAddMenu({
   onNewFeature: () => void;
   onReviewPr: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onDocClick(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
   return (
-    <div className="overflow-menu" ref={ref}>
-      <button
-        type="button"
-        className="tree-action"
-        title={`Add to ${title}`}
-        aria-label={`Add to ${title}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <PlusIcon />
-      </button>
-      {open && (
-        <div className="overflow-pop" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            className="overflow-item"
-            onClick={() => {
-              setOpen(false);
-              onReviewPr();
-            }}
-          >
-            <span className="overflow-item-icon" aria-hidden="true">
-              <TagIcon />
-            </span>
-            Open a PR
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="overflow-item"
-            onClick={() => {
-              setOpen(false);
-              onNewFeature();
-            }}
-          >
-            <span className="overflow-item-icon" aria-hidden="true">
-              <PlusIcon />
-            </span>
-            New feature
-          </button>
-        </div>
-      )}
-    </div>
+    <OverflowMenu
+      label={`Add to ${title}`}
+      icon={<PlusIcon />}
+      triggerClassName="tree-action"
+      actions={[
+        { label: 'Open a PR', icon: <TagIcon />, onSelect: onReviewPr },
+        { label: 'New feature', icon: <PlusIcon />, onSelect: onNewFeature },
+      ]}
+    />
   );
 }
 
@@ -1156,7 +1094,7 @@ function RepoNode({
   const [viewingUsage, setViewingUsage] = useState(false);
   const [headerDropTarget, setHeaderDropTarget] = useState(false);
   const title = repo ? repo.name : 'Scratchpad';
-  const providerLabel = repo?.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
+  const providerLabel = repo?.provider === 'azure-devops' ? 'Azure' : 'GitHub';
   // A feature dragged from another repository group can be dropped on this
   // repo's header to append it to the end of this group.
   const canAcceptDrop =
@@ -1223,6 +1161,29 @@ function RepoNode({
             onClick={() => setViewingContext(true)}
           />
         )}
+        {repo ? (
+          <RepoAddMenu
+            title={title}
+            onNewFeature={() => {
+              setExpanded(true);
+              onAddFeature(repo.id);
+            }}
+            onReviewPr={() => onStartReview(repo)}
+          />
+        ) : (
+          <button
+            type="button"
+            className="tree-action"
+            title="New feature"
+            aria-label={`New feature in ${title}`}
+            onClick={() => {
+              setExpanded(true);
+              onAddFeature(null);
+            }}
+          >
+            <PlusIcon />
+          </button>
+        )}
         {repo &&
           (confirming ? (
             <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -1276,29 +1237,6 @@ function RepoNode({
               ]}
             />
           ))}
-        {repo ? (
-          <RepoAddMenu
-            title={title}
-            onNewFeature={() => {
-              setExpanded(true);
-              onAddFeature(repo.id);
-            }}
-            onReviewPr={() => onStartReview(repo)}
-          />
-        ) : (
-          <button
-            type="button"
-            className="tree-action"
-            title="New feature"
-            aria-label={`New feature in ${title}`}
-            onClick={() => {
-              setExpanded(true);
-              onAddFeature(null);
-            }}
-          >
-            <PlusIcon />
-          </button>
-        )}
       </div>
 
       {repo && viewingContext && repositoryContext && (
