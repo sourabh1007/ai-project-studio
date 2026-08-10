@@ -1,5 +1,4 @@
 import type { FeatureService } from '../feature/feature-service.js';
-import { ConflictError, NotFoundError } from '../kernel/error-types.js';
 import type { RepositoryContextConfig } from '../repository-context/config.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import type { Session } from '../session/session-contract.js';
@@ -29,6 +28,16 @@ export interface SessionBootstrap {
 const section = (heading: string, content: string): string =>
   `## ${heading}\n\n${content}`;
 
+/**
+ * Resolves the repository context for a feature WITHOUT ever blocking a session
+ * launch on it. Calling `ensureFresh` triggers (and keeps alive) the background
+ * repository analysis, but analysis for a large repo can take a while. Rather
+ * than gate the session behind it — which froze every session under a repo
+ * until analysis finished — we return the summary only when it is already
+ * `ready`, and otherwise return `null` so the session launches immediately
+ * without the Repository Context section. A later session picks up the richer
+ * context once the background analysis completes.
+ */
 async function repositoryContext(
   deps: SessionBootstrapDeps,
   featureId: string,
@@ -41,18 +50,13 @@ async function repositoryContext(
   let context;
   try {
     context = await deps.contexts.ensureFresh(feature.repoId);
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      throw new ConflictError(
-        `Repository context is not ready for feature ${featureId}: pending`,
-      );
-    }
-    throw error;
+  } catch {
+    // Triggering/looking up analysis failed — never block the session on it;
+    // background analysis will retry and a future session can pick it up.
+    return null;
   }
   if (context.status !== 'ready' || !context.content?.trim()) {
-    throw new ConflictError(
-      `Repository context is not ready for feature ${featureId}: ${context.status}`,
-    );
+    return null;
   }
   return context.content.slice(0, deps.config.maxOutputChars);
 }
@@ -96,6 +100,9 @@ export function createSessionBootstrap(
   deps: SessionBootstrapDeps,
 ): SessionBootstrap {
   return {
+    // Triggers background repository analysis for the feature's repo but never
+    // blocks on it — a session must be able to launch immediately even while the
+    // repo is still being analyzed.
     async assertFeatureReady(featureId) {
       await repositoryContext(deps, featureId);
     },

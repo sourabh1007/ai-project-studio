@@ -48,6 +48,7 @@ const pullBody = {
       pullRequestId: 42,
       title: 'Add feature',
       sourceRefName: 'refs/heads/topic/x',
+      targetRefName: 'refs/heads/main',
       createdBy: { displayName: 'Ada' },
     },
     { pullRequestId: 7 }, // missing ref -> skipped
@@ -127,6 +128,7 @@ describe('listAzurePulls', () => {
         title: 'Add feature',
         url: 'https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/42',
         sourceBranch: 'topic/x',
+        targetBranch: 'main',
         author: 'Ada',
         isAuthor: false,
         isReviewer: false,
@@ -421,6 +423,7 @@ describe('getAzurePull', () => {
         httpGet: http(200, {
           pullRequestId: 9,
           sourceRefName: 'refs/heads/main',
+          targetRefName: 'refs/heads/release/1.0',
         }),
       },
       target,
@@ -430,6 +433,7 @@ describe('getAzurePull', () => {
       number: 9,
       title: 'PR #9',
       sourceBranch: 'main',
+      targetBranch: 'release/1.0',
       author: null,
     });
   });

@@ -119,8 +119,25 @@ describe('pr-feature-service', () => {
     ]);
   });
 
+  it('prefers the PR target branch over the repo default as the diff base', async () => {
+    const { svc, started } = harness({
+      getPull: () =>
+        Promise.resolve({ ...pull, targetBranch: 'release/2.0' }),
+    });
+    await svc.createFromPull('r1', 12);
+    expect(started).toEqual([
+      {
+        featureId: 'f1',
+        repoId: 'r1',
+        pull: { ...pull, targetBranch: 'release/2.0' },
+        worktreePath: 'C:/wt/app-pr-12',
+        baseBranch: 'release/2.0',
+      },
+    ]);
+  });
+
   it('starts the review with a null base branch when the repo has none', async () => {
-    const { svc } = harness();
+    const started: unknown[] = [];
     const noBranch = createPrFeatureService({
       repos: { get: () => ({ ...repo, defaultBranch: null }) },
       listPulls: () => Promise.resolve([pull]),
@@ -141,10 +158,24 @@ describe('pr-feature-service', () => {
           throw new Error('should not be called');
         },
       },
-      reviews: { start: () => undefined as never, findByPull: () => null },
+      reviews: {
+        start: (input) => {
+          started.push(input);
+          return undefined as never;
+        },
+        findByPull: () => null,
+      },
     });
     await noBranch.createFromPull('r1', 12);
-    expect(svc).toBeDefined();
+    expect(started).toEqual([
+      {
+        featureId: 'f1',
+        repoId: 'r1',
+        pull,
+        worktreePath: 'C:/wt/app-pr-12',
+        baseBranch: null,
+      },
+    ]);
   });
 
   it('reuses the existing review feature when the PR is already open', async () => {

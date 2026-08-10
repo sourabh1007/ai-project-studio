@@ -237,36 +237,48 @@ describe('session bootstrap', () => {
   });
 
   it.each(['pending', 'generating', 'stale', 'failed'] as const)(
-    'rejects repository context in the %s state',
+    'does not block a session launch while repository context is %s',
     async (status) => {
       const h = harness({ context: { ...readyContext, status } });
-      await expect(h.bootstrap.assertFeatureReady('feature-1')).rejects.toEqual(
-        expect.objectContaining({ kind: 'conflict', message: expect.stringContaining(status) }),
-      );
+      await expect(
+        h.bootstrap.assertFeatureReady('feature-1'),
+      ).resolves.toBeUndefined();
+      // Analysis was still triggered so it keeps making progress in the
+      // background, but the session launches without the (not-yet-ready) section.
+      expect(h.contextIds).toEqual(['repo-1']);
+      const result = await h.bootstrap.composeForSession(baseSession);
+      expect(result).not.toContain('## Repository Context');
+      expect(result).toContain('## Feature');
     },
   );
 
-  it('maps a missing repository context to a pending conflict', async () => {
+  it('does not block a launch when the repository context is missing', async () => {
     const h = harness({ context: null });
-    await expect(h.bootstrap.assertFeatureReady('feature-1')).rejects.toEqual(
-      expect.objectContaining({
-        kind: 'conflict',
-        message: expect.stringContaining('pending'),
-      }),
-    );
+    await expect(
+      h.bootstrap.assertFeatureReady('feature-1'),
+    ).resolves.toBeUndefined();
+    expect(h.contextIds).toEqual(['repo-1']);
+    const result = await h.bootstrap.composeForSession(baseSession);
+    expect(result).not.toContain('## Repository Context');
   });
 
-  it('preserves unexpected repository-context lookup failures', async () => {
+  it('does not block a launch when the repository-context lookup fails', async () => {
     const failure = new Error('database unavailable');
     const h = harness({ contextError: failure });
-    await expect(h.bootstrap.assertFeatureReady('feature-1')).rejects.toBe(failure);
+    await expect(
+      h.bootstrap.assertFeatureReady('feature-1'),
+    ).resolves.toBeUndefined();
+    const result = await h.bootstrap.composeForSession(baseSession);
+    expect(result).not.toContain('## Repository Context');
   });
 
-  it('rejects a ready context that has no usable content', async () => {
+  it('omits a ready context that has no usable content without blocking', async () => {
     const h = harness({ context: { ...readyContext, content: ' ' } });
-    await expect(h.bootstrap.assertFeatureReady('feature-1')).rejects.toEqual(
-      expect.objectContaining({ kind: 'conflict' }),
-    );
+    await expect(
+      h.bootstrap.assertFeatureReady('feature-1'),
+    ).resolves.toBeUndefined();
+    const result = await h.bootstrap.composeForSession(baseSession);
+    expect(result).not.toContain('## Repository Context');
   });
 
   it('allows repo-less features and omits repository context', async () => {

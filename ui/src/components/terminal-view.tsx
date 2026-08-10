@@ -13,6 +13,7 @@ import {
 interface DesktopClipboard {
   copyText?: (text: string) => void;
   readText?: () => Promise<string>;
+  readImage?: () => Promise<string>;
 }
 
 function desktopBridge(): DesktopClipboard | undefined {
@@ -74,6 +75,23 @@ async function readClipboard(): Promise<string> {
   if (navigator.clipboard?.readText) {
     try {
       return await navigator.clipboard.readText();
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+/**
+ * Reads an image or copied file from the clipboard via the native desktop
+ * bridge, returning a shell-ready path (a temp PNG for a raw screenshot, or the
+ * source path for a copied file). Empty when there's no image/file to paste.
+ */
+async function readClipboardImagePath(): Promise<string> {
+  const bridge = desktopBridge();
+  if (bridge?.readImage) {
+    try {
+      return await bridge.readImage();
     } catch {
       return '';
     }
@@ -188,9 +206,21 @@ export function TerminalView({
     };
 
     const paste = (text: string) => {
-      if (text && ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeClientMessage({ type: 'input', data: text }));
+      if (text) {
+        term.paste(text);
       }
+    };
+
+    // Bridge-based paste for the right-click path only (a context-menu paste
+    // fires no native `paste` event, so xterm won't handle it): text first, then
+    // an image/file fallback. The keyboard path does NOT use this — see onPaste.
+    const pasteFromClipboard = async () => {
+      const text = await readClipboard();
+      if (text) {
+        paste(text);
+        return;
+      }
+      paste(await readClipboardImagePath());
     };
 
     // Terminal clipboard shortcuts. Ctrl/Cmd+C copies when there is a
@@ -217,12 +247,39 @@ export function TerminalView({
       }
 
       if (key === 'v') {
-        void readClipboard().then(paste);
+        // Only block xterm from emitting a literal ^V (0x16). Do NOT paste here:
+        // the browser fires a native `paste` event that xterm's own listener
+        // handles exactly once. Pasting here as well is what doubled every paste.
         return false;
       }
 
       return true;
     });
+
+    // TEXT paste is handled 100% by xterm's built-in `paste` listener (single,
+    // bracketed). We only supplement the case xterm can't handle: an image or a
+    // copied file with NO text. This capture-phase listener runs before xterm's;
+    // for text it does nothing (lets xterm paste), and for an image/file it
+    // preventDefault/stopPropagation and pastes a shell-ready path from the
+    // native bridge — so neither case can ever paste twice.
+    const onPaste = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      const text = data?.getData('text/plain') ?? '';
+      if (text) {
+        return;
+      }
+      const hasImageOrFile =
+        !!data &&
+        (data.files.length > 0 ||
+          Array.from(data.items).some((it) => it.kind === 'file'));
+      if (!hasImageOrFile) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void readClipboardImagePath().then(paste);
+    };
+    host.addEventListener('paste', onPaste, { capture: true });
 
     // Right-click acts as copy-when-selected / paste-otherwise, the familiar
     // Windows-terminal convention, so text can be copied without a shortcut.
@@ -232,7 +289,7 @@ export function TerminalView({
         writeClipboard(term.getSelection());
         term.clearSelection();
       } else {
-        void readClipboard().then(paste);
+        void pasteFromClipboard();
       }
     };
     host.addEventListener('contextmenu', onContextMenu);
@@ -269,6 +326,7 @@ export function TerminalView({
     return () => {
       window.removeEventListener('resize', applyFit);
       host.removeEventListener('contextmenu', onContextMenu);
+      host.removeEventListener('paste', onPaste, { capture: true });
       observer?.disconnect();
       for (const id of rafIds) {
         cancelAnimationFrame(id);

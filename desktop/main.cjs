@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 
 const ROOT = app.isPackaged
   ? process.resourcesPath
@@ -34,6 +35,41 @@ function safeWrite(stream, text) {
   } catch {
     /* pipe already closed (EPIPE) — nothing to log to */
   }
+}
+
+/** Wraps a filesystem path in double quotes when it contains whitespace. */
+function quotePathIfNeeded(p) {
+  return /\s/.test(p) ? `"${p}"` : p;
+}
+
+/**
+ * Reads file path(s) placed on the clipboard by copying files in the OS file
+ * manager, so pasting them into the terminal yields their paths like a native
+ * shell. On Windows the `CF_HDROP` payload is exposed as the `FileNameW` format
+ * (UTF-16LE, NUL-separated); other platforms fall back to a newline/URI list.
+ */
+function readClipboardFilePaths() {
+  try {
+    if (process.platform === 'win32' && clipboard.has('FileNameW')) {
+      const raw = clipboard.readBuffer('FileNameW').toString('ucs2');
+      return raw
+        .split('\0')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    }
+    for (const format of ['text/uri-list', 'public.file-url']) {
+      if (clipboard.has(format)) {
+        return clipboard
+          .read(format)
+          .split(/\r?\n/)
+          .map((s) => s.replace(/^file:\/\//i, '').trim())
+          .filter((s) => s.length > 0 && !s.startsWith('#'));
+      }
+    }
+  } catch {
+    /* no file list on the clipboard */
+  }
+  return [];
 }
 
 /** Finds a free TCP port by binding to port 0 and reading the assigned port. */
@@ -312,6 +348,35 @@ async function bootstrap() {
       return '';
     }
     return clipboard.readText();
+  });
+
+  // Native image/file paste, so the embedded terminal matches a real shell and
+  // the user never has to drop out to PowerShell to attach a screenshot. Returns
+  // a shell-ready path string (empty when the clipboard holds no image/file):
+  //  - Explorer file copy  -> the quoted source path(s), like a native terminal.
+  //  - Raw bitmap (a screenshot) -> persisted to a temp PNG whose path is pasted,
+  //    since a PTY can't ingest binary image data but the CLI can attach a file.
+  ipcMain.handle('clipboard:readImage', (event) => {
+    if (!isTrustedSender(event)) {
+      return '';
+    }
+    const filePaths = readClipboardFilePaths();
+    if (filePaths.length > 0) {
+      return filePaths.map(quotePathIfNeeded).join(' ');
+    }
+    try {
+      const image = clipboard.readImage();
+      if (!image.isEmpty()) {
+        const dir = path.join(os.tmpdir(), 'ai-project-studio', 'clipboard');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `clip-${Date.now()}.png`);
+        fs.writeFileSync(file, image.toPNG());
+        return quotePathIfNeeded(file);
+      }
+    } catch {
+      /* clipboard held no readable image */
+    }
+    return '';
   });
 
   applyContentSecurityPolicy();

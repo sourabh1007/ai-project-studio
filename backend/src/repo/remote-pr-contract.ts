@@ -20,6 +20,13 @@ export interface RemotePullRequest {
   body?: string | null;
   /** Head/source branch name (no `refs/heads/` prefix). */
   sourceBranch: string;
+  /**
+   * Target/base branch the PR merges into (no `refs/heads/` prefix), or null
+   * when the provider did not report it. This is the branch the review diffs
+   * against; it is preferred over the repository's default branch because a PR
+   * may target a release/feature branch rather than the repo default.
+   */
+  targetBranch?: string | null;
   /** Author's display name or login, when known. */
   author: string | null;
   /** True when the authenticated IDE user opened this pull request. */

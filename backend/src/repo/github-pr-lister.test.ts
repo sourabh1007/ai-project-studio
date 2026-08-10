@@ -23,6 +23,7 @@ const listJson = JSON.stringify([
     title: 'Add login',
     url: 'https://github.com/acme/app/pull/12',
     headRefName: 'feature/login',
+    baseRefName: 'main',
     author: { login: 'octocat', name: 'Mona' },
   },
   {
@@ -30,6 +31,7 @@ const listJson = JSON.stringify([
     title: 'Fix bug',
     url: 'https://github.com/acme/app/pull/8',
     headRefName: 'fix/bug',
+    baseRefName: 'develop',
     author: { login: 'hubot' },
   },
 ]);
@@ -44,6 +46,7 @@ describe('parseGithubPulls', () => {
         title: 'Add login',
         url: 'https://github.com/acme/app/pull/12',
         sourceBranch: 'feature/login',
+        targetBranch: 'main',
         author: 'Mona',
         isAuthor: false,
         isReviewer: false,
@@ -54,6 +57,7 @@ describe('parseGithubPulls', () => {
         title: 'Fix bug',
         url: 'https://github.com/acme/app/pull/8',
         sourceBranch: 'fix/bug',
+        targetBranch: 'develop',
         author: 'hubot',
         isAuthor: false,
         isReviewer: false,
@@ -116,6 +120,7 @@ describe('parseGithubPulls', () => {
         title: 'PR #1',
         url: '',
         sourceBranch: 'a',
+        targetBranch: null,
         author: null,
         isAuthor: false,
         isReviewer: false,
@@ -170,7 +175,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,author,reviewRequests',
     ]);
   });
 
@@ -203,7 +208,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,author,reviewRequests',
     ]);
   });
 
@@ -224,7 +229,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,author,reviewRequests',
     ]);
   });
 
@@ -264,7 +269,7 @@ describe('getGithubPull', () => {
       '--repo',
       'acme/app',
       '--json',
-      'number,title,url,headRefName,author,reviewRequests,body',
+      'number,title,url,headRefName,baseRefName,author,reviewRequests,body',
     ]);
   });
 

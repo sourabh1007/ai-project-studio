@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { homedir } from 'node:os';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 
@@ -617,30 +617,40 @@ function main(): void {
   // underlying OAuth token, so we re-read it periodically (and right after an
   // in-app sign-in) — spawned sessions read the live process.env, so a refresh
   // reaches every future session without a restart.
-  const refreshGithubCredentialEnv = (): void => {
-    try {
-      const token = execFileSync('gh', ['auth', 'token'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 15_000,
-      }).trim();
-      for (const [key, value] of Object.entries(
-        buildGithubCredentialEnv(token),
-      )) {
-        process.env[key] = value;
-      }
-      if (token) {
-        logger.info('GitHub auth propagated to sessions', {});
-      }
-    } catch {
-      // gh missing or not logged in — sessions keep whatever git credentials the
-      // host already provides. The /github/status endpoint surfaces this state.
-    }
-  };
-  refreshGithubCredentialEnv();
+  // Reads the current `gh` token and propagates it to spawned sessions. This MUST
+  // stay asynchronous: it runs at startup, hourly, and on every sign-in/sign-out.
+  // A synchronous `execFileSync` here blocks the whole single-threaded backend
+  // event loop until `gh` returns (up to 15s, longer if gh stalls on a locked
+  // keychain/credential prompt), freezing every HTTP request and terminal
+  // WebSocket — i.e. the entire IDE hangs. `execFile` keeps the loop responsive.
+  const refreshGithubCredentialEnv = (): Promise<void> =>
+    new Promise((resolve) => {
+      execFile(
+        'gh',
+        ['auth', 'token'],
+        { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
+        (err, stdout) => {
+          if (!err) {
+            const token = (stdout ?? '').trim();
+            for (const [key, value] of Object.entries(
+              buildGithubCredentialEnv(token),
+            )) {
+              process.env[key] = value;
+            }
+            if (token) {
+              logger.info('GitHub auth propagated to sessions', {});
+            }
+          }
+          // gh missing or not logged in — sessions keep whatever git credentials
+          // the host already provides; /github/status surfaces this state.
+          resolve();
+        },
+      );
+    });
+  void refreshGithubCredentialEnv();
   // Re-read the token hourly so a long-running IDE never spawns sessions with an
   // expired GitHub token.
-  setInterval(refreshGithubCredentialEnv, 60 * 60 * 1000).unref();
+  setInterval(() => void refreshGithubCredentialEnv(), 60 * 60 * 1000).unref();
 
   // In-app GitHub sign-in via the OAuth device flow, for users who have never
   // run `gh auth login`. The minted token is handed to `gh auth login
@@ -699,7 +709,7 @@ function main(): void {
   const githubSignInPoll = async (deviceCode: string) => {
     const result = await githubDeviceAuth.poll(deviceCode);
     if (result.status === 'success') {
-      refreshGithubCredentialEnv();
+      await refreshGithubCredentialEnv();
     }
     return result;
   };
@@ -707,7 +717,7 @@ function main(): void {
   // credential from sessions rather than waiting for the hourly refresh.
   const githubSignOut = async () => {
     const status = await githubAuth.signOut();
-    refreshGithubCredentialEnv();
+    await refreshGithubCredentialEnv();
     return status;
   };
 
@@ -735,10 +745,12 @@ function main(): void {
           // long-running git operations get a much larger buffer.
           maxBuffer: opts.longRunning ? 512 * 1024 * 1024 : 1024 * 1024,
           // A silent status check must never hang the sidebar "checking…" pill;
-          // an interactive sign-in legitimately waits on the browser, and a
-          // worktree checkout of a huge repo legitimately runs for minutes — so
-          // only the plain non-interactive path is time-boxed.
-          timeout: opts.interactive || opts.longRunning ? 0 : 20_000,
+          // an interactive sign-in legitimately waits on the browser (unbounded),
+          // and a worktree checkout of a huge repo legitimately runs for minutes
+          // — but must still not hang *forever* if git stalls on a network read
+          // or a credential wait, so it gets a generous finite ceiling rather
+          // than no timeout at all.
+          timeout: opts.interactive ? 0 : opts.longRunning ? 900_000 : 20_000,
           env: {
             ...process.env,
             // Sign-in may show the browser prompt; the silent status check must
@@ -793,11 +805,36 @@ function main(): void {
   const provisionRepoInput = (input: Parameters<typeof provisionRepo>[1]) =>
     provisionRepo({ clone: cloneRepo, pathExists: existsSync }, input);
   const listGithubReposFor = () => listGithubRepos(ghRun);
+  // Azure DevOps REST calls must never hang the UI: a stalled connection (VPN
+  // drop, proxy black-hole) on a bare `fetch` has no default timeout, so PR
+  // listing, PR fetch and comment posting could spin forever. Bound every call
+  // with an AbortController, the same way the GitHub device-flow call is bounded.
+  const AZURE_HTTP_TIMEOUT_MS = 30_000;
+  const azureFetch = async (
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AZURE_HTTP_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(
+          'Azure DevOps did not respond in time. Check your network ' +
+            'connection (or VPN) and try again.',
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const azureHttpGet = async (
     url: string,
     token: string,
   ): Promise<AzureHttpResponse> => {
-    const response = await fetch(url, {
+    const response = await azureFetch(url, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     });
     const body = response.ok ? await response.json() : null;
@@ -809,7 +846,7 @@ function main(): void {
     token: string,
     payload: unknown,
   ): Promise<AzureHttpResponse> => {
-    const response = await fetch(url, {
+    const response = await azureFetch(url, {
       method,
       headers: {
         Authorization: 'Bearer ' + token,

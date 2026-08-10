@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('desktop', {
   readText() {
     return ipcRenderer.invoke('clipboard:read');
   },
+  readImage() {
+    return ipcRenderer.invoke('clipboard:readImage');
+  },
   relaunch() {
     ipcRenderer.send('app:relaunch');
   },

@@ -78,7 +78,11 @@ export function createPrFeatureService(
         repoId: repo.id,
         pull,
         worktreePath: worktree.worktreePath,
-        baseBranch: repo.defaultBranch ?? null,
+        // The PR's own target branch is the correct diff base; fall back to the
+        // repository default only when the provider didn't report one. Using the
+        // repo default alone breaks reviews of PRs that target a non-default
+        // branch, and yields an empty diff when the default branch is unknown.
+        baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
       });
       return feature;
     },
