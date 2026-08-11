@@ -303,10 +303,9 @@ export function buildChangeGraphLayout(
     if (projectId === undefined) {
       return null;
     }
-    const center = boxCenter.get(projectId);
-    if (!center) {
-      return null;
-    }
+    // Every project id present in `projectByPath` was planned above, so its box
+    // centre is always recorded — the lookup cannot miss.
+    const center = boxCenter.get(projectId)!;
     return { id: `box:${projectId}`, x: center.x, y: center.y };
   };
 

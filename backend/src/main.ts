@@ -1139,6 +1139,9 @@ function main(): void {
     clock,
     repos: repoService,
   });
+  // Seed a default "Scratchpad" feature on a fresh workspace so a new instance
+  // can start ad-hoc sessions immediately. No-op once any feature exists.
+  featureService.ensureScratchpad();
   // Layered shared-context store: durable, curated instructions injected at
   // launch and live-pushed into running sessions. The broadcaster fans context
   // writes out to affected running terminals; the merge runner curates a

@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { McpServerEntry } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
-import { PencilIcon, PlusIcon, RefreshIcon } from '../../components/icons.js';
+import { PencilIcon, PlusIcon, RefreshIcon, ToolsIcon } from '../../components/icons.js';
 import { McpServerForm } from './mcp-server-form.js';
 
 /** One-line human summary of a server spec for the card body. */
@@ -52,6 +52,7 @@ export function McpManager() {
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<McpServerEntry | null>(null);
+  const [toolsForName, setToolsForName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -214,44 +215,20 @@ export function McpManager() {
               {server.name}
             </span>
             <p className="skill-card-body">{describeSpec(server.spec)}</p>
-            <div className="mcp-tools-panel">
-              <div className="mcp-tools-head">
-                <span>Tools</span>
-                <span className={`mcp-discovery mcp-discovery-${server.toolDiscovery?.status ?? 'skipped'}`}>
-                  {server.tools?.length ?? 0}
-                </span>
-              </div>
-              <p className="mcp-tools-status">{discoveryLabel(server)}</p>
-              {server.toolDiscovery?.output && server.toolDiscovery.output.length > 0 && (
-                <pre className="mcp-output">
-                  {server.toolDiscovery.output.join('\n')}
-                </pre>
-              )}
-              {server.tools && server.tools.length > 0 ? (
-                <div className="mcp-tool-list">
-                  {server.tools.map((tool) => (
-                    <label key={tool.name} className="mcp-tool-row">
-                      <input
-                        type="checkbox"
-                        checked={tool.enabled}
-                        disabled={busyKey === `tool:${server.name}:${tool.name}`}
-                        onChange={(event) =>
-                          void toggleTool(server, tool.name, event.target.checked)
-                        }
-                      />
-                      <span>
-                        <strong>{tool.name}</strong>
-                        {tool.description && <small>{tool.description}</small>}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <p className="mcp-tools-empty">
-                  No tools discovered. Restart to retry and surface any auth prompt.
-                </p>
-              )}
-            </div>
+            <button
+              type="button"
+              className="mcp-tools-btn"
+              onClick={() => setToolsForName(server.name)}
+              title="View and toggle this server's tools"
+            >
+              <ToolsIcon size={14} />
+              <span>Tools</span>
+              <span
+                className={`mcp-tools-count mcp-discovery-${server.toolDiscovery?.status ?? 'skipped'}`}
+              >
+                {server.tools?.length ?? 0}
+              </span>
+            </button>
           </div>
         ))}
       </div>
@@ -270,6 +247,76 @@ export function McpManager() {
           />
         </Modal>
       )}
+      {(() => {
+        const toolsServer = toolsForName
+          ? list.find((s) => s.name === toolsForName) ?? null
+          : null;
+        if (!toolsServer) return null;
+        return (
+          <Modal
+            title={`${toolsServer.name} · tools`}
+            onClose={() => setToolsForName(null)}
+          >
+            <div className="mcp-tools-modal">
+              <div className="mcp-tools-modal-head">
+                <p className="mcp-tools-status">{discoveryLabel(toolsServer)}</p>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={busyKey === `restart:${toolsServer.name}`}
+                  onClick={() => void restart(toolsServer)}
+                >
+                  <RefreshIcon size={13} />
+                  {busyKey === `restart:${toolsServer.name}`
+                    ? 'Restarting…'
+                    : 'Restart'}
+                </button>
+              </div>
+              {toolsServer.toolDiscovery?.output &&
+                toolsServer.toolDiscovery.output.length > 0 && (
+                  <pre className="mcp-output">
+                    {toolsServer.toolDiscovery.output.join('\n')}
+                  </pre>
+                )}
+              {toolsServer.tools && toolsServer.tools.length > 0 ? (
+                <div className="mcp-tool-list">
+                  {toolsServer.tools.map((tool) => (
+                    <label key={tool.name} className="mcp-tool-row">
+                      <input
+                        type="checkbox"
+                        checked={tool.enabled}
+                        disabled={
+                          busyKey === `tool:${toolsServer.name}:${tool.name}`
+                        }
+                        onChange={(event) =>
+                          void toggleTool(
+                            toolsServer,
+                            tool.name,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      <span className="mcp-tool-text">
+                        <strong>{tool.name}</strong>
+                        {tool.description && (
+                          <small className="mcp-tool-desc">
+                            {tool.description}
+                          </small>
+                        )}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="mcp-tools-empty">
+                  No tools discovered. Restart to retry and surface any auth
+                  prompt.
+                </p>
+              )}
+            </div>
+          </Modal>
+        );
+      })()}
     </Card>
   );
 }

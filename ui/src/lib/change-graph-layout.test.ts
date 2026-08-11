@@ -367,6 +367,40 @@ describe('buildChangeGraphLayout', () => {
     ]);
   });
 
+  it('promotes a merged module edge to highlighted when a later parallel edge has calls', () => {
+    const built = step({
+      projects: [
+        { id: 'p1', name: 'One', path: null },
+        { id: 'p2', name: 'Two', path: null },
+      ],
+      nodes: [
+        node({ path: 'p1/a.cs', projectId: 'p1' }),
+        node({ path: 'p1/b.cs', projectId: 'p1' }),
+        node({ path: 'p1/c.cs', projectId: 'p1' }),
+        node({ path: 'p2/x.cs', projectId: 'p2' }),
+      ],
+      edges: [
+        // First cross-module edge carries no calls: the module edge starts
+        // unhighlighted (highlightsChanges false).
+        edge('p1/a.cs', 'p2/x.cs'),
+        // A parallel edge with calls merges in and promotes the module edge.
+        edge('p1/c.cs', 'p2/x.cs', [{ symbol: 'X', caller: 'C' }]),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code', {
+      collapsed: new Set(['p1']),
+    });
+
+    expect(layout.edges).toHaveLength(1);
+    expect(layout.edges[0]).toMatchObject({
+      from: 'box:p1',
+      to: 'p2/x.cs',
+      highlightsChanges: true,
+    });
+    expect(layout.edges[0].calls).toEqual([{ symbol: 'X', caller: 'C' }]);
+  });
+
   it('keeps every project expanded when no collapse set is given', () => {
     const built = step({
       nodes: [

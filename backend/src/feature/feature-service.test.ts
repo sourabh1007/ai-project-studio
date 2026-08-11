@@ -86,6 +86,34 @@ describe('feature-service', () => {
     expect(feature.repoId).toBe('repo-9');
   });
 
+  it('seeds a default Scratchpad feature when the workspace is empty', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.ensureScratchpad();
+    const all = svc.list();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toEqual({
+      id: 'feat-1',
+      name: 'Scratchpad',
+      description:
+        'Quick, ad-hoc CLI runs. Start a session here without setting up a feature first.',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      summary: null,
+      repoId: null,
+      checkoutPath: null,
+    });
+  });
+
+  it('does not seed a Scratchpad when a feature already exists', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'Login', description: 'Build login' });
+    svc.ensureScratchpad();
+    const all = svc.list();
+    expect(all).toHaveLength(1);
+    expect(all[0].name).toBe('Login');
+  });
+
   it('records a checkout path override when supplied', () => {
     const svc = service();
     const feature = svc.create({

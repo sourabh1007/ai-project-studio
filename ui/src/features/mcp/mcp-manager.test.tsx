@@ -64,7 +64,11 @@ describe('McpManager', () => {
     );
 
     expect(await screen.findByText('Azure')).toBeTruthy();
-    expect(screen.getByText('read')).toBeTruthy();
+
+    // Tools are behind a compact button that opens a modal.
+    fireEvent.click(screen.getByRole('button', { name: /Tools/i }));
+
+    expect(await screen.findByText('read')).toBeTruthy();
     expect(screen.getByText('Read things')).toBeTruthy();
     expect(screen.getByText('device code ABCD')).toBeTruthy();
 

@@ -40,6 +40,7 @@ import {
   Timer,
   Trash2,
   Upload,
+  Wrench,
   X,
   type LucideProps,
 } from 'lucide-react';
@@ -117,6 +118,7 @@ export const FileIcon = makeIcon(FileText);
 // Skills icons.
 export const SkillsIcon = makeIcon(Sparkles);
 export const McpIcon = makeIcon(Plug);
+export const ToolsIcon = makeIcon(Wrench);
 export const InstructionSkillIcon = makeIcon(BookOpen);
 export const TaskPlanSkillIcon = makeIcon(ListChecks);
 export const TagIcon = makeIcon(Tag);

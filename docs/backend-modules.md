@@ -18,6 +18,7 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 | `provider/` | Provider abstraction + registry/resolver + concrete CLI adapters + CLI stores/process kernel. | `provider-contract.ts`, `provider-registry.ts`, `provider-resolver.ts`, `copilot-adapter/`, `agency-adapter/`, `cli-store/` |
 | `terminal/` | PTY + WebSocket adapter for live interactive sessions; enforces bootstrap readiness and seeds repository/feature/memory/skill instructions after the prompt is ready. | `terminal-manager.ts`, `terminal-session.ts`, `node-pty-spawner.ts`, `executable-resolver.ts` |
 | `meta/` | Runs/parses provider-neutral headless AI sessions used for summaries, plans, and repository analysis; accepts a working directory and hidden internal scope. | `meta-runner.ts`, `meta-response-extractor.ts` |
+| `mcp/` | Manages Model Context Protocol servers per provider: reads/writes server specs, restarts servers, probes for available tools, and toggles individual tools; changes apply to open sessions. | `mcp-service.ts`, `mcp-contract.ts`, `mcp-tool-inspector-adapter.ts` |
 
 ## Telemetry & cost
 | Module | Responsibility | Key files |
