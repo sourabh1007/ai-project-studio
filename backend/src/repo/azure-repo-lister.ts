@@ -31,6 +31,13 @@ export type AzureHttpPatcher = (
   body: unknown,
 ) => Promise<AzureHttpResponse>;
 
+/** Performs an authenticated PUT against the Azure DevOps REST API. */
+export type AzureHttpPutter = (
+  url: string,
+  token: string,
+  body: unknown,
+) => Promise<AzureHttpResponse>;
+
 /** Resolves the cached OAuth bearer token for an organization, or null. */
 export type AzureTokenGetter = (org: string) => Promise<string | null>;
 

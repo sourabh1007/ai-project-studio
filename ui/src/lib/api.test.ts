@@ -801,6 +801,19 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({ status: 'resolved' }));
   });
 
+  it('approves a PR review via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ approved: true, state: 'approved' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.approvePrReview('f1');
+    expect(result).toEqual({ approved: true, state: 'approved' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/approve');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
   it('starts a GitHub device-flow sign-in via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ userCode: 'ABCD-1234' }),

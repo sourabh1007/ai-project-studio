@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { PrReviewIcon, RefreshIcon } from '../../components/icons.js';
+import { CheckIcon, PrReviewIcon, RefreshIcon } from '../../components/icons.js';
 import loadingGif from '../../assets/pr-review-loading.gif';
 import { ChangeGraph } from './change-graph.js';
 import { PrCommentsPanel, usePrComments } from './pr-comments.js';
@@ -163,6 +163,8 @@ export function PrReviewPage({
   const [review, setReview] = useState<PrReview | null>(liveReview ?? null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [approved, setApproved] = useState(false);
   const [retrying, setRetrying] = useState<PrReviewStepKey | null>(null);
   const [explaining, setExplaining] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -196,6 +198,11 @@ export function PrReviewPage({
       setReview(liveReview);
     }
   }, [liveReview]);
+
+  useEffect(() => {
+    setApproved(false);
+    setApproving(false);
+  }, [featureId]);
 
   // Polling fallback: while a step is generating, re-fetch the review on a timer
   // so the page always converges to the final state even if a live SSE update is
@@ -236,6 +243,22 @@ export function PrReviewPage({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function approve() {
+    if (approving || approved) {
+      return;
+    }
+    setApproving(true);
+    setError(null);
+    try {
+      await api.approvePrReview(featureId);
+      setApproved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -296,13 +319,19 @@ export function PrReviewPage({
             )}
           </div>
         </div>
-        <Button
-          variant="ghost"
-          onClick={() => void refresh()}
-          disabled={refreshing}
-        >
-          <RefreshIcon size={13} /> {refreshing ? 'Re-running…' : 'Re-run all'}
-        </Button>
+        <div className="pr-review-page-actions">
+          <Button onClick={() => void approve()} disabled={approving || approved}>
+            <CheckIcon size={13} />{' '}
+            {approved ? 'Approved ✓' : approving ? 'Approving…' : 'Approve'}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+          >
+            <RefreshIcon size={13} /> {refreshing ? 'Re-running…' : 'Re-run all'}
+          </Button>
+        </div>
       </header>
 
       <ErrorText error={error} />

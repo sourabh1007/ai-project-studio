@@ -43,6 +43,7 @@ import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 import type { PrCommentsService } from '../pr-review/pr-comments-contract.js';
+import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import { createRepoRoutes } from './repo-controller.js';
@@ -137,6 +138,8 @@ export interface ApiRoutesDeps {
   prReviews: PrReviewService;
   /** Live PR comment threads (list / add / resolve) for the review page. */
   prComments: PrCommentsService;
+  /** Live PR approval for the review page. */
+  prApprovals: PrApprovalService;
   /** The layered shared-context store surfaced in the IDE. */
   context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
   logger: Logger;
@@ -184,6 +187,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createPrReviewRoutes({
       prReviews: deps.prReviews,
       prComments: deps.prComments,
+      prApprovals: deps.prApprovals,
     }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createContextRoutes({ context: deps.context }),

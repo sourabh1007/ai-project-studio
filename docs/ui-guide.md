@@ -2,6 +2,9 @@
 
 The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST), Server-Sent Events (live usage/session updates), and a WebSocket (interactive terminal).
 
+> This is the **technical** UI reference (what components are mounted where). For
+> user-facing how-tos of each view, see the [feature guides](features/README.md).
+
 ## What's actually mounted
 
 `ui/src/App.tsx` renders four top-level views (selected from the activity bar):
@@ -62,7 +65,7 @@ When a development session launches, the UI does not assemble context itself. Th
 
 A feature created from a pull request renders a **PR review panel** (`feature-dashboard/pr-review-panel.tsx`) inside its dashboard. On mount it fetches `GET /features/:id/pr-review`; a `404` means the feature is not a PR review and the panel renders nothing. While generation is in flight it shows an animated "Analyzing pull request…" banner (reusing the repository-context spinner/dots). When ready it shows the **PR Summary** and **Core Analysis** sections; on failure it shows the failure detail and a **Retry** control. The panel consumes `pr.review.updated` from the shared SSE stream and prefers live state over the initial fetch, so lifecycle transitions appear without polling. **Refresh** calls `POST /features/:id/pr-review/refresh` to regenerate the review; the previous summary is retained for viewing if a later attempt fails.
 
-Opening a PR review as its own editor tab renders the full **PR review page** (`pr-review-page/pr-review-page.tsx`), which adds the per-file **change graph** (`change-graph.tsx`). The graph is a static reference graph of PR-modified functions and their connections; it supports **zoom, pan, internal scroll for large graphs, and full-screen**, plus a **show/hide callers** toggle. Selecting a node opens a detail popup with that file's **code diff** and inline **PR comments** (`pr-comments.tsx`). The page exposes **Re-run all** and per-step **Retry** controls; re-running re-collects diffs, so reviews generated before a diff-collection fix repopulate their per-file diffs.
+Opening a PR review as its own editor tab renders the full **PR review page** (`pr-review-page/pr-review-page.tsx`), which adds the per-file **change graph** (`change-graph.tsx`). The graph is a static reference graph of PR-modified functions and their connections; it supports **zoom, pan, internal scroll for large graphs, and full-screen**, plus a **show/hide callers** toggle. Selecting a node opens a detail popup with that file's **code diff** and inline **PR comments** (`pr-comments.tsx`). The page exposes **Approve** (casts the signed-in reviewer approval on GitHub or Azure DevOps), **Re-run all**, and per-step **Retry** controls; re-running re-collects diffs, so reviews generated before a diff-collection fix repopulate their per-file diffs.
 
 ## MCP server management UX
 

@@ -10,6 +10,8 @@ import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 interface DesktopBridge {
   revealFile(path: string): void;
   relaunch(): void;
+  getVersion?(): Promise<string>;
+  openDocs?(): void;
 }
 
 function desktopBridge(): DesktopBridge | undefined {
@@ -235,7 +237,25 @@ export function SettingsView() {
   const [query, setQuery] = useState('');
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
+
+  useEffect(() => {
+    let active = true;
+    bridge?.getVersion?.().then(
+      (v) => {
+        if (active) {
+          setVersion(v);
+        }
+      },
+      () => {
+        /* version is optional; ignore bridge errors */
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [bridge]);
 
   const namespaces = useMemo(() => {
     if (!data) {
@@ -300,6 +320,28 @@ export function SettingsView() {
           )}
         </div>
       )}
+
+      <Card>
+        <div className="page-header">
+          <div>
+            <h2 className="page-title">About</h2>
+            <p className="page-subtitle">
+              AI Project Studio — an IDE-style workspace for AI coding CLIs.
+            </p>
+          </div>
+          {bridge?.openDocs && (
+            <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
+              Open documentation
+            </Button>
+          )}
+        </div>
+        <dl className="kv">
+          <div style={{ display: 'contents' }}>
+            <dt>Version</dt>
+            <dd>{version ?? '—'}</dd>
+          </div>
+        </dl>
+      </Card>
 
       <Card>
         <div className="shared-context-card-head">

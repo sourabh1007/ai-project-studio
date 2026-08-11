@@ -5,6 +5,7 @@ import type {
   PrCommentThread,
   PrCommentsService,
 } from '../pr-review/pr-comments-contract.js';
+import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import type { HttpRequest, Route } from './http-contract.js';
 
@@ -89,8 +90,14 @@ function harness() {
       (calls.setStatus = [id, threadId, status]), Promise.resolve(thread)
     ),
   } as unknown as PrCommentsService;
+  const prApprovals = {
+    approve: (id: string) => (
+      (calls.approve = [id]),
+      Promise.resolve({ approved: true, state: 'approved' as const })
+    ),
+  } as unknown as PrApprovalService;
   return {
-    routes: createPrReviewRoutes({ prReviews, prComments }),
+    routes: createPrReviewRoutes({ prReviews, prComments, prApprovals }),
     calls,
     thread,
   };
@@ -168,6 +175,20 @@ describe('pr-review-controller', () => {
         '/features/:featureId/pr-review/files/explain',
       )(req({ params: { featureId: 'f1' }, body: {} })),
     ).rejects.toThrow(/file "path" is required/);
+  });
+
+  it('approves the pull request for a feature', async () => {
+    const { routes, calls } = harness();
+    const res = await pick(
+      routes,
+      'post',
+      '/features/:featureId/pr-review/approve',
+    )(req({ params: { featureId: 'f1' } }));
+    expect(res).toEqual({
+      status: 200,
+      body: { approved: true, state: 'approved' },
+    });
+    expect(calls.approve).toEqual(['f1']);
   });
 
   it('lists comments for a feature', async () => {

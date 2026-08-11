@@ -26,6 +26,8 @@ extraResources:
     to: backend
   - from: build/ui
     to: ui
+  - from: build/docs
+    to: docs
 
 # Windows installers are code-signed in CI with Azure Trusted Signing so users
 # don't hit the "Unknown Publisher" SmartScreen error on install. The signing

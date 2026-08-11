@@ -26,5 +26,11 @@ cpSync(join(rootDir, 'ui', 'dist'), join(buildDir, 'ui', 'dist'), {
   recursive: true,
 });
 
+// Ship the product docs (and the README) inside the installed app so the
+// version's documentation travels with the binary.
+mkdirSync(join(buildDir, 'docs'), { recursive: true });
+cpSync(join(rootDir, 'docs'), join(buildDir, 'docs'), { recursive: true });
+cpSync(join(rootDir, 'README.md'), join(buildDir, 'docs', 'README.md'));
+
 // eslint-disable-next-line no-console
 console.log(`Staged backend + UI runtime into ${buildDir}`);

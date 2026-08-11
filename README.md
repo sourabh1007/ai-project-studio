@@ -90,44 +90,22 @@ See **[docs/architecture.md](docs/architecture.md)** for the detailed data flow 
 
 ## Features (high level)
 
-- **Feature → Session organization** — group CLI runs under named features; add, rename, and delete inline.
-- **Embedded interactive terminal** — run the Copilot/Agency chat TUI in an `xterm.js` terminal that fills the workspace like an editor tab.
-- **Live usage & cost analytics** — real-time credit (AIC), token, cost, and time streamed over SSE from the CLIs' own telemetry.
-- **Feature dashboard** — AIC-over-time, AIC-by-model, and time-by-session charts plus KPI cards.
-- **Skills** — reusable instruction blocks you tag onto features/sessions; automatically seeded into a session's first prompt.
-- **AI feature task plans** — generate a structured task breakdown for a feature and track progress.
-- **Automatic summaries** — per-session summaries on session end, plus feature-level work summaries.
-- **PR review workspace** — an "Open a PR" flow with a dedicated review page: problem statement, blind proposal, syntactic + business-logic review, 0–100 scoring, and a per-file **change graph** that highlights PR-modified functions and their connections. The change graph is fully navigable — **zoom, pan, internal scroll for large graphs, full-screen**, and a **show/hide callers** toggle — with a **per-file code diff** shown when a node is selected.
-- **MCP server management** — a dedicated **MCP Servers** view to add, edit, and **restart** Model Context Protocol servers per provider, **discover their tools** from a live probe, and **enable/disable individual tools**; changes apply to open sessions without restarting the shell.
-- **Live PR comments** — read and post review comments inline against the exact file/line while reviewing; comments sync back to the PR (GitHub & Azure DevOps) and render with **Markdown/GFM** support.
-- **Generic nested usage tracking** — usage rolls up across **Feature → Group → Session**, with every AI call tagged as an **IDE metasession** or a **user session**, so internal steps (including PR reviews) are itemized and clearly attributed.
-- **Session import** — pull in past provider-native sessions (Copilot/Agency history) as workspace sessions.
-- **Multi-provider by design** — a pluggable provider registry; Copilot and Agency ship today, new CLIs slot in behind one interface.
-- **Local-first persistence** — features, sessions, usage, transcripts, and summaries in SQLite (`node:sqlite`).
-- **Light & dark themes** with native window chrome.
+Each feature has a focused how-to guide in **[docs/features/](docs/features/README.md)**.
 
-## Copilot App vs. AI Project Studio
+- **[Feature categories](docs/features/feature-categories.md)** — organize every run as **Repository → Feature → Group → Session**; a default **Scratchpad** lets you start instantly.
+- **[Sessions](docs/features/sessions.md)** — run the Copilot/Agency chat TUI in an embedded `xterm.js` terminal, with launch-time context bootstrap, auto summaries, and history import.
+- **[Skills](docs/features/skills.md)** — reusable instruction blocks tagged onto features/sessions and auto-seeded into a session's first prompt.
+- **[PR reviews](docs/features/pr-reviews.md)** — an "Open a PR" flow with a dedicated review page: AI summary, 0–100 scoring, a navigable per-file **change graph** (zoom/pan/scroll/full-screen), inline code diffs, **live PR comments**, and one-click **Approve** (GitHub & Azure DevOps).
+- **[MCP servers](docs/features/mcp-servers.md)** — add/edit/**restart** Model Context Protocol servers, discover their tools, and **toggle individual tools** live — applied to open sessions without a shell restart.
+- **[Usage & cost](docs/features/usage-and-cost.md)** — live credit (AIC), token, cost & time from the CLIs' own telemetry, feature dashboards, and **IDE AI** metasession attribution that rolls up across the whole hierarchy.
 
-The GitHub Copilot app/CLI is a single-conversation coding assistant. AI Project Studio wraps that same CLI in a project-centric, observable workspace — it doesn't replace the CLI, it organizes and instruments it.
+Also: multi-provider by design (pluggable registry — Copilot & Agency today), local-first SQLite persistence (`node:sqlite`), and light/dark themes with native window chrome.
 
-| Feature | Copilot App / CLI | AI Project Studio |
-| --- | --- | --- |
-| **Primary unit of work** | A single chat/session | **Feature → Session** hierarchy grouping many runs |
-| **Interface** | Terminal or editor chat pane | **IDE-style desktop app** (Electron) with an embedded `xterm.js` terminal |
-| **Usage & cost visibility** | Per-response, ephemeral | **Live credit (AIC), token, cost & time** streamed over SSE and persisted per session/feature |
-| **Analytics dashboards** | None | **Feature dashboard**: AIC-over-time, AIC-by-model, time-by-session charts + KPI cards |
-| **Reusable instructions** | Manual copy/paste each session | **Skills** — instruction blocks tagged to features/sessions and auto-seeded into a session's first prompt |
-| **Task planning** | Ad hoc, in-conversation | **AI-generated feature task plans** with progress tracking |
-| **Summaries** | None persisted | **Automatic per-session and feature-level summaries** |
-| **PR review** | Manual prompting | **"Open a PR"** flow: dedicated review page with problem statement, blind proposal, syntactic + business-logic review, 0–100 scoring, and a navigable per-file **change graph** (zoom/pan/full-screen) with inline code diffs |
-| **MCP servers** | Configured via CLI/config files | **MCP Servers view**: add/edit/**restart** servers, **discover tools**, and **toggle individual tools** live — applied to open sessions without a restart |
-| **Metasession attribution** | N/A | Internal AI steps run as **metasessions** with **itemized, clearly-labeled** credit/token usage |
-| **History** | Provider-native store only | **Imports** provider-native (Copilot/Agency) history as workspace sessions |
-| **Provider support** | GitHub Copilot only | **Pluggable provider registry** — Copilot and Agency today, more behind one interface |
-| **Persistence** | CLI's own session store | **Local-first SQLite** (`node:sqlite`): features, sessions, usage, transcripts, summaries |
-| **Configuration** | CLI flags / config file | **Namespaced, editable config** surfaced in a Settings UI |
+## How it differs from the Copilot app
 
-In short: the Copilot app is the *engine*; AI Project Studio is the *cockpit* — it turns raw CLI runs into an organized, measurable, multi-provider workflow.
+The GitHub Copilot app/CLI is a single-conversation coding assistant. AI Project Studio wraps that same CLI in a project-centric, observable workspace — it doesn't replace the CLI, it organizes and instruments it. The Copilot app is the *engine*; AI Project Studio is the *cockpit*.
+
+See **[docs/vs-copilot-app.md](docs/vs-copilot-app.md)** for the full side-by-side comparison and guidance on when to use which.
 
 ## Getting Started
 
@@ -196,10 +174,25 @@ Produces:
 
 ## Documentation
 
+**Using the app**
+
+| Doc | What's inside |
+| --- | --- |
+| [docs/features/](docs/features/README.md) | **Feature guides** — task-focused how-tos with in-app navigation. |
+| ↳ [Feature categories](docs/features/feature-categories.md) | Repository → Feature → Group → Session, and the default Scratchpad. |
+| ↳ [Sessions](docs/features/sessions.md) | Running the AI CLI, summaries, importing history. |
+| ↳ [Skills](docs/features/skills.md) | Reusable instructions auto-seeded into prompts. |
+| ↳ [PR reviews](docs/features/pr-reviews.md) | Open a PR: review page, change graph, comments, scoring. |
+| ↳ [MCP servers](docs/features/mcp-servers.md) | Manage MCP servers and toggle tools live. |
+| ↳ [Usage & cost](docs/features/usage-and-cost.md) | Credits, tokens, dashboards, IDE AI. |
+| [docs/vs-copilot-app.md](docs/vs-copilot-app.md) | How AI Project Studio differs from the Copilot app. |
+
+**Building & contributing**
+
 | Doc | What's inside |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | How to work in this repo: conventions, invariants, workflow |
-| [docs/architecture.md](docs/architecture.md) | Layers, data flow, key patterns |
+| [docs/architecture.md](docs/architecture.md) | Application architecture design: layers, data flow, key patterns |
 | [docs/backend-modules.md](docs/backend-modules.md) | Per-module responsibilities & key files |
 | [docs/ui-guide.md](docs/ui-guide.md) | UI structure, feature areas, and what's actually mounted |
 | [docs/development.md](docs/development.md) | Setup, scripts, testing, debugging, env quirks |

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboard, dialog } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
@@ -13,6 +13,8 @@ const ROOT = app.isPackaged
   : path.resolve(__dirname, '..');
 const BACKEND_ENTRY = path.join(ROOT, 'backend', 'dist', 'main.js');
 const UI_DIST = path.join(ROOT, 'ui', 'dist');
+const DOCS_DIR = path.join(ROOT, 'docs');
+const DOCS_URL = 'https://github.com/sourabh1007/ai-project-studio/tree/main/docs';
 const HOST = '127.0.0.1';
 const IS_DEV = process.env.CW_DESKTOP_DEV === '1';
 const DEV_URL = process.env.CW_DEV_URL || 'http://localhost:5173';
@@ -179,6 +181,48 @@ function isTrustedSender(event) {
 }
 
 /**
+ * Opens the product documentation that ships inside the app. Prefers the bundled
+ * docs (staged into `resources/docs` at build time, README included), opening the
+ * README first and falling back to the docs folder; if neither can be opened by
+ * the OS it opens the online docs in the browser.
+ */
+async function openDocs() {
+  const candidates = [
+    path.join(DOCS_DIR, 'README.md'),
+    path.join(ROOT, 'README.md'),
+    DOCS_DIR,
+  ];
+  for (const target of candidates) {
+    if (!fs.existsSync(target)) {
+      continue;
+    }
+    const error = await shell.openPath(target);
+    if (!error) {
+      return;
+    }
+  }
+  void shell.openExternal(DOCS_URL);
+}
+
+/** Shows the native About dialog with the app version and runtime details. */
+function showAboutDialog(win) {
+  void dialog.showMessageBox(win ?? undefined, {
+    type: 'info',
+    title: 'About AI Project Studio',
+    message: 'AI Project Studio',
+    detail: `Version ${app.getVersion()}\nElectron ${process.versions.electron}\nNode ${process.versions.node}\nChromium ${process.versions.chrome}`,
+    buttons: ['OK', 'Documentation'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  }).then((result) => {
+    if (result.response === 1) {
+      void openDocs();
+    }
+  });
+}
+
+/**
  * Installs the application menu. It mirrors Electron's default menu but with one
  * critical change: the Paste items keep their visible shortcut yet do NOT register
  * the `CmdOrCtrl+V` accelerator (`registerAccelerator: false`). The default menu's
@@ -212,12 +256,29 @@ function installApplicationMenu() {
     { role: 'delete' },
     { role: 'selectAll' },
   ];
+  const helpSubmenu = [
+    {
+      label: 'Documentation',
+      accelerator: 'F1',
+      click: () => void openDocs(),
+    },
+    ...(isMac
+      ? []
+      : [
+          { type: 'separator' },
+          {
+            label: 'About AI Project Studio',
+            click: (_item, win) => showAboutDialog(win),
+          },
+        ]),
+  ];
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
     { role: 'fileMenu' },
     { label: 'Edit', submenu: editSubmenu },
     { role: 'viewMenu' },
     { role: 'windowMenu' },
+    { role: 'help', submenu: helpSubmenu },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -373,6 +434,22 @@ async function bootstrap() {
     stopBackend();
     app.relaunch();
     app.exit(0);
+  });
+
+  // Exposes the packaged app version to the renderer's About section.
+  ipcMain.handle('app:getVersion', (event) => {
+    if (!isTrustedSender(event)) {
+      return '';
+    }
+    return app.getVersion();
+  });
+
+  // Opens the documentation that ships with the app (same as Help ▸ Documentation).
+  ipcMain.on('app:openDocs', (event) => {
+    if (!isTrustedSender(event)) {
+      return;
+    }
+    void openDocs();
   });
 
   // Native clipboard bridge. The renderer's async `navigator.clipboard` API is

@@ -1,6 +1,7 @@
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 import type { PrReviewStepKey } from '../pr-review/pr-review-contract.js';
 import type { PrCommentsService } from '../pr-review/pr-comments-contract.js';
+import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
 import {
   assertAddCommentInput,
   assertThreadStatus,
@@ -11,6 +12,7 @@ import type { Route } from './http-contract.js';
 export interface PrReviewControllerDeps {
   prReviews: PrReviewService;
   prComments: PrCommentsService;
+  prApprovals: PrApprovalService;
 }
 
 const STEP_KEYS: PrReviewStepKey[] = ['problemStatement', 'changeGraph'];
@@ -73,6 +75,14 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
           req.params.featureId,
           assertPath(req.body),
         ),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/pr-review/approve',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.prApprovals.approve(req.params.featureId),
       }),
     },
     {

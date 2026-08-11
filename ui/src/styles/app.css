@@ -1030,6 +1030,13 @@ body.is-resizing {
   gap: var(--space-3);
 }
 
+.pr-review-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .pr-review-page-title {
   display: flex;
   align-items: flex-start;

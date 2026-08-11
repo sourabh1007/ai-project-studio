@@ -57,6 +57,7 @@ function deps(): ApiRoutesDeps {
     prFeatures: empty,
     prReviews: empty,
     prComments: empty,
+    prApprovals: empty,
     context: empty,
     logger: empty,
   };
@@ -126,6 +127,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/pr-review/refresh',
       'post /features/:featureId/pr-review/steps/:step/retry',
       'post /features/:featureId/pr-review/files/explain',
+      'post /features/:featureId/pr-review/approve',
       'get /features/:featureId/pr-review/comments',
       'post /features/:featureId/pr-review/comments',
       'post /features/:featureId/pr-review/comments/:threadId/status',

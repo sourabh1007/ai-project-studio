@@ -1,6 +1,13 @@
 # Architecture
 
-AI Project Studio is a three-tier desktop app. This document explains the layers, the main data flows, and the patterns that keep the backend testable.
+AI Project Studio is a three-tier desktop app. This is the **application
+architecture design** document — it explains the layers, the main data flows, and
+the patterns that keep the backend testable.
+
+> Looking for how to *use* a feature instead? See the task-focused
+> **[feature guides](features/README.md)**. For the module-by-module code map see
+> **[backend-modules.md](backend-modules.md)**; for the UI structure see
+> **[ui-guide.md](ui-guide.md)**.
 
 ## Layers
 

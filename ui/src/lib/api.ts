@@ -36,6 +36,7 @@ import type {
   PrReviewStepKey,
   PrCommentThread,
   PrCommentThreadStatus,
+  PrApprovalResult,
   AddPrCommentInput,
   AddRepositoryInput,
   Session,
@@ -195,6 +196,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrCommentThread>(
         `/features/${featureId}/pr-review/comments/${threadId}/status`,
         jsonBody({ status }),
+      ),
+    approvePrReview: (featureId: string) =>
+      request<PrApprovalResult>(
+        `/features/${featureId}/pr-review/approve`,
+        jsonBody({}),
       ),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),

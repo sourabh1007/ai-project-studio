@@ -319,6 +319,13 @@ export interface AddPrCommentInput {
   body: string;
 }
 
+/** Result returned after approving the pull request from the review page. */
+export interface PrApprovalResult {
+  approved: true;
+  state: 'approved';
+  reviewer?: string;
+}
+
 /** A repository available to pick from a provider before it is added. */
 export interface RemoteRepo {
   provider: RepoProvider;

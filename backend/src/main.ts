@@ -161,10 +161,17 @@ import { createPrFeatureService } from './repo/pr-feature-service.js';
 import { createGithubCommentsGateway } from './repo/github-pr-comments.js';
 import { createAzureCommentsGateway } from './repo/azure-pr-comments.js';
 import { createPrCommentsService } from './pr-review/pr-comments-service.js';
+import { createGithubApprovalGateway } from './repo/github-pr-approval.js';
+import { createAzureApprovalGateway } from './repo/azure-pr-approval.js';
+import { createPrApprovalService } from './pr-review/pr-approval-service.js';
 import type {
   PrCommentsGateway,
   PrCommentsGatewayResolver,
 } from './pr-review/pr-comments-contract.js';
+import type {
+  PrApprovalGateway,
+  PrApprovalGatewayResolver,
+} from './pr-review/pr-approval-contract.js';
 import type { Repository } from './repo/repo-contract.js';
 import type {
   RemotePullRequest,
@@ -842,7 +849,7 @@ function main(): void {
     return { status: response.status, body };
   };
   const azureHttpSend = async (
-    method: 'POST' | 'PATCH',
+    method: 'POST' | 'PATCH' | 'PUT',
     url: string,
     token: string,
     payload: unknown,
@@ -871,6 +878,8 @@ function main(): void {
     azureHttpSend('POST', url, token, payload);
   const azureHttpPatch = (url: string, token: string, payload: unknown) =>
     azureHttpSend('PATCH', url, token, payload);
+  const azureHttpPut = (url: string, token: string, payload: unknown) =>
+    azureHttpSend('PUT', url, token, payload);
   const listAzureReposFor = (org: string) =>
     listAzureRepos(
       {
@@ -1445,6 +1454,35 @@ function main(): void {
     repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
     gateways: prCommentsGateways,
   });
+  const prApprovalGateways: PrApprovalGatewayResolver = {
+    resolve: (repo, pull): PrApprovalGateway => {
+      if (repo.provider === 'github') {
+        return createGithubApprovalGateway(ghRun, {
+          repo: repo.name,
+          number: pull.number,
+        });
+      }
+      const target = parseAzureRepoUrl(repo.remoteUrl);
+      if (!target) {
+        throw new ValidationError(
+          `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+        );
+      }
+      return createAzureApprovalGateway(
+        {
+          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          httpGet: azureHttpGet,
+          httpPut: azureHttpPut,
+        },
+        { ...target, pullRequestId: pull.number },
+      );
+    },
+  };
+  const prApprovalService = createPrApprovalService({
+    reviews: { get: (featureId) => prReviewService.find(featureId) },
+    repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
+    gateways: prApprovalGateways,
+  });
   const prFeatureService = createPrFeatureService({
     repos: repoService,
     listPulls: listPullsFor,
@@ -1577,6 +1615,7 @@ function main(): void {
       prFeatures: prFeatureService,
       prReviews: prReviewService,
       prComments: prCommentsService,
+      prApprovals: prApprovalService,
       context: contextService,
       logger,
     }),

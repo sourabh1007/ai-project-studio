@@ -37,4 +37,10 @@ contextBridge.exposeInMainWorld('desktop', {
   relaunch() {
     ipcRenderer.send('app:relaunch');
   },
+  getVersion() {
+    return ipcRenderer.invoke('app:getVersion');
+  },
+  openDocs() {
+    ipcRenderer.send('app:openDocs');
+  },
 });
