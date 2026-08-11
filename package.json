@@ -1,6 +1,6 @@
 {
   "name": "ai-project-studio",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "private": true,
   "description": "Project-centric management and observability layer over the GitHub Copilot and Agency CLIs.",
   "workspaces": [

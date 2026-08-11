@@ -70,6 +70,25 @@ describe('PrReviewPage approval', () => {
     ).toBeDisabled();
   });
 
+  it('shows an already-approved label when the reviewer had approved', async () => {
+    const client: Partial<ApiClient> = {
+      getPrReview: vi.fn().mockResolvedValue(review),
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      approvePrReview: vi.fn().mockResolvedValue({
+        approved: true,
+        state: 'approved',
+        alreadyApproved: true,
+      }),
+    };
+    renderPage(client);
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+
+    expect(
+      await screen.findByRole('button', { name: /Already approved/ }),
+    ).toBeDisabled();
+  });
+
   it('surfaces approval failures inline', async () => {
     const client: Partial<ApiClient> = {
       getPrReview: vi.fn().mockResolvedValue(review),

@@ -55,6 +55,11 @@ Use the **Approve** button in the review page header to cast your approval witho
 leaving AI Project Studio. The action uses the signed-in reviewer account and works
 for both **GitHub** and **Azure DevOps** pull requests.
 
+If you have **already approved** the pull request, the button recognizes your existing
+vote and shows **Already approved** instead of casting a duplicate approval. On Azure
+DevOps the approval is cast against your organization identity, so it works even when
+your profile and organization ids differ.
+
 ## Re-running
 
 The review page exposes **Re-run all** and per-step **Retry** controls, so you can

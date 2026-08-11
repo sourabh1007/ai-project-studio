@@ -165,6 +165,7 @@ export function PrReviewPage({
   const [refreshing, setRefreshing] = useState(false);
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
+  const [alreadyApproved, setAlreadyApproved] = useState(false);
   const [retrying, setRetrying] = useState<PrReviewStepKey | null>(null);
   const [explaining, setExplaining] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -202,6 +203,7 @@ export function PrReviewPage({
   useEffect(() => {
     setApproved(false);
     setApproving(false);
+    setAlreadyApproved(false);
   }, [featureId]);
 
   // Polling fallback: while a step is generating, re-fetch the review on a timer
@@ -253,8 +255,9 @@ export function PrReviewPage({
     setApproving(true);
     setError(null);
     try {
-      await api.approvePrReview(featureId);
+      const result = await api.approvePrReview(featureId);
       setApproved(true);
+      setAlreadyApproved(result.alreadyApproved === true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -322,7 +325,13 @@ export function PrReviewPage({
         <div className="pr-review-page-actions">
           <Button onClick={() => void approve()} disabled={approving || approved}>
             <CheckIcon size={13} />{' '}
-            {approved ? 'Approved ✓' : approving ? 'Approving…' : 'Approve'}
+            {approved
+              ? alreadyApproved
+                ? 'Already approved ✓'
+                : 'Approved ✓'
+              : approving
+                ? 'Approving…'
+                : 'Approve'}
           </Button>
           <Button
             variant="ghost"

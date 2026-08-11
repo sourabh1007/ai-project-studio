@@ -324,6 +324,7 @@ export interface PrApprovalResult {
   approved: true;
   state: 'approved';
   reviewer?: string;
+  alreadyApproved?: boolean;
 }
 
 /** A repository available to pick from a provider before it is added. */

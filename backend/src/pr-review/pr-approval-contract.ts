@@ -6,6 +6,8 @@ export interface PrApprovalResult {
   approved: true;
   state: 'approved';
   reviewer?: string;
+  /** True when the signed-in reviewer had already approved the pull request. */
+  alreadyApproved?: boolean;
 }
 
 /** Provider port bound to one pull request that can cast the reviewer approval. */

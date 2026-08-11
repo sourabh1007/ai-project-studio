@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
+import type { ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { resolveApiBase } from '../lib/api-base.js';
@@ -8,6 +9,57 @@ import {
   decodeServerMessage,
   encodeClientMessage,
 } from '../lib/terminal-protocol.js';
+
+type ThemeMode = 'light' | 'dark';
+
+/** Reads the app theme from the `data-theme` attribute set on `<html>`. */
+function currentThemeMode(): ThemeMode {
+  if (typeof document === 'undefined') {
+    return 'dark';
+  }
+  return document.documentElement.getAttribute('data-theme') === 'light'
+    ? 'light'
+    : 'dark';
+}
+
+/**
+ * The xterm palette for each app theme. Dark keeps the original deep-navy shell;
+ * light uses a white background with dark text and a VS Code Light+ ANSI palette
+ * so CLI output (including bright colours) stays readable on white.
+ */
+function xtermTheme(mode: ThemeMode): ITheme {
+  if (mode === 'light') {
+    return {
+      background: '#ffffff',
+      foreground: '#0f172a',
+      cursor: '#4f46e5',
+      cursorAccent: '#ffffff',
+      selectionBackground: 'rgba(79, 70, 229, 0.20)',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#00a33f',
+      yellow: '#946b00',
+      blue: '#0451a5',
+      magenta: '#a5289c',
+      cyan: '#0598a6',
+      white: '#4b5563',
+      brightBlack: '#64748b',
+      brightRed: '#cd3131',
+      brightGreen: '#14953b',
+      brightYellow: '#8a7100',
+      brightBlue: '#0451a5',
+      brightMagenta: '#a5289c',
+      brightCyan: '#0598a6',
+      brightWhite: '#1f2937',
+    };
+  }
+  return {
+    background: '#0a0f1e',
+    foreground: '#c9d6ef',
+    cursor: '#818cf8',
+    selectionBackground: 'rgba(129, 140, 248, 0.3)',
+  };
+}
 
 /** The subset of the Electron preload bridge this component uses. */
 interface DesktopClipboard {
@@ -115,6 +167,31 @@ export function TerminalView({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const termRef = useRef<Terminal | null>(null);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(currentThemeMode);
+  const themeModeRef = useRef(themeMode);
+  themeModeRef.current = themeMode;
+
+  // Track the app theme (set as `data-theme` on <html>) so the terminal can
+  // switch its palette live — white shell with dark text in light mode.
+  useEffect(() => {
+    const sync = () => setThemeMode(currentThemeMode());
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  // Re-theme the live terminal instance when the app theme toggles, without
+  // remounting it (which would drop scrollback and the WebSocket).
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = xtermTheme(themeMode);
+    }
+  }, [themeMode]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -142,16 +219,12 @@ export function TerminalView({
       letterSpacing: 0,
       allowProposedApi: true,
       scrollback: 5000,
-      theme: {
-        background: '#0a0f1e',
-        foreground: '#c9d6ef',
-        cursor: '#818cf8',
-        selectionBackground: 'rgba(129, 140, 248, 0.3)',
-      },
+      theme: xtermTheme(themeModeRef.current),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    termRef.current = term;
 
     const safeFit = () => {
       if (host.clientWidth === 0 || host.clientHeight === 0) {
@@ -387,6 +460,7 @@ export function TerminalView({
       ws.onmessage = null;
       ws.close();
       term.dispose();
+      termRef.current = null;
     };
   }, [sessionId]);
 

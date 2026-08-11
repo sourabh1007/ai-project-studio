@@ -4013,6 +4013,14 @@ body.is-resizing {
   background: var(--panel-editor);
 }
 
+[data-theme='light'] .terminal-host {
+  background: #ffffff;
+}
+
+[data-theme='light'] .terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(79, 70, 229, 0.35);
+}
+
 .terminal-host .xterm {
   height: 100%;
   max-height: none;
