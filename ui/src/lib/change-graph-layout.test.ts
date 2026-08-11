@@ -7,6 +7,7 @@ import {
   BOX_TITLE_H,
   buildFocusedChangeGraphLayout,
   buildChangeGraphLayout,
+  COLLAPSED_BOX_H,
   findNode,
   LABEL_CHAR_W,
   MAX_ROW_WIDTH,
@@ -304,6 +305,81 @@ describe('buildChangeGraphLayout', () => {
       calls: [],
       highlightsChanges: false,
     });
+  });
+
+  it('collapses a listed project into a module tile with no file nodes', () => {
+    const built = step({
+      projects: [{ id: 'p', name: 'App', path: null }],
+      nodes: [
+        node({ path: 'a.cs', projectId: 'p' }),
+        node({ path: 'b.cs', projectId: 'p' }),
+        node({ path: 'c.cs', projectId: 'p' }),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code', {
+      collapsed: new Set(['p']),
+    });
+
+    expect(layout.boxes).toHaveLength(1);
+    expect(layout.boxes[0]).toMatchObject({ id: 'p', collapsed: true, count: 3 });
+    // A collapsed box places none of its files.
+    expect(layout.nodes).toEqual([]);
+    expect(layout.boxes[0].height).toBe(COLLAPSED_BOX_H);
+  });
+
+  it('re-anchors edges to a collapsed module and hides its internal edges', () => {
+    const built = step({
+      projects: [
+        { id: 'p1', name: 'One', path: null },
+        { id: 'p2', name: 'Two', path: null },
+      ],
+      nodes: [
+        node({ path: 'p1/a.cs', projectId: 'p1' }),
+        node({ path: 'p1/b.cs', projectId: 'p1' }),
+        node({ path: 'p1/c.cs', projectId: 'p1' }),
+        node({ path: 'p2/x.cs', projectId: 'p2' }),
+      ],
+      edges: [
+        // Internal to the collapsed module p1: dropped.
+        edge('p1/a.cs', 'p1/b.cs'),
+        // Crosses from collapsed p1 into expanded p2: re-anchored to the tile.
+        edge('p1/a.cs', 'p2/x.cs', [{ symbol: 'X', caller: 'A' }]),
+        // A parallel cross-module edge is merged into the same module edge.
+        edge('p1/c.cs', 'p2/x.cs', [{ symbol: 'X', caller: 'C' }]),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code', {
+      collapsed: new Set(['p1']),
+    });
+
+    expect(layout.edges).toHaveLength(1);
+    expect(layout.edges[0]).toMatchObject({
+      from: 'box:p1',
+      to: 'p2/x.cs',
+      highlightsChanges: true,
+    });
+    // Both parallel edges' calls are merged onto the single module edge.
+    expect(layout.edges[0].calls).toEqual([
+      { symbol: 'X', caller: 'A' },
+      { symbol: 'X', caller: 'C' },
+    ]);
+  });
+
+  it('keeps every project expanded when no collapse set is given', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'a.cs', projectId: 'p' }),
+        node({ path: 'b.cs', projectId: 'p' }),
+        node({ path: 'c.cs', projectId: 'p' }),
+      ],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+
+    expect(layout.boxes[0].collapsed).toBe(false);
+    expect(layout.nodes).toHaveLength(3);
   });
 });
 

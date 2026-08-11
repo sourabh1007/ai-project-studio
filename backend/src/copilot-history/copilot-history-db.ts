@@ -51,7 +51,11 @@ export function createCopilotHistoryDb(
     },
     sessionSummaries(sessionIds) {
       return query<HistorySessionRow>(
-        `SELECT id, summary FROM sessions WHERE id IN (${placeholders(sessionIds.length)})`,
+        `SELECT s.id, s.summary,
+                (SELECT t.user_message FROM turns t
+                   WHERE t.session_id = s.id
+                   ORDER BY t.turn_index ASC LIMIT 1) AS first_user_message
+         FROM sessions s WHERE s.id IN (${placeholders(sessionIds.length)})`,
         sessionIds,
       );
     },

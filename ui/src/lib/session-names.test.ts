@@ -3,6 +3,7 @@ import {
   createSessionNameStore,
   defaultSessionLabel,
   sessionDisplayName,
+  sessionWorkTitle,
   SESSION_NAMES_KEY,
   type SessionNameStorage,
 } from './session-names.js';
@@ -117,5 +118,41 @@ describe('sessionDisplayName', () => {
 
   it('falls back to the default label for whitespace', () => {
     expect(sessionDisplayName('   ', 5)).toBe('Session #5');
+  });
+});
+
+describe('sessionWorkTitle', () => {
+  it('prefers a custom name over the prompt', () => {
+    expect(sessionWorkTitle('  Renamed  ', 'do a thing', null, 1)).toBe('Renamed');
+  });
+
+  it('derives a capitalised title from the first prompt line', () => {
+    expect(
+      sessionWorkTitle(null, 'add retry logic to the client\nmore detail', null, 1),
+    ).toBe('Add retry logic to the client');
+  });
+
+  it('strips polite boilerplate prefixes', () => {
+    expect(sessionWorkTitle(null, 'Please fix the flaky test', null, 1)).toBe(
+      'Fix the flaky test',
+    );
+  });
+
+  it('collapses whitespace and truncates long prompts with an ellipsis', () => {
+    const prompt = 'Analyze the attached pull-request review request and respond in detail';
+    const title = sessionWorkTitle(null, prompt, null, 1, 20);
+    expect(title.length).toBe(20);
+    expect(title.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to the default label when there is no prompt', () => {
+    expect(sessionWorkTitle(null, '', null, 7)).toBe('Session #7');
+    expect(sessionWorkTitle(null, '   \n  ', null, 8)).toBe('Session #8');
+  });
+
+  it('uses the CLI-history work title when the launch prompt is empty', () => {
+    expect(
+      sessionWorkTitle(null, '', 'investigate usage rows\nextra detail', 3),
+    ).toBe('Investigate usage rows');
   });
 });

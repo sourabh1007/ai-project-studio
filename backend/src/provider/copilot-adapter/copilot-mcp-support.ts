@@ -40,5 +40,6 @@ export function createCopilotMcpSupport(): McpSupport {
     configPathPrompt: DISCOVERY_PROMPT,
     parseConfigPath: parseCopilotMcpConfigPath,
     defaultConfigPath: () => join(homedir(), '.copilot', COPILOT_MCP_CONFIG_FILENAME),
+    liveReloadCommand: '/restart',
   };
 }

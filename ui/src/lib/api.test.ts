@@ -140,6 +140,15 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/features/f1/sessions');
   });
 
+  it('can include internal sessions for analytics labels', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.listSessions('f1', { includeInternal: true });
+    expect(calls[0][0]).toBe(
+      '/api/features/f1/sessions?includeInternal=true',
+    );
+  });
+
   it('lists a feature tree groups', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
@@ -326,6 +335,42 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(
       JSON.stringify({ name: 'fs', spec: { command: 'npx' } }),
     );
+  });
+
+  it('toggles an MCP tool with a JSON PUT body and encoded path params', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        config: { providerId: 'a/b', configPath: '/x', exists: true, servers: [] },
+        server: { name: 'Azure MCP', spec: {} },
+        liveReloadedSessions: 1,
+        liveReloadCommand: '/restart',
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.setMcpToolEnabled('a/b', 'Azure MCP', 'tool/read', false);
+    const [url, init] = calls[0];
+    expect(url).toBe(
+      '/api/mcp/providers/a%2Fb/servers/Azure%20MCP/tools/tool%2Fread',
+    );
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(JSON.stringify({ enabled: false }));
+  });
+
+  it('restarts an MCP server with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        config: { providerId: 'agency', configPath: '/x', exists: true, servers: [] },
+        server: { name: 'Azure', spec: {} },
+        liveReloadedSessions: 1,
+        liveReloadCommand: '/restart',
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.restartMcpServer('agency', 'Azure');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/mcp/providers/agency/servers/Azure/restart');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
   });
 
   it('reads the effective config', async () => {

@@ -14,7 +14,12 @@ beforeAll(() => {
   const db = new DatabaseSync(dbPath);
   db.exec(`
     CREATE TABLE sessions (id TEXT PRIMARY KEY, summary TEXT);
-    CREATE TABLE checkpoints (
+  CREATE TABLE turns (
+    session_id TEXT,
+    turn_index INTEGER,
+    user_message TEXT
+  );
+  CREATE TABLE checkpoints (
       session_id TEXT,
       checkpoint_number INTEGER,
       title TEXT,
@@ -22,6 +27,10 @@ beforeAll(() => {
       created_at TEXT
     );
     INSERT INTO sessions (id, summary) VALUES ('s1', 'Summary one'), ('s2', NULL);
+    INSERT INTO turns VALUES
+      ('s1', 0, 'First query'),
+      ('s1', 1, 'Second query'),
+      ('s2', 0, 'Only query');
     INSERT INTO checkpoints VALUES ('s1', 1, 'T1', 'O1', '2024-01-01T00:00:00Z');
     INSERT INTO checkpoints VALUES ('s1', 2, 'T2', 'O2', '2024-01-02T00:00:00Z');
   `);
@@ -49,8 +58,12 @@ describe('createCopilotHistoryDb', () => {
     const rows = source.sessionSummaries(['s1', 's2']);
     expect(rows).toEqual(
       expect.arrayContaining([
-        { id: 's1', summary: 'Summary one' },
-        { id: 's2', summary: null },
+        {
+          id: 's1',
+          summary: 'Summary one',
+          first_user_message: 'First query',
+        },
+        { id: 's2', summary: null, first_user_message: 'Only query' },
       ]),
     );
   });

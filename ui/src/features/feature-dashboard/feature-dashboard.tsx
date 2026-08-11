@@ -15,7 +15,7 @@ import {
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
-import { sessionDisplayName } from '../../lib/session-names.js';
+import { sessionDisplayName, sessionWorkTitle } from '../../lib/session-names.js';
 import {
   buildUsageTree,
   type FeatureUsageTreeNode,
@@ -340,16 +340,16 @@ function Charts({
   const { totals, groups, byDay, byModel, bySession, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
 
-  // Resolve human session labels (persisted name or "Session #N" in creation
-  // order) so charts never show cryptic truncated ids.
+  // Resolve human session labels: custom name, launch prompt, CLI-history work
+  // title, then "Session #N" — so IDE metasessions are not cryptic ordinals.
   const { data: sessions } = useAsync<Session[]>(
-    () => api.listSessions(featureId),
+    () => api.listSessions(featureId, { includeInternal: true }),
     [featureId],
   );
-  const nameById = useMemo(() => {
-    const map = new Map<string, string>();
-    (sessions ?? []).forEach((s, i) => {
-      map.set(s.id, sessionDisplayName(s.name, i + 1));
+  const sessionById = useMemo(() => {
+    const map = new Map<string, Session>();
+    (sessions ?? []).forEach((s) => {
+      map.set(s.id, s);
     });
     return map;
   }, [sessions]);
@@ -362,7 +362,10 @@ function Charts({
   }, [bySession]);
   const labelFor = (sessionId: string): string => {
     const ordinal = ordinalById.get(sessionId) ?? 1;
-    return nameById.get(sessionId) ?? sessionDisplayName(null, ordinal);
+    const session = sessionById.get(sessionId);
+    return session
+      ? sessionWorkTitle(session.name, session.prompt, session.workTitle, ordinal)
+      : sessionDisplayName(null, ordinal);
   };
 
   const dayData = useMemo(
@@ -562,7 +565,7 @@ function Charts({
       <Section
         icon={<ActivityIcon size={15} />}
         title="Usage tree"
-        hint={`${bySession.length} sessions · ${formatDuration(timing.totalActiveMs)} active`}
+        hint={`${bySession.length} sessions · ${totalAic.toFixed(2)} AIC · ${formatDuration(timing.totalActiveMs)} active`}
       >
       <div className="dash-table dash-usage-tree" role="table" aria-label="Nested usage activity">
           <div className="dash-table-head" role="row">

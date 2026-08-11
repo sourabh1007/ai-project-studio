@@ -137,98 +137,217 @@ function FocusedFileGraph({
   const viewW = Math.max(360, layout.width + FOCUSED_CANVAS_PAD * 2);
   const viewH = Math.max(132, layout.height + FOCUSED_CANVAS_PAD * 2);
 
-  return (
-    <div className="cg-focused-wrap">
-      <svg
-        className="cg-focused-svg"
-        viewBox={`0 0 ${viewW} ${viewH}`}
-        role="img"
-        aria-label="Focused file connection graph"
-      >
-        <defs>
-          <marker
-            id="cg-focused-arrow"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="7"
-            markerHeight="7"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head" />
-          </marker>
-          <marker
-            id="cg-focused-arrow-pr"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="7"
-            markerHeight="7"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
-          </marker>
-        </defs>
-        <g transform={`translate(${FOCUSED_CANVAS_PAD} ${FOCUSED_CANVAS_PAD})`}>
-          {layout.edges.map((edge) => {
-            const label = edgeCallLabel(edge.calls);
-            const highlighted = edge.highlightsChanges;
-            return (
-              <g key={`${edge.from}->${edge.to}`} className="cg-focused-edge">
-                <line
-                  className={`cg-link${highlighted ? ' cg-link-pr' : ''}`}
-                  x1={edge.x1}
-                  y1={edge.y1}
-                  x2={edge.x2}
-                  y2={edge.y2}
-                  markerEnd={
-                    highlighted
-                      ? 'url(#cg-focused-arrow-pr)'
-                      : 'url(#cg-focused-arrow)'
-                  }
-                />
-                {label && (
-                  <text
-                    className={`cg-link-label${highlighted ? ' cg-link-label-pr' : ''}`}
-                    x={(edge.x1 + edge.x2) / 2}
-                    y={(edge.y1 + edge.y2) / 2 - 7}
-                    textAnchor="middle"
-                  >
-                    {label}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-          {layout.nodes.map((node) => (
-            <g
-              key={node.path}
-              className={`cg-filenode cg-filenode-${node.kind}${node.path === focusPath ? ' cg-filenode-selected' : ''}`}
-              transform={`translate(${node.x} ${node.y})`}
-            >
-              <rect
-                className="cg-filenode-rect"
-                width={node.width}
-                height={NODE_H}
-                rx={8}
+  const [zoom, setZoom] = useState(1);
+  const [fullscreen, setFullscreen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!fullscreen) {
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
+
+  function onWheel(e: React.WheelEvent) {
+    if (!e.ctrlKey && !e.metaKey) {
+      return;
+    }
+    e.preventDefault();
+    setZoom((z) => Math.min(2.4, Math.max(0.4, z - e.deltaY * 0.0012)));
+  }
+  function onPointerDown(e: React.PointerEvent) {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      sl: el.scrollLeft,
+      st: el.scrollTop,
+    };
+  }
+  function onPointerMove(e: React.PointerEvent) {
+    const d = drag.current;
+    const el = scrollRef.current;
+    if (!d || !el) {
+      return;
+    }
+    el.scrollLeft = d.sl - (e.clientX - d.x);
+    el.scrollTop = d.st - (e.clientY - d.y);
+  }
+  function onPointerUp() {
+    drag.current = null;
+  }
+
+  const svg = (
+    <svg
+      className="cg-focused-svg"
+      width={viewW * zoom}
+      height={viewH * zoom}
+      viewBox={`0 0 ${viewW} ${viewH}`}
+      role="img"
+      aria-label="Focused file connection graph"
+    >
+      <defs>
+        <marker
+          id="cg-focused-arrow"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head" />
+        </marker>
+        <marker
+          id="cg-focused-arrow-pr"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
+        </marker>
+      </defs>
+      <g transform={`translate(${FOCUSED_CANVAS_PAD} ${FOCUSED_CANVAS_PAD})`}>
+        {layout.edges.map((edge) => {
+          const label = edgeCallLabel(edge.calls);
+          const highlighted = edge.highlightsChanges;
+          return (
+            <g key={`${edge.from}->${edge.to}`} className="cg-focused-edge">
+              <line
+                className={`cg-link${highlighted ? ' cg-link-pr' : ''}`}
+                x1={edge.x1}
+                y1={edge.y1}
+                x2={edge.x2}
+                y2={edge.y2}
+                markerEnd={
+                  highlighted
+                    ? 'url(#cg-focused-arrow-pr)'
+                    : 'url(#cg-focused-arrow)'
+                }
               />
-              <text
-                className="cg-filenode-label"
-                x={node.width / 2}
-                y={NODE_H / 2 + 4}
-                textAnchor="middle"
-              >
-                {node.label}
-              </text>
+              {label && (
+                <text
+                  className={`cg-link-label${highlighted ? ' cg-link-label-pr' : ''}`}
+                  x={(edge.x1 + edge.x2) / 2}
+                  y={(edge.y1 + edge.y2) / 2 - 7}
+                  textAnchor="middle"
+                >
+                  {label}
+                </text>
+              )}
             </g>
-          ))}
-        </g>
-      </svg>
-      {layout.edges.length === 0 && (
+          );
+        })}
+        {layout.nodes.map((node) => (
+          <g
+            key={node.path}
+            className={`cg-filenode cg-filenode-${node.kind}${node.path === focusPath ? ' cg-filenode-selected' : ''}`}
+            transform={`translate(${node.x} ${node.y})`}
+          >
+            <rect
+              className="cg-filenode-rect"
+              width={node.width}
+              height={NODE_H}
+              rx={8}
+            />
+            <text
+              className="cg-filenode-label"
+              x={node.width / 2}
+              y={NODE_H / 2 + 4}
+              textAnchor="middle"
+            >
+              {node.label}
+            </text>
+          </g>
+        ))}
+      </g>
+    </svg>
+  );
+
+  const controls = (
+    <div className="cg-controls" role="group" aria-label="Zoom controls">
+      <button
+        type="button"
+        onClick={() => setZoom((z) => Math.min(2.4, z + 0.2))}
+        aria-label="Zoom in"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        onClick={() => setZoom((z) => Math.max(0.4, z - 0.2))}
+        aria-label="Zoom out"
+      >
+        −
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setZoom(1);
+          scrollRef.current?.scrollTo({ top: 0, left: 0 });
+        }}
+        aria-label="Reset view"
+      >
+        ⟲
+      </button>
+      <button
+        type="button"
+        onClick={() => setFullscreen((f) => !f)}
+        aria-label={fullscreen ? 'Exit full screen' : 'Open full screen'}
+        title={fullscreen ? 'Exit full screen (Esc)' : 'Open full screen'}
+      >
+        {fullscreen ? '×' : '⛶'}
+      </button>
+    </div>
+  );
+
+  const body = (
+    <div className={`cg-focused-wrap${fullscreen ? ' cg-focused-full' : ''}`}>
+      <div
+        className="cg-scroll"
+        ref={scrollRef}
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
+      >
+        {svg}
+      </div>
+      {controls}
+      {layout.edges.length === 0 && !fullscreen && (
         <p className="muted">No direct file connections were found for this file.</p>
       )}
     </div>
   );
+
+  return fullscreen
+    ? createPortal(
+        <div
+          className="cg-fullscreen cg-fullscreen-over"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Focused file diagram full screen"
+        >
+          {body}
+        </div>,
+        document.body,
+      )
+    : body;
 }
 
 /** The detail panel content for the currently selected node. */
@@ -449,17 +568,87 @@ export function ChangeGraph({
   comments?: PrCommentsController;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
-  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
+  // Zoom multiplies the SVG's pixel size; navigation is native scrolling inside
+  // the box (see cg-scroll), so a graph larger than the box always gets real
+  // scrollbars instead of overflowing the card and pushing controls off-screen.
+  const [zoom, setZoom] = useState(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // The graph opens focused on the changed files themselves. External callers
+  // ("Calls the change" — blue boundary nodes) are what turn a large PR into an
+  // edge hairball, so they are hidden by default and revealed on demand. No
+  // information is lost: the toggle brings every caller and edge straight back.
+  const [showCallers, setShowCallers] = useState(false);
+  // Opens the whole canvas as a full-viewport overlay so a dense graph has room
+  // to breathe and every control stays reachable regardless of the card size.
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!fullscreen) {
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
+  // Project ids the user has expanded from their default collapsed module tile.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(
     null,
   );
   // True once the pointer has moved far enough to count as a pan, so the trailing
   // click after a drag is not misread as a node selection.
   const panned = useRef(false);
 
+  // The step actually laid out: with callers hidden, boundary nodes of this
+  // category and every edge touching them are dropped, so the canvas shows only
+  // the changed modules and the calls between them. Projects that existed solely
+  // to host a caller disappear too, which is what tames the hairball.
+  const layoutStep = useMemo<ChangeGraphStep>(() => {
+    if (showCallers) {
+      return step;
+    }
+    const nodes = step.nodes.filter(
+      (node) => !(node.category === category && node.kind === 'boundary'),
+    );
+    const remaining = new Set(nodes.map((node) => node.path));
+    const edges = step.edges.filter(
+      (edge) => remaining.has(edge.from) && remaining.has(edge.to),
+    );
+    return { ...step, nodes, edges };
+  }, [step, category, showCallers]);
+
+  // Every project/module is collapsible so the graph opens as a broad, module
+  // level overview: each project renders as a single tile with merged
+  // module→module edges instead of a hairball of individual files. Clicking a
+  // tile expands just that module to reveal its files and their edges.
+  const collapsible = useMemo(() => {
+    const set = new Set<string>();
+    for (const node of layoutStep.nodes) {
+      if (node.category === category) {
+        set.add(node.projectId);
+      }
+    }
+    return set;
+  }, [layoutStep.nodes, category]);
+
+  const collapsedSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const id of collapsible) {
+      if (!expanded.has(id)) {
+        set.add(id);
+      }
+    }
+    return set;
+  }, [collapsible, expanded]);
+
   const layout = useMemo(
-    () => buildChangeGraphLayout(step, category),
-    [step, category],
+    () => buildChangeGraphLayout(layoutStep, category, { collapsed: collapsedSet }),
+    [layoutStep, category, collapsedSet],
   );
   const kindsPresent = useMemo(() => {
     const set = new Set<PrChangeKind>();
@@ -477,8 +666,20 @@ export function ChangeGraph({
       ),
     [step.nodes, category],
   );
+  // Projects that contain at least one changed file in this category. Their
+  // module tiles are tinted light orange so a glance shows which modules the PR
+  // actually changes, versus modules shown only because they call the change.
+  const changedProjects = useMemo(() => {
+    const set = new Set<string>();
+    for (const node of step.nodes) {
+      if (node.category === category && node.kind === 'changed') {
+        set.add(node.projectId);
+      }
+    }
+    return set;
+  }, [step.nodes, category]);
 
-  if (layout.nodes.length === 0) {
+  if (layout.boxes.length === 0) {
     return (
       <div className="cg-empty">
         <p>No {category === 'test' ? 'test' : 'code'} changes in this PR.</p>
@@ -514,22 +715,51 @@ export function ChangeGraph({
     }
   }
 
-  function onWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    setView((v) => {
-      const next = Math.min(2.4, Math.max(0.4, v.scale - e.deltaY * 0.0012));
-      return { ...v, scale: next };
+  function toggleProject(id: string) {
+    // A pan gesture ends with a synthetic click; ignore it so dragging never
+    // expands or collapses a module.
+    if (panned.current) {
+      return;
+    }
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
     });
   }
 
+  // Ctrl/Cmd + wheel zooms; a plain wheel scrolls the box natively. Zoom is only
+  // intercepted with a modifier so the scrollbars remain the primary navigation.
+  function onWheel(e: React.WheelEvent) {
+    if (!e.ctrlKey && !e.metaKey) {
+      return;
+    }
+    e.preventDefault();
+    setZoom((z) => Math.min(2.4, Math.max(0.4, z - e.deltaY * 0.0012)));
+  }
+
   function onPointerDown(e: React.PointerEvent) {
-    drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y };
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    drag.current = {
+      x: e.clientX,
+      y: e.clientY,
+      sl: el.scrollLeft,
+      st: el.scrollTop,
+    };
     panned.current = false;
   }
 
   function onPointerMove(e: React.PointerEvent) {
     const d = drag.current;
-    if (!d) {
+    const el = scrollRef.current;
+    if (!d || !el) {
       return;
     }
     // Only treat this as a pan once the pointer clearly moves; a tiny jitter on a
@@ -537,74 +767,114 @@ export function ChangeGraph({
     if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) {
       panned.current = true;
     }
-    setView((v) => ({
-      ...v,
-      x: d.ox + (e.clientX - d.x),
-      y: d.oy + (e.clientY - d.y),
-    }));
+    // Drag-to-pan drives the native scroll offsets so it composes with the
+    // scrollbars instead of a separate transform.
+    el.scrollLeft = d.sl - (e.clientX - d.x);
+    el.scrollTop = d.st - (e.clientY - d.y);
   }
 
   function onPointerUp() {
     drag.current = null;
   }
 
-  return (
-    <div className="cg-wrap">
-      <div className="cg-canvas">
-        <svg
-          className="cg-svg"
-          viewBox={`0 0 ${viewW} ${viewH}`}
-          role="application"
-          aria-label="Changed files graph"
+  const graph = (
+    <>
+      <div className={`cg-canvas${fullscreen ? ' cg-canvas-full' : ''}`}>
+        <div
+          className="cg-scroll"
+          ref={scrollRef}
           onWheel={onWheel}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
         >
-          <defs>
-            <marker
-              id="cg-arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="7"
-              markerHeight="7"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head" />
-            </marker>
-            <marker
-              id="cg-arrow-pr"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="7"
-              markerHeight="7"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
-            </marker>
-          </defs>
-          <g
-            transform={`translate(${view.x + CANVAS_PAD} ${view.y + CANVAS_PAD}) scale(${view.scale})`}
+          <svg
+            className="cg-svg"
+            width={viewW * zoom}
+            height={viewH * zoom}
+            viewBox={`0 0 ${viewW} ${viewH}`}
+            role="application"
+            aria-label="Changed files graph"
           >
-            {layout.boxes.map((box) => (
-              <g key={box.id} className="cg-box">
-                <rect
-                  className="cg-box-rect"
-                  x={box.x}
-                  y={box.y}
-                  width={box.width}
-                  height={box.height}
-                  rx={12}
-                />
-                <text className="cg-box-title" x={box.x + 14} y={box.y + 20}>
-                  {box.name}
-                  <tspan className="cg-box-count"> · {box.count}</tspan>
-                </text>
-              </g>
-            ))}
+            <defs>
+              <marker
+                id="cg-arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head" />
+              </marker>
+              <marker
+                id="cg-arrow-pr"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
+              </marker>
+            </defs>
+            <g
+              transform={`translate(${CANVAS_PAD} ${CANVAS_PAD})`}
+          >
+            {layout.boxes.map((box) => {
+              const canToggle = box.collapsed || collapsible.has(box.id);
+              const changed = changedProjects.has(box.id);
+              return (
+                <g
+                  key={box.id}
+                  className={`cg-box${box.collapsed ? ' cg-box-collapsed' : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
+                  onClick={canToggle ? () => toggleProject(box.id) : undefined}
+                  role={canToggle ? 'button' : undefined}
+                  tabIndex={canToggle ? 0 : undefined}
+                  onKeyDown={
+                    canToggle
+                      ? (e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleProject(box.id);
+                          }
+                        }
+                      : undefined
+                  }
+                >
+                  <rect
+                    className="cg-box-rect"
+                    x={box.x}
+                    y={box.y}
+                    width={box.width}
+                    height={box.height}
+                    rx={12}
+                  />
+                  <text className="cg-box-title" x={box.x + 14} y={box.y + 20}>
+                    {canToggle && (
+                      <tspan className="cg-box-caret">
+                        {box.collapsed ? '▸ ' : '▾ '}
+                      </tspan>
+                    )}
+                    {box.name}
+                    <tspan className="cg-box-count"> · {box.count}</tspan>
+                  </text>
+                  {box.collapsed && (
+                    <text
+                      className="cg-box-hint"
+                      x={box.x + 14}
+                      y={box.y + 42}
+                    >
+                      {box.count} file{box.count === 1 ? '' : 's'} — click to
+                      expand
+                    </text>
+                  )}
+                </g>
+              );
+            })}
             {layout.edges.map((edge, i) => {
               const label = edgeCallLabel(edge.calls);
               return (
@@ -670,31 +940,54 @@ export function ChangeGraph({
             })}
           </g>
         </svg>
+        </div>
         <div className="cg-controls" role="group" aria-label="Zoom controls">
+          {hasBoundary && (
+            <button
+              type="button"
+              className={`cg-callers-toggle${showCallers ? ' cg-callers-on' : ''}`}
+              onClick={() => setShowCallers((s) => !s)}
+              aria-pressed={showCallers}
+              title={
+                showCallers
+                  ? 'Hide external callers to focus on the changed files'
+                  : 'Show external callers (the files that call the changed code)'
+              }
+            >
+              {showCallers ? 'Hide callers' : 'Show callers'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() =>
-              setView((v) => ({ ...v, scale: Math.min(2.4, v.scale + 0.2) }))
-            }
+            onClick={() => setZoom((z) => Math.min(2.4, z + 0.2))}
             aria-label="Zoom in"
           >
             +
           </button>
           <button
             type="button"
-            onClick={() =>
-              setView((v) => ({ ...v, scale: Math.max(0.4, v.scale - 0.2) }))
-            }
+            onClick={() => setZoom((z) => Math.max(0.4, z - 0.2))}
             aria-label="Zoom out"
           >
             −
           </button>
           <button
             type="button"
-            onClick={() => setView({ scale: 1, x: 0, y: 0 })}
+            onClick={() => {
+              setZoom(1);
+              scrollRef.current?.scrollTo({ top: 0, left: 0 });
+            }}
             aria-label="Reset view"
           >
             ⟲
+          </button>
+          <button
+            type="button"
+            onClick={() => setFullscreen((f) => !f)}
+            aria-label={fullscreen ? 'Exit full screen' : 'Open full screen'}
+            title={fullscreen ? 'Exit full screen (Esc)' : 'Open full screen'}
+          >
+            {fullscreen ? '×' : '⛶'}
           </button>
         </div>
         <Legend kinds={kindsPresent} category={category} hasBoundary={hasBoundary} />
@@ -709,6 +1002,19 @@ export function ChangeGraph({
           onClose={() => setSelected(null)}
         />
       )}
-    </div>
+    </>
   );
+  return fullscreen
+    ? createPortal(
+        <div
+          className="cg-fullscreen"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Change graph full screen"
+        >
+          {graph}
+        </div>,
+        document.body,
+      )
+    : <div className="cg-wrap">{graph}</div>;
 }

@@ -68,6 +68,7 @@ import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 import type { ContextService } from '../context-store/context-service.js';
+import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
 
 export interface ApiRoutesDeps {
   features: FeatureService;
@@ -77,6 +78,7 @@ export interface ApiRoutesDeps {
   factory: SessionFactory;
   sessionConfig: SessionConfig;
   sessions: SessionRepo;
+  sessionHistory: CopilotHistoryReader;
   providers: ProviderRegistry;
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
@@ -148,6 +150,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       launcher: deps.launcher,
       sessions: deps.sessions,
       admin: deps.admin,
+      history: deps.sessionHistory,
       logger: deps.logger,
     }),
     ...createTerminalRoutes({

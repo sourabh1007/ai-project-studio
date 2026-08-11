@@ -185,7 +185,10 @@ export function createPrDiffCollector(deps: PrDiffCollectorDeps): PrDiffCollecto
       const truncated = patchRaw.length > max;
       const patch = truncated ? patchRaw.slice(0, max) : patchRaw;
 
-      const perFile = splitPatchByFile(patch);
+      // Split the FULL patch (not the prompt-budget–truncated `patch`) so every
+      // changed file keeps its own diff even when it appears after the overall
+      // maxPatchChars cutoff; each file is still bounded to maxFileDiffChars.
+      const perFile = splitPatchByFile(patchRaw);
       const fileMax = deps.config.maxFileDiffChars;
       const entries: PrDiffEntry[] = parseNameStatus(nameStatus).map((row) => {
         const filePatch = perFile.get(row.path) ?? '';

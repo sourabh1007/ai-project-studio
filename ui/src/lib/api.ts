@@ -21,6 +21,7 @@ import type {
   ModelInfo,
   MoveFeatureInput,
   MoveNodeInput,
+  McpApplyResult,
   McpServerInput,
   ProviderInfo,
   ProviderMcpConfig,
@@ -212,8 +213,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ id: string }>(`/sessions/${id}`, del()),
     renameSession: (id: string, name: string | null) =>
       request<Session>(`/sessions/${id}`, putBody({ name })),
-    listSessions: (featureId: string) =>
-      request<Session[]>(`/features/${featureId}/sessions`),
+    listSessions: (
+      featureId: string,
+      options: { includeInternal?: boolean } = {},
+    ) =>
+      request<Session[]>(
+        `/features/${featureId}/sessions${
+          options.includeInternal ? '?includeInternal=true' : ''
+        }`,
+      ),
     listGroups: (featureId: string) =>
       request<TreeGroup[]>(`/features/${featureId}/groups`),
     createGroup: (featureId: string, input: CreateGroupInput) =>
@@ -273,6 +281,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<ProviderMcpConfig>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
         putBody(input),
+      ),
+    setMcpToolEnabled: (
+      providerId: string,
+      serverName: string,
+      toolName: string,
+      enabled: boolean,
+    ) =>
+      request<McpApplyResult>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}`,
+        putBody({ enabled }),
+      ),
+    restartMcpServer: (providerId: string, serverName: string) =>
+      request<McpApplyResult>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/restart`,
+        jsonBody({}),
       ),
     listSkills: () => request<Skill[]>('/skills'),
     getSkill: (id: string) => request<Skill>(`/skills/${id}`),

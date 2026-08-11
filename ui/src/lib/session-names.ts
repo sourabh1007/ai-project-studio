@@ -88,3 +88,41 @@ export function sessionDisplayName(
   const trimmed = custom?.trim();
   return trimmed ? trimmed : defaultSessionLabel(ordinal);
 }
+
+/** Boilerplate prefixes stripped from a launch prompt when deriving a title. */
+const PROMPT_TITLE_NOISE = /^(please\s+|kindly\s+|can you\s+|could you\s+)/i;
+
+/**
+ * A human, "what was done" title for a session. Prefers the user's custom name;
+ * otherwise derives a concise title from the session's launch prompt or, for
+ * prompt-less terminal/metasessions, a CLI-history work title. Falls back to
+ * "Session #N" only when there is no work text to summarise.
+ */
+export function sessionWorkTitle(
+  custom: string | null | undefined,
+  prompt: string | null | undefined,
+  workTitle: string | null | undefined,
+  ordinal: number,
+  maxLength = 64,
+): string {
+  const trimmedCustom = custom?.trim();
+  if (trimmedCustom) {
+    return trimmedCustom;
+  }
+  const firstLine = [prompt, workTitle]
+    .flatMap((value) => (value ?? '').split('\n'))
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) {
+    return defaultSessionLabel(ordinal);
+  }
+  const cleaned = firstLine
+    .replace(PROMPT_TITLE_NOISE, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const title = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  if (title.length <= maxLength) {
+    return title;
+  }
+  return `${title.slice(0, maxLength - 1).trimEnd()}…`;
+}

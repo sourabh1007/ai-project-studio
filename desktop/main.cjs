@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, shell, nativeTheme, ipcMain, session, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboard } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
@@ -178,7 +178,52 @@ function isTrustedSender(event) {
   }
 }
 
+/**
+ * Installs the application menu. It mirrors Electron's default menu but with one
+ * critical change: the Paste items keep their visible shortcut yet do NOT register
+ * the `CmdOrCtrl+V` accelerator (`registerAccelerator: false`). The default menu's
+ * registered Paste accelerator calls `webContents.paste()`, which inserts the
+ * clipboard into the focused xterm textarea *in addition to* xterm's own `paste`
+ * event handler — pasting everything twice in the terminal. Leaving the accelerator
+ * unregistered lets Chromium handle Ctrl/Cmd+V natively (single paste in inputs)
+ * and lets xterm's paste event be the sole terminal paste path (single paste there).
+ */
+function installApplicationMenu() {
+  const isMac = process.platform === 'darwin';
+  const editSubmenu = [
+    { role: 'undo' },
+    { role: 'redo' },
+    { type: 'separator' },
+    { role: 'cut' },
+    { role: 'copy' },
+    // Paste without a registered accelerator — see the doc comment above.
+    {
+      label: 'Paste',
+      accelerator: 'CmdOrCtrl+V',
+      registerAccelerator: false,
+      click: (_item, win) => win?.webContents.paste(),
+    },
+    {
+      label: 'Paste and Match Style',
+      accelerator: 'CmdOrCtrl+Shift+V',
+      registerAccelerator: false,
+      click: (_item, win) => win?.webContents.pasteAndMatchStyle(),
+    },
+    { role: 'delete' },
+    { role: 'selectAll' },
+  ];
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    { role: 'fileMenu' },
+    { label: 'Edit', submenu: editSubmenu },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow(loadUrl) {
+  installApplicationMenu();
   const win = new BrowserWindow({
     width: 1360,
     height: 900,

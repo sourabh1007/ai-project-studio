@@ -120,6 +120,12 @@ export interface McpSupport {
   parseConfigPath(reply: string): string | null;
   /** Documented default config path used when dynamic discovery yields nothing. */
   defaultConfigPath(): string;
+  /**
+   * Optional interactive command that makes an already-open provider session
+   * restart/reload its process so the provider re-reads MCP config. Omitted when
+   * the provider has no live reload path.
+   */
+  liveReloadCommand?: string;
 }
 
 /** A pluggable AI provider. Adding one requires only a new implementation. */

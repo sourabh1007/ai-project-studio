@@ -402,6 +402,8 @@ export interface Session {
   status: SessionStatus;
   kind: SessionKind;
   prompt: string;
+  /** Fallback work/query title derived from CLI history when prompt is empty. */
+  workTitle?: string | null;
   usageFilePath: string;
   createdAt: string;
   startedAt: string | null;
@@ -602,6 +604,22 @@ export interface ModelInfo {
 export interface McpServerEntry {
   name: string;
   spec: Record<string, unknown>;
+  tools?: McpToolEntry[];
+  toolDiscovery?: McpToolDiscovery;
+}
+
+export interface McpToolEntry {
+  name: string;
+  description: string | null;
+  enabled: boolean;
+}
+
+export type McpToolDiscoveryStatus = 'ok' | 'failed' | 'skipped';
+
+export interface McpToolDiscovery {
+  status: McpToolDiscoveryStatus;
+  message: string | null;
+  output: string[];
 }
 
 /** MCP configuration currently seen for a provider. */
@@ -616,6 +634,13 @@ export interface ProviderMcpConfig {
 export interface McpServerInput {
   name: string;
   spec: Record<string, unknown>;
+}
+
+export interface McpApplyResult {
+  config: ProviderMcpConfig;
+  server: McpServerEntry;
+  liveReloadedSessions: number;
+  liveReloadCommand: string | null;
 }
 
 export interface StoredUsage extends UsageTotals {

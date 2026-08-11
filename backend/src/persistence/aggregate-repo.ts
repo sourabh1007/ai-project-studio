@@ -49,15 +49,17 @@ export function createAggregateRepo(
   const kinds = config.rollupKinds;
   const kindsPlaceholders = kinds.map(() => '?').join(', ');
   // Session scope is persisted once on launch. Joining it here avoids copying
-  // visibility onto every usage row while keeping internal meta usage available
-  // to the separate IDE AI reader.
+  // visibility onto every usage row. Internal-scope work (PR review, summaries,
+  // repository analysis) is IDE AI the app runs on the user's behalf: it is kept
+  // OUT of the workspace-wide "billable" total, but it IS counted in per-feature
+  // analytics so a feature's usage tree shows the real credits its sessions spent
+  // (the feature dashboard lists those sessions and must reconcile with them).
   const visibleUsage = `NOT EXISTS (
     SELECT 1 FROM sessions
     WHERE sessions.id = usage_events.session_id
       AND sessions.scope = 'internal'
   )`;
-  const featureFilter = `feature_id = ? AND kind IN (${kindsPlaceholders})
-    AND ${visibleUsage}`;
+  const featureFilter = `feature_id = ? AND kind IN (${kindsPlaceholders})`;
 
   const featureTotalsStmt = db.prepare(
     `SELECT ${TOTALS_COLUMNS} FROM usage_events WHERE ${featureFilter}`,

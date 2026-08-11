@@ -85,7 +85,14 @@ describe('Explorer repository context gating', () => {
       name: 'New session in Context UI',
     });
     expect(newSession).toBeDisabled();
-    expect(screen.getByText(/pending analysis/i)).toBeInTheDocument();
+    // The inline notice is suppressed for transient states (pending/generating/
+    // stale) — the repo header already shows the status — so it must NOT appear
+    // under the feature; the reason is still conveyed via the button tooltip.
+    expect(screen.queryByText(/pending analysis/i)).not.toBeInTheDocument();
+    expect(newSession).toHaveAttribute(
+      'title',
+      expect.stringMatching(/pending analysis/i),
+    );
 
     const live: LiveState = {
       ...initialLiveState,
@@ -121,5 +128,31 @@ describe('Explorer repository context gating', () => {
     expect(
       await screen.findByRole('button', { name: 'New session in Context UI' }),
     ).toBeEnabled();
+  });
+
+  it('shows an inline notice only when context generation has failed', async () => {
+    const failed: RepositoryContext = {
+      ...context('failed', '2025-01-01T00:00:01Z'),
+      failure: { message: 'clone failed' } as RepositoryContext['failure'],
+    };
+    const live: LiveState = {
+      ...initialLiveState,
+      repositoryContexts: { r1: failed },
+    };
+    render(
+      <ApiProvider value={api(context('pending', '2025-01-01T00:00:01Z'))}>
+        <Explorer
+          live={live}
+          activeSessionId={null}
+          names={{}}
+          {...callbacks}
+        />
+      </ApiProvider>,
+    );
+    const newSession = await screen.findByRole('button', {
+      name: 'New session in Context UI',
+    });
+    expect(newSession).toBeDisabled();
+    expect(screen.getByText(/failed: clone failed/i)).toBeInTheDocument();
   });
 });

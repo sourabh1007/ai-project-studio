@@ -37,7 +37,16 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
 }
 
-function harness(completion: Promise<Session>, startError?: Error) {
+function harness(
+  completion: Promise<Session>,
+  startError?: Error,
+  options: {
+    withHistory?: boolean;
+    listAll?: Session[];
+    historySummary?: string | null;
+    historyFirstUserMessage?: string | null;
+  } = {},
+) {
   const requests: StartSessionRequest[] = [];
   const logs: LogRecord[] = [];
   const logger: Logger = createLogger('error', (r) => logs.push(r));
@@ -54,6 +63,12 @@ function harness(completion: Promise<Session>, startError?: Error) {
   };
   const sessions = {
     listByFeature: (id: string) => [{ ...session, featureId: id }],
+    listByFeatureAll: (id: string) => [
+      ...(options.listAll ?? [
+        { ...session, featureId: id },
+        { ...session, id: 'meta1', featureId: id, kind: 'meta', prompt: '' },
+      ]),
+    ],
     get: (id: string) => (id === 's1' ? session : null),
   } as unknown as SessionRepo;
   const deleted: string[] = [];
@@ -69,7 +84,32 @@ function harness(completion: Promise<Session>, startError?: Error) {
     deleteFeature: async () => undefined,
     deleteSession: async (id: string) => void deleted.push(id),
   };
-  const routes = createSessionRoutes({ launcher, sessions, admin, logger });
+  const history = options.withHistory === false ? undefined : {
+    read: (ids: string[]) =>
+      ids.map((id) => ({
+        sessionId: id,
+        summary:
+          id === 'meta1'
+            ? 'historySummary' in options
+              ? options.historySummary ?? null
+              : 'Summarized meta work'
+            : null,
+        firstUserMessage:
+          id === 'meta1'
+            ? 'historyFirstUserMessage' in options
+              ? options.historyFirstUserMessage ?? null
+              : 'investigate the PR'
+            : null,
+        checkpoints: [],
+      })),
+  };
+  const routes = createSessionRoutes({
+    launcher,
+    sessions,
+    admin,
+    history,
+    logger,
+  });
   return { routes, requests, logs, deleted, renamed };
 }
 
@@ -137,6 +177,59 @@ describe('session-controller', () => {
     );
     expect(result.status).toBe(200);
     expect((result.body as Session[])[0].featureId).toBe('fX');
+  });
+
+  it('includes internal sessions and enriches their work title when requested', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'get', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'fX' }, query: { includeInternal: 'true' } }),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'meta1',
+          kind: 'meta',
+          workTitle: 'investigate the PR',
+        }),
+      ]),
+    );
+  });
+
+  it('accepts includeInternal=1 and falls back to the CLI summary for a title', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      historyFirstUserMessage: null,
+      historySummary: 'Summarized meta work',
+    });
+    const result = await pick(h.routes, 'get', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'fX' }, query: { includeInternal: '1' } }),
+    );
+    expect(result.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'meta1',
+          workTitle: 'Summarized meta work',
+        }),
+      ]),
+    );
+  });
+
+  it('lists sessions without title enrichment when history is unavailable', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      withHistory: false,
+    });
+    const result = await pick(h.routes, 'get', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'fX' }, query: { includeInternal: 'true' } }),
+    );
+    expect((result.body as Session[]).some((item) => item.workTitle)).toBe(false);
+  });
+
+  it('does not query history for an empty session list', async () => {
+    const h = harness(Promise.resolve(session), undefined, { listAll: [] });
+    const result = await pick(h.routes, 'get', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'fX' }, query: { includeInternal: 'true' } }),
+    );
+    expect(result.body).toEqual([]);
   });
 
   it('gets a session by id', async () => {

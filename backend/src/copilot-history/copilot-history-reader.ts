@@ -32,13 +32,20 @@ export function createCopilotHistoryReader(
         return sessionIds.map((sessionId) => ({
           sessionId,
           summary: null,
+          firstUserMessage: null,
           checkpoints: [],
         }));
       }
 
-      const summaryById = new Map<string, string | null>();
+      const summaryById = new Map<
+        string,
+        { summary: string | null; firstUserMessage: string | null }
+      >();
       for (const row of source.sessionSummaries(sessionIds)) {
-        summaryById.set(row.id, row.summary);
+        summaryById.set(row.id, {
+          summary: row.summary,
+          firstUserMessage: row.first_user_message,
+        });
       }
 
       const checkpointsById = new Map<string, CheckpointSummary[]>();
@@ -57,9 +64,11 @@ export function createCopilotHistoryReader(
         const checkpoints = (checkpointsById.get(sessionId) ?? [])
           .sort((a, b) => b.number - a.number)
           .slice(0, config.maxCheckpointsPerSession);
+        const summary = summaryById.get(sessionId);
         return {
           sessionId,
-          summary: summaryById.get(sessionId) ?? null,
+          summary: summary?.summary ?? null,
+          firstUserMessage: summary?.firstUserMessage ?? null,
           checkpoints,
         };
       });

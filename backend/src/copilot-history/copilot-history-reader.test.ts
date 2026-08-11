@@ -47,8 +47,8 @@ describe('createCopilotHistoryReader', () => {
     const result = reader.read(['a', 'b']);
 
     expect(result).toEqual([
-      { sessionId: 'a', summary: null, checkpoints: [] },
-      { sessionId: 'b', summary: null, checkpoints: [] },
+      { sessionId: 'a', summary: null, firstUserMessage: null, checkpoints: [] },
+      { sessionId: 'b', summary: null, firstUserMessage: null, checkpoints: [] },
     ]);
     expect(calls.summaries).toHaveLength(0);
     expect(calls.checkpoints).toHaveLength(0);
@@ -56,8 +56,12 @@ describe('createCopilotHistoryReader', () => {
 
   it('joins summaries and checkpoints, newest checkpoint first', () => {
     const summaries: HistorySessionRow[] = [
-      { id: 's1', summary: 'Did work on s1' },
-      { id: 's2', summary: null },
+      {
+        id: 's1',
+        summary: 'Did work on s1',
+        first_user_message: 'please do work on s1',
+      },
+      { id: 's2', summary: null, first_user_message: null },
     ];
     const checkpoints: HistoryCheckpointRow[] = [
       {
@@ -90,6 +94,7 @@ describe('createCopilotHistoryReader', () => {
       {
         sessionId: 's1',
         summary: 'Did work on s1',
+        firstUserMessage: 'please do work on s1',
         checkpoints: [
           {
             number: 2,
@@ -105,8 +110,8 @@ describe('createCopilotHistoryReader', () => {
           },
         ],
       },
-      { sessionId: 's2', summary: null, checkpoints: [] },
-      { sessionId: 's3', summary: null, checkpoints: [] },
+      { sessionId: 's2', summary: null, firstUserMessage: null, checkpoints: [] },
+      { sessionId: 's3', summary: null, firstUserMessage: null, checkpoints: [] },
     ]);
   });
 

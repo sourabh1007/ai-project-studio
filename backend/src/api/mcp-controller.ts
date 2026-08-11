@@ -8,6 +8,10 @@ const putServerSchema = z.object({
   spec: z.record(z.string(), z.unknown()),
 });
 
+const setToolSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export interface McpControllerDeps {
   mcp: McpService;
 }
@@ -41,6 +45,32 @@ export function createMcpRoutes(deps: McpControllerDeps): Route[] {
           body: await deps.mcp.putServer(req.params.providerId, input),
         };
       },
+    },
+    {
+      method: 'put',
+      path: '/mcp/providers/:providerId/servers/:serverName/tools/:toolName',
+      handler: async (req) => {
+        const input = parseInput(setToolSchema, req.body);
+        return {
+          status: 200,
+          body: await deps.mcp.setToolEnabled(req.params.providerId, {
+            serverName: req.params.serverName,
+            toolName: req.params.toolName,
+            enabled: input.enabled,
+          }),
+        };
+      },
+    },
+    {
+      method: 'post',
+      path: '/mcp/providers/:providerId/servers/:serverName/restart',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.mcp.restartServer(
+          req.params.providerId,
+          req.params.serverName,
+        ),
+      }),
     },
   ];
 }

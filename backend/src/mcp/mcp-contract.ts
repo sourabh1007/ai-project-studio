@@ -8,6 +8,10 @@
 export interface McpServerEntry {
   name: string;
   spec: Record<string, unknown>;
+  /** Tools discovered from the live MCP server, annotated with current config. */
+  tools?: McpToolEntry[];
+  /** Outcome of the latest best-effort tool discovery probe. */
+  toolDiscovery?: McpToolDiscovery;
 }
 
 /** The MCP configuration currently seen for a provider. */
@@ -24,6 +28,50 @@ export interface ProviderMcpConfig {
 export interface McpServerInput {
   name: string;
   spec: Record<string, unknown>;
+}
+
+/** One tool exposed by an MCP server. */
+export interface McpToolEntry {
+  name: string;
+  description: string | null;
+  /** False when the provider config allow-list excludes this tool. */
+  enabled: boolean;
+}
+
+export type McpToolDiscoveryStatus = 'ok' | 'failed' | 'skipped';
+
+/** Details from a live MCP probe, including auth/device-code output if any. */
+export interface McpToolDiscovery {
+  status: McpToolDiscoveryStatus;
+  message: string | null;
+  output: string[];
+}
+
+export interface McpToolInspection extends McpToolDiscovery {
+  tools: Array<Omit<McpToolEntry, 'enabled'>>;
+}
+
+export interface McpToolInspector {
+  inspect(input: {
+    serverName: string;
+    spec: Record<string, unknown>;
+    timeoutMs: number;
+  }): Promise<McpToolInspection>;
+}
+
+/** Input to enable or disable one discovered MCP tool. */
+export interface McpToolToggleInput {
+  serverName: string;
+  toolName: string;
+  enabled: boolean;
+}
+
+/** Result of applying an MCP operation to config and live sessions. */
+export interface McpApplyResult {
+  config: ProviderMcpConfig;
+  server: McpServerEntry;
+  liveReloadedSessions: number;
+  liveReloadCommand: string | null;
 }
 
 /**

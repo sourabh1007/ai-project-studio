@@ -72,6 +72,7 @@ describe('createFeatureWorkSummaryService', () => {
       {
         sessionId: 'newer',
         summary: 'newer summary',
+        firstUserMessage: null,
         checkpoints: [
           {
             number: 1,
@@ -109,7 +110,12 @@ describe('createFeatureWorkSummaryService', () => {
   it('prefers a generated session summary over the CLI summary', () => {
     const sessions = [session({ id: 's1', createdAt: '2024-01-01T00:00:00Z' })];
     const histories: SessionHistory[] = [
-      { sessionId: 's1', summary: 'cli summary', checkpoints: [] },
+      {
+        sessionId: 's1',
+        summary: 'cli summary',
+        firstUserMessage: null,
+        checkpoints: [],
+      },
     ];
     const service = createFeatureWorkSummaryService({
       sessions: repoOf(sessions),

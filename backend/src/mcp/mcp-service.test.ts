@@ -3,7 +3,11 @@ import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import type { IAIProvider, McpSupport } from '../provider/provider-contract.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
-import type { McpConfigDocument, McpConfigFileStore } from './mcp-contract.js';
+import type {
+  McpConfigDocument,
+  McpConfigFileStore,
+  McpToolInspector,
+} from './mcp-contract.js';
 import { createMcpService } from './mcp-service.js';
 
 function support(overrides: Partial<McpSupport> = {}): McpSupport {
@@ -42,7 +46,22 @@ function fileStore(
 }
 
 function metaOf(run: MetaRunner['run']): MetaRunner {
-  return { run: vi.fn(run) };
+  return { run: vi.fn(run), runDetailed: vi.fn() } as unknown as MetaRunner;
+}
+
+function inspector(overrides: Partial<McpToolInspector> = {}): McpToolInspector {
+  return {
+    inspect: vi.fn(async () => ({
+      status: 'ok',
+      message: null,
+      output: [],
+      tools: [
+        { name: 'read', description: 'Read things' },
+        { name: 'write', description: null },
+      ],
+    })),
+    ...overrides,
+  };
 }
 
 const enabled = { enabled: true, discoveryTimeoutMs: 1000 };
@@ -53,6 +72,7 @@ describe('createMcpService.listProviders', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support()), provider('other')),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -63,6 +83,7 @@ describe('createMcpService.listProviders', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: disabled,
     });
@@ -83,17 +104,34 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta,
+      tools: inspector(),
       files: fileStore(async () => doc),
       config: enabled,
     });
     const result = await service.getServers('agency');
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       providerId: 'agency',
       configPath: '/default/mcp-config.json',
       exists: true,
       servers: [
-        { name: 'alpha', spec: { command: 'a' } },
-        { name: 'zeta', spec: { command: 'z' } },
+        {
+          name: 'alpha',
+          spec: { command: 'a' },
+          tools: [
+            { name: 'read', description: 'Read things', enabled: true },
+            { name: 'write', description: null, enabled: true },
+          ],
+          toolDiscovery: { status: 'ok', message: null, output: [] },
+        },
+        {
+          name: 'zeta',
+          spec: { command: 'z' },
+          tools: [
+            { name: 'read', description: 'Read things', enabled: true },
+            { name: 'write', description: null, enabled: true },
+          ],
+          toolDiscovery: { status: 'ok', message: null, output: [] },
+        },
       ],
     });
     expect(meta.run).not.toHaveBeenCalled();
@@ -104,6 +142,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta,
+      tools: inspector(),
       files: fileStore(async (path) =>
         path === '/discovered/mcp-config.json'
           ? { mcpServers: { s: { command: 'x' } } }
@@ -113,7 +152,7 @@ describe('createMcpService.getServers', () => {
     });
     const result = await service.getServers('agency');
     expect(result.configPath).toBe('/discovered/mcp-config.json');
-    expect(result.servers).toEqual([{ name: 's', spec: { command: 'x' } }]);
+    expect(result.servers[0]).toMatchObject({ name: 's', spec: { command: 'x' } });
     expect(meta.run).toHaveBeenCalledOnce();
   });
 
@@ -122,6 +161,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta,
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -134,6 +174,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => 'none here'),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -149,6 +190,7 @@ describe('createMcpService.getServers', () => {
       meta: metaOf(async () => {
         throw new Error('provider offline');
       }),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -160,6 +202,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(() => new Promise<string>(() => {})),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: { enabled: true, discoveryTimeoutMs: 5 },
     });
@@ -171,6 +214,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => ({ other: true })),
       config: enabled,
     });
@@ -178,10 +222,75 @@ describe('createMcpService.getServers', () => {
     expect(result.servers).toEqual([]);
   });
 
+  it('marks tools disabled when the provider config allow-list excludes them', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({
+        mcpServers: { s: { command: 'x', tools: ['read'] } },
+      })),
+      config: enabled,
+    });
+    const result = await service.getServers('agency');
+    expect(result.servers[0].tools).toEqual([
+      { name: 'read', description: 'Read things', enabled: true },
+      { name: 'write', description: null, enabled: false },
+    ]);
+  });
+
+  it('skips inspection for disabled servers and captures inspector failures', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async ({ serverName }) => {
+          if (serverName === 'bad') throw new Error('boom');
+          return { status: 'ok', message: null, output: [], tools: [] };
+        }),
+      }),
+      files: fileStore(async () => ({
+        mcpServers: {
+          bad: { command: 'x' },
+          off: { command: 'x', enabled: false },
+        },
+      })),
+      config: enabled,
+    });
+    const result = await service.getServers('agency');
+    expect(result.servers.find((s) => s.name === 'bad')?.toolDiscovery).toEqual({
+      status: 'failed',
+      message: 'boom',
+      output: [],
+    });
+    expect(result.servers.find((s) => s.name === 'off')?.toolDiscovery).toEqual({
+      status: 'skipped',
+      message: 'Server is disabled in provider config',
+      output: [],
+    });
+  });
+
+  it('captures non-Error inspector failures', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async () => {
+          throw 'plain failure';
+        }),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    const result = await service.getServers('agency');
+    expect(result.servers[0].toolDiscovery?.message).toBe('plain failure');
+  });
+
   it('rejects when disabled', async () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: disabled,
     });
@@ -194,6 +303,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -206,6 +316,7 @@ describe('createMcpService.getServers', () => {
     const service = createMcpService({
       registry: registryOf(provider('plain')),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -231,6 +342,7 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => '/x/mcp-config.json'),
+      tools: inspector(),
       files,
       config: enabled,
     });
@@ -261,6 +373,7 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => '/x/mcp-config.json'),
+      tools: inspector(),
       files,
       config: enabled,
     });
@@ -279,6 +392,7 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => '/x/mcp-config.json'),
+      tools: inspector(),
       files,
       config: enabled,
     });
@@ -290,6 +404,7 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => '/x/mcp-config.json'),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -302,6 +417,7 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => '/x/mcp-config.json'),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: enabled,
     });
@@ -317,11 +433,242 @@ describe('createMcpService.putServer', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
+      tools: inspector(),
       files: fileStore(async () => null),
       config: disabled,
     });
     await expect(
       service.putServer('agency', { name: 'x', spec: {} }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe('createMcpService.setToolEnabled', () => {
+  it('writes an explicit tool allow-list and live-reloads running sessions', async () => {
+    let written: McpConfigDocument | null = null;
+    const liveReload = vi.fn(() => 2);
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support({ liveReloadCommand: '/restart' }))),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(
+        async () => ({ mcpServers: { s: { command: 'x', tools: ['*'] } } }),
+        async (_path, doc) => {
+          written = doc;
+        },
+      ),
+      config: enabled,
+      liveReload,
+    });
+    const result = await service.setToolEnabled('agency', {
+      serverName: ' s ',
+      toolName: ' write ',
+      enabled: false,
+    });
+    expect(written).toEqual({
+      mcpServers: { s: { command: 'x', tools: ['read'] } },
+    });
+    expect(liveReload).toHaveBeenCalledWith('agency', '/restart');
+    expect(result.liveReloadedSessions).toBe(2);
+    expect(result.liveReloadCommand).toBe('/restart');
+    expect(result.server.tools).toEqual([
+      { name: 'read', description: 'Read things', enabled: true },
+      { name: 'write', description: null, enabled: false },
+    ]);
+  });
+
+  it('collapses the allow-list back to wildcard when every tool is enabled', async () => {
+    let written: McpConfigDocument | null = null;
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(
+        async () => ({ mcpServers: { s: { command: 'x', tools: ['read'] } } }),
+        async (_path, doc) => {
+          written = doc;
+        },
+      ),
+      config: enabled,
+    });
+    const result = await service.setToolEnabled('agency', {
+      serverName: 's',
+      toolName: 'write',
+      enabled: true,
+    });
+    expect(written).toEqual({
+      mcpServers: { s: { command: 'x', tools: ['*'] } },
+    });
+    expect(result.liveReloadedSessions).toBe(0);
+    expect(result.liveReloadCommand).toBeNull();
+  });
+
+  it('rejects invalid toggle inputs and failed discovery', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async () => ({
+          status: 'failed',
+          message: 'login required',
+          output: ['visit https://example'],
+          tools: [],
+        })),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    await expect(
+      service.setToolEnabled('agency', {
+        serverName: '',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      service.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: '',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      service.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toThrow('login required');
+
+    const genericFailure = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async () => ({
+          status: 'failed',
+          message: null,
+          output: [],
+          tools: [],
+        })),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    await expect(
+      genericFailure.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toThrow('MCP tool discovery failed');
+  });
+
+  it('rejects an unknown server or tool and when disabled', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    await expect(
+      service.setToolEnabled('agency', {
+        serverName: 'missing',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      service.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: 'missing',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    const disabledService = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => null),
+      config: disabled,
+    });
+    await expect(
+      disabledService.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    const missingDocument = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => null),
+      config: enabled,
+    });
+    await expect(
+      missingDocument.setToolEnabled('agency', {
+        serverName: 's',
+        toolName: 'read',
+        enabled: false,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe('createMcpService.restartServer', () => {
+  it('probes the server and live-reloads sessions', async () => {
+    const liveReload = vi.fn(() => 1);
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support({ liveReloadCommand: '/restart' }))),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async () => ({
+          status: 'ok',
+          message: null,
+          output: ['device code ABCD'],
+          tools: [{ name: 'read', description: null }],
+        })),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+      liveReload,
+    });
+    const result = await service.restartServer('agency', ' s ');
+    expect(result.server.toolDiscovery).toEqual({
+      status: 'ok',
+      message: null,
+      output: ['device code ABCD'],
+    });
+    expect(result.liveReloadedSessions).toBe(1);
+  });
+
+  it('rejects invalid, unknown, or disabled restart requests', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    await expect(service.restartServer('agency', '')).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+    await expect(service.restartServer('agency', 'missing')).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+
+    const disabledService = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => null),
+      config: disabled,
+    });
+    await expect(disabledService.restartServer('agency', 's')).rejects.toBeInstanceOf(
+      ValidationError,
+    );
   });
 });

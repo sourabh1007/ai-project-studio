@@ -29,8 +29,13 @@ export interface PlacedBox {
   id: string;
   /** Display name shown on the box header. */
   name: string;
-  /** Number of changed files in this box for the rendered category. */
+  /** Number of nodes of the rendered category inside this box. */
   count: number;
+  /**
+   * When true the box is rendered as a single compact module tile with no inner
+   * file nodes; clicking it expands the module to reveal its files and edges.
+   */
+  collapsed: boolean;
   /** Absolute top-left of the box and its size. */
   x: number;
   y: number;
@@ -75,6 +80,15 @@ export const NODE_LABEL_PAD = 24;
 export const TITLE_CHAR_W = 8;
 /** The width the box flow wraps at, matched to the SVG viewBox width. */
 export const MAX_ROW_WIDTH = 1600;
+/**
+ * A module/project box is collapsed to a single tile once it holds more than
+ * this many nodes of the rendered category, so a change that touches many files
+ * in one module (or is referenced by many callers) shows as one module box the
+ * user can expand on demand instead of flooding the canvas.
+ */
+export const COLLAPSE_MIN_NODES = 2;
+/** Height of a collapsed module tile (title row plus a compact hint row). */
+export const COLLAPSED_BOX_H = 58;
 const FOCUSED_COL_GAP = 96;
 const FOCUSED_ROW_GAP = 34;
 
@@ -105,14 +119,39 @@ interface BoxPlan {
   id: string;
   name: string;
   paths: string[];
+  collapsed: boolean;
   cols: number;
   nodeWidth: number;
   width: number;
   height: number;
 }
 
+/** The box width needed to keep a title (plus its count suffix) unclipped. */
+function titleWidthFor(name: string): number {
+  return Math.ceil((name.length + 4) * TITLE_CHAR_W) + BOX_PAD * 2;
+}
+
 /** Plans one box's grid dimensions from the files it owns. */
-function planBox(id: string, name: string, paths: string[]): BoxPlan {
+function planBox(
+  id: string,
+  name: string,
+  paths: string[],
+  collapsed: boolean,
+): BoxPlan {
+  if (collapsed) {
+    // A collapsed module shows only its title tile; no inner grid is placed.
+    const width = Math.max(NODE_MIN_W, titleWidthFor(name));
+    return {
+      id,
+      name,
+      paths,
+      collapsed: true,
+      cols: 1,
+      nodeWidth: NODE_MIN_W,
+      width,
+      height: COLLAPSED_BOX_H,
+    };
+  }
   const cols = Math.max(1, Math.ceil(Math.sqrt(paths.length)));
   const rows = Math.max(1, Math.ceil(paths.length / cols));
   // Every cell in a box shares one width (the widest label) so the grid stays
@@ -123,11 +162,16 @@ function planBox(id: string, name: string, paths: string[]): BoxPlan {
   );
   const gridWidth = cols * nodeWidth + (cols - 1) * NODE_GAP + BOX_PAD * 2;
   // Keep the box at least as wide as its title (plus the count suffix).
-  const titleWidth = Math.ceil((name.length + 4) * TITLE_CHAR_W) + BOX_PAD * 2;
-  const width = Math.max(gridWidth, titleWidth);
+  const width = Math.max(gridWidth, titleWidthFor(name));
   const height =
     BOX_TITLE_H + rows * NODE_H + (rows - 1) * NODE_GAP + BOX_PAD * 2;
-  return { id, name, paths, cols, nodeWidth, width, height };
+  return { id, name, paths, collapsed: false, cols, nodeWidth, width, height };
+}
+
+/** Options controlling which project boxes render collapsed to a module tile. */
+export interface ChangeGraphLayoutOptions {
+  /** Project ids to render as a single collapsed module tile. */
+  collapsed?: ReadonlySet<string>;
 }
 
 /**
@@ -137,11 +181,18 @@ function planBox(id: string, name: string, paths: string[]): BoxPlan {
  * geometry so the render stays stable across re-renders. Only nodes of the given
  * `category` are placed, and only edges whose *both* endpoints are placed are
  * drawn, so the two graphs (code, test) stay independent.
+ *
+ * Projects listed in `options.collapsed` render as a single module tile instead
+ * of a grid of file nodes; their file nodes are omitted and their incident edges
+ * are re-anchored to the module tile (edges internal to a collapsed module are
+ * dropped, and parallel module-to-module edges are merged).
  */
 export function buildChangeGraphLayout(
   step: ChangeGraphStep,
   category: ChangeGraphCategory,
+  options?: ChangeGraphLayoutOptions,
 ): ChangeGraphLayout {
+  const collapsedProjects = options?.collapsed;
   const nodesInCategory = step.nodes.filter(
     (node) => node.category === category,
   );
@@ -164,19 +215,27 @@ export function buildChangeGraphLayout(
   }
 
   const kindByPath = new Map<string, ChangeGraphNodeKind>();
+  const projectByPath = new Map<string, string>();
   for (const node of nodesInCategory) {
     kindByPath.set(node.path, node.kind);
+    projectByPath.set(node.path, node.projectId);
   }
 
   const plans: BoxPlan[] = [];
   for (const [projectId, paths] of pathsByProject) {
     plans.push(
-      planBox(projectId, projectName.get(projectId) ?? projectId, paths),
+      planBox(
+        projectId,
+        projectName.get(projectId) ?? projectId,
+        paths,
+        collapsedProjects?.has(projectId) ?? false,
+      ),
     );
   }
 
   const boxes: PlacedBox[] = [];
   const nodes: PlacedNode[] = [];
+  const boxCenter = new Map<string, { x: number; y: number }>();
 
   let rowX = 0;
   let rowY = 0;
@@ -195,24 +254,31 @@ export function buildChangeGraphLayout(
       id: plan.id,
       name: plan.name,
       count: plan.paths.length,
+      collapsed: plan.collapsed,
       x: boxX,
       y: boxY,
       width: plan.width,
       height: plan.height,
     });
-    plan.paths.forEach((path, i) => {
-      const col = i % plan.cols;
-      const row = Math.floor(i / plan.cols);
-      nodes.push({
-        path,
-        projectId: plan.id,
-        label: basename(path),
-        kind: kindByPath.get(path) as ChangeGraphNodeKind,
-        x: boxX + BOX_PAD + col * (plan.nodeWidth + NODE_GAP),
-        y: boxY + BOX_TITLE_H + BOX_PAD + row * (NODE_H + NODE_GAP),
-        width: plan.nodeWidth,
-      });
+    boxCenter.set(plan.id, {
+      x: boxX + plan.width / 2,
+      y: boxY + plan.height / 2,
     });
+    if (!plan.collapsed) {
+      plan.paths.forEach((path, i) => {
+        const col = i % plan.cols;
+        const row = Math.floor(i / plan.cols);
+        nodes.push({
+          path,
+          projectId: plan.id,
+          label: basename(path),
+          kind: kindByPath.get(path) as ChangeGraphNodeKind,
+          x: boxX + BOX_PAD + col * (plan.nodeWidth + NODE_GAP),
+          y: boxY + BOX_TITLE_H + BOX_PAD + row * (NODE_H + NODE_GAP),
+          width: plan.nodeWidth,
+        });
+      });
+    }
     rowX += plan.width + BOX_GAP;
     rowHeight = Math.max(rowHeight, plan.height);
     canvasWidth = Math.max(canvasWidth, rowX - BOX_GAP);
@@ -222,25 +288,59 @@ export function buildChangeGraphLayout(
   for (const node of nodes) {
     nodeByPath.set(node.path, node);
   }
+
+  // Resolve an edge endpoint to its drawing anchor: the placed file node when
+  // its module is expanded, or the collapsed module tile centre otherwise.
+  const anchorFor = (
+    path: string,
+  ): { id: string; x: number; y: number } | null => {
+    const node = nodeByPath.get(path);
+    if (node) {
+      const c = nodeCenter(node);
+      return { id: path, x: c.x, y: c.y };
+    }
+    const projectId = projectByPath.get(path);
+    if (projectId === undefined) {
+      return null;
+    }
+    const center = boxCenter.get(projectId);
+    if (!center) {
+      return null;
+    }
+    return { id: `box:${projectId}`, x: center.x, y: center.y };
+  };
+
   const edges: PlacedEdge[] = [];
+  const edgeByKey = new Map<string, PlacedEdge>();
   for (const edge of step.edges) {
-    const from = nodeByPath.get(edge.from);
-    const to = nodeByPath.get(edge.to);
-    if (!from || !to) {
+    const a = anchorFor(edge.from);
+    const b = anchorFor(edge.to);
+    if (!a || !b || a.id === b.id) {
+      // Both endpoints must resolve, and edges internal to a single collapsed
+      // module (same anchor) are hidden until the module is expanded.
       continue;
     }
-    const a = nodeCenter(from);
-    const b = nodeCenter(to);
-    edges.push({
-      from: edge.from,
-      to: edge.to,
-      calls: edgeCalls(edge),
-      highlightsChanges: edgeCalls(edge).length > 0,
+    const calls = edgeCalls(edge);
+    const key = `${a.id}\u0000${b.id}`;
+    const existing = edgeByKey.get(key);
+    if (existing) {
+      existing.calls = [...existing.calls, ...calls];
+      existing.highlightsChanges =
+        existing.highlightsChanges || calls.length > 0;
+      continue;
+    }
+    const placed: PlacedEdge = {
+      from: a.id,
+      to: b.id,
+      calls,
+      highlightsChanges: calls.length > 0,
       x1: a.x,
       y1: a.y,
       x2: b.x,
       y2: b.y,
-    });
+    };
+    edgeByKey.set(key, placed);
+    edges.push(placed);
   }
 
   const height = plans.length > 0 ? rowY + rowHeight : 0;

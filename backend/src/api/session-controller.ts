@@ -5,6 +5,8 @@ import type { SessionRepo } from '../session/session-repo-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
+import type { Session } from '../session/session-contract.js';
+import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
 
 const startSessionSchema = z.object({
   providerId: z.string().min(1).optional(),
@@ -22,7 +24,42 @@ export interface SessionControllerDeps {
   launcher: SessionLauncher;
   sessions: SessionRepo;
   admin: WorkspaceAdmin;
+  history?: CopilotHistoryReader;
   logger: Logger;
+}
+
+function includeInternal(query: string | undefined): boolean {
+  return query === 'true' || query === '1';
+}
+
+function firstNonEmpty(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function enrichWorkTitles(
+  sessions: Session[],
+  history: CopilotHistoryReader | undefined,
+): Session[] {
+  if (!history || sessions.length === 0) {
+    return sessions;
+  }
+  const historyById = new Map(
+    history.read(sessions.map((session) => session.id)).map((item) => [
+      item.sessionId,
+      item,
+    ]),
+  );
+  return sessions.map((session) => {
+    const item = historyById.get(session.id);
+    const workTitle = firstNonEmpty(item?.firstUserMessage, item?.summary);
+    return workTitle ? { ...session, workTitle } : session;
+  });
 }
 
 /** Routes for starting sessions and reading them back. */
@@ -47,10 +84,15 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
     {
       method: 'get',
       path: '/features/:featureId/sessions',
-      handler: (req) => ({
-        status: 200,
-        body: deps.sessions.listByFeature(req.params.featureId),
-      }),
+      handler: (req) => {
+        const sessions = includeInternal(req.query.includeInternal)
+          ? deps.sessions.listByFeatureAll(req.params.featureId)
+          : deps.sessions.listByFeature(req.params.featureId);
+        return {
+          status: 200,
+          body: enrichWorkTitles(sessions, deps.history),
+        };
+      },
     },
     {
       method: 'get',

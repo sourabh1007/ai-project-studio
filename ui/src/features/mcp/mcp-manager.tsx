@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { McpServerEntry } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
-import { PencilIcon, PlusIcon } from '../../components/icons.js';
+import { PencilIcon, PlusIcon, RefreshIcon } from '../../components/icons.js';
 import { McpServerForm } from './mcp-server-form.js';
 
 /** One-line human summary of a server spec for the card body. */
@@ -21,6 +21,13 @@ function describeSpec(spec: Record<string, unknown>): string {
 
 function specType(spec: Record<string, unknown>): string {
   return typeof spec.type === 'string' && spec.type ? spec.type : 'server';
+}
+
+function discoveryLabel(server: McpServerEntry): string {
+  const discovery = server.toolDiscovery;
+  if (!discovery) return 'Tool discovery has not run yet.';
+  if (discovery.status === 'ok') return 'Tools discovered from a live MCP probe.';
+  return discovery.message ?? 'Tool discovery did not complete.';
 }
 
 export function McpManager() {
@@ -46,6 +53,8 @@ export function McpManager() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<McpServerEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function save(input: { name: string; spec: Record<string, unknown> }) {
     if (!providerId) {
@@ -59,6 +68,55 @@ export function McpManager() {
       config.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function restart(server: McpServerEntry) {
+    if (!providerId) return;
+    setBusyKey(`restart:${server.name}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.restartMcpServer(providerId, server.name);
+      const suffix =
+        result.liveReloadCommand && result.liveReloadedSessions > 0
+          ? ` Sent ${result.liveReloadCommand} to ${result.liveReloadedSessions} open session(s).`
+          : ' No open sessions needed a live reload.';
+      setNotice(`Restarted ${server.name}.${suffix}`);
+      config.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function toggleTool(
+    server: McpServerEntry,
+    toolName: string,
+    enabled: boolean,
+  ) {
+    if (!providerId) return;
+    setBusyKey(`tool:${server.name}:${toolName}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.setMcpToolEnabled(
+        providerId,
+        server.name,
+        toolName,
+        enabled,
+      );
+      const suffix =
+        result.liveReloadCommand && result.liveReloadedSessions > 0
+          ? ` Sent ${result.liveReloadCommand} to ${result.liveReloadedSessions} open session(s).`
+          : ' It will apply to new sessions; no open sessions were reloaded.';
+      setNotice(`${enabled ? 'Enabled' : 'Disabled'} ${toolName}.${suffix}`);
+      config.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
     }
   }
 
@@ -104,6 +162,7 @@ export function McpManager() {
       </div>
 
       <ErrorText error={error ?? providers.error ?? config.error} />
+      {notice && <p className="mcp-notice">{notice}</p>}
 
       {config.data?.configPath && (
         <p className="field-hint" title={config.data.configPath}>
@@ -133,6 +192,16 @@ export function McpManager() {
                 <button
                   type="button"
                   className="tree-action"
+                  title="Restart server"
+                  aria-label={`Restart ${server.name}`}
+                  disabled={busyKey === `restart:${server.name}`}
+                  onClick={() => void restart(server)}
+                >
+                  <RefreshIcon />
+                </button>
+                <button
+                  type="button"
+                  className="tree-action"
                   title="Edit"
                   aria-label={`Edit ${server.name}`}
                   onClick={() => setEditing(server)}
@@ -145,6 +214,44 @@ export function McpManager() {
               {server.name}
             </span>
             <p className="skill-card-body">{describeSpec(server.spec)}</p>
+            <div className="mcp-tools-panel">
+              <div className="mcp-tools-head">
+                <span>Tools</span>
+                <span className={`mcp-discovery mcp-discovery-${server.toolDiscovery?.status ?? 'skipped'}`}>
+                  {server.tools?.length ?? 0}
+                </span>
+              </div>
+              <p className="mcp-tools-status">{discoveryLabel(server)}</p>
+              {server.toolDiscovery?.output && server.toolDiscovery.output.length > 0 && (
+                <pre className="mcp-output">
+                  {server.toolDiscovery.output.join('\n')}
+                </pre>
+              )}
+              {server.tools && server.tools.length > 0 ? (
+                <div className="mcp-tool-list">
+                  {server.tools.map((tool) => (
+                    <label key={tool.name} className="mcp-tool-row">
+                      <input
+                        type="checkbox"
+                        checked={tool.enabled}
+                        disabled={busyKey === `tool:${server.name}:${tool.name}`}
+                        onChange={(event) =>
+                          void toggleTool(server, tool.name, event.target.checked)
+                        }
+                      />
+                      <span>
+                        <strong>{tool.name}</strong>
+                        {tool.description && <small>{tool.description}</small>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="mcp-tools-empty">
+                  No tools discovered. Restart to retry and surface any auth prompt.
+                </p>
+              )}
+            </div>
           </div>
         ))}
       </div>

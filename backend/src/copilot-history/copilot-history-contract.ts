@@ -17,6 +17,8 @@ export interface SessionHistory {
   sessionId: string;
   /** The CLI's one-line session summary, if it produced one. */
   summary: string | null;
+  /** The first user prompt recorded by the CLI, if present. */
+  firstUserMessage: string | null;
   checkpoints: CheckpointSummary[];
 }
 
@@ -24,6 +26,7 @@ export interface SessionHistory {
 export interface HistorySessionRow {
   id: string;
   summary: string | null;
+  first_user_message: string | null;
 }
 
 /** Raw checkpoint row from the CLI store. */

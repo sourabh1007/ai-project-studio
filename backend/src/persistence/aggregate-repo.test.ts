@@ -85,12 +85,13 @@ function seed() {
 }
 
 describe('aggregate-repo', () => {
-  it('feature totals include dev and meta but exclude other features', () => {
+  it('feature totals include dev, meta and internal IDE work but exclude other features', () => {
     const { db, reader } = seed();
     const totals = reader.featureTotals('f1');
-    expect(totals.sessions).toBe(3);
-    expect(totals.credits).toBeCloseTo(0.33 + 1 + 2 + 99);
-    expect(totals.inputTokens).toBe(1349);
+    // s1, s2, s3 (dev/meta) plus s5 (internal IDE work under this feature).
+    expect(totals.sessions).toBe(4);
+    expect(totals.credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 500);
+    expect(totals.inputTokens).toBe(6349);
     db.close();
   });
 
@@ -109,21 +110,26 @@ describe('aggregate-repo', () => {
     const { db, reader } = seed();
     const byProvider = reader.byProvider('f1');
     expect(byProvider.map((p) => p.provider)).toEqual(['agency', 'github']);
-    expect(byProvider.find((p) => p.provider === 'github')?.sessions).toBe(2);
+    expect(byProvider.find((p) => p.provider === 'github')?.sessions).toBe(3);
     db.close();
   });
 
   it('breaks down by day', () => {
     const { db, reader } = seed();
     const byDay = reader.byDay('f1');
-    expect(byDay.map((d) => d.day)).toEqual(['2025-01-01', '2025-01-02', '2025-01-03']);
+    expect(byDay.map((d) => d.day)).toEqual([
+      '2025-01-01',
+      '2025-01-02',
+      '2025-01-03',
+      '2025-02-01',
+    ]);
     db.close();
   });
 
   it('breaks down by session', () => {
     const { db, reader } = seed();
     const bySession = reader.bySession('f1');
-    expect(bySession.map((s) => s.sessionId)).toEqual(['s1', 's2', 's3']);
+    expect(bySession.map((s) => s.sessionId)).toEqual(['s1', 's2', 's3', 's5']);
     db.close();
   });
 
@@ -134,12 +140,16 @@ describe('aggregate-repo', () => {
     db.close();
   });
 
-  it('excludes internal meta sessions from every development rollup', () => {
+  it('keeps internal IDE work out of the workspace-wide billable total', () => {
     const { db, reader } = seed();
-    expect(reader.featureTotals('f1').credits).not.toBe(500);
-    expect(reader.bySession('f1').map((row) => row.sessionId)).not.toContain('s5');
-    expect(reader.byDay('f1').map((row) => row.day)).not.toContain('2025-02-01');
+    // Feature analytics DO surface internal IDE work (so a feature's usage tree
+    // reconciles with the credits its sessions spent)...
+    expect(reader.featureTotals('f1').credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 500);
+    expect(reader.bySession('f1').map((row) => row.sessionId)).toContain('s5');
+    expect(reader.byDay('f1').map((row) => row.day)).toContain('2025-02-01');
+    // ...but the workspace-wide total excludes internal-scope usage.
     expect(reader.workspaceTotals().credits).not.toBe(500);
+    expect(reader.workspaceTotals().credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 5);
     db.close();
   });
 });

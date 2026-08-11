@@ -129,6 +129,12 @@ export function TerminalView({
       // timer), which shows up as a rapid, erratic cursor flicker. Disable
       // xterm's blink so the application owns the cursor — steady and IDE-like.
       cursorBlink: false,
+      // When the terminal loses DOM focus, xterm's default inactive style is a
+      // faint hollow "outline" that is nearly invisible on this dark theme, so
+      // the shell looks frozen even though it is fine. Keep a solid block so the
+      // cursor stays visible regardless of focus.
+      cursorStyle: 'block',
+      cursorInactiveStyle: 'block',
       fontFamily:
         'JetBrains Mono, SFMono-Regular, Menlo, Consolas, monospace',
       fontSize: 13,
@@ -205,6 +211,19 @@ export function TerminalView({
       copyToClipboard(text);
     };
 
+    // Copy-on-select: the hosted CLI enables any-event mouse tracking, so every
+    // mouse move is reported to the app, which re-renders and clears xterm's
+    // selection almost immediately — often before a following Ctrl+C can read
+    // it. Copying the moment a (non-empty) selection is made captures it while
+    // it still exists, so dragging to select reliably lands text on the OS
+    // clipboard (the familiar terminal "copy on select" behaviour).
+    const selectionSub = term.onSelectionChange(() => {
+      const selection = term.getSelection();
+      if (selection) {
+        copyToClipboard(selection);
+      }
+    });
+
     const paste = (text: string) => {
       if (text) {
         term.paste(text);
@@ -248,36 +267,44 @@ export function TerminalView({
 
       if (key === 'v') {
         // Only block xterm from emitting a literal ^V (0x16). Do NOT paste here:
-        // the browser fires a native `paste` event that xterm's own listener
-        // handles exactly once. Pasting here as well is what doubled every paste.
+        // returning false makes xterm ignore the key WITHOUT calling
+        // preventDefault, so the browser still fires a native `paste` event —
+        // which our capture-phase `onPaste` listener owns and handles once.
         return false;
       }
 
       return true;
     });
 
-    // TEXT paste is handled 100% by xterm's built-in `paste` listener (single,
-    // bracketed). We only supplement the case xterm can't handle: an image or a
-    // copied file with NO text. This capture-phase listener runs before xterm's;
-    // for text it does nothing (lets xterm paste), and for an image/file it
-    // preventDefault/stopPropagation and pastes a shell-ready path from the
-    // native bridge — so neither case can ever paste twice.
+    // We OWN the paste completely. This capture-phase listener sits on the host
+    // (an ancestor of xterm's element/textarea), so it runs first and can shut
+    // down every other paste path:
+    //   - `preventDefault()` stops the browser's default action, which would
+    //     otherwise insert the pasted text into xterm's hidden textarea; xterm's
+    //     input handler then re-sends it — the source of the double paste. Note
+    //     xterm 5.5.0's own `handlePasteEvent` only calls `stopPropagation()`,
+    //     NOT `preventDefault()`, so it does not prevent this on its own.
+    //   - `stopImmediatePropagation()` prevents the event from ever reaching
+    //     xterm's own `paste` listeners (bound to both textarea and element), so
+    //     xterm never pastes a second time either.
+    // We then paste exactly once: the text directly, or a shell-ready path from
+    // the native bridge for an image/copied file with no text.
     const onPaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
       const data = event.clipboardData;
       const text = data?.getData('text/plain') ?? '';
       if (text) {
+        paste(text);
         return;
       }
       const hasImageOrFile =
         !!data &&
         (data.files.length > 0 ||
           Array.from(data.items).some((it) => it.kind === 'file'));
-      if (!hasImageOrFile) {
-        return;
+      if (hasImageOrFile) {
+        void readClipboardImagePath().then(paste);
       }
-      event.preventDefault();
-      event.stopPropagation();
-      void readClipboardImagePath().then(paste);
     };
     host.addEventListener('paste', onPaste, { capture: true });
 
@@ -293,6 +320,24 @@ export function TerminalView({
       }
     };
     host.addEventListener('contextmenu', onContextMenu);
+
+    // The terminal can silently lose DOM focus (clicking the sidebar/another
+    // panel, or the OS window losing then regaining focus). An unfocused
+    // terminal swallows keystrokes and can look hung, so aggressively refocus:
+    // any pointer press inside the host, and whenever the window regains focus.
+    const refocus = () => {
+      try {
+        term.focus();
+      } catch {
+        /* terminal may be disposed during teardown; ignore */
+      }
+    };
+    const onHostMouseDown = () => {
+      // Defer so xterm's own selection/focus handling runs first.
+      timeoutIds.push(window.setTimeout(refocus, 0));
+    };
+    host.addEventListener('mousedown', onHostMouseDown);
+    window.addEventListener('focus', refocus);
 
     ws.onopen = () => {
       safeFit();
@@ -325,6 +370,8 @@ export function TerminalView({
 
     return () => {
       window.removeEventListener('resize', applyFit);
+      window.removeEventListener('focus', refocus);
+      host.removeEventListener('mousedown', onHostMouseDown);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('paste', onPaste, { capture: true });
       observer?.disconnect();
@@ -335,6 +382,7 @@ export function TerminalView({
         clearTimeout(id);
       }
       dataSub.dispose();
+      selectionSub.dispose();
       ws.onopen = null;
       ws.onmessage = null;
       ws.close();

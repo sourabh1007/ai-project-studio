@@ -23,6 +23,28 @@ function serviceStub(overrides: Partial<McpService> = {}): McpService {
       exists: true,
       servers: [{ name: 'a', spec: { command: 'a' } }],
     })),
+    setToolEnabled: vi.fn(async () => ({
+      config: {
+        providerId: 'agency',
+        configPath: '/x/mcp-config.json',
+        exists: true,
+        servers: [{ name: 'a', spec: { command: 'a' } }],
+      },
+      server: { name: 'a', spec: { command: 'a' } },
+      liveReloadedSessions: 1,
+      liveReloadCommand: '/restart',
+    })),
+    restartServer: vi.fn(async () => ({
+      config: {
+        providerId: 'agency',
+        configPath: '/x/mcp-config.json',
+        exists: true,
+        servers: [{ name: 'a', spec: { command: 'a' } }],
+      },
+      server: { name: 'a', spec: { command: 'a' } },
+      liveReloadedSessions: 1,
+      liveReloadCommand: '/restart',
+    })),
     ...overrides,
   };
 }
@@ -40,6 +62,8 @@ describe('createMcpRoutes', () => {
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers',
+      'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
+      'post /mcp/providers/:providerId/servers/:serverName/restart',
     ]);
   });
 
@@ -92,5 +116,55 @@ describe('createMcpRoutes', () => {
       route.handler(req({ params: { providerId: 'agency' }, body: { name: '' } })),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(mcp.putServer).not.toHaveBeenCalled();
+  });
+
+  it('toggles an MCP tool', async () => {
+    const mcp = serviceStub();
+    const route = routeFor(
+      createMcpRoutes({ mcp }),
+      'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
+    );
+    const result = await route.handler(
+      req({
+        params: { providerId: 'agency', serverName: 'Azure', toolName: 'read' },
+        body: { enabled: false },
+      }),
+    );
+    expect(mcp.setToolEnabled).toHaveBeenCalledWith('agency', {
+      serverName: 'Azure',
+      toolName: 'read',
+      enabled: false,
+    });
+    expect(result.status).toBe(200);
+  });
+
+  it('rejects an invalid tool toggle body', async () => {
+    const mcp = serviceStub();
+    const route = routeFor(
+      createMcpRoutes({ mcp }),
+      'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
+    );
+    await expect(
+      route.handler(
+        req({
+          params: { providerId: 'agency', serverName: 'Azure', toolName: 'read' },
+          body: { enabled: 'no' },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(mcp.setToolEnabled).not.toHaveBeenCalled();
+  });
+
+  it('restarts an MCP server', async () => {
+    const mcp = serviceStub();
+    const route = routeFor(
+      createMcpRoutes({ mcp }),
+      'post /mcp/providers/:providerId/servers/:serverName/restart',
+    );
+    const result = await route.handler(
+      req({ params: { providerId: 'agency', serverName: 'Azure' } }),
+    );
+    expect(mcp.restartServer).toHaveBeenCalledWith('agency', 'Azure');
+    expect(result.status).toBe(200);
   });
 });

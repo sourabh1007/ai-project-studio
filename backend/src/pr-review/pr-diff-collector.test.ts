@@ -240,8 +240,40 @@ describe('createPrDiffCollector', () => {
     expect(diff.changedFiles).toBe(0);
   });
 
-  it('truncates an oversized patch to the budget', async () => {
+  it('keeps per-file diffs for files after the overall patch cutoff', async () => {
+    const segA = [
+      'diff --git a/a.ts b/a.ts',
+      '--- a/a.ts',
+      '+++ b/a.ts',
+      '+' + 'a'.repeat(100),
+    ].join('\n');
+    const segB = [
+      'diff --git a/b.ts b/b.ts',
+      '--- a/b.ts',
+      '+++ b/b.ts',
+      '+bbb',
+    ].join('\n');
+    const patchRaw = segA + '\n' + segB;
     const { git } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'diff --stat origin/main...HEAD': ok('stat'),
+      'diff --name-status origin/main...HEAD': ok('M\ta.ts\nM\tb.ts'),
+      'diff origin/main...HEAD': ok(patchRaw),
+    });
+    // maxPatchChars cuts off inside segA, dropping segB from the prompt patch.
+    const collector = createPrDiffCollector({ git, config: cfg(segA.length, 1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.truncated).toBe(true);
+    const bEntry = diff.entries.find((e) => e.path === 'b.ts');
+    expect(bEntry?.patch).toContain('+bbb');
+  });
+
+  it('truncates an oversized patch to the budget', async () => {    const { git } = gitStub({
       'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
       'diff --stat origin/main...HEAD': ok('stat'),
       'diff --name-status origin/main...HEAD': ok('M\ta.ts'),

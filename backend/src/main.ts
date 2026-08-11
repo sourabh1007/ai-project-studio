@@ -239,6 +239,7 @@ import {
 } from './meta/config.js';
 import { createMcpService } from './mcp/mcp-service.js';
 import { createMcpConfigFileStore } from './mcp/mcp-config-file-adapter.js';
+import { createMcpToolInspector } from './mcp/mcp-tool-inspector-adapter.js';
 import {
   MCP_NAMESPACE,
   mcpConfigSchema,
@@ -1047,9 +1048,10 @@ function main(): void {
     }
   };
 
+  let terminalManager: ReturnType<typeof createTerminalManager> | null = null;
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
   // reusing the same usage-capture pipeline via session.started/ended events.
-  const terminalManager = createTerminalManager({
+  terminalManager = createTerminalManager({
     spawner: createNodePtySpawner(),
     providers,
     bus: bus as unknown as Parameters<typeof createTerminalManager>[0]['bus'],
@@ -1145,7 +1147,7 @@ function main(): void {
     features: featureService,
     sessions: sessionRepo,
     inject: (sessionId, instructions) =>
-      terminalManager.injectInstructions(sessionId, instructions),
+      terminalManager!.injectInstructions(sessionId, instructions),
     config: contextConfig,
   });
   const contextService = createContextService({
@@ -1263,7 +1265,21 @@ function main(): void {
     registry: providers,
     meta: metaRunner,
     files: createMcpConfigFileStore(),
+    tools: createMcpToolInspector(),
     config: mcpConfig,
+    liveReload: (providerId, command) => {
+      let applied = 0;
+      for (const session of sessionRepo.listAll()) {
+        if (
+          session.provider === providerId &&
+          session.status === 'running' &&
+          terminalManager?.injectInstructions(session.id, command)
+        ) {
+          applied += 1;
+        }
+      }
+      return applied;
+    },
   });
   const gitRepository = createGitRepositoryAdapter();
   const repositoryEvidence = createRepositoryEvidenceService({
@@ -1450,7 +1466,7 @@ function main(): void {
     transcripts: transcriptRepo,
     summaries: summaryRepo,
     sessionFiles: sessionFilesRepo,
-    terminals: terminalManager,
+    terminals: terminalManager!,
     prReviews: prReviewService,
     sharedContext: contextService,
   });
@@ -1505,6 +1521,7 @@ function main(): void {
       factory,
       sessionConfig,
       sessions: sessionRepo,
+      sessionHistory: copilotHistoryReader,
       providers,
       aggregates: featureAnalytics,
       summarizer,
@@ -1521,7 +1538,7 @@ function main(): void {
       injectSessionSkill: (sessionId, skillId) => {
         const instructions = skillsService.instructionsForSkill(skillId);
         if (instructions.length > 0) {
-          terminalManager.injectInstructions(sessionId, instructions);
+          terminalManager!.injectInstructions(sessionId, instructions);
         }
       },
       // Reverse a session-scoped skill on its live terminal when it is removed,
@@ -1529,7 +1546,7 @@ function main(): void {
       removeSessionSkill: (sessionId, skillId) => {
         const prompt = skillsService.removalPromptForSkill(skillId);
         if (prompt.length > 0) {
-          terminalManager.injectInstructions(sessionId, prompt);
+          terminalManager!.injectInstructions(sessionId, prompt);
         }
       },
       tasks: featureTasksService,
@@ -1662,7 +1679,7 @@ function main(): void {
   if (terminalConfig.enabled) {
     attachTerminalWs({
       server,
-      manager: terminalManager,
+      manager: terminalManager!,
       config: terminalConfig,
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
@@ -1685,7 +1702,7 @@ function main(): void {
     for (const tailer of tailers.values()) {
       tailer.stop();
     }
-    terminalManager.shutdown();
+    terminalManager!.shutdown();
     server.close();
     try {
       db.close();

@@ -36,6 +36,8 @@ export interface Session {
   /** Sort position within its container (the feature root or a group). */
   orderIndex?: number;
   prompt: string;
+  /** Read-side fallback title derived from CLI history when prompt is empty. */
+  workTitle?: string | null;
   /** Absolute/relative path of this session's OTel usage file. */
   usageFilePath: string;
   createdAt: string;

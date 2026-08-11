@@ -60,4 +60,8 @@ describe('createCopilotMcpSupport', () => {
     expect(path.endsWith(COPILOT_MCP_CONFIG_FILENAME)).toBe(true);
     expect(path).toContain('.copilot');
   });
+
+  it('uses the interactive restart command for live MCP reloads', () => {
+    expect(createCopilotMcpSupport().liveReloadCommand).toBe('/restart');
+  });
 });

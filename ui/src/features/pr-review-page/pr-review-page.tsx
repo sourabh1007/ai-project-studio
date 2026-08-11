@@ -401,7 +401,11 @@ export function PrReviewPage({
                 <h4 className="pr-graph-group-title">
                   Code changes
                   <span className="pr-graph-count">
-                    {graph.nodes.filter((n) => n.category === 'code').length}
+                    {
+                      graph.nodes.filter(
+                        (n) => n.category === 'code' && n.kind === 'changed',
+                      ).length
+                    }
                   </span>
                 </h4>
                 <ChangeGraph
@@ -416,7 +420,11 @@ export function PrReviewPage({
                 <h4 className="pr-graph-group-title">
                   Test changes
                   <span className="pr-graph-count">
-                    {graph.nodes.filter((n) => n.category === 'test').length}
+                    {
+                      graph.nodes.filter(
+                        (n) => n.category === 'test' && n.kind === 'changed',
+                      ).length
+                    }
                   </span>
                 </h4>
                 <ChangeGraph

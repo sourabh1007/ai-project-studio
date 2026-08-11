@@ -6,6 +6,11 @@ import type { McpConfig } from './config.js';
 import type {
   McpConfigDocument,
   McpConfigFileStore,
+  McpToolEntry,
+  McpToolInspection,
+  McpToolInspector,
+  McpToolToggleInput,
+  McpApplyResult,
   McpServerEntry,
   McpServerInput,
   ProviderMcpConfig,
@@ -16,7 +21,10 @@ export interface McpServiceDeps {
   /** Used to discover a provider's config-file path via a headless session. */
   meta: MetaRunner;
   files: McpConfigFileStore;
+  tools: McpToolInspector;
   config: McpConfig;
+  /** Best-effort live reload hook for already-open interactive sessions. */
+  liveReload?: (providerId: string, command: string) => number;
 }
 
 /**
@@ -32,6 +40,13 @@ export interface McpService {
   getServers(providerId: string): Promise<ProviderMcpConfig>;
   /** Adds or updates a single MCP server entry, returning the new config. */
   putServer(providerId: string, input: McpServerInput): Promise<ProviderMcpConfig>;
+  /** Enables/disables one discovered MCP tool in provider config. */
+  setToolEnabled(
+    providerId: string,
+    input: McpToolToggleInput,
+  ): Promise<McpApplyResult>;
+  /** Restarts/reloads one MCP server and open provider sessions where possible. */
+  restartServer(providerId: string, serverName: string): Promise<McpApplyResult>;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -58,16 +73,65 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+function configuredTools(spec: Record<string, unknown>): Set<string> | null {
+  const tools = spec.tools;
+  if (!Array.isArray(tools)) {
+    return null;
+  }
+  const names = tools.filter((tool): tool is string => typeof tool === 'string');
+  return names.includes('*') ? null : new Set(names);
+}
+
+function toolEntries(
+  spec: Record<string, unknown>,
+  inspection: McpToolInspection,
+): McpToolEntry[] {
+  const allowList = configuredTools(spec);
+  return inspection.tools
+    .map((tool) => ({
+      ...tool,
+      enabled: allowList === null || allowList.has(tool.name),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function skippedInspection(message: string): McpToolInspection {
+  return { status: 'skipped', message, output: [], tools: [] };
+}
+
+function isEnabledServer(spec: Record<string, unknown>): boolean {
+  return spec.enabled !== false;
+}
+
 /** Surfaces object-valued `mcpServers` entries as a sorted server list. */
-function serversFromDocument(document: McpConfigDocument | null): McpServerEntry[] {
+async function serversFromDocument(
+  document: McpConfigDocument | null,
+  inspect: (name: string, spec: Record<string, unknown>) => Promise<McpToolInspection>,
+): Promise<McpServerEntry[]> {
   const map = document?.mcpServers;
   if (!isPlainObject(map)) {
     return [];
   }
-  return Object.entries(map)
+  const entries = Object.entries(map)
     .filter(([, spec]) => isPlainObject(spec))
     .map(([name, spec]) => ({ name, spec: spec as Record<string, unknown> }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  return await Promise.all(
+    entries.map(async (entry) => {
+      const inspection = isEnabledServer(entry.spec)
+        ? await inspect(entry.name, entry.spec)
+        : skippedInspection('Server is disabled in provider config');
+      return {
+        ...entry,
+        tools: toolEntries(entry.spec, inspection),
+        toolDiscovery: {
+          status: inspection.status,
+          message: inspection.message,
+          output: inspection.output,
+        },
+      };
+    }),
+  );
 }
 
 export function createMcpService(deps: McpServiceDeps): McpService {
@@ -137,16 +201,85 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     }
   }
 
-  function toConfig(
+  async function inspectServer(
+    name: string,
+    spec: Record<string, unknown>,
+  ): Promise<McpToolInspection> {
+    try {
+      return await deps.tools.inspect({
+        serverName: name,
+        spec,
+        timeoutMs: deps.config.discoveryTimeoutMs,
+      });
+    } catch (error) {
+      return {
+        status: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+        output: [],
+        tools: [],
+      };
+    }
+  }
+
+  async function toConfig(
     providerId: string,
     configPath: string,
     document: McpConfigDocument | null,
-  ): ProviderMcpConfig {
+  ): Promise<ProviderMcpConfig> {
     return {
       providerId,
       configPath,
       exists: document !== null,
-      servers: serversFromDocument(document),
+      servers: await serversFromDocument(document, inspectServer),
+    };
+  }
+
+  async function readConfig(
+    providerId: string,
+    support: McpSupport,
+  ): Promise<{ configPath: string; document: McpConfigDocument | null }> {
+    const configPath = await resolveConfigPath(providerId, support);
+    return { configPath, document: await deps.files.read(configPath) };
+  }
+
+  function serverSpec(
+    document: McpConfigDocument | null,
+    serverName: string,
+  ): Record<string, unknown> {
+    const servers = document?.mcpServers;
+    const spec = isPlainObject(servers) ? servers[serverName] : undefined;
+    if (!isPlainObject(spec)) {
+      throw new NotFoundError(`Unknown MCP server: ${serverName}`);
+    }
+    return spec;
+  }
+
+  function liveReload(providerId: string, support: McpSupport): {
+    command: string | null;
+    count: number;
+  } {
+    const command = support.liveReloadCommand ?? null;
+    if (!command || !deps.liveReload) {
+      return { command, count: 0 };
+    }
+    return { command, count: deps.liveReload(providerId, command) };
+  }
+
+  async function resultFor(
+    providerId: string,
+    support: McpSupport,
+    configPath: string,
+    document: McpConfigDocument,
+    serverName: string,
+  ): Promise<McpApplyResult> {
+    const config = await toConfig(providerId, configPath, document);
+    const server = config.servers.find((entry) => entry.name === serverName)!;
+    const reloaded = liveReload(providerId, support);
+    return {
+      config,
+      server,
+      liveReloadedSessions: reloaded.count,
+      liveReloadCommand: reloaded.command,
     };
   }
 
@@ -164,9 +297,8 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     async getServers(providerId) {
       ensureEnabled();
       const support = requireSupport(providerId);
-      const configPath = await resolveConfigPath(providerId, support);
-      const document = await deps.files.read(configPath);
-      return toConfig(providerId, configPath, document);
+      const { configPath, document } = await readConfig(providerId, support);
+      return await toConfig(providerId, configPath, document);
     },
 
     async putServer(providerId, input) {
@@ -187,7 +319,68 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         mcpServers: { ...existing, [name]: input.spec },
       };
       await deps.files.write(configPath, next);
-      return toConfig(providerId, configPath, next);
+      return await toConfig(providerId, configPath, next);
+    },
+
+    async setToolEnabled(providerId, input) {
+      ensureEnabled();
+      const support = requireSupport(providerId);
+      const serverName = input.serverName.trim();
+      const toolName = input.toolName.trim();
+      if (!serverName) {
+        throw new ValidationError('MCP server name is required');
+      }
+      if (!toolName) {
+        throw new ValidationError('MCP tool name is required');
+      }
+      const { configPath, document } = await readConfig(providerId, support);
+      const spec = serverSpec(document, serverName);
+      const current = document!;
+      const inspection = await inspectServer(serverName, spec);
+      if (inspection.status !== 'ok') {
+        throw new ValidationError(
+          inspection.message ?? 'MCP tool discovery failed',
+        );
+      }
+      const discovered = inspection.tools.map((tool) => tool.name).sort();
+      if (!discovered.includes(toolName)) {
+        throw new NotFoundError(`Unknown MCP tool: ${toolName}`);
+      }
+      const enabled = new Set(
+        toolEntries(spec, inspection)
+          .filter((tool) => tool.enabled)
+          .map((tool) => tool.name),
+      );
+      if (input.enabled) {
+        enabled.add(toolName);
+      } else {
+        enabled.delete(toolName);
+      }
+      const nextTools =
+        enabled.size === discovered.length
+          ? ['*']
+          : discovered.filter((tool) => enabled.has(tool));
+      const nextSpec = { ...spec, tools: nextTools };
+      const existing = current.mcpServers as Record<string, unknown>;
+      const next: McpConfigDocument = {
+        ...current,
+        mcpServers: { ...existing, [serverName]: nextSpec },
+      };
+      await deps.files.write(configPath, next);
+      return await resultFor(providerId, support, configPath, next, serverName);
+    },
+
+    async restartServer(providerId, serverNameInput) {
+      ensureEnabled();
+      const support = requireSupport(providerId);
+      const serverName = serverNameInput.trim();
+      if (!serverName) {
+        throw new ValidationError('MCP server name is required');
+      }
+      const { configPath, document } = await readConfig(providerId, support);
+      serverSpec(document, serverName);
+      const current = document!;
+      return await resultFor(providerId, support, configPath, current, serverName);
     },
   };
 }

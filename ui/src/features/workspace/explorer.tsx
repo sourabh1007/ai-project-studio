@@ -477,6 +477,12 @@ function FeatureNode({
   const contextBlockReason = feature.repoId
     ? repositoryContextBlockReason(repositoryContext)
     : null;
+  // The repo header already shows an "Analyzing" badge for the shared context,
+  // so repeating a pending/generating/stale notice under every feature is just
+  // noise. Only surface the inline message for a genuine failure (which is not
+  // otherwise obvious); transient states still disable "+" with a tooltip.
+  const showContextBlockText =
+    Boolean(contextBlockReason) && repositoryContext?.status === 'failed';
 
   useEffect(() => {
     if (contextBlockReason) {
@@ -702,7 +708,7 @@ function FeatureNode({
           title={contextBlockReason ?? 'New session'}
           aria-label={`New session in ${feature.name}`}
           aria-describedby={
-            contextBlockReason ? `session-blocked-${feature.id}` : undefined
+            showContextBlockText ? `session-blocked-${feature.id}` : undefined
           }
           disabled={Boolean(contextBlockReason)}
           onClick={() => {
@@ -798,7 +804,7 @@ function FeatureNode({
           onClose={() => setViewingUsage(false)}
         />
       )}
-      {contextBlockReason && (
+      {showContextBlockText && (
         <span
           id={`session-blocked-${feature.id}`}
           className="session-context-blocked"
