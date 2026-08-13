@@ -6,6 +6,8 @@ import { CheckIcon, PrReviewIcon, RefreshIcon } from '../../components/icons.js'
 import loadingGif from '../../assets/pr-review-loading.gif';
 import { ChangeGraph } from './change-graph.js';
 import { PrCommentsPanel, usePrComments } from './pr-comments.js';
+import { StageProgress } from './stage-progress.js';
+import type { StageStatus } from '../../lib/progress-stages.js';
 import type {
   MetaUsage,
   PrReview,
@@ -19,6 +21,14 @@ const STATUS_LABELS: Record<PrReviewStepStatus, string> = {
   generating: 'Analyzing',
   ready: 'Ready',
   failed: 'Failed',
+};
+
+/** Maps a PR-review step status onto the generic progress-stage vocabulary. */
+const STEP_TO_STAGE_STATUS: Record<PrReviewStepStatus, StageStatus> = {
+  pending: 'pending',
+  generating: 'active',
+  ready: 'done',
+  failed: 'failed',
 };
 
 /** A rotating gif used as the real-progress indicator while a step generates. */
@@ -344,6 +354,23 @@ export function PrReviewPage({
       </header>
 
       <ErrorText error={error} />
+
+      {review && (
+        <StageProgress
+          stages={[
+            {
+              id: 'problemStatement',
+              label: 'Problem statement',
+              status: STEP_TO_STAGE_STATUS[review.problemStatement.status],
+            },
+            {
+              id: 'changeGraph',
+              label: 'Change graph',
+              status: STEP_TO_STAGE_STATUS[review.changeGraph.status],
+            },
+          ]}
+        />
+      )}
 
       {!review && !error && <GeneratingIndicator label="Loading review…" />}
 

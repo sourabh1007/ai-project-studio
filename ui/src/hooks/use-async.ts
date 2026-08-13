@@ -4,6 +4,8 @@ export interface AsyncState<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
+  /** The raw caught value, preserved so callers can classify it (HTTP status, etc). */
+  cause: unknown;
   reload: () => void;
 }
 
@@ -15,6 +17,7 @@ export function useAsync<T>(
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cause, setCause] = useState<unknown>(null);
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
@@ -23,6 +26,7 @@ export function useAsync<T>(
     let active = true;
     setLoading(true);
     setError(null);
+    setCause(null);
     loader()
       .then((result) => {
         if (active) {
@@ -32,6 +36,7 @@ export function useAsync<T>(
       .catch((err: unknown) => {
         if (active) {
           setError(err instanceof Error ? err.message : String(err));
+          setCause(err);
         }
       })
       .finally(() => {
@@ -45,5 +50,5 @@ export function useAsync<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
 
-  return { data, loading, error, reload };
+  return { data, loading, error, cause, reload };
 }

@@ -25,6 +25,7 @@ import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
+import { createHealthRoutes } from './health-controller.js';
 import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
 import type {
   DeviceCodeStart,
@@ -64,6 +65,9 @@ import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
 import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
+import { createAutomationRoutes } from './automation-controller.js';
+import type { AutomationService } from '../automation/automation-service.js';
+import type { SubagentService } from '../automation/subagent-service.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
 import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
@@ -142,12 +146,19 @@ export interface ApiRoutesDeps {
   prApprovals: PrApprovalService;
   /** The layered shared-context store surfaced in the IDE. */
   context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
+  /** Monitors & automations engine surfaced in the Automations menu. */
+  automations: AutomationService;
+  /** Tracked background AI subagents. */
+  subagents: SubagentService;
+  /** Per-launch token accepted by Studio MCP control routes. */
+  controlToken?: string;
   logger: Logger;
 }
 
 /** Assembles the full route table from every controller. */
 export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
   return [
+    ...createHealthRoutes(),
     ...createFeatureRoutes({ features: deps.features, admin: deps.admin }),
     ...createSessionRoutes({
       launcher: deps.launcher,
@@ -191,6 +202,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createContextRoutes({ context: deps.context }),
+    ...createAutomationRoutes({
+      automations: deps.automations,
+      subagents: deps.subagents,
+      controlToken: deps.controlToken,
+    }),
     ...createConfigRoutes({
       registry: deps.configRegistry,
       current: deps.currentConfig,

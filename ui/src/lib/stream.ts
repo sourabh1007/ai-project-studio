@@ -5,6 +5,8 @@ import type {
   RepositoryContext,
   Session,
   StoredUsage,
+  Automation,
+  Subagent,
 } from './types.js';
 
 /** Normalized live events consumed by the reducer. */
@@ -16,7 +18,10 @@ export type StreamEvent =
   | { type: 'usage.recorded'; usage: StoredUsage }
   | { type: 'repository.context.updated'; context: RepositoryContext }
   | { type: 'pr.review.updated'; review: PrReview }
-  | { type: 'context.status'; status: ContextStatus };
+  | { type: 'context.status'; status: ContextStatus }
+  | { type: 'automation.updated'; automation: Automation }
+  | { type: 'automation.removed'; id: string }
+  | { type: 'subagent.updated'; subagent: Subagent };
 
 /** Stable key for a context-status entry: one live phase per scope target. */
 export function contextStatusKey(scope: string, scopeId: string): string {
@@ -30,6 +35,8 @@ export interface LiveState {
   repositoryContexts: Record<string, RepositoryContext>;
   prReviews: Record<string, PrReview>;
   contextStatus: Record<string, ContextStatusPhase>;
+  automations: Record<string, Automation>;
+  subagents: Record<string, Subagent>;
 }
 
 export const initialLiveState: LiveState = {
@@ -39,6 +46,8 @@ export const initialLiveState: LiveState = {
   repositoryContexts: {},
   prReviews: {},
   contextStatus: {},
+  automations: {},
+  subagents: {},
 };
 
 /** Stable key that dedupes usage events by session + turn. */
@@ -91,6 +100,21 @@ export function parseServerEvent(
       return {
         type: 'context.status',
         status: JSON.parse(data) as ContextStatus,
+      };
+    case 'automation.updated':
+      return {
+        type: 'automation.updated',
+        automation: JSON.parse(data) as Automation,
+      };
+    case 'automation.removed':
+      return {
+        type: 'automation.removed',
+        id: (JSON.parse(data) as { id: string }).id,
+      };
+    case 'subagent.updated':
+      return {
+        type: 'subagent.updated',
+        subagent: JSON.parse(data) as Subagent,
       };
     default:
       return null;
@@ -150,6 +174,27 @@ export function applyStreamEvent(
           ...state.contextStatus,
           [contextStatusKey(event.status.scope, event.status.scopeId)]:
             event.status.phase,
+        },
+      };
+    case 'automation.updated':
+      return {
+        ...state,
+        automations: {
+          ...state.automations,
+          [event.automation.id]: event.automation,
+        },
+      };
+    case 'automation.removed': {
+      const nextAutomations = { ...state.automations };
+      delete nextAutomations[event.id];
+      return { ...state, automations: nextAutomations };
+    }
+    case 'subagent.updated':
+      return {
+        ...state,
+        subagents: {
+          ...state.subagents,
+          [event.subagent.id]: event.subagent,
         },
       };
   }

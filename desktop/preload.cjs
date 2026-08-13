@@ -43,4 +43,36 @@ contextBridge.exposeInMainWorld('desktop', {
   openDocs() {
     ipcRenderer.send('app:openDocs');
   },
+  updates: {
+    getState() {
+      return ipcRenderer.invoke('update:getState');
+    },
+    check() {
+      return ipcRenderer.invoke('update:check');
+    },
+    download() {
+      return ipcRenderer.invoke('update:download');
+    },
+    install() {
+      return ipcRenderer.invoke('update:install');
+    },
+    /**
+     * Subscribes to update state changes and the pre-install "flush your work"
+     * signal. Returns an unsubscribe function. `cb` receives (type, payload)
+     * where type is 'event' (state snapshot) or 'before-quit'.
+     */
+    onEvent(cb) {
+      if (typeof cb !== 'function') {
+        return () => {};
+      }
+      const onState = (_e, payload) => cb('event', payload);
+      const onBeforeQuit = (_e, payload) => cb('before-quit', payload);
+      ipcRenderer.on('update:event', onState);
+      ipcRenderer.on('update:before-quit', onBeforeQuit);
+      return () => {
+        ipcRenderer.removeListener('update:event', onState);
+        ipcRenderer.removeListener('update:before-quit', onBeforeQuit);
+      };
+    },
+  },
 });

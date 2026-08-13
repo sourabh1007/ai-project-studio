@@ -44,7 +44,10 @@ function fakeSessions(seed: Session[] = []) {
     },
     get: (id) => map.get(id) ?? null,
     listByFeature: (fid) => [...map.values()].filter((s) => s.featureId === fid),
+    listByFeatureAll: (fid) =>
+      [...map.values()].filter((s) => s.featureId === fid),
     listAll: () => [...map.values()],
+    updatePlacement: () => {},
     delete: () => {},
     deleteByFeature: () => {},
     rename: (id, name) => {

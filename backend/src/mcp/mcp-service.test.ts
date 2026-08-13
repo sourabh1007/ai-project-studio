@@ -6,6 +6,7 @@ import type { MetaRunner } from '../meta/meta-runner.js';
 import type {
   McpConfigDocument,
   McpConfigFileStore,
+  McpToolInspection,
   McpToolInspector,
 } from './mcp-contract.js';
 import { createMcpService } from './mcp-service.js';
@@ -51,7 +52,7 @@ function metaOf(run: MetaRunner['run']): MetaRunner {
 
 function inspector(overrides: Partial<McpToolInspector> = {}): McpToolInspector {
   return {
-    inspect: vi.fn(async () => ({
+    inspect: vi.fn(async (): Promise<McpToolInspection> => ({
       status: 'ok',
       message: null,
       output: [],
@@ -244,7 +245,7 @@ describe('createMcpService.getServers', () => {
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
       tools: inspector({
-        inspect: vi.fn(async ({ serverName }) => {
+        inspect: vi.fn(async ({ serverName }): Promise<McpToolInspection> => {
           if (serverName === 'bad') throw new Error('boom');
           return { status: 'ok', message: null, output: [], tools: [] };
         }),
@@ -508,7 +509,7 @@ describe('createMcpService.setToolEnabled', () => {
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
       tools: inspector({
-        inspect: vi.fn(async () => ({
+        inspect: vi.fn(async (): Promise<McpToolInspection> => ({
           status: 'failed',
           message: 'login required',
           output: ['visit https://example'],
@@ -544,7 +545,7 @@ describe('createMcpService.setToolEnabled', () => {
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
       tools: inspector({
-        inspect: vi.fn(async () => ({
+        inspect: vi.fn(async (): Promise<McpToolInspection> => ({
           status: 'failed',
           message: null,
           output: [],
@@ -625,7 +626,7 @@ describe('createMcpService.restartServer', () => {
       registry: registryOf(provider('agency', support({ liveReloadCommand: '/restart' }))),
       meta: metaOf(async () => ''),
       tools: inspector({
-        inspect: vi.fn(async () => ({
+        inspect: vi.fn(async (): Promise<McpToolInspection> => ({
           status: 'ok',
           message: null,
           output: ['device code ABCD'],

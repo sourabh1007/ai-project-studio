@@ -310,6 +310,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         pull: live.review.pull,
         baseBranch: live.review.baseBranch,
         description: live.review.description,
+        config: deps.config,
       });
       const { text, sessionId } = await runStepPrompt({
         review: live.review,
@@ -544,6 +545,8 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         problemStatement: problemText(existing),
         diff: file.diff,
         budget: { maxContextChars: deps.config.maxContextChars },
+        config: deps.config,
+        isTest: file.category === 'test',
       });
       const { text } = await runStepPrompt({
         review: existing,
@@ -559,6 +562,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
               whatItDoes: parsed.whatItDoes,
               whatChanged: parsed.whatChanged,
               review: parsed.review,
+              testMethods: parsed.testMethods,
             }
           : f,
       );

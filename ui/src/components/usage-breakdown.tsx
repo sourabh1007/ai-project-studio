@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useApi } from '../app/api-context.js';
 import { useAsync } from '../hooks/use-async.js';
+import { useVirtualWindow } from '../hooks/use-virtual-window.js';
 import {
   formatAic,
   formatCompactNumber,
@@ -161,39 +162,69 @@ export function UsageBreakdownModal({
               </ul>
             )}
 
-            <table className="usage-breakdown-table">
-              <thead>
-                <tr>
-                  <th scope="col">Turn</th>
-                  <th scope="col">Model</th>
-                  <th scope="col">Operation</th>
-                  <th scope="col">Input</th>
-                  <th scope="col">Output</th>
-                  <th scope="col">Reasoning</th>
-                  <th scope="col">AIC</th>
-                  <th scope="col">When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e) => (
-                  <tr key={`${e.sessionId}:${e.turnIndex}`}>
-                    <td>{e.turnIndex}</td>
-                    <td title={e.provider}>
-                      {e.resolvedModel || e.requestedModel}
-                    </td>
-                    <td>{e.operation}</td>
-                    <td>{formatCompactNumber(e.inputTokens)}</td>
-                    <td>{formatCompactNumber(e.outputTokens)}</td>
-                    <td>{formatCompactNumber(e.reasoningOutputTokens)}</td>
-                    <td>{nanoAiuToAic(e.nanoAiu).toFixed(4)}</td>
-                    <td className="usage-when">{formatDateTime(e.startedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <UsageEventsTable events={events} />
           </>
         )}
       </div>
     </Modal>
+  );
+}
+
+/** Approximate fixed height of one usage row, in pixels (see app.css). */
+const USAGE_ROW_HEIGHT = 25;
+
+/**
+ * The per-turn usage table, virtualized so a session with thousands of turns
+ * renders only the rows in view. Spacer rows preserve the scrollbar geometry so
+ * the sticky header, scroll position, and row alignment stay correct.
+ */
+function UsageEventsTable({ events }: { events: StoredUsage[] }) {
+  const { ref, window } = useVirtualWindow<HTMLDivElement>({
+    rowHeight: USAGE_ROW_HEIGHT,
+    rowCount: events.length,
+  });
+  const visible = events.slice(window.startIndex, window.endIndex);
+
+  return (
+    <div ref={ref} className="usage-table-scroll">
+      <table className="usage-breakdown-table">
+        <thead>
+          <tr>
+            <th scope="col">Turn</th>
+            <th scope="col">Model</th>
+            <th scope="col">Operation</th>
+            <th scope="col">Input</th>
+            <th scope="col">Output</th>
+            <th scope="col">Reasoning</th>
+            <th scope="col">AIC</th>
+            <th scope="col">When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {window.topPad > 0 && (
+            <tr aria-hidden="true" style={{ height: window.topPad }}>
+              <td colSpan={8} />
+            </tr>
+          )}
+          {visible.map((e) => (
+            <tr key={`${e.sessionId}:${e.turnIndex}`}>
+              <td>{e.turnIndex}</td>
+              <td title={e.provider}>{e.resolvedModel || e.requestedModel}</td>
+              <td>{e.operation}</td>
+              <td>{formatCompactNumber(e.inputTokens)}</td>
+              <td>{formatCompactNumber(e.outputTokens)}</td>
+              <td>{formatCompactNumber(e.reasoningOutputTokens)}</td>
+              <td>{nanoAiuToAic(e.nanoAiu).toFixed(4)}</td>
+              <td className="usage-when">{formatDateTime(e.startedAt)}</td>
+            </tr>
+          ))}
+          {window.bottomPad > 0 && (
+            <tr aria-hidden="true" style={{ height: window.bottomPad }}>
+              <td colSpan={8} />
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }

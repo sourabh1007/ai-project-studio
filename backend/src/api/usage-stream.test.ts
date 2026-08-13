@@ -34,6 +34,9 @@ describe('subscribeStream', () => {
       scopeId: 'f1',
       phase: 'generating',
     });
+    bus.emit('automation.updated', { id: 'a1' } as never);
+    bus.emit('automation.removed', { id: 'a1' } as never);
+    bus.emit('subagent.updated', { id: 'g1' } as never);
 
     expect(events.map((e) => e.event)).toEqual([
       'session.started',
@@ -44,11 +47,14 @@ describe('subscribeStream', () => {
       'repository.context.updated',
       'pr.review.updated',
       'context.status',
+      'automation.updated',
+      'automation.removed',
+      'subagent.updated',
     ]);
 
     off();
     bus.emit('session.started', { id: 's2' } as never);
-    expect(events).toHaveLength(8);
+    expect(events).toHaveLength(11);
   });
 
   it('does not stream internal session lifecycle or output events', () => {

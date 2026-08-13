@@ -29,7 +29,7 @@ function harness(sessionsByFeature: Record<string, Session[]>) {
   const sessions = {
     listByFeature: (featureId: string) => sessionsByFeature[featureId] ?? [],
   } as unknown as SessionRepo;
-  const inject = vi.fn(() => true);
+  const inject = vi.fn((_sessionId: string, _text: string) => true);
   const broadcaster = createContextBroadcaster({
     features,
     sessions,

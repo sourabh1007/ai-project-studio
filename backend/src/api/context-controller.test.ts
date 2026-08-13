@@ -51,9 +51,9 @@ describe('context-controller', () => {
     expect(h.get).toHaveBeenCalledWith('feature', 'f1');
   });
 
-  it('returns 404 when the document is absent', () => {
+  it('returns 404 when the document is absent', async () => {
     const h = harness(null);
-    const result = pick(h.routes, 'get', '/context/:scope')(
+    const result = await pick(h.routes, 'get', '/context/:scope')(
       req({ params: { scope: 'repo' }, query: { scopeId: 'r1' } }),
     );
     expect(result.status).toBe(404);

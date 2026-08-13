@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { rightSideLines } from '../../lib/diff-lines.js';
+import { annotateDiffLines, type DiffLineKind } from '../../lib/diff-lines.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import type {
   AddPrCommentInput,
@@ -205,12 +205,80 @@ export function PrCommentsPanel({
   );
 }
 
+/** CSS class for each annotated diff line kind. */
+const DIFF_LINE_CLASS: Record<DiffLineKind, string> = {
+  add: 'cg-diff-add',
+  del: 'cg-diff-del',
+  hunk: 'cg-diff-hunk',
+  meta: 'cg-diff-meta',
+  ctx: 'cg-diff-ctx',
+};
+
+/** The in-place composer shown under a diff line the reviewer clicked. */
+function InlineComposer({
+  comments,
+  path,
+  line,
+  onDone,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  line: number;
+  onDone: () => void;
+}) {
+  const [body, setBody] = useState('');
+  const [posting, setPosting] = useState(false);
+  const submit = async () => {
+    if (body.trim().length === 0) {
+      return;
+    }
+    setPosting(true);
+    try {
+      const created = await comments.add({ path, line, body: body.trim() });
+      if (created) {
+        setBody('');
+        onDone();
+      }
+    } finally {
+      setPosting(false);
+    }
+  };
+  return (
+    <div className="cg-inline-comment" role="form" aria-label={`Comment on line ${line}`}>
+      <textarea
+        className="cg-comment-input"
+        placeholder={`Comment on line ${line}…`}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        aria-label="Comment body"
+        rows={3}
+        autoFocus
+      />
+      <ErrorText error={comments.error} />
+      <div className="cg-comment-actions">
+        <Button
+          variant="primary"
+          onClick={() => void submit()}
+          disabled={posting || body.trim().length === 0}
+        >
+          {posting ? 'Posting…' : 'Comment'}
+        </Button>
+        <Button variant="ghost" onClick={onDone} disabled={posting}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
- * The inline comment composer + existing threads for a single changed file,
- * embedded in the change-graph file popup. The reviewer picks a line the PR
- * touched and posts a comment straight to the PR at that file + line.
+ * The change-graph file popup's code diff, rendered so a reviewer can click any
+ * new-side line (added or context) to open an in-place comment composer and post
+ * straight to the PR at that file + line — no line-number dropdown. Existing
+ * threads render inline beneath their anchored line, and file-level threads (no
+ * line) render above the diff.
  */
-export function FileCommentBox({
+export function CommentableDiff({
   comments,
   path,
   diff,
@@ -219,87 +287,129 @@ export function FileCommentBox({
   path: string;
   diff: string;
 }) {
-  const lineOptions = useMemo(() => rightSideLines(diff), [diff]);
-  const [line, setLine] = useState<number | null>(
-    lineOptions[0]?.line ?? null,
-  );
-  const [body, setBody] = useState('');
-  const [posting, setPosting] = useState(false);
-  const fileThreads = comments.threads.filter((t) => t.path === path);
+  const lines = useMemo(() => annotateDiffLines(diff), [diff]);
+  const [activeLine, setActiveLine] = useState<number | null>(null);
 
-  const submit = async () => {
-    if (line === null || body.trim().length === 0) {
-      return;
+  const presentLines = new Set<number>();
+  for (const ln of lines) {
+    if (ln.rightLine !== null) {
+      presentLines.add(ln.rightLine);
     }
-    setPosting(true);
-    try {
-      const created = await comments.add({ path, line, body: body.trim() });
-      if (created) {
-        setBody('');
-      }
-    } finally {
-      setPosting(false);
+  }
+
+  const fileThreads = comments.threads.filter((t) => t.path === path);
+  const threadsByLine = new Map<number, PrCommentThread[]>();
+  // Threads with no line, or a line not present in the (bounded) diff, are shown
+  // above the diff so they are never hidden just because their line was trimmed.
+  const looseThreads: PrCommentThread[] = [];
+  for (const thread of fileThreads) {
+    if (
+      thread.line === null ||
+      thread.line === undefined ||
+      !presentLines.has(thread.line)
+    ) {
+      looseThreads.push(thread);
+      continue;
     }
-  };
+    const list = threadsByLine.get(thread.line) ?? [];
+    list.push(thread);
+    threadsByLine.set(thread.line, list);
+  }
+
+  if (lines.length === 0) {
+    return (
+      <p className="muted">
+        No diff is available for this file (it may have been truncated from the
+        bounded PR diff).
+      </p>
+    );
+  }
 
   return (
-    <div className="cg-panel-section cg-comments">
-      <span className="cg-panel-label">Comments</span>
-      {fileThreads.length === 0 ? (
-        <p className="muted">No comments on this file yet.</p>
-      ) : (
-        <div className="pr-comment-threads">
-          {fileThreads.map((thread) => (
+    <div className="cg-diff-wrap">
+      {looseThreads.length > 0 && (
+        <div className="pr-comment-threads cg-diff-filethreads">
+          {looseThreads.map((thread) => (
             <ThreadCard
               key={thread.id}
               thread={thread}
-              onSetStatus={(status) =>
-                void comments.setStatus(thread.id, status)
-              }
+              onSetStatus={(status) => void comments.setStatus(thread.id, status)}
             />
           ))}
         </div>
       )}
-      {lineOptions.length === 0 ? (
-        <p className="muted">
-          No commentable lines were found in this file's diff.
-        </p>
-      ) : (
-        <div className="cg-comment-compose">
-          <label className="cg-comment-line">
-            Line
-            <select
-              value={line ?? ''}
-              onChange={(e) => setLine(Number(e.target.value))}
-              aria-label="Comment line"
-            >
-              {lineOptions.map((opt) => (
-                <option key={opt.line} value={opt.line}>
-                  {opt.line}: {opt.text.trim().slice(0, 60) || '(blank)'}
-                </option>
-              ))}
-            </select>
-          </label>
-          <textarea
-            className="cg-comment-input"
-            placeholder="Leave a comment on this line…"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            aria-label="Comment body"
-            rows={3}
-          />
-          <ErrorText error={comments.error} />
-          <div className="cg-comment-actions">
-            <Button
-              variant="primary"
-              onClick={() => void submit()}
-              disabled={posting || body.trim().length === 0 || line === null}
-            >
-              {posting ? 'Posting…' : 'Comment'}
-            </Button>
-          </div>
-        </div>
-      )}
+      <div className="cg-diff" aria-label="File diff">
+        {lines.map((ln, i) => {
+          const commentable = ln.rightLine !== null;
+          const lineThreads =
+            ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
+          const isActive =
+            activeLine !== null && ln.rightLine === activeLine;
+          return (
+            <div key={i} className="cg-diff-row">
+              <div
+                className={`cg-diff-line ${DIFF_LINE_CLASS[ln.kind]}${commentable ? ' cg-diff-commentable' : ''}`}
+                role={commentable ? 'button' : undefined}
+                tabIndex={commentable ? 0 : undefined}
+                aria-label={
+                  commentable ? `Comment on line ${ln.rightLine}` : undefined
+                }
+                onClick={
+                  commentable
+                    ? () =>
+                        setActiveLine((prev) =>
+                          prev === ln.rightLine ? null : ln.rightLine,
+                        )
+                    : undefined
+                }
+                onKeyDown={
+                  commentable
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setActiveLine((prev) =>
+                            prev === ln.rightLine ? null : ln.rightLine,
+                          );
+                        }
+                      }
+                    : undefined
+                }
+              >
+                <span className="cg-diff-gutter" aria-hidden="true">
+                  {ln.rightLine ?? ''}
+                </span>
+                {commentable && (
+                  <span className="cg-diff-add-comment" aria-hidden="true">
+                    {lineThreads.length > 0 ? '💬' : '+'}
+                  </span>
+                )}
+                <span className="cg-diff-code">{ln.raw || ' '}</span>
+              </div>
+              {lineThreads.length > 0 && (
+                <div className="pr-comment-threads cg-diff-linethreads">
+                  {lineThreads.map((thread) => (
+                    <ThreadCard
+                      key={thread.id}
+                      thread={thread}
+                      onSetStatus={(status) =>
+                        void comments.setStatus(thread.id, status)
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+              {isActive && ln.rightLine !== null && (
+                <InlineComposer
+                  comments={comments}
+                  path={path}
+                  line={ln.rightLine}
+                  onDone={() => setActiveLine(null)}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

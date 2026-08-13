@@ -115,6 +115,20 @@ export interface ChangeGraphNode {
    * caller, which is never reviewed).
    */
   review: string[];
+  /**
+   * For test files, a per-test-method explanation of what the PR changed in each
+   * touched test; lazy on click. Absent/empty for code files, boundary callers,
+   * and legacy payloads produced before per-method explanations existed.
+   */
+  testMethods?: TestMethodExplanation[];
+}
+
+/** A plain-English explanation of what a PR changed in one test method. */
+export interface TestMethodExplanation {
+  /** The test/method name (matches a segment name from the file's diff). */
+  name: string;
+  /** What this PR changed in that specific test method. */
+  whatChanged: string;
 }
 
 /**

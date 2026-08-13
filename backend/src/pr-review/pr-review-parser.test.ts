@@ -42,7 +42,31 @@ describe('parseFileExplanation', () => {
       whatItDoes: 'runs things',
       whatChanged: 'adds a flag',
       review: ['null default is unchecked', 'naming is terse'],
+      testMethods: [],
     });
+  });
+
+  it('reads a per-test-method breakdown and drops nameless/invalid entries', () => {
+    const parsed = parseFileExplanation(
+      '{ "whatItDoes": "tests things", "whatChanged": "adds cases", ' +
+        '"review": [], "methods": [' +
+        '{ "name": "adds two", "whatChanged": "new assertion" }, ' +
+        '{ "whatChanged": "no name — dropped" }, ' +
+        '{ "name": "", "whatChanged": "blank name — dropped" }, ' +
+        'null, "not an object", ' +
+        '{ "name": "renames" }] }',
+    );
+    expect(parsed.testMethods).toEqual([
+      { name: 'adds two', whatChanged: 'new assertion' },
+      { name: 'renames', whatChanged: '' },
+    ]);
+  });
+
+  it('treats a non-array methods value as no breakdown', () => {
+    const parsed = parseFileExplanation(
+      '{ "whatItDoes": "x", "whatChanged": "y", "review": [], "methods": "nope" }',
+    );
+    expect(parsed.testMethods).toEqual([]);
   });
 
   it('treats an empty review array as a clean, no-issue result', () => {
@@ -64,16 +88,19 @@ describe('parseFileExplanation', () => {
       whatItDoes: UNEXPLAINED_WHAT_IT_DOES,
       whatChanged: UNEXPLAINED_WHAT_CHANGED,
       review: [],
+      testMethods: [],
     });
     expect(parseFileExplanation('{ this is not: valid json }')).toEqual({
       whatItDoes: UNEXPLAINED_WHAT_IT_DOES,
       whatChanged: UNEXPLAINED_WHAT_CHANGED,
       review: [],
+      testMethods: [],
     });
     expect(parseFileExplanation('{ "whatItDoes": "only this" }')).toEqual({
       whatItDoes: 'only this',
       whatChanged: UNEXPLAINED_WHAT_CHANGED,
       review: [],
+      testMethods: [],
     });
   });
 });
@@ -125,6 +152,20 @@ describe('classifyCategory', () => {
     }
   });
 
+  it('flags files under .NET-style test project folders', () => {
+    const testPaths = [
+      'Microsoft.Azure.Cosmos.ContainerBuilder.Test.Unit/SplitTestsWithMockClient.cs',
+      'src/Foo.Tests/Helper.cs',
+      'src/FooUnitTests/Helper.cs',
+      'src/Foo.IntegrationTests/Helper.cs',
+      'src/foo.tests/helper.cs',
+      'src/foo.test.unit/helper.cs',
+    ];
+    for (const path of testPaths) {
+      expect(classifyCategory(path)).toBe('test');
+    }
+  });
+
   it('treats production files as code', () => {
     const codePaths = [
       'src/auth/login.ts',
@@ -132,6 +173,11 @@ describe('classifyCategory', () => {
       'pkg/handler.go',
       'app/service.py',
       'ui/src/features/page.tsx',
+      'src/latest/snapshot.cs',
+      'src/greatest/hits.cs',
+      'src/Contest/entry.cs',
+      'src/MyTestingHelpers/harness.cs',
+      'Microsoft.Azure.Cosmos.ContainerBuilder/Builder.cs',
     ];
     for (const path of codePaths) {
       expect(classifyCategory(path)).toBe('code');

@@ -19,7 +19,19 @@ npmRebuild: false
 files:
   - main.cjs
   - preload.cjs
+  - update-manager.cjs
   - package.json
+  - build-resources/icon.png
+
+# Update feed. electron-updater reads release metadata (latest.yml /
+# latest-mac.yml) from GitHub Releases. Declaring the provider here makes
+# electron-builder emit those metadata files during `dist:*` (even with
+# `--publish never`), which the Release workflow then uploads to the release.
+publish:
+  - provider: github
+    owner: sourabh1007
+    repo: ai-project-studio
+    releaseType: release
 
 extraResources:
   - from: build/backend

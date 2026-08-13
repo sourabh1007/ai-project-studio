@@ -96,6 +96,12 @@ function extractJsonObject(text: string): unknown {
  * the common conventions across the languages this tool reviews (xUnit/NUnit
  * `*Test(s).cs`, JS/TS `*.test|spec.*` and `__tests__`, Go `*_test.go`, Python
  * `test_*`/`*_test.py`, and files living under a `test`/`tests` directory).
+ *
+ * Also catches .NET-style test *project* folders that a file lives under, e.g.
+ * `Foo.Tests/`, `Foo.Test.Unit/`, `FooUnitTests/`, `Foo.IntegrationTests/`. The
+ * PascalCase directory pattern is intentionally case-sensitive so it matches the
+ * `Test` word boundary (`FooTests`, `.Test.Unit`) without mislabelling all-lower
+ * words such as `latest/`, `greatest/`, or `contest/`.
  */
 const TEST_PATH_PATTERNS: RegExp[] = [
   /(^|[\\/])__tests__[\\/]/i,
@@ -105,6 +111,8 @@ const TEST_PATH_PATTERNS: RegExp[] = [
   /_test\.go$/i,
   /(^|[\\/])test_[^\\/]+\.py$/i,
   /_test\.py$/i,
+  /(^|[\\/])[^\\/]*Tests?(\.[^\\/]*)?[\\/]/,
+  /(^|[\\/])[^\\/]*\.tests?(\.[^\\/]*)?[\\/]/i,
 ];
 
 /** Classifies a changed file as production code or a test from its path. */
@@ -147,22 +155,65 @@ export interface ParsedFileExplanation {
    * clean and no issues were found.
    */
   review: string[];
+  /**
+   * For test files, a per-test-method change explanation. Empty for code files
+   * or when the model produced no method breakdown.
+   */
+  testMethods: ParsedTestMethod[];
+}
+
+/** One entry of the model's per-test-method breakdown. */
+export interface ParsedTestMethod {
+  name: string;
+  whatChanged: string;
+}
+
+/**
+ * Coerces an unknown into the per-test-method breakdown. Accepts an array of
+ * `{ name, whatChanged }` objects (the expected shape), drops entries missing a
+ * name, and returns an empty list for anything else — a well-formed "no
+ * breakdown" result for code files or a model that omitted the field.
+ */
+function asMethodArray(value: unknown): ParsedTestMethod[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const methods: ParsedTestMethod[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as { name?: unknown; whatChanged?: unknown };
+    const name = asString(record.name);
+    if (name.length === 0) {
+      continue;
+    }
+    methods.push({ name, whatChanged: asString(record.whatChanged) });
+  }
+  return methods;
 }
 
 /**
  * Parses the lazy per-file explanation response — a single JSON object with
- * `whatItDoes`, `whatChanged` and a `review` list of syntactic findings. Falls
- * back to the unexplained placeholders for the text fields the model omitted and
- * to an empty finding list, so the caller always gets a well-formed result.
+ * `whatItDoes`, `whatChanged`, a `review` list of syntactic findings, and (for
+ * test files) an optional `methods` per-test-method breakdown. Falls back to the
+ * unexplained placeholders for the text fields the model omitted and to empty
+ * lists, so the caller always gets a well-formed result.
  */
 export function parseFileExplanation(text: string): ParsedFileExplanation {
   const raw = extractJsonObject(text) as
-    | { whatItDoes?: unknown; whatChanged?: unknown; review?: unknown }
+    | {
+        whatItDoes?: unknown;
+        whatChanged?: unknown;
+        review?: unknown;
+        methods?: unknown;
+      }
     | null;
   return {
     whatItDoes: asString(raw?.whatItDoes) || UNEXPLAINED_WHAT_IT_DOES,
     whatChanged: asString(raw?.whatChanged) || UNEXPLAINED_WHAT_CHANGED,
     review: asStringArray(raw?.review),
+    testMethods: asMethodArray(raw?.methods),
   };
 }
 

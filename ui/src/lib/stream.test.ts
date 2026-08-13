@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrReview, PrReviewStepStatus, RepositoryContext, Session, StoredUsage } from './types.js';
+import type { PrReview, PrReviewStepStatus, RepositoryContext, Session, StoredUsage, Automation, Subagent } from './types.js';
 import {
   applyStreamEvent,
   initialLiveState,
@@ -318,6 +318,72 @@ describe('applyStreamEvent', () => {
       type: 'context.status',
       status: { scope: 'feature', scopeId: 'f1', phase: 'sharing' },
     });
+  });
+
+  it('parses and applies automation.updated then automation.removed', () => {
+    const automation: Automation = {
+      id: 'a1',
+      name: 'Watch',
+      mode: 'long',
+      status: 'active',
+      origin: { sessionId: null, featureId: null },
+      check: { type: 'shell', command: 'echo' },
+      condition: { type: 'always' },
+      action: { type: 'report', prompt: 'go' },
+      intervalMs: 60000,
+      maxRuns: null,
+      runCount: 0,
+      progress: null,
+      plannedSteps: [],
+      lastOccurrenceKey: null,
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+      lastCheckedAt: null,
+      nextRunAt: null,
+      failure: null,
+    };
+    const parsed = parseServerEvent(
+      'automation.updated',
+      JSON.stringify(automation),
+    );
+    expect(parsed).toEqual({ type: 'automation.updated', automation });
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'automation.updated',
+      automation,
+    });
+    expect(state.automations['a1']).toEqual(automation);
+    const removed = parseServerEvent(
+      'automation.removed',
+      JSON.stringify({ id: 'a1' }),
+    );
+    expect(removed).toEqual({ type: 'automation.removed', id: 'a1' });
+    state = applyStreamEvent(state, { type: 'automation.removed', id: 'a1' });
+    expect(state.automations['a1']).toBeUndefined();
+  });
+
+  it('parses and applies subagent.updated', () => {
+    const subagent: Subagent = {
+      id: 'g1',
+      automationId: 'a1',
+      origin: { sessionId: null, featureId: null },
+      task: 'Analyze',
+      status: 'running',
+      progress: null,
+      result: null,
+      sessionId: null,
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+    };
+    const parsed = parseServerEvent(
+      'subagent.updated',
+      JSON.stringify(subagent),
+    );
+    expect(parsed).toEqual({ type: 'subagent.updated', subagent });
+    const state = applyStreamEvent(initialLiveState, {
+      type: 'subagent.updated',
+      subagent,
+    });
+    expect(state.subagents['g1']).toEqual(subagent);
   });
 });
 

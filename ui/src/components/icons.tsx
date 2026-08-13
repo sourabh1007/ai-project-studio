@@ -30,6 +30,7 @@ import {
   Pencil,
   Plug,
   Plus,
+  Radar,
   RefreshCw,
   ScanSearch,
   Search,
@@ -100,6 +101,7 @@ export const RepoIcon = makeIcon(FolderGit2);
 export const FolderIcon = makeIcon(Folder);
 export const PullRequestIcon = makeIcon(GitPullRequest);
 export const PrReviewIcon = makeIcon(ScanSearch);
+export const AutomationIcon = makeIcon(Radar);
 export const SettingsIcon = makeIcon(Settings);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);

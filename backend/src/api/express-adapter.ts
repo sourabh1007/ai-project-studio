@@ -12,6 +12,7 @@ export function toExpressHandler(handler: HttpHandler) {
       const result = await handler({
         params: req.params as unknown as Record<string, string>,
         query: req.query as unknown as Record<string, string | undefined>,
+        headers: req.headers,
         body: req.body,
       });
       res.status(result.status).json(result.body);

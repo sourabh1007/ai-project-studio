@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  buildFocusedChangeGraphLayout,
-  buildChangeGraphLayout,
   findNode,
+  formatEdgeLabel,
   NODE_H,
 } from '../../lib/change-graph-layout.js';
+import { useChangeGraphLayout } from './use-change-graph-layout.js';
+import { segmentTestMethods } from '../../lib/test-method-diff.js';
 import type {
   ChangeGraphCategory,
   ChangeGraphNode,
   ChangeGraphStep,
   PrChangeKind,
+  TestMethodExplanation,
 } from '../../lib/types.js';
-import { FileCommentBox, type PrCommentsController } from './pr-comments.js';
+import { CommentableDiff, type PrCommentsController } from './pr-comments.js';
 
 /** Placeholders the backend writes for a file whose English is not yet produced. */
 const UNEXPLAINED_WHAT_IT_DOES = 'No description was produced for this file.';
@@ -72,25 +74,6 @@ function changeKindLabel(
 /** The change kinds shown in a category's legend, in display order. */
 const LEGEND_KINDS: PrChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
 
-function edgeCallLabel(
-  calls: ReadonlyArray<{ caller: string | null }> | undefined,
-): string {
-  const callers = [
-    ...new Set(
-      (calls ?? [])
-        .map((call) => call.caller?.trim())
-        .filter((caller): caller is string => Boolean(caller)),
-    ),
-  ];
-  if (callers.length === 0) {
-    return (calls?.length ?? 0) > 0 ? 'module scope' : '';
-  }
-  if (callers.length <= 2) {
-    return callers.join(', ');
-  }
-  return `${callers[0]}, +${callers.length - 1}`;
-}
-
 /** Renders a unified diff with per-line +/- colour coding. */
 function DiffView({ diff }: { diff: string }) {
   const lines = diff.replace(/\n$/, '').split('\n');
@@ -121,19 +104,90 @@ function DiffView({ diff }: { diff: string }) {
   );
 }
 
+/** Finds the per-method explanation whose name matches a diff segment's name. */
+function explanationForSegment(
+  name: string | null,
+  methods: TestMethodExplanation[],
+): string | null {
+  if (!name) {
+    return null;
+  }
+  const target = name.trim().toLowerCase();
+  const hit = methods.find((m) => {
+    const candidate = m.name.trim().toLowerCase();
+    return (
+      candidate === target ||
+      candidate.includes(target) ||
+      target.includes(candidate)
+    );
+  });
+  return hit?.whatChanged.trim() || null;
+}
+
+/**
+ * Renders a test file's diff split into per-test-method blocks: each block is
+ * headed by the method name (or "File setup" for the preamble), badged when the
+ * PR changed it, and — when the backend produced one — carries a plain-English
+ * explanation of what changed in that specific test. Falls back to a single
+ * plain diff when the file could not be segmented into methods.
+ */
+function SegmentedDiffView({
+  diff,
+  methods,
+}: {
+  diff: string;
+  methods: TestMethodExplanation[];
+}) {
+  const segments = useMemo(() => segmentTestMethods(diff), [diff]);
+  if (segments.length <= 1) {
+    return <DiffView diff={diff} />;
+  }
+  return (
+    <div className="cg-test-methods">
+      {segments.map((segment, i) => {
+        const explanation = explanationForSegment(segment.name, methods);
+        return (
+          <div
+            key={i}
+            className={`cg-test-method${segment.changed ? ' cg-test-method-changed' : ''}`}
+          >
+            <div className="cg-test-method-head">
+              <span className="cg-test-method-name">
+                {segment.name ?? 'File setup'}
+              </span>
+              {segment.changed && (
+                <span className="cg-test-method-badge">Changed</span>
+              )}
+            </div>
+            {explanation && (
+              <p className="cg-test-method-explain">{explanation}</p>
+            )}
+            <DiffView diff={segment.diff} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function FocusedFileGraph({
   step,
   category,
   focusPath,
+  onNavigate,
 }: {
   step: ChangeGraphStep;
   category: ChangeGraphCategory;
   focusPath: string;
+  /** Opens another node's file popup when its tile is clicked. */
+  onNavigate?: (path: string) => void;
 }) {
-  const layout = useMemo(
-    () => buildFocusedChangeGraphLayout(step, category, focusPath),
-    [step, category, focusPath],
-  );
+  const layout = useChangeGraphLayout({
+    kind: 'focused',
+    step,
+    category,
+    focusPath,
+  });
   const viewW = Math.max(360, layout.width + FOCUSED_CANVAS_PAD * 2);
   const viewH = Math.max(132, layout.height + FOCUSED_CANVAS_PAD * 2);
 
@@ -223,7 +277,7 @@ function FocusedFileGraph({
       </defs>
       <g transform={`translate(${FOCUSED_CANVAS_PAD} ${FOCUSED_CANVAS_PAD})`}>
         {layout.edges.map((edge) => {
-          const label = edgeCallLabel(edge.calls);
+          const label = formatEdgeLabel(edge.calls);
           const highlighted = edge.highlightsChanges;
           return (
             <g key={`${edge.from}->${edge.to}`} className="cg-focused-edge">
@@ -252,28 +306,46 @@ function FocusedFileGraph({
             </g>
           );
         })}
-        {layout.nodes.map((node) => (
-          <g
-            key={node.path}
-            className={`cg-filenode cg-filenode-${node.kind}${node.path === focusPath ? ' cg-filenode-selected' : ''}`}
-            transform={`translate(${node.x} ${node.y})`}
-          >
-            <rect
-              className="cg-filenode-rect"
-              width={node.width}
-              height={NODE_H}
-              rx={8}
-            />
-            <text
-              className="cg-filenode-label"
-              x={node.width / 2}
-              y={NODE_H / 2 + 4}
-              textAnchor="middle"
+        {layout.nodes.map((node) => {
+          const isFocus = node.path === focusPath;
+          const clickable = !isFocus && onNavigate !== undefined;
+          return (
+            <g
+              key={node.path}
+              className={`cg-filenode cg-filenode-${node.kind}${isFocus ? ' cg-filenode-selected' : ''}${clickable ? ' cg-filenode-nav' : ''}`}
+              transform={`translate(${node.x} ${node.y})`}
+              role={clickable ? 'button' : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              aria-label={clickable ? `Open ${node.label}` : undefined}
+              onClick={clickable ? () => onNavigate(node.path) : undefined}
+              onKeyDown={
+                clickable
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onNavigate(node.path);
+                      }
+                    }
+                  : undefined
+              }
             >
-              {node.label}
-            </text>
-          </g>
-        ))}
+              <rect
+                className="cg-filenode-rect"
+                width={node.width}
+                height={NODE_H}
+                rx={8}
+              />
+              <text
+                className="cg-filenode-label"
+                x={node.width / 2}
+                y={NODE_H / 2 + 4}
+                textAnchor="middle"
+              >
+                {node.label}
+              </text>
+            </g>
+          );
+        })}
       </g>
     </svg>
   );
@@ -358,6 +430,7 @@ function SelectionPanel({
   explaining,
   comments,
   onClose,
+  onNavigate,
 }: {
   step: ChangeGraphStep;
   node: ChangeGraphNode;
@@ -365,6 +438,8 @@ function SelectionPanel({
   explaining: boolean;
   comments?: PrCommentsController;
   onClose: () => void;
+  /** Replaces the popup with another file's popup (clicked in the node graph). */
+  onNavigate?: (path: string) => void;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -466,12 +541,34 @@ function SelectionPanel({
         )}
         <div className="cg-panel-section">
           <span className="cg-panel-label">Focused node diagram</span>
-          <FocusedFileGraph step={step} category={category} focusPath={node.path} />
+          <FocusedFileGraph
+            step={step}
+            category={category}
+            focusPath={node.path}
+            onNavigate={onNavigate}
+          />
         </div>
         <div className="cg-panel-section">
-          <span className="cg-panel-label">Code diff</span>
+          <span className="cg-panel-label">
+            {category === 'test'
+              ? 'Test diff — grouped by test method'
+              : 'Code diff — click a line to comment'}
+          </span>
           {node.diff.trim() ? (
-            <DiffView diff={node.diff} />
+            category === 'test' ? (
+              <SegmentedDiffView
+                diff={node.diff}
+                methods={node.testMethods ?? []}
+              />
+            ) : comments ? (
+              <CommentableDiff
+                comments={comments}
+                path={node.path}
+                diff={node.diff}
+              />
+            ) : (
+              <DiffView diff={node.diff} />
+            )
           ) : (
             <p className="muted">
               No diff is available for this file (it may have been truncated from
@@ -499,13 +596,6 @@ function SelectionPanel({
               </div>
             );
           })()}
-        {comments && (
-          <FileCommentBox
-            comments={comments}
-            path={node.path}
-            diff={node.diff}
-          />
-        )}
       </aside>
     </div>,
     document.body,
@@ -646,10 +736,13 @@ export function ChangeGraph({
     return set;
   }, [collapsible, expanded]);
 
-  const layout = useMemo(
-    () => buildChangeGraphLayout(layoutStep, category, { collapsed: collapsedSet }),
-    [layoutStep, category, collapsedSet],
-  );
+  const collapsedList = useMemo(() => [...collapsedSet], [collapsedSet]);
+  const layout = useChangeGraphLayout({
+    kind: 'full',
+    step: layoutStep,
+    category,
+    collapsed: collapsedList,
+  });
   const kindsPresent = useMemo(() => {
     const set = new Set<PrChangeKind>();
     for (const node of step.nodes) {
@@ -876,7 +969,7 @@ export function ChangeGraph({
               );
             })}
             {layout.edges.map((edge, i) => {
-              const label = edgeCallLabel(edge.calls);
+              const label = formatEdgeLabel(edge.calls);
               return (
                 <g key={`${edge.from}->${edge.to}`}>
                   <line
@@ -1000,6 +1093,7 @@ export function ChangeGraph({
           explaining={explaining?.has(selectedNode.path) ?? false}
           comments={comments}
           onClose={() => setSelected(null)}
+          onNavigate={(path) => activate({ path })}
         />
       )}
     </>

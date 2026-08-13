@@ -54,6 +54,10 @@ export default defineConfig({
         'src/mcp/mcp-config-file-adapter.ts',
         'src/mcp/mcp-tool-inspector-adapter.ts',
         'src/meta/acp/acp-process-adapter.ts',
+        'src/automation/shell-executor-adapter.ts',
+        'src/automation/http-probe-adapter.ts',
+        'src/automation/ci-pipeline-probe-adapter.ts',
+        'src/automation/mcp/studio-mcp-server.ts',
       ],
       thresholds: {
         lines: 100,

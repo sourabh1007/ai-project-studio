@@ -255,6 +255,71 @@ const TASK_TABLES: readonly TableSchema[] = [
   },
 ];
 
+const AUTOMATIONS_TABLE: TableSchema = {
+  name: 'automations',
+  ddl: `CREATE TABLE IF NOT EXISTS automations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('short', 'long')),
+    status TEXT NOT NULL CHECK (
+      status IN (
+        'active', 'paused', 'needs-auth', 'completed', 'failed', 'cancelled'
+      )
+    ),
+    origin_session_id TEXT,
+    origin_feature_id TEXT,
+    check_spec TEXT NOT NULL,
+    condition_spec TEXT NOT NULL,
+    action_spec TEXT NOT NULL,
+    interval_ms INTEGER NOT NULL,
+    max_runs INTEGER,
+    run_count INTEGER NOT NULL DEFAULT 0,
+    progress TEXT,
+    planned_steps TEXT NOT NULL DEFAULT '[]',
+    last_occurrence_key TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_checked_at TEXT,
+    next_run_at TEXT,
+    failure TEXT
+  )`,
+};
+
+const AUTOMATION_TABLES: readonly TableSchema[] = [
+  AUTOMATIONS_TABLE,
+  {
+    name: 'automation_runs',
+    ddl: `CREATE TABLE IF NOT EXISTS automation_runs (
+    id TEXT PRIMARY KEY,
+    automation_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    triggered INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('ok', 'failed', 'skipped')),
+    detail TEXT,
+    session_id TEXT
+  )`,
+  },
+  {
+    name: 'subagents',
+    ddl: `CREATE TABLE IF NOT EXISTS subagents (
+    id TEXT PRIMARY KEY,
+    automation_id TEXT,
+    origin_session_id TEXT,
+    origin_feature_id TEXT,
+    task TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+      status IN ('queued', 'running', 'done', 'failed')
+    ),
+    progress TEXT,
+    result TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  },
+];
+
 /**
  * The logical database layout. The primary file (`main`) holds the small core
  * catalog and the FK-linked repository pair; append-heavy data is partitioned
@@ -265,6 +330,7 @@ export const DATABASE_GROUPS: readonly DatabaseGroup[] = [
   { schema: 'usage', file: 'usage.db', tables: USAGE_TABLES },
   { schema: 'content', file: 'content.db', tables: CONTENT_TABLES },
   { schema: 'tasks', file: 'tasks.db', tables: TASK_TABLES },
+  { schema: 'automations', file: 'automations.db', tables: AUTOMATION_TABLES },
 ];
 
 /**
@@ -317,6 +383,14 @@ const INDEXES: readonly IndexSchema[] = [
   {
     schema: 'tasks',
     ddl: 'CREATE INDEX IF NOT EXISTS tasks.idx_feature_tasks_feature_id ON feature_tasks (feature_id)',
+  },
+  {
+    schema: 'automations',
+    ddl: 'CREATE INDEX IF NOT EXISTS automations.idx_automation_runs_automation_id ON automation_runs (automation_id)',
+  },
+  {
+    schema: 'automations',
+    ddl: 'CREATE INDEX IF NOT EXISTS automations.idx_subagents_automation_id ON subagents (automation_id)',
   },
 ];
 
@@ -466,6 +540,32 @@ function addColumnIfMissing(
   }
 }
 
+/**
+ * Rebuilds the `automations` table when it predates a newly-allowed `status`
+ * value. SQLite cannot alter a CHECK constraint in place, and
+ * `CREATE TABLE IF NOT EXISTS` never touches an existing table, so a table
+ * created before `needs-auth` was permitted is recreated (preserving its rows)
+ * with the current DDL. Detection keys off the stored constraint text.
+ */
+function relaxAutomationStatusCheck(db: DatabaseSync): void {
+  const row = db
+    .prepare(
+      "SELECT sql FROM automations.sqlite_master " +
+        "WHERE type = 'table' AND name = 'automations'",
+    )
+    .get() as { sql: string };
+  if (row.sql.includes("'needs-auth'")) {
+    return;
+  }
+  db.exec('ALTER TABLE automations.automations RENAME TO automations_legacy');
+  db.exec(qualifyTable('automations', AUTOMATIONS_TABLE));
+  db.exec(
+    'INSERT INTO automations.automations ' +
+      'SELECT * FROM automations.automations_legacy',
+  );
+  db.exec('DROP TABLE automations.automations_legacy');
+}
+
 /** Applies the schema across the primary and attached databases. */
 export function applySchema(db: DatabaseSync): void {
   ensureGroupsAttached(db);
@@ -479,6 +579,7 @@ export function applySchema(db: DatabaseSync): void {
       }
     }
   }
+  relaxAutomationStatusCheck(db);
   for (const { table, column, ddl, schema } of ADDED_COLUMNS) {
     addColumnIfMissing(db, table, column, ddl, schema);
   }

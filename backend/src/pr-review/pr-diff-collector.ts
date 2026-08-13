@@ -123,6 +123,26 @@ function splitPatchByFile(patch: string): Map<string, string> {
 }
 
 /**
+ * Refreshes the remote-tracking ref for the base branch so the diff's merge-base
+ * is current. This is the crux of an accurate PR diff: a PR worktree only fetches
+ * the PR head, so `origin/<base>` can be stale (or far behind) — and a stale base
+ * makes the three-dot range span every unrelated commit merged into the target
+ * since the fork point, reporting thousands of files as "changed" on a busy
+ * monorepo. The fetch is best-effort: offline or an unadvertised base simply
+ * leaves the existing ref in place and the caller degrades gracefully.
+ */
+async function refreshBaseBranch(
+  git: PrDiffGit,
+  worktreePath: string,
+  baseBranch: string | null,
+): Promise<void> {
+  if (!baseBranch) {
+    return;
+  }
+  await git.run(['fetch', 'origin', baseBranch, '--no-tags'], worktreePath);
+}
+
+/**
  * Resolves the base branch to a ref that actually exists in the worktree. The
  * remote-tracking ref (`origin/<base>`) is preferred, but a freshly-provisioned
  * PR worktree may not have fetched it — so the plain local branch name is tried
@@ -150,6 +170,57 @@ async function resolveBaseRef(
 }
 
 /**
+ * True when HEAD is a merge commit (has a second parent). Azure DevOps serves a
+ * PR as `refs/pull/<n>/merge` — a server-maintained merge of the source into the
+ * target — whose *first* parent is the target tip at merge time. A first-parent
+ * diff of such a commit is therefore exactly the PR's own changes, which is the
+ * correct fallback when the base branch can't be fetched to form a merge-base.
+ */
+async function headIsMergeCommit(
+  git: PrDiffGit,
+  worktreePath: string,
+): Promise<boolean> {
+  const res = await git.run(
+    ['rev-parse', '--verify', '--quiet', 'HEAD^2^{commit}'],
+    worktreePath,
+  );
+  return res.code === 0;
+}
+
+/**
+ * Picks the diff range for a resolved base ref. Three-dot (`base...HEAD`)
+ * semantics are preferred so the diff reflects only the PR's own commits, but
+ * three-dot requires a merge-base between the base and HEAD. When no merge-base
+ * exists locally (e.g. the base could not be fetched) we prefer a first-parent
+ * diff for an Azure merge commit — `HEAD^1..HEAD` yields exactly the PR's
+ * changes — and otherwise degrade to a two-dot endpoint diff (`base..HEAD`),
+ * which always resolves, rather than failing the whole review.
+ */
+async function resolveDiffRange(
+  git: PrDiffGit,
+  worktreePath: string,
+  baseRef: string | null,
+): Promise<string> {
+  if (baseRef) {
+    const mergeBase = await git.run(
+      ['merge-base', baseRef, 'HEAD'],
+      worktreePath,
+    );
+    if (mergeBase.code === 0) {
+      return `${baseRef}...HEAD`;
+    }
+    if (await headIsMergeCommit(git, worktreePath)) {
+      return 'HEAD^1..HEAD';
+    }
+    return `${baseRef}..HEAD`;
+  }
+  if (await headIsMergeCommit(git, worktreePath)) {
+    return 'HEAD^1..HEAD';
+  }
+  return 'HEAD';
+}
+
+/**
  * Collects a bounded diff of a PR worktree against its base branch. The diff is
  * taken with three-dot range semantics (`base...HEAD`) so it reflects only the
  * PR's own commits, and the patch is clamped to the configured budget so the
@@ -158,12 +229,21 @@ async function resolveBaseRef(
 export function createPrDiffCollector(deps: PrDiffCollectorDeps): PrDiffCollector {
   return {
     async collect(request: PrDiffRequest): Promise<PrDiff> {
+      await refreshBaseBranch(
+        deps.git,
+        request.worktreePath,
+        request.baseBranch,
+      );
       const baseRef = await resolveBaseRef(
         deps.git,
         request.worktreePath,
         request.baseBranch,
       );
-      const range = baseRef ? `${baseRef}...HEAD` : 'HEAD';
+      const range = await resolveDiffRange(
+        deps.git,
+        request.worktreePath,
+        baseRef,
+      );
 
       const stat = ensureOk(
         await deps.git.run(['diff', '--stat', range], request.worktreePath),

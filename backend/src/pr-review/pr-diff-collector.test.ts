@@ -183,6 +183,93 @@ describe('createPrDiffCollector', () => {
     expect(diff.entries).toEqual([{ path: 'a.ts', status: 'modified', patch: '' }]);
   });
 
+  it('degrades to a two-dot range when no merge-base exists (rebased/shallow PR)', async () => {
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'merge-base origin/main HEAD': fail(),
+      'rev-parse --verify --quiet HEAD^2^{commit}': fail(),
+      'diff --stat origin/main..HEAD': ok('stat'),
+      'diff --name-status origin/main..HEAD': ok('M\ta.ts'),
+      'diff origin/main..HEAD': ok('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+x'),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.baseRef).toBe('origin/main');
+    expect(diff.files).toEqual(['a.ts']);
+    expect(calls.some((c) => c.args.join(' ') === 'diff origin/main..HEAD')).toBe(
+      true,
+    );
+  });
+
+  it('refreshes origin/<base> before diffing so the merge-base stays current', async () => {
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'diff --stat origin/main...HEAD': ok('stat'),
+      'diff --name-status origin/main...HEAD': ok('M\ta.ts'),
+      'diff origin/main...HEAD': ok('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+x'),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    await collector.collect({ worktreePath: 'C:\\wt', baseBranch: 'main' });
+
+    expect(
+      calls.some(
+        (c) => c.args.join(' ') === 'fetch origin main --no-tags',
+      ),
+    ).toBe(true);
+  });
+
+  it('uses a first-parent range for an Azure merge commit when the base has no merge-base', async () => {
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'merge-base origin/main HEAD': fail(),
+      'rev-parse --verify --quiet HEAD^2^{commit}': ok('mergesha'),
+      'diff --stat HEAD^1..HEAD': ok('stat'),
+      'diff --name-status HEAD^1..HEAD': ok('M\ta.ts'),
+      'diff HEAD^1..HEAD': ok('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+x'),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.baseRef).toBe('origin/main');
+    expect(diff.files).toEqual(['a.ts']);
+    expect(calls.some((c) => c.args.join(' ') === 'diff HEAD^1..HEAD')).toBe(
+      true,
+    );
+  });
+
+  it('uses a first-parent range for a merge commit when no base ref resolves', async () => {
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': fail(),
+      'rev-parse --verify --quiet main^{commit}': fail(),
+      'rev-parse --verify --quiet HEAD^2^{commit}': ok('mergesha'),
+      'diff --stat HEAD^1..HEAD': ok('stat'),
+      'diff --name-status HEAD^1..HEAD': ok('M\ta.ts'),
+      'diff HEAD^1..HEAD': ok('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+x'),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.baseRef).toBeNull();
+    expect(diff.files).toEqual(['a.ts']);
+    expect(calls.some((c) => c.args.join(' ') === 'diff HEAD^1..HEAD')).toBe(
+      true,
+    );
+  });
+
   it('falls back to the local branch when origin/<base> is not fetched', async () => {
     const { git } = gitStub({
       'rev-parse --verify --quiet origin/main^{commit}': fail(),
@@ -206,6 +293,7 @@ describe('createPrDiffCollector', () => {
     const { git } = gitStub({
       'rev-parse --verify --quiet origin/main^{commit}': fail(),
       'rev-parse --verify --quiet main^{commit}': fail(),
+      'rev-parse --verify --quiet HEAD^2^{commit}': fail(),
       'diff --stat HEAD': ok(''),
       'diff --name-status HEAD': ok(''),
       'diff HEAD': ok(''),
@@ -225,6 +313,7 @@ describe('createPrDiffCollector', () => {
 
   it('uses HEAD and a null base ref when no base branch is known', async () => {
     const { git } = gitStub({
+      'rev-parse --verify --quiet HEAD^2^{commit}': fail(),
       'diff --stat HEAD': ok(''),
       'diff --name-status HEAD': ok(''),
       'diff HEAD': ok(''),

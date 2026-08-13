@@ -59,6 +59,8 @@ function deps(): ApiRoutesDeps {
     prComments: empty,
     prApprovals: empty,
     context: empty,
+    automations: empty,
+    subagents: empty,
     logger: empty,
   };
 }
@@ -68,6 +70,7 @@ describe('createApiRoutes', () => {
     const routes = createApiRoutes(deps());
     const signatures = routes.map((r) => `${r.method} ${r.path}`);
     expect(signatures).toEqual([
+      'get /health',
       'post /features',
       'get /features',
       'get /features/:id',
@@ -135,6 +138,20 @@ describe('createApiRoutes', () => {
       'get /context/:scope',
       'put /context/:scope',
       'post /context/:scope/remember',
+      'get /automations',
+      'get /automations/:id',
+      'post /automations',
+      'post /automations/:id/progress',
+      'post /automations/:id/planned-steps',
+      'post /automations/:id/subagents',
+      'post /automations/:id/pause',
+      'post /automations/:id/resume',
+      'post /automations/:id/cancel',
+      'post /automations/:id/run',
+      'post /subagents/:id/progress',
+      'post /subagents/:id/complete',
+      'post /subagents/:id/fail',
+      'delete /automations/:id',
       'get /config',
       'put /config/:namespace',
       'delete /config/:namespace',

@@ -3,8 +3,8 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { McpServerEntry } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { Loader } from '../../components/loading.js';
-import { PencilIcon, PlusIcon, RefreshIcon, ToolsIcon } from '../../components/icons.js';
+import { SkeletonCards } from '../../components/loading.js';
+import { McpIcon, PencilIcon, PlusIcon, RefreshIcon, ToolsIcon } from '../../components/icons.js';
 import { McpServerForm } from './mcp-server-form.js';
 
 /** One-line human summary of a server spec for the card body. */
@@ -172,14 +172,19 @@ export function McpManager() {
         </p>
       )}
 
-      {(providers.loading || config.loading) && <Loader label="Loading MCP servers" />}
+      {(providers.loading || config.loading) && <SkeletonCards cards={3} />}
 
       {!providers.loading && providerList.length === 0 && (
         <EmptyState message="No providers expose MCP configuration." />
       )}
 
       {!config.loading && providerList.length > 0 && list.length === 0 && (
-        <EmptyState message="No MCP servers configured yet. Add your first one." />
+        <EmptyState
+          icon={<McpIcon size={20} />}
+          title="No MCP servers configured"
+          description="MCP servers extend your sessions with external tools and context. Add your first server to make its tools available."
+          action={{ label: 'Add server', onClick: () => setCreating(true) }}
+        />
       )}
 
       <div className="skill-list">

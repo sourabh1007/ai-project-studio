@@ -4,16 +4,42 @@
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
 
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 22px;
+  /* Strict typography scale (px-based so it never drifts with rem roots). */
+  --fs-page-title: 24px;
+  --lh-page-title: 32px;
+  --fs-section: 18px;
+  --lh-section: 24px;
+  --fs-card-title: 16px;
+  --lh-card-title: 22px;
+  --fs-body: 14px;
+  --lh-body: 20px;
+  --fs-secondary: 13px;
+  --lh-secondary: 18px;
+  --fs-meta: 12px;
+  --lh-meta: 16px;
 
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Compact, enterprise-grade radii (cards 10–12px). */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+
+  /* 8px spacing grid. XS=4 SM=8 MD=16 LG=24 XL=32 XXL=48. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-7: 48px;
+
+  /* Standard control sizing. */
+  --control-height: 36px;
+  --control-height-sm: 32px;
 
   --shadow-glass: 0 8px 32px rgba(15, 23, 42, 0.18);
   --shadow-soft: 0 2px 10px rgba(15, 23, 42, 0.1);
@@ -21,8 +47,8 @@
   --transition-fast: 140ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-med: 260ms cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* The editor panel is dark in both themes (it hosts the CLI terminal), so
-     content rendered on it always needs a light foreground. */
+  /* Editor panel foreground. Per-theme below: the panel is bright in light
+     mode (the terminal itself is themed white) and dark in dark mode. */
   --editor-fg: #e6ebf7;
   --editor-fg-muted: #94a0c0;
 }
@@ -57,7 +83,7 @@
   --panel-titlebar: #e6eaf6;
   --panel-activitybar: #dbe1f2;
   --panel-sidebar: #f4f6fc;
-  --panel-editor: #0a0f1e;
+  --panel-editor: #f7f9ff;
   --panel: #ffffff;
   --panel-inset: #eef2fb;
   --panel-hover: rgba(79, 70, 229, 0.08);
@@ -67,6 +93,11 @@
   --item-active: rgba(79, 70, 229, 0.14);
   --activity-fg: #64708c;
   --activity-fg-active: #4f46e5;
+
+  /* Editor chrome follows the light theme so a freshly opened session is
+     bright, not dark navy. The terminal itself is themed white by xterm. */
+  --editor-fg: #0f172a;
+  --editor-fg-muted: #475569;
 
   /* Per-feature identity palette (8 slots, resolved by lib/feature-color). */
   --feature-color-1: #4f46e5;
@@ -142,6 +173,8 @@ body,
 
 body {
   font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   color: var(--text);
   background: var(--bg);
   background-image: var(--bg-gradient);

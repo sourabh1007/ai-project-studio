@@ -7,10 +7,11 @@ The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST),
 
 ## What's actually mounted
 
-`ui/src/App.tsx` renders four top-level views (selected from the activity bar):
+`ui/src/App.tsx` renders five top-level views (selected from the activity bar):
 
 - **Workspace** (`features/workspace/`) — the IDE shell: explorer sidebar, session tabs, embedded terminal, new-session form, import-session panel, feature dashboard tabs.
 - **Skills** (`features/skills/`) — manage/tag reusable instruction skills.
+- **Automations** (`features/automations/`) — monitor and manage background monitors and tracked subagents.
 - **MCP Servers** (`features/mcp/`) — manage Model Context Protocol servers and their tools per provider.
 - **Settings** (`features/settings/`) — app configuration.
 
@@ -23,6 +24,7 @@ The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST),
 | `workspace/` | IDE shell: `workspace-view.tsx`, `explorer.tsx`, repository-context status/viewer, `new-session-form.tsx`, `import-session-panel.tsx`. | ✅ |
 | `feature-dashboard/` | Feature analytics: charts, `feature-tasks-panel.tsx`, `pr-review-panel.tsx`, `work-summary.tsx`. | ✅ (within workspace) |
 | `skills/` | `skills-manager.tsx`, `skill-tagger.tsx`, `skill-chips.tsx`, `skill-kind.tsx`. | ✅ |
+| `automations/` | Automations page: categorized monitor/subagent lists, prompt-based creation, lifecycle controls, run history, and planned-steps detail. | ✅ |
 | `mcp/` | `mcp-manager.tsx`, `mcp-server-form.tsx` — add/edit/restart MCP servers, discover and toggle tools. | ✅ |
 | `pr-review-page/` | `pr-review-page.tsx`, `change-graph.tsx`, `pr-comments.tsx` — dedicated PR review page opened as an editor tab. | ✅ (within workspace) |
 | `settings/` | `settings-view.tsx`. | ✅ |
@@ -70,6 +72,26 @@ Opening a PR review as its own editor tab renders the full **PR review page** (`
 ## MCP server management UX
 
 The **MCP Servers** view (`features/mcp/mcp-manager.tsx`) manages Model Context Protocol servers per provider. It lists the MCP-capable providers, and for the selected provider shows each configured server as a card with its spec summary and tool-discovery status. From here you can **add** and **edit** servers (`mcp-server-form.tsx`), **restart** a server, and **enable/disable individual tools** surfaced by a live discovery probe. Tool toggles and restarts take effect for already-open sessions without restarting the shell. Authentication, when required, is handled as part of the restart/discovery flow.
+
+## Automations UX
+
+The **Automations** view (`features/automations/`) manages workspace-global
+monitors and subagents. It offers a prompt entry point that starts a metasession
+to set up and run an automation, and it also reflects monitors registered by an
+in-session AI through the Studio local MCP bridge. Monitors are grouped by mode
+(`short` or `long`) and status; subagents appear in their own category.
+
+Monitor cards show name, mode badge, status, origin, progress, planned next
+steps, last check result/time, next-run countdown, and run count. Controls call
+the `/api/automations` lifecycle endpoints for **Pause**, **Resume**,
+**Cancel**, **Run now**, and **Delete**. Opening a detail view shows run history,
+retained report output, and the planned-steps timeline.
+
+The view consumes `automation.updated`, `automation.removed`, and
+`subagent.updated` from the shared SSE stream so status, progress, run counts,
+and planned steps update without polling. Automation AI work is internal and
+therefore hidden from workspace session lists while still appearing in **IDE AI**
+cost accounting.
 
 ## Conventions
 

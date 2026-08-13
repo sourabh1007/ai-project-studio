@@ -390,4 +390,62 @@ describe('db schema/connection', () => {
     expect(() => applySchema(db)).not.toThrow();
     db.close();
   });
+
+  it('rebuilds a legacy automations table to allow the needs-auth status', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec("ATTACH DATABASE ':memory:' AS automations");
+    // A pre-needs-auth automations table whose CHECK rejects the new status.
+    db.exec(`CREATE TABLE automations.automations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('short', 'long')),
+      status TEXT NOT NULL CHECK (
+        status IN ('active', 'paused', 'completed', 'failed', 'cancelled')
+      ),
+      origin_session_id TEXT,
+      origin_feature_id TEXT,
+      check_spec TEXT NOT NULL,
+      condition_spec TEXT NOT NULL,
+      action_spec TEXT NOT NULL,
+      interval_ms INTEGER NOT NULL,
+      max_runs INTEGER,
+      run_count INTEGER NOT NULL DEFAULT 0,
+      progress TEXT,
+      planned_steps TEXT NOT NULL DEFAULT '[]',
+      last_occurrence_key TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_checked_at TEXT,
+      next_run_at TEXT,
+      failure TEXT
+    )`);
+    db.exec(`INSERT INTO automations.automations
+      (id, name, mode, status, check_spec, condition_spec, action_spec,
+       interval_ms, created_at, updated_at)
+      VALUES ('a1', 'Mon', 'long', 'active', '{}', '{}', '{}', 60000,
+              'now', 'now')`);
+    expect(() =>
+      db.exec(
+        "UPDATE automations.automations SET status = 'needs-auth' WHERE id = 'a1'",
+      ),
+    ).toThrow();
+
+    applySchema(db);
+
+    // The row survived the rebuild...
+    expect(
+      db
+        .prepare("SELECT name FROM automations.automations WHERE id = 'a1'")
+        .get(),
+    ).toEqual({ name: 'Mon' });
+    // ...and the new status value is now accepted.
+    expect(() =>
+      db.exec(
+        "UPDATE automations.automations SET status = 'needs-auth' WHERE id = 'a1'",
+      ),
+    ).not.toThrow();
+    // Idempotent: a table already carrying the new status is left untouched.
+    expect(() => applySchema(db)).not.toThrow();
+    db.close();
+  });
 });

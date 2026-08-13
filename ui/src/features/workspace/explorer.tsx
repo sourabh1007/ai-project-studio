@@ -26,7 +26,7 @@ import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { Loader } from '../../components/loading.js';
+import { SkeletonList } from '../../components/loading.js';
 import {
   ChevronIcon,
   ArrowDownIcon,
@@ -860,14 +860,16 @@ function FeatureNode({
               onCancel={() => setImporting(false)}
             />
           )}
-          {sessions.loading && <Loader label="Loading sessions" />}
+          {sessions.loading && <SkeletonList rows={4} />}
           <ErrorText error={sessions.error} />
           <ErrorText error={groups.error} />
           {!sessions.loading &&
             rows.length === 0 &&
             (groups.data?.length ?? 0) === 0 &&
             !creating &&
-            !importing && <EmptyState message="No sessions yet." />}
+            !importing && (
+              <EmptyState message="No sessions yet. Start one from the + above." />
+            )}
           <FeatureTree
             featureId={feature.id}
             groups={groups.data ?? []}
@@ -1590,16 +1592,22 @@ export function Explorer({
       )}
 
       <div className="explorer-body">
-        {(repos.loading || features.loading) && (
-          <Loader label="Loading workspace" />
-        )}
+        {(repos.loading || features.loading) && <SkeletonList rows={5} />}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
         {!repos.loading &&
           !features.loading &&
           repoList.length === 0 &&
           orphanFeatures.length === 0 && (
-            <EmptyState message="No repositories yet. Add one to get started." />
+            <EmptyState
+              icon={<RepoIcon size={20} />}
+              title="No repositories yet"
+              description="Add a repository to organize sessions, features, and PR reviews around your code."
+              action={{
+                label: 'Add repository',
+                onClick: () => setAddingRepo(true),
+              }}
+            />
           )}
         <NodeDragStoreProvider>
         {repoList.map((repo) => (

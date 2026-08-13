@@ -38,6 +38,25 @@ the PR modified and how they connect.
   you can focus on just the changes or see their blast radius.
 - **Select a node** to open a detail popup with that file's **code diff** and its
   inline **PR comments**.
+- **Jump between files without closing the popup:** the popup's **focused node
+  diagram** is clickable — clicking a connected file replaces the popup with that
+  file's popup, so you can walk the call graph file by file.
+
+> Reference edges are clipped to each box's border, so an arrow starts at the
+> edge of one module/file and ends at the edge of the next instead of crossing
+> over the box labels.
+
+> **Arrow labels read in the arrow's direction:** `caller() → Symbol` means the
+> function `caller` in the source file calls or uses the class `Symbol` declared
+> in the target file; `init Symbol` marks a module/field/base-type reference
+> (`Symbol` is being initialised rather than called from inside a function).
+> Dense edges are deduped and capped as `first +N` so they stay legible.
+
+> **Tests stay in the test graph.** Files under test-project folders — including
+> .NET conventions like `Foo.Tests/`, `Foo.Test.Unit/`, or `FooUnitTests/` — are
+> classified as tests, so the **Code changes** graph shows only production changes
+> and the spurious test↔code edges are gone. Switch to the test category to review
+> the test changes on demand.
 
 > If a change graph shows empty diffs, it was generated before a diff-collection
 > fix — click **Re-run all** (or a step's **Retry**) on the review page to
@@ -48,6 +67,12 @@ the PR modified and how they connect.
 While reviewing, you can **read and post review comments** against the exact
 file/line. Comments render with **Markdown/GFM** support and sync back to the pull
 request on **GitHub** and **Azure DevOps**.
+
+**Comment in place:** in a file popup's code diff, **click any line** (added or
+context) to open an inline composer and post a comment anchored to that line — no
+line-number dropdown. Existing threads render inline beneath their line (a 💬
+marker flags commented lines); threads whose line falls outside the bounded diff
+are listed above it.
 
 ## Approve the PR
 

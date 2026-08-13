@@ -32,7 +32,7 @@ Domain logic depends on **interfaces** (ports), not concrete IO. Examples of por
 Everything else receives its collaborators through an explicit `*Deps` object — no service constructs its own dependencies.
 
 ### Event bus
-`kernel/event-bus.ts` is a typed pub/sub used for live, cross-module updates. Producers emit events (`usage.recorded`, `session.started`, `session.ended`, `repository.context.updated`, `pr.review.updated`); `api/usage-stream.ts` forwards them to the UI over SSE. Internal repository-analysis and PR-review sessions are not forwarded as session events, but their lifecycle updates are. This decouples background work and telemetry ingestion from delivery.
+`kernel/event-bus.ts` is a typed pub/sub used for live, cross-module updates. Producers emit events (`usage.recorded`, `session.started`, `session.ended`, `repository.context.updated`, `pr.review.updated`, `automation.updated`, `automation.removed`, `subagent.updated`); `api/usage-stream.ts` forwards them to the UI over SSE. Internal repository-analysis, PR-review, and automation metasessions are not forwarded as session events, but their lifecycle updates are. This decouples background work and telemetry ingestion from delivery.
 
 ### Per-module config
 Each module exports `{ <NAME>_NAMESPACE, <name>ConfigSchema, <name>Defaults }` from its `config.ts` (zod-validated). `main.ts` registers them all; values come from env via the config loader. There is no monolithic config object.
@@ -89,11 +89,11 @@ One-shot sessions prepend this bootstrap while retaining the user's request in a
 The interactive CLI treats a fast multi-line write as a *paste*. `terminal/terminal-manager.ts` therefore waits for a ready marker in CLI output (with a timeout fallback), writes the bootstrap, then sends the submit keystroke separately after the configured quiet delay. See `backend/src/terminal/config.ts`.
 
 ### Internal AI accounting
-Repository analysis reuses the normal provider-neutral meta runner with the repository checkout as `cwd` and a stable `repository:<id>` attribution key. These sessions have `scope = internal`: they are persisted so usage can be tailed and credited, but are hidden from feature session lists, workspace session counts, feature/workspace development rollups, and session SSE events. Their `kind = meta` usage remains included in the separate **IDE AI** totals.
+Repository analysis reuses the normal provider-neutral meta runner with the repository checkout as `cwd` and a stable `repository:<id>` attribution key. Automation checks, actions, reports, and subagents also run AI work through the shared meta runner. These sessions have `scope = internal`: they are persisted so usage can be tailed and credited, but are hidden from feature session lists, workspace session counts, feature/workspace development rollups, and session SSE events. Their `kind = meta` usage remains included in the separate **IDE AI** totals. Automation usage is attributed to the originating feature when one is present; otherwise it uses a stable `automation:<id>` key under **IDE AI**.
 
 ## Storage
 
-- `workspace.db` (SQLite via `node:sqlite`) plus attached sibling files — persistence is split by domain to keep each file light: the primary `workspace.db` holds the core catalog (features, sessions, repositories, skills) and one `repository_contexts` row per saved repository, while `usage.db` (usage events), `content.db` (transcripts, feature/session summaries, session files), and `tasks.db` (feature tasks) are `ATTACH`ed through the same connection. Table names stay globally unique so queries and cross-domain joins are unchanged; older single-file databases relocate their tables into the siblings on first open. See [docs/backend-modules.md](backend-modules.md#persistence-layout-multiple-databases). Context lifecycle writes use a single SQLite upsert; null content/revision/generated timestamps preserve the last good values during stale, generating, or failed transitions. Removing a repository deletes its context explicitly, with a foreign-key cascade as schema-level cleanup.
+- `workspace.db` (SQLite via `node:sqlite`) plus attached sibling files — persistence is split by domain to keep each file light: the primary `workspace.db` holds the core catalog (features, sessions, repositories, skills) and one `repository_contexts` row per saved repository, while `usage.db` (usage events), `content.db` (transcripts, feature/session summaries, session files), `tasks.db` (feature tasks), and `automations.db` (monitors, runs, subagents) are `ATTACH`ed through the same connection. Table names stay globally unique so queries and cross-domain joins are unchanged; older single-file databases relocate their tables into the siblings on first open. See [docs/backend-modules.md](backend-modules.md#persistence-layout-multiple-databases). Context lifecycle writes use a single SQLite upsert; null content/revision/generated timestamps preserve the last good values during stale, generating, or failed transitions. Removing a repository deletes its context explicitly, with a foreign-key cascade as schema-level cleanup.
 - The CLI's own `session-store.db` — read-only source of truth for usage/telemetry (never written by this app).
 
 ## Repository context API
@@ -110,6 +110,40 @@ When a feature is created from a pull request (`repo/pr-feature-service.ts` `cre
 - `GET /api/features/:id/pr-review` returns the persisted record; a non-PR feature has none (`404`).
 - `POST /api/features/:id/pr-review/refresh` regenerates against the current worktree; jobs are deduplicated in-flight and a review deleted with its feature suppresses late publishes.
 - These internal generation sessions are hidden from session lists/SSE like repository analysis, and their usage is included in **IDE AI** totals.
+
+## Monitors & Automations
+
+`automation/automation-scheduler.ts` runs persisted monitors in the background.
+Each tick runs a check through the appropriate adapter, evaluates the pure
+condition, and fires the configured action when it matches:
+
+```
+Automations view or local MCP tool
+  ─▶ api/automation-controller.ts or Studio MCP bridge
+  ─▶ automation/automation-service.ts (CRUD/lifecycle)
+  ─▶ automation/automation-scheduler.ts (intervals, resume, edge trigger)
+  ─▶ check-runner.ts + shell/http/ci adapters or meta-runner AI check
+  ─▶ condition.ts
+  ─▶ action-runner.ts + meta-runner/subagent-service/shell command
+  ─▶ automations.db + automation.updated/subagent.updated SSE
+```
+
+- **Short** monitors fire once and complete. **Long** monitors keep polling until
+  cancelled or `maxRuns` is reached, and fire only when the condition transitions
+  from non-matching to matching.
+- Checks support shell commands, HTTP probes, AI yes/no metasessions, and GitHub
+  Actions polling; Azure CI polling returns `null`/unsupported for now.
+- Actions support metasessions, report metasessions whose output is retained on
+  the run record, command execution, and tracked subagents.
+- The local MCP server lets in-session AI create monitors, set planned steps,
+  update monitor/subagent progress, register subagents, and list automations.
+- Records live in the attached `automations.db` (`automations`,
+  `automation_runs`, `subagents`) and are resumed across app restarts. They are
+  workspace-global while retaining their originating session/feature.
+
+REST endpoints under `/api` expose list/detail/create plus
+`pause`, `resume`, `cancel`, `run`, and delete operations. The UI listens for
+`automation.updated`, `automation.removed`, and `subagent.updated`.
 
 ## Diagram
 

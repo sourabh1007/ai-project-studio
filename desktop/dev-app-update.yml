@@ -1,0 +1,9 @@
+# Dev-only update feed used by electron-updater when the app is NOT packaged.
+# The real feed is resolved from the `publish` block in electron-builder.yml at
+# build time; this file only exists so a developer can exercise the update code
+# paths locally by launching with `CW_UPDATE_SIM=1`. It points at the same
+# public GitHub Releases feed. Safe to leave committed — it has no secrets.
+owner: sourabh1007
+repo: ai-project-studio
+provider: github
+updaterCacheDirName: ai-project-studio-updater

@@ -27,6 +27,16 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/features');
   });
 
+  it('checks backend health via GET /health', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ status: 'ok', uptimeMs: 1234 }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.checkHealth();
+    expect(result).toEqual({ status: 'ok', uptimeMs: 1234 });
+    expect(calls[0][0]).toBe('/api/health');
+  });
+
   it('honours a custom base url', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f1' }));
     const client = createApiClient({ baseUrl: 'http://host/api', fetchImpl });
@@ -869,5 +879,48 @@ describe('createApiClient', () => {
       status: 500,
       message: 'Request failed: /features',
     });
+  });
+
+  it('lists automations and reads one', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ automations: [], subagents: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.listAutomations();
+    await client.getAutomation('a1');
+    expect(calls[0][0]).toBe('/api/automations');
+    expect(calls[0][1]).toBeUndefined();
+    expect(calls[1][0]).toBe('/api/automations/a1');
+  });
+
+  it('creates an automation with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'a1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createAutomation({
+      name: 'Watch',
+      mode: 'long',
+      check: { type: 'shell', command: 'echo' },
+      condition: { type: 'always' },
+      action: { type: 'report', prompt: 'go' },
+    });
+    expect(calls[0][0]).toBe('/api/automations');
+    expect(calls[0][1]?.method).toBe('POST');
+  });
+
+  it('drives automation lifecycle routes', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'a1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.pauseAutomation('a1');
+    await client.resumeAutomation('a1');
+    await client.cancelAutomation('a1');
+    await client.runAutomation('a1');
+    await client.deleteAutomation('a1');
+    expect(calls.map((c) => `${c[1]?.method ?? 'GET'} ${c[0]}`)).toEqual([
+      'POST /api/automations/a1/pause',
+      'POST /api/automations/a1/resume',
+      'POST /api/automations/a1/cancel',
+      'POST /api/automations/a1/run',
+      'DELETE /api/automations/a1',
+    ]);
   });
 });

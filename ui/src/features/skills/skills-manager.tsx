@@ -3,11 +3,12 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Skill, SkillExport, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { Loader } from '../../components/loading.js';
+import { SkeletonCards } from '../../components/loading.js';
 import {
   ExportIcon,
   PencilIcon,
   PlusIcon,
+  SkillsIcon,
   TrashIcon,
   UploadIcon,
 } from '../../components/icons.js';
@@ -150,9 +151,14 @@ export function SkillsManager() {
       />
 
       <ErrorText error={error ?? skills.error} />
-      {skills.loading && <Loader label="Loading skills" />}
+      {skills.loading && <SkeletonCards cards={3} />}
       {!skills.loading && list.length === 0 && (
-        <EmptyState message="No skills yet. Create your first reusable instruction." />
+        <EmptyState
+          icon={<SkillsIcon size={20} />}
+          title="No skills yet"
+          description="Skills are reusable instruction blocks you can tag to a feature or session. Create your first one to get started."
+          action={{ label: 'New skill', onClick: () => setCreating(true) }}
+        />
       )}
 
       <div className="skill-list">

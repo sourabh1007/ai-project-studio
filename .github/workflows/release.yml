@@ -94,6 +94,7 @@ jobs:
             desktop/release/*.exe
             desktop/release/*.dmg
             desktop/release/*.blockmap
+            desktop/release/*.yml
           if-no-files-found: error
 
       - name: Attach installers to release
@@ -104,4 +105,5 @@ jobs:
             desktop/release/*.exe
             desktop/release/*.dmg
             desktop/release/*.blockmap
+            desktop/release/*.yml
           fail_on_unmatched_files: false

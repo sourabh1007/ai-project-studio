@@ -3,8 +3,12 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { ConfigUpdateResult, ConfigValue } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText } from '../../components/ui.js';
+import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
+import { SoftwareUpdateSection } from '../updates/software-update-section.js';
+import { NetworkActivitySection } from './network-activity-section.js';
+import { DiagnosticsSection } from './diagnostics-section.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DesktopBridge {
@@ -18,7 +22,12 @@ function desktopBridge(): DesktopBridge | undefined {
   return (window as unknown as { desktop?: DesktopBridge }).desktop;
 }
 
-type FieldKind = 'boolean' | 'number' | 'string' | 'json';
+type FieldKind = 'boolean' | 'number' | 'string' | 'multiline' | 'json';
+
+/** Long or multi-line strings (e.g. prompt templates) get a textarea editor. */
+function isMultiline(value: string): boolean {
+  return value.includes('\n') || value.length > 60;
+}
 
 function kindOf(value: ConfigValue): FieldKind {
   if (typeof value === 'boolean') {
@@ -28,7 +37,7 @@ function kindOf(value: ConfigValue): FieldKind {
     return 'number';
   }
   if (typeof value === 'string') {
-    return 'string';
+    return isMultiline(value) ? 'multiline' : 'string';
   }
   return 'json';
 }
@@ -187,6 +196,16 @@ function NamespaceEditor({
                   setDraft((d) => ({ ...d, [f.key]: e.target.value }))
                 }
               />
+            ) : f.kind === 'multiline' ? (
+              <textarea
+                className="input config-multiline"
+                rows={6}
+                value={draft[f.key] as string}
+                disabled={busy !== null}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, [f.key]: e.target.value }))
+                }
+              />
             ) : (
               <input
                 className="input"
@@ -233,7 +252,10 @@ function NamespaceEditor({
 
 export function SettingsView() {
   const api = useApi();
-  const { data, loading, error, reload } = useAsync(() => api.getConfig(), []);
+  const { data, loading, error, cause, reload } = useAsync(
+    () => api.getConfig(),
+    [],
+  );
   const [query, setQuery] = useState('');
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -343,6 +365,10 @@ export function SettingsView() {
         </dl>
       </Card>
 
+      <SoftwareUpdateSection />
+
+      <NetworkActivitySection />
+
       <Card>
         <div className="shared-context-card-head">
           <h2 className="page-title">Workspace context</h2>
@@ -389,6 +415,12 @@ export function SettingsView() {
         </dl>
       </Card>
 
+      <DiagnosticsSection
+        version={version}
+        logDirectory={logDirectory ?? null}
+        bridge={bridge}
+      />
+
       <Card>
         <div className="page-header">
           <div>
@@ -407,7 +439,9 @@ export function SettingsView() {
           />
         </div>
         {loading && <Loader label="Loading configuration" />}
-        <ErrorText error={error} />
+        {error && (
+          <ErrorState error={cause ?? error} onRetry={reload} />
+        )}
         {data && namespaces.length === 0 && (
           <EmptyState message="No matching settings." />
         )}

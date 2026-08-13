@@ -14,6 +14,7 @@ function skill(overrides: Partial<Skill> = {}): Skill {
     kind: 'instruction',
     instructions: 'Always write tests.',
     removalInstructions: '',
+    recommendedScope: 'any',
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };

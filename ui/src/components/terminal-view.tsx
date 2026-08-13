@@ -269,6 +269,27 @@ export function TerminalView({
       sendResize();
     };
 
+    // Coalesce bursts of resize events (e.g. the sidebar collapse/expand
+    // animation fires the ResizeObserver on every frame) into a single fit at
+    // the settled width. Refitting mid-animation sizes xterm to intermediate
+    // widths and floods the CLI TUI with resizes, which garbles/truncates its
+    // reflowed output. Debouncing to the trailing edge sends one clean final
+    // fit+resize once the width stops changing, then redraws.
+    let settleTimer: number | undefined;
+    const applyFitSettled = () => {
+      if (settleTimer !== undefined) {
+        window.clearTimeout(settleTimer);
+      }
+      settleTimer = window.setTimeout(() => {
+        settleTimer = undefined;
+        applyFit();
+        // Ask the terminal to repaint so any stale reflowed cells from the
+        // intermediate widths are cleared.
+        termRef.current?.refresh(0, term.rows - 1);
+      }, 120);
+      timeoutIds.push(settleTimer);
+    };
+
     rafIds.push(requestAnimationFrame(applyFit));
     for (const delay of [0, 60, 160, 320, 600]) {
       timeoutIds.push(window.setTimeout(applyFit, delay));
@@ -436,13 +457,13 @@ export function TerminalView({
 
     const observer =
       typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => applyFit())
+        ? new ResizeObserver(() => applyFitSettled())
         : null;
     observer?.observe(host);
-    window.addEventListener('resize', applyFit);
+    window.addEventListener('resize', applyFitSettled);
 
     return () => {
-      window.removeEventListener('resize', applyFit);
+      window.removeEventListener('resize', applyFitSettled);
       window.removeEventListener('focus', refocus);
       host.removeEventListener('mousedown', onHostMouseDown);
       host.removeEventListener('contextmenu', onContextMenu);

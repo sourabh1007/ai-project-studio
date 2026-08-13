@@ -5,6 +5,12 @@ export interface AgencyStatus {
   installed: boolean;
 }
 
+/** Lightweight backend liveness probe payload (`GET /health`). */
+export interface HealthStatus {
+  status: 'ok';
+  uptimeMs: number;
+}
+
 export interface GithubStatus {
   authenticated: boolean;
   login: string | null;
@@ -228,6 +234,20 @@ export interface ChangeGraphNode {
    * finding. Empty means no issues were found (or a boundary caller).
    */
   review: string[];
+  /**
+   * For test files, a per-test-method explanation of what the PR changed in each
+   * touched test; lazy on click. Absent/empty for code files, boundary callers,
+   * and legacy payloads produced before per-method explanations existed.
+   */
+  testMethods?: TestMethodExplanation[];
+}
+
+/** A plain-English explanation of what a PR changed in one test method. */
+export interface TestMethodExplanation {
+  /** The test/method name (matches a segment name from the file's diff). */
+  name: string;
+  /** What this PR changed in that specific test method. */
+  whatChanged: string;
 }
 
 /**
@@ -786,4 +806,99 @@ export interface FeatureTask {
 export interface AddFeatureTaskInput {
   title: string;
   detail?: string;
+}
+
+// --- Monitors & Automations -------------------------------------------------
+
+export type AutomationMode = 'short' | 'long';
+
+export type AutomationStatus =
+  | 'active'
+  | 'paused'
+  | 'needs-auth'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AutomationCheckType = 'shell' | 'http' | 'ai' | 'ci-pipeline';
+
+export type AutomationActionType =
+  | 'metasession'
+  | 'subagent'
+  | 'report'
+  | 'command';
+
+export interface AutomationOrigin {
+  sessionId: string | null;
+  featureId: string | null;
+}
+
+export interface AutomationPlannedStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'active' | 'done' | 'skipped';
+  detail: string | null;
+}
+
+export interface AutomationRun {
+  id: string;
+  automationId: string;
+  startedAt: string;
+  endedAt: string | null;
+  triggered: boolean;
+  status: 'ok' | 'failed' | 'skipped';
+  detail: string | null;
+  sessionId: string | null;
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  mode: AutomationMode;
+  status: AutomationStatus;
+  origin: AutomationOrigin;
+  check: { type: AutomationCheckType } & Record<string, unknown>;
+  condition: { type: string } & Record<string, unknown>;
+  action: { type: AutomationActionType } & Record<string, unknown>;
+  intervalMs: number;
+  maxRuns: number | null;
+  runCount: number;
+  progress: string | null;
+  plannedSteps: AutomationPlannedStep[];
+  lastOccurrenceKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastCheckedAt: string | null;
+  nextRunAt: string | null;
+  failure: string | null;
+}
+
+export interface Subagent {
+  id: string;
+  automationId: string | null;
+  origin: AutomationOrigin;
+  task: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  progress: string | null;
+  result: string | null;
+  sessionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationDetail {
+  automation: Automation | null;
+  runs: AutomationRun[];
+  subagents: Subagent[];
+}
+
+export interface CreateAutomationInput {
+  name: string;
+  mode: AutomationMode;
+  check: { type: AutomationCheckType } & Record<string, unknown>;
+  condition: { type: string } & Record<string, unknown>;
+  action: { type: AutomationActionType } & Record<string, unknown>;
+  intervalMs?: number;
+  maxRuns?: number | null;
+  origin?: AutomationOrigin;
 }

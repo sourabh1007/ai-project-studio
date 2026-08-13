@@ -4,13 +4,17 @@ import type { UsageRecordedMap } from '../usage/usage-recorder.js';
 import type { RepositoryContextEventMap } from '../repository-context/repository-context-coordinator.js';
 import type { PrReviewEventMap } from '../pr-review/pr-review-contract.js';
 import type { ContextStatusEventMap } from '../context-store/context-status.js';
+import type { AutomationEventMap } from '../automation/automation-service.js';
+import type { SubagentEventMap } from '../automation/subagent-service.js';
 
 /** Combined event map streamed to clients over SSE. */
 export type StreamEventMap = SessionEventMap &
   UsageRecordedMap &
   RepositoryContextEventMap &
   PrReviewEventMap &
-  ContextStatusEventMap;
+  ContextStatusEventMap &
+  AutomationEventMap &
+  SubagentEventMap;
 
 export type StreamEventName = keyof StreamEventMap;
 
@@ -28,6 +32,9 @@ const STREAM_EVENTS: StreamEventName[] = [
   'repository.context.updated',
   'pr.review.updated',
   'context.status',
+  'automation.updated',
+  'automation.removed',
+  'subagent.updated',
 ];
 
 /**

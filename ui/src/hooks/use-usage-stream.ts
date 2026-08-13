@@ -16,6 +16,9 @@ const STREAM_EVENT_NAMES = [
   'usage.recorded',
   'repository.context.updated',
   'context.status',
+  'automation.updated',
+  'automation.removed',
+  'subagent.updated',
 ] as const;
 
 function reducer(state: LiveState, event: StreamEvent): LiveState {

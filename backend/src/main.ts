@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -257,6 +258,25 @@ import { createFeatureTasksService } from './feature-tasks/feature-tasks-service
 import { createTaskPlanRunner } from './feature-tasks/task-plan-runner.js';
 import { createFeatureTasksRepo } from './persistence/feature-tasks-repo.js';
 import {
+  AUTOMATION_NAMESPACE,
+  automationConfigSchema,
+  automationDefaults,
+  type AutomationConfig,
+} from './automation/config.js';
+import { createAutomationRepo } from './persistence/automation-repo.js';
+import { createSubagentRepo } from './persistence/subagent-repo.js';
+import { createAutomationService } from './automation/automation-service.js';
+import type { AutomationEventMap } from './automation/automation-service.js';
+import { createSubagentService } from './automation/subagent-service.js';
+import type { SubagentEventMap } from './automation/subagent-service.js';
+import { createCheckRunner } from './automation/check-runner.js';
+import { createActionRunner } from './automation/action-runner.js';
+import { createAutomationScheduler } from './automation/automation-scheduler.js';
+import { createShellExecutor } from './automation/shell-executor-adapter.js';
+import { createHttpProbe } from './automation/http-probe-adapter.js';
+import { createCiPipelineProbe } from './automation/ci-pipeline-probe-adapter.js';
+import type { AiInvoker } from './automation/automation-ports.js';
+import {
   FEATURE_TASKS_NAMESPACE,
   featureTasksConfigSchema,
   featureTasksDefaults,
@@ -369,6 +389,11 @@ function main(): void {
     namespace: PR_REVIEW_NAMESPACE,
     schema: prReviewConfigSchema,
     defaults: prReviewDefaults,
+  });
+  registry.register({
+    namespace: AUTOMATION_NAMESPACE,
+    schema: automationConfigSchema,
+    defaults: automationDefaults,
   });
 
   // Phase 1 (bootstrap): resolve just enough config from defaults + environment
@@ -506,6 +531,7 @@ function main(): void {
   ] as RepositoryContextConfig;
   const repoInsightsConfig = config[REPO_INSIGHTS_NAMESPACE] as RepoInsightsConfig;
   const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
+  const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
 
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
@@ -1348,28 +1374,47 @@ function main(): void {
             {
               cwd,
               windowsHide: true,
-              // A large PR diff can be tens of MB. Buffer generously so it does
-              // not error, and treat an overflow past even this as a truncated
-              // success below (the collector only keeps a bounded slice anyway).
-              maxBuffer: 64 * 1024 * 1024,
-              timeout: 20_000,
+              // A large PR diff can be tens of MB (a giant monorepo PR can top
+              // 100 MB). Buffer generously so it is captured in full, and treat
+              // an overflow past even this as a truncated success below (the
+              // collector only keeps a bounded slice anyway).
+              maxBuffer: 256 * 1024 * 1024,
+              // Large monorepos (e.g. Azure) can take well over 20s to compute a
+              // three-dot diff (merge-base walk + rename detection) on a cold FS
+              // cache. A too-tight timeout kills git with SIGTERM, which surfaces
+              // as a bogus "git diff failed: exit 1" (killed processes report no
+              // exit code and no stderr). Give git a generous budget instead.
+              timeout: 180_000,
             },
             (err, stdout, stderr) => {
               // Node reports a maxBuffer overflow with a non-numeric string code
               // and still hands back the captured (truncated) stdout. The diff
               // collector clamps the patch to its own budget, so a truncated but
               // present diff is fine — surface it as success instead of a bogus
-              // "git diff failed: exit 1".
+              // "git diff failed: exit 1". The exact code has varied across Node
+              // versions (`ERR_CHILD_PROCESS_STDOUT_MAXBUFFER` in older releases,
+              // `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` in current ones), so match any
+              // MAXBUFFER code rather than a single spelling.
+              const errCode = (err as { code?: unknown } | null)?.code;
               const overflowed =
-                (err as { code?: unknown } | null)?.code ===
-                'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER';
+                typeof errCode === 'string' && errCode.includes('MAXBUFFER');
+              // A timeout/kill leaves `err.killed` set with a null exit code and
+              // empty stderr. Synthesise a meaningful message so the review shows
+              // "git diff timed out" instead of an opaque "exit 1".
+              const killed = Boolean(
+                (err as { killed?: boolean } | null)?.killed,
+              );
               const code =
                 overflowed || !err
                   ? 0
-                  : typeof (err as { code?: unknown }).code === 'number'
-                    ? (err as { code: number }).code
+                  : typeof errCode === 'number'
+                    ? errCode
                     : 1;
-              resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
+              const resolvedStderr =
+                killed && !overflowed && !(stderr ?? '').trim()
+                  ? `git ${args[0] ?? 'command'} timed out after 180s`
+                  : (stderr ?? '');
+              resolve({ code, stdout: stdout ?? '', stderr: resolvedStderr });
             },
           );
         }),
@@ -1548,6 +1593,55 @@ function main(): void {
     config: featureTreeConfig,
   });
 
+  // Monitors & Automations: a background engine that polls a check on an
+  // interval and fires an action (metasession/subagent/report/command) when a
+  // condition matches. Checks/actions run through the shared meta-runner so
+  // their AI usage folds into the existing cost accounting.
+  const automationAi: AiInvoker = {
+    run: (input) =>
+      metaRunner.runDetailed({
+        featureId: input.featureId,
+        prompt: input.prompt,
+        cwd: input.cwd,
+        scope: 'internal',
+      }),
+  };
+  const automationService = createAutomationService({
+    repo: createAutomationRepo(db),
+    clock,
+    ids,
+    bus: bus as unknown as EventBus<AutomationEventMap>,
+    config: automationConfig,
+  });
+  const subagentService = createSubagentService({
+    repo: createSubagentRepo(db),
+    clock,
+    ids,
+    bus: bus as unknown as EventBus<SubagentEventMap>,
+    ai: automationAi,
+  });
+  const automationScheduler = createAutomationScheduler({
+    service: automationService,
+    repo: createAutomationRepo(db),
+    checks: createCheckRunner({
+      shell: createShellExecutor(automationConfig.runTimeoutMs),
+      http: createHttpProbe(automationConfig.runTimeoutMs),
+      ai: automationAi,
+      ci: createCiPipelineProbe(ghRun),
+    }),
+    actions: createActionRunner({
+      ai: automationAi,
+      shell: createShellExecutor(automationConfig.runTimeoutMs),
+      subagents: subagentService,
+    }),
+    clock,
+    ids,
+    config: automationConfig,
+  });
+  automationScheduler.resume();
+  automationScheduler.start();
+  const studioControlToken = randomUUID();
+
   // HTTP API.
   const app = express();
   app.use(express.json());
@@ -1617,6 +1711,9 @@ function main(): void {
       prComments: prCommentsService,
       prApprovals: prApprovalService,
       context: contextService,
+      automations: automationService,
+      subagents: subagentService,
+      controlToken: studioControlToken,
       logger,
     }),
   );
@@ -1716,6 +1813,45 @@ function main(): void {
     logger.info(
       `AI Project Studio API listening on http://${apiConfig.host}:${apiConfig.port}${apiConfig.basePath}`,
     );
+    const host =
+      apiConfig.host === '0.0.0.0' || apiConfig.host === '::'
+        ? '127.0.0.1'
+        : apiConfig.host;
+    const address = server.address();
+    const port =
+      typeof address === 'object' && address !== null
+        ? address.port
+        : apiConfig.port;
+    const apiBase = `http://${host}:${port}${apiConfig.basePath}`;
+    const script = pathJoin(
+      dirname(fileURLToPath(import.meta.url)),
+      'automation',
+      'mcp',
+      'studio-mcp-server.js',
+    );
+    for (const provider of mcpService.listProviders()) {
+      void mcpService
+        .putServer(provider.id, {
+          name: 'ai-project-studio',
+          spec: {
+            command: process.execPath,
+            args: [script],
+            env: {
+              // When Studio is packaged, execPath is the Electron binary; this
+              // flag makes it behave as plain Node so the stdio server runs.
+              ELECTRON_RUN_AS_NODE: '1',
+              STUDIO_API_BASE: apiBase,
+              STUDIO_CONTROL_TOKEN: studioControlToken,
+            },
+          },
+        })
+        .catch((error: unknown) => {
+          logger.error('Studio MCP auto-registration failed', {
+            providerId: provider.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
   });
 
   if (terminalConfig.enabled) {

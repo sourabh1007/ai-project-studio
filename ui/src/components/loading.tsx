@@ -45,3 +45,56 @@ export function SkeletonList({ rows = 3 }: { rows?: number }) {
     </div>
   );
 }
+
+/**
+ * A single shimmering block sized by props — the primitive behind richer
+ * skeletons. `width`/`height` accept any CSS length; `radius` rounds corners
+ * (e.g. a circle for avatars).
+ */
+export function Skeleton({
+  width = '100%',
+  height = 12,
+  radius,
+}: {
+  width?: number | string;
+  height?: number | string;
+  radius?: number | string;
+}) {
+  return (
+    <span
+      className="skeleton-block"
+      aria-hidden="true"
+      style={{ width, height, borderRadius: radius }}
+    />
+  );
+}
+
+/**
+ * A card-shaped skeleton (title line + body lines) for first paint of panels
+ * that render item cards, so the layout's shape is previewed instead of a bare
+ * spinner or blank area.
+ */
+export function SkeletonCards({
+  cards = 3,
+  lines = 2,
+}: {
+  cards?: number;
+  lines?: number;
+}) {
+  return (
+    <div className="skeleton-cards" aria-hidden="true">
+      {Array.from({ length: cards }, (_, i) => (
+        <div key={i} className="skeleton-card">
+          <span className="skeleton-block skeleton-card-title" />
+          {Array.from({ length: lines }, (_, j) => (
+            <span
+              key={j}
+              className="skeleton-block skeleton-card-line"
+              style={{ width: j === lines - 1 ? '60%' : '100%' }}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}

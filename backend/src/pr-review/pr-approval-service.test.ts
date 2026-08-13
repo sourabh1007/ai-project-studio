@@ -83,17 +83,19 @@ describe('createPrApprovalService', () => {
   });
 
   it('passes the repo and pull to the resolver', async () => {
-    let seen: { repo: Repository; pull: PrReviewPull } | null = null;
+    const seen: { value: { repo: Repository; pull: PrReviewPull } | null } = {
+      value: null,
+    };
     const { service } = setup({
       reviews: new Map([['f1', review('f1', 'r1')]]),
       repos: new Map([['r1', repo('r1')]]),
       onResolve: (r, p) => {
-        seen = { repo: r, pull: p };
+        seen.value = { repo: r, pull: p };
       },
     });
     await service.approve('f1');
-    expect(seen?.repo.id).toBe('r1');
-    expect(seen?.pull.number).toBe(7);
+    expect(seen.value?.repo.id).toBe('r1');
+    expect(seen.value?.pull.number).toBe(7);
   });
 
   it('throws when the feature has no PR review', async () => {

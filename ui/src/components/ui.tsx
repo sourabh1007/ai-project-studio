@@ -130,8 +130,49 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export function EmptyState({ message }: { message: string }) {
-  return <p className="muted">{message}</p>;
+export function EmptyState({
+  message,
+  title,
+  description,
+  icon,
+  action,
+}: {
+  /** Shorthand single-line copy; used as the description when no title is set. */
+  message?: string;
+  /** Optional bold headline for a richer, guided empty state. */
+  title?: string;
+  /** Optional supporting copy shown under the title. */
+  description?: string;
+  /** Optional decorative icon shown above the text. */
+  icon?: ReactNode;
+  /** Optional primary call-to-action button. */
+  action?: { label: string; onClick: () => void };
+}) {
+  const body = description ?? message;
+  // Plain shorthand: a single muted line, preserving prior call-site behavior.
+  if (!title && !icon && !action) {
+    return <p className="muted">{body}</p>;
+  }
+  return (
+    <div className="empty-state" role="note">
+      {icon ? (
+        <span className="empty-state-icon" aria-hidden="true">
+          {icon}
+        </span>
+      ) : null}
+      {title ? <p className="empty-state-title">{title}</p> : null}
+      {body ? <p className="empty-state-desc">{body}</p> : null}
+      {action ? (
+        <button
+          type="button"
+          className="empty-state-action"
+          onClick={action.onClick}
+        >
+          {action.label}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export function ErrorText({ error }: { error: string | null }) {

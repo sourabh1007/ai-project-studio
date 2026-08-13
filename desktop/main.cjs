@@ -1,12 +1,18 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboard, dialog, nativeImage } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const updateManager = require('./update-manager.cjs');
+const ipcInput = require('./ipc-input.cjs');
+
+// The current top-level app window. Captured in createWindow so the update
+// manager (and any future feature) can push messages to the renderer.
+let mainWindow = null;
 
 const ROOT = app.isPackaged
   ? process.resourcesPath
@@ -18,6 +24,44 @@ const DOCS_URL = 'https://github.com/sourabh1007/ai-project-studio/tree/main/doc
 const HOST = '127.0.0.1';
 const IS_DEV = process.env.CW_DESKTOP_DEV === '1';
 const DEV_URL = process.env.CW_DEV_URL || 'http://localhost:5173';
+
+// The app icon, packaged next to main.cjs (see `files` in electron-builder.yml)
+// so it resolves both in dev (desktop/build-resources) and inside app.asar. Used
+// for the window/taskbar icon and the native About dialog. Loaded lazily and
+// cached so a missing file degrades gracefully to the platform default.
+const APP_ICON_PATH = path.join(__dirname, 'build-resources', 'icon.png');
+let appIconImage;
+function appIcon() {
+  if (appIconImage === undefined) {
+    const image = nativeImage.createFromPath(APP_ICON_PATH);
+    appIconImage = image.isEmpty() ? null : image;
+  }
+  return appIconImage;
+}
+
+// Persisted UI theme, used to pick the window's launch background color so a
+// light-theme user doesn't get a dark flash before the renderer paints. The
+// renderer is the source of truth and pushes updates via the `theme:set` IPC.
+const THEME_FILE = path.join(app.getPath('userData'), 'theme.json');
+const THEME_BG = { dark: '#0b1020', light: '#eef2fb' };
+
+function readPersistedTheme() {
+  try {
+    const raw = fs.readFileSync(THEME_FILE, 'utf8');
+    const mode = JSON.parse(raw).mode;
+    return mode === 'light' || mode === 'dark' ? mode : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+function writePersistedTheme(mode) {
+  try {
+    fs.writeFileSync(THEME_FILE, JSON.stringify({ mode }), 'utf8');
+  } catch {
+    /* best effort; a missing persisted theme just falls back to dark. */
+  }
+}
 const STARTUP_TIMEOUT_MS = Number(process.env.CW_STARTUP_TIMEOUT_MS || 30000);
 
 /** @type {import('node:child_process').ChildProcess | null} */
@@ -206,8 +250,10 @@ async function openDocs() {
 
 /** Shows the native About dialog with the app version and runtime details. */
 function showAboutDialog(win) {
+  const icon = appIcon();
   void dialog.showMessageBox(win ?? undefined, {
     type: 'info',
+    ...(icon ? { icon } : {}),
     title: 'About AI Project Studio',
     message: 'AI Project Studio',
     detail: `Version ${app.getVersion()}\nElectron ${process.versions.electron}\nNode ${process.versions.node}\nChromium ${process.versions.chrome}`,
@@ -262,6 +308,11 @@ function installApplicationMenu() {
       accelerator: 'F1',
       click: () => void openDocs(),
     },
+    { type: 'separator' },
+    {
+      label: 'Check for Updates…',
+      click: () => void updateManager.checkForUpdates(true),
+    },
     ...(isMac
       ? []
       : [
@@ -285,13 +336,16 @@ function installApplicationMenu() {
 
 function createWindow(loadUrl) {
   installApplicationMenu();
+  const launchTheme = readPersistedTheme();
+  const icon = appIcon();
   const win = new BrowserWindow({
     width: 1360,
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    backgroundColor: '#0b1020',
+    backgroundColor: THEME_BG[launchTheme],
     title: 'AI Project Studio',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -354,6 +408,12 @@ function createWindow(loadUrl) {
   });
 
   void win.loadURL(loadUrl);
+  mainWindow = win;
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+    }
+  });
   return win;
 }
 
@@ -392,25 +452,33 @@ function applyContentSecurityPolicy() {
 }
 
 async function bootstrap() {
-  // Native chrome (title bar + menu bar) follows the app theme. Default to dark
-  // so it matches the dark launch background; the renderer syncs the real value.
-  nativeTheme.themeSource = 'dark';
+  // Group windows under our own taskbar identity (and pick up the packaged icon)
+  // on Windows instead of the generic electron.exe entry.
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.sourabh1007.aiprojectstudio');
+  }
+  // Native chrome (title bar + menu bar) follows the app theme. Seed from the
+  // persisted value so the launch chrome matches the window background; the
+  // renderer syncs the authoritative value once it mounts.
+  nativeTheme.themeSource = readPersistedTheme();
   ipcMain.on('theme:set', (event, mode) => {
     if (!isTrustedSender(event)) {
       return;
     }
-    if (mode === 'light' || mode === 'dark') {
+    if (ipcInput.isThemeMode(mode)) {
       nativeTheme.themeSource = mode;
+      writePersistedTheme(mode);
     }
   });
 
-  // Reveal a session-created file in the OS file explorer. Guarded to a non-empty
-  // string so a malformed message can't crash the main process.
+  // Reveal a session-created file in the OS file explorer. Guarded to a safe
+  // absolute path so a malformed or relative message can't crash the main
+  // process or resolve against an unexpected working directory.
   ipcMain.on('file:reveal', (event, filePath) => {
     if (!isTrustedSender(event)) {
       return;
     }
-    if (typeof filePath === 'string' && filePath.length > 0) {
+    if (ipcInput.isRevealablePath(filePath)) {
       shell.showItemInFolder(filePath);
     }
   });
@@ -422,7 +490,7 @@ async function bootstrap() {
     if (!isTrustedSender(event)) {
       return;
     }
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+    if (ipcInput.isExternalUrl(url)) {
       void shell.openExternal(url);
     }
   });
@@ -444,6 +512,34 @@ async function bootstrap() {
     return app.getVersion();
   });
 
+  // Auto-update IPC. All guarded to our own frame; the update manager itself is
+  // defensive so a rejected/failed update never surfaces as an exception here.
+  ipcMain.handle('update:getState', (event) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    return updateManager.getState();
+  });
+  ipcMain.handle('update:check', (event) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    return updateManager.checkForUpdates(true);
+  });
+  ipcMain.handle('update:download', (event) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    return updateManager.downloadUpdate();
+  });
+  ipcMain.handle('update:install', (event) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    updateManager.installNow();
+    return true;
+  });
+
   // Opens the documentation that ships with the app (same as Help ▸ Documentation).
   ipcMain.on('app:openDocs', (event) => {
     if (!isTrustedSender(event)) {
@@ -460,7 +556,7 @@ async function bootstrap() {
     if (!isTrustedSender(event)) {
       return;
     }
-    if (typeof text === 'string' && text.length > 0) {
+    if (ipcInput.isClipboardText(text)) {
       clipboard.writeText(text);
     }
   });
@@ -519,6 +615,14 @@ async function bootstrap() {
   }
   setAppOrigin(loadUrl);
   createWindow(loadUrl);
+
+  // Start the auto-update manager once the window exists. It pushes state to
+  // the renderer via `update:event` and stops the backend cleanly before an
+  // install-driven relaunch. A no-op unless packaged (or CW_UPDATE_SIM=1).
+  updateManager.init({
+    getWindow: () => mainWindow,
+    stopBackend,
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();

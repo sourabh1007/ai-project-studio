@@ -55,6 +55,11 @@ import type {
   UsageTotals,
   StoredUsage,
   WorkspaceStats,
+  Automation,
+  AutomationDetail,
+  Subagent,
+  CreateAutomationInput,
+  HealthStatus,
 } from './types.js';
 
 /** Injectable fetch so the client is unit-testable without a real network. */
@@ -132,6 +137,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
   }
 
   return {
+    checkHealth: () => request<HealthStatus>('/health'),
     listRepos: () => request<Repository[]>('/repos'),
     addRepo: (input: AddRepositoryInput) =>
       request<Repository>('/repos', jsonBody(input)),
@@ -390,6 +396,24 @@ export function createApiClient(options: ApiClientOptions = {}) {
         '/azure-devops/signin',
         jsonBody(url ? { url } : {}),
       ),
+    listAutomations: () =>
+      request<{ automations: Automation[]; subagents: Subagent[] }>(
+        '/automations',
+      ),
+    getAutomation: (id: string) =>
+      request<AutomationDetail>(`/automations/${id}`),
+    createAutomation: (input: CreateAutomationInput) =>
+      request<Automation>('/automations', jsonBody(input)),
+    pauseAutomation: (id: string) =>
+      request<Automation>(`/automations/${id}/pause`, jsonBody({})),
+    resumeAutomation: (id: string) =>
+      request<Automation>(`/automations/${id}/resume`, jsonBody({})),
+    cancelAutomation: (id: string) =>
+      request<Automation>(`/automations/${id}/cancel`, jsonBody({})),
+    runAutomation: (id: string) =>
+      request<Automation>(`/automations/${id}/run`, jsonBody({})),
+    deleteAutomation: (id: string) =>
+      request<{ id: string }>(`/automations/${id}`, del()),
   };
 }
 

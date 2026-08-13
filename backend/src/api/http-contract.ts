@@ -6,6 +6,7 @@ export type HttpMethod = 'get' | 'post' | 'put' | 'delete';
 export interface HttpRequest {
   params: Record<string, string>;
   query: Record<string, string | undefined>;
+  headers?: Record<string, string | string[] | undefined>;
   body: unknown;
 }
 

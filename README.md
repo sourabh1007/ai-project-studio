@@ -23,6 +23,7 @@ flowchart TB
         Workspace["Workspace shell<br/>explorer · tabs · terminal"]
         FeatDash["Feature dashboard<br/>charts · tasks · summaries"]
         SkillsUI["Skills manager"]
+        AutomationsUI["Automations<br/>monitors · subagents"]
         UsageUI["Usage & cost"]
         SettingsUI["Settings"]
     end
@@ -37,6 +38,7 @@ flowchart TB
             session["session"]
             tasks["feature-tasks"]
             skills["skills"]
+            automation["automation"]
         end
         subgraph Exec["Execution"]
             provider["provider registry<br/>copilot · agency adapters"]
@@ -69,7 +71,7 @@ flowchart TB
         Agency["Agency CLI"]
     end
 
-    DB[("SQLite<br/>workspace.db")]
+    DB[("SQLite<br/>workspace.db + attached siblings")]
     CliDB[("CLI session-store.db")]
 
     Main -- spawns --> API
@@ -96,6 +98,7 @@ Each feature has a focused how-to guide in **[docs/features/](docs/features/READ
 - **[Sessions](docs/features/sessions.md)** — run the Copilot/Agency chat TUI in an embedded `xterm.js` terminal, with launch-time context bootstrap, auto summaries, and history import.
 - **[Skills](docs/features/skills.md)** — reusable instruction blocks tagged onto features/sessions and auto-seeded into a session's first prompt.
 - **[PR reviews](docs/features/pr-reviews.md)** — an "Open a PR" flow with a dedicated review page: AI summary, 0–100 scoring, a navigable per-file **change graph** (zoom/pan/scroll/full-screen), inline code diffs, **live PR comments**, and one-click **Approve** (GitHub & Azure DevOps).
+- **[Monitors & Automations](docs/features/automations.md)** — background monitors that run shell, HTTP, AI, or CI checks on an interval, evaluate conditions, and fire metasession, subagent, report, or command actions.
 - **[MCP servers](docs/features/mcp-servers.md)** — add/edit/**restart** Model Context Protocol servers, discover their tools, and **toggle individual tools** live — applied to open sessions without a shell restart.
 - **[Usage & cost](docs/features/usage-and-cost.md)** — live credit (AIC), token, cost & time from the CLIs' own telemetry, feature dashboards, and **IDE AI** metasession attribution that rolls up across the whole hierarchy.
 
@@ -162,6 +165,17 @@ Produces:
 > - **Right-click** the app in Finder → **Open** → **Open** (only needed the first time), or
 > - clear the quarantine flag: `xattr -dr com.apple.quarantine "/Applications/AI Project Studio.app"`.
 
+### Automatic updates
+
+Once installed, the app keeps itself up to date from GitHub Releases (via `electron-updater`), so users don't have to revisit this page:
+
+- It checks for updates on launch and periodically in the background, then **notifies you inside the app** — a top banner and a **Settings ▸ About ▸ Software updates** panel show the current version, the available version, and release notes.
+- **Windows:** download with one click (live progress), then **Restart & install** — no browser required. Your work is signalled to save before the relaunch.
+- **macOS:** because the build is unsigned, the app can't self-install; it still detects new versions and guides you to the download. (This upgrades to one-click install once macOS signing lands.)
+- Update failures are always non-fatal — the app stays responsive and simply keeps running the current version.
+
+See [docs/development.md → Auto-update](docs/development.md#auto-update) for the architecture and release requirements.
+
 ## Project Structure
 
 | Path | Description |
@@ -183,6 +197,7 @@ Produces:
 | ↳ [Sessions](docs/features/sessions.md) | Running the AI CLI, summaries, importing history. |
 | ↳ [Skills](docs/features/skills.md) | Reusable instructions auto-seeded into prompts. |
 | ↳ [PR reviews](docs/features/pr-reviews.md) | Open a PR: review page, change graph, comments, scoring. |
+| ↳ [Monitors & Automations](docs/features/automations.md) | Background monitors, actions, tracked subagents, and automation controls. |
 | ↳ [MCP servers](docs/features/mcp-servers.md) | Manage MCP servers and toggle tools live. |
 | ↳ [Usage & cost](docs/features/usage-and-cost.md) | Credits, tokens, dashboards, IDE AI. |
 | [docs/vs-copilot-app.md](docs/vs-copilot-app.md) | How AI Project Studio differs from the Copilot app. |

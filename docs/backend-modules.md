@@ -10,6 +10,7 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 | `session-bootstrap/` | Gates repository-backed development sessions on ready context and composes launch-only repository, feature, prior-session-summary, and skill instructions. | `session-bootstrap.ts` |
 | `feature-tasks/` | Generate, parse, and run AI task plans attached to a feature; track progress. | `feature-tasks-service.ts`, `task-plan-runner.ts`, `task-plan-parser.ts` |
 | `pr-review/` | Generates and tracks the automated review of a pull-request review feature: collects a bounded PR diff, embeds the ready repository context, runs an internal meta AI session, parses the summary + core analysis, persists lifecycle state, and publishes `pr.review.updated`. | `pr-review-service.ts`, `pr-diff-collector.ts`, `pr-review-prompt.ts`, `pr-review-parser.ts`, `config.ts` |
+| `automation/` | Owns workspace-global monitors and tracked subagents: CRUD/lifecycle, interval scheduling and resume, pure condition evaluation, shell/HTTP/AI/CI checks, metasession/subagent/report/command actions, REST + MCP bridge progress, and live automation events. | `automation-contract.ts`, `automation-service.ts`, `automation-scheduler.ts`, `check-runner.ts`, `action-runner.ts`, `subagent-service.ts`, `condition.ts`, `config.ts`, `persistence/automation-repo.ts`, `persistence/subagent-repo.ts` |
 | `skills/` | Skill tagging + prompt composition (instruction blocks seeded into sessions). | `skills-service.ts`, `skill-prompt-composer.ts`, `skills-repo-port.ts` |
 
 ## Execution
@@ -44,7 +45,7 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 | `config/` | Config infrastructure: schema registry, env loader, validation, secret resolution. | `config-schema-registry.ts`, `config-loader.ts`, `config-validator.ts` |
 | `persistence/` | SQLite connection, schema, and repos for every persisted aggregate. Storage is split across several sibling database files (see below) attached through one connection. `repository-context-repo.ts` atomically upserts lifecycle state, retains last-good content during later attempts, and deletes context with its repository. Internal-session scope is persisted for visibility filtering while meta usage remains available to IDE AI reports. | `db/connection.ts`, `db/schema.ts`, `repository-context-repo.ts`, `*-repo.ts` |
 | `workspace/` | Workspace admin/path utilities and migration helpers. | `workspace-admin-service.ts`, `workspace-paths.ts` |
-| `api/` | HTTP/SSE boundary: Express adapter, route table, controllers, validation, stream forwarding. Repository routes initialize context after add, expose `GET /repos/:id/context` and `POST /repos/:id/context/refresh`, clean it up on removal, and stream `repository.context.updated`. PR review routes expose `GET /features/:id/pr-review` and `POST /features/:id/pr-review/refresh` and stream `pr.review.updated`. Terminal creation rejects repository-backed dev sessions until context is ready. | `routes.ts`, `repo-controller.ts`, `pr-review-controller.ts`, `terminal-controller.ts`, `usage-stream.ts` |
+| `api/` | HTTP/SSE boundary: Express adapter, route table, controllers, validation, stream forwarding. Repository routes initialize context after add, expose `GET /repos/:id/context` and `POST /repos/:id/context/refresh`, clean it up on removal, and stream `repository.context.updated`. PR review routes expose `GET /features/:id/pr-review` and `POST /features/:id/pr-review/refresh` and stream `pr.review.updated`. Automation routes expose `/automations` CRUD/lifecycle operations and stream `automation.updated`, `automation.removed`, and `subagent.updated`. Terminal creation rejects repository-backed dev sessions until context is ready. | `routes.ts`, `repo-controller.ts`, `pr-review-controller.ts`, `automation-controller.ts`, `terminal-controller.ts`, `usage-stream.ts` |
 
 ## Persistence layout (multiple databases)
 
@@ -56,6 +57,7 @@ Rather than one monolithic file, the workspace is partitioned into several SQLit
 | `usage.db` | `usage` | `usage_events` |
 | `content.db` | `content` | `transcripts`, `summaries`, `session_summaries`, `session_files`, `pr_reviews` |
 | `tasks.db` | `tasks` | `feature_tasks` |
+| `automations.db` | `automations` | `automations`, `automation_runs`, `subagents` |
 
 - Table names are globally unique, so repos keep issuing unqualified SQL and cross-group reads (e.g. `aggregate-repo`'s `usage_events ⋈ sessions` visibility filter) work through the single attached connection.
 - The FK-linked pair `repositories` → `repository_contexts` (ON DELETE CASCADE) stays in the same file because SQLite cannot enforce foreign keys across attached databases.

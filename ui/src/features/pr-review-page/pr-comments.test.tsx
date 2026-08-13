@@ -4,7 +4,7 @@ import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { PrCommentThread } from '../../lib/types.js';
 import {
-  FileCommentBox,
+  CommentableDiff,
   PrCommentsPanel,
   usePrComments,
   type PrCommentsController,
@@ -155,8 +155,8 @@ describe('PrCommentsPanel', () => {
 
 const DIFF = ['@@ -1,1 +1,2 @@', ' ctx', '+added'].join('\n');
 
-describe('FileCommentBox', () => {
-  it('posts a comment on the selected line', async () => {
+describe('CommentableDiff', () => {
+  it('posts a comment on the clicked line in place', async () => {
     const created = thread({ id: 'new', line: 2, comments: [] });
     const client: Partial<ApiClient> = {
       listPrReviewComments: vi.fn().mockResolvedValue([]),
@@ -164,12 +164,11 @@ describe('FileCommentBox', () => {
     };
     render(
       <Harness client={client}>
-        {(c) => <FileCommentBox comments={c} path="src/a.cs" diff={DIFF} />}
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
       </Harness>,
     );
-    fireEvent.change(await screen.findByLabelText('Comment line'), {
-      target: { value: '2' },
-    });
+    // Click the added line (new-side line 2) to open the in-place composer.
+    fireEvent.click(await screen.findByLabelText('Comment on line 2'));
     fireEvent.change(screen.getByLabelText('Comment body'), {
       target: { value: 'looks good' },
     });
@@ -183,35 +182,54 @@ describe('FileCommentBox', () => {
     );
   });
 
-  it('only shows threads for the current file', async () => {
-    const client: Partial<ApiClient> = {
-      listPrReviewComments: vi
-        .fn()
-        .mockResolvedValue([
-          thread({ id: 't1', path: 'src/a.cs' }),
-          thread({ id: 't2', path: 'src/other.cs' }),
-        ]),
-    };
-    render(
-      <Harness client={client}>
-        {(c) => <FileCommentBox comments={c} path="src/a.cs" diff={DIFF} />}
-      </Harness>,
-    );
-    expect(await screen.findByText('a.cs:3')).toBeInTheDocument();
-    expect(screen.queryByText('other.cs:3')).not.toBeInTheDocument();
-  });
-
-  it('reports when the diff has no commentable lines', async () => {
+  it('closes the composer when Cancel is clicked', async () => {
     const client: Partial<ApiClient> = {
       listPrReviewComments: vi.fn().mockResolvedValue([]),
     };
     render(
       <Harness client={client}>
-        {(c) => <FileCommentBox comments={c} path="src/a.cs" diff="" />}
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByLabelText('Comment on line 1'));
+    expect(screen.getByLabelText('Comment body')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Comment body')).not.toBeInTheDocument();
+  });
+
+  it('renders an existing thread inline at its line and loose threads above', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi
+        .fn()
+        .mockResolvedValue([
+          thread({ id: 't1', path: 'src/a.cs', line: 2 }),
+          thread({ id: 't2', path: 'src/a.cs', line: 99 }),
+          thread({ id: 't3', path: 'src/other.cs', line: 2 }),
+        ]),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    // Inline thread on line 2 and the off-diff thread on line 99 both show; the
+    // other file's thread does not.
+    expect(await screen.findByText('a.cs:2')).toBeInTheDocument();
+    expect(screen.getByText('a.cs:99')).toBeInTheDocument();
+    expect(screen.queryByText('other.cs:2')).not.toBeInTheDocument();
+  });
+
+  it('reports when there is no diff to comment on', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff="" />}
       </Harness>,
     );
     expect(
-      await screen.findByText(/No commentable lines/),
+      await screen.findByText(/No diff is available/),
     ).toBeInTheDocument();
   });
 });

@@ -3,10 +3,34 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/logo.png" />
     <title>AI Project Studio</title>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      /* Apply the persisted theme before first paint so a light-theme user
+         never sees a dark flash (and vice versa) on load or when a new
+         session view mounts. Mirrors ui/src/lib/theme.ts: the stored value is
+         a *preference* (light/dark/system); `system` resolves against the OS. */
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('cw-theme');
+          var mode =
+            stored === 'light' || stored === 'dark' || stored === 'system'
+              ? stored
+              : 'system';
+          var prefersDark = window.matchMedia(
+            '(prefers-color-scheme: dark)',
+          ).matches;
+          var resolved =
+            mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+          document.documentElement.setAttribute('data-theme', resolved);
+        } catch (_) {
+          /* localStorage may be unavailable; fall back to CSS defaults. */
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

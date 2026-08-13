@@ -1,9 +1,12 @@
-import { useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
+import { createDisposer } from '../../lib/disposer.js';
 import { useApi } from '../../app/api-context.js';
+import { usePersistentState } from '../../hooks/use-persistent-state.js';
+import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { TerminalView } from '../../components/terminal-view.js';
@@ -63,7 +66,14 @@ export function WorkspaceView({
   );
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [explorerWidth, setExplorerWidth] = useState(260);
+  const [explorerWidth, setExplorerWidth] = usePersistentState(
+    'cw-explorer-width',
+    260,
+    {
+      validate: isFiniteNumber,
+      normalize: (w) => clampNumber(w, 200, 560),
+    },
+  );
 
   function openTab(tab: Tab) {
     setTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
@@ -175,22 +185,36 @@ export function WorkspaceView({
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeSessionId = active?.kind === 'session' ? active.session.id : null;
 
+  // Owns teardown for the imperative explorer-resize drag listeners so they are
+  // removed even if the workspace unmounts while a drag is still in progress.
+  const resizeDisposer = useRef(createDisposer());
+  useEffect(() => {
+    const disposer = resizeDisposer.current;
+    return () => disposer.dispose();
+  }, []);
+
   function startResize(event: ReactMouseEvent) {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = explorerWidth;
+    // Global drag listeners are attached imperatively (not via an effect), so
+    // route their teardown through a disposer that both the drag's own mouseup
+    // and the unmount effect can trigger — no leak if we unmount mid-drag.
+    const disposer = resizeDisposer.current;
+    disposer.dispose();
     function onMove(move: MouseEvent) {
       const next = Math.min(560, Math.max(200, startWidth + (move.clientX - startX)));
       setExplorerWidth(next);
     }
     function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.classList.remove('is-resizing');
+      disposer.dispose();
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     document.body.classList.add('is-resizing');
+    disposer.add(() => document.removeEventListener('mousemove', onMove));
+    disposer.add(() => document.removeEventListener('mouseup', onUp));
+    disposer.add(() => document.body.classList.remove('is-resizing'));
   }
 
   return (
@@ -252,11 +276,13 @@ export function WorkspaceView({
                     className={`tab-dot tab-dot-${tab.kind}`}
                     aria-hidden="true"
                   />
-                  {tab.kind === 'session'
-                    ? tab.session.name?.trim() ||
-                      names[tab.session.id]?.trim() ||
-                      tab.label
-                    : tab.label}
+                  <span className="tab-label-text">
+                    {tab.kind === 'session'
+                      ? tab.session.name?.trim() ||
+                        names[tab.session.id]?.trim() ||
+                        tab.label
+                      : tab.label}
+                  </span>
                 </button>
                 <button
                   type="button"

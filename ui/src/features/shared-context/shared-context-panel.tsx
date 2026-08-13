@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
+import { useDraft } from '../../hooks/use-draft.js';
 import type {
   ContextScope,
   ContextStatusPhase,
@@ -43,12 +44,20 @@ export function SharedContextPanel({
 }) {
   const api = useApi();
   const [doc, setDoc] = useState<SharedContextDoc | null>(null);
-  const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
   const [justUpdated, setJustUpdated] = useState(false);
+
+  const base = doc?.content ?? '';
+  const {
+    value: draft,
+    setValue: setDraft,
+    isDirty: dirty,
+    restored,
+    discard,
+    clear,
+  } = useDraft(`cw-shared-context-draft:${scope}:${scopeId}`, base);
 
   const reload = useCallback(() => {
     let active = true;
@@ -60,12 +69,6 @@ export function SharedContextPanel({
           return;
         }
         setDoc(result);
-        setDirty((wasDirty) => {
-          if (!wasDirty) {
-            setDraft(result?.content ?? '');
-          }
-          return wasDirty;
-        });
       })
       .catch((err: unknown) => {
         if (active) {
@@ -108,8 +111,7 @@ export function SharedContextPanel({
     try {
       const saved = await api.saveSharedContext(scope, scopeId, draft);
       setDoc(saved);
-      setDraft(saved.content);
-      setDirty(false);
+      clear();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -162,9 +164,22 @@ export function SharedContextPanel({
             placeholder="No shared context yet. Add durable conventions, decisions, and gotchas that every future session should know."
             onChange={(e) => {
               setDraft(e.target.value);
-              setDirty(true);
             }}
           />
+          {restored && dirty && (
+            <div className="shared-context-draft" role="status">
+              <span className="shared-context-draft-text">
+                Restored an unsaved draft from this device.
+              </span>
+              <button
+                type="button"
+                className="shared-context-draft-discard"
+                onClick={discard}
+              >
+                Discard draft
+              </button>
+            </div>
+          )}
           <ErrorText error={error} />
           <div className="shared-context-actions">
             <span className="shared-context-note">

@@ -98,6 +98,51 @@ export function basename(path: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : path;
 }
 
+/** Joins a deduped list into `first +N` once it exceeds a single entry. */
+function summarizeNames(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  return `${names[0]} +${names.length - 1}`;
+}
+
+/** Distinct, trimmed, non-empty values from a raw list, preserving order. */
+function distinct(values: Array<string | null | undefined>): string[] {
+  return [
+    ...new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+}
+
+/**
+ * A human-readable arrow label describing what the source file references in the
+ * target file. Reads in the direction the arrow points ("from" calls "to"):
+ *
+ * - `caller() → Symbol` — function `caller` in the source calls/uses class
+ *   `Symbol` declared in the target.
+ * - `init Symbol` — `Symbol` is referenced at module/field/type scope (no
+ *   enclosing function), i.e. it is being initialised or used as a base type.
+ *
+ * Many-to-one relationships are deduped and capped with `+N` so a dense edge
+ * stays legible instead of listing every caller or symbol.
+ */
+export function formatEdgeLabel(
+  calls: ReadonlyArray<ChangeGraphEdgeCall> | undefined,
+): string {
+  const list = calls ?? [];
+  if (list.length === 0) return '';
+  const symbols = distinct(list.map((call) => call.symbol));
+  const callers = distinct(list.map((call) => call.caller));
+  const symbolText = summarizeNames(symbols);
+  if (callers.length === 0) {
+    return symbolText ? `init ${symbolText}` : '';
+  }
+  const callerText = summarizeNames(callers.map((caller) => `${caller}()`));
+  return symbolText ? `${callerText} → ${symbolText}` : callerText;
+}
+
 /** The node cell width needed to fit a label without overflow. */
 function nodeWidthFor(label: string): number {
   return Math.max(
@@ -109,6 +154,51 @@ function nodeWidthFor(label: string): number {
 /** The centre point of a placed node, where its edges connect. */
 export function nodeCenter(node: PlacedNode): { x: number; y: number } {
   return { x: node.x + node.width / 2, y: node.y + NODE_H / 2 };
+}
+
+/** A rectangle described by its centre and half extents, for edge clipping. */
+export interface AnchorRect {
+  /** Centre coordinates of the rectangle. */
+  x: number;
+  y: number;
+  /** Half the rectangle's width and height. */
+  halfW: number;
+  halfH: number;
+}
+
+/** The border point of `rect` on the ray from its centre toward `(tx, ty)`. */
+function borderPointToward(
+  rect: AnchorRect,
+  tx: number,
+  ty: number,
+): { x: number; y: number } {
+  const dx = tx - rect.x;
+  const dy = ty - rect.y;
+  if (dx === 0 && dy === 0) {
+    return { x: rect.x, y: rect.y };
+  }
+  const scaleX =
+    dx === 0 ? Number.POSITIVE_INFINITY : rect.halfW / Math.abs(dx);
+  const scaleY =
+    dy === 0 ? Number.POSITIVE_INFINITY : rect.halfH / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+  return { x: rect.x + dx * scale, y: rect.y + dy * scale };
+}
+
+/**
+ * Clips the centre-to-centre segment between two rectangles to their borders,
+ * so a connecting edge leaves the source box at its edge and meets the target
+ * box at its edge instead of running through the box interior (which draws the
+ * arrow on top of the box label and looks clumsy). Concentric rectangles fall
+ * back to their shared centre.
+ */
+export function clipEdgeBetween(
+  a: AnchorRect,
+  b: AnchorRect,
+): { x1: number; y1: number; x2: number; y2: number } {
+  const start = borderPointToward(a, b.x, b.y);
+  const end = borderPointToward(b, a.x, a.y);
+  return { x1: start.x, y1: start.y, x2: end.x, y2: end.y };
 }
 
 function edgeCalls(edge: { calls?: ChangeGraphEdgeCall[] }): ChangeGraphEdgeCall[] {
@@ -235,7 +325,7 @@ export function buildChangeGraphLayout(
 
   const boxes: PlacedBox[] = [];
   const nodes: PlacedNode[] = [];
-  const boxCenter = new Map<string, { x: number; y: number }>();
+  const boxRect = new Map<string, AnchorRect>();
 
   let rowX = 0;
   let rowY = 0;
@@ -260,9 +350,11 @@ export function buildChangeGraphLayout(
       width: plan.width,
       height: plan.height,
     });
-    boxCenter.set(plan.id, {
+    boxRect.set(plan.id, {
       x: boxX + plan.width / 2,
       y: boxY + plan.height / 2,
+      halfW: plan.width / 2,
+      halfH: plan.height / 2,
     });
     if (!plan.collapsed) {
       plan.paths.forEach((path, i) => {
@@ -290,23 +382,27 @@ export function buildChangeGraphLayout(
   }
 
   // Resolve an edge endpoint to its drawing anchor: the placed file node when
-  // its module is expanded, or the collapsed module tile centre otherwise.
+  // its module is expanded, or the collapsed module tile otherwise. The anchor
+  // carries the rectangle extents so edges can be clipped to the box border.
   const anchorFor = (
     path: string,
-  ): { id: string; x: number; y: number } | null => {
+  ): { id: string; rect: AnchorRect } | null => {
     const node = nodeByPath.get(path);
     if (node) {
       const c = nodeCenter(node);
-      return { id: path, x: c.x, y: c.y };
+      return {
+        id: path,
+        rect: { x: c.x, y: c.y, halfW: node.width / 2, halfH: NODE_H / 2 },
+      };
     }
     const projectId = projectByPath.get(path);
     if (projectId === undefined) {
       return null;
     }
     // Every project id present in `projectByPath` was planned above, so its box
-    // centre is always recorded — the lookup cannot miss.
-    const center = boxCenter.get(projectId)!;
-    return { id: `box:${projectId}`, x: center.x, y: center.y };
+    // rectangle is always recorded — the lookup cannot miss.
+    const rect = boxRect.get(projectId)!;
+    return { id: `box:${projectId}`, rect };
   };
 
   const edges: PlacedEdge[] = [];
@@ -333,10 +429,7 @@ export function buildChangeGraphLayout(
       to: b.id,
       calls,
       highlightsChanges: calls.length > 0,
-      x1: a.x,
-      y1: a.y,
-      x2: b.x,
-      y2: b.y,
+      ...clipEdgeBetween(a.rect, b.rect),
     };
     edgeByKey.set(key, placed);
     edges.push(placed);
@@ -462,10 +555,10 @@ export function buildFocusedChangeGraphLayout(
       to: edge.to,
       calls: edgeCalls(edge),
       highlightsChanges: edgeCalls(edge).length > 0,
-      x1: a.x,
-      y1: a.y,
-      x2: b.x,
-      y2: b.y,
+      ...clipEdgeBetween(
+        { x: a.x, y: a.y, halfW: from.width / 2, halfH: NODE_H / 2 },
+        { x: b.x, y: b.y, halfW: to.width / 2, halfH: NODE_H / 2 },
+      ),
     });
   }
 

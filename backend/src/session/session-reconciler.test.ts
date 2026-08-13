@@ -38,7 +38,10 @@ function fakeRepo(initial: Session[]): {
     get: (id) => store.get(id) ?? null,
     listByFeature: (featureId) =>
       [...store.values()].filter((s) => s.featureId === featureId),
+    listByFeatureAll: (featureId) =>
+      [...store.values()].filter((s) => s.featureId === featureId),
     listAll: () => [...store.values()],
+    updatePlacement: () => {},
     delete: (id) => {
       store.delete(id);
     },

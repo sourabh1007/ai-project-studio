@@ -33,10 +33,12 @@ function repoOf(sessions: Session[]): SessionRepo {
     save: () => undefined,
     get: () => null,
     listByFeature: () => sessions,
+    listByFeatureAll: () => sessions,
     listAll: () => sessions,
     delete: () => undefined,
     deleteByFeature: () => undefined,
     rename: () => undefined,
+    updatePlacement: () => undefined,
   };
 }
 

@@ -136,7 +136,10 @@ function makeIds() {
   return { next: () => `gen-${++n}` };
 }
 
-const clock = { isoNow: () => '2025-06-01T00:00:00.000Z' };
+const clock = {
+  now: () => new Date('2025-06-01T00:00:00.000Z'),
+  isoNow: () => '2025-06-01T00:00:00.000Z',
+};
 
 function build(
   groups: FeatureGroupsRepo,

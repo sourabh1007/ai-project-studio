@@ -31,6 +31,13 @@ function harness(options: { metaError?: Error; createError?: Error } = {}) {
       }
       return 'repository context';
     },
+    runDetailed: async (request) => {
+      requests.push(request);
+      if (options.metaError) {
+        throw options.metaError;
+      }
+      return { text: 'repository context', sessionId: 'meta-1' };
+    },
   };
   return {
     executor: createRepositoryAnalysisExecutor(meta, temporaryPrompts),

@@ -7,8 +7,10 @@ import {
   BOX_TITLE_H,
   buildFocusedChangeGraphLayout,
   buildChangeGraphLayout,
+  clipEdgeBetween,
   COLLAPSED_BOX_H,
   findNode,
+  formatEdgeLabel,
   LABEL_CHAR_W,
   MAX_ROW_WIDTH,
   NODE_GAP,
@@ -91,6 +93,47 @@ describe('nodeCenter', () => {
   });
 });
 
+describe('formatEdgeLabel', () => {
+  it('returns an empty string for missing or empty calls', () => {
+    expect(formatEdgeLabel(undefined)).toBe('');
+    expect(formatEdgeLabel([])).toBe('');
+  });
+
+  it('reads caller() → Symbol in the arrow direction', () => {
+    expect(formatEdgeLabel([{ caller: 'Run', symbol: 'Builder' }])).toBe(
+      'Run() → Builder',
+    );
+  });
+
+  it('marks module-scope references as initialisation', () => {
+    expect(formatEdgeLabel([{ caller: null, symbol: 'Builder' }])).toBe(
+      'init Builder',
+    );
+    expect(formatEdgeLabel([{ caller: '  ', symbol: 'Builder' }])).toBe(
+      'init Builder',
+    );
+  });
+
+  it('dedupes and caps many callers and symbols with +N', () => {
+    expect(
+      formatEdgeLabel([
+        { caller: 'Run', symbol: 'Builder' },
+        { caller: 'Run', symbol: 'Builder' },
+        { caller: 'Setup', symbol: 'Client' },
+        { caller: 'Init', symbol: 'Client' },
+      ]),
+    ).toBe('Run() +2 → Builder +1');
+  });
+
+  it('falls back to callers when no symbol is present', () => {
+    expect(formatEdgeLabel([{ caller: 'Run', symbol: '' }])).toBe('Run()');
+  });
+
+  it('returns an empty string when neither caller nor symbol is present', () => {
+    expect(formatEdgeLabel([{ caller: null, symbol: '' }])).toBe('');
+  });
+});
+
 describe('buildChangeGraphLayout', () => {
   it('groups the category into project boxes with placed nodes and an edge', () => {
     const built = step({
@@ -125,15 +168,17 @@ describe('buildChangeGraphLayout', () => {
     });
     expect(layout.nodes[1].x).toBe(BOX_PAD + NODE_MIN_W + NODE_GAP);
     expect(layout.nodes[0].width).toBe(NODE_MIN_W);
+    // Edges are clipped to the node borders (not centre-to-centre) so the arrow
+    // sits in the gap between the boxes instead of over their labels.
     expect(layout.edges).toEqual([
       {
         from: 'src/Service.cs',
         to: 'src/Store.cs',
         calls: [],
         highlightsChanges: false,
-        x1: layout.nodes[0].x + NODE_MIN_W / 2,
+        x1: layout.nodes[0].x + NODE_MIN_W,
         y1: layout.nodes[0].y + NODE_H / 2,
-        x2: layout.nodes[1].x + NODE_MIN_W / 2,
+        x2: layout.nodes[1].x,
         y2: layout.nodes[1].y + NODE_H / 2,
       },
     ]);
@@ -414,6 +459,48 @@ describe('buildChangeGraphLayout', () => {
 
     expect(layout.boxes[0].collapsed).toBe(false);
     expect(layout.nodes).toHaveLength(3);
+  });
+});
+
+describe('clipEdgeBetween', () => {
+  it('clips a horizontal edge to the facing vertical borders', () => {
+    const a = { x: 0, y: 0, halfW: 10, halfH: 5 };
+    const b = { x: 100, y: 0, halfW: 20, halfH: 5 };
+    expect(clipEdgeBetween(a, b)).toEqual({
+      x1: 10,
+      y1: 0,
+      x2: 80,
+      y2: 0,
+    });
+  });
+
+  it('clips a vertical edge to the facing horizontal borders', () => {
+    const a = { x: 0, y: 0, halfW: 10, halfH: 5 };
+    const b = { x: 0, y: 100, halfW: 10, halfH: 8 };
+    expect(clipEdgeBetween(a, b)).toEqual({
+      x1: 0,
+      y1: 5,
+      x2: 0,
+      y2: 92,
+    });
+  });
+
+  it('clips a diagonal edge to whichever border it exits first', () => {
+    // Square boxes offset diagonally: the ray exits through a corner-adjacent
+    // border, scaled by the smaller of the x/y extents.
+    const a = { x: 0, y: 0, halfW: 10, halfH: 10 };
+    const b = { x: 40, y: 20, halfW: 10, halfH: 10 };
+    const clipped = clipEdgeBetween(a, b);
+    expect(clipped.x1).toBeCloseTo(10);
+    expect(clipped.y1).toBeCloseTo(5);
+    expect(clipped.x2).toBeCloseTo(30);
+    expect(clipped.y2).toBeCloseTo(15);
+  });
+
+  it('falls back to the shared centre for concentric rectangles', () => {
+    const a = { x: 5, y: 5, halfW: 10, halfH: 10 };
+    const b = { x: 5, y: 5, halfW: 4, halfH: 4 };
+    expect(clipEdgeBetween(a, b)).toEqual({ x1: 5, y1: 5, x2: 5, y2: 5 });
   });
 });
 

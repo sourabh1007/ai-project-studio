@@ -43,10 +43,13 @@ const analyticsResult: FeatureAnalytics = {
       startedAt: '2025-01-01T00:00:00.000Z',
       endedAt: null,
       activeMs: 1000,
+      groupId: null,
+      origin: 'user',
       ...totals,
     },
   ],
   timing: { totalActiveMs: 1000 },
+  groups: [],
 };
 
 function harness() {
