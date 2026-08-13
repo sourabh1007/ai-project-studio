@@ -20,6 +20,7 @@ files:
   - main.cjs
   - preload.cjs
   - update-manager.cjs
+  - ipc-input.cjs
   - package.json
   - build-resources/icon.png
 
