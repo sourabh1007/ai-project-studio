@@ -6,7 +6,7 @@ import {
   NODE_H,
 } from '../../lib/change-graph-layout.js';
 import { useChangeGraphLayout } from './use-change-graph-layout.js';
-import { segmentTestMethods } from '../../lib/test-method-diff.js';
+import { segmentTestMethods, segmentAnnotatedTestMethods } from '../../lib/test-method-diff.js';
 import type {
   ChangeGraphCategory,
   ChangeGraphNode,
@@ -14,7 +14,14 @@ import type {
   PrChangeKind,
   TestMethodExplanation,
 } from '../../lib/types.js';
-import { CommentableDiff, type PrCommentsController } from './pr-comments.js';
+import {
+  CommentableDiff,
+  CommentableDiffLines,
+  FileLevelThreads,
+  type PrCommentsController,
+} from './pr-comments.js';
+import { GraphChat, type GraphChatSend } from './graph-chat.js';
+import { AiIcon } from '../../components/icons.js';
 
 /** Placeholders the backend writes for a file whose English is not yet produced. */
 const UNEXPLAINED_WHAT_IT_DOES = 'No description was produced for this file.';
@@ -23,6 +30,97 @@ const UNEXPLAINED_WHAT_CHANGED = 'No change summary was produced.';
 /** Padding added around the placed layout so labels are never clipped. */
 const CANVAS_PAD = 40;
 const FOCUSED_CANVAS_PAD = 28;
+
+/** A user-applied positional offset (in SVG units) for a draggable element. */
+interface DragOffset {
+  dx: number;
+  dy: number;
+}
+
+const ZERO_OFFSET: DragOffset = { dx: 0, dy: 0 };
+
+/**
+ * Lets the user drag graph elements (module boxes, or focused-view file nodes)
+ * to reposition them at will, on top of the deterministic auto-layout. Offsets
+ * are keyed by a stable id (project id or file path) and expressed in SVG units,
+ * so they stay correct under zoom (a client-pixel delta is divided by the live
+ * zoom). Pointer capture keeps a drag tracking even when the cursor briefly
+ * leaves the element. `moved` distinguishes a real drag from a click so the
+ * trailing click never doubles as a select/expand.
+ */
+function useDragOffsets(zoom: number) {
+  const [offsets, setOffsets] = useState<Record<string, DragOffset>>({});
+  const state = useRef<{
+    id: string;
+    x: number;
+    y: number;
+    dx0: number;
+    dy0: number;
+  } | null>(null);
+  const moved = useRef(false);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+
+  const start = (e: React.PointerEvent, id: string) => {
+    // Keep the canvas pan (bound to the scroll container) from also firing.
+    e.stopPropagation();
+    try {
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer capture is best-effort */
+    }
+    const current = offsets[id] ?? ZERO_OFFSET;
+    state.current = {
+      id,
+      x: e.clientX,
+      y: e.clientY,
+      dx0: current.dx,
+      dy0: current.dy,
+    };
+    moved.current = false;
+  };
+
+  const move = (e: React.PointerEvent) => {
+    const d = state.current;
+    if (!d) {
+      return;
+    }
+    const mdx = e.clientX - d.x;
+    const mdy = e.clientY - d.y;
+    if (Math.abs(mdx) + Math.abs(mdy) > 3) {
+      moved.current = true;
+    }
+    const z = zoomRef.current || 1;
+    setOffsets((prev) => ({
+      ...prev,
+      [d.id]: { dx: d.dx0 + mdx / z, dy: d.dy0 + mdy / z },
+    }));
+  };
+
+  const end = (e: React.PointerEvent) => {
+    if (!state.current) {
+      return;
+    }
+    try {
+      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    } catch {
+      /* nothing to release */
+    }
+    state.current = null;
+  };
+
+  const of = (id: string): DragOffset => offsets[id] ?? ZERO_OFFSET;
+  const reset = () => setOffsets({});
+
+  const handlers = (id: string) => ({
+    onPointerDown: (e: React.PointerEvent) => start(e, id),
+    onPointerMove: move,
+    onPointerUp: end,
+    onPointerCancel: end,
+  });
+
+  return { of, reset, handlers, movedRef: moved };
+}
 
 /**
  * Whether a node still carries the build-time placeholders rather than a real,
@@ -170,6 +268,71 @@ function SegmentedDiffView({
   );
 }
 
+/**
+ * The commentable counterpart of {@link SegmentedDiffView}: a test file's diff
+ * split into per-test-method blocks (each headed by the method name, badged when
+ * changed, and carrying its plain-English explanation), where every new-side
+ * line is clickable to post an inline PR comment — the same commenting the code
+ * diff offers. File-level threads render once above all segments so they are not
+ * duplicated per method. Falls back to a single whole-file commentable diff when
+ * the file could not be segmented into methods.
+ */
+function CommentableSegmentedDiff({
+  comments,
+  path,
+  diff,
+  methods,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  diff: string;
+  methods: TestMethodExplanation[];
+}) {
+  const segments = useMemo(() => segmentAnnotatedTestMethods(diff), [diff]);
+  if (segments.length <= 1) {
+    return <CommentableDiff comments={comments} path={path} diff={diff} />;
+  }
+  const presentLines = new Set<number>();
+  for (const segment of segments) {
+    for (const line of segment.lines) {
+      if (line.rightLine !== null) {
+        presentLines.add(line.rightLine);
+      }
+    }
+  }
+  return (
+    <div className="cg-test-methods">
+      <FileLevelThreads comments={comments} path={path} presentLines={presentLines} />
+      {segments.map((segment, i) => {
+        const explanation = explanationForSegment(segment.name, methods);
+        return (
+          <div
+            key={i}
+            className={`cg-test-method${segment.changed ? ' cg-test-method-changed' : ''}`}
+          >
+            <div className="cg-test-method-head">
+              <span className="cg-test-method-name">
+                {segment.name ?? 'File setup'}
+              </span>
+              {segment.changed && (
+                <span className="cg-test-method-badge">Changed</span>
+              )}
+            </div>
+            {explanation && (
+              <p className="cg-test-method-explain">{explanation}</p>
+            )}
+            <CommentableDiffLines
+              comments={comments}
+              path={path}
+              lines={segment.lines}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function FocusedFileGraph({
   step,
   category,
@@ -194,6 +357,8 @@ function FocusedFileGraph({
   const [zoom, setZoom] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Per-file drag offsets so the user can pull individual nodes apart at will.
+  const nodeDrag = useDragOffsets(zoom);
   const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(
     null,
   );
@@ -279,14 +444,20 @@ function FocusedFileGraph({
         {layout.edges.map((edge) => {
           const label = formatEdgeLabel(edge.calls);
           const highlighted = edge.highlightsChanges;
+          const offFrom = nodeDrag.of(edge.from);
+          const offTo = nodeDrag.of(edge.to);
+          const x1 = edge.x1 + offFrom.dx;
+          const y1 = edge.y1 + offFrom.dy;
+          const x2 = edge.x2 + offTo.dx;
+          const y2 = edge.y2 + offTo.dy;
           return (
             <g key={`${edge.from}->${edge.to}`} className="cg-focused-edge">
               <line
                 className={`cg-link${highlighted ? ' cg-link-pr' : ''}`}
-                x1={edge.x1}
-                y1={edge.y1}
-                x2={edge.x2}
-                y2={edge.y2}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
                 markerEnd={
                   highlighted
                     ? 'url(#cg-focused-arrow-pr)'
@@ -296,8 +467,8 @@ function FocusedFileGraph({
               {label && (
                 <text
                   className={`cg-link-label${highlighted ? ' cg-link-label-pr' : ''}`}
-                  x={(edge.x1 + edge.x2) / 2}
-                  y={(edge.y1 + edge.y2) / 2 - 7}
+                  x={(x1 + x2) / 2}
+                  y={(y1 + y2) / 2 - 7}
                   textAnchor="middle"
                 >
                   {label}
@@ -309,15 +480,26 @@ function FocusedFileGraph({
         {layout.nodes.map((node) => {
           const isFocus = node.path === focusPath;
           const clickable = !isFocus && onNavigate !== undefined;
+          const off = nodeDrag.of(node.path);
           return (
             <g
               key={node.path}
-              className={`cg-filenode cg-filenode-${node.kind}${isFocus ? ' cg-filenode-selected' : ''}${clickable ? ' cg-filenode-nav' : ''}`}
-              transform={`translate(${node.x} ${node.y})`}
+              className={`cg-filenode cg-draggable cg-filenode-${node.kind}${isFocus ? ' cg-filenode-selected' : ''}${clickable ? ' cg-filenode-nav' : ''}`}
+              transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
+              {...nodeDrag.handlers(node.path)}
               role={clickable ? 'button' : undefined}
               tabIndex={clickable ? 0 : undefined}
               aria-label={clickable ? `Open ${node.label}` : undefined}
-              onClick={clickable ? () => onNavigate(node.path) : undefined}
+              onClick={
+                clickable
+                  ? () => {
+                      if (nodeDrag.movedRef.current) {
+                        return;
+                      }
+                      onNavigate(node.path);
+                    }
+                  : undefined
+              }
               onKeyDown={
                 clickable
                   ? (e) => {
@@ -333,7 +515,7 @@ function FocusedFileGraph({
                 className="cg-filenode-rect"
                 width={node.width}
                 height={NODE_H}
-                rx={8}
+                rx={6}
               />
               <text
                 className="cg-filenode-label"
@@ -370,6 +552,7 @@ function FocusedFileGraph({
         type="button"
         onClick={() => {
           setZoom(1);
+          nodeDrag.reset();
           scrollRef.current?.scrollTo({ top: 0, left: 0 });
         }}
         aria-label="Reset view"
@@ -551,15 +734,24 @@ function SelectionPanel({
         <div className="cg-panel-section">
           <span className="cg-panel-label">
             {category === 'test'
-              ? 'Test diff — grouped by test method'
+              ? 'Test diff — grouped by test method · click a line to comment'
               : 'Code diff — click a line to comment'}
           </span>
           {node.diff.trim() ? (
             category === 'test' ? (
-              <SegmentedDiffView
-                diff={node.diff}
-                methods={node.testMethods ?? []}
-              />
+              comments ? (
+                <CommentableSegmentedDiff
+                  comments={comments}
+                  path={node.path}
+                  diff={node.diff}
+                  methods={node.testMethods ?? []}
+                />
+              ) : (
+                <SegmentedDiffView
+                  diff={node.diff}
+                  methods={node.testMethods ?? []}
+                />
+              )
             ) : comments ? (
               <CommentableDiff
                 comments={comments}
@@ -646,6 +838,7 @@ export function ChangeGraph({
   category,
   explaining,
   onExplainFile,
+  onChat,
   comments,
 }: {
   step: ChangeGraphStep;
@@ -654,10 +847,13 @@ export function ChangeGraph({
   explaining?: ReadonlySet<string>;
   /** Requests the on-demand English explanation for a file's diff. */
   onExplainFile?: (path: string) => void;
+  /** Sends a turn of the "explain this diagram" chat; enables the AI panel. */
+  onChat?: GraphChatSend;
   /** Live PR comments controller; enables the inline comment box in the popup. */
   comments?: PrCommentsController;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   // Zoom multiplies the SVG's pixel size; navigation is native scrolling inside
   // the box (see cg-scroll), so a graph larger than the box always gets real
   // scrollbars instead of overflowing the card and pushing controls off-screen.
@@ -743,6 +939,27 @@ export function ChangeGraph({
     category,
     collapsed: collapsedList,
   });
+  // User-applied drag offsets keyed by project id. Dragging a module box moves
+  // the box, its file nodes, and every edge endpoint anchored to that module, so
+  // the whole module travels together and its connections stay attached.
+  const boxDrag = useDragOffsets(zoom);
+  // Maps a placed file node's path to its owning project so an edge endpoint
+  // that anchors on a node (expanded module) still shifts with that module.
+  const nodeProject = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of layout.nodes) {
+      map.set(node.path, node.projectId);
+    }
+    return map;
+  }, [layout.nodes]);
+  // Resolves an edge endpoint's anchor id to the project whose offset moves it:
+  // a `box:<id>` tile anchor, or a file-node path inside an expanded module.
+  const projectOfAnchor = (anchorId: string): string | undefined =>
+    anchorId.startsWith('box:') ? anchorId.slice(4) : nodeProject.get(anchorId);
+  const offsetOfAnchor = (anchorId: string): DragOffset => {
+    const projectId = projectOfAnchor(anchorId);
+    return projectId === undefined ? ZERO_OFFSET : boxDrag.of(projectId);
+  };
   const kindsPresent = useMemo(() => {
     const set = new Set<PrChangeKind>();
     for (const node of step.nodes) {
@@ -920,11 +1137,23 @@ export function ChangeGraph({
             {layout.boxes.map((box) => {
               const canToggle = box.collapsed || collapsible.has(box.id);
               const changed = changedProjects.has(box.id);
+              const off = boxDrag.of(box.id);
               return (
                 <g
                   key={box.id}
-                  className={`cg-box${box.collapsed ? ' cg-box-collapsed' : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
-                  onClick={canToggle ? () => toggleProject(box.id) : undefined}
+                  className={`cg-box cg-draggable${box.collapsed ? ' cg-box-collapsed' : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
+                  transform={`translate(${off.dx} ${off.dy})`}
+                  {...boxDrag.handlers(box.id)}
+                  onClick={
+                    canToggle
+                      ? () => {
+                          if (boxDrag.movedRef.current) {
+                            return;
+                          }
+                          toggleProject(box.id);
+                        }
+                      : undefined
+                  }
                   role={canToggle ? 'button' : undefined}
                   tabIndex={canToggle ? 0 : undefined}
                   onKeyDown={
@@ -944,9 +1173,9 @@ export function ChangeGraph({
                     y={box.y}
                     width={box.width}
                     height={box.height}
-                    rx={12}
+                    rx={10}
                   />
-                  <text className="cg-box-title" x={box.x + 14} y={box.y + 20}>
+                  <text className="cg-box-title" x={box.x + 12} y={box.y + 17}>
                     {canToggle && (
                       <tspan className="cg-box-caret">
                         {box.collapsed ? '▸ ' : '▾ '}
@@ -958,8 +1187,8 @@ export function ChangeGraph({
                   {box.collapsed && (
                     <text
                       className="cg-box-hint"
-                      x={box.x + 14}
-                      y={box.y + 42}
+                      x={box.x + 12}
+                      y={box.y + 35}
                     >
                       {box.count} file{box.count === 1 ? '' : 's'} — click to
                       expand
@@ -970,14 +1199,20 @@ export function ChangeGraph({
             })}
             {layout.edges.map((edge, i) => {
               const label = formatEdgeLabel(edge.calls);
+              const offFrom = offsetOfAnchor(edge.from);
+              const offTo = offsetOfAnchor(edge.to);
+              const x1 = edge.x1 + offFrom.dx;
+              const y1 = edge.y1 + offFrom.dy;
+              const x2 = edge.x2 + offTo.dx;
+              const y2 = edge.y2 + offTo.dy;
               return (
                 <g key={`${edge.from}->${edge.to}`}>
                   <line
                     className={`cg-link${edge.highlightsChanges ? ' cg-link-pr' : ''}`}
-                    x1={edge.x1}
-                    y1={edge.y1}
-                    x2={edge.x2}
-                    y2={edge.y2}
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
                     markerEnd={
                       edge.highlightsChanges ? 'url(#cg-arrow-pr)' : 'url(#cg-arrow)'
                     }
@@ -986,8 +1221,8 @@ export function ChangeGraph({
                   {label && (
                     <text
                       className={`cg-link-label${edge.highlightsChanges ? ' cg-link-label-pr' : ''}`}
-                      x={(edge.x1 + edge.x2) / 2}
-                      y={(edge.y1 + edge.y2) / 2 - 7}
+                      x={(x1 + x2) / 2}
+                      y={(y1 + y2) / 2 - 7}
                       textAnchor="middle"
                     >
                       {label}
@@ -998,13 +1233,20 @@ export function ChangeGraph({
             })}
             {layout.nodes.map((node, i) => {
               const isSel = node.path === selected;
+              const off = boxDrag.of(node.projectId);
               return (
                 <g
                   key={node.path}
-                  className={`cg-filenode cg-filenode-${node.kind}${isSel ? ' cg-filenode-selected' : ''}`}
-                  transform={`translate(${node.x} ${node.y})`}
+                  className={`cg-filenode cg-draggable cg-filenode-${node.kind}${isSel ? ' cg-filenode-selected' : ''}`}
+                  transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
                   style={{ animationDelay: `${i * 20}ms` }}
-                  onClick={() => activate(node)}
+                  {...boxDrag.handlers(node.projectId)}
+                  onClick={() => {
+                    if (boxDrag.movedRef.current) {
+                      return;
+                    }
+                    activate(node);
+                  }}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
@@ -1018,7 +1260,7 @@ export function ChangeGraph({
                     className="cg-filenode-rect"
                     width={node.width}
                     height={NODE_H}
-                    rx={8}
+                    rx={6}
                   />
                   <text
                     className="cg-filenode-label"
@@ -1035,21 +1277,33 @@ export function ChangeGraph({
         </svg>
         </div>
         <div className="cg-controls" role="group" aria-label="Zoom controls">
-          {hasBoundary && (
+          {onChat && (
             <button
               type="button"
-              className={`cg-callers-toggle${showCallers ? ' cg-callers-on' : ''}`}
-              onClick={() => setShowCallers((s) => !s)}
-              aria-pressed={showCallers}
-              title={
-                showCallers
-                  ? 'Hide external callers to focus on the changed files'
-                  : 'Show external callers (the files that call the changed code)'
-              }
+              className={`cg-ai-toggle${chatOpen ? ' cg-ai-on' : ''}`}
+              onClick={() => setChatOpen((o) => !o)}
+              aria-pressed={chatOpen}
+              title="Explain this diagram and ask questions about it"
             >
-              {showCallers ? 'Hide callers' : 'Show callers'}
+              <AiIcon size={14} /> Explain
             </button>
           )}
+          <button
+            type="button"
+            className={`cg-callers-toggle${showCallers ? ' cg-callers-on' : ''}`}
+            onClick={() => setShowCallers((s) => !s)}
+            aria-pressed={showCallers}
+            disabled={!hasBoundary && !showCallers}
+            title={
+              !hasBoundary
+                ? 'No external callers were found for these changes'
+                : showCallers
+                  ? 'Hide external callers to focus on the changed files'
+                  : 'Show external callers (the files that call the changed code)'
+            }
+          >
+            {showCallers ? 'Hide callers' : 'Show external callers'}
+          </button>
           <button
             type="button"
             onClick={() => setZoom((z) => Math.min(2.4, z + 0.2))}
@@ -1068,6 +1322,7 @@ export function ChangeGraph({
             type="button"
             onClick={() => {
               setZoom(1);
+              boxDrag.reset();
               scrollRef.current?.scrollTo({ top: 0, left: 0 });
             }}
             aria-label="Reset view"
@@ -1084,6 +1339,13 @@ export function ChangeGraph({
           </button>
         </div>
         <Legend kinds={kindsPresent} category={category} hasBoundary={hasBoundary} />
+        {onChat && chatOpen && (
+          <GraphChat
+            category={category}
+            onSend={onChat}
+            onClose={() => setChatOpen(false)}
+          />
+        )}
       </div>
       {selectedNode && (
         <SelectionPanel

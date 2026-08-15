@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
@@ -7,9 +7,10 @@ import type {
   RepoDefinitionEntry,
   Repository,
   RepoInsights,
+  RepositoryContext,
 } from '../../lib/types.js';
-import { EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { Loader } from '../../components/loading.js';
+import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { BrandedLoader, Loader } from '../../components/loading.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import {
   CheckIcon,
@@ -177,6 +178,133 @@ function DefinitionViewer({
 }
 
 /**
+ * Heuristic: does a repository-analysis failure message read like an auth wall
+ * (expired token, 401/403, "not signed in", a login redirect)? Used to offer a
+ * "Sign in" affordance instead of a bare "Rescan" when the real fix is to
+ * re-authenticate. Mirrors the backend's automation auth-detection phrasing.
+ */
+function looksLikeAuthError(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return /unauthorized|forbidden|access denied|not (?:logged|signed) in|sign[\s-]?in|log[\s-]?in|authenticat|credential|token (?:has )?expired|\b401\b|\b403\b/i.test(
+    message,
+  );
+}
+
+/**
+ * Repository-context status surfaced on the repo page — the single place the
+ * user should see (and fix) an analysis failure, rather than a red notice
+ * repeated under every feature. Shows an animated "analyzing" note while the
+ * background scan runs, and on failure a clear error with a Rescan action —
+ * plus a Sign in button when the failure looks like an auth problem.
+ */
+function RepoContextBanner({ repo }: { repo: Repository }) {
+  const api = useApi();
+  const context = useAsync<RepositoryContext>(
+    () => api.getRepositoryContext(repo.id),
+    [repo.id],
+  );
+  const [busy, setBusy] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const data = context.data;
+  const status = data?.status;
+  const analyzing =
+    status === 'pending' || status === 'generating' || status === 'stale';
+
+  // The repo dashboard isn't wired to the live event stream, so poll while an
+  // analysis is in flight to reflect completion without a manual refresh.
+  const reload = context.reload;
+  useEffect(() => {
+    if (!analyzing) {
+      return;
+    }
+    const id = window.setInterval(reload, 3000);
+    return () => window.clearInterval(id);
+  }, [analyzing, reload]);
+
+  if (!data || status === 'ready') {
+    return null;
+  }
+
+  const failure = data.failure?.message ?? null;
+  const authError = status === 'failed' && looksLikeAuthError(failure);
+  const isAzure = repo.provider === 'azure-devops';
+
+  async function rescan() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api.refreshRepositoryContext(repo.id);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signIn() {
+    setSigningIn(true);
+    setActionError(null);
+    try {
+      const result = await api.azureSignIn(repo.remoteUrl);
+      if (!result.authenticated) {
+        setActionError(result.message ?? 'Sign-in did not complete.');
+        return;
+      }
+      await api.refreshRepositoryContext(repo.id);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSigningIn(false);
+    }
+  }
+
+  if (analyzing) {
+    return (
+      <div className="repo-context-note" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        <span>Analyzing repository context…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="repo-context-alert" role="alert">
+      <div className="repo-context-alert-body">
+        <strong className="repo-context-alert-title">
+          Repository analysis failed
+        </strong>
+        <span className="repo-context-alert-msg">
+          {failure ?? 'The repository context could not be generated.'}
+        </span>
+        {authError && (
+          <span className="repo-context-alert-hint">
+            This looks like a sign-in issue. Sign in to{' '}
+            {isAzure ? 'Azure DevOps' : 'your provider'}, then rescan.
+          </span>
+        )}
+        <ErrorText error={actionError} />
+      </div>
+      <div className="repo-context-alert-actions">
+        {authError && isAzure && (
+          <Button onClick={() => void signIn()} disabled={signingIn}>
+            {signingIn ? 'Signing in…' : 'Sign in'}
+          </Button>
+        )}
+        <Button variant="ghost" onClick={() => void rescan()} disabled={busy}>
+          <RefreshIcon size={13} /> {busy ? 'Rescanning…' : 'Rescan'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Repo analogue of the feature dashboard: opens as a tab and surfaces
  * agent-readiness, discovered skills and custom agents, and repository usage.
  * Every figure reflects a live on-demand scan of the repo's default branch.
@@ -234,7 +362,19 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
       </header>
 
       <ErrorText error={insights.error} />
-      {insights.loading && !data && <Loader label="Scanning repository" />}
+      <RepoContextBanner repo={repo} />
+      {insights.loading && !data && (
+        <BrandedLoader
+          title="Scanning repository"
+          detail={`Reading the default branch of ${repo.name}`}
+          hints={[
+            'Reading the repository file tree…',
+            'Discovering skills, custom agents and docs…',
+            'Evaluating agent-readiness checks…',
+            'Summarizing configuration and conventions…',
+          ]}
+        />
+      )}
 
       {data && (
         <>

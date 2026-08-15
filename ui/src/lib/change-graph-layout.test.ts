@@ -8,11 +8,12 @@ import {
   buildFocusedChangeGraphLayout,
   buildChangeGraphLayout,
   clipEdgeBetween,
+  COL_GAP,
   COLLAPSED_BOX_H,
   findNode,
   formatEdgeLabel,
   LABEL_CHAR_W,
-  MAX_ROW_WIDTH,
+  layerBoxes,
   NODE_GAP,
   NODE_H,
   NODE_LABEL_PAD,
@@ -205,11 +206,10 @@ describe('buildChangeGraphLayout', () => {
     expect(third.y).toBe(BOX_TITLE_H + BOX_PAD + NODE_H + NODE_GAP);
   });
 
-  it('wraps boxes onto a second row when they exceed the max row width', () => {
-    // Each single-file box is one column wide; enough of them overflow the row.
-    const boxWidth = NODE_MIN_W + BOX_PAD * 2;
-    const perRow = Math.floor((MAX_ROW_WIDTH + BOX_GAP) / (boxWidth + BOX_GAP));
-    const count = perRow + 1;
+  it('stacks unrelated boxes into a single left column', () => {
+    // Four boxes with no references between them all sit in layer 0, so they
+    // form one vertical column instead of a scattered grid.
+    const count = 4;
     const nodes: ChangeGraphNode[] = [];
     const projects = [];
     for (let i = 0; i < count; i += 1) {
@@ -219,12 +219,87 @@ describe('buildChangeGraphLayout', () => {
 
     const layout = buildChangeGraphLayout(step({ projects, nodes }), 'code');
 
-    // The last box wrapped to a new row: its y is below the first row.
     const first = layout.boxes[0];
-    const last = layout.boxes[count - 1];
-    expect(last.x).toBe(0);
-    expect(last.y).toBe(first.height + BOX_GAP);
-    expect(layout.height).toBe(first.height * 2 + BOX_GAP);
+    // Single column: every box shares the same x and stacks downward.
+    expect(layout.boxes[1].x).toBe(first.x);
+    expect(layout.boxes[1].y).toBe(first.height + BOX_GAP);
+    expect(layout.boxes[2].y).toBe((first.height + BOX_GAP) * 2);
+    expect(layout.height).toBe(first.height * count + BOX_GAP * (count - 1));
+  });
+
+  it('flows referenced boxes left-to-right by dependency layer', () => {
+    // A references B, B references C, so the modules fan out into three columns
+    // in call order: A (layer 0) → B (layer 1) → C (layer 2).
+    const projects = [
+      { id: 'a', name: 'A', path: null },
+      { id: 'b', name: 'B', path: null },
+      { id: 'c', name: 'C', path: null },
+    ];
+    const nodes = [
+      node({ path: 'a.cs', projectId: 'a' }),
+      node({ path: 'b.cs', projectId: 'b' }),
+      node({ path: 'c.cs', projectId: 'c' }),
+    ];
+    const edges: ChangeGraphEdge[] = [
+      { from: 'a.cs', to: 'b.cs', calls: [] },
+      { from: 'b.cs', to: 'c.cs', calls: [] },
+    ];
+
+    const layout = buildChangeGraphLayout(
+      step({ projects, nodes, edges }),
+      'code',
+    );
+
+    const box = (id: string) => layout.boxes.find((b) => b.id === id)!;
+    // Each layer sits strictly to the right of the previous one.
+    expect(box('a').x).toBeLessThan(box('b').x);
+    expect(box('b').x).toBeLessThan(box('c').x);
+    // Single box per column => all vertically centred on the same row.
+    expect(box('a').y).toBe(box('b').y);
+  });
+
+  it('layers boxes by longest reference path and tolerates cycles', () => {
+    // A clean chain a → b → c lays out as consecutive layers 0,1,2.
+    const chain = layerBoxes(
+      ['a', 'b', 'c'],
+      [
+        ['a', 'b'],
+        ['b', 'c'],
+      ],
+    );
+    expect(chain.get('a')).toBe(0);
+    expect(chain.get('b')).toBe(1);
+    expect(chain.get('c')).toBe(2);
+
+    // A cycle a → b → c → a still terminates with finite, bounded layers.
+    const cyclic = layerBoxes(
+      ['a', 'b', 'c'],
+      [
+        ['a', 'b'],
+        ['b', 'c'],
+        ['c', 'a'],
+      ],
+    );
+    for (const id of ['a', 'b', 'c']) {
+      const value = cyclic.get(id)!;
+      expect(Number.isFinite(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThan(3);
+    }
+  });
+
+  it('ignores self-edges and unknown endpoints when layering', () => {
+    const layers = layerBoxes(
+      ['a', 'b'],
+      [
+        ['a', 'a'],
+        ['a', 'missing'],
+        ['a', 'b'],
+      ],
+    );
+    expect(layers.get('a')).toBe(0);
+    expect(layers.get('b')).toBe(1);
+    expect(COL_GAP).toBeGreaterThan(0);
   });
 
   it('widens nodes to fit long file labels so text never overflows', () => {

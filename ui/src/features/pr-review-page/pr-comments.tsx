@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { annotateDiffLines, type DiffLineKind } from '../../lib/diff-lines.js';
+import { annotateDiffLines, type DiffLineKind, type DiffDisplayLine } from '../../lib/diff-lines.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import type {
   AddPrCommentInput,
@@ -272,6 +272,146 @@ function InlineComposer({
 }
 
 /**
+ * File-level comment threads: threads with no line, or a line not present in the
+ * (bounded) diff — shown above the diff so they are never hidden just because
+ * their anchor line was trimmed. Shared by the code and test diff views.
+ */
+export function FileLevelThreads({
+  comments,
+  path,
+  presentLines,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  presentLines: ReadonlySet<number>;
+}) {
+  const looseThreads = comments.threads.filter(
+    (t) =>
+      t.path === path &&
+      (t.line === null || t.line === undefined || !presentLines.has(t.line)),
+  );
+  if (looseThreads.length === 0) {
+    return null;
+  }
+  return (
+    <div className="pr-comment-threads cg-diff-filethreads">
+      {looseThreads.map((thread) => (
+        <ThreadCard
+          key={thread.id}
+          thread={thread}
+          onSetStatus={(status) => void comments.setStatus(thread.id, status)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Renders a block of already-annotated diff lines with click-to-comment: any
+ * new-side line (added or context) opens an in-place composer and existing
+ * threads render inline beneath their anchored line. This is the reusable core
+ * shared by the whole-file code diff and each per-test-method test segment; it
+ * deliberately does NOT render file-level threads (the caller renders those once
+ * so they are not duplicated across test-method segments).
+ */
+export function CommentableDiffLines({
+  comments,
+  path,
+  lines,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  lines: DiffDisplayLine[];
+}) {
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+
+  const fileThreads = comments.threads.filter((t) => t.path === path);
+  const threadsByLine = new Map<number, PrCommentThread[]>();
+  for (const thread of fileThreads) {
+    if (thread.line === null || thread.line === undefined) {
+      continue;
+    }
+    const list = threadsByLine.get(thread.line) ?? [];
+    list.push(thread);
+    threadsByLine.set(thread.line, list);
+  }
+
+  return (
+    <div className="cg-diff" aria-label="File diff">
+      {lines.map((ln, i) => {
+        const commentable = ln.rightLine !== null;
+        const lineThreads =
+          ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
+        const isActive = activeLine !== null && ln.rightLine === activeLine;
+        return (
+          <div key={i} className="cg-diff-row">
+            <div
+              className={`cg-diff-line ${DIFF_LINE_CLASS[ln.kind]}${commentable ? ' cg-diff-commentable' : ''}`}
+              role={commentable ? 'button' : undefined}
+              tabIndex={commentable ? 0 : undefined}
+              aria-label={
+                commentable ? `Comment on line ${ln.rightLine}` : undefined
+              }
+              onClick={
+                commentable
+                  ? () =>
+                      setActiveLine((prev) =>
+                        prev === ln.rightLine ? null : ln.rightLine,
+                      )
+                  : undefined
+              }
+              onKeyDown={
+                commentable
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setActiveLine((prev) =>
+                          prev === ln.rightLine ? null : ln.rightLine,
+                        );
+                      }
+                    }
+                  : undefined
+              }
+            >
+              <span className="cg-diff-gutter" aria-hidden="true">
+                {ln.rightLine ?? ''}
+              </span>
+              {commentable && (
+                <span className="cg-diff-add-comment" aria-hidden="true">
+                  {lineThreads.length > 0 ? '💬' : '+'}
+                </span>
+              )}
+              <span className="cg-diff-code">{ln.raw || ' '}</span>
+            </div>
+            {lineThreads.length > 0 && (
+              <div className="pr-comment-threads cg-diff-linethreads">
+                {lineThreads.map((thread) => (
+                  <ThreadCard
+                    key={thread.id}
+                    thread={thread}
+                    onSetStatus={(status) =>
+                      void comments.setStatus(thread.id, status)
+                    }
+                  />
+                ))}
+              </div>
+            )}
+            {isActive && ln.rightLine !== null && (
+              <InlineComposer
+                comments={comments}
+                path={path}
+                line={ln.rightLine}
+                onDone={() => setActiveLine(null)}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * The change-graph file popup's code diff, rendered so a reviewer can click any
  * new-side line (added or context) to open an in-place comment composer and post
  * straight to the PR at that file + line — no line-number dropdown. Existing
@@ -288,33 +428,6 @@ export function CommentableDiff({
   diff: string;
 }) {
   const lines = useMemo(() => annotateDiffLines(diff), [diff]);
-  const [activeLine, setActiveLine] = useState<number | null>(null);
-
-  const presentLines = new Set<number>();
-  for (const ln of lines) {
-    if (ln.rightLine !== null) {
-      presentLines.add(ln.rightLine);
-    }
-  }
-
-  const fileThreads = comments.threads.filter((t) => t.path === path);
-  const threadsByLine = new Map<number, PrCommentThread[]>();
-  // Threads with no line, or a line not present in the (bounded) diff, are shown
-  // above the diff so they are never hidden just because their line was trimmed.
-  const looseThreads: PrCommentThread[] = [];
-  for (const thread of fileThreads) {
-    if (
-      thread.line === null ||
-      thread.line === undefined ||
-      !presentLines.has(thread.line)
-    ) {
-      looseThreads.push(thread);
-      continue;
-    }
-    const list = threadsByLine.get(thread.line) ?? [];
-    list.push(thread);
-    threadsByLine.set(thread.line, list);
-  }
 
   if (lines.length === 0) {
     return (
@@ -325,91 +438,17 @@ export function CommentableDiff({
     );
   }
 
+  const presentLines = new Set<number>();
+  for (const ln of lines) {
+    if (ln.rightLine !== null) {
+      presentLines.add(ln.rightLine);
+    }
+  }
+
   return (
     <div className="cg-diff-wrap">
-      {looseThreads.length > 0 && (
-        <div className="pr-comment-threads cg-diff-filethreads">
-          {looseThreads.map((thread) => (
-            <ThreadCard
-              key={thread.id}
-              thread={thread}
-              onSetStatus={(status) => void comments.setStatus(thread.id, status)}
-            />
-          ))}
-        </div>
-      )}
-      <div className="cg-diff" aria-label="File diff">
-        {lines.map((ln, i) => {
-          const commentable = ln.rightLine !== null;
-          const lineThreads =
-            ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
-          const isActive =
-            activeLine !== null && ln.rightLine === activeLine;
-          return (
-            <div key={i} className="cg-diff-row">
-              <div
-                className={`cg-diff-line ${DIFF_LINE_CLASS[ln.kind]}${commentable ? ' cg-diff-commentable' : ''}`}
-                role={commentable ? 'button' : undefined}
-                tabIndex={commentable ? 0 : undefined}
-                aria-label={
-                  commentable ? `Comment on line ${ln.rightLine}` : undefined
-                }
-                onClick={
-                  commentable
-                    ? () =>
-                        setActiveLine((prev) =>
-                          prev === ln.rightLine ? null : ln.rightLine,
-                        )
-                    : undefined
-                }
-                onKeyDown={
-                  commentable
-                    ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setActiveLine((prev) =>
-                            prev === ln.rightLine ? null : ln.rightLine,
-                          );
-                        }
-                      }
-                    : undefined
-                }
-              >
-                <span className="cg-diff-gutter" aria-hidden="true">
-                  {ln.rightLine ?? ''}
-                </span>
-                {commentable && (
-                  <span className="cg-diff-add-comment" aria-hidden="true">
-                    {lineThreads.length > 0 ? '💬' : '+'}
-                  </span>
-                )}
-                <span className="cg-diff-code">{ln.raw || ' '}</span>
-              </div>
-              {lineThreads.length > 0 && (
-                <div className="pr-comment-threads cg-diff-linethreads">
-                  {lineThreads.map((thread) => (
-                    <ThreadCard
-                      key={thread.id}
-                      thread={thread}
-                      onSetStatus={(status) =>
-                        void comments.setStatus(thread.id, status)
-                      }
-                    />
-                  ))}
-                </div>
-              )}
-              {isActive && ln.rightLine !== null && (
-                <InlineComposer
-                  comments={comments}
-                  path={path}
-                  line={ln.rightLine}
-                  onDone={() => setActiveLine(null)}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <FileLevelThreads comments={comments} path={path} presentLines={presentLines} />
+      <CommentableDiffLines comments={comments} path={path} lines={lines} />
     </div>
   );
 }

@@ -75,6 +75,10 @@ function harness() {
     explainFile: (id: string, path: string) => (
       (calls.explainFile = [id, path]), Promise.resolve(review)
     ),
+    chatAboutGraph: (id: string, category: string, messages: unknown) => (
+      (calls.chatAboutGraph = [id, category, messages]),
+      Promise.resolve({ answer: 'Two modules changed.' })
+    ),
   } as unknown as PrReviewService;
   const thread: PrCommentThread = {
     id: 't1',
@@ -177,6 +181,80 @@ describe('pr-review-controller', () => {
         '/features/:featureId/pr-review/files/explain',
       )(req({ params: { featureId: 'f1' }, body: {} })),
     ).rejects.toThrow(/file "path" is required/);
+  });
+
+  it('answers a graph-chat question from the request body', async () => {
+    const { routes, calls } = harness();
+    const messages = [{ role: 'user', content: 'What changed?' }];
+    const res = await pick(
+      routes,
+      'post',
+      '/features/:featureId/pr-review/graph-chat',
+    )(req({ params: { featureId: 'f1' }, body: { category: 'code', messages } }));
+    expect(res).toEqual({ status: 200, body: { answer: 'Two modules changed.' } });
+    expect(calls.chatAboutGraph).toEqual(['f1', 'code', messages]);
+  });
+
+  it('rejects a graph-chat request with an unknown category', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'post',
+        '/features/:featureId/pr-review/graph-chat',
+      )(
+        req({
+          params: { featureId: 'f1' },
+          body: { category: 'docs', messages: [{ role: 'user', content: 'x' }] },
+        }),
+      ),
+    ).rejects.toThrow(/"category"/);
+  });
+
+  it('rejects a graph-chat request with no messages', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'post',
+        '/features/:featureId/pr-review/graph-chat',
+      )(req({ params: { featureId: 'f1' }, body: { category: 'code', messages: [] } })),
+    ).rejects.toThrow(/"messages" array is required/);
+  });
+
+  it('rejects a graph-chat message with a bad role or empty content', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'post',
+        '/features/:featureId/pr-review/graph-chat',
+      )(
+        req({
+          params: { featureId: 'f1' },
+          body: { category: 'code', messages: [{ role: 'bot', content: 'x' }] },
+        }),
+      ),
+    ).rejects.toThrow(/"role"/);
+  });
+
+  it('rejects a graph-chat whose last message is not from the reviewer', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'post',
+        '/features/:featureId/pr-review/graph-chat',
+      )(
+        req({
+          params: { featureId: 'f1' },
+          body: {
+            category: 'test',
+            messages: [{ role: 'assistant', content: 'hi' }],
+          },
+        }),
+      ),
+    ).rejects.toThrow(/last message must be from the reviewer/);
   });
 
   it('approves the pull request for a feature', async () => {

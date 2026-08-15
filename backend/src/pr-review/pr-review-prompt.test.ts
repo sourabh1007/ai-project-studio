@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { prReviewDefaults } from './config.js';
-import type { PrReviewPull } from './pr-review-contract.js';
+import type {
+  ChangeGraphEdge,
+  ChangeGraphNode,
+  ChangeGraphProject,
+  PrReviewChatMessage,
+  PrReviewPull,
+} from './pr-review-contract.js';
 import {
+  buildChangeGraphChatPrompt,
   buildFileExplanationPrompt,
   buildProblemStatementPrompt,
+  summarizeChangeGraph,
 } from './pr-review-prompt.js';
 
 const config = prReviewDefaults;
@@ -125,6 +133,120 @@ describe('buildFileExplanationPrompt', () => {
     });
     expect(prompt).not.toContain('"methods"');
     expect(prompt).not.toContain('This is a TEST file');
+  });
+});
+
+function node(over: Partial<ChangeGraphNode>): ChangeGraphNode {
+  return {
+    path: 'src/a.cs',
+    projectId: 'p1',
+    module: null,
+    category: 'code',
+    kind: 'changed',
+    changeKind: 'modified',
+    diff: '',
+    whatItDoes: '',
+    whatChanged: '',
+    review: [],
+    ...over,
+  };
+}
+
+describe('summarizeChangeGraph', () => {
+  const projects: ChangeGraphProject[] = [
+    { id: 'p1', name: 'Core', path: 'src/Core.csproj' },
+    { id: 'p2', name: 'Api', path: 'src/Api.csproj' },
+  ];
+  const nodes: ChangeGraphNode[] = [
+    node({ path: 'src/Core/A.cs', projectId: 'p1', whatChanged: 'Adds retry.' }),
+    node({ path: 'src/Api/B.cs', projectId: 'p2', changeKind: 'added' }),
+    node({ path: 'src/Api/Caller.cs', projectId: 'p2', kind: 'boundary', changeKind: null }),
+    // An orphan file whose project has no declared name and no change kind:
+    // exercises the id fallback and the "changed" default label.
+    node({ path: 'src/Orphan/O.cs', projectId: 'pX', changeKind: null }),
+    node({ path: 'test/T.cs', projectId: 'p1', category: 'test' }),
+  ];
+  const edges: ChangeGraphEdge[] = [
+    { from: 'src/Api/B.cs', to: 'src/Core/A.cs', calls: [{ symbol: 'A', caller: 'B' }] },
+    // A reference with no recorded symbols renders without the "(uses …)" suffix.
+    { from: 'src/Api/B.cs', to: 'src/Orphan/O.cs', calls: [] },
+    { from: 'x', to: 'y', calls: [] },
+  ];
+
+  it('groups changed files by module and lists callers and references', () => {
+    const text = summarizeChangeGraph({
+      category: 'code',
+      problemStatement: 'Improve retry.',
+      projects,
+      nodes,
+      edges,
+    });
+    expect(text).toContain('## Change graph (code)');
+    expect(text).toContain('Problem statement: Improve retry.');
+    expect(text).toContain('Core (1 file(s))');
+    expect(text).toContain('src/Core/A.cs [modified] — Adds retry.');
+    expect(text).toContain('src/Api/B.cs [added]');
+    expect(text).toContain('src/Api/Caller.cs');
+    // Unknown project falls back to its id; a null change kind reads "changed".
+    expect(text).toContain('pX (1 file(s))');
+    expect(text).toContain('src/Orphan/O.cs [changed]');
+    expect(text).toContain('src/Api/B.cs → src/Core/A.cs (uses A)');
+    // The symbol-less edge is listed with no "(uses …)" suffix.
+    expect(text).toContain('- src/Api/B.cs → src/Orphan/O.cs');
+    expect(text).not.toContain('src/Orphan/O.cs (uses');
+    // The test file must not leak into the code summary.
+    expect(text).not.toContain('test/T.cs');
+  });
+
+  it('notes when a category has no changed files, callers or references', () => {
+    const text = summarizeChangeGraph({
+      category: 'test',
+      problemStatement: 'P',
+      projects,
+      nodes: [],
+      edges: [],
+    });
+    expect(text).toContain('0 changed test file(s)');
+    expect(text).toContain('(none)');
+    expect(text).toContain('(none discovered)');
+  });
+});
+
+describe('buildChangeGraphChatPrompt', () => {
+  const base = {
+    category: 'code' as const,
+    graphSummary: '## Change graph (code)\nProblem statement: P',
+    budget: { maxContextChars: 500 },
+    config,
+  };
+
+  it('embeds the summary, prior turns and the latest question', () => {
+    const messages: PrReviewChatMessage[] = [
+      { role: 'user', content: 'What changed?' },
+      { role: 'assistant', content: 'Two files.' },
+      { role: 'user', content: 'Which module?' },
+    ];
+    const prompt = buildChangeGraphChatPrompt({ ...base, messages });
+    expect(prompt).toContain('## Change graph (code)');
+    expect(prompt).toContain('Reviewer: What changed?');
+    expect(prompt).toContain('Assistant: Two files.');
+    expect(prompt).toContain('## Reviewer question\nWhich module?');
+  });
+
+  it('uses the no-history placeholder for the first question and clamps the summary', () => {
+    const prompt = buildChangeGraphChatPrompt({
+      ...base,
+      graphSummary: 'S'.repeat(50),
+      budget: { maxContextChars: 10 },
+      messages: [{ role: 'user', content: 'Overview?' }],
+    });
+    expect(prompt).toContain(prReviewDefaults.graphChatNoHistoryPlaceholder);
+    expect(prompt).toContain('…');
+  });
+
+  it('tolerates an empty messages array', () => {
+    const prompt = buildChangeGraphChatPrompt({ ...base, messages: [] });
+    expect(prompt).toContain('## Reviewer question');
   });
 });
 

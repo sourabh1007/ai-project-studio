@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { McpServerEntry } from '../../lib/types.js';
-import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Button, Card, EmptyState, ErrorText, IconBadge, Modal } from '../../components/ui.js';
 import { SkeletonCards } from '../../components/loading.js';
 import { McpIcon, PencilIcon, PlusIcon, RefreshIcon, ToolsIcon } from '../../components/icons.js';
 import { McpServerForm } from './mcp-server-form.js';
@@ -127,13 +127,16 @@ export function McpManager() {
   return (
     <Card>
       <div className="page-header">
-        <div>
-          <h2 className="page-title">MCP Servers</h2>
-          <p className="page-subtitle">
-            Model Context Protocol servers configured for the selected provider.
-            The provider’s CLI reports where its config lives, so entries reflect
-            the real file it uses.
-          </p>
+        <div className="page-header-main">
+          <IconBadge icon={<McpIcon size={24} />} tone="accent" size="lg" />
+          <div>
+            <h2 className="page-title">MCP Servers</h2>
+            <p className="page-subtitle">
+              Model Context Protocol servers configured for the selected provider.
+              The provider’s CLI reports where its config lives, so entries reflect
+              the real file it uses.
+            </p>
+          </div>
         </div>
         <div className="row">
           {providerList.length > 1 && (

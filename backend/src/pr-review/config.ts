@@ -50,6 +50,14 @@ export const prReviewConfigSchema = z.object({
   fileExplanationTestMethodsKnown: z.string().min(1),
   /** Appended when no changed test method could be identified. */
   fileExplanationTestMethodsUnknown: z.string().min(1),
+  /**
+   * Change-graph "explain this diagram" chat prompt. Placeholders:
+   * {{untrusted}}, {{category}}, {{graphSummary}}, {{conversation}},
+   * {{question}}.
+   */
+  graphChatPromptTemplate: z.string().min(1),
+  /** Substituted for {{conversation}} when the chat has no prior turns. */
+  graphChatNoHistoryPlaceholder: z.string().min(1),
 });
 
 export type PrReviewConfig = z.infer<typeof prReviewConfigSchema>;
@@ -74,7 +82,20 @@ export const prReviewDefaults: PrReviewConfig = {
     '## PR description\n{{description}}',
     'Respond in Markdown with exactly this section:\n## {{problemHeading}}\n' +
       'A concise, plain-language statement of the problem or goal this PR ' +
-      'addresses, grounded strictly in the description above. ' +
+      'addresses, grounded strictly in the description above.\n\n' +
+      'Be specific and unambiguous — a reader must not have to guess what is ' +
+      'meant. Follow these rules:\n' +
+      '- Never use a bare count or vague quantifier as a stand-in for the ' +
+      'actual items (do NOT write "seven service configurations", "several ' +
+      'settings", "a number of files"). If the description names or implies a ' +
+      'set of things, enumerate the concrete items explicitly as a Markdown ' +
+      'bullet list, quoting each name exactly as it appears.\n' +
+      '- Name the exact components, settings, services, flags, files or ' +
+      'identifiers involved rather than describing them generically.\n' +
+      '- Only include specifics that are present in the description; do not ' +
+      'invent names. If the description asserts a count (e.g. "seven settings") ' +
+      'but does not list the individual items, state the count AND note that ' +
+      'the description does not enumerate them — do not fabricate the list.\n\n' +
       'If the description does not contain enough information to state the ' +
       'problem, respond with exactly "{{insufficientMarker}}: <short reason>" ' +
       'instead of guessing.',
@@ -110,4 +131,22 @@ export const prReviewDefaults: PrReviewConfig = {
     'The changed test methods are: {{methods}}. Explain each of these.',
   fileExplanationTestMethodsUnknown:
     'Use [] if the diff changes no identifiable test method.',
+  graphChatPromptTemplate: [
+    'You are a helpful reviewer-support assistant. A reviewer is looking at a ' +
+      "node diagram of a pull request's {{category}} changes — the files the PR " +
+      'touched, grouped into their project/module boxes, and the static ' +
+      'references between them. Answer the reviewer\'s question about this ' +
+      'diagram clearly and briefly, grounded strictly in the change-graph data ' +
+      'below. When asked for an overview, give a 2–4 sentence summary of what ' +
+      'the diagram shows (which modules changed, roughly how many files, and how ' +
+      'they relate). Name concrete files, modules and references rather than ' +
+      'speaking generically. Never invent files, references or behaviour that is ' +
+      'not present in the data; if the data does not answer the question, say so.',
+    '{{untrusted}}',
+    '{{graphSummary}}',
+    '## Conversation so far\n{{conversation}}',
+    '## Reviewer question\n{{question}}',
+    'Respond in concise Markdown. Do not repeat the question back.',
+  ].join('\n\n'),
+  graphChatNoHistoryPlaceholder: '(no earlier messages — this is the first question)',
 };

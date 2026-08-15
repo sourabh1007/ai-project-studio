@@ -120,6 +120,47 @@ export function classifyCategory(path: string): ChangeGraphCategory {
   return TEST_PATH_PATTERNS.some((re) => re.test(path)) ? 'test' : 'code';
 }
 
+/**
+ * Patterns that mark a *project* (by its manifest name, e.g. a `.csproj`) as a
+ * test project. A test project's file/folder path does not always contain a
+ * `test` token — the convention lives in the project name — so classifying by
+ * path alone can mislabel a test file as production code (and vice versa). These
+ * match the dominant .NET naming conventions:
+ *  - a dot-separated `Test`/`Tests` token: `Foo.Tests`, `Foo.Test.Unit`;
+ *  - a PascalCase compound ending in `Test`/`Tests`: `FooUnitTests`,
+ *    `Foo.IntegrationTests`.
+ * The compound pattern is case-sensitive on the capital `T` so it never matches
+ * all-lower words such as `latest`, `greatest`, or `contest`.
+ */
+const TEST_PROJECT_NAME_PATTERNS: RegExp[] = [
+  /(^|\.)tests?(\.|$)/i,
+  /[a-z0-9]Tests?(\.|$)/,
+];
+
+/**
+ * Whether a project (identified by its manifest display name) is a test project.
+ * Used to classify the files it owns as tests even when their own path carries
+ * no test token.
+ */
+export function isTestProjectName(name: string): boolean {
+  return TEST_PROJECT_NAME_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Effective category for a changed file: a test when either its path matches a
+ * test convention or the project that owns it is a test project. Keeps a test
+ * file grouped with the tests even when it lives in a plainly-named folder.
+ */
+export function classifyCategoryWithProject(
+  path: string,
+  projectName: string | null | undefined,
+): ChangeGraphCategory {
+  if (classifyCategory(path) === 'test') {
+    return 'test';
+  }
+  return projectName && isTestProjectName(projectName) ? 'test' : 'code';
+}
+
 /** Placeholder shown for a file's description until it is explained on demand. */
 export const UNEXPLAINED_WHAT_IT_DOES = 'No description was produced for this file.';
 

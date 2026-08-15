@@ -1,12 +1,22 @@
 import {
   summarizeStages,
   type ProgressStage,
+  type StageStatus,
 } from '../../lib/progress-stages.js';
 
+const STAGE_STATUS_LABEL: Record<StageStatus, string> = {
+  pending: 'Pending',
+  active: 'In progress',
+  done: 'Done',
+  failed: 'Failed',
+};
+
 /**
- * A compact, consistent progress read-out for a staged AI operation (Phase 5a).
- * Shows an overall bar, a "Stage N of M" headline, and a chip per stage so the
- * user can see at a glance how far a long op has progressed and where it is now.
+ * A compact, thin progress read-out for a staged AI operation (Phase 5a).
+ * Renders a single slim bar split into one color-coded segment per stage, so
+ * the whole pipeline (and where it currently is) reads at a glance in minimal
+ * vertical space. Adding a future stage is just another entry in `stages` — the
+ * bar grows automatically and each status carries its own color.
  */
 export function StageProgress({ stages }: { stages: readonly ProgressStage[] }) {
   const summary = summarizeStages(stages);
@@ -19,32 +29,29 @@ export function StageProgress({ stages }: { stages: readonly ProgressStage[] }) 
       role="group"
       aria-label="Analysis progress"
     >
-      <div className="stage-progress-head">
-        <span className="stage-progress-headline">{summary.headline}</span>
-        <span className="stage-progress-count">{summary.percent}%</span>
-      </div>
-      <div
-        className="stage-progress-track"
+      <ol
+        className="stage-progress-segments"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={summary.percent}
+        aria-valuetext={summary.headline}
       >
-        <div
-          className="stage-progress-fill"
-          style={{ width: `${summary.percent}%` }}
-        />
-      </div>
-      <ol className="stage-progress-stages">
         {stages.map((stage) => (
           <li
             key={stage.id}
-            className={`stage-progress-chip stage-chip-${stage.status}`}
+            className={`stage-seg stage-seg-${stage.status}`}
+            title={`${stage.label}: ${STAGE_STATUS_LABEL[stage.status]}`}
           >
-            {stage.label}
+            <span className="stage-seg-bar" aria-hidden="true" />
+            <span className="stage-seg-label">{stage.label}</span>
           </li>
         ))}
       </ol>
+      <div className="stage-progress-meta">
+        <span className="stage-progress-headline">{summary.headline}</span>
+        <span className="stage-progress-count">{summary.percent}%</span>
+      </div>
     </div>
   );
 }

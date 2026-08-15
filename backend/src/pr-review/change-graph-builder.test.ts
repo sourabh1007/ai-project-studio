@@ -184,6 +184,29 @@ describe('buildChangeGraph', () => {
     );
   });
 
+  it('classifies a changed file in a test project as a test even when its folder looks like code', async () => {
+    const files = {
+      'ContainerBuilder/Runner.cs': 'namespace App;\nclass Runner { }',
+    };
+    // The folder has no "test" token; the test signal lives in the .csproj name.
+    const dirs = {
+      ContainerBuilder: [
+        'Microsoft.Azure.Cosmos.ContainerBuilder.Test.Unit.csproj',
+        'Runner.cs',
+      ],
+    };
+
+    const graph = await buildChangeGraph({
+      worktreePath: WORKTREE,
+      entries: [entry('ContainerBuilder/Runner.cs')],
+      registry: csharpRegistry,
+      fs: fakeFs(files, dirs),
+    });
+
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0]?.category).toBe('test');
+  });
+
   it('draws no edges when no changed file in a group declares a type', async () => {
     const graph = await buildChangeGraph({
       worktreePath: WORKTREE,

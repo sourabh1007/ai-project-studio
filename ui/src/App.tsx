@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useUsageStream } from './hooks/use-usage-stream.js';
 import { useTheme } from './hooks/use-theme.js';
+import { useGlobalClipboard } from './hooks/use-global-clipboard.js';
 import { themeModeLabel } from './lib/theme.js';
 import { useWorkspaceStats } from './hooks/use-workspace-stats.js';
 import { useIdeUsage } from './hooks/use-ide-usage.js';
@@ -88,6 +89,11 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [networkOpen, setNetworkOpen] = useState(false);
+
+  // App-wide clipboard hardening so Ctrl/Cmd+C on any selected UI text reaches
+  // the OS clipboard (the app's non-secure localhost origin disables the web
+  // Clipboard API). See use-global-clipboard.
+  useGlobalClipboard();
 
   const cycleView = (delta: number) => {
     setView((current) => {

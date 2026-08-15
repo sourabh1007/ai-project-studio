@@ -61,6 +61,37 @@ export function Card({
   );
 }
 
+/**
+ * Layered icon container that gives an icon premium visual weight: a gradient
+ * or accent-tinted rounded tile, optional glow, and a hover lift. Use `tone`
+ * to signal intent — `ai` renders the purple→blue gradient reserved for
+ * AI-native features; `accent`/`success`/`neutral` tint from theme tokens.
+ */
+export function IconBadge({
+  icon,
+  tone = 'accent',
+  size = 'md',
+  glow = false,
+  className,
+}: {
+  icon: ReactNode;
+  tone?: 'ai' | 'accent' | 'success' | 'neutral';
+  size?: 'sm' | 'md' | 'lg' | 'hero';
+  glow?: boolean;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`icon-badge icon-badge-${tone} icon-badge-${size} ${
+        glow ? 'is-glow' : ''
+      } ${className ?? ''}`.trim()}
+      aria-hidden="true"
+    >
+      {icon}
+    </span>
+  );
+}
+
 export function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="stat">

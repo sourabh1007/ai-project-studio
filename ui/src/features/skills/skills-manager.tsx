@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Skill, SkillExport, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
-import { Button, Card, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Button, Card, EmptyState, ErrorText, IconBadge, Modal } from '../../components/ui.js';
 import { SkeletonCards } from '../../components/loading.js';
 import {
   ExportIcon,
@@ -103,12 +103,20 @@ export function SkillsManager() {
   return (
     <Card>
       <div className="page-header">
-        <div>
-          <h2 className="page-title">Skills</h2>
-          <p className="page-subtitle">
-            Reusable instruction blocks you can tag to a feature or a single
-            session. Tagged skills are injected into every session run.
-          </p>
+        <div className="page-header-main">
+          <IconBadge
+            icon={<SkillsIcon size={24} />}
+            tone="ai"
+            size="lg"
+            glow
+          />
+          <div>
+            <h2 className="page-title">Skills</h2>
+            <p className="page-subtitle">
+              Reusable instruction blocks you can tag to a feature or a single
+              session. Tagged skills are injected into every session run.
+            </p>
+          </div>
         </div>
         <div className="row">
           <Button variant="ghost" onClick={() => fileInput.current?.click()}>

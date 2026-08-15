@@ -287,6 +287,17 @@ export interface ChangeGraphStep extends PrReviewStepBase {
 /** The two analysis steps that make up a review, in execution order. */
 export type PrReviewStepKey = 'problemStatement' | 'changeGraph';
 
+/** One turn in the change-graph "explain this diagram" support chat. */
+export interface PrReviewChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** The assistant's answer to a change-graph chat turn. */
+export interface PrReviewChatReply {
+  answer: string;
+}
+
 /** Minimal pull-request identity captured with a review. */
 export interface PrReviewPull {
   number: number;

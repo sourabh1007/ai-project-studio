@@ -776,6 +776,18 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({ path: 'src/a.ts' }));
   });
 
+  it('chats about a change graph via a JSON POST with category and messages', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ answer: 'Two files.' }));
+    const client = createApiClient({ fetchImpl });
+    const messages = [{ role: 'user' as const, content: 'What changed?' }];
+    const reply = await client.chatPrReviewGraph('f1', 'code', messages);
+    expect(reply).toEqual({ answer: 'Two files.' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/graph-chat');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ category: 'code', messages }));
+  });
+
   it('lists PR review comments for a feature', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });

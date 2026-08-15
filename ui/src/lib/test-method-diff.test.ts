@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   detectTestMethodName,
+  segmentAnnotatedTestMethods,
   segmentTestMethods,
 } from './test-method-diff.js';
 
@@ -128,5 +129,40 @@ describe('segmentTestMethods', () => {
     const [segment] = segmentTestMethods(diff);
     expect(segment.name).toBeNull();
     expect(segment.changed).toBe(true);
+  });
+});
+
+describe('segmentAnnotatedTestMethods', () => {
+  it('returns no segments for an empty diff', () => {
+    expect(segmentAnnotatedTestMethods('')).toEqual([]);
+  });
+
+  it('carries whole-file right-side line numbers into each method segment', () => {
+    const diff = [
+      '@@ -10,6 +10,7 @@',
+      " it('first', () => {",
+      '   expect(1).toBe(1);',
+      ' });',
+      " it('second', () => {",
+      '+  expect(2).toBe(2);',
+      ' });',
+    ].join('\n');
+    const segments = segmentAnnotatedTestMethods(diff);
+    // Same segmentation as the raw splitter: preamble hunk, then two methods.
+    expect(segments.map((s) => s.name)).toEqual([null, 'first', 'second']);
+    expect(segments.find((s) => s.name === 'second')?.changed).toBe(true);
+
+    // The 'second' segment starts on a bare declaration line (no @@ header) yet
+    // still knows its file line numbers, so its lines can anchor comments.
+    const second = segments.find((s) => s.name === 'second');
+    const numbered = second?.lines
+      .filter((l) => l.rightLine !== null)
+      .map((l) => l.rightLine);
+    expect(numbered).toContain(13);
+    expect(numbered).toContain(14);
+
+    // Every input line is accounted for exactly once across the segments.
+    const total = segments.reduce((n, s) => n + s.lines.length, 0);
+    expect(total).toBe(diff.split('\n').length);
   });
 });

@@ -9,8 +9,10 @@ import { PrCommentsPanel, usePrComments } from './pr-comments.js';
 import { StageProgress } from './stage-progress.js';
 import type { StageStatus } from '../../lib/progress-stages.js';
 import type {
+  ChangeGraphCategory,
   MetaUsage,
   PrReview,
+  PrReviewChatMessage,
   PrReviewStepBase,
   PrReviewStepKey,
   PrReviewStepStatus,
@@ -310,6 +312,10 @@ export function PrReviewPage({
   const problem = review?.problemStatement ?? null;
   const graph = review?.changeGraph ?? null;
 
+  const chatGraph =
+    (category: ChangeGraphCategory) => async (messages: PrReviewChatMessage[]) =>
+      (await api.chatPrReviewGraph(featureId, category, messages)).answer;
+
   return (
     <div className="pr-review-page">
       <header className="pr-review-page-head">
@@ -478,6 +484,7 @@ export function PrReviewPage({
                   category="code"
                   explaining={explaining}
                   onExplainFile={explainFile}
+                  onChat={chatGraph('code')}
                   comments={comments}
                 />
               </div>
@@ -497,6 +504,7 @@ export function PrReviewPage({
                   category="test"
                   explaining={explaining}
                   onExplainFile={explainFile}
+                  onChat={chatGraph('test')}
                   comments={comments}
                 />
               </div>

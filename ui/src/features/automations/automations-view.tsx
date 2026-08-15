@@ -22,6 +22,7 @@ import {
   Card,
   EmptyState,
   ErrorText,
+  IconBadge,
   StatusBadge,
 } from '../../components/ui.js';
 import { SkeletonCards } from '../../components/loading.js';
@@ -30,6 +31,9 @@ import {
   RefreshIcon,
   TrashIcon,
   ClockIcon,
+  ActivityIcon,
+  HistoryIcon,
+  AiChatIcon,
 } from '../../components/icons.js';
 
 type LifecycleAction = 'pause' | 'resume' | 'cancel' | 'run' | 'delete';
@@ -71,14 +75,22 @@ export function AutomationsView({ live }: { live: LiveState }) {
   return (
     <Card>
       <div className="page-header">
-        <div>
-          <h2 className="page-title">Automations</h2>
-          <p className="page-subtitle">
-            Background monitors that watch a check on an interval and run an
-            action when a condition matches. Short monitors fire once; long
-            monitors keep watching. Register them from any session, or manage
-            them here.
-          </p>
+        <div className="page-header-main">
+          <IconBadge
+            icon={<AutomationIcon size={24} />}
+            tone="ai"
+            size="lg"
+            glow
+          />
+          <div>
+            <h2 className="page-title">Automations</h2>
+            <p className="page-subtitle">
+              Background monitors that watch a check on an interval and run an
+              action when a condition matches. Short monitors fire once; long
+              monitors keep watching. Register them from any session, or manage
+              them here.
+            </p>
+          </div>
         </div>
         <button
           type="button"
@@ -105,7 +117,9 @@ export function AutomationsView({ live }: { live: LiveState }) {
 
       {groups.active.length > 0 && (
         <section className="automation-section">
-          <h3 className="automation-section-title">Active monitors</h3>
+          <h3 className="automation-section-title">
+            <ActivityIcon size={14} /> Active monitors
+          </h3>
           <div className="automation-list">
             {groups.active.map((automation) => (
               <AutomationCard
@@ -122,7 +136,9 @@ export function AutomationsView({ live }: { live: LiveState }) {
 
       {groups.finished.length > 0 && (
         <section className="automation-section">
-          <h3 className="automation-section-title">Finished monitors</h3>
+          <h3 className="automation-section-title">
+            <HistoryIcon size={14} /> Finished monitors
+          </h3>
           <div className="automation-list">
             {groups.finished.map((automation) => (
               <AutomationCard
@@ -139,7 +155,9 @@ export function AutomationsView({ live }: { live: LiveState }) {
 
       {sortedSubagents.length > 0 && (
         <section className="automation-section">
-          <h3 className="automation-section-title">Subagents</h3>
+          <h3 className="automation-section-title">
+            <AiChatIcon size={14} /> Subagents
+          </h3>
           <div className="automation-list">
             {sortedSubagents.map((subagent) => (
               <SubagentCard key={subagent.id} subagent={subagent} />

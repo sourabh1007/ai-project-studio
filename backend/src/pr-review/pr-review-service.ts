@@ -7,15 +7,20 @@ import type {
   PrChangeKind,
   PrDiff,
   PrReview,
+  PrReviewChatMessage,
+  PrReviewChatReply,
   PrReviewEventMap,
   PrReviewRepo,
   PrReviewStepKey,
   MetaUsageReader,
   StartPrReviewInput,
 } from './pr-review-contract.js';
+import type { ChangeGraphCategory } from './pr-review-contract.js';
 import {
+  buildChangeGraphChatPrompt,
   buildFileExplanationPrompt,
   buildProblemStatementPrompt,
+  summarizeChangeGraph,
 } from './pr-review-prompt.js';
 import {
   isFileExplained,
@@ -95,6 +100,17 @@ export interface PrReviewService {
    * on the review, so a second click returns immediately without re-running.
    */
   explainFile(featureId: string, path: string): Promise<PrReview>;
+  /**
+   * Answers a single question about the change graph for one category, grounded
+   * in the diagram's data (modules, changed files, callers and references) plus
+   * the running conversation. Stateless: nothing is persisted, so the reviewer's
+   * "explain this diagram" chat never mutates the review.
+   */
+  chatAboutGraph(
+    featureId: string,
+    category: ChangeGraphCategory,
+    messages: PrReviewChatMessage[],
+  ): Promise<PrReviewChatReply>;
 }
 
 function errorMessage(error: unknown): string {
@@ -570,6 +586,33 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         ...existing,
         changeGraph: { ...existing.changeGraph, nodes },
       }));
+    },
+    async chatAboutGraph(featureId, category, messages) {
+      const existing = deps.reviews.get(featureId);
+      if (!existing) {
+        throw new NotFoundError(`PR review is not available: ${featureId}`);
+      }
+      const graphSummary = summarizeChangeGraph({
+        category,
+        problemStatement: problemText(existing),
+        projects: existing.changeGraph.projects,
+        nodes: existing.changeGraph.nodes,
+        edges: existing.changeGraph.edges,
+      });
+      const prompt = buildChangeGraphChatPrompt({
+        category,
+        graphSummary,
+        messages,
+        budget: { maxContextChars: deps.config.maxContextChars },
+        config: deps.config,
+      });
+      const { text } = await runStepPrompt({
+        review: existing,
+        prompt,
+        onStart: () => {},
+        onActivity: () => {},
+      });
+      return { answer: text.trim() };
     },
   };
 }

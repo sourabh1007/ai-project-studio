@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { ConfigUpdateResult, ConfigValue } from '../../lib/types.js';
-import { Button, Card, EmptyState, ErrorText } from '../../components/ui.js';
+import { Button, Card, EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
+import {
+  InfoIcon,
+  WorkspaceContextIcon,
+  LogsIcon,
+  ConfigIcon,
+  AdvancedIcon,
+} from '../../components/icons.js';
 import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
@@ -345,11 +352,14 @@ export function SettingsView() {
 
       <Card>
         <div className="page-header">
-          <div>
-            <h2 className="page-title">About</h2>
-            <p className="page-subtitle">
-              AI Project Studio — an IDE-style workspace for AI coding CLIs.
-            </p>
+          <div className="page-header-main">
+            <IconBadge icon={<InfoIcon size={22} />} tone="accent" />
+            <div>
+              <h2 className="page-title">About</h2>
+              <p className="page-subtitle">
+                AI Project Studio — an IDE-style workspace for AI coding CLIs.
+              </p>
+            </div>
           </div>
           {bridge?.openDocs && (
             <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
@@ -371,12 +381,17 @@ export function SettingsView() {
 
       <Card>
         <div className="shared-context-card-head">
-          <h2 className="page-title">Workspace context</h2>
-          <p className="page-subtitle">
-            Global knowledge shared with every repository, feature, and session.
-            Promote durable, workspace-wide conventions here — it is manual-only
-            and never auto-written.
-          </p>
+          <div className="page-header-main">
+            <IconBadge icon={<WorkspaceContextIcon size={22} />} tone="accent" />
+            <div>
+              <h2 className="page-title">Workspace context</h2>
+              <p className="page-subtitle">
+                Global knowledge shared with every repository, feature, and session.
+                Promote durable, workspace-wide conventions here — it is manual-only
+                and never auto-written.
+              </p>
+            </div>
+          </div>
         </div>
         <SharedContextPanel
           scope="workspace"
@@ -387,12 +402,15 @@ export function SettingsView() {
 
       <Card>
         <div className="page-header">
-          <div>
-            <h2 className="page-title">Logs &amp; diagnostics</h2>
-            <p className="page-subtitle">
-              The app writes structured logs to a daily file. Open the folder to
-              inspect or share them when reporting an issue.
-            </p>
+          <div className="page-header-main">
+            <IconBadge icon={<LogsIcon size={22} />} tone="neutral" />
+            <div>
+              <h2 className="page-title">Logs &amp; diagnostics</h2>
+              <p className="page-subtitle">
+                The app writes structured logs to a daily file. Open the folder to
+                inspect or share them when reporting an issue.
+              </p>
+            </div>
           </div>
           {logDirectory && bridge && (
             <Button
@@ -423,12 +441,15 @@ export function SettingsView() {
 
       <Card>
         <div className="page-header">
-          <div>
-            <h2 className="page-title">Settings</h2>
-            <p className="page-subtitle">
-              Effective configuration, grouped by module. Every value is
-              config-driven — nothing is hardcoded.
-            </p>
+          <div className="page-header-main">
+            <IconBadge icon={<ConfigIcon size={22} />} tone="accent" />
+            <div>
+              <h2 className="page-title">Settings</h2>
+              <p className="page-subtitle">
+                Effective configuration, grouped by module. Every value is
+                config-driven — nothing is hardcoded.
+              </p>
+            </div>
           </div>
           <input
             className="input"
@@ -464,12 +485,15 @@ export function SettingsView() {
 
       <Card>
         <div className="page-header">
-          <div>
-            <h2 className="page-title">Advanced</h2>
-            <p className="page-subtitle">
-              Reconfigure any module. Saved values persist and take effect after
-              a restart. Environment variables, when set, still take precedence.
-            </p>
+          <div className="page-header-main">
+            <IconBadge icon={<AdvancedIcon size={22} />} tone="neutral" />
+            <div>
+              <h2 className="page-title">Advanced</h2>
+              <p className="page-subtitle">
+                Reconfigure any module. Saved values persist and take effect after
+                a restart. Environment variables, when set, still take precedence.
+              </p>
+            </div>
           </div>
         </div>
         {loading && <Loader label="Loading configuration" />}

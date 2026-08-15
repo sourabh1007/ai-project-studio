@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyCategory,
+  classifyCategoryWithProject,
+  isTestProjectName,
   isFileExplained,
   parseFileExplanation,
   parseProblemStatement,
@@ -182,5 +184,57 @@ describe('classifyCategory', () => {
     for (const path of codePaths) {
       expect(classifyCategory(path)).toBe('code');
     }
+  });
+});
+
+describe('isTestProjectName', () => {
+  it('recognises .NET test project names', () => {
+    const names = [
+      'Tests',
+      'Foo.Tests',
+      'Microsoft.Azure.Cosmos.ContainerBuilder.Test.Unit',
+      'Foo.UnitTests',
+      'Foo.IntegrationTests',
+      'foo.tests',
+      'Foo.Test.Emulator',
+    ];
+    for (const name of names) {
+      expect(isTestProjectName(name)).toBe(true);
+    }
+  });
+
+  it('does not flag production project names', () => {
+    const names = [
+      'App',
+      'Microsoft.Azure.Cosmos.ContainerBuilder',
+      'Contoso.Latest',
+      'Greatest.Hits',
+      'MyTestingHelpers',
+    ];
+    for (const name of names) {
+      expect(isTestProjectName(name)).toBe(false);
+    }
+  });
+});
+
+describe('classifyCategoryWithProject', () => {
+  it('classifies by path when the path already looks like a test', () => {
+    expect(
+      classifyCategoryWithProject('src/Foo.Tests/Helper.cs', 'App'),
+    ).toBe('test');
+  });
+
+  it('classifies as test when the owning project is a test project even if the path looks like code', () => {
+    expect(
+      classifyCategoryWithProject(
+        'ContainerBuilder/TestOnBuilderUnitShutDownEventRaised.cs',
+        'Microsoft.Azure.Cosmos.ContainerBuilder.Test.Unit',
+      ),
+    ).toBe('test');
+  });
+
+  it('classifies as code when neither the path nor the project is a test', () => {
+    expect(classifyCategoryWithProject('src/Store.cs', 'App')).toBe('code');
+    expect(classifyCategoryWithProject('src/Store.cs', null)).toBe('code');
   });
 });

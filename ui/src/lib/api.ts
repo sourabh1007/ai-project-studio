@@ -34,6 +34,9 @@ import type {
   PullFilter,
   PrReview,
   PrReviewStepKey,
+  PrReviewChatMessage,
+  PrReviewChatReply,
+  ChangeGraphCategory,
   PrCommentThread,
   PrCommentThreadStatus,
   PrApprovalResult,
@@ -184,6 +187,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrReview>(
         `/features/${featureId}/pr-review/files/explain`,
         jsonBody({ path }),
+      ),
+    chatPrReviewGraph: (
+      featureId: string,
+      category: ChangeGraphCategory,
+      messages: PrReviewChatMessage[],
+    ) =>
+      request<PrReviewChatReply>(
+        `/features/${featureId}/pr-review/graph-chat`,
+        jsonBody({ category, messages }),
       ),
     listPrReviewComments: (featureId: string) =>
       request<PrCommentThread[]>(

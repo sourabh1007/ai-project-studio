@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -68,9 +68,9 @@ const callbacks = {
 };
 
 describe('Explorer repository context gating', () => {
-  it('disables new sessions until an SSE update marks context ready', async () => {
+  it('keeps new sessions enabled while context is still analyzing', async () => {
     const client = api(context('pending', '2025-01-01T00:00:01Z'));
-    const { rerender } = render(
+    render(
       <ApiProvider value={client}>
         <Explorer
           live={initialLiveState}
@@ -84,28 +84,12 @@ describe('Explorer repository context gating', () => {
     const newSession = await screen.findByRole('button', {
       name: 'New session in Context UI',
     });
-    expect(newSession).toBeDisabled();
-    // The inline notice is suppressed for transient states (pending/generating/
-    // stale) — the repo header already shows the status — so it must NOT appear
-    // under the feature; the reason is still conveyed via the button tooltip.
-    expect(screen.queryByText(/pending analysis/i)).not.toBeInTheDocument();
-    expect(newSession).toHaveAttribute(
-      'title',
-      expect.stringMatching(/pending analysis/i),
-    );
-
-    const live: LiveState = {
-      ...initialLiveState,
-      repositoryContexts: {
-        r1: context('ready', '2025-01-01T00:00:02Z'),
-      },
-    };
-    rerender(
-      <ApiProvider value={client}>
-        <Explorer live={live} activeSessionId={null} names={{}} {...callbacks} />
-      </ApiProvider>,
-    );
-    await waitFor(() => expect(newSession).toBeEnabled());
+    // Session launch never blocks on repository context (the backend composes
+    // it lazily and omits it when not ready), and the analysis status lives on
+    // the repo page — so the feature row shows neither a disabled + nor an
+    // inline notice.
+    expect(newSession).toBeEnabled();
+    expect(newSession).toHaveAttribute('title', 'New session');
     expect(screen.queryByText(/pending analysis/i)).not.toBeInTheDocument();
   });
 
@@ -130,7 +114,7 @@ describe('Explorer repository context gating', () => {
     ).toBeEnabled();
   });
 
-  it('shows an inline notice only when context generation has failed', async () => {
+  it('never shows an inline context-failure notice under a feature', async () => {
     const failed: RepositoryContext = {
       ...context('failed', '2025-01-01T00:00:01Z'),
       failure: { message: 'clone failed' } as RepositoryContext['failure'],
@@ -152,7 +136,9 @@ describe('Explorer repository context gating', () => {
     const newSession = await screen.findByRole('button', {
       name: 'New session in Context UI',
     });
-    expect(newSession).toBeDisabled();
-    expect(screen.getByText(/failed: clone failed/i)).toBeInTheDocument();
+    // The failure is surfaced on the repo page (with Rescan / Sign in), not
+    // repeated under every feature, and it must not disable session creation.
+    expect(newSession).toBeEnabled();
+    expect(screen.queryByText(/failed: clone failed/i)).not.toBeInTheDocument();
   });
 });

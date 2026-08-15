@@ -1,4 +1,4 @@
-import { classifyCategory } from './pr-review-parser.js';
+import { classifyCategory, classifyCategoryWithProject } from './pr-review-parser.js';
 import {
   UNEXPLAINED_WHAT_CHANGED,
   UNEXPLAINED_WHAT_IT_DOES,
@@ -137,7 +137,7 @@ export async function buildChangeGraph(
       projectCache,
     );
     projectsById.set(project.id, project);
-    const category = classifyCategory(entry.path);
+    const category = classifyCategoryWithProject(entry.path, project.name);
     facts.push({
       path: entry.path,
       category,

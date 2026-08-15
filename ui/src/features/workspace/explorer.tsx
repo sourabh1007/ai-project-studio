@@ -70,7 +70,6 @@ import { AzureStatusBadge } from '../azure/azure-status.js';
 import {
   RepositoryContextBadge,
   RepositoryContextViewer,
-  repositoryContextBlockReason,
 } from './repository-context.js';
 
 /** Merges a persisted session with any live status/model updates. */
@@ -396,7 +395,6 @@ function PrReviewChild({
 
 function FeatureNode({
   feature,
-  repositoryContext,
   live,
   activeSessionId,
   names,
@@ -414,7 +412,6 @@ function FeatureNode({
   onMoveNode,
 }: {
   feature: Feature;
-  repositoryContext?: RepositoryContext | null;
   live: LiveState;
   activeSessionId: string | null;
   names: Record<string, string>;
@@ -474,21 +471,6 @@ function FeatureNode({
     (usage.data?.bySession ?? []).map((s) => [s.sessionId, s]),
   );
   const accent = featureColor(feature.id);
-  const contextBlockReason = feature.repoId
-    ? repositoryContextBlockReason(repositoryContext)
-    : null;
-  // The repo header already shows an "Analyzing" badge for the shared context,
-  // so repeating a pending/generating/stale notice under every feature is just
-  // noise. Only surface the inline message for a genuine failure (which is not
-  // otherwise obvious); transient states still disable "+" with a tooltip.
-  const showContextBlockText =
-    Boolean(contextBlockReason) && repositoryContext?.status === 'failed';
-
-  useEffect(() => {
-    if (contextBlockReason) {
-      setCreating(false);
-    }
-  }, [contextBlockReason]);
 
   function startEditing() {
     setDraft(feature.name);
@@ -705,12 +687,8 @@ function FeatureNode({
         <button
           type="button"
           className="tree-action"
-          title={contextBlockReason ?? 'New session'}
+          title="New session"
           aria-label={`New session in ${feature.name}`}
-          aria-describedby={
-            showContextBlockText ? `session-blocked-${feature.id}` : undefined
-          }
-          disabled={Boolean(contextBlockReason)}
           onClick={() => {
             setExpanded(true);
             setImporting(false);
@@ -803,15 +781,6 @@ function FeatureNode({
           scope={{ kind: 'feature', id: feature.id, label: feature.name }}
           onClose={() => setViewingUsage(false)}
         />
-      )}
-      {showContextBlockText && (
-        <span
-          id={`session-blocked-${feature.id}`}
-          className="session-context-blocked"
-          role="status"
-        >
-          {contextBlockReason}
-        </span>
       )}
 
       {expanded && (
@@ -1279,7 +1248,6 @@ function RepoNode({
             <Fragment key={feature.id}>
               <FeatureNode
                 feature={feature}
-                repositoryContext={repositoryContext}
                 live={live}
                 activeSessionId={activeSessionId}
                 names={names}

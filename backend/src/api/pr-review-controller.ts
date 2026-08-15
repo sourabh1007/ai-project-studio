@@ -1,5 +1,9 @@
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
-import type { PrReviewStepKey } from '../pr-review/pr-review-contract.js';
+import type {
+  ChangeGraphCategory,
+  PrReviewChatMessage,
+  PrReviewStepKey,
+} from '../pr-review/pr-review-contract.js';
 import type { PrCommentsService } from '../pr-review/pr-comments-contract.js';
 import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
 import {
@@ -31,6 +35,41 @@ function assertPath(body: unknown): string {
     throw new ValidationError('A non-empty file "path" is required.');
   }
   return path;
+}
+
+const CATEGORIES: ChangeGraphCategory[] = ['code', 'test'];
+
+/** Validates and extracts the `{ category, messages }` of a graph-chat request. */
+function assertGraphChat(body: unknown): {
+  category: ChangeGraphCategory;
+  messages: PrReviewChatMessage[];
+} {
+  const category = (body as { category?: unknown })?.category;
+  if (typeof category !== 'string' || !(CATEGORIES as string[]).includes(category)) {
+    throw new ValidationError('A "category" of "code" or "test" is required.');
+  }
+  const raw = (body as { messages?: unknown })?.messages;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new ValidationError('A non-empty "messages" array is required.');
+  }
+  const messages = raw.map((m) => {
+    const role = (m as { role?: unknown })?.role;
+    const content = (m as { content?: unknown })?.content;
+    if (
+      (role !== 'user' && role !== 'assistant') ||
+      typeof content !== 'string' ||
+      content.trim().length === 0
+    ) {
+      throw new ValidationError(
+        'Each message needs a "role" of "user"/"assistant" and non-empty "content".',
+      );
+    }
+    return { role: role as 'user' | 'assistant', content };
+  });
+  if (messages[messages.length - 1].role !== 'user') {
+    throw new ValidationError('The last message must be from the reviewer.');
+  }
+  return { category: category as ChangeGraphCategory, messages };
 }
 
 /**
@@ -76,6 +115,21 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
           assertPath(req.body),
         ),
       }),
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/pr-review/graph-chat',
+      handler: async (req) => {
+        const { category, messages } = assertGraphChat(req.body);
+        return {
+          status: 200,
+          body: await deps.prReviews.chatAboutGraph(
+            req.params.featureId,
+            category,
+            messages,
+          ),
+        };
+      },
     },
     {
       method: 'post',

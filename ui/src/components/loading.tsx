@@ -4,6 +4,7 @@
  * shimmering skeleton), while human-readable status ("Working…") lives in the
  * bottom status bar.
  */
+import { useEffect, useState } from 'react';
 
 /** A small inline spinner, sized to the surrounding text by default. */
 export function Spinner({
@@ -28,6 +29,53 @@ export function Loader({ label = 'Loading' }: { label?: string }) {
   return (
     <div className="loader" role="status" aria-label={label}>
       <span className="spinner spinner-lg" aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
+ * A prominent, branded loader for full-panel loading states. Unlike the bare
+ * {@link Loader} spinner, this shows the animated app logo plus a visible title
+ * and a rotating "what's happening behind the scenes" line, so a long-running
+ * scan/analysis tells the user what it is actually doing instead of leaving a
+ * mystery spinner stuck mid-screen. `hints` cycle every couple of seconds;
+ * `detail` is a static secondary line shown beneath the title.
+ */
+export function BrandedLoader({
+  title = 'Working',
+  detail,
+  hints,
+}: {
+  title?: string;
+  detail?: string;
+  hints?: string[];
+}) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (!hints || hints.length <= 1) {
+      return;
+    }
+    const id = window.setInterval(
+      () => setIndex((value) => (value + 1) % hints.length),
+      2200,
+    );
+    return () => window.clearInterval(id);
+  }, [hints]);
+  const hint = hints && hints.length > 0 ? hints[index % hints.length] : null;
+  return (
+    <div className="branded-loader" role="status" aria-live="polite">
+      <span className="branded-loader-mark" aria-hidden="true">
+        <span className="branded-loader-orbit" />
+        <span className="branded-loader-orbit branded-loader-orbit-2" />
+        <img src="/logo.png" alt="" width={40} height={40} />
+      </span>
+      <span className="branded-loader-title">{title}</span>
+      {detail && <span className="branded-loader-detail">{detail}</span>}
+      {hint && (
+        <span key={hint} className="branded-loader-hint">
+          {hint}
+        </span>
+      )}
     </div>
   );
 }

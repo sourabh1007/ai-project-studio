@@ -594,6 +594,36 @@ describe('createPrReviewService', () => {
     );
   });
 
+  it('answers a change-graph chat question grounded in the diagram', async () => {
+    const text = (prompt: string): string => {
+      if (prompt.includes('Reviewer question')) {
+        return '  Two modules changed: Store and Service.  ';
+      }
+      return defaultProblemText();
+    };
+    const h = harness({ text });
+    h.service.start(startInput);
+    await settle();
+    const promptsBefore = h.prompts.length;
+
+    const reply = await h.service.chatAboutGraph('f1', 'code', [
+      { role: 'user', content: 'What changed?' },
+    ]);
+    expect(reply.answer).toBe('Two modules changed: Store and Service.');
+    // The chat prompt embeds the diagram summary and runs one metasession.
+    expect(h.prompts.length).toBe(promptsBefore + 1);
+    expect(h.prompts[h.prompts.length - 1]).toContain('Change graph (code)');
+  });
+
+  it('chatAboutGraph rejects when the review is missing', async () => {
+    const h = harness();
+    await expect(
+      h.service.chatAboutGraph('missing', 'code', [
+        { role: 'user', content: 'Hi' },
+      ]),
+    ).rejects.toThrow(/not available/);
+  });
+
   it('grounds the file explanation on the description, then the title', async () => {
     const node = {
       path: 'src/Store.cs',

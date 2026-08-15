@@ -10,6 +10,8 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Bot,
+  BrainCircuit,
   Check,
   ChevronRight,
   Circle,
@@ -23,6 +25,8 @@ import {
   GitPullRequest,
   Gauge,
   History,
+  Info,
+  Layers,
   ListChecks,
   Moon,
   MoreHorizontal,
@@ -32,15 +36,20 @@ import {
   Plus,
   Radar,
   RefreshCw,
+  Rocket,
   ScanSearch,
+  ScrollText,
   Search,
-  Settings,
+  Send,
+  Settings2,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Tag,
   Timer,
   Trash2,
   Upload,
+  WandSparkles,
   Wrench,
   X,
   type LucideProps,
@@ -102,9 +111,16 @@ export const FolderIcon = makeIcon(Folder);
 export const PullRequestIcon = makeIcon(GitPullRequest);
 export const PrReviewIcon = makeIcon(ScanSearch);
 export const AutomationIcon = makeIcon(Radar);
-export const SettingsIcon = makeIcon(Settings);
+export const SettingsIcon = makeIcon(Settings2);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);
+
+// Section / settings icons.
+export const InfoIcon = makeIcon(Info);
+export const WorkspaceContextIcon = makeIcon(Layers);
+export const ConfigIcon = makeIcon(SlidersHorizontal);
+export const AdvancedIcon = makeIcon(Wrench);
+export const LogsIcon = makeIcon(ScrollText);
 
 // Dashboard section icons.
 export const OverviewIcon = makeIcon(Gauge);
@@ -114,11 +130,17 @@ export const ArrowDownIcon = makeIcon(ArrowDown);
 export const ActivityIcon = makeIcon(Activity);
 export const TimeIcon = makeIcon(Timer);
 export const HistoryIcon = makeIcon(History);
-export const SummaryIcon = makeIcon(FileText);
+export const SummaryIcon = makeIcon(ScrollText);
 export const FileIcon = makeIcon(FileText);
 
-// Skills icons.
+// Skills / AI icons.
 export const SkillsIcon = makeIcon(Sparkles);
+export const AiIcon = makeIcon(Sparkles);
+export const AiMagicIcon = makeIcon(WandSparkles);
+export const IntelligenceIcon = makeIcon(BrainCircuit);
+export const LaunchIcon = makeIcon(Rocket);
+export const AiChatIcon = makeIcon(Bot);
+export const SendIcon = makeIcon(Send);
 export const McpIcon = makeIcon(Plug);
 export const ToolsIcon = makeIcon(Wrench);
 export const InstructionSkillIcon = makeIcon(BookOpen);

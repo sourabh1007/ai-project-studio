@@ -16,6 +16,8 @@
  * stable grouping, not a parser.
  */
 
+import { annotateDiffLines, type DiffDisplayLine } from './diff-lines.js';
+
 /** One method-scoped slice of a test file's unified diff. */
 export interface TestMethodSegment {
   /** Detected test/method name, or null for the file preamble (imports/setup). */
@@ -152,4 +154,44 @@ export function segmentTestMethods(diff: string): TestMethodSegment[] {
   }
   flush();
   return segments;
+}
+
+/** A test-method segment whose diff lines carry the file's right-side line
+ * numbers, so each line can anchor an inline PR comment. */
+export interface AnnotatedTestSegment {
+  /** Detected test/method name, or null for the file preamble. */
+  name: string | null;
+  /** True when the segment contains at least one added or removed line. */
+  changed: boolean;
+  /** The segment's diff lines, annotated with right-side line numbers. */
+  lines: DiffDisplayLine[];
+}
+
+/**
+ * Segments a test file's unified `diff` into method-scoped slices whose lines
+ * carry the correct right-side line numbers of the *whole file*. Segmentation
+ * can start a new method segment on a bare declaration line (no `@@` header), so
+ * annotating each segment in isolation would lose its line numbers; instead the
+ * full diff is annotated once and sliced positionally. Both {@link
+ * segmentTestMethods} and {@link annotateDiffLines} preprocess the diff
+ * identically and emit exactly one entry per input line, so the annotated array
+ * aligns one-to-one with the concatenation of the segments' lines.
+ */
+export function segmentAnnotatedTestMethods(
+  diff: string,
+): AnnotatedTestSegment[] {
+  const segments = segmentTestMethods(diff);
+  const annotated = annotateDiffLines(diff);
+  const result: AnnotatedTestSegment[] = [];
+  let offset = 0;
+  for (const segment of segments) {
+    const count = segment.diff.split('\n').length;
+    result.push({
+      name: segment.name,
+      changed: segment.changed,
+      lines: annotated.slice(offset, offset + count),
+    });
+    offset += count;
+  }
+  return result;
 }

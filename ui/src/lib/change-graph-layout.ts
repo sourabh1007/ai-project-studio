@@ -66,20 +66,78 @@ export interface ChangeGraphLayout {
 }
 
 /** Layout geometry constants (kept here so the render stays declarative). */
-export const NODE_MIN_W = 132;
-export const NODE_H = 40;
-export const NODE_GAP = 14;
-export const BOX_PAD = 16;
-export const BOX_TITLE_H = 30;
-export const BOX_GAP = 28;
-/** Approx. width of one monospace label glyph at the node font size. */
-export const LABEL_CHAR_W = 7.7;
+export const NODE_MIN_W = 96;
+export const NODE_H = 28;
+export const NODE_GAP = 10;
+export const BOX_PAD = 12;
+export const BOX_TITLE_H = 26;
+export const BOX_GAP = 22;
+/** Approx. width of one label glyph at the node font size. */
+export const LABEL_CHAR_W = 7;
 /** Horizontal padding inside a node cell, added around its label. */
-export const NODE_LABEL_PAD = 24;
+export const NODE_LABEL_PAD = 18;
 /** Approx. width of one title glyph, used to keep long box titles unclipped. */
-export const TITLE_CHAR_W = 8;
-/** The width the box flow wraps at, matched to the SVG viewBox width. */
-export const MAX_ROW_WIDTH = 1600;
+export const TITLE_CHAR_W = 7.2;
+/** Horizontal gap between two dependency layers (columns of module boxes). */
+export const COL_GAP = 120;
+
+/**
+ * Assigns every module box a left-to-right dependency layer so the graph reads
+ * as a flow: entry points (boxes nothing else calls) sit in layer 0 on the far
+ * left, and each box a reference points *into* is pushed one layer to the right
+ * of its caller. The layer is the longest reference path reaching the box, so
+ * the columns fan out in call order instead of being scattered across a grid.
+ *
+ * Edges are `from → to` ("from references to"), so `to` must sit to the right of
+ * `from`. Layers are resolved by a memoised depth-first longest-path walk over
+ * each box's predecessors; an edge that points back at a box still on the
+ * recursion stack closes a cycle and is skipped, so a cyclic reference graph
+ * terminates cleanly (the cycle is simply broken at one edge) instead of
+ * looping forever.
+ */
+export function layerBoxes(
+  ids: readonly string[],
+  edges: ReadonlyArray<readonly [string, string]>,
+): Map<string, number> {
+  // Reverse adjacency: a box's layer is one past the deepest box that references
+  // it, so we walk its predecessors.
+  const preds = new Map<string, string[]>();
+  for (const id of ids) {
+    preds.set(id, []);
+  }
+  for (const [from, to] of edges) {
+    if (from !== to && preds.has(from) && preds.has(to)) {
+      preds.get(to)!.push(from);
+    }
+  }
+  const layer = new Map<string, number>();
+  const onStack = new Set<string>();
+  const done = new Set<string>();
+  const compute = (box: string): number => {
+    if (done.has(box)) {
+      return layer.get(box)!;
+    }
+    onStack.add(box);
+    let best = 0;
+    for (const pred of preds.get(box)!) {
+      // Skip a predecessor currently being resolved: that edge closes a cycle,
+      // and following it would recurse forever. Dropping it breaks the cycle at
+      // exactly one edge and lets the rest layer cleanly.
+      if (onStack.has(pred)) {
+        continue;
+      }
+      best = Math.max(best, compute(pred) + 1);
+    }
+    onStack.delete(box);
+    done.add(box);
+    layer.set(box, best);
+    return best;
+  };
+  for (const id of ids) {
+    compute(id);
+  }
+  return layer;
+}
 /**
  * A module/project box is collapsed to a single tile once it holds more than
  * this many nodes of the rendered category, so a change that touches many files
@@ -88,7 +146,7 @@ export const MAX_ROW_WIDTH = 1600;
  */
 export const COLLAPSE_MIN_NODES = 2;
 /** Height of a collapsed module tile (title row plus a compact hint row). */
-export const COLLAPSED_BOX_H = 58;
+export const COLLAPSED_BOX_H = 46;
 const FOCUSED_COL_GAP = 96;
 const FOCUSED_ROW_GAP = 34;
 
@@ -253,9 +311,24 @@ function planBox(
   const gridWidth = cols * nodeWidth + (cols - 1) * NODE_GAP + BOX_PAD * 2;
   // Keep the box at least as wide as its title (plus the count suffix).
   const width = Math.max(gridWidth, titleWidthFor(name));
+  // Stretch every node cell to consume the full box width. A long project title
+  // can widen the box well beyond its file grid; without this the inner nodes
+  // stay tiny and float in a large empty gutter (an "inner box much smaller than
+  // the outer box"). Filling the width makes the inner grid match the outer box,
+  // removes the dead gutter, and gives every node a large, aligned target.
+  const filledNodeWidth = (width - BOX_PAD * 2 - (cols - 1) * NODE_GAP) / cols;
   const height =
     BOX_TITLE_H + rows * NODE_H + (rows - 1) * NODE_GAP + BOX_PAD * 2;
-  return { id, name, paths, collapsed: false, cols, nodeWidth, width, height };
+  return {
+    id,
+    name,
+    paths,
+    collapsed: false,
+    cols,
+    nodeWidth: filledNodeWidth,
+    width,
+    height,
+  };
 }
 
 /** Options controlling which project boxes render collapsed to a module tile. */
@@ -327,19 +400,75 @@ export function buildChangeGraphLayout(
   const nodes: PlacedNode[] = [];
   const boxRect = new Map<string, AnchorRect>();
 
-  let rowX = 0;
-  let rowY = 0;
-  let rowHeight = 0;
-  let canvasWidth = 0;
+  // Aggregate the file-level reference edges to the box (module) level so the
+  // modules can be layered in call order. Self-edges (references inside one
+  // module) do not constrain the flow and are dropped.
+  const boxEdgePairs: Array<[string, string]> = [];
+  const seenBoxEdge = new Set<string>();
+  for (const edge of step.edges) {
+    const fromBox = projectByPath.get(edge.from);
+    const toBox = projectByPath.get(edge.to);
+    if (fromBox === undefined || toBox === undefined || fromBox === toBox) {
+      continue;
+    }
+    const key = `${fromBox}\u0000${toBox}`;
+    if (seenBoxEdge.has(key)) {
+      continue;
+    }
+    seenBoxEdge.add(key);
+    boxEdgePairs.push([fromBox, toBox]);
+  }
+
+  // Layer the boxes left-to-right by their reference flow, then lay each layer
+  // out as a vertical column. Shorter columns are centred against the tallest so
+  // the flow reads as a balanced diagram rather than a top-left-anchored grid.
+  const layerOf = layerBoxes(
+    plans.map((plan) => plan.id),
+    boxEdgePairs,
+  );
+  const byLayer = new Map<number, BoxPlan[]>();
+  for (const plan of plans) {
+    // layerBoxes seeds every plan id, so the layer is always present.
+    const l = layerOf.get(plan.id)!;
+    const bucket = byLayer.get(l);
+    if (bucket) {
+      bucket.push(plan);
+    } else {
+      byLayer.set(l, [plan]);
+    }
+  }
+  const orderedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+  const columnHeight = (column: BoxPlan[]): number =>
+    column.reduce((sum, plan) => sum + plan.height, 0) +
+    Math.max(0, column.length - 1) * BOX_GAP;
+  const maxColumnHeight = orderedLayers.reduce(
+    (max, l) => Math.max(max, columnHeight(byLayer.get(l)!)),
+    0,
+  );
+
+  const placement = new Map<string, { x: number; y: number }>();
+  let cursorX = 0;
+  for (const l of orderedLayers) {
+    const column = byLayer.get(l)!;
+    const columnWidth = column.reduce((max, plan) => Math.max(max, plan.width), 0);
+    let cursorY = (maxColumnHeight - columnHeight(column)) / 2;
+    for (const plan of column) {
+      // Centre each box within its column so the arrows fan symmetrically.
+      placement.set(plan.id, {
+        x: cursorX + (columnWidth - plan.width) / 2,
+        y: cursorY,
+      });
+      cursorY += plan.height + BOX_GAP;
+    }
+    cursorX += columnWidth + COL_GAP;
+  }
+  const canvasWidth = orderedLayers.length > 0 ? cursorX - COL_GAP : 0;
+  const canvasHeight = maxColumnHeight;
 
   for (const plan of plans) {
-    if (rowX > 0 && rowX + plan.width > MAX_ROW_WIDTH) {
-      rowY += rowHeight + BOX_GAP;
-      rowX = 0;
-      rowHeight = 0;
-    }
-    const boxX = rowX;
-    const boxY = rowY;
+    const at = placement.get(plan.id)!;
+    const boxX = at.x;
+    const boxY = at.y;
     boxes.push({
       id: plan.id,
       name: plan.name,
@@ -371,9 +500,6 @@ export function buildChangeGraphLayout(
         });
       });
     }
-    rowX += plan.width + BOX_GAP;
-    rowHeight = Math.max(rowHeight, plan.height);
-    canvasWidth = Math.max(canvasWidth, rowX - BOX_GAP);
   }
 
   const nodeByPath = new Map<string, PlacedNode>();
@@ -435,7 +561,7 @@ export function buildChangeGraphLayout(
     edges.push(placed);
   }
 
-  const height = plans.length > 0 ? rowY + rowHeight : 0;
+  const height = plans.length > 0 ? canvasHeight : 0;
   return { boxes, nodes, edges, width: canvasWidth, height };
 }
 

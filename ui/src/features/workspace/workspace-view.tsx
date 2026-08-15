@@ -8,6 +8,7 @@ import { useApi } from '../../app/api-context.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
+import { AiMagicIcon } from '../../components/icons.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { TerminalView } from '../../components/terminal-view.js';
 import { FeatureDashboard } from '../feature-dashboard/feature-dashboard.js';
@@ -328,7 +329,11 @@ export function WorkspaceView({
           {!active && (
             <div className="editor-empty">
               <div className="editor-empty-art" aria-hidden="true" />
-              <EmptyState message="Open a session to launch its live CLI, or a feature to see analytics." />
+              <EmptyState
+                icon={<AiMagicIcon size={28} />}
+                title="Your AI workspace awaits"
+                description="Open a session to launch its live CLI, or a feature to see usage analytics."
+              />
             </div>
           )}
         </div>

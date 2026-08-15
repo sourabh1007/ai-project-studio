@@ -130,6 +130,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/pr-review/refresh',
       'post /features/:featureId/pr-review/steps/:step/retry',
       'post /features/:featureId/pr-review/files/explain',
+      'post /features/:featureId/pr-review/graph-chat',
       'post /features/:featureId/pr-review/approve',
       'get /features/:featureId/pr-review/comments',
       'post /features/:featureId/pr-review/comments',
