@@ -34,7 +34,7 @@ export interface DeviceCodeStart {
 
 /** Result of a single device-flow poll. */
 export type DevicePollResult =
-  | { status: 'pending' }
+  | { status: 'pending'; slowDown?: boolean }
   | { status: 'success' }
   | { status: 'error'; message: string };
 

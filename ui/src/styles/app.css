@@ -6788,6 +6788,30 @@ body.is-resizing {
   border: 1px solid var(--border);
   color: var(--text);
   animation: fade-in 0.25s ease both;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.device-code:hover {
+  border-color: var(--accent, #6366f1);
+}
+
+.device-code:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+}
+
+.device-code-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.device-signin-error-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .device-signin-waiting {

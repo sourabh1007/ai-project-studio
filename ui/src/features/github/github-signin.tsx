@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Modal, Button } from '../../components/ui.js';
 import { Spinner } from '../../components/loading.js';
@@ -41,7 +41,26 @@ export function GithubSignInModal({
 }) {
   const api = useApi();
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
+  const [copied, setCopied] = useState(false);
+  // Bumping this restarts the whole flow (used by "Try again").
+  const [attempt, setAttempt] = useState(0);
   const cancelled = useRef(false);
+
+  const retry = useCallback(() => {
+    setCopied(false);
+    setPhase({ kind: 'starting' });
+    setAttempt((n) => n + 1);
+  }, []);
+
+  const copyCode = useCallback((code: string) => {
+    void navigator.clipboard?.writeText(code).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => undefined,
+    );
+  }, []);
 
   useEffect(() => {
     cancelled.current = false;
@@ -52,7 +71,9 @@ export function GithubSignInModal({
         setPhase({ kind: 'awaiting', code });
         openExternal(code.verificationUri);
 
-        const intervalMs = Math.max(code.interval, 1) * 1000;
+        // GitHub's `slow_down` tells us to poll less often; we add 5s to the
+        // interval each time or the flow can spin until the code expires.
+        let intervalMs = Math.max(code.interval, 1) * 1000;
         const deadline = Date.now() + Math.max(code.expiresIn, 1) * 1000;
         while (!cancelled.current && Date.now() < deadline) {
           await sleep(intervalMs);
@@ -68,6 +89,9 @@ export function GithubSignInModal({
           if (result.status === 'error') {
             setPhase({ kind: 'error', message: result.message });
             return;
+          }
+          if (result.slowDown) {
+            intervalMs += 5000;
           }
         }
         if (!cancelled.current) {
@@ -88,7 +112,7 @@ export function GithubSignInModal({
     return () => {
       cancelled.current = true;
     };
-  }, [api, onAuthenticated]);
+  }, [api, onAuthenticated, attempt]);
 
   return (
     <Modal title="Sign in to GitHub" onClose={onClose}>
@@ -104,9 +128,18 @@ export function GithubSignInModal({
             <p className="device-signin-lead">
               Enter this code on GitHub to finish signing in:
             </p>
-            <div className="device-code" aria-label="Your one-time device code">
+            <button
+              type="button"
+              className="device-code"
+              aria-label={`Copy your one-time device code ${phase.code.userCode}`}
+              title="Click to copy"
+              onClick={() => copyCode(phase.code.userCode)}
+            >
               {phase.code.userCode}
-            </div>
+            </button>
+            <p className="device-code-hint" aria-live="polite">
+              {copied ? 'Copied to clipboard' : 'Click the code to copy it'}
+            </p>
             <Button onClick={() => openExternal(phase.code.verificationUri)}>
               Open GitHub
             </Button>
@@ -131,9 +164,12 @@ export function GithubSignInModal({
         {phase.kind === 'error' && (
           <div className="device-signin-center device-signin-error">
             <p className="device-signin-error-msg">{phase.message}</p>
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
+            <div className="device-signin-error-actions">
+              <Button onClick={retry}>Try again</Button>
+              <Button variant="ghost" onClick={onClose}>
+                Close
+              </Button>
+            </div>
           </div>
         )}
       </div>

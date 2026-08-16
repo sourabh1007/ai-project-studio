@@ -48,7 +48,7 @@ export interface DeviceCodeStart {
 }
 
 export type DevicePollResult =
-  | { status: 'pending' }
+  | { status: 'pending'; slowDown?: boolean }
   | { status: 'success' }
   | { status: 'error'; message: string };
 
@@ -143,8 +143,13 @@ export function createGithubDeviceAuth(deps: {
         return { status: 'success' };
       }
       const error = str(body.error);
-      if (error === 'authorization_pending' || error === 'slow_down') {
+      if (error === 'authorization_pending') {
         return { status: 'pending' };
+      }
+      // GitHub asks us to poll less often; the caller must add >=5s to its
+      // interval, otherwise it keeps getting `slow_down` and never completes.
+      if (error === 'slow_down') {
+        return { status: 'pending', slowDown: true };
       }
       return { status: 'error', message: describeDeviceError(error) };
     },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
@@ -10,11 +10,34 @@ import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
 import { AiMagicIcon } from '../../components/icons.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
-import { TerminalView } from '../../components/terminal-view.js';
-import { FeatureDashboard } from '../feature-dashboard/feature-dashboard.js';
-import { PrReviewPage } from '../pr-review-page/pr-review-page.js';
-import { RepoDashboard } from '../repo-dashboard/repo-dashboard.js';
+import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
+
+// Heavy, view-specific bundles (xterm for terminals, recharts for the feature
+// and repo dashboards, the change-graph stack for PR review) are code-split so
+// opening the workspace doesn't eagerly download them. Each only loads the
+// first time its tab is activated. Named exports are mapped to the default
+// shape React.lazy expects.
+const TerminalView = lazy(() =>
+  import('../../components/terminal-view.js').then((m) => ({
+    default: m.TerminalView,
+  })),
+);
+const FeatureDashboard = lazy(() =>
+  import('../feature-dashboard/feature-dashboard.js').then((m) => ({
+    default: m.FeatureDashboard,
+  })),
+);
+const PrReviewPage = lazy(() =>
+  import('../pr-review-page/pr-review-page.js').then((m) => ({
+    default: m.PrReviewPage,
+  })),
+);
+const RepoDashboard = lazy(() =>
+  import('../repo-dashboard/repo-dashboard.js').then((m) => ({
+    default: m.RepoDashboard,
+  })),
+);
 
 type Tab =
   | { kind: 'session'; id: string; label: string; session: Session }
@@ -300,31 +323,39 @@ export function WorkspaceView({
         <div className="editor-body">
           {active?.kind === 'session' && (
             <div key={active.session.id} className="session-editor">
-              <TerminalView sessionId={active.session.id} />
+              <Suspense fallback={<ViewSkeleton label="terminal" />}>
+                <TerminalView sessionId={active.session.id} />
+              </Suspense>
             </div>
           )}
           {active?.kind === 'feature' && (
-            <FeatureDashboard
-              key={active.feature.id}
-              featureId={active.feature.id}
-              featureName={active.feature.name}
-              featureDescription={active.feature.description}
-              contextPhase={
-                live.contextStatus[`feature:${active.feature.id}`]
-              }
-            />
+            <Suspense fallback={<ViewSkeleton label="dashboard" />}>
+              <FeatureDashboard
+                key={active.feature.id}
+                featureId={active.feature.id}
+                featureName={active.feature.name}
+                featureDescription={active.feature.description}
+                contextPhase={
+                  live.contextStatus[`feature:${active.feature.id}`]
+                }
+              />
+            </Suspense>
           )}
           {active?.kind === 'pr-review' && (
             <ErrorBoundary label="PR Review">
-              <PrReviewPage
-                key={active.feature.id}
-                featureId={active.feature.id}
-                liveReview={live.prReviews[active.feature.id]}
-              />
+              <Suspense fallback={<ViewSkeleton label="PR review" />}>
+                <PrReviewPage
+                  key={active.feature.id}
+                  featureId={active.feature.id}
+                  liveReview={live.prReviews[active.feature.id]}
+                />
+              </Suspense>
             </ErrorBoundary>
           )}
           {active?.kind === 'repo' && (
-            <RepoDashboard key={active.repo.id} repo={active.repo} />
+            <Suspense fallback={<ViewSkeleton label="repository" />}>
+              <RepoDashboard key={active.repo.id} repo={active.repo} />
+            </Suspense>
           )}
           {!active && (
             <div className="editor-empty">

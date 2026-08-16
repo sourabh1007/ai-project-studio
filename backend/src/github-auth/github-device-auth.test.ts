@@ -161,7 +161,7 @@ describe('createGithubDeviceAuth.poll', () => {
     });
   });
 
-  it('reports pending on authorization_pending and slow_down', async () => {
+  it('reports pending on authorization_pending, and a slow-down pending on slow_down', async () => {
     const { httpPost } = httpStub([
       { status: 200, body: { error: 'authorization_pending' } },
       { status: 200, body: { error: 'slow_down' } },
@@ -171,7 +171,7 @@ describe('createGithubDeviceAuth.poll', () => {
       ghLogin: () => Promise.resolve({ code: 0, stderr: '' }),
     });
     expect(await auth.poll('d')).toEqual({ status: 'pending' });
-    expect(await auth.poll('d')).toEqual({ status: 'pending' });
+    expect(await auth.poll('d')).toEqual({ status: 'pending', slowDown: true });
   });
 
   it('reports a terminal error for other error codes', async () => {

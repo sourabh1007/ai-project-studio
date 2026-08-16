@@ -633,17 +633,34 @@ function main(): void {
   // non-interactively (no "Cannot prompt" failures). The credential env is
   // injected into this process's env; the session env-mapper copies process.env
   // into each session, so all sessions inherit the same login automatically.
+  const GH_NOT_FOUND_MESSAGE =
+    'GitHub CLI (gh) was not found. Install it from https://cli.github.com and make sure it is on your PATH, then try again.';
   const ghRun: GhRunner = (args) =>
     new Promise((resolve) => {
-      execFile('gh', args, { windowsHide: true }, (err, stdout, stderr) => {
-        const code =
-          err && typeof (err as { code?: unknown }).code === 'number'
-            ? ((err as { code: number }).code)
-            : err
-              ? 1
-              : 0;
-        resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
-      });
+      // `gh auth status` / `logout` can stall on a locked keyring or a hidden
+      // credential prompt; without a timeout that blocks the single-threaded
+      // backend (and any awaiting /github/status request) indefinitely. Bound
+      // it and treat "gh not found" as a clear, non-hanging failure.
+      execFile(
+        'gh',
+        args,
+        { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 },
+        (err, stdout, stderr) => {
+          const enoent =
+            !!err && (err as { code?: unknown }).code === 'ENOENT';
+          const code =
+            err && typeof (err as { code?: unknown }).code === 'number'
+              ? ((err as { code: number }).code)
+              : err
+                ? 1
+                : 0;
+          resolve({
+            code,
+            stdout: stdout ?? '',
+            stderr: enoent ? GH_NOT_FOUND_MESSAGE : stderr ?? '',
+          });
+        },
+      );
     });
   const githubAuth = createGithubAuth({ run: ghRun });
   // Capture the current `gh` token into this process's env so every spawned
@@ -726,13 +743,15 @@ function main(): void {
           ['auth', 'login', '--with-token'],
           { windowsHide: true, timeout: 20_000 },
           (err, _stdout, stderr) => {
+            const enoent =
+              !!err && (err as { code?: unknown }).code === 'ENOENT';
             const code =
               err && typeof (err as { code?: unknown }).code === 'number'
                 ? (err as { code: number }).code
                 : err
                   ? 1
                   : 0;
-            resolve({ code, stderr: stderr ?? '' });
+            resolve({ code, stderr: enoent ? GH_NOT_FOUND_MESSAGE : stderr ?? '' });
           },
         );
         child.stdin?.end(`${token}\n`);
