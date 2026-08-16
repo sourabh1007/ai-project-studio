@@ -60,7 +60,7 @@ function parseNameStatus(output: string): { path: string; status: PrChangeKind }
     }
     const cols = line.split('\t');
     const status = toChangeKind(cols[0].charAt(0));
-    const path = cols[cols.length - 1].trim();
+    const path = unquoteGitPath(cols[cols.length - 1].trim());
     if (path.length > 0) {
       rows.push({ path, status });
     }
@@ -71,6 +71,34 @@ function parseNameStatus(output: string): { path: string; status: PrChangeKind }
 /** Strips a leading `a/` or `b/` diff prefix from a header path. */
 function stripDiffPrefix(value: string): string {
   return value.replace(/^[ab]\//, '');
+}
+
+/**
+ * Decodes a git "C-quoted" path back to its literal form. When a path contains
+ * non-ASCII bytes (or other special characters) git wraps it in double quotes
+ * and escapes each such byte as an octal `\ooo` sequence — and it does so in
+ * BOTH `--name-status` and the unified-diff `---`/`+++`/`diff --git` headers.
+ * Left undecoded, the two representations key differently and a file's diff is
+ * silently dropped. Decoding both sides to the same literal UTF-8 path keeps
+ * every changed file matched to its patch. Non-quoted paths pass through
+ * untouched.
+ */
+function unquoteGitPath(value: string): string {
+  if (!value.startsWith('"')) {
+    return value;
+  }
+  const body = value.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === '\\') {
+      bytes.push(parseInt(body.slice(i + 1, i + 4), 8) & 0xff);
+      i += 3;
+    } else {
+      bytes.push(ch.charCodeAt(0));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 /**
@@ -89,8 +117,13 @@ function splitPatchByFile(patch: string): Map<string, string> {
     if (lines.length === 0) {
       return;
     }
-    const resolve = (value: string | null): string | null =>
-      value && value !== '/dev/null' ? stripDiffPrefix(value) : null;
+    const resolve = (value: string | null): string | null => {
+      if (!value) {
+        return null;
+      }
+      const unquoted = unquoteGitPath(value);
+      return unquoted === '/dev/null' ? null : stripDiffPrefix(unquoted);
+    };
     const path = resolve(plusPath) ?? resolve(minusPath) ?? headerPath;
     if (path) {
       byPath.set(path, lines.join('\n'));
@@ -270,15 +303,30 @@ export function createPrDiffCollector(deps: PrDiffCollectorDeps): PrDiffCollecto
       // maxPatchChars cutoff; each file is still bounded to maxFileDiffChars.
       const perFile = splitPatchByFile(patchRaw);
       const fileMax = deps.config.maxFileDiffChars;
-      const entries: PrDiffEntry[] = parseNameStatus(nameStatus).map((row) => {
-        const filePatch = perFile.get(row.path) ?? '';
-        return {
+      const clampFile = (text: string): string =>
+        text.length > fileMax ? text.slice(0, fileMax) : text;
+
+      const entries: PrDiffEntry[] = [];
+      for (const row of parseNameStatus(nameStatus)) {
+        let filePatch = perFile.get(row.path) ?? '';
+        // Guarantee a per-file diff is never missing: when the whole-PR patch
+        // could not be split into a segment for this path (unusual diff header,
+        // pathological rename, etc.), ask git for just this file's diff directly.
+        if (filePatch.length === 0) {
+          const direct = await deps.git.run(
+            ['diff', range, '--', row.path],
+            request.worktreePath,
+          );
+          if (direct.code === 0) {
+            filePatch = direct.stdout;
+          }
+        }
+        entries.push({
           path: row.path,
           status: row.status,
-          patch:
-            filePatch.length > fileMax ? filePatch.slice(0, fileMax) : filePatch,
-        };
-      });
+          patch: clampFile(filePatch),
+        });
+      }
       const files = entries.map((entry) => entry.path);
 
       return {

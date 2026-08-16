@@ -183,6 +183,83 @@ describe('createPrDiffCollector', () => {
     expect(diff.entries).toEqual([{ path: 'a.ts', status: 'modified', patch: '' }]);
   });
 
+  it('recovers a missing per-file diff via a direct git-diff fallback', async () => {
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'diff --stat origin/main...HEAD': ok('stat'),
+      'diff --name-status origin/main...HEAD': ok('M\ta.ts'),
+      // The whole-PR patch has a header the splitter can't attribute to a.ts.
+      'diff origin/main...HEAD': ok('diff --git weird-header\nbody'),
+      // ...but a direct per-file diff recovers it.
+      'diff origin/main...HEAD -- a.ts': ok(
+        'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new',
+      ),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.entries[0].patch).toContain('+new');
+    expect(
+      calls.some((c) => c.args.join(' ') === 'diff origin/main...HEAD -- a.ts'),
+    ).toBe(true);
+  });
+
+  it('keeps the patch empty when the direct fallback also fails', async () => {
+    const { git } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'diff --stat origin/main...HEAD': ok('stat'),
+      'diff --name-status origin/main...HEAD': ok('M\ta.ts'),
+      'diff origin/main...HEAD': ok('no segment here'),
+      'diff origin/main...HEAD -- a.ts': fail(),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.entries).toEqual([{ path: 'a.ts', status: 'modified', patch: '' }]);
+  });
+
+  it('matches a git-quoted non-ASCII path between name-status and the patch', async () => {
+    // git C-quotes non-ASCII bytes as octal in BOTH --name-status and the diff
+    // headers; the collector must decode both to the same literal path so the
+    // file keeps its diff instead of falling through to an empty patch.
+    const patch = [
+      'diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"',
+      'index 111..222 100644',
+      '--- "a/caf\\303\\251.ts"',
+      '+++ "b/caf\\303\\251.ts"',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const { git, calls } = gitStub({
+      'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
+      'diff --stat origin/main...HEAD': ok('stat'),
+      'diff --name-status origin/main...HEAD': ok('M\t"caf\\303\\251.ts"'),
+      'diff origin/main...HEAD': ok(patch),
+    });
+    const collector = createPrDiffCollector({ git, config: cfg(1000) });
+
+    const diff = await collector.collect({
+      worktreePath: 'C:\\wt',
+      baseBranch: 'main',
+    });
+
+    expect(diff.files).toEqual(['café.ts']);
+    expect(diff.entries[0].patch).toContain('+new');
+    // The split attributed the diff, so no per-file fallback was needed.
+    expect(
+      calls.some((c) => c.args[0] === 'diff' && c.args.includes('--')),
+    ).toBe(false);
+  });
+
   it('degrades to a two-dot range when no merge-base exists (rebased/shallow PR)', async () => {
     const { git, calls } = gitStub({
       'rev-parse --verify --quiet origin/main^{commit}': ok('abc'),
