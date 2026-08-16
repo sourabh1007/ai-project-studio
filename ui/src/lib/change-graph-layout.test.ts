@@ -11,6 +11,7 @@ import {
   COL_GAP,
   COLLAPSED_BOX_H,
   findNode,
+  fitZoom,
   formatEdgeLabel,
   LABEL_CHAR_W,
   layerBoxes,
@@ -692,5 +693,32 @@ describe('buildFocusedChangeGraphLayout', () => {
     ]);
     expect(layout.edges).toHaveLength(2);
     expect(layout.edges.every((edge) => edge.highlightsChanges)).toBe(false);
+  });
+});
+
+describe('fitZoom', () => {
+  it('scales a graph wider than the viewport down to fit', () => {
+    // Width is the tighter constraint: 800/1600 = 0.5.
+    expect(fitZoom(800, 600, 1600, 400)).toBe(0.5);
+  });
+
+  it('uses the tighter of the width and height ratios', () => {
+    // Height is the tighter constraint: 300/1200 = 0.25 (clamped by min below).
+    expect(fitZoom(1000, 300, 1000, 1200, 0.1)).toBeCloseTo(0.25, 5);
+  });
+
+  it('never upscales a graph smaller than the viewport past 100%', () => {
+    expect(fitZoom(2000, 2000, 400, 300)).toBe(1);
+  });
+
+  it('clamps very large graphs to the minimum zoom', () => {
+    expect(fitZoom(100, 100, 5000, 5000, 0.4)).toBe(0.4);
+  });
+
+  it('returns 1 when the viewport or graph has no measurable size', () => {
+    expect(fitZoom(0, 600, 1600, 400)).toBe(1);
+    expect(fitZoom(800, 0, 1600, 400)).toBe(1);
+    expect(fitZoom(800, 600, 0, 400)).toBe(1);
+    expect(fitZoom(800, 600, 1600, 0)).toBe(1);
   });
 });

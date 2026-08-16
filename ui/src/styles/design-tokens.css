@@ -149,6 +149,12 @@
   --activity-fg: #7c8bb0;
   --activity-fg-active: #c7ccff;
 
+  /* Editor chrome is dark in dark mode; without this the token falls back to
+     the light-theme value set on :root, rendering dark-on-dark (e.g. the active
+     workspace tab label). */
+  --editor-fg: #e6ebf7;
+  --editor-fg-muted: #94a0c0;
+
   /* Per-feature identity palette — brighter variants for dark surfaces. */
   --feature-color-1: #818cf8;
   --feature-color-2: #22d3ee;

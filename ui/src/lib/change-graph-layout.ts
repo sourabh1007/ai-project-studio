@@ -699,3 +699,25 @@ export function findNode(
 ): ChangeGraphNode | null {
   return step.nodes.find((node) => node.path === path) ?? null;
 }
+
+/**
+ * The zoom multiplier that fits a natural graph size (`viewW`×`viewH`) inside
+ * the available viewport (`availW`×`availH`) so the whole diagram is visible on
+ * load instead of overflowing the card. The result is clamped so a small graph
+ * is never upscaled past 100%, and a very large graph never shrinks below `min`
+ * (staying legible and scrollable). Non-positive inputs — an unmeasured or
+ * empty canvas — yield the neutral 1× so the caller renders at natural size.
+ */
+export function fitZoom(
+  availW: number,
+  availH: number,
+  viewW: number,
+  viewH: number,
+  min = 0.4,
+): number {
+  if (availW <= 0 || availH <= 0 || viewW <= 0 || viewH <= 0) {
+    return 1;
+  }
+  const fit = Math.min(availW / viewW, availH / viewH);
+  return Math.min(1, Math.max(min, fit));
+}

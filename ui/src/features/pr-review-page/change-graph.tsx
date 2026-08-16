@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   findNode,
+  fitZoom,
   formatEdgeLabel,
   NODE_H,
 } from '../../lib/change-graph-layout.js';
@@ -20,8 +21,9 @@ import {
   FileLevelThreads,
   type PrCommentsController,
 } from './pr-comments.js';
-import { GraphChat, type GraphChatSend } from './graph-chat.js';
-import { AiIcon } from '../../components/icons.js';
+import { GraphChat, FindingChat, type GraphChatSend } from './graph-chat.js';
+import { AiIcon, AiChatIcon } from '../../components/icons.js';
+import { rightSideLines } from '../../lib/diff-lines.js';
 
 /** Placeholders the backend writes for a file whose English is not yet produced. */
 const UNEXPLAINED_WHAT_IT_DOES = 'No description was produced for this file.';
@@ -120,6 +122,40 @@ function useDragOffsets(zoom: number) {
   });
 
   return { of, reset, handlers, movedRef: moved };
+}
+
+/** A positioned rectangle (already including any drag offset). */
+interface ExtentRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The bounding extent of all graph content, never smaller than the base layout
+ * size. Because dragged nodes/boxes carry offsets that can push them outside the
+ * original layout box (in any direction), the SVG viewBox must grow to enclose
+ * them — otherwise the diagram is clipped/truncated the moment a tile is dragged
+ * past an edge. `minX`/`minY` can go negative (drag up/left); callers translate
+ * the content by `pad - min` so nothing is ever cut off and scrollbars appear.
+ */
+function contentExtent(
+  baseW: number,
+  baseH: number,
+  rects: ExtentRect[],
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = 0;
+  let minY = 0;
+  let maxX = baseW;
+  let maxY = baseH;
+  for (const r of rects) {
+    if (r.x < minX) minX = r.x;
+    if (r.y < minY) minY = r.y;
+    if (r.x + r.w > maxX) maxX = r.x + r.w;
+    if (r.y + r.h > maxY) maxY = r.y + r.h;
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 /**
@@ -338,27 +374,82 @@ function FocusedFileGraph({
   category,
   focusPath,
   onNavigate,
+  onChat,
 }: {
   step: ChangeGraphStep;
   category: ChangeGraphCategory;
   focusPath: string;
   /** Opens another node's file popup when its tile is clicked. */
   onNavigate?: (path: string) => void;
+  /** Sends a turn of the "explain this diagram" chat; enables the AI panel. */
+  onChat?: GraphChatSend;
 }) {
+  const [showCallers, setShowCallers] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  // Whether any external caller (blue boundary node) exists for this category,
+  // so the toggle can be disabled when there is nothing to reveal.
+  const hasBoundary = useMemo(
+    () =>
+      step.nodes.some(
+        (node) => node.category === category && node.kind === 'boundary',
+      ),
+    [step.nodes, category],
+  );
+  // With callers hidden, drop boundary nodes of this category (and any edge that
+  // touches them) so the focused view shows only the change and its real
+  // neighbours instead of a hairball of external callers.
+  const layoutStep = useMemo<ChangeGraphStep>(() => {
+    if (showCallers) {
+      return step;
+    }
+    const nodes = step.nodes.filter(
+      (node) => !(node.category === category && node.kind === 'boundary'),
+    );
+    const remaining = new Set(nodes.map((node) => node.path));
+    const edges = step.edges.filter(
+      (edge) => remaining.has(edge.from) && remaining.has(edge.to),
+    );
+    return { ...step, nodes, edges };
+  }, [step, category, showCallers]);
   const layout = useChangeGraphLayout({
     kind: 'focused',
-    step,
+    step: layoutStep,
     category,
     focusPath,
   });
-  const viewW = Math.max(360, layout.width + FOCUSED_CANVAS_PAD * 2);
-  const viewH = Math.max(132, layout.height + FOCUSED_CANVAS_PAD * 2);
 
   const [zoom, setZoom] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Per-file drag offsets so the user can pull individual nodes apart at will.
   const nodeDrag = useDragOffsets(zoom);
+  // Grow the viewBox to enclose every node including its live drag offset, so a
+  // node dragged past the original layout edge is never clipped; the content is
+  // then translated by `pad - min` and the scroll container reveals the rest.
+  const { minX, minY, maxX, maxY } = contentExtent(
+    layout.width,
+    layout.height,
+    layout.nodes.map((n) => {
+      const off = nodeDrag.of(n.path);
+      return { x: n.x + off.dx, y: n.y + off.dy, w: n.width, h: NODE_H };
+    }),
+  );
+  const viewW = Math.max(360, maxX - minX + FOCUSED_CANVAS_PAD * 2);
+  const viewH = Math.max(132, maxY - minY + FOCUSED_CANVAS_PAD * 2);
+  const originX = FOCUSED_CANVAS_PAD - minX;
+  const originY = FOCUSED_CANVAS_PAD - minY;
+  // Fit the focused graph within its visible canvas on load and when the
+  // available space changes, so it opens fully visible instead of overflowing.
+  // Keyed on natural size + fullscreen (not zoom) so manual zoom is preserved.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    setZoom(fitZoom(el.clientWidth, el.clientHeight, viewW, viewH));
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
+  }, [viewW, viewH, fullscreen]);
   const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(
     null,
   );
@@ -440,7 +531,7 @@ function FocusedFileGraph({
           <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
         </marker>
       </defs>
-      <g transform={`translate(${FOCUSED_CANVAS_PAD} ${FOCUSED_CANVAS_PAD})`}>
+      <g transform={`translate(${originX} ${originY})`}>
         {layout.edges.map((edge) => {
           const label = formatEdgeLabel(edge.calls);
           const highlighted = edge.highlightsChanges;
@@ -534,6 +625,33 @@ function FocusedFileGraph({
 
   const controls = (
     <div className="cg-controls" role="group" aria-label="Zoom controls">
+      {onChat && (
+        <button
+          type="button"
+          className={`cg-ai-toggle${chatOpen ? ' cg-ai-on' : ''}`}
+          onClick={() => setChatOpen((o) => !o)}
+          aria-pressed={chatOpen}
+          title="Explain this diagram and ask questions about it"
+        >
+          <AiIcon size={14} /> Explain
+        </button>
+      )}
+      <button
+        type="button"
+        className={`cg-callers-toggle${showCallers ? ' cg-callers-on' : ''}`}
+        onClick={() => setShowCallers((s) => !s)}
+        aria-pressed={showCallers}
+        disabled={!hasBoundary && !showCallers}
+        title={
+          !hasBoundary
+            ? 'No external callers were found for these changes'
+            : showCallers
+              ? 'Hide external callers to focus on the changed files'
+              : 'Show external callers (the files that call the changed code)'
+        }
+      >
+        {showCallers ? 'Hide callers' : 'Show external callers'}
+      </button>
       <button
         type="button"
         onClick={() => setZoom((z) => Math.min(2.4, z + 0.2))}
@@ -584,6 +702,13 @@ function FocusedFileGraph({
         {svg}
       </div>
       {controls}
+      {onChat && chatOpen && (
+        <GraphChat
+          category={category}
+          onSend={onChat}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
       {layout.edges.length === 0 && !fullscreen && (
         <p className="muted">No direct file connections were found for this file.</p>
       )}
@@ -614,6 +739,7 @@ function SelectionPanel({
   comments,
   onClose,
   onNavigate,
+  onChat,
 }: {
   step: ChangeGraphStep;
   node: ChangeGraphNode;
@@ -623,6 +749,8 @@ function SelectionPanel({
   onClose: () => void;
   /** Replaces the popup with another file's popup (clicked in the node graph). */
   onNavigate?: (path: string) => void;
+  /** Sends a turn of the focused diagram's "explain this" chat; enables it. */
+  onChat?: GraphChatSend;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -631,6 +759,7 @@ function SelectionPanel({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  const [activeFinding, setActiveFinding] = useState<number | null>(null);
   const label = node.path.split(/[\\/]/).pop() ?? node.path;
   if (node.kind === 'boundary') {
     return createPortal(
@@ -729,6 +858,7 @@ function SelectionPanel({
             category={category}
             focusPath={node.path}
             onNavigate={onNavigate}
+            onChat={onChat}
           />
         </div>
         <div className="cg-panel-section">
@@ -771,6 +901,21 @@ function SelectionPanel({
         {!pendingExplanation &&
           (() => {
             const findings = reviewFindings(node.review);
+            const anchorLine = (() => {
+              if (!node.diff) return null;
+              const rl = rightSideLines(node.diff);
+              const hit = rl.find((l) => l.kind === 'added') ?? rl[0];
+              return hit ? hit.line : null;
+            })();
+            const onFindingComment =
+              comments && anchorLine != null
+                ? async (body: string) =>
+                    (await comments.add({
+                      path: node.path,
+                      line: anchorLine,
+                      body,
+                    })) != null
+                : undefined;
             return (
               <div className="cg-panel-section">
                 <span className="cg-panel-label">Syntactic review</span>
@@ -781,7 +926,39 @@ function SelectionPanel({
                 ) : (
                   <ul className="cg-review-list">
                     {findings.map((finding, i) => (
-                      <li key={i}>{finding}</li>
+                      <li key={i} className="cg-finding">
+                        <div className="cg-finding-row">
+                          <span className="cg-finding-text">{finding}</span>
+                          {onChat && (
+                            <button
+                              type="button"
+                              className={`cg-finding-ai${
+                                activeFinding === i ? ' is-active' : ''
+                              }`}
+                              onClick={() =>
+                                setActiveFinding(
+                                  activeFinding === i ? null : i,
+                                )
+                              }
+                              aria-label="Discuss this finding with AI"
+                              aria-expanded={activeFinding === i}
+                              title="Discuss, fix, or comment with AI"
+                            >
+                              <AiChatIcon size={15} />
+                            </button>
+                          )}
+                        </div>
+                        {activeFinding === i && onChat && (
+                          <FindingChat
+                            finding={finding}
+                            filePath={node.path}
+                            category={category}
+                            onSend={onChat}
+                            onComment={onFindingComment}
+                            onClose={() => setActiveFinding(null)}
+                          />
+                        )}
+                      </li>
                     ))}
                   </ul>
                 )}
@@ -1003,8 +1180,39 @@ export function ChangeGraph({
   }
 
   const selectedNode = selected ? findNode(step, selected) : null;
-  const viewW = layout.width + CANVAS_PAD * 2;
-  const viewH = layout.height + CANVAS_PAD * 2;
+  // Grow the viewBox to enclose every box/node including its live drag offset so
+  // dragging a tile past the layout edge never clips the diagram; the content is
+  // shifted by `pad - min` and the scroll container reveals the overflow.
+  const { minX, minY, maxX, maxY } = contentExtent(layout.width, layout.height, [
+    ...layout.boxes.map((b) => {
+      const o = boxDrag.of(b.id);
+      return { x: b.x + o.dx, y: b.y + o.dy, w: b.width, h: b.height };
+    }),
+    ...layout.nodes.map((n) => {
+      const o = boxDrag.of(n.projectId);
+      return { x: n.x + o.dx, y: n.y + o.dy, w: n.width, h: NODE_H };
+    }),
+  ]);
+  const viewW = maxX - minX + CANVAS_PAD * 2;
+  const viewH = maxY - minY + CANVAS_PAD * 2;
+  const originX = CANVAS_PAD - minX;
+  const originY = CANVAS_PAD - minY;
+
+  // Fit the whole graph within the visible canvas on load (and whenever the
+  // available space changes, e.g. entering/leaving fullscreen) so a graph larger
+  // than the card is never clipped or overflowing on first paint. Runs after
+  // layout so the container is measured; keyed on the graph's natural size and
+  // fullscreen — not on `zoom` — so a later manual zoom is preserved until the
+  // graph itself changes size.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    setZoom(fitZoom(el.clientWidth, el.clientHeight, viewW, viewH));
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
+  }, [viewW, viewH, fullscreen]);
 
   function activate(node: { path: string }) {
     // A pan gesture ends with a synthetic click; ignore it so dragging the
@@ -1132,7 +1340,7 @@ export function ChangeGraph({
               </marker>
             </defs>
             <g
-              transform={`translate(${CANVAS_PAD} ${CANVAS_PAD})`}
+              transform={`translate(${originX} ${originY})`}
           >
             {layout.boxes.map((box) => {
               const canToggle = box.collapsed || collapsible.has(box.id);
@@ -1356,6 +1564,7 @@ export function ChangeGraph({
           comments={comments}
           onClose={() => setSelected(null)}
           onNavigate={(path) => activate({ path })}
+          onChat={onChat}
         />
       )}
     </>
