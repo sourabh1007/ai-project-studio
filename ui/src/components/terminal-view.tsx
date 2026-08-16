@@ -73,6 +73,21 @@ function desktopBridge(): DesktopClipboard | undefined {
 }
 
 /**
+ * Normalises copied terminal text to the host's clipboard line-ending
+ * convention. xterm's `getSelection()` joins rows with a bare LF, but on Windows
+ * the clipboard convention is CRLF — pasting LF-only text into Notepad and many
+ * native apps collapses every line onto one, which reads as "broken formatting".
+ * Converting to CRLF on Windows keeps multi-line copies correctly formatted;
+ * other platforms keep LF. The regex first strips any existing CR so the result
+ * is never doubled.
+ */
+function toClipboardText(text: string): string {
+  const isWindows =
+    typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+  return isWindows ? text.replace(/\r?\n/g, '\r\n') : text;
+}
+
+/**
  * Writes text to the OS clipboard as robustly as possible. In the packaged
  * desktop app this routes through Electron's native clipboard (reliable), then
  * falls back to the async Clipboard API and finally a synchronous
@@ -82,18 +97,19 @@ function copyToClipboard(text: string): void {
   if (!text) {
     return;
   }
+  const normalized = toClipboardText(text);
   const bridge = desktopBridge();
   if (bridge?.copyText) {
-    bridge.copyText(text);
+    bridge.copyText(normalized);
     return;
   }
   if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => {
-      legacyCopy(text);
+    navigator.clipboard.writeText(normalized).catch(() => {
+      legacyCopy(normalized);
     });
     return;
   }
-  legacyCopy(text);
+  legacyCopy(normalized);
 }
 
 /** Synchronous clipboard write via a transient textarea (browser fallback). */
@@ -305,16 +321,21 @@ export function TerminalView({
       copyToClipboard(text);
     };
 
-    // Copy-on-select: the hosted CLI enables any-event mouse tracking, so every
-    // mouse move is reported to the app, which re-renders and clears xterm's
-    // selection almost immediately — often before a following Ctrl+C can read
-    // it. Copying the moment a (non-empty) selection is made captures it while
-    // it still exists, so dragging to select reliably lands text on the OS
-    // clipboard (the familiar terminal "copy on select" behaviour).
+    // Copy-on-select, done right. The hosted CLI enables any-event mouse
+    // tracking, so every mouse move is reported to the app, which re-renders and
+    // can clear xterm's visual selection mid-drag — often before a following
+    // Ctrl+C could read it. So we CACHE the latest non-empty selection here (a
+    // cheap ref update, NOT a clipboard write) and copy it once at the end of a
+    // drag (see the mouseup handler). Writing to the OS clipboard on every
+    // selection change — as this did before — clobbered whatever the user had
+    // copied elsewhere on any stray click/drag in the terminal.
+    let lastSelection = '';
+    let selectedDuringDrag = false;
     const selectionSub = term.onSelectionChange(() => {
       const selection = term.getSelection();
       if (selection) {
-        copyToClipboard(selection);
+        lastSelection = selection;
+        selectedDuringDrag = true;
       }
     });
 
@@ -427,10 +448,24 @@ export function TerminalView({
       }
     };
     const onHostMouseDown = () => {
+      // Start of a fresh interaction: reset the copy-on-select capture so a
+      // plain click (no drag) never copies and never clobbers the clipboard.
+      selectedDuringDrag = false;
+      lastSelection = '';
       // Defer so xterm's own selection/focus handling runs first.
       timeoutIds.push(window.setTimeout(refocus, 0));
     };
     host.addEventListener('mousedown', onHostMouseDown);
+    // Copy-on-select fires exactly once, at the END of a drag that actually
+    // selected text — using the cached selection so it survives the TUI's
+    // mid-drag re-render. A click with no drag selects nothing and copies
+    // nothing, so the user's existing clipboard is left untouched.
+    const onHostMouseUp = () => {
+      if (selectedDuringDrag && lastSelection) {
+        copyToClipboard(lastSelection);
+      }
+    };
+    host.addEventListener('mouseup', onHostMouseUp);
     window.addEventListener('focus', refocus);
 
     ws.onopen = () => {
@@ -466,6 +501,7 @@ export function TerminalView({
       window.removeEventListener('resize', applyFitSettled);
       window.removeEventListener('focus', refocus);
       host.removeEventListener('mousedown', onHostMouseDown);
+      host.removeEventListener('mouseup', onHostMouseUp);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('paste', onPaste, { capture: true });
       observer?.disconnect();
