@@ -32,6 +32,13 @@ export interface ProvisionedWorktree {
   worktreePath: string;
   /** Local branch the worktree tracks the PR head on. */
   branch: string;
+  /**
+   * True when `branch` is the PR's own head branch, tracking its `origin`
+   * remote, so commits pushed from a session update the pull request. False for
+   * fork PRs (whose head branch is not on `origin`), where a detached `pr-<n>`
+   * review branch is used instead.
+   */
+  tracksPullRequest: boolean;
 }
 
 /** Where a PR's worktree lives: a sibling `.ai-worktrees` dir next to the repo. */
@@ -109,10 +116,14 @@ export function describeFetchFailure(
  * without the user having to manually favourite/publish the branch first.
  *
  * The PR head is always fetched fresh from `origin` into `FETCH_HEAD`, so a
- * review reflects the latest remote state even when a local `pr-<n>` branch
- * already exists. A pre-existing worktree is reused but hard-reset to the freshly
- * fetched head; otherwise the worktree is created with its branch (re)pointed at
- * that head.
+ * review reflects the latest remote state even when the worktree already exists.
+ *
+ * The worktree is checked out on the PR's *own* head branch, tracking its
+ * `origin` remote branch, so commits made in a review session `git push`
+ * straight back onto the pull request. This requires the head branch to live on
+ * `origin` (same-repo PRs); a fork PR's head branch is not on `origin`, so we
+ * fall back to a detached `pr-<n>` review branch that still reflects the fetched
+ * head for reviewing but is not pushable to the PR.
  *
  * `FETCH_HEAD` is per-worktree, so the ref written by the fetch (run in the main
  * checkout) is invisible to the PR worktree's own git dir — a `reset --hard
@@ -125,7 +136,6 @@ export async function provisionPrWorktree(
   input: ProvisionPrWorktreeInput,
 ): Promise<ProvisionedWorktree> {
   const worktreePath = prWorktreePath(input.repoLocalPath, input.number);
-  const branch = `pr-${input.number}`;
 
   const candidateRefs =
     input.provider === 'github'
@@ -165,47 +175,77 @@ export async function provisionPrWorktree(
   }
   const headSha = revParse.stdout.trim();
 
+  // Populate the head branch's remote-tracking ref so we can put the worktree on
+  // a like-named local branch that tracks it. When the branch is not on `origin`
+  // (a fork PR, or an Azure branch reached only via the merge ref) this fetch
+  // fails and we keep the detached `pr-<n>` review branch.
+  const trackFetch = input.sourceBranch
+    ? await deps.git([
+        '-C',
+        input.repoLocalPath,
+        'fetch',
+        'origin',
+        `+${input.sourceBranch}:refs/remotes/origin/${input.sourceBranch}`,
+      ])
+    : { code: 1, stdout: '', stderr: '' };
+  const tracksPullRequest = trackFetch.code === 0;
+  const branch = tracksPullRequest ? input.sourceBranch : `pr-${input.number}`;
+
   if (deps.pathExists(worktreePath)) {
-    const reset = await deps.git([
+    const checkout = await deps.git([
       '-c',
       'core.longpaths=true',
       '-C',
       worktreePath,
-      'reset',
-      '--hard',
+      'checkout',
+      '-f',
+      '-B',
+      branch,
       headSha,
     ]);
-    if (reset.code !== 0) {
+    if (checkout.code !== 0) {
       throw new ValidationError(
         describeWorktreeFailure(
-          reset.stderr,
+          checkout.stderr,
           'Failed to update the review worktree',
         ),
       );
     }
-    return { worktreePath, branch };
+  } else {
+    const add = await deps.git([
+      '-c',
+      'core.longpaths=true',
+      '-C',
+      input.repoLocalPath,
+      'worktree',
+      'add',
+      '--force',
+      '-B',
+      branch,
+      worktreePath,
+      headSha,
+    ]);
+    if (add.code !== 0) {
+      throw new ValidationError(
+        describeWorktreeFailure(
+          add.stderr,
+          'Failed to create the review worktree',
+        ),
+      );
+    }
   }
 
-  const add = await deps.git([
-    '-c',
-    'core.longpaths=true',
-    '-C',
-    input.repoLocalPath,
-    'worktree',
-    'add',
-    '--force',
-    '-B',
-    branch,
-    worktreePath,
-    headSha,
-  ]);
-  if (add.code !== 0) {
-    throw new ValidationError(
-      describeWorktreeFailure(
-        add.stderr,
-        'Failed to create the review worktree',
-      ),
-    );
+  if (tracksPullRequest) {
+    // Best-effort: link the local branch to its remote so a bare `git push` from
+    // a session updates the PR. A failure here still leaves a usable worktree.
+    await deps.git([
+      '-C',
+      worktreePath,
+      'branch',
+      `--set-upstream-to=origin/${input.sourceBranch}`,
+      branch,
+    ]);
   }
-  return { worktreePath, branch };
+
+  return { worktreePath, branch, tracksPullRequest };
 }

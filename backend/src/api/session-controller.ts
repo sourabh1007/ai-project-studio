@@ -26,6 +26,13 @@ export interface SessionControllerDeps {
   admin: WorkspaceAdmin;
   history?: CopilotHistoryReader;
   logger: Logger;
+  /**
+   * Resolves the working directory a feature's sessions must run in — the PR
+   * worktree for PR-review features, otherwise the repo checkout. When it
+   * returns a path that path wins over any client-supplied `cwd`, so every
+   * session under a PR feature shares the one PR branch/worktree.
+   */
+  resolveCwd?: (featureId: string) => string | undefined;
 }
 
 function includeInternal(query: string | undefined): boolean {
@@ -70,10 +77,12 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       path: '/features/:featureId/sessions',
       handler: async (req) => {
         const input = parseInput(startSessionSchema, req.body);
+        const pinnedCwd = deps.resolveCwd?.(req.params.featureId);
         const launched = await deps.launcher.start({
           featureId: req.params.featureId,
           ...input,
           prompt: input.prompt,
+          cwd: pinnedCwd ?? input.cwd,
         });
         launched.completion.catch((error) =>
           deps.logger.error('Session run failed', error),

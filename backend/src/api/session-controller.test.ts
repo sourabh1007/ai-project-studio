@@ -45,6 +45,7 @@ function harness(
     listAll?: Session[];
     historySummary?: string | null;
     historyFirstUserMessage?: string | null;
+    resolveCwd?: (featureId: string) => string | undefined;
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
@@ -109,6 +110,7 @@ function harness(
     admin,
     history,
     logger,
+    resolveCwd: options.resolveCwd,
   });
   return { routes, requests, logs, deleted, renamed };
 }
@@ -128,8 +130,34 @@ describe('session-controller', () => {
     });
   });
 
-  it('preserves meta prompts', async () => {
-    const h = harness(Promise.resolve(session));
+  it('pins the launch cwd to the resolved feature worktree, overriding client cwd', async () => {
+    const worktree = 'C:/work/.ai-worktrees/app-pr-42';
+    const h = harness(Promise.resolve(session), undefined, {
+      resolveCwd: (id) => (id === 'f1' ? worktree : undefined),
+    });
+    await pick(h.routes, 'post', '/features/:featureId/sessions')(
+      req({
+        params: { featureId: 'f1' },
+        body: { prompt: 'hello', cwd: 'C:/somewhere/else' },
+      }),
+    );
+    expect(h.requests[0].cwd).toBe(worktree);
+  });
+
+  it('falls back to the client cwd when no worktree is pinned for the feature', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      resolveCwd: () => undefined,
+    });
+    await pick(h.routes, 'post', '/features/:featureId/sessions')(
+      req({
+        params: { featureId: 'f1' },
+        body: { prompt: 'hello', cwd: 'C:/client/cwd' },
+      }),
+    );
+    expect(h.requests[0].cwd).toBe('C:/client/cwd');
+  });
+
+  it('preserves meta prompts', async () => {    const h = harness(Promise.resolve(session));
     await pick(h.routes, 'post', '/features/:featureId/sessions')(
       req({ params: { featureId: 'f1' }, body: { prompt: 'hello', kind: 'meta' } }),
     );

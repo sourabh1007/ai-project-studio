@@ -84,6 +84,12 @@ export interface ApiRoutesDeps {
   sessionConfig: SessionConfig;
   sessions: SessionRepo;
   sessionHistory: CopilotHistoryReader;
+  /**
+   * Resolves the working directory a feature's sessions must launch in (PR
+   * worktree for PR features, else repo checkout). Threaded to the session
+   * launcher so `/features/:id/sessions` pins the cwd like the terminal path.
+   */
+  resolveSessionCwd?: (featureId: string) => string | undefined;
   providers: ProviderRegistry;
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
@@ -166,6 +172,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       admin: deps.admin,
       history: deps.sessionHistory,
       logger: deps.logger,
+      resolveCwd: deps.resolveSessionCwd,
     }),
     ...createTerminalRoutes({
       resolver: deps.resolver,

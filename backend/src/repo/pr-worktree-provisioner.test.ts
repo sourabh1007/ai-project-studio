@@ -31,14 +31,18 @@ describe('prWorktreePath', () => {
 });
 
 describe('provisionPrWorktree', () => {
-  it('fetches the GitHub pull ref into FETCH_HEAD and adds a forced worktree', async () => {
-    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc123\n', stderr: '' }, ok]);
+  it('checks out the GitHub PR head branch tracking origin and adds a forced worktree', async () => {
+    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc123\n', stderr: '' }]);
     const result = await provisionPrWorktree(
       { git, pathExists: () => false },
-      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'ignored' },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'feature-x' },
     );
     const worktreePath = prWorktreePath(repoLocalPath, 12);
-    expect(result).toEqual({ worktreePath, branch: 'pr-12' });
+    expect(result).toEqual({
+      worktreePath,
+      branch: 'feature-x',
+      tracksPullRequest: true,
+    });
     expect(calls[0]).toEqual([
       '-C',
       repoLocalPath,
@@ -48,6 +52,13 @@ describe('provisionPrWorktree', () => {
     ]);
     expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
     expect(calls[2]).toEqual([
+      '-C',
+      repoLocalPath,
+      'fetch',
+      'origin',
+      '+feature-x:refs/remotes/origin/feature-x',
+    ]);
+    expect(calls[3]).toEqual([
       '-c',
       'core.longpaths=true',
       '-C',
@@ -56,15 +67,57 @@ describe('provisionPrWorktree', () => {
       'add',
       '--force',
       '-B',
-      'pr-12',
+      'feature-x',
       worktreePath,
       'abc123',
     ]);
+    expect(calls[4]).toEqual([
+      '-C',
+      worktreePath,
+      'branch',
+      '--set-upstream-to=origin/feature-x',
+      'feature-x',
+    ]);
   });
 
-  it('fetches the Azure source branch into FETCH_HEAD', async () => {
-    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc123\n', stderr: '' }, ok]);
-    await provisionPrWorktree(
+  it('falls back to a detached pr-<n> branch when the head branch is not on origin (fork PR)', async () => {
+    const { git, calls } = gitRecorder([
+      ok,
+      { code: 0, stdout: 'abc123\n', stderr: '' },
+      { code: 1, stdout: '', stderr: "couldn't find remote ref feature-x" },
+    ]);
+    const worktreePath = prWorktreePath(repoLocalPath, 12);
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => false },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'feature-x' },
+    );
+    expect(result).toEqual({
+      worktreePath,
+      branch: 'pr-12',
+      tracksPullRequest: false,
+    });
+    expect(calls[3][calls[3].length - 2]).toBe(worktreePath);
+    expect(calls[3]).toContain('pr-12');
+    // No upstream is set for a fork fallback.
+    expect(calls).toHaveLength(4);
+  });
+
+  it('does not attempt tracking when the source branch is unknown', async () => {
+    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc\n', stderr: '' }]);
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => false },
+      { repoLocalPath, provider: 'github', number: 9, sourceBranch: '' },
+    );
+    expect(result.branch).toBe('pr-9');
+    expect(result.tracksPullRequest).toBe(false);
+    // fetch head, rev-parse, worktree add — no track fetch, no set-upstream.
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toContain('worktree');
+  });
+
+  it('checks out the Azure source branch tracking origin', async () => {
+    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc123\n', stderr: '' }]);
+    const result = await provisionPrWorktree(
       { git, pathExists: () => false },
       {
         repoLocalPath,
@@ -73,6 +126,8 @@ describe('provisionPrWorktree', () => {
         sourceBranch: 'topic/x',
       },
     );
+    expect(result.branch).toBe('topic/x');
+    expect(result.tracksPullRequest).toBe(true);
     expect(calls[0]).toEqual([
       '-C',
       repoLocalPath,
@@ -80,21 +135,32 @@ describe('provisionPrWorktree', () => {
       'origin',
       'topic/x',
     ]);
+    expect(calls[2]).toEqual([
+      '-C',
+      repoLocalPath,
+      'fetch',
+      'origin',
+      '+topic/x:refs/remotes/origin/topic/x',
+    ]);
   });
 
-  it('falls back to the PR merge ref when the Azure source branch is not resolvable', async () => {
+  it('falls back to the PR merge ref then a detached branch when the Azure source branch is not resolvable', async () => {
     const { git, calls } = gitRecorder([
       { code: 1, stdout: '', stderr: "fatal: couldn't find remote ref topic/x" },
       { code: 0, stdout: '', stderr: '' },
       { code: 0, stdout: 'sha789\n', stderr: '' },
-      ok,
+      { code: 1, stdout: '', stderr: 'no branch' },
     ]);
     const worktreePath = prWorktreePath(repoLocalPath, 7);
     const result = await provisionPrWorktree(
       { git, pathExists: () => false },
       { repoLocalPath, provider: 'azure-devops', number: 7, sourceBranch: 'topic/x' },
     );
-    expect(result).toEqual({ worktreePath, branch: 'pr-7' });
+    expect(result).toEqual({
+      worktreePath,
+      branch: 'pr-7',
+      tracksPullRequest: false,
+    });
     expect(calls[0]).toEqual(['-C', repoLocalPath, 'fetch', 'origin', 'topic/x']);
     expect(calls[1]).toEqual([
       '-C',
@@ -104,7 +170,14 @@ describe('provisionPrWorktree', () => {
       'refs/pull/7/merge',
     ]);
     expect(calls[2]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
-    expect(calls[3][calls[3].length - 1]).toBe('sha789');
+    expect(calls[3]).toEqual([
+      '-C',
+      repoLocalPath,
+      'fetch',
+      'origin',
+      '+topic/x:refs/remotes/origin/topic/x',
+    ]);
+    expect(calls[4][calls[4].length - 1]).toBe('sha789');
   });
 
   it('surfaces favourite/publish guidance when no Azure ref can be fetched', async () => {
@@ -124,14 +197,18 @@ describe('provisionPrWorktree', () => {
     ).rejects.toThrow(/favourite \/ publish it/i);
   });
 
-  it('reuses an existing worktree but resets it to the freshly fetched head', async () => {
-    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'def456\n', stderr: '' }, ok]);
+  it('reuses an existing worktree, force-switching it to the freshly fetched head branch', async () => {
+    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'def456\n', stderr: '' }]);
     const worktreePath = prWorktreePath(repoLocalPath, 3);
     const result = await provisionPrWorktree(
       { git, pathExists: () => true },
-      { repoLocalPath, provider: 'github', number: 3, sourceBranch: 'b' },
+      { repoLocalPath, provider: 'github', number: 3, sourceBranch: 'feat' },
     );
-    expect(result).toEqual({ worktreePath, branch: 'pr-3' });
+    expect(result).toEqual({
+      worktreePath,
+      branch: 'feat',
+      tracksPullRequest: true,
+    });
     expect(calls[0]).toEqual([
       '-C',
       repoLocalPath,
@@ -140,14 +217,23 @@ describe('provisionPrWorktree', () => {
       'pull/3/head',
     ]);
     expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
-    expect(calls[2]).toEqual([
+    expect(calls[3]).toEqual([
       '-c',
       'core.longpaths=true',
       '-C',
       worktreePath,
-      'reset',
-      '--hard',
+      'checkout',
+      '-f',
+      '-B',
+      'feat',
       'def456',
+    ]);
+    expect(calls[4]).toEqual([
+      '-C',
+      worktreePath,
+      'branch',
+      '--set-upstream-to=origin/feat',
+      'feat',
     ]);
   });
 
@@ -191,10 +277,11 @@ describe('provisionPrWorktree', () => {
     ).rejects.toThrow('Failed to resolve the fetched head for pull request #9');
   });
 
-  it('throws when the worktree reset fails for an existing worktree', async () => {
+  it('throws when the checkout fails for an existing worktree', async () => {
     const { git } = gitRecorder([
       ok,
       { code: 0, stdout: 'abc\n', stderr: '' },
+      ok,
       { code: 1, stdout: '', stderr: 'dirty' },
     ]);
     await expect(
@@ -205,10 +292,11 @@ describe('provisionPrWorktree', () => {
     ).rejects.toThrow('dirty');
   });
 
-  it('throws a default message when the reset fails without stderr', async () => {
+  it('throws a default message when the checkout fails without stderr', async () => {
     const { git } = gitRecorder([
       ok,
       { code: 0, stdout: 'abc\n', stderr: '' },
+      ok,
       { code: 1, stdout: '', stderr: '' },
     ]);
     await expect(
@@ -223,6 +311,7 @@ describe('provisionPrWorktree', () => {
     const { git } = gitRecorder([
       ok,
       { code: 0, stdout: 'abc\n', stderr: '' },
+      ok,
       { code: 1, stdout: '', stderr: 'busy' },
     ]);
     await expect(
@@ -237,6 +326,7 @@ describe('provisionPrWorktree', () => {
     const { git } = gitRecorder([
       ok,
       { code: 0, stdout: 'abc\n', stderr: '' },
+      ok,
       {
         code: 1,
         stdout: '',

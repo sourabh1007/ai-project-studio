@@ -1657,6 +1657,7 @@ function main(): void {
       sessionConfig,
       sessions: sessionRepo,
       sessionHistory: copilotHistoryReader,
+      resolveSessionCwd,
       providers,
       aggregates: featureAnalytics,
       summarizer,
