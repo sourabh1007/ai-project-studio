@@ -52,7 +52,7 @@ extraResources:
 win:
   target:
     - nsis
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  artifactName: AI-Project-Studio-${version}-win-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -63,7 +63,7 @@ mac:
   target:
     - dmg
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  artifactName: AI-Project-Studio-${version}-mac-${arch}.${ext}
 
 # macOS artifacts are unsigned (no Apple Developer Program membership yet), so
 # skip signing-identity auto-discovery to keep CI green. Users bypass Gatekeeper
