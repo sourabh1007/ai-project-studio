@@ -333,6 +333,10 @@ import {
 import { createPrReviewService } from './pr-review/pr-review-service.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
 import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
+import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
+import { createJavaAnalyzer } from './pr-review/java-analyzer.js';
+import { createRustAnalyzer } from './pr-review/rust-analyzer.js';
+import { createCppAnalyzer } from './pr-review/cpp-analyzer.js';
 import { nodeChangeGraphFs } from './pr-review/change-graph-fs.js';
 import { createPrReviewReconciler } from './pr-review/pr-review-reconciler.js';
 import { createMetaUsageReader } from './pr-review/meta-usage-reader.js';
@@ -1475,7 +1479,13 @@ function main(): void {
   const prReviewService = createPrReviewService({
     reviews: prReviewRepo,
     diffs: prDiffCollector,
-    analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+    analyzers: createLanguageAnalyzerRegistry([
+      createCSharpAnalyzer(),
+      createJavaScriptAnalyzer(),
+      createJavaAnalyzer(),
+      createRustAnalyzer(),
+      createCppAnalyzer(),
+    ]),
     changeGraphFs: nodeChangeGraphFs,
     ai: warmMetaRunner ?? metaRunner,
     inlinePrompts: warmMetaRunner !== null,

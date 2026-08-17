@@ -24,10 +24,17 @@ export interface CommentStringOptions {
    * string prefixes, including the combined `$@"`/`@$"` forms.
    */
   csharp?: boolean;
+  /** Enable JavaScript/TypeScript template literals (backtick strings). */
+  templateLiterals?: boolean;
 }
 
 /** Scans a `\`-escaped literal from just after its opening quote. */
-function scanQuoted(source: string, start: number, quote: string): number {
+function scanQuoted(
+  source: string,
+  start: number,
+  quote: string,
+  allowNewline = false,
+): number {
   const n = source.length;
   let j = start;
   while (j < n) {
@@ -39,7 +46,7 @@ function scanQuoted(source: string, start: number, quote: string): number {
     if (ch === quote) {
       return j + 1;
     }
-    if (ch === '\n') {
+    if (ch === '\n' && !allowNewline) {
       // A non-verbatim literal cannot span lines; stop so an unterminated
       // quote never blanks the remainder of the file.
       return j;
@@ -133,6 +140,13 @@ export function blankCommentsAndStrings(
       continue;
     }
 
+    if (options.templateLiterals && c === '`') {
+      const end = scanQuoted(source, i + 1, '`', true);
+      blank(i, end);
+      i = end;
+      continue;
+    }
+
     i += 1;
   }
 
@@ -142,4 +156,9 @@ export function blankCommentsAndStrings(
 /** Replaces every match of `pattern` with an equal-length run of spaces. */
 export function blankMatches(code: string, pattern: RegExp): string {
   return code.replace(pattern, (match) => ' '.repeat(match.length));
+}
+
+/** Escapes a value for safe literal use inside a `RegExp`. */
+export function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

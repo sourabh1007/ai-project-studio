@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { blankCommentsAndStrings, blankMatches } from './analyzer-text.js';
+import {
+  blankCommentsAndStrings,
+  blankMatches,
+  escapeForRegExp,
+} from './analyzer-text.js';
 
 /** Asserts length is preserved and none of `hidden` survives in the output. */
 function expectBlanked(
@@ -106,6 +110,20 @@ describe('blankCommentsAndStrings', () => {
     const out = blankCommentsAndStrings('a $ b', { csharp: true });
     expect(out).toBe('a $ b');
   });
+
+  it('blanks a multi-line template literal when enabled', () => {
+    const src = 'x = `a\nStore ${y} b`;';
+    const out = blankCommentsAndStrings(src, { templateLiterals: true });
+    expect(out.length).toBe(src.length);
+    expect(out).toContain('x = ');
+    expect(out).not.toContain('Store');
+    expect(out).toContain('\n');
+  });
+
+  it('leaves backticks untouched when template literals are disabled', () => {
+    const out = blankCommentsAndStrings('`Store`');
+    expect(out).toBe('`Store`');
+  });
 });
 
 describe('blankMatches', () => {
@@ -116,5 +134,15 @@ describe('blankMatches', () => {
 
   it('returns the input unchanged when nothing matches', () => {
     expect(blankMatches('code only', /using[^\n]*/g)).toBe('code only');
+  });
+});
+
+describe('escapeForRegExp', () => {
+  it('escapes regex metacharacters', () => {
+    expect(escapeForRegExp('a.b*c')).toBe('a\\.b\\*c');
+  });
+
+  it('leaves plain identifiers unchanged', () => {
+    expect(escapeForRegExp('BatchCreator')).toBe('BatchCreator');
   });
 });

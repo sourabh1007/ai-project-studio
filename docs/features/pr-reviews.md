@@ -58,6 +58,17 @@ the PR modified and how they connect.
 > and the spurious test↔code edges are gone. Switch to the test category to review
 > the test changes on demand.
 
+> **Supported languages.** The graph is built by deterministic static analysis
+> (no AI, so it never hangs), one pluggable analyzer per language. Today it
+> understands **C#** (`.cs`), **JavaScript/TypeScript** (`.js/.jsx/.ts/.tsx` and
+> the `.mjs/.cjs/.mts/.cts` variants), **Java** (`.java`), **Rust** (`.rs`) and
+> **C/C++** (`.c/.cc/.cpp/.cxx/.h/.hpp/…`). Every graph feature — edges, caller
+> blast-radius, the focused diagram, PR-description export — works for all of
+> them out of the box; adding another language is a single analyzer, no builder
+> or UI changes. To avoid false edges, a type name that appears only inside a
+> comment, a string/template literal, an `import`/`using`/`use` line, or a
+> `namespace`/`package` declaration never creates a reference.
+
 > If a change graph shows empty diffs, it was generated before a diff-collection
 > fix — click **Re-run all** (or a step's **Retry**) on the review page to
 > re-collect and repopulate the per-file diffs.
