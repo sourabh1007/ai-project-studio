@@ -168,6 +168,7 @@ import { createPrApprovalService } from './pr-review/pr-approval-service.js';
 import { createGithubDescriptionGateway } from './repo/github-pr-description.js';
 import { createAzureDescriptionGateway } from './repo/azure-pr-description.js';
 import { createPrDescriptionService } from './pr-review/pr-description-service.js';
+import { createWorktreeService } from './worktrees/worktree-service.js';
 import type { PrDescriptionGatewayResolver } from './pr-review/pr-description-contract.js';
 import type {
   PrCommentsGateway,
@@ -1590,6 +1591,21 @@ function main(): void {
     repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
     gateways: prDescriptionGateways,
   });
+  const worktreeService = createWorktreeService({
+    repos: {
+      list: () => repoService.list(),
+      get: (id) => repoService.list().find((r) => r.id === id) ?? null,
+    },
+    reviews: {
+      find: (featureId) => {
+        const review = prReviewService.find(featureId);
+        return review
+          ? { repoId: review.repoId, worktreePath: review.worktreePath }
+          : null;
+      },
+    },
+    git: { run: (args, cwd) => gitRun(['-C', cwd, ...args], { longRunning: true }) },
+  });
   const prFeatureService = createPrFeatureService({
     repos: repoService,
     listPulls: listPullsFor,
@@ -1616,6 +1632,7 @@ function main(): void {
     sessionFiles: sessionFilesRepo,
     terminals: terminalManager!,
     prReviews: prReviewService,
+    worktrees: worktreeService,
     sharedContext: contextService,
   });
   const sessionBootstrap = createSessionBootstrap({
@@ -1774,6 +1791,7 @@ function main(): void {
       prComments: prCommentsService,
       prApprovals: prApprovalService,
       prDescriptions: prDescriptionService,
+      worktrees: worktreeService,
       context: contextService,
       automations: automationService,
       subagents: subagentService,

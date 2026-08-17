@@ -19,6 +19,11 @@ export interface PrReviewRemover {
   removeForFeature(featureId: string): void;
 }
 
+/** Removes the on-disk git worktree a feature's PR review checked out into. */
+export interface WorktreeRemover {
+  removeForFeature(featureId: string): Promise<void>;
+}
+
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
   sessions: Pick<SessionRepo, 'get' | 'listByFeature' | 'delete' | 'deleteByFeature' | 'rename'>;
@@ -29,6 +34,8 @@ export interface WorkspaceAdminDeps {
   terminals: TerminalCloser;
   /** Optional: purges a feature's PR review when the feature is deleted. */
   prReviews?: PrReviewRemover;
+  /** Optional: removes a feature's PR review worktree from disk when deleted. */
+  worktrees?: WorktreeRemover;
   /** Optional: purges a feature's shared-context document when it is deleted. */
   sharedContext?: Pick<ContextService, 'remove'>;
 }
@@ -77,6 +84,15 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       }
       deps.sessions.deleteByFeature(id);
       deps.summaries.delete(id);
+      // Remove the on-disk worktree before purging the review row it is
+      // resolved from; a failure here must not block feature deletion.
+      if (deps.worktrees) {
+        try {
+          await deps.worktrees.removeForFeature(id);
+        } catch {
+          // Best-effort cleanup: leave an orphaned worktree rather than fail.
+        }
+      }
       deps.prReviews?.removeForFeature(id);
       deps.sharedContext?.remove('feature', id);
       deps.features.remove(id);

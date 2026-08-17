@@ -52,7 +52,11 @@ function harness(overrides: {
     getPull: overrides.getPull ?? (() => Promise.resolve(pull)),
     provisionWorktree: () => {
       provisioned.push(true);
-      return Promise.resolve({ worktreePath: 'C:/wt/app-pr-12', branch: 'pr-12' });
+      return Promise.resolve({
+        worktreePath: 'C:/wt/app-pr-12',
+        branch: 'pr-12',
+        tracksPullRequest: false,
+      });
     },
     features: {
       create: (input) => {
@@ -143,7 +147,11 @@ describe('pr-feature-service', () => {
       listPulls: () => Promise.resolve([pull]),
       getPull: () => Promise.resolve(pull),
       provisionWorktree: () =>
-        Promise.resolve({ worktreePath: 'C:/wt/app-pr-12', branch: 'pr-12' }),
+        Promise.resolve({
+          worktreePath: 'C:/wt/app-pr-12',
+          branch: 'pr-12',
+          tracksPullRequest: false,
+        }),
       features: {
         create: (input) => ({
           id: 'f1',

@@ -96,6 +96,23 @@ vote and shows **Already approved** instead of casting a duplicate approval. On 
 DevOps the approval is cast against your organization identity, so it works even when
 your profile and organization ids differ.
 
+## Export to the PR description
+
+The **Add to PR description** button writes the review's **problem statement** and a
+Mermaid **change-graph diagram** into the pull request's description as a managed,
+idempotent Markdown block (delimited by `ai-project-studio:pr-review` markers).
+Re-running the export updates the block in place instead of appending a duplicate,
+and any text you authored around it is preserved. Works for both GitHub and Azure
+DevOps.
+
+## Cleaning up worktrees
+
+Each review checks its branch out into an isolated git **worktree** under a sibling
+`.ai-worktrees` directory. These are removed automatically when you delete the
+PR-review feature. To reclaim disk from orphaned checkouts, open **Settings →
+Review worktrees**, which lists every app-managed worktree and lets you remove any
+of them (a forced `git worktree remove` + `prune`).
+
 ## Re-running
 
 The review page exposes **Re-run all** and per-step **Retry** controls, so you can

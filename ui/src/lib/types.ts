@@ -363,6 +363,14 @@ export interface PrDescriptionExportResult {
   url: string;
 }
 
+export interface ManagedWorktree {
+  path: string;
+  branch: string | null;
+  repoId: string;
+  repoName: string;
+  pullNumber: number | null;
+}
+
 /** A repository available to pick from a provider before it is added. */
 export interface RemoteRepo {
   provider: RepoProvider;

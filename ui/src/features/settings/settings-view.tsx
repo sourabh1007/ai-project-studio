@@ -16,6 +16,7 @@ import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 import { SoftwareUpdateSection } from '../updates/software-update-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
+import { WorktreesSection } from './worktrees-section.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DesktopBridge {
@@ -438,6 +439,8 @@ export function SettingsView() {
         logDirectory={logDirectory ?? null}
         bridge={bridge}
       />
+
+      <WorktreesSection />
 
       <Card>
         <div className="page-header">

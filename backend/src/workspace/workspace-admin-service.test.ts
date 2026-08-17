@@ -35,7 +35,12 @@ function session(id: string, featureId = 'f1'): Session {
 
 function harness(
   featureSessions: Session[] = [],
-  options: { withPrReviews?: boolean; withContext?: boolean } = {},
+  options: {
+    withPrReviews?: boolean;
+    withContext?: boolean;
+    withWorktrees?: boolean;
+    worktreeFails?: boolean;
+  } = {},
 ) {
   const calls: string[] = [];
   const known = new Map<string, Session>(
@@ -92,6 +97,16 @@ function harness(
     },
     prReviews: options.withPrReviews
       ? { removeForFeature: (id) => calls.push(`prReviews.removeForFeature:${id}`) }
+      : undefined,
+    worktrees: options.withWorktrees
+      ? {
+          removeForFeature: async (id) => {
+            calls.push(`worktrees.removeForFeature:${id}`);
+            if (options.worktreeFails) {
+              throw new Error('worktree gone');
+            }
+          },
+        }
       : undefined,
     sharedContext: options.withContext
       ? { remove: (scope, id) => calls.push(`context.remove:${scope}:${id}`) }
@@ -186,6 +201,33 @@ describe('workspace-admin-service', () => {
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
       'prReviews.removeForFeature:f1',
+      'feature.remove:f1',
+    ]);
+  });
+
+  it('removes a feature worktree before purging its review row when wired', async () => {
+    const { admin, calls } = harness([], { withWorktrees: true, withPrReviews: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeature:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'worktrees.removeForFeature:f1',
+      'prReviews.removeForFeature:f1',
+      'feature.remove:f1',
+    ]);
+  });
+
+  it('continues feature deletion when worktree removal fails', async () => {
+    const { admin, calls } = harness([], { withWorktrees: true, worktreeFails: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeature:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'worktrees.removeForFeature:f1',
       'feature.remove:f1',
     ]);
   });

@@ -849,6 +849,29 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({}));
   });
 
+  it('lists managed worktrees via GET', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse([
+        { path: '/w/app-pr-7', branch: 'pr-7', repoId: 'r1', repoName: 'app', pullNumber: 7 },
+      ]),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listWorktrees();
+    expect(result).toHaveLength(1);
+    expect(calls[0][0]).toBe('/api/worktrees');
+  });
+
+  it('removes a worktree via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ removed: true }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.removeWorktree('/w/app-pr-7');
+    expect(result).toEqual({ removed: true });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/worktrees/remove');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ path: '/w/app-pr-7' }));
+  });
+
   it('starts a GitHub device-flow sign-in via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ userCode: 'ABCD-1234' }),

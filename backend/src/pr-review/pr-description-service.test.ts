@@ -45,7 +45,7 @@ function harness(overrides: {
   repoValue?: Repository | null;
   current?: string;
 }) {
-  const setBody = vi.fn(async () => {});
+  const setBody = vi.fn(async (_body: string) => {});
   const gateway: PrDescriptionGateway = {
     getBody: async () => overrides.current ?? '',
     setBody,

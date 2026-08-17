@@ -66,6 +66,8 @@ import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
 import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
+import { createWorktreeRoutes } from './worktree-controller.js';
+import type { WorktreeService } from '../worktrees/worktree-contract.js';
 import { createAutomationRoutes } from './automation-controller.js';
 import type { AutomationService } from '../automation/automation-service.js';
 import type { SubagentService } from '../automation/subagent-service.js';
@@ -153,6 +155,8 @@ export interface ApiRoutesDeps {
   prApprovals: PrApprovalService;
   /** Writes a review's problem statement + change graph into the PR description. */
   prDescriptions: PrDescriptionService;
+  /** Lists and removes the git worktrees the app provisioned for PR reviews. */
+  worktrees: WorktreeService;
   /** The layered shared-context store surfaced in the IDE. */
   context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
   /** Monitors & automations engine surfaced in the Automations menu. */
@@ -211,6 +215,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prApprovals: deps.prApprovals,
       prDescriptions: deps.prDescriptions,
     }),
+    ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createContextRoutes({ context: deps.context }),
     ...createAutomationRoutes({

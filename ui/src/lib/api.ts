@@ -41,6 +41,7 @@ import type {
   PrCommentThreadStatus,
   PrApprovalResult,
   PrDescriptionExportResult,
+  ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
   Session,
@@ -226,6 +227,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/pr-review/export-description`,
         jsonBody({}),
       ),
+    listWorktrees: () => request<ManagedWorktree[]>('/worktrees'),
+    removeWorktree: (path: string) =>
+      request<{ removed: true }>('/worktrees/remove', jsonBody({ path })),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),
     createFeature: (input: CreateFeatureInput) =>
