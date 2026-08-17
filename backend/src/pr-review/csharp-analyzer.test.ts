@@ -85,6 +85,52 @@ describe('createCSharpAnalyzer', () => {
     expect(analyzer.references(content, ['Store'])).toEqual([]);
   });
 
+  it('ignores a type name that appears only inside a string literal', () => {
+    const content = `
+      namespace App;
+      class Service {
+        public void Run() {
+          Log.Info("writing to BatchCreator queue");
+          Metric.Emit(@"BatchCreator.latency");
+          Trace($"batch {count} for BatchCreator done");
+        }
+      }
+    `;
+    expect(analyzer.references(content, ['BatchCreator'])).toEqual([]);
+  });
+
+  it('ignores a type name that appears only in a using directive', () => {
+    const content = `
+      using BatchCreator;
+      using Alias = Some.BatchCreator;
+      global using BatchCreator.Extensions;
+      namespace App;
+      class Service { }
+    `;
+    expect(analyzer.references(content, ['BatchCreator'])).toEqual([]);
+  });
+
+  it('ignores a type name that appears only in the namespace declaration', () => {
+    const content = 'namespace Company.BatchCreator; class Service { }';
+    expect(analyzer.references(content, ['BatchCreator'])).toEqual([]);
+  });
+
+  it('still detects a genuine usage alongside string/using noise', () => {
+    const content = `
+      using BatchCreator.Extensions;
+      namespace App;
+      class Service {
+        public void Run() {
+          Log.Info("BatchCreator failed");
+          BatchCreator creator = new BatchCreator();
+        }
+      }
+    `;
+    expect(analyzer.references(content, ['BatchCreator'])).toEqual([
+      { type: 'BatchCreator', caller: 'Run' },
+    ]);
+  });
+
   it('returns no references when there are no candidate types', () => {
     expect(analyzer.references('class C {}', [])).toEqual([]);
   });

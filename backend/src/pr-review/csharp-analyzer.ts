@@ -1,3 +1,4 @@
+import { blankCommentsAndStrings, blankMatches } from './analyzer-text.js';
 import type {
   LanguageAnalyzer,
   LanguageDeclarations,
@@ -9,15 +10,31 @@ import type {
  * type declarations, and detects which candidate types a file references, using
  * light regular-expression scans (no full parser). This is deliberately
  * approximate — good enough to draw reference edges between the PR's changed
- * `.cs` files without the cost or hang risk of a real compiler — and accepts a
- * few false edges from common type-name collisions (documented in the plan).
+ * `.cs` files without the cost or hang risk of a real compiler — but it takes
+ * care to ignore type names that appear only in comments, string/char literals,
+ * `using` directives or `namespace` names, which would otherwise create false
+ * reference edges.
  */
 
-/** Strips line and block comments so declarations/references ignore commented code. */
+/**
+ * Blanks comments and string/char literals, keeping the text length so that
+ * downstream index-based scans (member attribution) stay aligned.
+ */
 function stripComments(content: string): string {
-  return content
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\/\/[^\n]*/g, ' ');
+  return blankCommentsAndStrings(content, { csharp: true });
+}
+
+/**
+ * Blanks `using` directives and `namespace` declarations so a candidate type
+ * whose name coincides with an imported namespace segment or the file's own
+ * namespace does not register as a reference.
+ */
+function stripImportsAndNamespaces(code: string): string {
+  const withoutUsings = blankMatches(
+    code,
+    /^[ \t]*(?:global[ \t]+)?using\b[^\n]*/gm,
+  );
+  return blankMatches(withoutUsings, /\bnamespace[ \t]+[A-Za-z_][\w.]*/g);
 }
 
 /** The first namespace declared in a file (file-scoped or block), or null. */
@@ -121,7 +138,7 @@ export function createCSharpAnalyzer(): LanguageAnalyzer {
       if (candidateTypes.length === 0) {
         return [];
       }
-      const code = stripComments(content);
+      const code = stripImportsAndNamespaces(stripComments(content));
       const members = extractMembers(code);
       const hits: ReferenceHit[] = [];
       const seen = new Set<string>();
