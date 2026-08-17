@@ -1224,6 +1224,22 @@ export function ChangeGraph({
   // the box, its file nodes, and every edge endpoint anchored to that module, so
   // the whole module travels together and its connections stay attached.
   const boxDrag = useDragOffsets(zoom);
+  // Drag handlers for a box/node, wrapped so pressing down on the element first
+  // clears any stale pan flag. The element's own pointerdown calls
+  // stopPropagation (to keep the canvas from also panning), which means the
+  // scroll container's pointerdown — the only other place that resets `panned`
+  // — never fires on an element press. Without this, a single canvas pan leaves
+  // `panned` stuck true and every later expand/select is silently swallowed.
+  const elementDragHandlers = (id: string) => {
+    const base = boxDrag.handlers(id);
+    return {
+      ...base,
+      onPointerDown: (e: React.PointerEvent) => {
+        panned.current = false;
+        base.onPointerDown(e);
+      },
+    };
+  };
   // Maps a placed file node's path to its owning project so an edge endpoint
   // that anchors on a node (expanded module) still shifts with that module.
   const nodeProject = useMemo(() => {
@@ -1493,7 +1509,7 @@ export function ChangeGraph({
                   key={box.id}
                   className={`cg-box cg-draggable${box.collapsed ? ' cg-box-collapsed' : ''}${box.flow ? ` cg-flow-${box.flow}` : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
                   transform={`translate(${off.dx} ${off.dy})`}
-                  {...boxDrag.handlers(box.id)}
+                  {...elementDragHandlers(box.id)}
                   onClick={
                     canToggle
                       ? () => {
@@ -1602,7 +1618,7 @@ export function ChangeGraph({
                   className={`cg-filenode cg-draggable cg-filenode-${node.kind}${node.flow ? ` cg-flow-${node.flow}` : ''}${highlighted ? ' cg-filenode-spotlight' : ''}${isSel ? ' cg-filenode-selected' : ''}`}
                   transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
                   style={{ animationDelay: `${i * 20}ms` }}
-                  {...boxDrag.handlers(node.projectId)}
+                  {...elementDragHandlers(node.projectId)}
                   onClick={() => {
                     if (boxDrag.movedRef.current) {
                       return;
