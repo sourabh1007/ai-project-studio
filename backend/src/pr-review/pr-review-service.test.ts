@@ -110,6 +110,7 @@ function defaultProblemText(): string {
 function harness(options: {
   text?: (prompt: string) => string;
   aiError?: Error;
+  aiErrorSequence?: (Error | null)[];
   diffError?: Error;
   fs?: ChangeGraphFs;
   usage?: (sessionId: string) => MetaUsage | null;
@@ -124,12 +125,17 @@ function harness(options: {
   const prompts: string[] = [];
   const attachmentContents = new Map<string, string>();
   const cleanups: string[] = [];
+  const sleeps: number[] = [];
   let session = 0;
   let attachment = 0;
+  let aiCall = 0;
   const service = createPrReviewService({
     reviews,
     bus,
     clock: stepClock(),
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
     config: prReviewDefaults,
     inlinePrompts: options.inlinePrompts,
     analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
@@ -171,7 +177,10 @@ function harness(options: {
         const attached = request.attachments?.[0] ?? '';
         const realPrompt = attachmentContents.get(attached) ?? request.prompt;
         prompts.push(realPrompt);
+        const sequenced = options.aiErrorSequence?.[aiCall] ?? null;
+        aiCall += 1;
         if (options.aiError) throw options.aiError;
+        if (sequenced) throw sequenced;
         const sessionId = `meta-${session++}`;
         request.onStart?.(sessionId);
         const lines = options.activityLines ?? 1;
@@ -185,7 +194,7 @@ function harness(options: {
       },
     },
   });
-  return { service, reviews, events, diffRequests, prompts, cleanups };
+  return { service, reviews, events, diffRequests, prompts, cleanups, sleeps };
 }
 
 async function settle(): Promise<void> {
@@ -313,6 +322,57 @@ describe('createPrReviewService', () => {
     expect(review.changeGraph.status).toBe('ready');
   });
 
+  it('retries a transient provider failure and recovers the problem statement', async () => {
+    const h = harness({
+      aiErrorSequence: [
+        new Error(
+          'Provider failed (exit code 1): Failed to fetch GitHub CLI user login (503): No server is currently available',
+        ),
+        null,
+      ],
+    });
+    h.service.start(startInput);
+    await settle();
+
+    const review = h.service.get('f1');
+    expect(review.problemStatement.status).toBe('ready');
+    expect(review.problemStatement.content).toBe('Requests fail transiently.');
+    // One backoff was waited before the successful second attempt.
+    expect(h.sleeps).toEqual([prReviewDefaults.transientRetryBackoffMs]);
+    // A retry notice was surfaced in the step's live activity.
+    expect(
+      review.problemStatement.activity.some((line) =>
+        line.startsWith('Provider unavailable — retrying (attempt 2)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('fails after exhausting the transient retry budget', async () => {
+    const transient = new Error('Provider failed (exit code 1): 503 service unavailable');
+    const h = harness({
+      aiErrorSequence: [transient, transient, transient, transient],
+    });
+    h.service.start(startInput);
+    await settle();
+
+    const review = h.service.get('f1');
+    expect(review.problemStatement.status).toBe('failed');
+    // Two backoffs waited across the two retries, then it gave up.
+    expect(h.sleeps).toHaveLength(prReviewDefaults.transientRetryAttempts);
+  });
+
+  it('does not retry a provider timeout', async () => {
+    const h = harness({
+      aiErrorSequence: [new Error('Provider timed out after 120000ms')],
+    });
+    h.service.start(startInput);
+    await settle();
+
+    const review = h.service.get('f1');
+    expect(review.problemStatement.status).toBe('failed');
+    expect(h.sleeps).toEqual([]);
+  });
+
   it('reports a generic message for non-Error failures', async () => {
     const reviews = memoryRepo();
     const bus = createEventBus<PrReviewEventMap>();
@@ -320,6 +380,7 @@ describe('createPrReviewService', () => {
       reviews,
       bus,
       clock: stepClock(),
+      sleep: async () => {},
       config: prReviewDefaults,
       analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
       changeGraphFs: fakeFs(),

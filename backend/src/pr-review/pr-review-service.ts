@@ -23,6 +23,7 @@ import {
   summarizeChangeGraph,
 } from './pr-review-prompt.js';
 import { parseGraphAnnotations } from './graph-annotation-parser.js';
+import { isTransientProviderFailure } from './transient-failure.js';
 import {
   isFileExplained,
   parseFileExplanation,
@@ -51,6 +52,8 @@ export interface PrReviewServiceDeps {
   /** Reads worktree files for the deterministic change-graph builder. */
   changeGraphFs: ChangeGraphFs;
   clock: Clock;
+  /** Waits `ms` before a transient-failure retry; injected so tests stay fast. */
+  sleep: (ms: number) => Promise<void>;
   bus: EventBus<PrReviewEventMap>;
   config: PrReviewConfig;
   /**
@@ -247,14 +250,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     timestamps: { ...review.timestamps, updatedAt: deps.clock.isoNow() },
   });
 
-  /**
-   * Runs one step's prompt as a metasession. The prompt (which embeds the PR
-   * diff and repository context) is delivered as a short-lived attachment rather
-   * than an inline CLI argument: a large diff would otherwise overflow the OS
-   * command-line limit and fail the spawn with `ENAMETOOLONG`. A tiny trusted
-   * instruction points the model at the attachment and is safe to pass inline.
-   */
-  async function runStepPrompt(params: {
+  async function runStepAttempt(params: {
     review: PrReview;
     prompt: string;
     onStart: (sessionId: string) => void;
@@ -297,6 +293,40 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     } finally {
       await temporaryPrompt.cleanup();
     }
+  }
+
+  /**
+   * Runs one step's prompt as a metasession, automatically retrying a
+   * *transient* provider failure (an upstream 5xx, a GitHub auth/login blip, a
+   * network reset, or a flaky CLI launch). These steps are read-only, single-
+   * shot completions, so re-running one is safe and lets a brief upstream
+   * outage recover on its own instead of failing the step and forcing the
+   * reviewer to click Retry. A timeout is never retried — it already waited out
+   * the step budget and surfaces at once.
+   */
+  async function runStepPrompt(params: {
+    review: PrReview;
+    prompt: string;
+    onStart: (sessionId: string) => void;
+    onActivity: (line: string) => void;
+  }): Promise<{ text: string; sessionId: string }> {
+    for (let retry = 0; retry < deps.config.transientRetryAttempts; retry += 1) {
+      try {
+        return await runStepAttempt(params);
+      } catch (error) {
+        const message = errorMessage(error);
+        if (!isTransientProviderFailure(message)) {
+          throw error;
+        }
+        params.onActivity(
+          `Provider unavailable — retrying (attempt ${retry + 2}): ${message}`,
+        );
+        await deps.sleep(deps.config.transientRetryBackoffMs);
+      }
+    }
+    // Retries exhausted (or none configured): a final attempt whose failure —
+    // transient or not — now surfaces to the caller.
+    return runStepAttempt(params);
   }
 
   /**

@@ -1499,6 +1499,7 @@ function main(): void {
     metaUsage: createMetaUsageReader({ usage: usageRepo }),
     temporaryPrompts: createTemporaryPromptFileFactory(),
     clock,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     bus: bus as unknown as EventBus<PrReviewEventMap>,
     config: prReviewConfig,
   });

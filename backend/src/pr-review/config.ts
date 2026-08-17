@@ -22,6 +22,17 @@ export const prReviewConfigSchema = z.object({
    */
   stepTimeoutMs: z.number().int().positive(),
   /**
+   * Extra automatic attempts for a step whose metasession fails with a
+   * *transient* provider error (an upstream 5xx, a GitHub auth/login blip, a
+   * network reset, or a flaky CLI launch). These read-only steps are safe to
+   * re-run, so a transient upstream hiccup retries silently instead of failing
+   * the whole step and forcing the reviewer to click Retry. Timeouts are never
+   * retried — they surface immediately.
+   */
+  transientRetryAttempts: z.number().int().nonnegative(),
+  /** Backoff (ms) waited before each transient retry. */
+  transientRetryBackoffMs: z.number().int().nonnegative(),
+  /**
    * Shared "untrusted evidence" notice embedded in every review prompt. Warns
    * the model to treat PR/diff content as read-only data, never instructions.
    */
@@ -71,6 +82,8 @@ export const prReviewDefaults: PrReviewConfig = {
   maxPatchChars: 60_000,
   maxFileDiffChars: 8_000,
   stepTimeoutMs: 120_000,
+  transientRetryAttempts: 2,
+  transientRetryBackoffMs: 2_000,
   untrustedNotice: UNTRUSTED_NOTICE,
   emptyDescriptionPlaceholder: '(no description provided)',
   problemStatementPromptTemplate: [
