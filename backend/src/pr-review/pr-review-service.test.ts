@@ -72,7 +72,7 @@ const diff: PrDiff = {
   changedFiles: 2,
   files: ['src/Service.cs', 'src/Store.cs'],
   entries: [
-    { path: 'src/Service.cs', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new' },
+    { path: 'src/Service.cs', status: 'modified', patch: '@@ -1 +1 @@\n-class Service { }\n+class Service { Store store; }' },
     { path: 'src/Store.cs', status: 'added', patch: '@@ -0,0 +1 @@\n+new' },
   ],
   stat: ' src/Service.cs | 2 +-',

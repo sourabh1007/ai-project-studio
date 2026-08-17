@@ -14,6 +14,7 @@ import type { ChangeGraphFs } from './change-graph-fs.js';
 import type {
   LanguageAnalyzer,
   LanguageAnalyzerRegistry,
+  ReferenceHit,
 } from './language-analyzer.js';
 
 /** The deterministic reference graph the builder produces for one PR. */
@@ -100,6 +101,49 @@ interface FileFacts {
   content: string | null;
   module: string | null;
   types: string[];
+  /** The file's unified-diff patch, used to scope edges to the changed code. */
+  patch: string;
+}
+
+/**
+ * The added ("+") lines of a unified-diff patch, joined as the new/changed code
+ * of the file. Diff file headers (`+++`) are excluded and the leading `+` is
+ * stripped. Returns null when the patch adds no lines (an empty or
+ * deletion-only patch, or a test stub with no `+` lines), so the caller can fall
+ * back to scanning the whole file instead of dropping every edge.
+ */
+export function addedCodeFromPatch(patch: string): string | null {
+  const lines: string[] = [];
+  for (const raw of patch.split('\n')) {
+    if (raw.startsWith('+') && !raw.startsWith('+++')) {
+      lines.push(raw.slice(1));
+    }
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+/**
+ * Restricts a file's reference hits to those whose referenced type is *also*
+ * referenced from the file's added lines, so an edge reflects what the PR
+ * actually changed (a changed method/class using another changed file's type)
+ * rather than a pre-existing reference elsewhere in the same file. Caller labels
+ * come from the full-file scan (`hits`); the changed-code scan only decides
+ * which types survive. When the patch adds no lines the file is not scoped.
+ */
+function scopeHitsToChangedCode(
+  hits: ReferenceHit[],
+  analyzer: LanguageAnalyzer,
+  patch: string,
+  candidateTypes: string[],
+): ReferenceHit[] {
+  const changedCode = addedCodeFromPatch(patch);
+  if (changedCode === null) {
+    return hits;
+  }
+  const changedTypes = new Set(
+    analyzer.references(changedCode, candidateTypes).map((hit) => hit.type),
+  );
+  return hits.filter((hit) => changedTypes.has(hit.type));
 }
 
 /**
@@ -145,6 +189,7 @@ export async function buildChangeGraph(
       content,
       module: decls?.module ?? null,
       types: decls?.types ?? [],
+      patch: entry.patch,
     });
     nodes.push({
       path: entry.path,
@@ -192,7 +237,14 @@ export async function buildChangeGraph(
     if (!byType) {
       continue;
     }
-    const hits = file.analyzer.references(file.content, [...byType.keys()]);
+    const candidates = [...byType.keys()];
+    const allHits = file.analyzer.references(file.content, candidates);
+    const hits = scopeHitsToChangedCode(
+      allHits,
+      file.analyzer,
+      file.patch,
+      candidates,
+    );
     for (const hit of hits) {
       const declarers = byType.get(hit.type);
       if (!declarers) {

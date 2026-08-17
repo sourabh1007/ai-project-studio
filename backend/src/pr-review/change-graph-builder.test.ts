@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChangeGraph } from './change-graph-builder.js';
+import { buildChangeGraph, addedCodeFromPatch } from './change-graph-builder.js';
 import {
   createLanguageAnalyzerRegistry,
   type LanguageAnalyzer,
@@ -92,6 +92,61 @@ describe('buildChangeGraph', () => {
           { symbol: 'Store', caller: null },
           { symbol: 'Store', caller: 'Run' },
         ],
+      },
+    ]);
+  });
+
+  it('scopes edges to types referenced in the changed (added) lines', async () => {
+    const files = {
+      'src/Service.cs':
+        'namespace App;\nclass Service {\n  Cache cache;\n  public void Run() { Store s = new Store(); }\n}',
+      'src/Store.cs': 'namespace App;\nclass Store { }',
+      'src/Cache.cs': 'namespace App;\nclass Cache { }',
+    };
+    const dirs = { src: ['App.csproj', 'Service.cs', 'Store.cs', 'Cache.cs'] };
+    const servicePatch =
+      '@@ -1,3 +1,4 @@\n namespace App;\n class Service {\n   Cache cache;\n+  public void Run() { Store s = new Store(); }\n }';
+
+    const graph = await buildChangeGraph({
+      worktreePath: WORKTREE,
+      entries: [
+        entry('src/Service.cs', servicePatch),
+        entry('src/Store.cs'),
+        entry('src/Cache.cs'),
+      ],
+      registry: csharpRegistry,
+      fs: fakeFs(files, dirs),
+    });
+
+    expect(graph.edges).toEqual([
+      {
+        from: 'src/Service.cs',
+        to: 'src/Store.cs',
+        calls: [{ symbol: 'Store', caller: 'Run' }],
+      },
+    ]);
+  });
+
+  it('keeps all references when the patch adds no lines (deletion-only)', async () => {
+    const files = {
+      'src/Service.cs': 'namespace App;\nclass Service { Store store; }',
+      'src/Store.cs': 'namespace App;\nclass Store { }',
+    };
+    const dirs = { src: ['App.csproj', 'Service.cs', 'Store.cs'] };
+    const deletionPatch = '@@ -1,2 +0,0 @@\n-namespace App;\n-class Service { Store store; }';
+
+    const graph = await buildChangeGraph({
+      worktreePath: WORKTREE,
+      entries: [entry('src/Service.cs', deletionPatch), entry('src/Store.cs')],
+      registry: csharpRegistry,
+      fs: fakeFs(files, dirs),
+    });
+
+    expect(graph.edges).toEqual([
+      {
+        from: 'src/Service.cs',
+        to: 'src/Store.cs',
+        calls: [{ symbol: 'Store', caller: null }],
       },
     ]);
   });
@@ -362,5 +417,22 @@ describe('buildChangeGraph', () => {
 
     expect(graph.nodes).toHaveLength(1);
     expect(graph.edges).toEqual([]);
+  });
+});
+
+describe('addedCodeFromPatch', () => {
+  it('returns the added lines with the leading + stripped', () => {
+    const patch = '@@ -1,2 +1,3 @@\n context\n-removed\n+added one\n+added two';
+    expect(addedCodeFromPatch(patch)).toBe('added one\nadded two');
+  });
+
+  it('excludes the +++ file header from the added code', () => {
+    const patch = '+++ b/src/Service.cs\n@@ -0,0 +1 @@\n+class Service { }';
+    expect(addedCodeFromPatch(patch)).toBe('class Service { }');
+  });
+
+  it('returns null when the patch adds no lines', () => {
+    expect(addedCodeFromPatch('@@ -1 +0,0 @@\n-only removals')).toBeNull();
+    expect(addedCodeFromPatch('')).toBeNull();
   });
 });
