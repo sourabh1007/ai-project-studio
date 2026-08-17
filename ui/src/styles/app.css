@@ -2165,6 +2165,39 @@ body.is-resizing {
   filter: drop-shadow(0 0 6px color-mix(in srgb, #3b82f6 60%, transparent));
 }
 
+/* Flow markers: entry points (start, green) and leaves (end, purple). The
+   shape of the badge glyph — not just its colour — encodes the role, so the
+   distinction survives for colour-blind reviewers. */
+.cg-flow-badge {
+  stroke-width: 1;
+}
+
+.cg-flow-marker-start .cg-flow-badge {
+  fill: #2ea043;
+  stroke: color-mix(in srgb, #2ea043 60%, #041308);
+}
+
+.cg-flow-marker-end .cg-flow-badge {
+  fill: #a371f7;
+  stroke: color-mix(in srgb, #a371f7 60%, #0b0416);
+}
+
+.cg-flow-glyph {
+  fill: #fff;
+}
+
+.cg-flow-start .cg-filenode-rect {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, #2ea043 55%, transparent));
+}
+
+.cg-flow-end .cg-filenode-rect {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, #a371f7 45%, transparent));
+}
+
+.cg-legend-flow .cg-flow-glyph {
+  fill: var(--text-muted, #8b949e);
+}
+
 .cg-filenode-label {
   fill: var(--text);
   font-size: 11px;
@@ -2259,6 +2292,11 @@ body.is-resizing {
 
 .cg-legend-dot-boundary {
   background: #3b82f6;
+}
+
+.cg-legend-flow {
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .cg-diff {

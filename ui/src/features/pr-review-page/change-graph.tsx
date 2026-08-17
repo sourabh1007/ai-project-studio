@@ -5,6 +5,7 @@ import {
   fitZoom,
   formatEdgeLabel,
   NODE_H,
+  type FlowRole,
 } from '../../lib/change-graph-layout.js';
 import { useChangeGraphLayout } from './use-change-graph-layout.js';
 import { segmentTestMethods, segmentAnnotatedTestMethods } from '../../lib/test-method-diff.js';
@@ -575,7 +576,7 @@ function FocusedFileGraph({
           return (
             <g
               key={node.path}
-              className={`cg-filenode cg-draggable cg-filenode-${node.kind}${isFocus ? ' cg-filenode-selected' : ''}${clickable ? ' cg-filenode-nav' : ''}`}
+              className={`cg-filenode cg-draggable cg-filenode-${node.kind}${node.flow ? ` cg-flow-${node.flow}` : ''}${isFocus ? ' cg-filenode-selected' : ''}${clickable ? ' cg-filenode-nav' : ''}`}
               transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
               {...nodeDrag.handlers(node.path)}
               role={clickable ? 'button' : undefined}
@@ -616,6 +617,9 @@ function FocusedFileGraph({
               >
                 {node.label}
               </text>
+              {node.flow && (
+                <FlowMarker flow={node.flow} nodeWidth={node.width} />
+              )}
             </g>
           );
         })}
@@ -976,13 +980,17 @@ function Legend({
   kinds,
   category,
   hasBoundary,
+  hasStart,
+  hasEnd,
 }: {
   kinds: Set<PrChangeKind>;
   category: ChangeGraphCategory;
   hasBoundary: boolean;
+  hasStart: boolean;
+  hasEnd: boolean;
 }) {
   const shown = LEGEND_KINDS.filter((kind) => kinds.has(kind));
-  if (shown.length === 0 && !hasBoundary) {
+  if (shown.length === 0 && !hasBoundary && !hasStart && !hasEnd) {
     return null;
   }
   return (
@@ -999,7 +1007,71 @@ function Legend({
           Calls the change
         </span>
       )}
+      {hasStart && (
+        <span className="cg-legend-item">
+          <svg className="cg-legend-flow" width="12" height="12" aria-hidden="true">
+            <FlowGlyph flow="start" cx={6} cy={6} />
+          </svg>
+          Flow start (entry)
+        </span>
+      )}
+      {hasEnd && (
+        <span className="cg-legend-item">
+          <svg className="cg-legend-flow" width="12" height="12" aria-hidden="true">
+            <FlowGlyph flow="end" cx={6} cy={6} />
+          </svg>
+          Flow end (leaf)
+        </span>
+      )}
     </div>
+  );
+}
+
+/** The bare shape for a flow marker: a triangle for `start`, a square for `end`. */
+function FlowGlyph({
+  flow,
+  cx,
+  cy,
+}: {
+  flow: FlowRole;
+  cx: number;
+  cy: number;
+}) {
+  return flow === 'start' ? (
+    <path
+      className="cg-flow-glyph"
+      d={`M ${cx - 3} ${cy - 3.4} L ${cx + 3.4} ${cy} L ${cx - 3} ${cy + 3.4} Z`}
+    />
+  ) : (
+    <rect
+      className="cg-flow-glyph"
+      x={cx - 3}
+      y={cy - 3}
+      width={6}
+      height={6}
+      rx={1}
+    />
+  );
+}
+
+/**
+ * A small entry (`start`) / leaf (`end`) marker drawn at a placed node's
+ * top-right corner. The shape (triangle vs. square) — not just colour — encodes
+ * the role, so the marker stays legible for colour-blind users.
+ */
+function FlowMarker({ flow, nodeWidth }: { flow: FlowRole; nodeWidth: number }) {
+  const cx = nodeWidth - 6;
+  const cy = 0;
+  return (
+    <g className={`cg-flow-marker cg-flow-marker-${flow}`}>
+      <title>
+        {flow === 'start'
+          ? 'Flow start — entry point (nothing calls it)'
+          : 'Flow end — leaf (calls nothing)'}
+      </title>
+      <circle className="cg-flow-badge" cx={cx} cy={cy} r={6.5} />
+      <FlowGlyph flow={flow} cx={cx} cy={cy} />
+    </g>
   );
 }
 
@@ -1349,7 +1421,7 @@ export function ChangeGraph({
               return (
                 <g
                   key={box.id}
-                  className={`cg-box cg-draggable${box.collapsed ? ' cg-box-collapsed' : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
+                  className={`cg-box cg-draggable${box.collapsed ? ' cg-box-collapsed' : ''}${box.flow ? ` cg-flow-${box.flow}` : ''}${canToggle ? ' cg-box-toggle' : ''}${changed ? ' cg-box-changed' : ''}`}
                   transform={`translate(${off.dx} ${off.dy})`}
                   {...boxDrag.handlers(box.id)}
                   onClick={
@@ -1402,6 +1474,11 @@ export function ChangeGraph({
                       expand
                     </text>
                   )}
+                  {box.collapsed && box.flow && (
+                    <g transform={`translate(${box.x + box.width} ${box.y})`}>
+                      <FlowMarker flow={box.flow} nodeWidth={0} />
+                    </g>
+                  )}
                 </g>
               );
             })}
@@ -1445,7 +1522,7 @@ export function ChangeGraph({
               return (
                 <g
                   key={node.path}
-                  className={`cg-filenode cg-draggable cg-filenode-${node.kind}${isSel ? ' cg-filenode-selected' : ''}`}
+                  className={`cg-filenode cg-draggable cg-filenode-${node.kind}${node.flow ? ` cg-flow-${node.flow}` : ''}${isSel ? ' cg-filenode-selected' : ''}`}
                   transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
                   style={{ animationDelay: `${i * 20}ms` }}
                   {...boxDrag.handlers(node.projectId)}
@@ -1478,6 +1555,9 @@ export function ChangeGraph({
                   >
                     {node.label}
                   </text>
+                  {node.flow && (
+                    <FlowMarker flow={node.flow} nodeWidth={node.width} />
+                  )}
                 </g>
               );
             })}
@@ -1546,7 +1626,19 @@ export function ChangeGraph({
             {fullscreen ? '×' : '⛶'}
           </button>
         </div>
-        <Legend kinds={kindsPresent} category={category} hasBoundary={hasBoundary} />
+        <Legend
+          kinds={kindsPresent}
+          category={category}
+          hasBoundary={hasBoundary}
+          hasStart={
+            layout.nodes.some((n) => n.flow === 'start') ||
+            layout.boxes.some((b) => b.flow === 'start')
+          }
+          hasEnd={
+            layout.nodes.some((n) => n.flow === 'end') ||
+            layout.boxes.some((b) => b.flow === 'end')
+          }
+        />
         {onChat && chatOpen && (
           <GraphChat
             category={category}

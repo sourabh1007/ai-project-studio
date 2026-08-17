@@ -6,6 +6,15 @@ import type {
   ChangeGraphStep,
 } from './types.js';
 
+/**
+ * Where a node sits in the reference flow, derived from its edges within the
+ * *rendered* graph. Edges read `from → to` ("from calls to"), so a `start` node
+ * has no incoming edges (nothing calls it — an entry point) and an `end` node
+ * has no outgoing edges (it calls nothing — a leaf/sink). Nodes that are both a
+ * caller and a callee, or that are fully isolated, carry no flow role.
+ */
+export type FlowRole = 'start' | 'end';
+
 /** A changed-file node placed on the canvas, in absolute coordinates. */
 export interface PlacedNode {
   /** Repo-relative path (stable id and lookup key). */
@@ -21,6 +30,8 @@ export interface PlacedNode {
   y: number;
   /** Node cell width, sized to its label so text never overflows. */
   width: number;
+  /** Entry (`start`) / leaf (`end`) marker in the reference flow; absent otherwise. */
+  flow?: FlowRole;
 }
 
 /** A project box grouping the changed files that belong to one project. */
@@ -41,6 +52,11 @@ export interface PlacedBox {
   y: number;
   width: number;
   height: number;
+  /**
+   * For a collapsed module tile, its entry/leaf marker in the reference flow
+   * (an expanded box's flow lives on its individual file nodes). Absent otherwise.
+   */
+  flow?: FlowRole;
 }
 
 /** A reference edge placed between two node centres, in absolute coordinates. */
@@ -137,6 +153,47 @@ export function layerBoxes(
     compute(id);
   }
   return layer;
+}
+
+/**
+ * Classifies every anchor as a flow `start` (no incoming edges — an entry point
+ * nothing else calls), a flow `end` (no outgoing edges — a leaf that calls
+ * nothing), or neither (an intermediate node with both, or an isolated node with
+ * no edges at all). Self-edges are ignored so a file that only references itself
+ * is still treated as isolated. Pure over the edge list, so it works uniformly
+ * for the full and focused layouts.
+ */
+export function computeFlowRoles(
+  ids: Iterable<string>,
+  edges: ReadonlyArray<{ from: string; to: string }>,
+): Map<string, FlowRole> {
+  const inDeg = new Map<string, number>();
+  const outDeg = new Map<string, number>();
+  for (const id of ids) {
+    inDeg.set(id, 0);
+    outDeg.set(id, 0);
+  }
+  for (const edge of edges) {
+    if (edge.from === edge.to) {
+      continue;
+    }
+    if (outDeg.has(edge.from)) {
+      outDeg.set(edge.from, outDeg.get(edge.from)! + 1);
+    }
+    if (inDeg.has(edge.to)) {
+      inDeg.set(edge.to, inDeg.get(edge.to)! + 1);
+    }
+  }
+  const roles = new Map<string, FlowRole>();
+  for (const [id, incoming] of inDeg) {
+    const outgoing = outDeg.get(id)!;
+    if (incoming === 0 && outgoing > 0) {
+      roles.set(id, 'start');
+    } else if (outgoing === 0 && incoming > 0) {
+      roles.set(id, 'end');
+    }
+  }
+  return roles;
 }
 /**
  * A module/project box is collapsed to a single tile once it holds more than
@@ -562,7 +619,38 @@ export function buildChangeGraphLayout(
   }
 
   const height = plans.length > 0 ? canvasHeight : 0;
+  assignFlowRoles(boxes, nodes, edges);
   return { boxes, nodes, edges, width: canvasWidth, height };
+}
+
+/**
+ * Tags each placed node (and each collapsed module tile) with its flow role so
+ * the render can mark the entry points and leaves of the reference graph. Edge
+ * endpoints are the file path for an expanded node and `box:<id>` for a
+ * collapsed module, matching the anchor ids produced during placement.
+ */
+function assignFlowRoles(
+  boxes: PlacedBox[],
+  nodes: PlacedNode[],
+  edges: PlacedEdge[],
+): void {
+  const ids = [
+    ...nodes.map((node) => node.path),
+    ...boxes.map((box) => `box:${box.id}`),
+  ];
+  const roles = computeFlowRoles(ids, edges);
+  for (const node of nodes) {
+    const role = roles.get(node.path);
+    if (role) {
+      node.flow = role;
+    }
+  }
+  for (const box of boxes) {
+    const role = roles.get(`box:${box.id}`);
+    if (role) {
+      box.flow = role;
+    }
+  }
 }
 
 function placedNodeFor(
@@ -689,6 +777,16 @@ export function buildFocusedChangeGraphLayout(
   }
 
   const width = rightWidth > 0 ? rightX + rightWidth : focusX + focusWidth;
+  const roles = computeFlowRoles(
+    nodes.map((node) => node.path),
+    edges,
+  );
+  for (const node of nodes) {
+    const role = roles.get(node.path);
+    if (role) {
+      node.flow = role;
+    }
+  }
   return { boxes: [], nodes, edges, width, height };
 }
 

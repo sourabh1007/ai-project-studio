@@ -10,6 +10,7 @@ import {
   clipEdgeBetween,
   COL_GAP,
   COLLAPSED_BOX_H,
+  computeFlowRoles,
   findNode,
   fitZoom,
   formatEdgeLabel,
@@ -536,6 +537,77 @@ describe('buildChangeGraphLayout', () => {
     expect(layout.boxes[0].collapsed).toBe(false);
     expect(layout.nodes).toHaveLength(3);
   });
+
+  it('marks flow start/end on nodes and leaves isolated nodes unmarked', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'src/Entry.cs', projectId: 'p' }),
+        node({ path: 'src/Leaf.cs', projectId: 'p' }),
+        node({ path: 'src/Alone.cs', projectId: 'p' }),
+      ],
+      edges: [edge('src/Entry.cs', 'src/Leaf.cs')],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code');
+    const flowOf = (path: string) =>
+      layout.nodes.find((n) => n.path === path)?.flow;
+
+    expect(flowOf('src/Entry.cs')).toBe('start');
+    expect(flowOf('src/Leaf.cs')).toBe('end');
+    expect(flowOf('src/Alone.cs')).toBeUndefined();
+  });
+
+  it('marks flow start/end on collapsed module tiles', () => {
+    const built = step({
+      nodes: [
+        node({ path: 'a/one.cs', projectId: 'a' }),
+        node({ path: 'a/two.cs', projectId: 'a' }),
+        node({ path: 'b/one.cs', projectId: 'b' }),
+        node({ path: 'b/two.cs', projectId: 'b' }),
+      ],
+      edges: [edge('a/one.cs', 'b/one.cs')],
+    });
+
+    const layout = buildChangeGraphLayout(built, 'code', {
+      collapsed: new Set(['a', 'b']),
+    });
+    const boxFlow = (id: string) =>
+      layout.boxes.find((b) => b.id === id)?.flow;
+
+    expect(boxFlow('a')).toBe('start');
+    expect(boxFlow('b')).toBe('end');
+  });
+});
+
+describe('computeFlowRoles', () => {
+  it('classifies start, end, intermediate and isolated ids', () => {
+    const roles = computeFlowRoles(
+      ['s', 'm', 'e', 'iso'],
+      [
+        { from: 's', to: 'm' },
+        { from: 'm', to: 'e' },
+      ],
+    );
+    expect(roles.get('s')).toBe('start');
+    expect(roles.get('e')).toBe('end');
+    // An intermediate (both in and out) and a fully isolated id get no role.
+    expect(roles.get('m')).toBeUndefined();
+    expect(roles.get('iso')).toBeUndefined();
+  });
+
+  it('ignores self-edges and endpoints outside the id set', () => {
+    const roles = computeFlowRoles(
+      ['a', 'b'],
+      [
+        { from: 'a', to: 'a' },
+        { from: 'a', to: 'missing' },
+        { from: 'gone', to: 'b' },
+      ],
+    );
+    // Only a→(missing) counts as an out-edge for a; only (gone)→b as in for b.
+    expect(roles.get('a')).toBe('start');
+    expect(roles.get('b')).toBe('end');
+  });
 });
 
 describe('clipEdgeBetween', () => {
@@ -637,6 +709,11 @@ describe('buildFocusedChangeGraphLayout', () => {
     });
     expect(layout.width).toBeGreaterThan(0);
     expect(layout.height).toBeGreaterThan(0);
+    // The one-hop flow reads left-to-right: the caller is an entry, the focused
+    // file is intermediate (both caller and callee), and the callee is a leaf.
+    expect(byPath.get('src/Caller.cs')?.flow).toBe('start');
+    expect(byPath.get('src/Focus.cs')?.flow).toBeUndefined();
+    expect(byPath.get('src/Callee.cs')?.flow).toBe('end');
   });
 
   it('returns a single focused node when there are no incident edges', () => {
