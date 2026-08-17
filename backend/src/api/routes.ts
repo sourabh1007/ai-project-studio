@@ -45,6 +45,7 @@ import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 import type { PrCommentsService } from '../pr-review/pr-comments-contract.js';
 import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
+import type { PrDescriptionService } from '../pr-review/pr-description-contract.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import { createRepoRoutes } from './repo-controller.js';
@@ -150,6 +151,8 @@ export interface ApiRoutesDeps {
   prComments: PrCommentsService;
   /** Live PR approval for the review page. */
   prApprovals: PrApprovalService;
+  /** Writes a review's problem statement + change graph into the PR description. */
+  prDescriptions: PrDescriptionService;
   /** The layered shared-context store surfaced in the IDE. */
   context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
   /** Monitors & automations engine surfaced in the Automations menu. */
@@ -206,6 +209,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prReviews: deps.prReviews,
       prComments: deps.prComments,
       prApprovals: deps.prApprovals,
+      prDescriptions: deps.prDescriptions,
     }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createContextRoutes({ context: deps.context }),

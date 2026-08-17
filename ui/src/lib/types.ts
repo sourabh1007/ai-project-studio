@@ -358,6 +358,11 @@ export interface PrApprovalResult {
   alreadyApproved?: boolean;
 }
 
+export interface PrDescriptionExportResult {
+  updated: true;
+  url: string;
+}
+
 /** A repository available to pick from a provider before it is added. */
 export interface RemoteRepo {
   provider: RepoProvider;

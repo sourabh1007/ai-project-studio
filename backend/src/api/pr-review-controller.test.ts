@@ -6,6 +6,7 @@ import type {
   PrCommentsService,
 } from '../pr-review/pr-comments-contract.js';
 import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
+import type { PrDescriptionService } from '../pr-review/pr-description-contract.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import type { HttpRequest, Route } from './http-contract.js';
 
@@ -102,8 +103,19 @@ function harness() {
       Promise.resolve({ approved: true, state: 'approved' as const })
     ),
   } as unknown as PrApprovalService;
+  const prDescriptions = {
+    exportToPull: (id: string) => (
+      (calls.exportDescription = [id]),
+      Promise.resolve({ updated: true as const, url: 'https://example/pr/1' })
+    ),
+  } as unknown as PrDescriptionService;
   return {
-    routes: createPrReviewRoutes({ prReviews, prComments, prApprovals }),
+    routes: createPrReviewRoutes({
+      prReviews,
+      prComments,
+      prApprovals,
+      prDescriptions,
+    }),
     calls,
     thread,
   };
@@ -269,6 +281,20 @@ describe('pr-review-controller', () => {
       body: { approved: true, state: 'approved' },
     });
     expect(calls.approve).toEqual(['f1']);
+  });
+
+  it('exports the review into the PR description for a feature', async () => {
+    const { routes, calls } = harness();
+    const res = await pick(
+      routes,
+      'post',
+      '/features/:featureId/pr-review/export-description',
+    )(req({ params: { featureId: 'f1' } }));
+    expect(res).toEqual({
+      status: 200,
+      body: { updated: true, url: 'https://example/pr/1' },
+    });
+    expect(calls.exportDescription).toEqual(['f1']);
   });
 
   it('lists comments for a feature', async () => {

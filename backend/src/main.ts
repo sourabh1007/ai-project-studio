@@ -165,6 +165,10 @@ import { createPrCommentsService } from './pr-review/pr-comments-service.js';
 import { createGithubApprovalGateway } from './repo/github-pr-approval.js';
 import { createAzureApprovalGateway } from './repo/azure-pr-approval.js';
 import { createPrApprovalService } from './pr-review/pr-approval-service.js';
+import { createGithubDescriptionGateway } from './repo/github-pr-description.js';
+import { createAzureDescriptionGateway } from './repo/azure-pr-description.js';
+import { createPrDescriptionService } from './pr-review/pr-description-service.js';
+import type { PrDescriptionGatewayResolver } from './pr-review/pr-description-contract.js';
 import type {
   PrCommentsGateway,
   PrCommentsGatewayResolver,
@@ -1557,6 +1561,35 @@ function main(): void {
     repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
     gateways: prApprovalGateways,
   });
+  const prDescriptionGateways: PrDescriptionGatewayResolver = {
+    resolve: (repo, pull) => {
+      if (repo.provider === 'github') {
+        return createGithubDescriptionGateway(ghRun, {
+          repo: repo.name,
+          number: pull.number,
+        });
+      }
+      const target = parseAzureRepoUrl(repo.remoteUrl);
+      if (!target) {
+        throw new ValidationError(
+          `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+        );
+      }
+      return createAzureDescriptionGateway(
+        {
+          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          httpGet: azureHttpGet,
+          httpPatch: azureHttpPatch,
+        },
+        { ...target, pullRequestId: pull.number },
+      );
+    },
+  };
+  const prDescriptionService = createPrDescriptionService({
+    reviews: { get: (featureId) => prReviewService.find(featureId) },
+    repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
+    gateways: prDescriptionGateways,
+  });
   const prFeatureService = createPrFeatureService({
     repos: repoService,
     listPulls: listPullsFor,
@@ -1740,6 +1773,7 @@ function main(): void {
       prReviews: prReviewService,
       prComments: prCommentsService,
       prApprovals: prApprovalService,
+      prDescriptions: prDescriptionService,
       context: contextService,
       automations: automationService,
       subagents: subagentService,

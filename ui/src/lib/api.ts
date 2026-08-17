@@ -40,6 +40,7 @@ import type {
   PrCommentThread,
   PrCommentThreadStatus,
   PrApprovalResult,
+  PrDescriptionExportResult,
   AddPrCommentInput,
   AddRepositoryInput,
   Session,
@@ -218,6 +219,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
     approvePrReview: (featureId: string) =>
       request<PrApprovalResult>(
         `/features/${featureId}/pr-review/approve`,
+        jsonBody({}),
+      ),
+    exportPrReviewDescription: (featureId: string) =>
+      request<PrDescriptionExportResult>(
+        `/features/${featureId}/pr-review/export-description`,
         jsonBody({}),
       ),
     listFeatures: () => request<Feature[]>('/features'),

@@ -178,6 +178,8 @@ export function PrReviewPage({
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState(false);
   const [alreadyApproved, setAlreadyApproved] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exported, setExported] = useState(false);
   const [retrying, setRetrying] = useState<PrReviewStepKey | null>(null);
   const [explaining, setExplaining] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -216,6 +218,8 @@ export function PrReviewPage({
     setApproved(false);
     setApproving(false);
     setAlreadyApproved(false);
+    setExporting(false);
+    setExported(false);
   }, [featureId]);
 
   // Polling fallback: while a step is generating, re-fetch the review on a timer
@@ -274,6 +278,23 @@ export function PrReviewPage({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function exportDescription() {
+    if (exporting) {
+      return;
+    }
+    setExporting(true);
+    setExported(false);
+    setError(null);
+    try {
+      await api.exportPrReviewDescription(featureId);
+      setExported(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -348,6 +369,14 @@ export function PrReviewPage({
               : approving
                 ? 'Approving…'
                 : 'Approve'}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => void exportDescription()}
+            disabled={exporting}
+          >
+            <PrReviewIcon size={13} />{' '}
+            {exported ? 'Added to PR ✓' : exporting ? 'Adding…' : 'Add to PR description'}
           </Button>
           <Button
             variant="ghost"

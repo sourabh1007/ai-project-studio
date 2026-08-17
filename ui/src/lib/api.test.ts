@@ -836,6 +836,19 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({}));
   });
 
+  it('exports a PR review into the description via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ updated: true, url: 'https://example/pr/7' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.exportPrReviewDescription('f1');
+    expect(result).toEqual({ updated: true, url: 'https://example/pr/7' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/export-description');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
   it('starts a GitHub device-flow sign-in via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ userCode: 'ABCD-1234' }),
