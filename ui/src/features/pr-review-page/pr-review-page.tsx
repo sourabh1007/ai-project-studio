@@ -334,8 +334,8 @@ export function PrReviewPage({
   const graph = review?.changeGraph ?? null;
 
   const chatGraph =
-    (category: ChangeGraphCategory) => async (messages: PrReviewChatMessage[]) =>
-      (await api.chatPrReviewGraph(featureId, category, messages)).answer;
+    (category: ChangeGraphCategory) => (messages: PrReviewChatMessage[]) =>
+      api.chatPrReviewGraph(featureId, category, messages);
 
   return (
     <div className="pr-review-page">

@@ -183,10 +183,39 @@ export interface PrReviewChatMessage {
   content: string;
 }
 
+/** A short note the assistant pins to one node to enrich the diagram. */
+export interface ChangeGraphAnnotationNote {
+  /** Repo-relative path of the node the note is attached to. */
+  path: string;
+  /** The note text (short; clamped when parsed). */
+  text: string;
+}
+
+/**
+ * An optional overlay the "explain this diagram" chat can attach to its answer
+ * to *enhance the node diagram itself*: spotlight the nodes it is talking about,
+ * trace an ordered flow through them, and pin short notes to specific files. All
+ * paths are validated against the real graph, so the overlay can never point at
+ * a node that is not on the diagram.
+ */
+export interface ChangeGraphAnnotations {
+  /** Node paths to spotlight (deduped; only real nodes). */
+  highlight: string[];
+  /** An ordered path of node paths to trace as a flow (deduped-in-order). */
+  focusFlow: string[];
+  /** Short notes pinned to specific nodes. */
+  notes: ChangeGraphAnnotationNote[];
+}
+
 /** The assistant's answer to a change-graph chat turn. */
 export interface PrReviewChatReply {
   /** The assistant's Markdown answer to the latest question. */
   answer: string;
+  /**
+   * An optional diagram overlay parsed from the answer (spotlights, a traced
+   * flow, pinned notes). Absent when the answer carried no valid annotations.
+   */
+  annotations?: ChangeGraphAnnotations;
 }
 
 /** Minimal pull-request identity captured with a review so it can be re-run. */

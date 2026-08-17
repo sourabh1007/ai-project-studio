@@ -296,6 +296,24 @@ export interface PrReviewChatMessage {
 /** The assistant's answer to a change-graph chat turn. */
 export interface PrReviewChatReply {
   answer: string;
+  /** Optional diagram overlay parsed from the answer; absent when none. */
+  annotations?: ChangeGraphAnnotations;
+}
+
+/** A short note the chat pins to one node to enrich the diagram. */
+export interface ChangeGraphAnnotationNote {
+  path: string;
+  text: string;
+}
+
+/** An overlay the "explain this diagram" chat attaches to enhance the diagram. */
+export interface ChangeGraphAnnotations {
+  /** Node paths to spotlight. */
+  highlight: string[];
+  /** An ordered path of node paths to trace as a flow. */
+  focusFlow: string[];
+  /** Short notes pinned to specific nodes. */
+  notes: ChangeGraphAnnotationNote[];
 }
 
 /** Minimal pull-request identity captured with a review. */

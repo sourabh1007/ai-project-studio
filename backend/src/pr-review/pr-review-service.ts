@@ -22,6 +22,7 @@ import {
   buildProblemStatementPrompt,
   summarizeChangeGraph,
 } from './pr-review-prompt.js';
+import { parseGraphAnnotations } from './graph-annotation-parser.js';
 import {
   isFileExplained,
   parseFileExplanation,
@@ -612,7 +613,16 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         onStart: () => {},
         onActivity: () => {},
       });
-      return { answer: text.trim() };
+      const validPaths = new Set(
+        existing.changeGraph.nodes
+          .filter((node) => node.category === category)
+          .map((node) => node.path),
+      );
+      const { answer, annotations } = parseGraphAnnotations(
+        text.trim(),
+        validPaths,
+      );
+      return annotations ? { answer, annotations } : { answer };
     },
   };
 }

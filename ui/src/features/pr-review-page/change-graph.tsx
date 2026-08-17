@@ -10,6 +10,7 @@ import {
 import { useChangeGraphLayout } from './use-change-graph-layout.js';
 import { segmentTestMethods, segmentAnnotatedTestMethods } from '../../lib/test-method-diff.js';
 import type {
+  ChangeGraphAnnotations,
   ChangeGraphCategory,
   ChangeGraphNode,
   ChangeGraphStep,
@@ -975,6 +976,31 @@ function SelectionPanel({
   );
 }
 
+/**
+ * A small pinned note the "Explain" chat attaches to a node. Rendered as a
+ * label chip below the node so the reviewer sees the AI's annotation in place on
+ * the diagram. Long text is clipped by the backend, so it always fits one line.
+ */
+function NoteBadge({ text, nodeWidth }: { text: string; nodeWidth: number }) {
+  return (
+    <g className="cg-note" transform={`translate(0 ${NODE_H + 4})`}>
+      <title>{text}</title>
+      <rect
+        className="cg-note-rect"
+        x={0}
+        y={0}
+        width={nodeWidth}
+        height={16}
+        rx={4}
+      />
+      <text className="cg-note-text" x={nodeWidth / 2} y={11} textAnchor="middle">
+        {text}
+      </text>
+    </g>
+  );
+}
+
+
 /** A colour-coded legend for the change kinds present in this category. */
 function Legend({
   kinds,
@@ -1103,6 +1129,12 @@ export function ChangeGraph({
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  // A diagram overlay the "Explain" chat can attach to its answers: spotlighted
+  // nodes, an ordered flow to trace, and short notes pinned to files. Cleared
+  // with the toolbar button. Null until the chat returns an overlay.
+  const [annotations, setAnnotations] = useState<ChangeGraphAnnotations | null>(
+    null,
+  );
   // Zoom multiplies the SVG's pixel size; navigation is native scrolling inside
   // the box (see cg-scroll), so a graph larger than the box always gets real
   // scrollbars instead of overflowing the card and pushing controls off-screen.
@@ -1237,6 +1269,33 @@ export function ChangeGraph({
     }
     return set;
   }, [step.nodes, category]);
+
+  // Derived overlay lookups: which nodes are spotlighted, which node carries a
+  // pinned note, and which directed file pairs form the traced flow. The flow is
+  // matched in both directions so it highlights the diagram edge regardless of
+  // whether the call flows with or against the reference arrow.
+  const highlightSet = useMemo(
+    () => new Set(annotations?.highlight ?? []),
+    [annotations],
+  );
+  const noteByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const note of annotations?.notes ?? []) {
+      map.set(note.path, note.text);
+    }
+    return map;
+  }, [annotations]);
+  const flowEdgeSet = useMemo(() => {
+    const set = new Set<string>();
+    const flow = annotations?.focusFlow ?? [];
+    for (let i = 0; i + 1 < flow.length; i += 1) {
+      set.add(`${flow[i]}\u0000${flow[i + 1]}`);
+      set.add(`${flow[i + 1]}\u0000${flow[i]}`);
+    }
+    return set;
+  }, [annotations]);
+  const hasAnnotations =
+    highlightSet.size > 0 || noteByPath.size > 0 || flowEdgeSet.size > 0;
 
   if (layout.boxes.length === 0) {
     return (
@@ -1410,6 +1469,17 @@ export function ChangeGraph({
               >
                 <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-pr" />
               </marker>
+              <marker
+                id="cg-arrow-flow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="8"
+                markerHeight="8"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" className="cg-arrow-head-flow" />
+              </marker>
             </defs>
             <g
               transform={`translate(${originX} ${originY})`}
@@ -1490,16 +1560,21 @@ export function ChangeGraph({
               const y1 = edge.y1 + offFrom.dy;
               const x2 = edge.x2 + offTo.dx;
               const y2 = edge.y2 + offTo.dy;
+              const onFlow = flowEdgeSet.has(`${edge.from}\u0000${edge.to}`);
               return (
                 <g key={`${edge.from}->${edge.to}`}>
                   <line
-                    className={`cg-link${edge.highlightsChanges ? ' cg-link-pr' : ''}`}
+                    className={`cg-link${edge.highlightsChanges ? ' cg-link-pr' : ''}${onFlow ? ' cg-link-flow' : ''}`}
                     x1={x1}
                     y1={y1}
                     x2={x2}
                     y2={y2}
                     markerEnd={
-                      edge.highlightsChanges ? 'url(#cg-arrow-pr)' : 'url(#cg-arrow)'
+                      onFlow
+                        ? 'url(#cg-arrow-flow)'
+                        : edge.highlightsChanges
+                          ? 'url(#cg-arrow-pr)'
+                          : 'url(#cg-arrow)'
                     }
                     style={{ animationDelay: `${i * 18}ms` }}
                   />
@@ -1519,10 +1594,12 @@ export function ChangeGraph({
             {layout.nodes.map((node, i) => {
               const isSel = node.path === selected;
               const off = boxDrag.of(node.projectId);
+              const highlighted = highlightSet.has(node.path);
+              const note = noteByPath.get(node.path);
               return (
                 <g
                   key={node.path}
-                  className={`cg-filenode cg-draggable cg-filenode-${node.kind}${node.flow ? ` cg-flow-${node.flow}` : ''}${isSel ? ' cg-filenode-selected' : ''}`}
+                  className={`cg-filenode cg-draggable cg-filenode-${node.kind}${node.flow ? ` cg-flow-${node.flow}` : ''}${highlighted ? ' cg-filenode-spotlight' : ''}${isSel ? ' cg-filenode-selected' : ''}`}
                   transform={`translate(${node.x + off.dx} ${node.y + off.dy})`}
                   style={{ animationDelay: `${i * 20}ms` }}
                   {...boxDrag.handlers(node.projectId)}
@@ -1558,6 +1635,7 @@ export function ChangeGraph({
                   {node.flow && (
                     <FlowMarker flow={node.flow} nodeWidth={node.width} />
                   )}
+                  {note && <NoteBadge text={note} nodeWidth={node.width} />}
                 </g>
               );
             })}
@@ -1574,6 +1652,16 @@ export function ChangeGraph({
               title="Explain this diagram and ask questions about it"
             >
               <AiIcon size={14} /> Explain
+            </button>
+          )}
+          {hasAnnotations && (
+            <button
+              type="button"
+              className="cg-clear-annotations"
+              onClick={() => setAnnotations(null)}
+              title="Remove the highlights, flow and notes the chat added"
+            >
+              Clear highlights
             </button>
           )}
           <button
@@ -1643,6 +1731,7 @@ export function ChangeGraph({
           <GraphChat
             category={category}
             onSend={onChat}
+            onAnnotations={setAnnotations}
             onClose={() => setChatOpen(false)}
           />
         )}

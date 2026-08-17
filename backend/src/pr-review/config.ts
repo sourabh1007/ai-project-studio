@@ -147,6 +147,17 @@ export const prReviewDefaults: PrReviewConfig = {
     '## Conversation so far\n{{conversation}}',
     '## Reviewer question\n{{question}}',
     'Respond in concise Markdown. Do not repeat the question back.',
+    'You may ALSO enhance the diagram itself. When your answer refers to ' +
+      'specific files, a flow, or a change worth marking, append a single fenced ' +
+      'code block tagged `pr-graph` after your prose whose body is JSON of the ' +
+      'form: {"highlight":["<file path>", …],"focusFlow":["<file path>", …in ' +
+      'call order],"notes":[{"path":"<file path>","text":"<short note>"}]}. Use ' +
+      'exact file paths from the data above; omit any field you are not using; ' +
+      'omit the whole block when there is nothing to mark. "highlight" spotlights ' +
+      'the nodes you are discussing, "focusFlow" traces an ordered path through ' +
+      'the diagram, and each "notes" entry pins a short label to one node. The ' +
+      'block is rendered onto the diagram and stripped from your prose, so do ' +
+      'not mention it in the text.',
   ].join('\n\n'),
   graphChatNoHistoryPlaceholder: '(no earlier messages — this is the first question)',
 };

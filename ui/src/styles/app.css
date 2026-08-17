@@ -2198,6 +2198,40 @@ body.is-resizing {
   fill: var(--text-muted, #8b949e);
 }
 
+/* Chat-driven diagram overlay: spotlighted nodes, a traced flow, pinned notes. */
+.cg-filenode-spotlight .cg-filenode-rect {
+  stroke: #58a6ff;
+  stroke-width: 2.6;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, #58a6ff 70%, transparent));
+}
+
+.cg-link-flow {
+  stroke: #58a6ff;
+  stroke-width: 2.6;
+  opacity: 1;
+}
+
+.cg-arrow-head-flow {
+  fill: #58a6ff;
+}
+
+.cg-note-rect {
+  fill: color-mix(in srgb, #58a6ff 20%, var(--panel));
+  stroke: #58a6ff;
+  stroke-width: 1;
+}
+
+.cg-note-text {
+  fill: var(--text);
+  font-size: 10px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.cg-clear-annotations {
+  white-space: nowrap;
+}
+
 .cg-filenode-label {
   fill: var(--text);
   font-size: 11px;

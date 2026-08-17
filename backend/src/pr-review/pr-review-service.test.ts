@@ -615,6 +615,38 @@ describe('createPrReviewService', () => {
     expect(h.prompts[h.prompts.length - 1]).toContain('Change graph (code)');
   });
 
+  it('parses a diagram overlay from a chat answer and validates its paths', async () => {
+    const text = (prompt: string): string => {
+      if (prompt.includes('Reviewer question')) {
+        return (
+          'Service calls into Store.\n\n' +
+          '```pr-graph\n' +
+          JSON.stringify({
+            highlight: ['src/Service.cs', 'ghost.cs'],
+            focusFlow: ['src/Service.cs', 'src/Store.cs'],
+            notes: [{ path: 'src/Store.cs', text: 'data layer' }],
+          }) +
+          '\n```'
+        );
+      }
+      return defaultProblemText();
+    };
+    const h = harness({ text });
+    h.service.start(startInput);
+    await settle();
+
+    const reply = await h.service.chatAboutGraph('f1', 'code', [
+      { role: 'user', content: 'Show the flow.' },
+    ]);
+    // Prose is stripped of the block; the ghost path is dropped as it is not a node.
+    expect(reply.answer).toBe('Service calls into Store.');
+    expect(reply.annotations).toEqual({
+      highlight: ['src/Service.cs'],
+      focusFlow: ['src/Service.cs', 'src/Store.cs'],
+      notes: [{ path: 'src/Store.cs', text: 'data layer' }],
+    });
+  });
+
   it('chatAboutGraph rejects when the review is missing', async () => {
     const h = harness();
     await expect(

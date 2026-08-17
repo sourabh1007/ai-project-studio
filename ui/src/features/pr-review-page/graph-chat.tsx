@@ -2,14 +2,21 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import { AiChatIcon, CloseIcon, SendIcon } from '../../components/icons.js';
 import type {
+  ChangeGraphAnnotations,
   ChangeGraphCategory,
   PrReviewChatMessage,
 } from '../../lib/types.js';
 
-/** Sends the running conversation and resolves the assistant's next answer. */
+/** The assistant's reply to a chat turn: prose plus an optional diagram overlay. */
+export interface GraphChatReply {
+  answer: string;
+  annotations?: ChangeGraphAnnotations;
+}
+
+/** Sends the running conversation and resolves the assistant's next reply. */
 export type GraphChatSend = (
   messages: PrReviewChatMessage[],
-) => Promise<string>;
+) => Promise<GraphChatReply>;
 
 /** Posts `body` as a comment on the PR; resolves `true` when it lands. */
 export type FindingCommentSend = (body: string) => Promise<boolean>;
@@ -37,10 +44,13 @@ function AssistantBubble({ content }: { content: string }) {
 export function GraphChat({
   category,
   onSend,
+  onAnnotations,
   onClose,
 }: {
   category: ChangeGraphCategory;
   onSend: GraphChatSend;
+  /** Receives the diagram overlay from each answer (null when it carries none). */
+  onAnnotations?: (annotations: ChangeGraphAnnotations | null) => void;
   onClose: () => void;
 }) {
   const [messages, setMessages] = useState<PrReviewChatMessage[]>([]);
@@ -61,8 +71,9 @@ export function GraphChat({
         setBusy(true);
         setError(null);
         try {
-          const answer = await onSend(next);
-          setMessages([...next, { role: 'assistant', content: answer }]);
+          const reply = await onSend(next);
+          setMessages([...next, { role: 'assistant', content: reply.answer }]);
+          onAnnotations?.(reply.annotations ?? null);
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
           // Drop the un-answered question so a retry does not stack duplicates.
@@ -71,7 +82,7 @@ export function GraphChat({
           setBusy(false);
         }
       },
-    [messages, onSend],
+    [messages, onSend, onAnnotations],
   );
 
   // Auto-ask for an overview exactly once when the panel first opens.
@@ -213,8 +224,8 @@ export function FindingChat({
         setBusy(true);
         setError(null);
         try {
-          const answer = await onSend(next);
-          setMessages([...next, { role: 'assistant', content: answer }]);
+          const reply = await onSend(next);
+          setMessages([...next, { role: 'assistant', content: reply.answer }]);
         } catch (err) {
           setError(err instanceof Error ? err.message : String(err));
           setMessages(messages);
