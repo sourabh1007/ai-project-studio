@@ -20,7 +20,12 @@ export interface GithubAuthStatus {
 }
 
 export interface GithubAuth {
-  /** Whether `gh` reports an authenticated account, and its login name. */
+  /**
+   * Whether `gh` reports an authenticated account, and its login name. A
+   * transient GitHub outage that fails token *validation* still counts as
+   * signed in when a credential is stored locally, so a blip does not demand a
+   * pointless re-sign-in.
+   */
   status(): Promise<GithubAuthStatus>;
   /** The current GitHub token, or null when unavailable / not logged in. */
   token(): Promise<string | null>;
@@ -45,13 +50,29 @@ export function createGithubAuth(deps: { run: GhRunner }): GithubAuth {
   return {
     async status() {
       const res = await deps.run(['auth', 'status']);
-      if (res.code !== 0) {
-        return { authenticated: false, login: null };
+      if (res.code === 0) {
+        return {
+          authenticated: true,
+          login: parseGhLogin(`${res.stdout}\n${res.stderr}`),
+        };
       }
-      return {
-        authenticated: true,
-        login: parseGhLogin(`${res.stdout}\n${res.stderr}`),
-      };
+      // `gh auth status` validates the token against GitHub, so a transient
+      // outage (a 5xx / "could not validate the token" while GitHub is briefly
+      // unavailable) makes it exit non-zero even though a usable credential is
+      // stored locally. Falling straight to "sign in required" then wrongly
+      // nags the user to re-authenticate — and the device-flow they start hits
+      // the same down servers and appears to hang. So on failure, fall back to
+      // the stored token (read from the keyring without a network round-trip):
+      // if one exists we still hold a credential, so report signed in rather
+      // than stranding the user during a blip.
+      const stored = await deps.run(['auth', 'token']);
+      if (stored.code === 0 && stored.stdout.trim().length > 0) {
+        return {
+          authenticated: true,
+          login: parseGhLogin(`${res.stdout}\n${res.stderr}`),
+        };
+      }
+      return { authenticated: false, login: null };
     },
     async token() {
       const res = await deps.run(['auth', 'token']);

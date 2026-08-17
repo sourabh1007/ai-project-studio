@@ -43,10 +43,46 @@ describe('createGithubAuth', () => {
 
   it('reports not authenticated when gh exits non-zero', async () => {
     const auth = createGithubAuth({
-      run: runner({ 'auth status': { code: 1, stdout: '', stderr: 'x' } }),
+      run: runner({
+        'auth status': { code: 1, stdout: '', stderr: 'x' },
+        'auth token': { code: 1, stdout: '', stderr: 'no token' },
+      }),
     });
     expect(await auth.status()).toEqual({
       authenticated: false,
+      login: null,
+    });
+  });
+
+  it('stays signed in when validation fails transiently but a token is stored', async () => {
+    // `gh auth status` fails during a GitHub outage, yet the credential is
+    // still in the keyring — the badge must not flip to "sign in required".
+    const auth = createGithubAuth({
+      run: runner({
+        'auth status': {
+          code: 1,
+          stdout: '',
+          stderr:
+            'Logged in to github.com account octocat (keyring)\n  X Failed to validate token: GitHub returned 503',
+        },
+        'auth token': { code: 0, stdout: 'gho_stored\n', stderr: '' },
+      }),
+    });
+    expect(await auth.status()).toEqual({
+      authenticated: true,
+      login: 'octocat',
+    });
+  });
+
+  it('reports signed in without a login when the token is stored but status is bare', async () => {
+    const auth = createGithubAuth({
+      run: runner({
+        'auth status': { code: 1, stdout: '', stderr: 'could not connect' },
+        'auth token': { code: 0, stdout: 'gho_stored\n', stderr: '' },
+      }),
+    });
+    expect(await auth.status()).toEqual({
+      authenticated: true,
       login: null,
     });
   });

@@ -808,12 +808,15 @@ function main(): void {
           // long-running git operations get a much larger buffer.
           maxBuffer: opts.longRunning ? 512 * 1024 * 1024 : 1024 * 1024,
           // A silent status check must never hang the sidebar "checking…" pill;
-          // an interactive sign-in legitimately waits on the browser (unbounded),
-          // and a worktree checkout of a huge repo legitimately runs for minutes
-          // — but must still not hang *forever* if git stalls on a network read
-          // or a credential wait, so it gets a generous finite ceiling rather
-          // than no timeout at all.
-          timeout: opts.interactive ? 0 : opts.longRunning ? 900_000 : 20_000,
+          // an interactive sign-in legitimately waits on the browser (through
+          // an account picker + MFA), and a worktree checkout of a huge repo
+          // legitimately runs for minutes — but none may hang *forever* if git
+          // or GCM stalls on a network read, a wedged browser handshake, or a
+          // credential wait, so each gets a generous finite ceiling rather than
+          // no timeout at all. Without this, a stalled interactive sign-in kept
+          // the /azure/signin request (and its "Signing in…" spinner) spinning
+          // indefinitely with no way to recover.
+          timeout: opts.interactive ? 300_000 : opts.longRunning ? 900_000 : 20_000,
           env: {
             ...process.env,
             // Sign-in may show the browser prompt; the silent status check must
