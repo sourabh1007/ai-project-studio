@@ -13,6 +13,7 @@ const STREAM_EVENT_NAMES = [
   'session.output',
   'session.ended',
   'session.updated',
+  'session.file',
   'usage.recorded',
   'repository.context.updated',
   'context.status',

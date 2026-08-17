@@ -39,6 +39,12 @@ export type SessionEventMap = {
    * usage tailer. Carries the session id.
    */
   'session.discarded': string;
+  /**
+   * A session just created or edited a file (parsed from its own terminal
+   * output). Carries only the session id; clients re-fetch the authoritative
+   * file list so the left-panel Files view updates live as the CLI works.
+   */
+  'session.file': { sessionId: string };
 };
 
 export interface SessionLauncherDeps {

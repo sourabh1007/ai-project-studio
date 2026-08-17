@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyCopyCut,
   fieldSelectionText,
+  toClipboardText,
+  createPasteGuard,
   type ClipboardKeyEvent,
 } from './clipboard.js';
 
@@ -65,5 +67,47 @@ describe('fieldSelectionText', () => {
     expect(
       fieldSelectionText({ value: 'hello', selectionStart: 1, selectionEnd: null }),
     ).toBe('');
+  });
+});
+
+describe('toClipboardText', () => {
+  it('converts LF to CRLF on Windows', () => {
+    expect(toClipboardText('a\nb\nc', true)).toBe('a\r\nb\r\nc');
+  });
+
+  it('never doubles an existing CR on Windows', () => {
+    expect(toClipboardText('a\r\nb', true)).toBe('a\r\nb');
+  });
+
+  it('leaves line endings untouched off Windows', () => {
+    expect(toClipboardText('a\nb', false)).toBe('a\nb');
+  });
+});
+
+describe('createPasteGuard', () => {
+  it('accepts the first paste and rejects an identical one inside the window', () => {
+    const guard = createPasteGuard(50);
+    expect(guard.shouldPaste('hi', 1000)).toBe(true);
+    expect(guard.shouldPaste('hi', 1010)).toBe(false);
+  });
+
+  it('anchors the window to the first paste, not the rejected duplicates', () => {
+    const guard = createPasteGuard(50);
+    expect(guard.shouldPaste('hi', 1000)).toBe(true);
+    expect(guard.shouldPaste('hi', 1040)).toBe(false);
+    // 1080 is >50ms after the accepted paste at 1000, so it is a fresh paste.
+    expect(guard.shouldPaste('hi', 1080)).toBe(true);
+  });
+
+  it('accepts an identical paste once the window has elapsed', () => {
+    const guard = createPasteGuard(50);
+    expect(guard.shouldPaste('hi', 1000)).toBe(true);
+    expect(guard.shouldPaste('hi', 1100)).toBe(true);
+  });
+
+  it('accepts different text immediately', () => {
+    const guard = createPasteGuard(50);
+    expect(guard.shouldPaste('hi', 1000)).toBe(true);
+    expect(guard.shouldPaste('bye', 1005)).toBe(true);
   });
 });

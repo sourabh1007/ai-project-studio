@@ -20,6 +20,7 @@ describe('subscribeStream', () => {
     });
     bus.emit('session.ended', { id: 's1' } as never);
     bus.emit('session.updated', { id: 's1' } as never);
+    bus.emit('session.file', { sessionId: 's1' });
     bus.emit('usage.recorded', { sessionId: 's1' } as never);
     bus.emit('repository.context.updated', {
       repositoryId: 'r1',
@@ -43,6 +44,7 @@ describe('subscribeStream', () => {
       'session.output',
       'session.ended',
       'session.updated',
+      'session.file',
       'usage.recorded',
       'repository.context.updated',
       'pr.review.updated',
@@ -54,7 +56,7 @@ describe('subscribeStream', () => {
 
     off();
     bus.emit('session.started', { id: 's2' } as never);
-    expect(events).toHaveLength(11);
+    expect(events).toHaveLength(12);
   });
 
   it('does not stream internal session lifecycle or output events', () => {

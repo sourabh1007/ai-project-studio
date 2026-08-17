@@ -15,6 +15,7 @@ export type StreamEvent =
   | { type: 'session.ended'; session: Session }
   | { type: 'session.updated'; session: Session }
   | { type: 'session.output'; sessionId: string; line: string }
+  | { type: 'session.file'; sessionId: string }
   | { type: 'usage.recorded'; usage: StoredUsage }
   | { type: 'repository.context.updated'; context: RepositoryContext }
   | { type: 'pr.review.updated'; review: PrReview }
@@ -37,6 +38,12 @@ export interface LiveState {
   contextStatus: Record<string, ContextStatusPhase>;
   automations: Record<string, Automation>;
   subagents: Record<string, Subagent>;
+  /**
+   * Per-session count of observed file create/edit events. Bumps on every
+   * `session.file`; consumers use it as an effect dependency to re-fetch the
+   * authoritative session file list so the Files view updates live.
+   */
+  fileChangesBySession: Record<string, number>;
 }
 
 export const initialLiveState: LiveState = {
@@ -48,6 +55,7 @@ export const initialLiveState: LiveState = {
   contextStatus: {},
   automations: {},
   subagents: {},
+  fileChangesBySession: {},
 };
 
 /** Stable key that dedupes usage events by session + turn. */
@@ -84,6 +92,11 @@ export function parseServerEvent(
       }
       return null;
     }
+    case 'session.file':
+      return {
+        type: 'session.file',
+        sessionId: (JSON.parse(data) as { sessionId: string }).sessionId,
+      };
     case 'usage.recorded':
       return { type: 'usage.recorded', usage: JSON.parse(data) as StoredUsage };
     case 'repository.context.updated':
@@ -141,6 +154,16 @@ export function applyStreamEvent(
         outputBySession: {
           ...state.outputBySession,
           [event.sessionId]: [...previous, event.line],
+        },
+      };
+    }
+    case 'session.file': {
+      const previous = state.fileChangesBySession[event.sessionId] ?? 0;
+      return {
+        ...state,
+        fileChangesBySession: {
+          ...state.fileChangesBySession,
+          [event.sessionId]: previous + 1,
         },
       };
     }

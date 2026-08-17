@@ -143,9 +143,11 @@ function makeManager(
   const started: Session[] = [];
   const ended: Session[] = [];
   const discarded: string[] = [];
+  const fileEvents: Array<{ sessionId: string }> = [];
   bus.on('session.started', (s) => started.push(s));
   bus.on('session.ended', (s) => ended.push(s));
   bus.on('session.discarded', (id) => discarded.push(id));
+  bus.on('session.file', (e) => fileEvents.push(e));
   const instructionCalls: string[] = [];
   const recorded: Array<{ sessionId: string; path: string; tool: string }> = [];
   const modelResolved: Array<{ sessionId: string; model: string }> = [];
@@ -184,6 +186,7 @@ function makeManager(
     started,
     ended,
     discarded,
+    fileEvents,
     saved: ts.saved,
     instructionCalls,
     recorded,
@@ -461,6 +464,25 @@ describe('createTerminalManager', () => {
         { sessionId: 'sess-1', path: '/home/me/notes.md', tool: 'create' },
         { sessionId: 'sess-1', path: '/home/me/src/app.ts', tool: 'create' },
       ]);
+    });
+
+    it('emits session.file for each detected file so the UI refreshes live', async () => {
+      const { manager, env, fileEvents } = makeManager('', true);
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('FILE: notes.md');
+      env.emitData('some unrelated output');
+      env.emitData('FILE: src/app.ts');
+      expect(fileEvents).toEqual([
+        { sessionId: 'sess-1' },
+        { sessionId: 'sess-1' },
+      ]);
+    });
+
+    it('emits no session.file when the provider exposes no scanner', async () => {
+      const { manager, env, fileEvents } = makeManager('', false);
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('FILE: notes.md');
+      expect(fileEvents).toEqual([]);
     });
 
     it('records nothing when the provider exposes no scanner', async () => {

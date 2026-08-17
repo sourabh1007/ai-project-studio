@@ -9,6 +9,7 @@ import {
   decodeServerMessage,
   encodeClientMessage,
 } from '../lib/terminal-protocol.js';
+import { toClipboardText, createPasteGuard } from '../lib/clipboard.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -74,17 +75,11 @@ function desktopBridge(): DesktopClipboard | undefined {
 
 /**
  * Normalises copied terminal text to the host's clipboard line-ending
- * convention. xterm's `getSelection()` joins rows with a bare LF, but on Windows
- * the clipboard convention is CRLF — pasting LF-only text into Notepad and many
- * native apps collapses every line onto one, which reads as "broken formatting".
- * Converting to CRLF on Windows keeps multi-line copies correctly formatted;
- * other platforms keep LF. The regex first strips any existing CR so the result
- * is never doubled.
+ * convention (CRLF on Windows, LF elsewhere) via the pure `toClipboardText`
+ * helper. Detecting the platform here keeps that helper DOM-free and testable.
  */
-function toClipboardText(text: string): string {
-  const isWindows =
-    typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
-  return isWindows ? text.replace(/\r?\n/g, '\r\n') : text;
+function hostIsWindows(): boolean {
+  return typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
 }
 
 /**
@@ -97,7 +92,7 @@ function copyToClipboard(text: string): void {
   if (!text) {
     return;
   }
-  const normalized = toClipboardText(text);
+  const normalized = toClipboardText(text, hostIsWindows());
   const bridge = desktopBridge();
   if (bridge?.copyText) {
     bridge.copyText(normalized);
@@ -339,8 +334,12 @@ export function TerminalView({
       }
     });
 
+    // Collapse duplicate pastes delivered as one user action (see
+    // createPasteGuard). 40ms is far below deliberate double-paste speed, so a
+    // real repeat is never suppressed, but a doubled single paste is.
+    const pasteGuard = createPasteGuard(40);
     const paste = (text: string) => {
-      if (text) {
+      if (text && pasteGuard.shouldPaste(text, Date.now())) {
         term.paste(text);
       }
     };
@@ -447,11 +446,13 @@ export function TerminalView({
         /* terminal may be disposed during teardown; ignore */
       }
     };
+    let dragActive = false;
     const onHostMouseDown = () => {
       // Start of a fresh interaction: reset the copy-on-select capture so a
       // plain click (no drag) never copies and never clobbers the clipboard.
       selectedDuringDrag = false;
       lastSelection = '';
+      dragActive = true;
       // Defer so xterm's own selection/focus handling runs first.
       timeoutIds.push(window.setTimeout(refocus, 0));
     };
@@ -459,13 +460,20 @@ export function TerminalView({
     // Copy-on-select fires exactly once, at the END of a drag that actually
     // selected text — using the cached selection so it survives the TUI's
     // mid-drag re-render. A click with no drag selects nothing and copies
-    // nothing, so the user's existing clipboard is left untouched.
-    const onHostMouseUp = () => {
+    // nothing, so the user's existing clipboard is left untouched. The listener
+    // lives on `window` (not the host) so a drag that ends OUTSIDE the terminal
+    // — e.g. selecting down to the last line and releasing past its edge, a very
+    // common gesture — still copies instead of silently dropping the selection.
+    const onDocumentMouseUp = () => {
+      if (!dragActive) {
+        return;
+      }
+      dragActive = false;
       if (selectedDuringDrag && lastSelection) {
         copyToClipboard(lastSelection);
       }
     };
-    host.addEventListener('mouseup', onHostMouseUp);
+    window.addEventListener('mouseup', onDocumentMouseUp);
     window.addEventListener('focus', refocus);
 
     ws.onopen = () => {
@@ -500,8 +508,8 @@ export function TerminalView({
     return () => {
       window.removeEventListener('resize', applyFitSettled);
       window.removeEventListener('focus', refocus);
+      window.removeEventListener('mouseup', onDocumentMouseUp);
       host.removeEventListener('mousedown', onHostMouseDown);
-      host.removeEventListener('mouseup', onHostMouseUp);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('paste', onPaste, { capture: true });
       observer?.disconnect();

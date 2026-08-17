@@ -20,9 +20,23 @@ function desktopBridge(): DesktopBridge | undefined {
  * the store for every session on every render. In the desktop app a row reveals
  * the file in the OS file explorer; in the browser it stays informational.
  */
-export function SessionFiles({ sessionId }: { sessionId: string }) {
+export function SessionFiles({
+  sessionId,
+  reloadSignal = 0,
+}: {
+  sessionId: string;
+  /**
+   * Bumps whenever the session records a new file (via the live SSE stream), so
+   * the list re-fetches immediately as the CLI creates/edits files instead of
+   * only when the disclosure is first opened.
+   */
+  reloadSignal?: number;
+}) {
   const api = useApi();
-  const files = useAsync(() => api.listSessionFiles(sessionId), [sessionId]);
+  const files = useAsync(
+    () => api.listSessionFiles(sessionId),
+    [sessionId, reloadSignal],
+  );
   const bridge = desktopBridge();
 
   if (files.loading) {

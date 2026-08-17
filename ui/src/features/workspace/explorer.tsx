@@ -277,7 +277,12 @@ function SessionRow({
           <FilesIcon size={12} />
           <span>Files</span>
         </button>
-        {filesOpen && <SessionFiles sessionId={session.id} />}
+        {filesOpen && (
+          <SessionFiles
+            sessionId={session.id}
+            reloadSignal={live.fileChangesBySession[session.id] ?? 0}
+          />
+        )}
       </div>
     </div>
   );

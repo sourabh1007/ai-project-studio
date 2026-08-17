@@ -153,6 +153,14 @@ describe('parseServerEvent', () => {
     expect(event).toEqual({ type: 'session.updated', session: updated });
   });
 
+  it('parses session.file', () => {
+    const event = parseServerEvent(
+      'session.file',
+      JSON.stringify({ sessionId: 's1' }),
+    );
+    expect(event).toEqual({ type: 'session.file', sessionId: 's1' });
+  });
+
   it('parses a stdout output frame', () => {
     const event = parseServerEvent(
       'session.output',
@@ -243,6 +251,18 @@ describe('applyStreamEvent', () => {
       session: { ...session('s1'), resolvedModel: 'claude-opus-4.8' },
     });
     expect(state.sessions['s1'].resolvedModel).toBe('claude-opus-4.8');
+  });
+
+  it('counts session.file events per session (live Files refresh signal)', () => {
+    let state = applyStreamEvent(initialLiveState, {
+      type: 'session.file',
+      sessionId: 's1',
+    });
+    expect(state.fileChangesBySession['s1']).toBe(1);
+    state = applyStreamEvent(state, { type: 'session.file', sessionId: 's1' });
+    state = applyStreamEvent(state, { type: 'session.file', sessionId: 's2' });
+    expect(state.fileChangesBySession['s1']).toBe(2);
+    expect(state.fileChangesBySession['s2']).toBe(1);
   });
 
   it('appends output lines per session', () => {

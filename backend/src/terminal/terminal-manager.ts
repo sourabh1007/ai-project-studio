@@ -198,6 +198,10 @@ export function createTerminalManager(
             op.tool,
             deps.clock.isoNow(),
           );
+          // Notify clients so the left-panel Files view refreshes live rather
+          // than only on remount. Carries just the session id; the UI re-fetches
+          // the authoritative list.
+          deps.bus.emit('session.file', { sessionId: spec.sessionId });
         }
       },
       exit: () => {},
