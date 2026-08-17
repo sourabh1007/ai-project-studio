@@ -62,7 +62,13 @@ the PR modified and how they connect.
 > (no AI, so it never hangs), one pluggable analyzer per language. Today it
 > understands **C#** (`.cs`), **JavaScript/TypeScript** (`.js/.jsx/.ts/.tsx` and
 > the `.mjs/.cjs/.mts/.cts` variants), **Java** (`.java`), **Rust** (`.rs`) and
-> **C/C++** (`.c/.cc/.cpp/.cxx/.h/.hpp/…`). Every graph feature — edges, caller
+> **C/C++** (`.c/.cc/.cpp/.cxx/.h/.hpp/…`). It also understands **Azure Service
+> Fabric** application packaging (`ApplicationManifest.xml`, `ServiceManifest.xml`
+> and `Settings.xml`): the application manifest is the composition root, so edges
+> run from it to the service manifests it imports (`ServiceManifestName` /
+> `ServiceTypeName`) and to the settings sections its `<ConfigOverride>`s target —
+> a clean, uncluttered map of how the package is wired, grounded entirely in the
+> manifest XML. Every graph feature — edges, caller
 > blast-radius, the focused diagram, PR-description export — works for all of
 > them out of the box; adding another language is a single analyzer, no builder
 > or UI changes. To avoid false edges, a type name that appears only inside a

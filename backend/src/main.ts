@@ -342,6 +342,7 @@ import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
 import { createJavaAnalyzer } from './pr-review/java-analyzer.js';
 import { createRustAnalyzer } from './pr-review/rust-analyzer.js';
 import { createCppAnalyzer } from './pr-review/cpp-analyzer.js';
+import { createServiceFabricAnalyzer } from './pr-review/service-fabric-analyzer.js';
 import { nodeChangeGraphFs } from './pr-review/change-graph-fs.js';
 import { createPrReviewReconciler } from './pr-review/pr-review-reconciler.js';
 import { createMetaUsageReader } from './pr-review/meta-usage-reader.js';
@@ -1490,6 +1491,7 @@ function main(): void {
       createJavaAnalyzer(),
       createRustAnalyzer(),
       createCppAnalyzer(),
+      createServiceFabricAnalyzer(),
     ]),
     changeGraphFs: nodeChangeGraphFs,
     ai: warmMetaRunner ?? metaRunner,
