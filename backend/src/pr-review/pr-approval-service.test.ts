@@ -101,7 +101,7 @@ describe('createPrApprovalService', () => {
   it('throws when the feature has no PR review', async () => {
     const { service } = setup();
     await expect(service.approve('missing')).rejects.toThrow(
-      /No PR review for feature missing/,
+      /No code review for feature missing/,
     );
   });
 

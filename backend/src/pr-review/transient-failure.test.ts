@@ -32,7 +32,7 @@ describe('isTransientProviderFailure', () => {
 
   it('does not treat a genuine, non-infra failure as transient', () => {
     expect(isTransientProviderFailure('provider exited 1')).toBe(false);
-    expect(isTransientProviderFailure('PR review step failed')).toBe(false);
+    expect(isTransientProviderFailure('Code review step failed')).toBe(false);
     expect(isTransientProviderFailure('')).toBe(false);
   });
 });

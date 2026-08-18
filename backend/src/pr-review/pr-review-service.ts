@@ -118,7 +118,7 @@ export interface PrReviewService {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'PR review step failed';
+  return error instanceof Error ? error.message : 'Code review step failed';
 }
 
 /**
@@ -503,7 +503,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     get(featureId) {
       const review = deps.reviews.get(featureId);
       if (!review) {
-        throw new NotFoundError(`PR review is not available: ${featureId}`);
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
       }
       return enrich(review);
     },
@@ -526,7 +526,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     refresh(featureId) {
       const existing = deps.reviews.get(featureId);
       if (!existing) {
-        throw new NotFoundError(`PR review is not available: ${featureId}`);
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
       }
       removed.delete(featureId);
       const reset = newReview(
@@ -549,7 +549,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     retryStep(featureId, step) {
       const existing = deps.reviews.get(featureId);
       if (!existing) {
-        throw new NotFoundError(`PR review is not available: ${featureId}`);
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
       }
       if (!ALL_STEPS.includes(step)) {
         throw new NotFoundError(`Unknown PR review step: ${step}`);
@@ -566,7 +566,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     async explainFile(featureId, path) {
       const existing = deps.reviews.get(featureId);
       if (!existing) {
-        throw new NotFoundError(`PR review is not available: ${featureId}`);
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
       }
       const index = existing.changeGraph.nodes.findIndex((f) => f.path === path);
       if (index === -1) {
@@ -621,7 +621,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     async chatAboutGraph(featureId, category, messages) {
       const existing = deps.reviews.get(featureId);
       if (!existing) {
-        throw new NotFoundError(`PR review is not available: ${featureId}`);
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
       }
       const graphSummary = summarizeChangeGraph({
         category,

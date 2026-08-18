@@ -32,7 +32,7 @@ export function createPrDescriptionService(
     async exportToPull(featureId): Promise<PrDescriptionResult> {
       const review = deps.reviews.get(featureId);
       if (!review) {
-        throw new NotFoundError(`No PR review for feature ${featureId}`);
+        throw new NotFoundError(`No code review for feature ${featureId}`);
       }
       const repo = deps.repos.get(review.repoId);
       if (!repo) {

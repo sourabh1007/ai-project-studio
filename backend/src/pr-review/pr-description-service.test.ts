@@ -70,7 +70,7 @@ describe('createPrDescriptionService', () => {
 
   it('throws when there is no review for the feature', async () => {
     const { svc } = harness({ reviewValue: null, repoValue: repo });
-    await expect(svc.exportToPull('f1')).rejects.toThrow('No PR review');
+    await expect(svc.exportToPull('f1')).rejects.toThrow('No code review');
   });
 
   it('throws when the review targets an unknown repository', async () => {

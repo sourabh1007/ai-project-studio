@@ -48,7 +48,7 @@ export function WorktreesSection() {
             <h2 className="page-title">Review worktrees</h2>
             <p className="page-subtitle">
               Isolated git checkouts the app created under{' '}
-              <code>.ai-worktrees</code> for PR reviews. Remove any you no longer
+              <code>.ai-worktrees</code> for code reviews. Remove any you no longer
               need to reclaim disk space.
             </p>
           </div>

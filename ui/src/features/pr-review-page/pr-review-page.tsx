@@ -345,7 +345,7 @@ export function PrReviewPage({
             <PrReviewIcon size={20} />
           </span>
           <div>
-            <h2>PR Review</h2>
+            <h2>Code Review</h2>
             {review && (
               <p className="pr-review-page-meta">
                 <a href={review.pull.url} target="_blank" rel="noreferrer">

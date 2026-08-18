@@ -402,7 +402,7 @@ describe('createPrReviewService', () => {
     service.start(startInput);
     await settle();
     expect(service.get('f1').problemStatement.failure?.message).toBe(
-      'PR review step failed',
+      'Code review step failed',
     );
   });
 

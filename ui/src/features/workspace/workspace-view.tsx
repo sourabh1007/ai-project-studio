@@ -121,7 +121,7 @@ export function WorkspaceView({
     openTab({
       kind: 'pr-review',
       id: prReviewTabId(feature.id),
-      label: `PR Review · ${feature.name}`,
+      label: `Code Review · ${feature.name}`,
       feature,
     });
   }
@@ -342,8 +342,8 @@ export function WorkspaceView({
             </Suspense>
           )}
           {active?.kind === 'pr-review' && (
-            <ErrorBoundary label="PR Review">
-              <Suspense fallback={<ViewSkeleton label="PR review" />}>
+            <ErrorBoundary label="Code Review">
+              <Suspense fallback={<ViewSkeleton label="code review" />}>
                 <PrReviewPage
                   key={active.feature.id}
                   featureId={active.feature.id}

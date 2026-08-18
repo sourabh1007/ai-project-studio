@@ -351,12 +351,12 @@ function PrReviewChild({
           className="session-open"
           aria-current={active ? 'true' : undefined}
           onClick={onOpen}
-          title={`PR Review for ${feature.name}`}
+          title={`Code Review for ${feature.name}`}
         >
           <span className="pr-review-child-icon" aria-hidden="true">
             <PrReviewIcon size={14} />
           </span>
-          <span className="session-name">PR Review</span>
+          <span className="session-name">Code Review</span>
           {working && (
             <span className="pr-review-child-working" aria-hidden="true" />
           )}
@@ -1575,7 +1575,7 @@ export function Explorer({
             <EmptyState
               icon={<RepoIcon size={20} />}
               title="No repositories yet"
-              description="Add a repository to organize sessions, features, and PR reviews around your code."
+              description="Add a repository to organize sessions, features, and code reviews around your code."
               action={{
                 label: 'Add repository',
                 onClick: () => setAddingRepo(true),
