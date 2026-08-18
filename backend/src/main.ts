@@ -336,6 +336,13 @@ import {
   type PrReviewConfig,
 } from './pr-review/config.js';
 import { createPrReviewService } from './pr-review/pr-review-service.js';
+import {
+  REVIEW_BOARD_NAMESPACE,
+  reviewBoardConfigSchema,
+  reviewBoardDefaults,
+  type ReviewBoardConfig,
+} from './review-board/config.js';
+import { createReviewBoardService } from './review-board/review-board-service.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
 import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
 import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
@@ -399,6 +406,11 @@ function main(): void {
     namespace: PR_REVIEW_NAMESPACE,
     schema: prReviewConfigSchema,
     defaults: prReviewDefaults,
+  });
+  registry.register({
+    namespace: REVIEW_BOARD_NAMESPACE,
+    schema: reviewBoardConfigSchema,
+    defaults: reviewBoardDefaults,
   });
   registry.register({
     namespace: AUTOMATION_NAMESPACE,
@@ -541,6 +553,7 @@ function main(): void {
   ] as RepositoryContextConfig;
   const repoInsightsConfig = config[REPO_INSIGHTS_NAMESPACE] as RepoInsightsConfig;
   const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
+  const reviewBoardConfig = config[REVIEW_BOARD_NAMESPACE] as ReviewBoardConfig;
   const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
 
   const featureRepo = createFeatureRepo(db);
@@ -1506,6 +1519,11 @@ function main(): void {
     bus: bus as unknown as EventBus<PrReviewEventMap>,
     config: prReviewConfig,
   });
+  const reviewBoardService = createReviewBoardService({
+    reviews: { get: (featureId) => prReviewService.get(featureId) },
+    config: reviewBoardConfig,
+    clock,
+  });
   // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
   // Azure DevOps (REST) gateway from the repo's provider, so the comments
   // service stays pure and every operation posts against the real pull request.
@@ -1794,6 +1812,7 @@ function main(): void {
       listAzureRepos: listAzureReposFor,
       prFeatures: prFeatureService,
       prReviews: prReviewService,
+      reviewBoard: reviewBoardService,
       prComments: prCommentsService,
       prApprovals: prApprovalService,
       prDescriptions: prDescriptionService,

@@ -66,6 +66,8 @@ import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
 import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
+import { createReviewBoardRoutes } from './review-board-controller.js';
+import type { ReviewBoardService } from '../review-board/review-board-contract.js';
 import { createWorktreeRoutes } from './worktree-controller.js';
 import type { WorktreeService } from '../worktrees/worktree-contract.js';
 import { createAutomationRoutes } from './automation-controller.js';
@@ -149,6 +151,8 @@ export interface ApiRoutesDeps {
   prFeatures: PrFeatureService;
   /** Automated AI reviews for PR review features. */
   prReviews: PrReviewService;
+  /** Derived, evidence-based Project Review Board for a review feature. */
+  reviewBoard: ReviewBoardService;
   /** Live PR comment threads (list / add / resolve) for the review page. */
   prComments: PrCommentsService;
   /** Live PR approval for the review page. */
@@ -215,6 +219,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prApprovals: deps.prApprovals,
       prDescriptions: deps.prDescriptions,
     }),
+    ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createContextRoutes({ context: deps.context }),

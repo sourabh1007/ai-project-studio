@@ -59,6 +59,7 @@ const callbacks = {
   onOpenSession: vi.fn(),
   onOpenFeature: vi.fn(),
   onOpenPrReview: vi.fn(),
+  onOpenReviewBoard: vi.fn(),
   onOpenRepo: vi.fn(),
   onRenameSession: vi.fn(),
   onRenameFeature: vi.fn(),

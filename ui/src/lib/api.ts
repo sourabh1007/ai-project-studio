@@ -41,6 +41,7 @@ import type {
   PrCommentThreadStatus,
   PrApprovalResult,
   PrDescriptionExportResult,
+  ReviewBoard,
   ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
@@ -175,6 +176,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Feature>(`/repos/${repoId}/pulls`, jsonBody({ number })),
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),
+    getReviewBoard: (featureId: string) =>
+      request<ReviewBoard>(`/features/${featureId}/review-board`),
     refreshPrReview: (featureId: string) =>
       request<PrReview>(
         `/features/${featureId}/pr-review/refresh`,

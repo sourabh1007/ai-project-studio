@@ -344,6 +344,114 @@ export interface PrReview {
 /** Whether a PR review thread is open (`active`) or resolved. */
 export type PrCommentThreadStatus = 'active' | 'resolved';
 
+/* ── Project Review Board ───────────────────────────────────────────────── */
+
+/** How confident a review signal is. Mirrors the backend contract. */
+export type ReviewStatus =
+  | 'not-started'
+  | 'needs-review'
+  | 'warning'
+  | 'blocked'
+  | 'approved'
+  | 'not-applicable';
+
+/** Coarse risk band for a perspective or blast-radius dimension. */
+export type ReviewRisk = 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+
+/** Severity of a single review finding. */
+export type FindingSeverity =
+  | 'critical'
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'suggestion';
+
+/** Whether a perspective is an always-present core lens or an evidence-derived one. */
+export type PerspectiveSource = 'core' | 'detected';
+
+/** One piece of evidence backing a detection, risk marker or finding. */
+export interface ReviewEvidence {
+  source: string;
+  reason: string;
+  confidence: number;
+  direct: boolean;
+}
+
+/** A named thing the discovery engine detected, with its evidence. */
+export interface DetectedItem {
+  name: string;
+  evidence: ReviewEvidence[];
+}
+
+/** The evidence-derived understanding of the project a change belongs to. */
+export interface ProjectModel {
+  projectType: string;
+  projectTypeConfidence: number;
+  primaryLanguages: string[];
+  secondaryLanguages: string[];
+  changedComponents: string[];
+  changedModules: string[];
+  changedRuntimePaths: string[];
+  configurationSystems: DetectedItem[];
+  testSignals: DetectedItem[];
+  deploymentModel: string;
+  contracts: DetectedItem[];
+  blastRadiusDimensions: string[];
+  confidence: number;
+  evidence: ReviewEvidence[];
+}
+
+/** One concrete, evidence-backed observation under a perspective. */
+export interface ReviewFinding {
+  id: string;
+  perspectiveId: string;
+  title: string;
+  detail: string;
+  severity: FindingSeverity;
+  status: ReviewStatus;
+  evidence: ReviewEvidence[];
+}
+
+/** A rendered review lens with its rolled-up status, risk and findings. */
+export interface ReviewPerspective {
+  id: string;
+  name: string;
+  why: string;
+  source: PerspectiveSource;
+  status: ReviewStatus;
+  risk: ReviewRisk;
+  findings: ReviewFinding[];
+}
+
+/** Header roll-up counts for the board. */
+export interface ReviewBoardSummary {
+  open: number;
+  blocking: number;
+  warnings: number;
+  suggestions: number;
+}
+
+/** The board-level merge recommendation; never auto-approves. */
+export type ReviewRecommendation =
+  | 'approve'
+  | 'request-changes'
+  | 'needs-review';
+
+/** The complete Project Review Board for one change. */
+export interface ReviewBoard {
+  featureId: string;
+  pull: PrReviewPull;
+  worktreePath: string;
+  baseBranch: string | null;
+  changedFiles: number;
+  model: ProjectModel;
+  perspectives: ReviewPerspective[];
+  recommendation: ReviewRecommendation;
+  summary: ReviewBoardSummary;
+  generatedAt: string;
+}
+
+
 /** A single comment within a review thread on the pull request. */
 export interface PrComment {
   id: string;

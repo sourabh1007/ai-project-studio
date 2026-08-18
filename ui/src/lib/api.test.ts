@@ -746,6 +746,15 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
   });
 
+  it('reads a review board for a feature', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getReviewBoard('f1');
+    expect(result).toEqual({ featureId: 'f1' });
+    expect(calls[0][0]).toBe('/api/features/f1/review-board');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
   it('refreshes a PR review via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
     const client = createApiClient({ fetchImpl });

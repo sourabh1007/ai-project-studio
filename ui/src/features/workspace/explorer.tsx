@@ -398,6 +398,35 @@ function PrReviewChild({
   );
 }
 
+function ReviewBoardChild({
+  feature,
+  active,
+  onOpen,
+}: {
+  feature: Feature;
+  active: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <div className={`session-card pr-review-child ${active ? 'is-active' : ''}`.trim()}>
+      <div className="session-card-head">
+        <button
+          type="button"
+          className="session-open"
+          aria-current={active ? 'true' : undefined}
+          onClick={onOpen}
+          title={`Review Board for ${feature.name}`}
+        >
+          <span className="pr-review-child-icon" aria-hidden="true">
+            <PrReviewIcon size={14} />
+          </span>
+          <span className="session-name">Review Board</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FeatureNode({
   feature,
   live,
@@ -406,6 +435,7 @@ function FeatureNode({
   onOpenSession,
   onOpenFeature,
   onOpenPrReview,
+  onOpenReviewBoard,
   onRenameSession,
   onRenameFeature,
   onDeleteFeature,
@@ -423,6 +453,7 @@ function FeatureNode({
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
   onOpenPrReview: (feature: Feature) => void;
+  onOpenReviewBoard: (feature: Feature) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
@@ -808,6 +839,13 @@ function FeatureNode({
               review={live.prReviews[feature.id]}
             />
           )}
+          {(feature.checkoutPath !== null || live.prReviews[feature.id]) && (
+            <ReviewBoardChild
+              feature={feature}
+              active={false}
+              onOpen={() => onOpenReviewBoard(feature)}
+            />
+          )}
           {creating && (
             <NewSessionForm
               featureId={feature.id}
@@ -1023,6 +1061,7 @@ function RepoNode({
   onOpenSession,
   onOpenFeature,
   onOpenPrReview,
+  onOpenReviewBoard,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -1049,6 +1088,7 @@ function RepoNode({
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
   onOpenPrReview: (feature: Feature) => void;
+  onOpenReviewBoard: (feature: Feature) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -1259,6 +1299,7 @@ function RepoNode({
                 onOpenSession={onOpenSession}
                 onOpenFeature={onOpenFeature}
                 onOpenPrReview={onOpenPrReview}
+                onOpenReviewBoard={onOpenReviewBoard}
                 onRenameSession={onRenameSession}
                 onRenameFeature={onRenameFeature}
                 onDeleteFeature={onDeleteFeature}
@@ -1297,6 +1338,7 @@ export function Explorer({
   onOpenSession,
   onOpenFeature,
   onOpenPrReview,
+  onOpenReviewBoard,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -1310,6 +1352,7 @@ export function Explorer({
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
   onOpenPrReview: (feature: Feature) => void;
+  onOpenReviewBoard: (feature: Feature) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -1596,6 +1639,7 @@ export function Explorer({
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
             onOpenPrReview={onOpenPrReview}
+            onOpenReviewBoard={onOpenReviewBoard}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}
@@ -1625,6 +1669,7 @@ export function Explorer({
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
             onOpenPrReview={onOpenPrReview}
+            onOpenReviewBoard={onOpenReviewBoard}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}

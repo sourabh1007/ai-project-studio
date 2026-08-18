@@ -33,6 +33,11 @@ const PrReviewPage = lazy(() =>
     default: m.PrReviewPage,
   })),
 );
+const ReviewBoardPage = lazy(() =>
+  import('../review-board-page/review-board-page.js').then((m) => ({
+    default: m.ReviewBoardPage,
+  })),
+);
 const RepoDashboard = lazy(() =>
   import('../repo-dashboard/repo-dashboard.js').then((m) => ({
     default: m.RepoDashboard,
@@ -43,6 +48,7 @@ type Tab =
   | { kind: 'session'; id: string; label: string; session: Session }
   | { kind: 'feature'; id: string; label: string; feature: Feature }
   | { kind: 'pr-review'; id: string; label: string; feature: Feature }
+  | { kind: 'review-board'; id: string; label: string; feature: Feature }
   | { kind: 'repo'; id: string; label: string; repo: Repository };
 
 function featureTabId(featureId: string): string {
@@ -51,6 +57,10 @@ function featureTabId(featureId: string): string {
 
 function prReviewTabId(featureId: string): string {
   return `pr-review:${featureId}`;
+}
+
+function reviewBoardTabId(featureId: string): string {
+  return `review-board:${featureId}`;
 }
 
 function repoTabId(repoId: string): string {
@@ -122,6 +132,15 @@ export function WorkspaceView({
       kind: 'pr-review',
       id: prReviewTabId(feature.id),
       label: `Code Review · ${feature.name}`,
+      feature,
+    });
+  }
+
+  function openReviewBoard(feature: Feature) {
+    openTab({
+      kind: 'review-board',
+      id: reviewBoardTabId(feature.id),
+      label: `Review Board · ${feature.name}`,
       feature,
     });
   }
@@ -259,6 +278,7 @@ export function WorkspaceView({
             onOpenSession={openSession}
             onOpenFeature={openFeature}
             onOpenPrReview={openPrReview}
+            onOpenReviewBoard={openReviewBoard}
             onOpenRepo={openRepo}
             onRenameSession={renameSession}
             onRenameFeature={renameFeature}
@@ -348,6 +368,16 @@ export function WorkspaceView({
                   key={active.feature.id}
                   featureId={active.feature.id}
                   liveReview={live.prReviews[active.feature.id]}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          )}
+          {active?.kind === 'review-board' && (
+            <ErrorBoundary label="Review Board">
+              <Suspense fallback={<ViewSkeleton label="review board" />}>
+                <ReviewBoardPage
+                  key={active.feature.id}
+                  featureId={active.feature.id}
                 />
               </Suspense>
             </ErrorBoundary>
