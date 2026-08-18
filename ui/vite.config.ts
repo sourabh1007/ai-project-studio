@@ -6,6 +6,14 @@ const backendUrl = process.env.VITE_BACKEND_URL ?? 'http://127.0.0.1:4319';
 export default defineConfig({
   base: './',
   plugins: [react()],
+  // The change-graph layout runs in a module worker (`new Worker(url, { type:
+  // 'module' })`). Vite's default `worker.format` is 'iife', which emits a
+  // classic script that a module worker can fail to load in the packaged build
+  // — freezing every layout recompute (expand/zoom). Emit an ES worker so the
+  // built file matches how it's instantiated.
+  worker: {
+    format: 'es',
+  },
   build: {
     rollupOptions: {
       output: {

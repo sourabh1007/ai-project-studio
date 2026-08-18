@@ -49,6 +49,9 @@ export function useChangeGraphLayout(spec: LayoutSpec): ChangeGraphLayout {
   const nextId = useRef(0);
   const latestId = useRef(0);
   const firstRun = useRef(true);
+  // The most recent request posted to the worker, so if the worker fails after
+  // the fact we can recompute exactly what the UI is currently asking for.
+  const latestRequest = useRef<LayoutRequest | null>(null);
 
   useEffect(() => {
     const worker = createWorker();
@@ -57,6 +60,24 @@ export function useChangeGraphLayout(spec: LayoutSpec): ChangeGraphLayout {
       worker.onmessage = (event: MessageEvent<LayoutResponse>) => {
         if (event.data.id === latestId.current) {
           setLayout(event.data.layout);
+        }
+      };
+      // A module worker can be constructed successfully yet fail to *load* or
+      // execute later (a production bundling/format mismatch, a CSP quirk, a
+      // parse error) — the constructor doesn't throw, so the try/catch in
+      // createWorker never sees it. Without this handler `onmessage` would then
+      // simply never fire, silently freezing every interaction that depends on
+      // a recompute (expanding a module, zooming, toggling callers): the state
+      // updates but the layout never does. On error, drop the worker and fall
+      // back to the identical pure computation on the main thread — for the
+      // request currently in flight and for every recompute thereafter.
+      worker.onerror = () => {
+        worker.terminate();
+        if (workerRef.current === worker) {
+          workerRef.current = null;
+        }
+        if (latestRequest.current) {
+          setLayout(computeLayout(latestRequest.current));
         }
       };
     }
@@ -80,6 +101,7 @@ export function useChangeGraphLayout(spec: LayoutSpec): ChangeGraphLayout {
     const id = (nextId.current += 1);
     latestId.current = id;
     const request = specToRequest(spec, id);
+    latestRequest.current = request;
     const worker = workerRef.current;
     if (worker) {
       worker.postMessage(request);
