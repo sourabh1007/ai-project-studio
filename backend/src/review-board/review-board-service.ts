@@ -23,6 +23,7 @@ import { discoverProjectModel } from './project-discovery.js';
 import {
   assembleBoard,
   buildDeterministicFindings,
+  buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
 import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt } from './review-board-prompt.js';
@@ -87,6 +88,15 @@ function toDiscoveryInput(review: PrReview): DiscoveryInput {
 /** Read the message from an unknown thrown value. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The concrete file paths the change touched, so the AI can ground every
+ * finding in a specific file/symbol instead of generic advice. Test scaffolding
+ * files are included too — they are legitimate review targets.
+ */
+function changedPathsOf(input: BuildBoardInput): string[] {
+  return input.nodes.filter((n) => n.kind === 'changed').map((n) => n.path);
 }
 
 export function createReviewBoardService(
@@ -173,8 +183,7 @@ export function createReviewBoardService(
 
   return {
     get(featureId: string): ReviewBoard {
-      const input = toBuildInput(deps.reviews.get(featureId));
-      return assembleBoard(input, buildDeterministicFindings(input));
+      return buildEmptyBoard(toBuildInput(deps.reviews.get(featureId)));
     },
 
     async analyze(featureId: string): Promise<ReviewBoard> {
@@ -185,6 +194,7 @@ export function createReviewBoardService(
       const prompt = buildFindingsPrompt({
         board,
         description: review.description,
+        changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
       });
       const text = await runPrompt(review, prompt);
@@ -219,6 +229,7 @@ export function createReviewBoardService(
         board,
         perspective,
         description: review.description,
+        changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
       });
       const text = await runPrompt(review, prompt);

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
-  mapWithConcurrency,
-  mergeAnalyzedPerspective,
-} from '../../lib/review-board-progress.js';
+  reviewBoardRunStore,
+  type PerspectiveProgress,
+} from './review-board-run-store.js';
 import {
   AiChatIcon,
   AiMagicIcon,
@@ -21,23 +21,6 @@ import type {
   ReviewRisk,
   ReviewStatus,
 } from '../../lib/types.js';
-
-/** How many perspectives the AI analyses at once — one at a time, in order. */
-const ANALYZE_CONCURRENCY = 1;
-
-/** Live per-perspective analysis state, keyed by perspective id. */
-type PerspectiveStatus =
-  | 'idle'
-  | 'pending'
-  | 'analyzing'
-  | 'done'
-  | 'skipped'
-  | 'error';
-interface PerspectiveProgress {
-  status: PerspectiveStatus;
-  skipReason: string | null;
-  error: string | null;
-}
 
 const RISK_LABEL: Record<ReviewRisk, string> = {
   low: 'Low',
@@ -286,122 +269,51 @@ export function ReviewBoardPage({
   onOpenCodeReview?: () => void;
 }) {
   const api = useApi();
-  const [board, setBoard] = useState<ReviewBoard | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [progress, setProgress] = useState<Record<string, PerspectiveProgress>>(
-    {},
+  // The analysis run lives in a persistent, per-feature store so it keeps going
+  // when the reviewer switches tabs/windows and this page unmounts — returning
+  // shows live progress instead of restarting. The API adapter is memoised so
+  // the store always drives the same stable client.
+  const runApi = useMemo(
+    () => ({
+      getReviewBoard: api.getReviewBoard,
+      analyzeReviewBoardPerspective: api.analyzeReviewBoardPerspective,
+    }),
+    [api],
   );
-  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
-  const [analyzed, setAnalyzed] = useState(false);
-  // A monotonically increasing token that invalidates an in-flight analysis
-  // run when the reviewer resets or re-analyses, plus the controller used to
-  // abort its outstanding requests so a slow/hung perspective can't wedge the UI.
-  const runToken = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
+  const state = useSyncExternalStore(
+    (listener) => reviewBoardRunStore.subscribe(featureId, listener),
+    () => reviewBoardRunStore.getState(featureId),
+  );
+  const { board, loading, loadError: error, analyzed, progress } = state;
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (board && selectedId === null) {
+      setSelectedId(board.perspectives[0]?.id ?? null);
+    }
+  }, [board, selectedId]);
 
   const load = useMemo(
-    () => async () => {
-      setLoading(true);
-      setError(null);
-      setProgress({});
-      setAnalyzed(false);
-      setAnalyzeError(null);
-      try {
-        const result = await api.getReviewBoard(featureId);
-        setBoard(result);
-        setSelectedId((prev) => prev ?? result.perspectives[0]?.id ?? null);
-      } catch (err) {
-        setError(
-          err instanceof ApiError
-            ? err.message
-            : 'Failed to load the review board.',
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [api, featureId],
+    () => () => reviewBoardRunStore.load(featureId, runApi),
+    [featureId, runApi],
   );
-
   const analyze = useMemo(
-    () => async () => {
-      if (!board) return;
-      const ids = board.perspectives.map((p) => p.id);
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const token = (runToken.current += 1);
-      setAnalyzeError(null);
-      setAnalyzed(true);
-      setProgress(
-        Object.fromEntries(
-          ids.map((id) => [
-            id,
-            { status: 'pending', skipReason: null, error: null },
-          ]),
-        ),
-      );
-      await mapWithConcurrency(ids, ANALYZE_CONCURRENCY, async (id) => {
-        if (token !== runToken.current) return;
-        setProgress((prev) => ({
-          ...prev,
-          [id]: { status: 'analyzing', skipReason: null, error: null },
-        }));
-        try {
-          const result = await api.analyzeReviewBoardPerspective(
-            featureId,
-            id,
-            controller.signal,
-          );
-          if (token !== runToken.current) return;
-          setBoard((prev) =>
-            prev ? mergeAnalyzedPerspective(prev, result.perspective) : prev,
-          );
-          setProgress((prev) => ({
-            ...prev,
-            [id]: {
-              status: result.skipped ? 'skipped' : 'done',
-              skipReason: result.skipReason,
-              error: null,
-            },
-          }));
-        } catch (err) {
-          if (token !== runToken.current) return;
-          setProgress((prev) => ({
-            ...prev,
-            [id]: {
-              status: 'error',
-              skipReason: null,
-              error:
-                err instanceof ApiError
-                  ? err.message
-                  : 'This perspective could not be analysed.',
-            },
-          }));
-        }
-      });
-    },
-    [api, board, featureId],
+    () => () => reviewBoardRunStore.analyze(featureId, runApi),
+    [featureId, runApi],
   );
-
-  // Reset abandons any in-flight run (invalidating late responses and aborting
-  // outstanding requests) and reloads the deterministic board — always usable,
-  // even mid-analysis, so a slow perspective can never trap the reviewer.
+  const retryFailed = useMemo(
+    () => () => reviewBoardRunStore.retryFailed(featureId, runApi),
+    [featureId, runApi],
+  );
   const reset = useMemo(
-    () => () => {
-      runToken.current += 1;
-      abortRef.current?.abort();
-      abortRef.current = null;
-      void load();
-    },
-    [load],
+    () => () => reviewBoardRunStore.reset(featureId, runApi),
+    [featureId, runApi],
   );
 
+  // Load the clean board on mount; the store no-ops if a run is already live.
   useEffect(() => {
-    void load();
-  }, [load]);
+    void reviewBoardRunStore.load(featureId, runApi);
+  }, [featureId, runApi]);
 
   const selected =
     board?.perspectives.find((p) => p.id === selectedId) ?? null;
@@ -410,14 +322,21 @@ export function ReviewBoardPage({
       status: 'idle',
       skipReason: null,
       error: null,
+      attempt: 0,
     };
 
   const progressValues = Object.values(progress);
   const analyzing = progressValues.some(
-    (p) => p.status === 'analyzing' || p.status === 'pending',
+    (p) =>
+      p.status === 'analyzing' ||
+      p.status === 'pending' ||
+      p.status === 'retrying',
   );
   const analyzedCount = progressValues.filter(
     (p) => p.status === 'done' || p.status === 'skipped' || p.status === 'error',
+  ).length;
+  const failedCount = progressValues.filter(
+    (p) => p.status === 'error',
   ).length;
   const totalPerspectives = board?.perspectives.length ?? 0;
 
@@ -494,9 +413,16 @@ export function ReviewBoardPage({
         </div>
       </header>
 
-      {analyzeError && (
-        <div className="rb-analyze-error">
-          <ErrorText error={analyzeError} />
+      {failedCount > 0 && !analyzing && (
+        <div className="rb-analyze-error" role="alert">
+          <ErrorText
+            error={`${failedCount} perspective${
+              failedCount === 1 ? '' : 's'
+            } couldn't be analysed after automatic retries.`}
+          />
+          <Button variant="ghost" onClick={() => void retryFailed()}>
+            <RefreshIcon size={14} /> Retry failed
+          </Button>
         </div>
       )}
 
@@ -505,8 +431,8 @@ export function ReviewBoardPage({
           <span className="spinner" aria-hidden="true" />
           <span>
             Reviewing {analyzedCount} of {totalPerspectives} perspectives —
-            findings appear as each one completes. Select any perspective to
-            follow along.
+            findings appear as each one completes. Runs one at a time and keeps
+            going if you switch tabs. Select any perspective to follow along.
           </span>
         </div>
       )}
@@ -550,12 +476,20 @@ export function ReviewBoardPage({
                       Queued
                     </span>
                   )}
-                  {state === 'analyzing' && (
+                  {(state === 'analyzing' || state === 'retrying') && (
                     <span
                       className="spinner rb-nav-spin"
-                      aria-label="Analyzing"
+                      aria-label={state === 'retrying' ? 'Retrying' : 'Analyzing'}
                       role="status"
                     />
+                  )}
+                  {state === 'retrying' && (
+                    <span
+                      className="rb-nav-queued"
+                      title="Retrying after a transient failure"
+                    >
+                      Retry {progress[p.id]?.attempt ?? 2}/{3}
+                    </span>
                   )}
                   {state === 'skipped' && (
                     <span className="rb-nav-skip">Skipped</span>
@@ -588,9 +522,13 @@ export function ReviewBoardPage({
                 {selected.source === 'detected' && (
                   <span className="rb-card-badge">Detected</span>
                 )}
-                {selectedProgress.status === 'analyzing' && (
+                {(selectedProgress.status === 'analyzing' ||
+                  selectedProgress.status === 'retrying') && (
                   <span className="rb-detail-working">
-                    <span className="spinner" aria-hidden="true" /> AI reviewing…
+                    <span className="spinner" aria-hidden="true" />{' '}
+                    {selectedProgress.status === 'retrying'
+                      ? `Retrying (${selectedProgress.attempt}/3)…`
+                      : 'AI reviewing…'}
                   </span>
                 )}
                 <span className="rb-detail-spacer" />
@@ -621,12 +559,13 @@ export function ReviewBoardPage({
                   <strong>Analysis failed.</strong>{' '}
                   {selectedProgress.error ??
                     'This perspective could not be analysed.'}{' '}
+                  Automatic retries were exhausted.{' '}
                   <button
                     type="button"
                     className="rb-linkish"
-                    onClick={() => void analyze()}
+                    onClick={() => void retryFailed()}
                   >
-                    Retry all
+                    Retry failed
                   </button>
                 </div>
               )}
@@ -635,6 +574,14 @@ export function ReviewBoardPage({
                   <strong>Queued for review.</strong> The AI reviewer works
                   through perspectives one at a time — this one is waiting its
                   turn. Existing findings stay visible until it runs.
+                </div>
+              )}
+              {selectedProgress.status === 'retrying' && (
+                <div className="rb-banner rb-banner-working" role="status">
+                  <span className="spinner" aria-hidden="true" /> A transient
+                  failure interrupted this perspective — automatically retrying
+                  (attempt {selectedProgress.attempt} of 3) before reporting an
+                  error.
                 </div>
               )}
               {selectedProgress.status === 'analyzing' && (
@@ -651,13 +598,15 @@ export function ReviewBoardPage({
                   <p className="rb-empty">
                     {selectedProgress.status === 'analyzing'
                       ? 'Looking for evidence-backed findings for this perspective…'
-                      : selectedProgress.status === 'pending'
-                        ? 'Queued — the reviewer will analyse this perspective shortly.'
-                        : selectedProgress.status === 'skipped'
-                        ? 'No findings — the reviewer skipped this perspective for the reason above.'
-                        : selectedProgress.status === 'done'
-                          ? 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
-                          : 'No deterministic findings yet. Run the AI reviewer to author evidence-backed findings for this perspective.'}
+                      : selectedProgress.status === 'retrying'
+                        ? 'Retrying after a transient failure…'
+                        : selectedProgress.status === 'pending'
+                          ? 'Queued — the reviewer will analyse this perspective shortly.'
+                          : selectedProgress.status === 'skipped'
+                            ? 'No findings — the reviewer skipped this perspective for the reason above.'
+                            : selectedProgress.status === 'done'
+                              ? 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
+                              : 'Not analysed yet. Run the AI reviewer to author evidence-backed findings for this perspective.'}
                   </p>
                   {!analyzed && (
                     <Button

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewBoard } from './review-board-builder.js';
+import { buildEmptyBoard, buildReviewBoard } from './review-board-builder.js';
 import type { BoardThresholds, BuildBoardInput } from './review-board-builder.js';
 import type {
   DiscoveryNode,
@@ -70,6 +70,45 @@ function build(over: Partial<BuildBoardInput>) {
     ...over,
   });
 }
+
+describe('buildEmptyBoard', () => {
+  const emptyInput: BuildBoardInput = {
+    featureId: 'f1',
+    pull: { number: 7, title: 't', url: 'u' },
+    worktreePath: 'w',
+    baseBranch: 'main',
+    description: 'short',
+    nodes: [node({ path: 'a.go', category: 'code' })],
+    changedFiles: 5,
+    model: model({ changedComponents: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }),
+    thresholds,
+    generatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('starts every perspective clean regardless of deterministic signals', () => {
+    const board = buildEmptyBoard(emptyInput);
+    expect(board.summary).toEqual({
+      open: 0,
+      blocking: 0,
+      warnings: 0,
+      suggestions: 0,
+    });
+    expect(board.recommendation).toBe('needs-review');
+    expect(board.changedFiles).toBe(5);
+    for (const p of board.perspectives) {
+      expect(p.findings).toHaveLength(0);
+      expect(p.status).toBe('not-started');
+      expect(p.risk).toBe('unknown');
+    }
+  });
+
+  it('preserves the pull, model and generatedAt metadata', () => {
+    const board = buildEmptyBoard(emptyInput);
+    expect(board.pull.number).toBe(7);
+    expect(board.model.projectType).toBe('Backend service');
+    expect(board.generatedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
 
 describe('buildReviewBoard findings', () => {
   it('flags a missing description', () => {

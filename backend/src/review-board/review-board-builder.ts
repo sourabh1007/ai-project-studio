@@ -254,6 +254,45 @@ export function buildReviewBoard(input: BuildBoardInput): ReviewBoard {
   return assembleBoard(input, buildDeterministicFindings(input));
 }
 
+/**
+ * Assemble a *clean* board: every perspective starts Not-started / Unrated with
+ * no findings and the summary at zero. This is the initial state the page shows
+ * before the reviewer runs the AI — findings (deterministic + AI) are layered in
+ * per perspective as each analysis completes, so nothing looks "already
+ * reviewed" on first load.
+ */
+export function buildEmptyBoard(input: BuildBoardInput): ReviewBoard {
+  const perspectives: ReviewPerspective[] = input.model.perspectives.map(
+    (spec) => ({
+      id: spec.id,
+      name: spec.name,
+      why: spec.why,
+      source: spec.source,
+      status: 'not-started',
+      risk: 'unknown',
+      findings: [],
+    }),
+  );
+  const summary: ReviewBoardSummary = {
+    open: 0,
+    blocking: 0,
+    warnings: 0,
+    suggestions: 0,
+  };
+  return {
+    featureId: input.featureId,
+    pull: input.pull,
+    worktreePath: input.worktreePath,
+    baseBranch: input.baseBranch,
+    changedFiles: input.changedFiles,
+    model: input.model,
+    perspectives,
+    recommendation: recommend(summary),
+    summary,
+    generatedAt: input.generatedAt,
+  };
+}
+
 /** The deterministic, evidence-backed findings (exported for the AI merge). */
 export function buildDeterministicFindings(
   input: BuildBoardInput,

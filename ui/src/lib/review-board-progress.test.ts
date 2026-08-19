@@ -3,6 +3,8 @@ import {
   mapWithConcurrency,
   mergeAnalyzedPerspective,
   recommendationFor,
+  runWithRetry,
+  RetryCancelledError,
   summarizePerspectives,
 } from './review-board-progress.js';
 import type { ReviewBoard, ReviewFinding, ReviewPerspective } from './types.js';
@@ -149,5 +151,153 @@ describe('mapWithConcurrency', () => {
       seen.push(s);
     });
     expect(seen).toEqual(['only']);
+  });
+});
+
+describe('runWithRetry', () => {
+  const noDelay = async () => {};
+
+  it('returns immediately on first success', async () => {
+    const attempts: number[] = [];
+    const result = await runWithRetry(
+      async (attempt) => {
+        attempts.push(attempt);
+        return 'ok';
+      },
+      { attempts: 3, delay: noDelay, backoffMs: () => 10 },
+    );
+    expect(result).toBe('ok');
+    expect(attempts).toEqual([1]);
+  });
+
+  it('heals after transient failures and reports each retry', async () => {
+    const retried: number[] = [];
+    const backoffs: number[] = [];
+    let calls = 0;
+    const result = await runWithRetry(
+      async (attempt) => {
+        calls += 1;
+        if (attempt < 3) throw new Error(`boom ${attempt}`);
+        return 'healed';
+      },
+      {
+        attempts: 3,
+        delay: async (ms) => {
+          backoffs.push(ms);
+        },
+        backoffMs: (attempt) => attempt * 100,
+        onRetry: (next) => retried.push(next),
+      },
+    );
+    expect(result).toBe('healed');
+    expect(calls).toBe(3);
+    expect(retried).toEqual([2, 3]);
+    expect(backoffs).toEqual([100, 200]);
+  });
+
+  it('throws the last error once attempts are exhausted', async () => {
+    await expect(
+      runWithRetry(
+        async (attempt) => {
+          throw new Error(`fail ${attempt}`);
+        },
+        { attempts: 2, delay: noDelay, backoffMs: () => 1 },
+      ),
+    ).rejects.toThrow('fail 2');
+  });
+
+  it('does not retry when shouldRetry is false', async () => {
+    let calls = 0;
+    await expect(
+      runWithRetry(
+        async () => {
+          calls += 1;
+          throw new Error('permanent');
+        },
+        {
+          attempts: 3,
+          delay: noDelay,
+          backoffMs: () => 1,
+          shouldRetry: () => false,
+        },
+      ),
+    ).rejects.toThrow('permanent');
+    expect(calls).toBe(1);
+  });
+
+  it('cancels before the first attempt', async () => {
+    let calls = 0;
+    await expect(
+      runWithRetry(
+        async () => {
+          calls += 1;
+          return 'never';
+        },
+        {
+          attempts: 3,
+          delay: noDelay,
+          backoffMs: () => 1,
+          cancelled: () => true,
+        },
+      ),
+    ).rejects.toBeInstanceOf(RetryCancelledError);
+    expect(calls).toBe(0);
+  });
+
+  it('stops retrying once cancelled after a failure', async () => {
+    let calls = 0;
+    let cancelled = false;
+    await expect(
+      runWithRetry(
+        async () => {
+          calls += 1;
+          cancelled = true;
+          throw new Error('boom');
+        },
+        {
+          attempts: 3,
+          delay: noDelay,
+          backoffMs: () => 1,
+          cancelled: () => cancelled,
+        },
+      ),
+    ).rejects.toThrow('boom');
+    expect(calls).toBe(1);
+  });
+
+  it('cancels during the backoff wait', async () => {
+    let calls = 0;
+    let cancelled = false;
+    await expect(
+      runWithRetry(
+        async () => {
+          calls += 1;
+          throw new Error('boom');
+        },
+        {
+          attempts: 3,
+          delay: async () => {
+            cancelled = true;
+          },
+          backoffMs: () => 1,
+          cancelled: () => cancelled,
+        },
+      ),
+    ).rejects.toBeInstanceOf(RetryCancelledError);
+    expect(calls).toBe(1);
+  });
+
+  it('treats a non-positive attempt count as a single try', async () => {
+    let calls = 0;
+    await expect(
+      runWithRetry(
+        async () => {
+          calls += 1;
+          throw new Error('once');
+        },
+        { attempts: 0, delay: noDelay, backoffMs: () => 1 },
+      ),
+    ).rejects.toThrow('once');
+    expect(calls).toBe(1);
   });
 });

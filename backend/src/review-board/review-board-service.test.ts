@@ -100,15 +100,27 @@ function aiReturning(text: string): {
 }
 
 describe('createReviewBoardService.get', () => {
-  it('derives a board from the feature PR review', () => {
+  it('derives a clean board from the feature PR review', () => {
     const service = createReviewBoardService(baseDeps());
     const board = service.get('f9');
     expect(board.featureId).toBe('f9');
     expect(board.pull.number).toBe(42);
     expect(board.model.projectType).toBe('Backend service');
     expect(board.generatedAt).toBe('2026-02-02T00:00:00.000Z');
+    // Starts clean: no findings and every perspective Not-started until analyzed.
+    expect(board.summary).toEqual({
+      open: 0,
+      blocking: 0,
+      warnings: 0,
+      suggestions: 0,
+    });
+    expect(board.perspectives.every((p) => p.findings.length === 0)).toBe(true);
+    expect(board.perspectives.every((p) => p.status === 'not-started')).toBe(
+      true,
+    );
+    expect(board.perspectives.every((p) => p.risk === 'unknown')).toBe(true);
     const problem = board.perspectives.find((p) => p.id === 'problem-solution');
-    expect(problem?.status).toBe('warning');
+    expect(problem?.status).toBe('not-started');
   });
 
   it('handles a review with no changed files count', () => {

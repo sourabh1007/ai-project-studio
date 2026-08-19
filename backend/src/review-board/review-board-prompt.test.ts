@@ -62,10 +62,11 @@ const board: ReviewBoard = {
 };
 
 describe('buildFindingsPrompt', () => {
-  it('includes pull, model digest and the perspective menu', () => {
+  it('includes pull, model digest, changed files and the perspective menu', () => {
     const prompt = buildFindingsPrompt({
       board,
       description: 'Adds a cache layer.',
+      changedPaths: ['src/Cache.cs', 'src/CacheKey.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('#42');
@@ -73,12 +74,16 @@ describe('buildFindingsPrompt', () => {
     expect(prompt).toContain('- security: Security');
     expect(prompt).toContain('Adds a cache layer.');
     expect(prompt).toContain('one of [security]');
+    expect(prompt).toContain('## Changed files');
+    expect(prompt).toContain('- src/Cache.cs');
+    expect(prompt).toContain('no generic review');
   });
 
   it('falls back to a placeholder when the description is blank', () => {
     const prompt = buildFindingsPrompt({
       board,
       description: '   ',
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no description provided)');
@@ -88,6 +93,7 @@ describe('buildFindingsPrompt', () => {
     const prompt = buildFindingsPrompt({
       board,
       description: null,
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no description provided)');
@@ -97,9 +103,32 @@ describe('buildFindingsPrompt', () => {
     const prompt = buildFindingsPrompt({
       board,
       description: 'x'.repeat(100),
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 10 },
     });
     expect(prompt).toContain('…');
+  });
+
+  it('notes when no changed files were resolved', () => {
+    const prompt = buildFindingsPrompt({
+      board,
+      description: 'd',
+      changedPaths: [],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('(no changed files were resolved');
+  });
+
+  it('truncates a very long changed-files list', () => {
+    const many = Array.from({ length: 90 }, (_, i) => `src/f${i}.cs`);
+    const prompt = buildFindingsPrompt({
+      board,
+      description: 'd',
+      changedPaths: many,
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('…and 10 more changed file(s)');
+    expect(prompt).not.toContain('src/f85.cs');
   });
 
   it('renders "none" fallbacks and unknown base branch for a bare model', () => {
@@ -114,6 +143,7 @@ describe('buildFindingsPrompt', () => {
     const prompt = buildFindingsPrompt({
       board: { ...board, model: bareModel, baseBranch: null },
       description: 'd',
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Languages: none detected');
@@ -129,6 +159,7 @@ describe('buildPerspectivePrompt', () => {
       board,
       perspective,
       description: 'Adds a cache layer.',
+      changedPaths: ['src/Cache.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Review lens: Security');
@@ -138,6 +169,8 @@ describe('buildPerspectivePrompt', () => {
     expect(prompt).toContain('#42');
     expect(prompt).toContain('"skipped": boolean');
     expect(prompt).toContain('Adds a cache layer.');
+    expect(prompt).toContain('- src/Cache.cs');
+    expect(prompt).toContain('no generic review');
   });
 
   it('falls back to a placeholder for a null description', () => {
@@ -145,6 +178,7 @@ describe('buildPerspectivePrompt', () => {
       board,
       perspective,
       description: null,
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no description provided)');
@@ -155,9 +189,21 @@ describe('buildPerspectivePrompt', () => {
       board: { ...board, baseBranch: null },
       perspective,
       description: 'd',
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Base branch: unknown');
+  });
+
+  it('notes when no changed files were resolved', () => {
+    const prompt = buildPerspectivePrompt({
+      board,
+      perspective,
+      description: 'd',
+      changedPaths: [],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('(no changed files were resolved');
   });
 
   it('clamps a very long description', () => {
@@ -165,6 +211,7 @@ describe('buildPerspectivePrompt', () => {
       board,
       perspective,
       description: 'x'.repeat(100),
+      changedPaths: ['a.cs'],
       config: { maxContextChars: 10 },
     });
     expect(prompt).toContain('…');

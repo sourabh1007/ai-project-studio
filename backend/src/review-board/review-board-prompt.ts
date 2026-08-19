@@ -50,6 +50,39 @@ function perspectiveMenu(perspectives: ReviewPerspective[]): string {
     .join('\n');
 }
 
+/** A bounded, enumerated list of the concrete files the change touched. */
+function changedFilesDigest(paths: readonly string[], max: number): string {
+  if (paths.length === 0) {
+    return '(no changed files were resolved from the change graph)';
+  }
+  const shown = paths.slice(0, max);
+  const lines = shown.map((p) => `- ${p}`);
+  if (paths.length > shown.length) {
+    lines.push(`- …and ${paths.length - shown.length} more changed file(s)`);
+  }
+  return lines.join('\n');
+}
+
+/** The evidence contract both finding prompts share, kept identical. */
+const EVIDENCE_RULES: readonly string[] = [
+  '## Rules — grounded, specific, no generic review',
+  'Every finding MUST be tied to concrete changed code. A finding is invalid',
+  'and must be omitted unless it satisfies ALL of the following:',
+  '1. It names at least one specific file from "Changed files" (and, where you',
+  '   can, the exact function/class/symbol or region within it) in the',
+  '   evidence "source" — never cite "the code", "the change" or the PR as a',
+  '   whole.',
+  '2. The "detail" states three things explicitly: (a) the precise problem,',
+  '   (b) WHERE it is (file + symbol), and (c) the concrete fix or the exact',
+  '   thing to verify — not vague advice like "ensure proper error handling".',
+  '3. The "reason" in each evidence entry explains how that specific file/symbol',
+  '   demonstrates the problem, linking the change to its effect.',
+  'Do not restate best practices, do not speculate about code you were not',
+  'shown, and do not raise a finding you cannot pin to a listed file. If you',
+  'cannot ground it in the evidence, leave it out.',
+  '',
+];
+
 /**
  * Build the findings prompt. The model receives the derived project model, the
  * PR identity/description and the exact perspective ids it may use, and must
@@ -59,6 +92,7 @@ function perspectiveMenu(perspectives: ReviewPerspective[]): string {
 export function buildFindingsPrompt(input: {
   board: ReviewBoard;
   description: string | null;
+  changedPaths: readonly string[];
   config: { maxContextChars: number };
 }): string {
   const { board } = input;
@@ -85,19 +119,23 @@ export function buildFindingsPrompt(input: {
     '## Derived project model',
     modelDigest(board.model),
     '',
+    '## Changed files',
+    changedFilesDigest(input.changedPaths, 80),
+    '',
     '## Perspectives you may file findings under',
     perspectiveMenu(board.perspectives),
     '',
+    ...EVIDENCE_RULES,
     '## Response format',
     'Reply with ONLY a fenced ```json code block containing an array of',
     'findings. Each finding is an object:',
     '{',
     `  "perspectiveId": one of [${ids}],`,
-    '  "title": short imperative headline,',
-    '  "detail": 1-3 sentences explaining the concern and what to check,',
+    '  "title": short imperative headline naming the affected file/symbol,',
+    '  "detail": problem + exact location (file + symbol) + concrete fix,',
     '  "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-    '  "evidence": [ { "source": what you looked at, "reason": why it supports',
-    '    this finding, "confidence": 0..1 } ]',
+    '  "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
+    '    specific code demonstrates the finding, "confidence": 0..1 } ]',
     '}',
     'Return an empty array [] if the change looks clean. Do not wrap the array',
     'in any other object and do not add prose outside the code block.',
@@ -114,6 +152,7 @@ export function buildPerspectivePrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective;
   description: string | null;
+  changedPaths: readonly string[];
   config: { maxContextChars: number };
 }): string {
   const { board, perspective } = input;
@@ -142,17 +181,21 @@ export function buildPerspectivePrompt(input: {
     '## Derived project model',
     modelDigest(board.model),
     '',
+    '## Changed files',
+    changedFilesDigest(input.changedPaths, 80),
+    '',
+    ...EVIDENCE_RULES,
     '## Response format',
     'Reply with ONLY a fenced ```json code block containing a single object:',
     '{',
     '  "skipped": boolean — true only if this lens does not apply,',
     '  "reason": string — required when skipped: why it does not apply,',
     '  "findings": [ {',
-    '    "title": short imperative headline,',
-    '    "detail": 1-3 sentences explaining the concern and what to check,',
+    '    "title": short imperative headline naming the affected file/symbol,',
+    '    "detail": problem + exact location (file + symbol) + concrete fix,',
     '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-    '    "evidence": [ { "source": what you looked at, "reason": why it supports',
-    '      this finding, "confidence": 0..1 } ]',
+    '    "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
+    '      specific code demonstrates the finding, "confidence": 0..1 } ]',
     '  } ]',
     '}',
     'When the lens applies but the change is clean, set skipped=false and return',
