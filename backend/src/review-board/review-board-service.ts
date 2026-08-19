@@ -39,6 +39,7 @@ import type {
   ReviewBoardChatMessage,
   ReviewBoardChatReply,
   ReviewBoardService,
+  ReviewPerspective,
 } from './review-board-contract.js';
 
 /** The read port over PR reviews the board derives from. */
@@ -97,6 +98,24 @@ function errorMessage(error: unknown): string {
  */
 function changedPathsOf(input: BuildBoardInput): string[] {
   return input.nodes.filter((n) => n.kind === 'changed').map((n) => n.path);
+}
+
+/**
+ * Give an *analysed* perspective a meaningful rating so the board never leaves a
+ * reviewed lens looking un-assessed. A lens the AI reviewed and found clean is
+ * marked Approved / Low (a positive result, not the "Unrated" a never-run lens
+ * shows); a lens the AI skipped is marked Not-applicable. Lenses that carry
+ * findings keep their severity-derived roll-up untouched.
+ */
+function finalizeAnalyzedPerspective(
+  perspective: ReviewPerspective,
+  skipped: boolean,
+): ReviewPerspective {
+  if (perspective.findings.length > 0) return perspective;
+  if (skipped) {
+    return { ...perspective, status: 'not-applicable', risk: 'unknown' };
+  }
+  return { ...perspective, status: 'approved', risk: 'low' };
 }
 
 export function createReviewBoardService(
@@ -247,7 +266,7 @@ export function createReviewBoardService(
       ) as (typeof rebuilt.perspectives)[number];
       return {
         perspectiveId,
-        perspective: rolledUp,
+        perspective: finalizeAnalyzedPerspective(rolledUp, parsed.skipped),
         skipped: parsed.skipped,
         skipReason: parsed.skipReason,
       };

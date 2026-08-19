@@ -281,6 +281,26 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.perspective.findings.length).toBeGreaterThan(0);
   });
 
+  it('marks a reviewed-but-clean perspective Approved / Low', async () => {
+    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(result.perspective.findings).toHaveLength(0);
+    expect(result.perspective.status).toBe('approved');
+    expect(result.perspective.risk).toBe('low');
+  });
+
+  it('marks a skipped, finding-less perspective Not-applicable', async () => {
+    const ai = aiReturning(
+      '```json\n{"skipped": true, "reason": "No security-relevant code changed."}\n```',
+    );
+    const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(result.skipped).toBe(true);
+    expect(result.perspective.status).toBe('not-applicable');
+    expect(result.perspective.risk).toBe('unknown');
+  });
+
   it('rejects an unknown perspective id', async () => {
     const service = createReviewBoardService(baseDeps({ inlinePrompts: true }));
     await expect(
