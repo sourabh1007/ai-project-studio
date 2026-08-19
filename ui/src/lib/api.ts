@@ -186,10 +186,14 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/review-board/analyze`,
         jsonBody({}),
       ),
-    analyzeReviewBoardPerspective: (featureId: string, perspectiveId: string) =>
+    analyzeReviewBoardPerspective: (
+      featureId: string,
+      perspectiveId: string,
+      signal?: AbortSignal,
+    ) =>
       request<PerspectiveAnalysis>(
         `/features/${featureId}/review-board/perspectives/${perspectiveId}/analyze`,
-        jsonBody({}),
+        { ...jsonBody({}), signal },
       ),
     chatReviewBoard: (
       featureId: string,

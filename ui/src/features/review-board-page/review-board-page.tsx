@@ -247,6 +247,11 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
   );
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
+  // A monotonically increasing token that invalidates an in-flight analysis
+  // run when the reviewer resets or re-analyses, plus the controller used to
+  // abort its outstanding requests so a slow/hung perspective can't wedge the UI.
+  const runToken = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = useMemo(
     () => async () => {
@@ -276,6 +281,10 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
     () => async () => {
       if (!board) return;
       const ids = board.perspectives.map((p) => p.id);
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const token = (runToken.current += 1);
       setAnalyzeError(null);
       setAnalyzed(true);
       setProgress(
@@ -288,7 +297,12 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
       );
       await mapWithConcurrency(ids, ANALYZE_CONCURRENCY, async (id) => {
         try {
-          const result = await api.analyzeReviewBoardPerspective(featureId, id);
+          const result = await api.analyzeReviewBoardPerspective(
+            featureId,
+            id,
+            controller.signal,
+          );
+          if (token !== runToken.current) return;
           setBoard((prev) =>
             prev ? mergeAnalyzedPerspective(prev, result.perspective) : prev,
           );
@@ -301,6 +315,7 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
             },
           }));
         } catch (err) {
+          if (token !== runToken.current) return;
           setProgress((prev) => ({
             ...prev,
             [id]: {
@@ -316,6 +331,19 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
       });
     },
     [api, board, featureId],
+  );
+
+  // Reset abandons any in-flight run (invalidating late responses and aborting
+  // outstanding requests) and reloads the deterministic board — always usable,
+  // even mid-analysis, so a slow perspective can never trap the reviewer.
+  const reset = useMemo(
+    () => () => {
+      runToken.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      void load();
+    },
+    [load],
   );
 
   useEffect(() => {
@@ -404,10 +432,9 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
           </Button>
           <Button
             variant="ghost"
-            onClick={() => void load()}
-            disabled={analyzing}
+            onClick={() => reset()}
           >
-            <RefreshIcon size={14} /> Reset
+            <RefreshIcon size={14} /> {analyzing ? 'Stop & reset' : 'Reset'}
           </Button>
         </div>
       </header>
@@ -476,6 +503,11 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
                   {state === 'error' && (
                     <span className="rb-nav-err" title="Analysis failed">
                       !
+                    </span>
+                  )}
+                  {state === 'done' && p.findings.length === 0 && (
+                    <span className="rb-nav-clean" title="Analyzed — no findings">
+                      ✓
                     </span>
                   )}
                   <Marker kind="risk" value={p.risk} />

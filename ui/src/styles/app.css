@@ -8622,9 +8622,15 @@ body.is-resizing {
   font-size: 12px;
 }
 .rb-evidence-source {
-  color: var(--accent);
+  color: var(--text-muted);
   flex-shrink: 0;
   font-family: var(--mono, monospace);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  align-self: flex-start;
 }
 .rb-evidence-reason {
   color: var(--text-muted);
@@ -8798,6 +8804,18 @@ body.is-resizing {
   border-radius: 50%;
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 14%, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rb-nav-clean {
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 50%;
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 16%, transparent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
