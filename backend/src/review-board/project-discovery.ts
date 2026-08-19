@@ -366,20 +366,14 @@ export function selectPerspectives(
     },
     {
       id: 'architecture',
-      name: 'Architecture & Design',
-      why: 'Confirm the change fits the existing structure and boundaries.',
+      name: 'Architecture & Code Flow',
+      why: 'Confirm the change fits the existing structure and boundaries, and trace how control and data flow through the changed code.',
       source: 'core',
     },
     {
       id: 'impact-blast-radius',
       name: 'Impact & Blast Radius',
       why: 'Understand everything the change can reach before approving.',
-      source: 'core',
-    },
-    {
-      id: 'code-flow',
-      name: 'Code Flow',
-      why: 'Trace how control and data move through the changed code.',
       source: 'core',
     },
     {
@@ -392,12 +386,6 @@ export function selectPerspectives(
 
   const type = model.projectType;
   if (isServiceLike(type)) {
-    specs.push({
-      id: 'reliability',
-      name: 'Reliability',
-      why: `Runtime failure modes matter for a ${type.toLowerCase()}.`,
-      source: 'detected',
-    });
     specs.push({
       id: 'performance',
       name: 'Performance',

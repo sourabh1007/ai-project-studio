@@ -185,7 +185,7 @@ describe('selectPerspectives', () => {
       deploymentModel: 'Containerized deployment',
     });
     const ids = specs.map((s) => s.id);
-    expect(ids).toContain('reliability');
+    expect(ids).not.toContain('reliability');
     expect(ids).toContain('performance');
     expect(ids).toContain('observability');
     expect(ids).toContain('configuration');

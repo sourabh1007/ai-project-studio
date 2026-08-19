@@ -22,11 +22,17 @@ import type {
   ReviewStatus,
 } from '../../lib/types.js';
 
-/** How many perspectives the AI analyses in parallel at once. */
-const ANALYZE_CONCURRENCY = 3;
+/** How many perspectives the AI analyses at once — one at a time, in order. */
+const ANALYZE_CONCURRENCY = 1;
 
 /** Live per-perspective analysis state, keyed by perspective id. */
-type PerspectiveStatus = 'idle' | 'analyzing' | 'done' | 'skipped' | 'error';
+type PerspectiveStatus =
+  | 'idle'
+  | 'pending'
+  | 'analyzing'
+  | 'done'
+  | 'skipped'
+  | 'error';
 interface PerspectiveProgress {
   status: PerspectiveStatus;
   skipReason: string | null;
@@ -85,8 +91,41 @@ function DetectedList({ title, items }: { title: string; items: DetectedItem[] }
   );
 }
 
+/**
+ * An evidence source label. When the board can open the underlying Code Review
+ * (where the change graph, diffs and changed files live), it renders as a real
+ * link that jumps there; otherwise it's a plain label.
+ */
+function EvidenceSource({
+  source,
+  onOpenCodeReview,
+}: {
+  source: string;
+  onOpenCodeReview?: () => void;
+}) {
+  if (!onOpenCodeReview) {
+    return <span className="rb-evidence-source">{source}</span>;
+  }
+  return (
+    <button
+      type="button"
+      className="rb-evidence-source rb-evidence-link"
+      onClick={onOpenCodeReview}
+      title="Open in Code Review"
+    >
+      {source}
+    </button>
+  );
+}
+
 /** The "Explain Review Model" panel — why this board looks the way it does. */
-function ExplainModel({ board }: { board: ReviewBoard }) {
+function ExplainModel({
+  board,
+  onOpenCodeReview,
+}: {
+  board: ReviewBoard;
+  onOpenCodeReview?: () => void;
+}) {
   const { model } = board;
   return (
     <div className="rb-explain">
@@ -128,7 +167,10 @@ function ExplainModel({ board }: { board: ReviewBoard }) {
         <ul className="rb-evidence">
           {model.evidence.map((e, i) => (
             <li key={i}>
-              <span className="rb-evidence-source">{e.source}</span>
+              <EvidenceSource
+                source={e.source}
+                onOpenCodeReview={onOpenCodeReview}
+              />
               <span className="rb-evidence-reason">{e.reason}</span>
             </li>
           ))}
@@ -236,7 +278,13 @@ function ReviewAgent({
   );
 }
 
-export function ReviewBoardPage({ featureId }: { featureId: string }) {
+export function ReviewBoardPage({
+  featureId,
+  onOpenCodeReview,
+}: {
+  featureId: string;
+  onOpenCodeReview?: () => void;
+}) {
   const api = useApi();
   const [board, setBoard] = useState<ReviewBoard | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,11 +339,16 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
         Object.fromEntries(
           ids.map((id) => [
             id,
-            { status: 'analyzing', skipReason: null, error: null },
+            { status: 'pending', skipReason: null, error: null },
           ]),
         ),
       );
       await mapWithConcurrency(ids, ANALYZE_CONCURRENCY, async (id) => {
+        if (token !== runToken.current) return;
+        setProgress((prev) => ({
+          ...prev,
+          [id]: { status: 'analyzing', skipReason: null, error: null },
+        }));
         try {
           const result = await api.analyzeReviewBoardPerspective(
             featureId,
@@ -360,7 +413,9 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
     };
 
   const progressValues = Object.values(progress);
-  const analyzing = progressValues.some((p) => p.status === 'analyzing');
+  const analyzing = progressValues.some(
+    (p) => p.status === 'analyzing' || p.status === 'pending',
+  );
   const analyzedCount = progressValues.filter(
     (p) => p.status === 'done' || p.status === 'skipped' || p.status === 'error',
   ).length;
@@ -490,6 +545,11 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
               >
                 <span className="rb-nav-name">{p.name}</span>
                 <span className="rb-nav-markers">
+                  {state === 'pending' && (
+                    <span className="rb-nav-queued" title="Queued for review">
+                      Queued
+                    </span>
+                  )}
                   {state === 'analyzing' && (
                     <span
                       className="spinner rb-nav-spin"
@@ -570,11 +630,19 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
                   </button>
                 </div>
               )}
+              {selectedProgress.status === 'pending' && (
+                <div className="rb-banner rb-banner-queued" role="status">
+                  <strong>Queued for review.</strong> The AI reviewer works
+                  through perspectives one at a time — this one is waiting its
+                  turn. Existing findings stay visible until it runs.
+                </div>
+              )}
               {selectedProgress.status === 'analyzing' && (
                 <div className="rb-banner rb-banner-working" role="status">
                   <span className="spinner" aria-hidden="true" /> The AI reviewer
                   is examining this perspective. Existing findings stay visible
-                  while it works — other perspectives continue in parallel.
+                  while it works — remaining perspectives are queued and run one
+                  by one.
                 </div>
               )}
 
@@ -583,7 +651,9 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
                   <p className="rb-empty">
                     {selectedProgress.status === 'analyzing'
                       ? 'Looking for evidence-backed findings for this perspective…'
-                      : selectedProgress.status === 'skipped'
+                      : selectedProgress.status === 'pending'
+                        ? 'Queued — the reviewer will analyse this perspective shortly.'
+                        : selectedProgress.status === 'skipped'
                         ? 'No findings — the reviewer skipped this perspective for the reason above.'
                         : selectedProgress.status === 'done'
                           ? 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
@@ -615,9 +685,10 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
                         <ul className="rb-evidence">
                           {f.evidence.map((e, i) => (
                             <li key={i}>
-                              <span className="rb-evidence-source">
-                                {e.source}
-                              </span>
+                              <EvidenceSource
+                                source={e.source}
+                                onOpenCodeReview={onOpenCodeReview}
+                              />
                               <span className="rb-evidence-reason">
                                 {e.reason}
                               </span>
@@ -632,7 +703,7 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
             </section>
           )}
 
-          <ExplainModel board={board} />
+          <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
         </main>
 
         <ReviewAgent

@@ -8632,6 +8632,19 @@ body.is-resizing {
   border: 1px solid var(--border);
   align-self: flex-start;
 }
+.rb-evidence-link {
+  color: var(--accent);
+  cursor: pointer;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.rb-evidence-link:hover {
+  text-decoration: underline;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+}
+.rb-evidence-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .rb-evidence-reason {
   color: var(--text-muted);
 }
@@ -8864,6 +8877,22 @@ body.is-resizing {
   color: var(--text-muted);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.rb-banner-queued {
+  color: var(--text-muted);
+  border-style: dashed;
+  background: var(--surface-strong);
+}
+.rb-nav-queued {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px dashed var(--border);
+  background: var(--surface-strong);
 }
 .rb-linkish {
   background: none;

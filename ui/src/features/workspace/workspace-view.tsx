@@ -378,6 +378,7 @@ export function WorkspaceView({
                 <ReviewBoardPage
                   key={active.feature.id}
                   featureId={active.feature.id}
+                  onOpenCodeReview={() => openPrReview(active.feature)}
                 />
               </Suspense>
             </ErrorBoundary>
