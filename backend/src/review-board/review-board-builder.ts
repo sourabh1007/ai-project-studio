@@ -14,6 +14,7 @@ import type {
   ReviewBoardSummary,
   ReviewEvidence,
   ReviewFinding,
+  FindingSeverity,
   ReviewPerspective,
   ReviewRecommendation,
   ReviewRisk,
@@ -202,9 +203,22 @@ function recommend(summary: ReviewBoardSummary): ReviewRecommendation {
   return 'needs-review';
 }
 
-/** Assemble the full board. */
-export function buildReviewBoard(input: BuildBoardInput): ReviewBoard {
-  const findings = buildFindings(input);
+/** Map a finding severity onto its worst-case rolled-up status. */
+export function statusForSeverity(severity: FindingSeverity): ReviewStatus {
+  if (severity === 'critical' || severity === 'high') return 'blocked';
+  if (severity === 'medium') return 'warning';
+  return 'needs-review';
+}
+
+/**
+ * Assemble the full board from a resolved findings list. Shared by the
+ * deterministic build and the AI analyze path so perspective roll-ups,
+ * summary counts and the recommendation are computed identically for both.
+ */
+export function assembleBoard(
+  input: BuildBoardInput,
+  findings: ReviewFinding[],
+): ReviewBoard {
   const perspectives: ReviewPerspective[] = input.model.perspectives.map(
     (spec) => {
       const own = findings.filter((f) => f.perspectiveId === spec.id);
@@ -233,4 +247,16 @@ export function buildReviewBoard(input: BuildBoardInput): ReviewBoard {
     summary,
     generatedAt: input.generatedAt,
   };
+}
+
+/** Assemble the full board from the deterministic findings only. */
+export function buildReviewBoard(input: BuildBoardInput): ReviewBoard {
+  return assembleBoard(input, buildDeterministicFindings(input));
+}
+
+/** The deterministic, evidence-backed findings (exported for the AI merge). */
+export function buildDeterministicFindings(
+  input: BuildBoardInput,
+): ReviewFinding[] {
+  return buildFindings(input);
 }

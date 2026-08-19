@@ -1,15 +1,37 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { PrReviewIcon, RefreshIcon } from '../../components/icons.js';
+import {
+  mapWithConcurrency,
+  mergeAnalyzedPerspective,
+} from '../../lib/review-board-progress.js';
+import {
+  AiChatIcon,
+  AiMagicIcon,
+  PrReviewIcon,
+  RefreshIcon,
+  SendIcon,
+} from '../../components/icons.js';
 import type {
   DetectedItem,
   ReviewBoard,
+  ReviewBoardChatMessage,
   ReviewPerspective,
   ReviewRisk,
   ReviewStatus,
 } from '../../lib/types.js';
+
+/** How many perspectives the AI analyses in parallel at once. */
+const ANALYZE_CONCURRENCY = 3;
+
+/** Live per-perspective analysis state, keyed by perspective id. */
+type PerspectiveStatus = 'idle' | 'analyzing' | 'done' | 'skipped' | 'error';
+interface PerspectiveProgress {
+  status: PerspectiveStatus;
+  skipReason: string | null;
+  error: string | null;
+}
 
 const RISK_LABEL: Record<ReviewRisk, string> = {
   low: 'Low',
@@ -116,39 +138,101 @@ function ExplainModel({ board }: { board: ReviewBoard }) {
   );
 }
 
-function PerspectiveCard({
+/** The context-aware review agent: a scoped chat over the selected perspective. */
+function ReviewAgent({
+  featureId,
+  pullNumber,
   perspective,
-  onSelect,
-  selected,
 }: {
-  perspective: ReviewPerspective;
-  onSelect: () => void;
-  selected: boolean;
+  featureId: string;
+  pullNumber: number;
+  perspective: ReviewPerspective | null;
 }) {
+  const api = useApi();
+  const [messages, setMessages] = useState<ReviewBoardChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = async () => {
+    const content = input.trim();
+    if (content.length === 0 || pending) return;
+    const next: ReviewBoardChatMessage[] = [
+      ...messages,
+      { role: 'user', content },
+    ];
+    setMessages(next);
+    setInput('');
+    setPending(true);
+    setError(null);
+    try {
+      const reply = await api.chatReviewBoard(
+        featureId,
+        perspective?.id ?? null,
+        next,
+      );
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: reply.answer },
+      ]);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : 'The review agent is unavailable.',
+      );
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      className={`rb-card ${selected ? 'is-selected' : ''}`.trim()}
-      onClick={onSelect}
-    >
-      <div className="rb-card-top">
-        <span className="rb-card-name">{perspective.name}</span>
-        {perspective.source === 'detected' && (
-          <span className="rb-card-badge">Detected</span>
+    <aside className="rb-agent" aria-label="Review agent">
+      <h3 className="rb-card-header">
+        <AiChatIcon size={16} /> Engineering Review Agent
+      </h3>
+      <p className="rb-agent-context">
+        Context: #{pullNumber}
+        {perspective ? ` · ${perspective.name}` : ' · whole board'}
+      </p>
+      <div className="rb-agent-thread">
+        {messages.length === 0 && !pending && (
+          <p className="rb-agent-hint">
+            Ask why a risk was marked, challenge a finding, or ask the agent to
+            draft a PR comment for this{' '}
+            {perspective ? 'perspective' : 'review'}.
+          </p>
         )}
+        {messages.map((m, i) => (
+          <div key={i} className={`rb-agent-msg rb-agent-${m.role}`}>
+            {m.content}
+          </div>
+        ))}
+        {pending && <div className="rb-agent-msg rb-agent-assistant">…</div>}
       </div>
-      <p className="rb-card-why">{perspective.why}</p>
-      <div className="rb-card-markers">
-        <Marker kind="status" value={perspective.status} />
-        <Marker kind="risk" value={perspective.risk} />
-        {perspective.findings.length > 0 && (
-          <span className="rb-card-findings">
-            {perspective.findings.length} finding
-            {perspective.findings.length === 1 ? '' : 's'}
-          </span>
-        )}
-      </div>
-    </button>
+      {error && <ErrorText error={error} />}
+      <form
+        className="rb-agent-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send();
+        }}
+      >
+        <input
+          className="rb-agent-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask the review agent…"
+          aria-label="Message the review agent"
+          disabled={pending}
+        />
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={pending || input.trim().length === 0}
+        >
+          <SendIcon size={14} />
+        </Button>
+      </form>
+    </aside>
   );
 }
 
@@ -158,11 +242,19 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<Record<string, PerspectiveProgress>>(
+    {},
+  );
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [analyzed, setAnalyzed] = useState(false);
 
   const load = useMemo(
     () => async () => {
       setLoading(true);
       setError(null);
+      setProgress({});
+      setAnalyzed(false);
+      setAnalyzeError(null);
       try {
         const result = await api.getReviewBoard(featureId);
         setBoard(result);
@@ -180,12 +272,83 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
     [api, featureId],
   );
 
+  const analyze = useMemo(
+    () => async () => {
+      if (!board) return;
+      const ids = board.perspectives.map((p) => p.id);
+      setAnalyzeError(null);
+      setAnalyzed(true);
+      setProgress(
+        Object.fromEntries(
+          ids.map((id) => [
+            id,
+            { status: 'analyzing', skipReason: null, error: null },
+          ]),
+        ),
+      );
+      await mapWithConcurrency(ids, ANALYZE_CONCURRENCY, async (id) => {
+        try {
+          const result = await api.analyzeReviewBoardPerspective(featureId, id);
+          setBoard((prev) =>
+            prev ? mergeAnalyzedPerspective(prev, result.perspective) : prev,
+          );
+          setProgress((prev) => ({
+            ...prev,
+            [id]: {
+              status: result.skipped ? 'skipped' : 'done',
+              skipReason: result.skipReason,
+              error: null,
+            },
+          }));
+        } catch (err) {
+          setProgress((prev) => ({
+            ...prev,
+            [id]: {
+              status: 'error',
+              skipReason: null,
+              error:
+                err instanceof ApiError
+                  ? err.message
+                  : 'This perspective could not be analysed.',
+            },
+          }));
+        }
+      });
+    },
+    [api, board, featureId],
+  );
+
   useEffect(() => {
     void load();
   }, [load]);
 
   const selected =
     board?.perspectives.find((p) => p.id === selectedId) ?? null;
+  const selectedProgress: PerspectiveProgress =
+    (selectedId && progress[selectedId]) || {
+      status: 'idle',
+      skipReason: null,
+      error: null,
+    };
+
+  const progressValues = Object.values(progress);
+  const analyzing = progressValues.some((p) => p.status === 'analyzing');
+  const analyzedCount = progressValues.filter(
+    (p) => p.status === 'done' || p.status === 'skipped' || p.status === 'error',
+  ).length;
+  const totalPerspectives = board?.perspectives.length ?? 0;
+
+  const detailRef = useRef<HTMLElement | null>(null);
+  const firstSelection = useRef(true);
+  useEffect(() => {
+    // Bring the detail into view whenever the reviewer picks a perspective,
+    // but not on the very first render (that would yank the page down on load).
+    if (firstSelection.current) {
+      firstSelection.current = false;
+      return;
+    }
+    detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [selectedId]);
 
   if (loading && !board) {
     return (
@@ -223,11 +386,48 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
           <span className={`rb-reco rb-reco-${board.recommendation}`}>
             {RECOMMENDATION_LABEL[board.recommendation]}
           </span>
-          <Button variant="ghost" onClick={() => void load()}>
-            <RefreshIcon size={14} /> Re-run
+          <Button
+            variant="primary"
+            onClick={() => void analyze()}
+            disabled={analyzing}
+          >
+            {analyzing ? (
+              <span className="spinner" aria-hidden="true" />
+            ) : (
+              <AiMagicIcon size={14} />
+            )}{' '}
+            {analyzing
+              ? 'Analyzing…'
+              : analyzed
+                ? 'Re-analyze with AI'
+                : 'Analyze with AI'}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => void load()}
+            disabled={analyzing}
+          >
+            <RefreshIcon size={14} /> Reset
           </Button>
         </div>
       </header>
+
+      {analyzeError && (
+        <div className="rb-analyze-error">
+          <ErrorText error={analyzeError} />
+        </div>
+      )}
+
+      {analyzing && (
+        <div className="rb-analyzing" role="status">
+          <span className="spinner" aria-hidden="true" />
+          <span>
+            Reviewing {analyzedCount} of {totalPerspectives} perspectives —
+            findings appear as each one completes. Select any perspective to
+            follow along.
+          </span>
+        </div>
+      )}
 
       <div className="rb-summary">
         <span>
@@ -250,62 +450,132 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
 
       <div className="rb-body">
         <nav className="rb-nav" aria-label="Review perspectives">
-          {board.perspectives.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`rb-nav-item ${
-                p.id === selectedId ? 'is-active' : ''
-              }`.trim()}
-              onClick={() => setSelectedId(p.id)}
-            >
-              <span className="rb-nav-name">{p.name}</span>
-              <span className="rb-nav-markers">
-                <Marker kind="risk" value={p.risk} />
-                {p.findings.length > 0 && (
-                  <span className="rb-nav-count">{p.findings.length}</span>
-                )}
-              </span>
-            </button>
-          ))}
+          {board.perspectives.map((p) => {
+            const state = progress[p.id]?.status ?? 'idle';
+            return (
+              <button
+                key={p.id}
+                type="button"
+                className={`rb-nav-item ${
+                  p.id === selectedId ? 'is-active' : ''
+                }`.trim()}
+                onClick={() => setSelectedId(p.id)}
+              >
+                <span className="rb-nav-name">{p.name}</span>
+                <span className="rb-nav-markers">
+                  {state === 'analyzing' && (
+                    <span
+                      className="spinner rb-nav-spin"
+                      aria-label="Analyzing"
+                      role="status"
+                    />
+                  )}
+                  {state === 'skipped' && (
+                    <span className="rb-nav-skip">Skipped</span>
+                  )}
+                  {state === 'error' && (
+                    <span className="rb-nav-err" title="Analysis failed">
+                      !
+                    </span>
+                  )}
+                  <Marker kind="risk" value={p.risk} />
+                  {p.findings.length > 0 && (
+                    <span className="rb-nav-count">{p.findings.length}</span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </nav>
 
         <main className="rb-canvas">
-          <ExplainModel board={board} />
-
-          <section className="rb-board">
-            <h3 className="rb-section-header">Dynamic review board</h3>
-            <div className="rb-card-grid">
-              {board.perspectives.map((p) => (
-                <PerspectiveCard
-                  key={p.id}
-                  perspective={p}
-                  selected={p.id === selectedId}
-                  onSelect={() => setSelectedId(p.id)}
-                />
-              ))}
-            </div>
-          </section>
-
           {selected && (
-            <section className="rb-detail">
-              <h3 className="rb-section-header">{selected.name}</h3>
-              <p className="rb-detail-why">{selected.why}</p>
-              <div className="rb-detail-markers">
+            <section className="rb-detail" ref={detailRef}>
+              <div className="rb-detail-head">
+                <h3 className="rb-section-header">{selected.name}</h3>
+                {selected.source === 'detected' && (
+                  <span className="rb-card-badge">Detected</span>
+                )}
+                {selectedProgress.status === 'analyzing' && (
+                  <span className="rb-detail-working">
+                    <span className="spinner" aria-hidden="true" /> AI reviewing…
+                  </span>
+                )}
+                <span className="rb-detail-spacer" />
                 <Marker kind="status" value={selected.status} />
                 <Marker kind="risk" value={selected.risk} />
               </div>
+              <p className="rb-detail-why">{selected.why}</p>
+              <div className="rb-detail-meta">
+                <span>
+                  <strong>{selected.findings.length}</strong> finding
+                  {selected.findings.length === 1 ? '' : 's'}
+                </span>
+                <span>·</span>
+                <span>
+                  Reviewing across {board.model.blastRadiusDimensions.join(', ')}
+                </span>
+              </div>
+
+              {selectedProgress.status === 'skipped' && (
+                <div className="rb-banner rb-banner-skip" role="note">
+                  <strong>Skipped by the AI reviewer.</strong>{' '}
+                  {selectedProgress.skipReason ??
+                    'This perspective was judged not applicable to the change.'}
+                </div>
+              )}
+              {selectedProgress.status === 'error' && (
+                <div className="rb-banner rb-banner-err" role="alert">
+                  <strong>Analysis failed.</strong>{' '}
+                  {selectedProgress.error ??
+                    'This perspective could not be analysed.'}{' '}
+                  <button
+                    type="button"
+                    className="rb-linkish"
+                    onClick={() => void analyze()}
+                  >
+                    Retry all
+                  </button>
+                </div>
+              )}
+              {selectedProgress.status === 'analyzing' && (
+                <div className="rb-banner rb-banner-working" role="status">
+                  <span className="spinner" aria-hidden="true" /> The AI reviewer
+                  is examining this perspective. Existing findings stay visible
+                  while it works — other perspectives continue in parallel.
+                </div>
+              )}
+
               {selected.findings.length === 0 ? (
-                <p className="rb-empty">
-                  No deterministic findings for this perspective yet. Deeper,
-                  AI-authored findings arrive in a later increment.
-                </p>
+                <div className="rb-detail-empty">
+                  <p className="rb-empty">
+                    {selectedProgress.status === 'analyzing'
+                      ? 'Looking for evidence-backed findings for this perspective…'
+                      : selectedProgress.status === 'skipped'
+                        ? 'No findings — the reviewer skipped this perspective for the reason above.'
+                        : selectedProgress.status === 'done'
+                          ? 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
+                          : 'No deterministic findings yet. Run the AI reviewer to author evidence-backed findings for this perspective.'}
+                  </p>
+                  {!analyzed && (
+                    <Button
+                      variant="primary"
+                      onClick={() => void analyze()}
+                      disabled={analyzing}
+                    >
+                      <AiMagicIcon size={14} /> Analyze with AI
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <ul className="rb-findings">
                   {selected.findings.map((f) => (
                     <li key={f.id} className={`rb-finding rb-sev-${f.severity}`}>
                       <div className="rb-finding-head">
                         <span className="rb-finding-title">{f.title}</span>
+                        <span className={`rb-sev-tag rb-sev-tag-${f.severity}`}>
+                          {f.severity}
+                        </span>
                         <Marker kind="status" value={f.status} />
                       </div>
                       <p className="rb-finding-detail">{f.detail}</p>
@@ -329,20 +599,15 @@ export function ReviewBoardPage({ featureId }: { featureId: string }) {
               )}
             </section>
           )}
+
+          <ExplainModel board={board} />
         </main>
 
-        <aside className="rb-agent" aria-label="Review agent">
-          <h3 className="rb-card-header">Engineering Review Agent</h3>
-          <p className="rb-agent-context">
-            Context: #{board.pull.number}
-            {selected ? ` · ${selected.name}` : ''}
-          </p>
-          <p className="rb-agent-placeholder">
-            A context-aware review agent will let you challenge scores, ask why a
-            risk was marked, and generate PR comments here. Coming in a later
-            increment.
-          </p>
-        </aside>
+        <ReviewAgent
+          featureId={featureId}
+          pullNumber={board.pull.number}
+          perspective={selected}
+        />
       </div>
     </div>
   );

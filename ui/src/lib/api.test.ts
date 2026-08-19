@@ -755,6 +755,51 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
   });
 
+  it('analyzes a review board via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.analyzeReviewBoard('f1');
+    expect(result).toEqual({ featureId: 'f1' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/review-board/analyze');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('analyzes a single review perspective via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        perspectiveId: 'security',
+        perspective: { id: 'security' },
+        skipped: false,
+        skipReason: null,
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.analyzeReviewBoardPerspective('f1', 'security');
+    expect(result.perspectiveId).toBe('security');
+    const [url, init] = calls[0];
+    expect(url).toBe(
+      '/api/features/f1/review-board/perspectives/security/analyze',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('chats with the review agent via a JSON POST with perspective and messages', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ answer: 'Because.' }));
+    const client = createApiClient({ fetchImpl });
+    const messages = [{ role: 'user' as const, content: 'Why?' }];
+    const reply = await client.chatReviewBoard('f1', 'security', messages);
+    expect(reply).toEqual({ answer: 'Because.' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/review-board/chat');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ perspectiveId: 'security', messages }),
+    );
+  });
+
   it('refreshes a PR review via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
     const client = createApiClient({ fetchImpl });

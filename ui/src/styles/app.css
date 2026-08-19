@@ -8714,6 +8714,148 @@ body.is-resizing {
   font-size: 14px;
   color: var(--text-muted);
 }
+.rb-detail {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.rb-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.rb-detail-head .rb-section-header {
+  margin: 0;
+}
+.rb-detail-spacer {
+  flex: 1 1 auto;
+}
+.rb-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+.rb-detail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.rb-sev-tag {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.rb-sev-tag-critical,
+.rb-sev-tag-high {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.rb-sev-tag-medium {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.rb-analyzing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.rb-nav-spin {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+.rb-nav-skip {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+.rb-nav-err {
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 50%;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rb-detail-working {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.rb-detail-working .spinner {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+.rb-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.rb-banner .spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.rb-banner-skip {
+  color: var(--text-muted);
+  background: var(--surface-strong);
+}
+.rb-banner-err {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.rb-banner-working {
+  color: var(--text-muted);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.rb-linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
 .rb-findings {
   list-style: none;
   margin: 12px 0 0;
@@ -8776,6 +8918,62 @@ body.is-resizing {
   color: var(--text-muted);
   line-height: 18px;
   margin: 0;
+}
+.rb-analyze-error {
+  padding: 8px 12px;
+}
+.rb-agent-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 80px;
+}
+.rb-agent-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 18px;
+  margin: 0;
+}
+.rb-agent-msg {
+  font-size: 13px;
+  line-height: 18px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rb-agent-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  max-width: 85%;
+}
+.rb-agent-assistant {
+  align-self: flex-start;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  color: var(--text);
+  max-width: 92%;
+}
+.rb-agent-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.rb-agent-input {
+  flex: 1 1 auto;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.rb-agent-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 @media (max-width: 1100px) {
   .rb-body {

@@ -42,6 +42,9 @@ import type {
   PrApprovalResult,
   PrDescriptionExportResult,
   ReviewBoard,
+  ReviewBoardChatMessage,
+  ReviewBoardChatReply,
+  PerspectiveAnalysis,
   ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
@@ -178,6 +181,25 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrReview>(`/features/${featureId}/pr-review`),
     getReviewBoard: (featureId: string) =>
       request<ReviewBoard>(`/features/${featureId}/review-board`),
+    analyzeReviewBoard: (featureId: string) =>
+      request<ReviewBoard>(
+        `/features/${featureId}/review-board/analyze`,
+        jsonBody({}),
+      ),
+    analyzeReviewBoardPerspective: (featureId: string, perspectiveId: string) =>
+      request<PerspectiveAnalysis>(
+        `/features/${featureId}/review-board/perspectives/${perspectiveId}/analyze`,
+        jsonBody({}),
+      ),
+    chatReviewBoard: (
+      featureId: string,
+      perspectiveId: string | null,
+      messages: ReviewBoardChatMessage[],
+    ) =>
+      request<ReviewBoardChatReply>(
+        `/features/${featureId}/review-board/chat`,
+        jsonBody({ perspectiveId, messages }),
+      ),
     refreshPrReview: (featureId: string) =>
       request<PrReview>(
         `/features/${featureId}/pr-review/refresh`,

@@ -179,8 +179,56 @@ export interface DiscoveryInput {
   nodes: DiscoveryNode[];
 }
 
+/** One turn in the review-agent conversation. */
+export interface ReviewBoardChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** The agent's answer to a chat turn. */
+export interface ReviewBoardChatReply {
+  answer: string;
+}
+
+/** The AI's per-perspective verdict: findings, or an explicit skip + reason. */
+export interface PerspectiveAnalysis {
+  perspectiveId: string;
+  /** The fully rolled-up perspective (deterministic + AI findings merged). */
+  perspective: ReviewPerspective;
+  /** True when the AI judged this perspective not applicable to the change. */
+  skipped: boolean;
+  /** Plain-language reason the perspective was skipped, or null. */
+  skipReason: string | null;
+}
+
 /** Application service backing the Project Review Board page. */
 export interface ReviewBoardService {
   /** The board for a review feature, or throws when no review exists. */
   get(featureId: string): ReviewBoard;
+  /**
+   * Run the AI reviewer over the change and return the board enriched with
+   * evidence-backed, per-perspective findings merged on top of the
+   * deterministic ones. Throws when no PR review exists.
+   */
+  analyze(featureId: string): Promise<ReviewBoard>;
+  /**
+   * Run the AI reviewer over a *single* perspective and return its rolled-up
+   * result. Lets the UI analyse perspectives independently and show live,
+   * per-perspective progress. Throws when no PR review exists or the
+   * perspective id is not on the board.
+   */
+  analyzePerspective(
+    featureId: string,
+    perspectiveId: string,
+  ): Promise<PerspectiveAnalysis>;
+  /**
+   * Ask the context-aware review agent a question. `perspectiveId` scopes the
+   * conversation to one lens (or is null for the whole board). Throws when no
+   * PR review exists.
+   */
+  chat(
+    featureId: string,
+    perspectiveId: string | null,
+    messages: ReviewBoardChatMessage[],
+  ): Promise<ReviewBoardChatReply>;
 }

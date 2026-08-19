@@ -1523,6 +1523,10 @@ function main(): void {
     reviews: { get: (featureId) => prReviewService.get(featureId) },
     config: reviewBoardConfig,
     clock,
+    ai: warmMetaRunner ?? metaRunner,
+    inlinePrompts: warmMetaRunner !== null,
+    temporaryPrompts: createTemporaryPromptFileFactory(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
   // Azure DevOps (REST) gateway from the repo's provider, so the comments

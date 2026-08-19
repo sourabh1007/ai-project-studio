@@ -451,6 +451,25 @@ export interface ReviewBoard {
   generatedAt: string;
 }
 
+/** One turn in the review-agent conversation. */
+export interface ReviewBoardChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** The review agent's answer to a chat turn. */
+export interface ReviewBoardChatReply {
+  answer: string;
+}
+
+/** The AI's verdict for a single perspective: rolled-up result + skip info. */
+export interface PerspectiveAnalysis {
+  perspectiveId: string;
+  perspective: ReviewPerspective;
+  skipped: boolean;
+  skipReason: string | null;
+}
+
 
 /** A single comment within a review thread on the pull request. */
 export interface PrComment {
