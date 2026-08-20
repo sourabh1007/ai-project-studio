@@ -468,6 +468,8 @@ export interface PerspectiveAnalysis {
   perspective: ReviewPerspective;
   skipped: boolean;
   skipReason: string | null;
+  /** What the reviewer checked to justify the rating, or null when omitted. */
+  summary: string | null;
 }
 
 

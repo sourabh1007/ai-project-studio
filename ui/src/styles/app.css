@@ -8494,9 +8494,43 @@ body.is-resizing {
 .rb-body {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 260px;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 16px;
   flex: 1;
   min-height: 0;
+}
+.rb-body > .rb-explain {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.rb-checked {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.rb-checked-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.rb-checked-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+.rb-checked-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .rb-nav {
   display: flex;

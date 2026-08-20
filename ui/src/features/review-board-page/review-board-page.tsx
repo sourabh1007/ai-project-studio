@@ -321,6 +321,7 @@ export function ReviewBoardPage({
     (selectedId && progress[selectedId]) || {
       status: 'idle',
       skipReason: null,
+      checked: null,
       error: null,
       attempt: 0,
     };
@@ -547,6 +548,19 @@ export function ReviewBoardPage({
                 </span>
               </div>
 
+              {selectedProgress.checked && (
+                <div className="rb-checked" role="note">
+                  <span className="rb-checked-label">
+                    What was checked for this rating
+                  </span>
+                  <p className="rb-checked-text">{selectedProgress.checked}</p>
+                  <p className="rb-checked-hint">
+                    Disagree with this rating? Challenge it with the review agent
+                    on the right — point at the code and it will re-evaluate. →
+                  </p>
+                </div>
+              )}
+
               {selectedProgress.status === 'skipped' && (
                 <div className="rb-banner rb-banner-skip" role="note">
                   <strong>Skipped by the AI reviewer.</strong>{' '}
@@ -651,8 +665,6 @@ export function ReviewBoardPage({
               )}
             </section>
           )}
-
-          <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
         </main>
 
         <ReviewAgent
@@ -660,6 +672,8 @@ export function ReviewBoardPage({
           pullNumber={board.pull.number}
           perspective={selected}
         />
+
+        <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
       </div>
     </div>
   );

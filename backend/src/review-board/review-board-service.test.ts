@@ -244,7 +244,7 @@ describe('createReviewBoardService.analyze', () => {
 
 describe('createReviewBoardService.analyzePerspective', () => {
   const objectJson = `\`\`\`json
-{"skipped": false, "findings": [
+{"skipped": false, "summary": "Inspected svc/cache.cs BuildKey for tainted input.", "findings": [
   {"title":"Unvalidated cache key","detail":"key from user input","severity":"high","evidence":[{"source":"svc/cache.cs","reason":"key from request","confidence":0.8}]}
 ]}
 \`\`\``;
@@ -256,6 +256,9 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.perspectiveId).toBe('security');
     expect(result.skipped).toBe(false);
     expect(result.skipReason).toBeNull();
+    expect(result.summary).toBe(
+      'Inspected svc/cache.cs BuildKey for tainted input.',
+    );
     expect(result.perspective.id).toBe('security');
     expect(result.perspective.findings).toHaveLength(1);
     expect(result.perspective.status).toBe('blocked');

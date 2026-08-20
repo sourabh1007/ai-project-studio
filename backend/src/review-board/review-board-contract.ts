@@ -199,6 +199,12 @@ export interface PerspectiveAnalysis {
   skipped: boolean;
   /** Plain-language reason the perspective was skipped, or null. */
   skipReason: string | null;
+  /**
+   * A specific statement of exactly what the reviewer checked to justify this
+   * lens's rating — the concrete files/symbols inspected and what was verified.
+   * Present whether or not findings were raised; null when the model omitted it.
+   */
+  summary: string | null;
 }
 
 /** Application service backing the Project Review Board page. */

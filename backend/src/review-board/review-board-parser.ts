@@ -142,25 +142,31 @@ export interface ParsedPerspectiveAnalysis {
   findings: ReviewFinding[];
   skipped: boolean;
   skipReason: string | null;
+  /** What the reviewer checked to justify the rating, or null when omitted. */
+  summary: string | null;
 }
 
 /**
  * Parse the model's single-perspective response: a JSON object with an optional
- * `skipped`/`reason` and a `findings` array. Totally defensive — a malformed
- * completion yields no findings and no skip, so the perspective simply shows
- * its deterministic result. All findings are attributed to `perspectiveId`.
+ * `skipped`/`reason`, a `summary` of what was checked, and a `findings` array.
+ * Totally defensive — a malformed completion yields no findings and no skip, so
+ * the perspective simply shows its deterministic result. All findings are
+ * attributed to `perspectiveId`.
  */
 export function parsePerspectiveAnalysis(
   text: string,
   perspectiveId: string,
 ): ParsedPerspectiveAnalysis {
   const record = extractJsonObject(text);
-  if (record === null) return { findings: [], skipped: false, skipReason: null };
+  if (record === null) {
+    return { findings: [], skipped: false, skipReason: null, summary: null };
+  }
+  const summary = isText(record.summary) ? record.summary.trim() : null;
   if (record.skipped === true) {
     const skipReason = isText(record.reason)
       ? record.reason.trim()
       : 'The reviewer judged this perspective not applicable to the change.';
-    return { findings: [], skipped: true, skipReason };
+    return { findings: [], skipped: true, skipReason, summary };
   }
   const rawFindings = Array.isArray(record.findings) ? record.findings : [];
   const findings: ReviewFinding[] = [];
@@ -168,7 +174,7 @@ export function parsePerspectiveAnalysis(
     const finding = toFinding(raw, perspectiveId, index);
     if (finding) findings.push(finding);
   });
-  return { findings, skipped: false, skipReason: null };
+  return { findings, skipped: false, skipReason: null, summary };
 }
 
 /**

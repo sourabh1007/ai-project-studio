@@ -269,6 +269,7 @@ export function createReviewBoardService(
         perspective: finalizeAnalyzedPerspective(rolledUp, parsed.skipped),
         skipped: parsed.skipped,
         skipReason: parsed.skipReason,
+        summary: parsed.summary,
       };
     },
 

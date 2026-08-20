@@ -773,6 +773,7 @@ describe('createApiClient', () => {
         perspective: { id: 'security' },
         skipped: false,
         skipReason: null,
+        summary: null,
       }),
     );
     const client = createApiClient({ fetchImpl });

@@ -51,6 +51,8 @@ export type PerspectiveStatus =
 export interface PerspectiveProgress {
   status: PerspectiveStatus;
   skipReason: string | null;
+  /** What the reviewer checked to justify the rating, or null. */
+  checked: string | null;
   error: string | null;
   /** 1-based attempt currently running (>1 means a self-healing retry). */
   attempt: number;
@@ -223,7 +225,13 @@ class ReviewBoardRunStore {
       progress: Object.fromEntries(
         ids.map((id) => [
           id,
-          { status: 'pending', skipReason: null, error: null, attempt: 0 },
+          {
+            status: 'pending',
+            skipReason: null,
+            checked: null,
+            error: null,
+            attempt: 0,
+          },
         ]),
       ),
     }));
@@ -238,6 +246,7 @@ class ReviewBoardRunStore {
             this.setProgress(featureId, id, {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
+              checked: null,
               error: null,
               attempt,
             });
@@ -265,6 +274,7 @@ class ReviewBoardRunStore {
         this.setProgress(featureId, id, {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
+          checked: result.summary,
           error: null,
           attempt: 0,
         });
@@ -273,6 +283,7 @@ class ReviewBoardRunStore {
         this.setProgress(featureId, id, {
           status: 'error',
           skipReason: null,
+          checked: null,
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });
@@ -307,7 +318,13 @@ class ReviewBoardRunStore {
         ...Object.fromEntries(
           failed.map((id) => [
             id,
-            { status: 'pending', skipReason: null, error: null, attempt: 0 },
+            {
+            status: 'pending',
+            skipReason: null,
+            checked: null,
+            error: null,
+            attempt: 0,
+          },
           ]),
         ),
       },
@@ -321,6 +338,7 @@ class ReviewBoardRunStore {
             this.setProgress(featureId, id, {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
+              checked: null,
               error: null,
               attempt,
             });
@@ -348,6 +366,7 @@ class ReviewBoardRunStore {
         this.setProgress(featureId, id, {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
+          checked: result.summary,
           error: null,
           attempt: 0,
         });
@@ -356,6 +375,7 @@ class ReviewBoardRunStore {
         this.setProgress(featureId, id, {
           status: 'error',
           skipReason: null,
+          checked: null,
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });

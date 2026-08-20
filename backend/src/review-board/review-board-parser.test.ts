@@ -103,13 +103,14 @@ describe('parseAiFindings', () => {
 describe('parsePerspectiveAnalysis', () => {
   it('parses a fenced object of findings', () => {
     const text = `\`\`\`json
-{"skipped": false, "findings": [
+{"skipped": false, "summary": "Checked auth.ts renderProfile for escaping.", "findings": [
   {"title":"XSS","detail":"unescaped","severity":"high","evidence":[{"source":"a.ts","reason":"raw html","confidence":0.9}]}
 ]}
 \`\`\``;
     const result = parsePerspectiveAnalysis(text, 'security');
     expect(result.skipped).toBe(false);
     expect(result.skipReason).toBeNull();
+    expect(result.summary).toBe('Checked auth.ts renderProfile for escaping.');
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject({
       id: 'security/ai-0',
@@ -118,12 +119,26 @@ describe('parsePerspectiveAnalysis', () => {
     });
   });
 
+  it('captures a summary on a skipped result and ignores a blank summary', () => {
+    const skipped = parsePerspectiveAnalysis(
+      '```json\n{"skipped": true, "reason": "n/a", "summary": "Reviewed schema.ts; no contract changed."}\n```',
+      'api',
+    );
+    expect(skipped.summary).toBe('Reviewed schema.ts; no contract changed.');
+    const blank = parsePerspectiveAnalysis(
+      '```json\n{"skipped": false, "summary": "   ", "findings": []}\n```',
+      'api',
+    );
+    expect(blank.summary).toBeNull();
+  });
+
   it('honours an explicit skip with a reason', () => {
     const text =
       '```json\n{"skipped": true, "reason": "No public contracts changed."}\n```';
     const result = parsePerspectiveAnalysis(text, 'api');
     expect(result.skipped).toBe(true);
     expect(result.skipReason).toBe('No public contracts changed.');
+    expect(result.summary).toBeNull();
     expect(result.findings).toEqual([]);
   });
 
@@ -139,11 +154,13 @@ describe('parsePerspectiveAnalysis', () => {
       findings: [],
       skipped: false,
       skipReason: null,
+      summary: null,
     });
     expect(parsePerspectiveAnalysis('```json\n[1,2]\n```', 'security')).toEqual({
       findings: [],
       skipped: false,
       skipReason: null,
+      summary: null,
     });
   });
 
@@ -160,6 +177,7 @@ describe('parsePerspectiveAnalysis', () => {
       findings: [],
       skipped: false,
       skipReason: null,
+      summary: null,
     });
   });
 });
