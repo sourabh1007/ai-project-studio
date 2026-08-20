@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capPerspectiveFindings,
   parseAiFindings,
+  parseChatReply,
   parsePerspectiveAnalysis,
 } from './review-board-parser.js';
 import type { ReviewFinding } from './review-board-contract.js';
@@ -260,5 +261,92 @@ describe('capPerspectiveFindings', () => {
     const capped = capPerspectiveFindings(findings, 2);
     expect(capped.filter((f) => f.perspectiveId === 'security')).toHaveLength(2);
     expect(capped.filter((f) => f.perspectiveId === 'testing')).toHaveLength(1);
+  });
+});
+
+describe('parseChatReply', () => {
+  const change = `Good point — the retry loop in svc/cache.cs BuildKey does bound growth.
+\`\`\`json
+{"status":"approved","risk":"low","summary":"Re-checked svc/cache.cs BuildKey; the bound is enforced.","rationale":[{"label":"Evidence","detail":"BuildKey caps size at svc/cache.cs:42"}],"justification":"You showed BuildKey enforces the cap at line 42."}
+\`\`\``;
+
+  it('never proposes a change for a whole-board (null) chat', () => {
+    const reply = parseChatReply(change, null);
+    expect(reply.ratingChange).toBeNull();
+    expect(reply.answer).toContain('Good point');
+  });
+
+  it('returns prose with no change when there is no fenced block', () => {
+    const reply = parseChatReply('Just some prose, no block.', 'security');
+    expect(reply).toEqual({
+      answer: 'Just some prose, no block.',
+      ratingChange: null,
+    });
+  });
+
+  it('parses a convinced rating change and strips the block from the answer', () => {
+    const reply = parseChatReply(change, 'security');
+    expect(reply.answer).toBe(
+      'Good point — the retry loop in svc/cache.cs BuildKey does bound growth.',
+    );
+    expect(reply.ratingChange).toEqual({
+      perspectiveId: 'security',
+      status: 'approved',
+      risk: 'low',
+      summary: 'Re-checked svc/cache.cs BuildKey; the bound is enforced.',
+      rationale: [
+        { label: 'Evidence', detail: 'BuildKey caps size at svc/cache.cs:42' },
+      ],
+      justification: 'You showed BuildKey enforces the cap at line 42.',
+    });
+  });
+
+  it('falls back to a confirmation when the reply is only the block', () => {
+    const only = `\`\`\`json
+{"status":"blocked","risk":"high","summary":"s","rationale":[{"label":"L","detail":"d"}],"justification":"j"}
+\`\`\``;
+    const reply = parseChatReply(only, 'security');
+    expect(reply.answer).toBe(
+      'Updated the rating for this perspective based on our discussion.',
+    );
+    expect(reply.ratingChange?.status).toBe('blocked');
+  });
+
+  it('rejects a block with an unknown status', () => {
+    const bad = `\`\`\`json
+{"status":"nope","risk":"low","summary":"s","rationale":[{"label":"L","detail":"d"}],"justification":"j"}
+\`\`\``;
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
+  });
+
+  it('rejects a block with an unknown risk', () => {
+    const bad = `\`\`\`json
+{"status":"approved","risk":"nope","summary":"s","rationale":[{"label":"L","detail":"d"}],"justification":"j"}
+\`\`\``;
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
+  });
+
+  it('rejects a block missing the justification', () => {
+    const bad = `\`\`\`json
+{"status":"approved","risk":"low","summary":"s","rationale":[{"label":"L","detail":"d"}]}
+\`\`\``;
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
+  });
+
+  it('rejects a block with an empty rationale', () => {
+    const bad = `\`\`\`json
+{"status":"approved","risk":"low","summary":"s","rationale":[],"justification":"j"}
+\`\`\``;
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
+  });
+
+  it('rejects a fenced block that is not valid JSON', () => {
+    const bad = '```json\n{not json}\n```';
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
+  });
+
+  it('ignores a fenced block that carries no object', () => {
+    const bad = '```json\n[1, 2, 3]\n```';
+    expect(parseChatReply(bad, 'security').ratingChange).toBeNull();
   });
 });

@@ -31,6 +31,7 @@ import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt } fro
 import {
   capPerspectiveFindings,
   parseAiFindings,
+  parseChatReply,
   parsePerspectiveAnalysis,
 } from './review-board-parser.js';
 import type {
@@ -333,7 +334,7 @@ export function createReviewBoardService(
         config: { maxContextChars: deps.config.maxContextChars },
       });
       const text = await runPrompt(review, prompt);
-      return { answer: text.trim() };
+      return parseChatReply(text, perspective?.id ?? null);
     },
   };
 }

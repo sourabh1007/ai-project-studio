@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyAgentRatingChange,
   mapWithConcurrency,
   mergeAnalyzedPerspective,
   recommendationFor,
@@ -7,7 +8,12 @@ import {
   RetryCancelledError,
   summarizePerspectives,
 } from './review-board-progress.js';
-import type { ReviewBoard, ReviewFinding, ReviewPerspective } from './types.js';
+import type {
+  ReviewBoard,
+  ReviewBoardRatingChange,
+  ReviewFinding,
+  ReviewPerspective,
+} from './types.js';
 
 function finding(severity: ReviewFinding['severity']): ReviewFinding {
   return {
@@ -113,6 +119,34 @@ describe('mergeAnalyzedPerspective', () => {
     expect(next.perspectives[1]).toBe(board.perspectives[1]);
     expect(next.summary.blocking).toBe(1);
     expect(next.recommendation).toBe('request-changes');
+  });
+
+  it('re-rates a perspective on an agent rating change', () => {
+    const change: ReviewBoardRatingChange = {
+      perspectiveId: 'a',
+      status: 'blocked',
+      risk: 'high',
+      summary: 's',
+      rationale: [{ label: 'L', detail: 'd' }],
+      justification: 'j',
+    };
+    const next = applyAgentRatingChange(board, change);
+    expect(next.perspectives[0].status).toBe('blocked');
+    expect(next.perspectives[0].risk).toBe('high');
+    // Findings are untouched by a rating change.
+    expect(next.perspectives[0].findings).toHaveLength(0);
+  });
+
+  it('ignores an agent rating change for an unknown perspective', () => {
+    const next = applyAgentRatingChange(board, {
+      perspectiveId: 'ghost',
+      status: 'approved',
+      risk: 'low',
+      summary: 's',
+      rationale: [{ label: 'L', detail: 'd' }],
+      justification: 'j',
+    });
+    expect(next).toBe(board);
   });
 });
 

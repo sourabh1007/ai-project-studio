@@ -13,8 +13,11 @@ import type {
   FindingSeverity,
   PerspectiveCheck,
   RationalePoint,
+  ReviewBoardRatingChange,
   ReviewEvidence,
   ReviewFinding,
+  ReviewRisk,
+  ReviewStatus,
 } from './review-board-contract.js';
 
 const SEVERITIES: readonly FindingSeverity[] = [
@@ -26,6 +29,25 @@ const SEVERITIES: readonly FindingSeverity[] = [
 ];
 
 const CHECK_STATUSES: readonly CheckStatus[] = ['pass', 'concern', 'na'];
+
+/** The rating verdicts the review agent may set for a perspective. */
+const REVIEW_STATUSES: readonly ReviewStatus[] = [
+  'not-started',
+  'needs-review',
+  'warning',
+  'blocked',
+  'approved',
+  'not-applicable',
+];
+
+/** The risk bands the review agent may set for a perspective. */
+const REVIEW_RISKS: readonly ReviewRisk[] = [
+  'low',
+  'medium',
+  'high',
+  'critical',
+  'unknown',
+];
 
 /** Extract the JSON array from a completion, tolerating fences and prose. */
 function extractJsonArray(text: string): unknown {
@@ -277,4 +299,88 @@ export function capPerspectiveFindings(
     kept.push(finding);
   }
   return kept;
+}
+
+/** The parsed outcome of a review-agent chat turn. */
+export interface ParsedChatReply {
+  answer: string;
+  ratingChange: ReviewBoardRatingChange | null;
+}
+
+/** Extract the FENCED ```json object from an agent reply, or null. Unlike the
+ * lenient object extractor, this only trusts an explicit fenced block so a
+ * rating change can never be conjured from stray braces in prose. */
+function extractFencedObject(text: string): {
+  record: Record<string, unknown>;
+  block: string;
+} | null {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (!fenced) return null;
+  const candidate = fenced[1].trim();
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end < start) return null;
+  try {
+    const record = JSON.parse(candidate.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
+    return { record, block: fenced[0] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a review-agent chat reply. The agent answers in prose and, ONLY when
+ * the discussion convinced it to change the focused perspective's rating,
+ * appends a single fenced ```json object describing the new verdict. This is
+ * totally defensive: a plain-prose reply (or any malformed/partial block, an
+ * unknown status/risk, or a missing justification) yields the answer with a
+ * null `ratingChange`, so a rating never changes without a complete, valid
+ * proposal — and never at all for a whole-board (perspectiveId === null) chat.
+ */
+export function parseChatReply(
+  text: string,
+  perspectiveId: string | null,
+): ParsedChatReply {
+  const trimmed = text.trim();
+  if (perspectiveId === null) {
+    return { answer: trimmed, ratingChange: null };
+  }
+  const extracted = extractFencedObject(text);
+  if (extracted === null) {
+    return { answer: trimmed, ratingChange: null };
+  }
+  const { record, block } = extracted;
+  const status = record.status;
+  const risk = record.risk;
+  const summary = record.summary;
+  const justification = record.justification;
+  const rationale = parseRationale(record.rationale);
+  const valid =
+    REVIEW_STATUSES.includes(status as ReviewStatus) &&
+    REVIEW_RISKS.includes(risk as ReviewRisk) &&
+    isText(summary) &&
+    isText(justification) &&
+    rationale.length > 0;
+  if (!valid) {
+    return { answer: trimmed, ratingChange: null };
+  }
+  // Strip the machine-readable block from the human-facing answer; fall back to
+  // a short confirmation when the reply was nothing but the block.
+  const answer =
+    text.replace(block, '').trim() ||
+    'Updated the rating for this perspective based on our discussion.';
+  return {
+    answer,
+    ratingChange: {
+      perspectiveId,
+      status: status as ReviewStatus,
+      risk: risk as ReviewRisk,
+      summary: (summary as string).trim(),
+      rationale,
+      justification: (justification as string).trim(),
+    },
+  };
 }

@@ -18,9 +18,11 @@ import type {
   PerspectiveCheck,
   RationalePoint,
   ReviewBoard,
+  ReviewBoardRatingChange,
 } from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
 import {
+  applyAgentRatingChange,
   mapWithConcurrency,
   mergeAnalyzedPerspective,
   runWithRetry,
@@ -65,6 +67,11 @@ export interface PerspectiveProgress {
   error: string | null;
   /** 1-based attempt currently running (>1 means a self-healing retry). */
   attempt: number;
+  /**
+   * Set when the review agent revised this rating during a discussion. Records
+   * why the agent was convinced so the change is auditable in the detail panel.
+   */
+  agentAdjustment?: { justification: string } | null;
 }
 
 export interface ReviewBoardRunState {
@@ -410,6 +417,35 @@ class ReviewBoardRunStore {
     if (!isStale()) {
       this.update(featureId, (prev) => ({ ...prev, running: false }));
     }
+  }
+
+  /**
+   * Apply a rating change the review agent proposed during a discussion. The
+   * agent only returns one once it is convinced by concrete evidence, so this
+   * re-rates the perspective, refreshes its "what was checked" summary and
+   * verdict rationale, and records the justification for the audit trail. A
+   * change for an unknown perspective is ignored.
+   */
+  applyRatingChange(
+    featureId: string,
+    change: ReviewBoardRatingChange,
+  ): void {
+    const rec = this.record(featureId);
+    const existing = rec.state.progress[change.perspectiveId];
+    if (!rec.state.board || !existing) return;
+    this.update(featureId, (prev) => ({
+      ...prev,
+      board: prev.board ? applyAgentRatingChange(prev.board, change) : prev.board,
+      progress: {
+        ...prev.progress,
+        [change.perspectiveId]: {
+          ...existing,
+          checked: change.summary,
+          rationale: change.rationale,
+          agentAdjustment: { justification: change.justification },
+        },
+      },
+    }));
   }
 }
 

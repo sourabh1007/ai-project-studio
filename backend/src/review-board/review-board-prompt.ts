@@ -216,7 +216,12 @@ export function buildPerspectivePrompt(input: {
     '  } ]',
     '}',
     'When the lens applies but the change is clean, set skipped=false and return',
-    'an empty findings array. Do not add prose outside the code block.',
+    'an empty findings array — but you MUST still populate a non-empty',
+    '`rationale` and non-empty `checks` that prove, with concrete file/symbol',
+    'references, exactly what you inspected and why the change is sound for this',
+    'lens. An approved/clean verdict with an empty rationale or empty checks is',
+    'INVALID: never assume "green" — always show the evidence you based it on.',
+    'Do not add prose outside the code block.',
   ].join('\n');
 }
 export function buildAgentChatPrompt(input: {
@@ -258,6 +263,7 @@ export function buildAgentChatPrompt(input: {
       modelDigest(board.model),
       focus,
       '',
+      ...ratingChangeProtocol(perspective),
       '## Conversation',
       transcript,
       '',
@@ -265,4 +271,45 @@ export function buildAgentChatPrompt(input: {
     ].join('\n'),
     input.config.maxContextChars,
   );
+}
+
+/**
+ * The instructions that let the agent *change* the focused perspective's rating
+ * — but only when genuinely convinced by concrete, code-referenced evidence.
+ * When no perspective is focused there is nothing to re-rate, so the protocol
+ * is omitted entirely and the agent can only answer.
+ */
+function ratingChangeProtocol(
+  perspective: ReviewPerspective | null,
+): string[] {
+  if (perspective === null) return [];
+  return [
+    '## Changing this rating',
+    `The focused perspective "${perspective.name}" is currently rated`,
+    `status="${perspective.status}", risk="${perspective.risk}". You MAY revise`,
+    'that rating, but ONLY when the user has given you concrete, verifiable',
+    'evidence — specific files/symbols and reasoning — that proves the current',
+    'rating is wrong. Stay skeptical: do NOT change a rating on assertion,',
+    'opinion, or pressure alone, and never invent evidence. If you are not',
+    'convinced, keep the rating and explain, in prose, exactly what evidence',
+    'would convince you.',
+    '',
+    'When — and only when — you are convinced, end your reply with a single',
+    'fenced ```json object (and nothing after it):',
+    '```json',
+    '{',
+    '  "status": one of "approved" | "needs-review" | "warning" | "blocked" |',
+    '    "not-applicable",',
+    '  "risk": one of "low" | "medium" | "high" | "critical" | "unknown",',
+    '  "summary": one or two sentences stating what you re-checked to reach the',
+    '    new rating, naming the specific files/symbols,',
+    '  "rationale": [ { "label": step label, "detail": concrete, code-referenced',
+    '    explanation } ]  — non-empty, justifying the new rating,',
+    '  "justification": one sentence naming the exact evidence from this',
+    '    discussion that changed your mind',
+    '}',
+    '```',
+    'If you are NOT changing the rating, do not include any json block at all.',
+    '',
+  ];
 }

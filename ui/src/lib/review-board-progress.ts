@@ -8,6 +8,7 @@
 
 import type {
   ReviewBoard,
+  ReviewBoardRatingChange,
   ReviewBoardSummary,
   ReviewPerspective,
   ReviewRecommendation,
@@ -58,6 +59,26 @@ export function mergeAnalyzedPerspective(
     summary,
     recommendation: recommendationFor(summary),
   };
+}
+
+/**
+ * Apply a review-agent rating change to the board: re-rate the target
+ * perspective's status/risk (its findings are unchanged — the agent adjusts the
+ * verdict, not the evidence list) and recompute the header roll-up. A change
+ * naming a perspective that is not on the board is a no-op, so a stale proposal
+ * can never corrupt the board.
+ */
+export function applyAgentRatingChange(
+  board: ReviewBoard,
+  change: ReviewBoardRatingChange,
+): ReviewBoard {
+  const target = board.perspectives.find((p) => p.id === change.perspectiveId);
+  if (!target) return board;
+  return mergeAnalyzedPerspective(board, {
+    ...target,
+    status: change.status,
+    risk: change.risk,
+  });
 }
 
 /** Options for {@link runWithRetry}. */

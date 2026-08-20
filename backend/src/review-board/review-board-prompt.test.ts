@@ -209,6 +209,18 @@ describe('buildPerspectivePrompt', () => {
     expect(prompt).toContain('(no changed files were resolved');
   });
 
+  it('forbids an approved verdict without evidence', () => {
+    const prompt = buildPerspectivePrompt({
+      board,
+      perspective,
+      description: 'd',
+      changedPaths: ['a.cs'],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('with an empty rationale or empty checks is');
+    expect(prompt).toContain('never assume "green"');
+  });
+
   it('clamps a very long description', () => {
     const prompt = buildPerspectivePrompt({
       board,
@@ -237,6 +249,24 @@ describe('buildAgentChatPrompt', () => {
     expect(prompt).toContain('Unvalidated input');
     expect(prompt).toContain('User: Why blocked?');
     expect(prompt).toContain('Assistant: Because...');
+  });
+
+  it('includes the rating-change protocol only when a perspective is focused', () => {
+    const focused = buildAgentChatPrompt({
+      board,
+      perspective,
+      messages: [{ role: 'user', content: 'Hi' }],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(focused).toContain('Changing this rating');
+    expect(focused).toContain('do NOT change a rating on assertion');
+    const whole = buildAgentChatPrompt({
+      board,
+      perspective: null,
+      messages: [{ role: 'user', content: 'Hi' }],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(whole).not.toContain('Changing this rating');
   });
 
   it('omits the focus block when no perspective is selected', () => {

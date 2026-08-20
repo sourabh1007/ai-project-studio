@@ -188,6 +188,33 @@ export interface ReviewBoardChatMessage {
 /** The agent's answer to a chat turn. */
 export interface ReviewBoardChatReply {
   answer: string;
+  /**
+   * A rating change the agent was convinced to make for the focused
+   * perspective, or null when the discussion did not (yet) justify one. The
+   * agent only emits this after the user supplies concrete, code-referenced
+   * evidence that the current rating is wrong — never on assertion alone.
+   */
+  ratingChange: ReviewBoardRatingChange | null;
+}
+
+/**
+ * A rating adjustment the review agent proposes for a perspective after being
+ * convinced by the discussion. It carries the new verdict together with the
+ * refreshed evidence-backed narrative and an explicit justification of what
+ * changed the agent's mind, so the adjustment is auditable — never opaque.
+ */
+export interface ReviewBoardRatingChange {
+  perspectiveId: string;
+  /** The new rolled-up status for the perspective. */
+  status: ReviewStatus;
+  /** The new risk band for the perspective. */
+  risk: ReviewRisk;
+  /** The refreshed "what was checked" statement reflecting the discussion. */
+  summary: string;
+  /** The refreshed evidence-backed narrative justifying the new rating. */
+  rationale: RationalePoint[];
+  /** Why the agent was convinced to change the rating — the deciding evidence. */
+  justification: string;
 }
 
 /** Outcome of one concrete inspection the reviewer performed for a lens. */

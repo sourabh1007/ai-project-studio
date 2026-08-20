@@ -416,5 +416,34 @@ describe('createReviewBoardService.chat', () => {
       { role: 'user', content: 'Hi' },
     ]);
     expect(reply.answer).toBe('n/a');
+    expect(reply.ratingChange).toBeNull();
+  });
+
+  it('surfaces a convinced rating change for the focused perspective', async () => {
+    const ai = aiReturning(
+      'You are right — svc/cache.cs BuildKey bounds growth.\n' +
+        '```json\n' +
+        '{"status":"approved","risk":"low","summary":"Re-checked BuildKey.",' +
+        '"rationale":[{"label":"Evidence","detail":"cap at svc/cache.cs:42"}],' +
+        '"justification":"You showed the cap at line 42."}\n' +
+        '```',
+    );
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true }),
+    );
+    const reply = await service.chat('f9', 'security', [
+      { role: 'user', content: 'The cap at line 42 bounds it.' },
+    ]);
+    expect(reply.answer).toBe(
+      'You are right — svc/cache.cs BuildKey bounds growth.',
+    );
+    expect(reply.ratingChange).toEqual({
+      perspectiveId: 'security',
+      status: 'approved',
+      risk: 'low',
+      summary: 'Re-checked BuildKey.',
+      rationale: [{ label: 'Evidence', detail: 'cap at svc/cache.cs:42' }],
+      justification: 'You showed the cap at line 42.',
+    });
   });
 });

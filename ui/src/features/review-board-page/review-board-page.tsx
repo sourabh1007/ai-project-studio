@@ -23,6 +23,7 @@ import type {
   DetectedItem,
   ReviewBoard,
   ReviewBoardChatMessage,
+  ReviewBoardRatingChange,
   ReviewPerspective,
   ReviewRisk,
   ReviewStatus,
@@ -180,12 +181,14 @@ function ReviewAgent({
   perspective,
   focused,
   onToggleFocus,
+  onRatingChange,
 }: {
   featureId: string;
   pullNumber: number;
   perspective: ReviewPerspective | null;
   focused: boolean;
   onToggleFocus: () => void;
+  onRatingChange: (change: ReviewBoardRatingChange) => void;
 }) {
   const api = useApi();
   const [messages, setMessages] = useState<ReviewBoardChatMessage[]>([]);
@@ -214,6 +217,9 @@ function ReviewAgent({
         ...prev,
         { role: 'assistant', content: reply.answer },
       ]);
+      if (reply.ratingChange) {
+        onRatingChange(reply.ratingChange);
+      }
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : 'The review agent is unavailable.',
@@ -245,6 +251,13 @@ function ReviewAgent({
             Ask why a risk was marked, challenge a finding, or ask the agent to
             draft a PR comment for this{' '}
             {perspective ? 'perspective' : 'review'}.
+            {perspective && (
+              <>
+                {' '}
+                Point at concrete code and the agent will re-evaluate — it only
+                changes the rating once the evidence convinces it.
+              </>
+            )}
           </p>
         )}
         {messages.map((m, i) => (
@@ -610,6 +623,19 @@ export function ReviewBoardPage({
                 </span>
               </div>
 
+              {selectedProgress.agentAdjustment && (
+                <div className="rb-adjusted" role="note">
+                  <span className="rb-adjusted-label">
+                    Rating updated by the review agent
+                  </span>
+                  <p className="rb-adjusted-text">
+                    You challenged this rating and the agent was convinced to
+                    change it. Why:{' '}
+                    <em>{selectedProgress.agentAdjustment.justification}</em>
+                  </p>
+                </div>
+              )}
+
               {selectedProgress.checked && (
                 <div className="rb-checked" role="note">
                   <span className="rb-checked-label">
@@ -796,6 +822,9 @@ export function ReviewBoardPage({
           perspective={selected}
           focused={focus === 'agent'}
           onToggleFocus={() => setFocus(focus === 'agent' ? null : 'agent')}
+          onRatingChange={(change) =>
+            reviewBoardRunStore.applyRatingChange(featureId, change)
+          }
         />
 
         <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />

@@ -460,6 +460,18 @@ export interface ReviewBoardChatMessage {
 /** The review agent's answer to a chat turn. */
 export interface ReviewBoardChatReply {
   answer: string;
+  /** A rating change the agent was convinced to make, or null. */
+  ratingChange: ReviewBoardRatingChange | null;
+}
+
+/** A rating adjustment the review agent proposes after being convinced. */
+export interface ReviewBoardRatingChange {
+  perspectiveId: string;
+  status: ReviewStatus;
+  risk: ReviewRisk;
+  summary: string;
+  rationale: RationalePoint[];
+  justification: string;
 }
 
 /** Outcome of one concrete inspection the reviewer performed for a lens. */

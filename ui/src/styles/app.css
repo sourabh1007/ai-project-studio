@@ -8538,6 +8538,28 @@ body.is-resizing {
   font-size: 12px;
   color: var(--text-muted);
 }
+.rb-adjusted {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--success, #2ea043) 45%, var(--border));
+  border-left: 3px solid var(--success, #2ea043);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success, #2ea043) 8%, transparent);
+}
+.rb-adjusted-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--success, #2ea043) 80%, var(--text));
+  margin-bottom: 6px;
+}
+.rb-adjusted-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
 .rb-nav {
   display: flex;
   flex-direction: column;
