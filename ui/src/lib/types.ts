@@ -472,6 +472,12 @@ export interface PerspectiveCheck {
   status: CheckStatus;
 }
 
+/** A single labeled step in the reviewer's evidence-backed verdict rationale. */
+export interface RationalePoint {
+  label: string;
+  detail: string;
+}
+
 /** The AI's verdict for a single perspective: rolled-up result + skip info. */
 export interface PerspectiveAnalysis {
   perspectiveId: string;
@@ -480,6 +486,8 @@ export interface PerspectiveAnalysis {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null when omitted. */
   summary: string | null;
+  /** Evidence-backed labeled narrative justifying the rating. */
+  rationale: RationalePoint[];
   /** Line-by-line audit trail of what was inspected and each outcome. */
   checks: PerspectiveCheck[];
 }

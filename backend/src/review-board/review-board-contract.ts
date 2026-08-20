@@ -207,6 +207,19 @@ export interface PerspectiveCheck {
   status: CheckStatus;
 }
 
+/**
+ * A single labeled step in the reviewer's verdict rationale. Together the
+ * points form an evidence-backed narrative that justifies the rating — e.g.
+ * "Problem" → "Solution implemented" → "Why they align" → "Verdict" for a
+ * problem/solution lens, with labels natural to each lens.
+ */
+export interface RationalePoint {
+  /** Short label for this step (e.g. "Problem", "Solution implemented"). */
+  label: string;
+  /** The concrete, code-referenced explanation for this step. */
+  detail: string;
+}
+
 /** The AI's per-perspective verdict: findings, or an explicit skip + reason. */
 export interface PerspectiveAnalysis {
   perspectiveId: string;
@@ -222,6 +235,12 @@ export interface PerspectiveAnalysis {
    * Present whether or not findings were raised; null when the model omitted it.
    */
   summary: string | null;
+  /**
+   * An evidence-backed, labeled narrative justifying the rating (problem,
+   * solution implemented, why they align, verdict — or labels natural to the
+   * lens). Empty when the model supplied none.
+   */
+  rationale: RationalePoint[];
   /**
    * A line-by-line audit trail of what the reviewer actually inspected and the
    * outcome of each inspection. Empty when the model supplied none.

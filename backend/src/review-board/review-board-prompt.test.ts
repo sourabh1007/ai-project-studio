@@ -169,6 +169,7 @@ describe('buildPerspectivePrompt', () => {
     expect(prompt).toContain('#42');
     expect(prompt).toContain('"skipped": boolean');
     expect(prompt).toContain('"summary": string — REQUIRED');
+    expect(prompt).toContain('"rationale": [');
     expect(prompt).toContain('"checks": [');
     expect(prompt).toContain('Adds a cache layer.');
     expect(prompt).toContain('- src/Cache.cs');

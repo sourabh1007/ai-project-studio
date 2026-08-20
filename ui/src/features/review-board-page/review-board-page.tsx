@@ -349,6 +349,7 @@ export function ReviewBoardPage({
       status: 'idle',
       skipReason: null,
       checked: null,
+      rationale: [],
       checks: [],
       error: null,
       attempt: 0,
@@ -614,6 +615,20 @@ export function ReviewBoardPage({
                 </div>
               )}
 
+              {selectedProgress.rationale.length > 0 && (
+                <div className="rb-rationale">
+                  <span className="rb-rationale-label">Verdict rationale</span>
+                  <dl className="rb-rationale-list">
+                    {selectedProgress.rationale.map((r, i) => (
+                      <div key={i} className="rb-rationale-row">
+                        <dt className="rb-rationale-term">{r.label}</dt>
+                        <dd className="rb-rationale-detail">{r.detail}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )}
+
               {selectedProgress.checks.length > 0 && (
                 <div className="rb-checks">
                   <span className="rb-checks-label">
@@ -700,7 +715,10 @@ export function ReviewBoardPage({
                           : selectedProgress.status === 'skipped'
                             ? 'No findings — the reviewer skipped this perspective for the reason above.'
                             : selectedProgress.status === 'done'
-                              ? 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
+                              ? selectedProgress.rationale.length > 0 ||
+                                selectedProgress.checks.length > 0
+                                ? 'No blocking findings. The rating above is backed by the verdict rationale and the line-by-line analysis — review them to see exactly what was inspected.'
+                                : 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
                               : 'Not analysed yet. Run the AI reviewer to author evidence-backed findings for this perspective.'}
                   </p>
                   {!analyzed && (

@@ -245,6 +245,7 @@ describe('createReviewBoardService.analyze', () => {
 describe('createReviewBoardService.analyzePerspective', () => {
   const objectJson = `\`\`\`json
 {"skipped": false, "summary": "Inspected svc/cache.cs BuildKey for tainted input.",
+ "rationale": [{"label":"Problem","detail":"cache key may be tainted"},{"label":"Verdict","detail":"needs validation"}],
  "checks": [{"item":"svc/cache.cs — BuildKey","finding":"key derived from request","status":"concern"}],
  "findings": [
   {"title":"Unvalidated cache key","detail":"key from user input","severity":"high","evidence":[{"source":"svc/cache.cs","reason":"key from request","confidence":0.8}]}
@@ -261,6 +262,10 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.summary).toBe(
       'Inspected svc/cache.cs BuildKey for tainted input.',
     );
+    expect(result.rationale).toEqual([
+      { label: 'Problem', detail: 'cache key may be tainted' },
+      { label: 'Verdict', detail: 'needs validation' },
+    ]);
     expect(result.checks).toEqual([
       {
         item: 'svc/cache.cs — BuildKey',

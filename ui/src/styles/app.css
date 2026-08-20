@@ -8909,11 +8909,59 @@ body.is-resizing {
 .rb-body[data-focus='agent'] > :not(.rb-agent) {
   display: none;
 }
+/* Evidence-backed verdict rationale (problem → solution → why → verdict). */
+.rb-rationale {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.rb-rationale-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.rb-rationale-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rb-rationale-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.rb-rationale-term {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.rb-rationale-detail {
+  margin: 0;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .rb-rationale-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
 /* Line-by-line audit trail of what the reviewer inspected. */
 .rb-checks {
   margin: 12px 0 4px;
-}
-.rb-checks-label {
+}.rb-checks-label {
   display: block;
   font-size: 12px;
   font-weight: 600;

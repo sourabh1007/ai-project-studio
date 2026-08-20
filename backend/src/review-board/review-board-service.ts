@@ -270,6 +270,7 @@ export function createReviewBoardService(
         skipped: parsed.skipped,
         skipReason: parsed.skipReason,
         summary: parsed.summary,
+        rationale: parsed.rationale,
         checks: parsed.checks,
       };
     },

@@ -12,6 +12,7 @@ import type {
   CheckStatus,
   FindingSeverity,
   PerspectiveCheck,
+  RationalePoint,
   ReviewEvidence,
   ReviewFinding,
 } from './review-board-contract.js';
@@ -171,6 +172,25 @@ function parseChecks(value: unknown): PerspectiveCheck[] {
   return checks;
 }
 
+/** Build one validated rationale point from a raw record, or null. */
+function toRationalePoint(raw: unknown): RationalePoint | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  if (!isText(record.label) || !isText(record.detail)) return null;
+  return { label: record.label.trim(), detail: record.detail.trim() };
+}
+
+/** Parse the optional `rationale` array from a perspective record. */
+function parseRationale(value: unknown): RationalePoint[] {
+  if (!Array.isArray(value)) return [];
+  const points: RationalePoint[] = [];
+  value.forEach((raw) => {
+    const point = toRationalePoint(raw);
+    if (point) points.push(point);
+  });
+  return points;
+}
+
 /** The parsed outcome of a single-perspective AI review. */
 export interface ParsedPerspectiveAnalysis {
   findings: ReviewFinding[];
@@ -178,16 +198,19 @@ export interface ParsedPerspectiveAnalysis {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null when omitted. */
   summary: string | null;
+  /** Evidence-backed labeled narrative justifying the rating. */
+  rationale: RationalePoint[];
   /** Line-by-line audit trail of what was inspected and each outcome. */
   checks: PerspectiveCheck[];
 }
 
 /**
  * Parse the model's single-perspective response: a JSON object with an optional
- * `skipped`/`reason`, a `summary` of what was checked, a `checks` audit trail,
- * and a `findings` array. Totally defensive — a malformed completion yields no
- * findings and no skip, so the perspective simply shows its deterministic
- * result. All findings are attributed to `perspectiveId`.
+ * `skipped`/`reason`, a `summary` of what was checked, a `rationale` narrative,
+ * a `checks` audit trail, and a `findings` array. Totally defensive — a
+ * malformed completion yields no findings and no skip, so the perspective
+ * simply shows its deterministic result. All findings are attributed to
+ * `perspectiveId`.
  */
 export function parsePerspectiveAnalysis(
   text: string,
@@ -200,16 +223,25 @@ export function parsePerspectiveAnalysis(
       skipped: false,
       skipReason: null,
       summary: null,
+      rationale: [],
       checks: [],
     };
   }
   const summary = isText(record.summary) ? record.summary.trim() : null;
+  const rationale = parseRationale(record.rationale);
   const checks = parseChecks(record.checks);
   if (record.skipped === true) {
     const skipReason = isText(record.reason)
       ? record.reason.trim()
       : 'The reviewer judged this perspective not applicable to the change.';
-    return { findings: [], skipped: true, skipReason, summary, checks };
+    return {
+      findings: [],
+      skipped: true,
+      skipReason,
+      summary,
+      rationale,
+      checks,
+    };
   }
   const rawFindings = Array.isArray(record.findings) ? record.findings : [];
   const findings: ReviewFinding[] = [];
@@ -217,7 +249,14 @@ export function parsePerspectiveAnalysis(
     const finding = toFinding(raw, perspectiveId, index);
     if (finding) findings.push(finding);
   });
-  return { findings, skipped: false, skipReason: null, summary, checks };
+  return {
+    findings,
+    skipped: false,
+    skipReason: null,
+    summary,
+    rationale,
+    checks,
+  };
 }
 
 /**

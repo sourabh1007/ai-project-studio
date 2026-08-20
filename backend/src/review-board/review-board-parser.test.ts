@@ -104,6 +104,7 @@ describe('parsePerspectiveAnalysis', () => {
   it('parses a fenced object of findings', () => {
     const text = `\`\`\`json
 {"skipped": false, "summary": "Checked auth.ts renderProfile for escaping.",
+ "rationale": [{"label":"Problem","detail":"XSS risk in auth.ts"},{"label":"Verdict","detail":"escaped, so safe"}],
  "checks": [{"item":"auth.ts — renderProfile","finding":"escapes output","status":"pass"}],
  "findings": [
   {"title":"XSS","detail":"unescaped","severity":"high","evidence":[{"source":"a.ts","reason":"raw html","confidence":0.9}]}
@@ -113,6 +114,10 @@ describe('parsePerspectiveAnalysis', () => {
     expect(result.skipped).toBe(false);
     expect(result.skipReason).toBeNull();
     expect(result.summary).toBe('Checked auth.ts renderProfile for escaping.');
+    expect(result.rationale).toEqual([
+      { label: 'Problem', detail: 'XSS risk in auth.ts' },
+      { label: 'Verdict', detail: 'escaped, so safe' },
+    ]);
     expect(result.checks).toEqual([
       { item: 'auth.ts — renderProfile', finding: 'escapes output', status: 'pass' },
     ]);
@@ -122,6 +127,23 @@ describe('parsePerspectiveAnalysis', () => {
       perspectiveId: 'security',
       status: 'blocked',
     });
+  });
+
+  it('validates rationale: drops malformed points and a non-array field', () => {
+    const text = `\`\`\`json
+{"skipped": false, "rationale": [
+  99,
+  {"label":"","detail":"blank label"},
+  {"label":"Problem","detail":""},
+  {"label":"Solution implemented","detail":"moved cfg to svc.cs"}
+], "findings": []}
+\`\`\``;
+    expect(parsePerspectiveAnalysis(text, 'security').rationale).toEqual([
+      { label: 'Solution implemented', detail: 'moved cfg to svc.cs' },
+    ]);
+    const notArray =
+      '```json\n{"skipped": false, "rationale": "nope", "findings": []}\n```';
+    expect(parsePerspectiveAnalysis(notArray, 'security').rationale).toEqual([]);
   });
 
   it('validates checks: drops malformed entries and defaults an unknown status', () => {
@@ -182,6 +204,7 @@ describe('parsePerspectiveAnalysis', () => {
       skipped: false,
       skipReason: null,
       summary: null,
+      rationale: [],
       checks: [],
     });
     expect(parsePerspectiveAnalysis('```json\n[1,2]\n```', 'security')).toEqual({
@@ -189,6 +212,7 @@ describe('parsePerspectiveAnalysis', () => {
       skipped: false,
       skipReason: null,
       summary: null,
+      rationale: [],
       checks: [],
     });
   });
@@ -207,6 +231,7 @@ describe('parsePerspectiveAnalysis', () => {
       skipped: false,
       skipReason: null,
       summary: null,
+      rationale: [],
       checks: [],
     });
   });

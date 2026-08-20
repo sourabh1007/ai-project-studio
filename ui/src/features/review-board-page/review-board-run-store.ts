@@ -16,6 +16,7 @@
 import type {
   PerspectiveAnalysis,
   PerspectiveCheck,
+  RationalePoint,
   ReviewBoard,
 } from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
@@ -57,6 +58,8 @@ export interface PerspectiveProgress {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null. */
   checked: string | null;
+  /** Evidence-backed labeled narrative justifying the rating. */
+  rationale: RationalePoint[];
   /** Line-by-line audit trail of what was inspected and each outcome. */
   checks: PerspectiveCheck[];
   error: string | null;
@@ -235,6 +238,7 @@ class ReviewBoardRunStore {
             status: 'pending',
             skipReason: null,
             checked: null,
+            rationale: [],
             checks: [],
             error: null,
             attempt: 0,
@@ -254,6 +258,7 @@ class ReviewBoardRunStore {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
               checked: null,
+              rationale: [],
               checks: [],
               error: null,
               attempt,
@@ -283,6 +288,7 @@ class ReviewBoardRunStore {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
           checked: result.summary,
+          rationale: result.rationale,
           checks: result.checks,
           error: null,
           attempt: 0,
@@ -293,6 +299,7 @@ class ReviewBoardRunStore {
           status: 'error',
           skipReason: null,
           checked: null,
+          rationale: [],
           checks: [],
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
@@ -332,6 +339,7 @@ class ReviewBoardRunStore {
             status: 'pending',
             skipReason: null,
             checked: null,
+            rationale: [],
             checks: [],
             error: null,
             attempt: 0,
@@ -350,6 +358,7 @@ class ReviewBoardRunStore {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
               checked: null,
+              rationale: [],
               checks: [],
               error: null,
               attempt,
@@ -379,6 +388,7 @@ class ReviewBoardRunStore {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
           checked: result.summary,
+          rationale: result.rationale,
           checks: result.checks,
           error: null,
           attempt: 0,
@@ -389,6 +399,7 @@ class ReviewBoardRunStore {
           status: 'error',
           skipReason: null,
           checked: null,
+          rationale: [],
           checks: [],
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,

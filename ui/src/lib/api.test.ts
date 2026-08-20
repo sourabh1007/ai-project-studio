@@ -774,6 +774,7 @@ describe('createApiClient', () => {
         skipped: false,
         skipReason: null,
         summary: null,
+        rationale: [],
         checks: [],
       }),
     );
