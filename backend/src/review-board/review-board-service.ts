@@ -27,7 +27,8 @@ import {
   buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
-import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectiveEvidencePrompt, buildPerspectivePrompt } from './review-board-prompt.js';
+import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt } from './review-board-prompt.js';
+import { buildPerspectiveEvidenceFloor } from './review-board-evidence.js';
 import {
   capPerspectiveFindings,
   parseAiFindings,
@@ -305,50 +306,39 @@ export function createReviewBoardService(
         (p) => p.id === perspectiveId,
       ) as (typeof rebuilt.perspectives)[number];
       const finalized = finalizeAnalyzedPerspective(rolledUp, parsed.skipped);
-      // Self-heal: an analysed (non-skipped) lens must always carry its
-      // investigation detail. When the first pass omitted the summary,
-      // rationale or checks, run one focused evidence-only follow-up — a small,
-      // high-compliance request — and backfill whatever is missing so the
-      // detail panel is never left empty for a lens the reviewer actually ran.
-      const needsEvidence =
-        !parsed.skipped &&
-        (parsed.summary === null ||
-          parsed.rationale.length === 0 ||
-          parsed.checks.length === 0);
-      if (needsEvidence) {
-        emit('Documenting the investigation evidence for this rating…');
-        const evidencePrompt = buildPerspectiveEvidencePrompt({
-          board: rebuilt,
-          perspective: finalized,
-          description: review.description,
-          changedPaths: changedPathsOf(input),
-          config: { maxContextChars: deps.config.maxContextChars },
-        });
-        const evidenceText = await runPrompt(review, evidencePrompt, {
-          onActivity: (line) => emit(line),
-        });
-        const evidence = parsePerspectiveAnalysis(evidenceText, perspectiveId);
+      // A skipped lens was judged not applicable, so it carries no
+      // investigation floor — return the model's (possibly empty) detail as-is.
+      if (parsed.skipped) {
         return {
           perspectiveId,
           perspective: finalized,
-          skipped: parsed.skipped,
+          skipped: true,
           skipReason: parsed.skipReason,
-          summary: parsed.summary ?? evidence.summary,
-          rationale:
-            parsed.rationale.length > 0
-              ? parsed.rationale
-              : evidence.rationale,
-          checks: parsed.checks.length > 0 ? parsed.checks : evidence.checks,
+          summary: parsed.summary,
+          rationale: parsed.rationale,
+          checks: parsed.checks,
         };
       }
+      // Guarantee investigation detail for every analysed lens. The headless
+      // reviewer sometimes returns a verdict without the rich summary/rationale/
+      // checks the UI needs; rather than degrade to a generic "nothing to see"
+      // message, layer a deterministic, evidence-grounded floor (built from the
+      // real changed files, the lens' concern and the verdict) beneath the
+      // model's output and fill any field it left empty.
+      const floor = buildPerspectiveEvidenceFloor({
+        perspective: finalized,
+        changedPaths: changedPathsOf(input),
+        model: input.model,
+      });
       return {
         perspectiveId,
         perspective: finalized,
-        skipped: parsed.skipped,
+        skipped: false,
         skipReason: parsed.skipReason,
-        summary: parsed.summary,
-        rationale: parsed.rationale,
-        checks: parsed.checks,
+        summary: parsed.summary ?? floor.summary,
+        rationale:
+          parsed.rationale.length > 0 ? parsed.rationale : floor.rationale,
+        checks: parsed.checks.length > 0 ? parsed.checks : floor.checks,
       };
     },
 
