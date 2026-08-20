@@ -8505,6 +8505,12 @@ body.is-resizing {
   max-height: 240px;
   overflow-y: auto;
 }
+.rb-body > .rb-agent {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  min-height: 0;
+  overflow-y: auto;
+}
 .rb-checked {
   margin: 12px 0 4px;
   padding: 12px;
