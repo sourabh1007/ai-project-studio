@@ -378,6 +378,190 @@ describe('createReviewBoardService.analyzePerspective', () => {
       line: 'Inspecting the diff…',
     });
   });
+
+  it('self-heals missing checks with a focused evidence pass', async () => {
+    const firstPass =
+      '```json\n' +
+      JSON.stringify({
+        skipped: false,
+        summary: 'Checked svc/cache.cs.',
+        rationale: [{ label: 'Verdict', detail: 'clean at svc/cache.cs' }],
+        checks: [],
+        findings: [],
+      }) +
+      '\n```';
+    const evidencePass =
+      '```json\n' +
+      JSON.stringify({
+        summary: 'This evidence summary must be ignored.',
+        rationale: [{ label: 'Ignored', detail: 'ignored' }],
+        checks: [
+          {
+            item: 'svc/cache.cs — BuildKey',
+            finding: 'validated',
+            status: 'pass',
+          },
+        ],
+      }) +
+      '\n```';
+    const emit = vi.fn();
+    const runDetailed = vi
+      .fn()
+      .mockResolvedValueOnce({ text: firstPass, sessionId: 's1' })
+      .mockImplementationOnce(async (r: MetaRequest) => {
+        r.onActivity?.('Re-checking svc/cache.cs — BuildKey…');
+        return { text: evidencePass, sessionId: 's2' };
+      });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, bus: { emit }, inlinePrompts: true }),
+    );
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
+    // The first pass's summary + rationale are kept…
+    expect(result.summary).toBe('Checked svc/cache.cs.');
+    expect(result.rationale).toEqual([
+      { label: 'Verdict', detail: 'clean at svc/cache.cs' },
+    ]);
+    // …and only the empty checks are backfilled from the evidence pass.
+    expect(result.checks).toEqual([
+      { item: 'svc/cache.cs — BuildKey', finding: 'validated', status: 'pass' },
+    ]);
+    const second = (runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[1][0] as MetaRequest;
+    expect(second.prompt).toContain('documenting the investigation');
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: '',
+      line: 'Documenting the investigation evidence for this rating…',
+    });
+    // The evidence pass streams its own activity too.
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: '',
+      line: 'Re-checking svc/cache.cs — BuildKey…',
+    });
+  });
+
+  it('rebuilds all detail from the evidence pass for a detail-less clean verdict', async () => {
+    const firstPass = '```json\n{"skipped": false, "findings": []}\n```';
+    const evidencePass =
+      '```json\n' +
+      JSON.stringify({
+        summary: 'Re-derived from the evidence pass.',
+        rationale: [{ label: 'Verdict', detail: 'sound at svc/cache.cs' }],
+        checks: [
+          { item: 'svc/cache.cs', finding: 'no tainted key', status: 'pass' },
+        ],
+      }) +
+      '\n```';
+    const runDetailed = vi
+      .fn()
+      .mockResolvedValueOnce({ text: firstPass, sessionId: 's1' })
+      .mockResolvedValueOnce({ text: evidencePass, sessionId: 's2' });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, inlinePrompts: true }),
+    );
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
+    expect(result.summary).toBe('Re-derived from the evidence pass.');
+    expect(result.rationale).toEqual([
+      { label: 'Verdict', detail: 'sound at svc/cache.cs' },
+    ]);
+    expect(result.checks).toEqual([
+      { item: 'svc/cache.cs', finding: 'no tainted key', status: 'pass' },
+    ]);
+    expect(result.perspective.status).toBe('approved');
+    const second = (runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[1][0] as MetaRequest;
+    expect(second.prompt).toContain('reviewed and found clean');
+  });
+
+  it('documents evidence for a finding-bearing verdict missing detail', async () => {
+    const firstPass =
+      '```json\n' +
+      JSON.stringify({
+        skipped: false,
+        findings: [
+          {
+            title: 'Unvalidated key',
+            detail: 'key from input at svc/cache.cs',
+            severity: 'high',
+            evidence: [
+              { source: 'svc/cache.cs', reason: 'tainted', confidence: 0.7 },
+            ],
+          },
+        ],
+      }) +
+      '\n```';
+    const evidencePass =
+      '```json\n' +
+      JSON.stringify({
+        summary: 'Confirmed the tainted key path.',
+        rationale: [{ label: 'Problem', detail: 'tainted key at svc/cache.cs' }],
+        checks: [
+          {
+            item: 'svc/cache.cs — BuildKey',
+            finding: 'tainted',
+            status: 'concern',
+          },
+        ],
+      }) +
+      '\n```';
+    const runDetailed = vi
+      .fn()
+      .mockResolvedValueOnce({ text: firstPass, sessionId: 's1' })
+      .mockResolvedValueOnce({ text: evidencePass, sessionId: 's2' });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, inlinePrompts: true }),
+    );
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(result.perspective.findings.length).toBeGreaterThan(0);
+    expect(result.summary).toBe('Confirmed the tainted key path.');
+    const second = (runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[1][0] as MetaRequest;
+    expect(second.prompt).toContain('you must justify with evidence');
+  });
+
+  it('backfills only the empty rationale, keeping the first-pass checks', async () => {
+    const firstPass =
+      '```json\n' +
+      JSON.stringify({
+        skipped: false,
+        summary: 'Checked svc/cache.cs.',
+        rationale: [],
+        checks: [
+          { item: 'svc/cache.cs', finding: 'key is capped', status: 'pass' },
+        ],
+        findings: [],
+      }) +
+      '\n```';
+    const evidencePass =
+      '```json\n' +
+      JSON.stringify({
+        summary: 'Ignored.',
+        rationale: [{ label: 'Verdict', detail: 'sound at svc/cache.cs' }],
+        checks: [{ item: 'ignored', finding: 'ignored', status: 'na' }],
+      }) +
+      '\n```';
+    const runDetailed = vi
+      .fn()
+      .mockResolvedValueOnce({ text: firstPass, sessionId: 's1' })
+      .mockResolvedValueOnce({ text: evidencePass, sessionId: 's2' });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, inlinePrompts: true }),
+    );
+    const result = await service.analyzePerspective('f9', 'security');
+    // Empty rationale is backfilled from the evidence pass…
+    expect(result.rationale).toEqual([
+      { label: 'Verdict', detail: 'sound at svc/cache.cs' },
+    ]);
+    // …but the non-empty first-pass checks are preserved.
+    expect(result.checks).toEqual([
+      { item: 'svc/cache.cs', finding: 'key is capped', status: 'pass' },
+    ]);
+  });
 });
 
 describe('createReviewBoardService.chat', () => {

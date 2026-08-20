@@ -27,7 +27,7 @@ import {
   buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
-import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt } from './review-board-prompt.js';
+import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectiveEvidencePrompt, buildPerspectivePrompt } from './review-board-prompt.js';
 import {
   capPerspectiveFindings,
   parseAiFindings,
@@ -304,9 +304,46 @@ export function createReviewBoardService(
       const rolledUp = rebuilt.perspectives.find(
         (p) => p.id === perspectiveId,
       ) as (typeof rebuilt.perspectives)[number];
+      const finalized = finalizeAnalyzedPerspective(rolledUp, parsed.skipped);
+      // Self-heal: an analysed (non-skipped) lens must always carry its
+      // investigation detail. When the first pass omitted the summary,
+      // rationale or checks, run one focused evidence-only follow-up — a small,
+      // high-compliance request — and backfill whatever is missing so the
+      // detail panel is never left empty for a lens the reviewer actually ran.
+      const needsEvidence =
+        !parsed.skipped &&
+        (parsed.summary === null ||
+          parsed.rationale.length === 0 ||
+          parsed.checks.length === 0);
+      if (needsEvidence) {
+        emit('Documenting the investigation evidence for this rating…');
+        const evidencePrompt = buildPerspectiveEvidencePrompt({
+          board: rebuilt,
+          perspective: finalized,
+          description: review.description,
+          changedPaths: changedPathsOf(input),
+          config: { maxContextChars: deps.config.maxContextChars },
+        });
+        const evidenceText = await runPrompt(review, evidencePrompt, {
+          onActivity: (line) => emit(line),
+        });
+        const evidence = parsePerspectiveAnalysis(evidenceText, perspectiveId);
+        return {
+          perspectiveId,
+          perspective: finalized,
+          skipped: parsed.skipped,
+          skipReason: parsed.skipReason,
+          summary: parsed.summary ?? evidence.summary,
+          rationale:
+            parsed.rationale.length > 0
+              ? parsed.rationale
+              : evidence.rationale,
+          checks: parsed.checks.length > 0 ? parsed.checks : evidence.checks,
+        };
+      }
       return {
         perspectiveId,
-        perspective: finalizeAnalyzedPerspective(rolledUp, parsed.skipped),
+        perspective: finalized,
         skipped: parsed.skipped,
         skipReason: parsed.skipReason,
         summary: parsed.summary,

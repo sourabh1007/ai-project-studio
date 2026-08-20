@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAgentChatPrompt,
   buildFindingsPrompt,
+  buildPerspectiveEvidencePrompt,
   buildPerspectivePrompt,
 } from './review-board-prompt.js';
 import type {
@@ -229,6 +230,60 @@ describe('buildPerspectivePrompt', () => {
       changedPaths: ['a.cs'],
       config: { maxContextChars: 10 },
     });
+    expect(prompt).toContain('…');
+  });
+});
+
+describe('buildPerspectiveEvidencePrompt', () => {
+  it('asks only for the investigation evidence and echoes the findings', () => {
+    const prompt = buildPerspectiveEvidencePrompt({
+      board,
+      perspective,
+      description: 'Adds a cache layer.',
+      changedPaths: ['src/Cache.cs'],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('documenting the investigation');
+    expect(prompt).toContain('Review lens: Security');
+    expect(prompt).toContain('you must justify with evidence');
+    expect(prompt).toContain('[high] Unvalidated input');
+    expect(prompt).toContain('"summary": string — REQUIRED');
+    expect(prompt).toContain('"rationale": [');
+    expect(prompt).toContain('"checks": [');
+    expect(prompt).toContain('do not raise new findings');
+    expect(prompt).toContain('- src/Cache.cs');
+    expect(prompt).toContain('Adds a cache layer.');
+  });
+
+  it('frames a clean verdict as one to prove with evidence', () => {
+    const clean: ReviewPerspective = {
+      ...perspective,
+      status: 'approved',
+      risk: 'low',
+      findings: [],
+    };
+    const prompt = buildPerspectiveEvidencePrompt({
+      board,
+      perspective: clean,
+      description: null,
+      changedPaths: [],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('reviewed and found clean');
+    expect(prompt).toContain('do NOT');
+    expect(prompt).toContain('(no description provided)');
+    expect(prompt).toContain('(no changed files were resolved');
+  });
+
+  it('reports an unknown base branch and clamps a long description', () => {
+    const prompt = buildPerspectiveEvidencePrompt({
+      board: { ...board, baseBranch: null },
+      perspective,
+      description: 'x'.repeat(100),
+      changedPaths: ['a.cs'],
+      config: { maxContextChars: 10 },
+    });
+    expect(prompt).toContain('Base branch: unknown');
     expect(prompt).toContain('…');
   });
 });
