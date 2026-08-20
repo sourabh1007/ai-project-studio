@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import type { ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { resolveApiBase } from '../lib/api-base.js';
 import { buildTerminalWsUrl } from '../lib/terminal-url.js';
@@ -236,6 +237,27 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(host);
     termRef.current = term;
+
+    // Render with the GPU (WebGL) instead of xterm's default DOM renderer.
+    // The DOM renderer positions each row as a separate element and, when the
+    // viewport is scrolled back over output a full-screen TUI drew with cursor
+    // moves, leaves misaligned/overlapping rows — the "garbled, unreadable"
+    // scrollback the user saw. The WebGL renderer paints every cell onto one
+    // grid canvas, so scrollback stays pixel-aligned and legible. If the GPU
+    // context is unavailable or is later lost (driver reset, tab backgrounding),
+    // dispose the addon so xterm transparently falls back to the DOM renderer.
+    let webgl: WebglAddon | null = null;
+    try {
+      webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webgl?.dispose();
+        webgl = null;
+      });
+      term.loadAddon(webgl);
+    } catch {
+      webgl?.dispose();
+      webgl = null;
+    }
 
     const safeFit = () => {
       if (host.clientWidth === 0 || host.clientHeight === 0) {
@@ -524,6 +546,7 @@ export function TerminalView({
       ws.onopen = null;
       ws.onmessage = null;
       ws.close();
+      webgl?.dispose();
       term.dispose();
       termRef.current = null;
     };
