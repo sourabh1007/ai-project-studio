@@ -103,7 +103,9 @@ describe('parseAiFindings', () => {
 describe('parsePerspectiveAnalysis', () => {
   it('parses a fenced object of findings', () => {
     const text = `\`\`\`json
-{"skipped": false, "summary": "Checked auth.ts renderProfile for escaping.", "findings": [
+{"skipped": false, "summary": "Checked auth.ts renderProfile for escaping.",
+ "checks": [{"item":"auth.ts — renderProfile","finding":"escapes output","status":"pass"}],
+ "findings": [
   {"title":"XSS","detail":"unescaped","severity":"high","evidence":[{"source":"a.ts","reason":"raw html","confidence":0.9}]}
 ]}
 \`\`\``;
@@ -111,6 +113,9 @@ describe('parsePerspectiveAnalysis', () => {
     expect(result.skipped).toBe(false);
     expect(result.skipReason).toBeNull();
     expect(result.summary).toBe('Checked auth.ts renderProfile for escaping.');
+    expect(result.checks).toEqual([
+      { item: 'auth.ts — renderProfile', finding: 'escapes output', status: 'pass' },
+    ]);
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toMatchObject({
       id: 'security/ai-0',
@@ -119,17 +124,38 @@ describe('parsePerspectiveAnalysis', () => {
     });
   });
 
+  it('validates checks: drops malformed entries and defaults an unknown status', () => {
+    const text = `\`\`\`json
+{"skipped": false, "checks": [
+  42,
+  {"item":"","finding":"blank item","status":"pass"},
+  {"item":"a.ts","finding":"","status":"pass"},
+  {"item":"svc.cs — Handle","finding":"validates input","status":"weird"},
+  {"item":"cfg.cs","finding":"no bounds check","status":"concern"}
+], "findings": []}
+\`\`\``;
+    const result = parsePerspectiveAnalysis(text, 'security');
+    expect(result.checks).toEqual([
+      { item: 'svc.cs — Handle', finding: 'validates input', status: 'pass' },
+      { item: 'cfg.cs', finding: 'no bounds check', status: 'concern' },
+    ]);
+  });
+
   it('captures a summary on a skipped result and ignores a blank summary', () => {
     const skipped = parsePerspectiveAnalysis(
-      '```json\n{"skipped": true, "reason": "n/a", "summary": "Reviewed schema.ts; no contract changed."}\n```',
+      '```json\n{"skipped": true, "reason": "n/a", "summary": "Reviewed schema.ts; no contract changed.", "checks": [{"item":"schema.ts","finding":"unchanged","status":"na"}]}\n```',
       'api',
     );
     expect(skipped.summary).toBe('Reviewed schema.ts; no contract changed.');
+    expect(skipped.checks).toEqual([
+      { item: 'schema.ts', finding: 'unchanged', status: 'na' },
+    ]);
     const blank = parsePerspectiveAnalysis(
       '```json\n{"skipped": false, "summary": "   ", "findings": []}\n```',
       'api',
     );
     expect(blank.summary).toBeNull();
+    expect(blank.checks).toEqual([]);
   });
 
   it('honours an explicit skip with a reason', () => {
@@ -139,6 +165,7 @@ describe('parsePerspectiveAnalysis', () => {
     expect(result.skipped).toBe(true);
     expect(result.skipReason).toBe('No public contracts changed.');
     expect(result.summary).toBeNull();
+    expect(result.checks).toEqual([]);
     expect(result.findings).toEqual([]);
   });
 
@@ -155,12 +182,14 @@ describe('parsePerspectiveAnalysis', () => {
       skipped: false,
       skipReason: null,
       summary: null,
+      checks: [],
     });
     expect(parsePerspectiveAnalysis('```json\n[1,2]\n```', 'security')).toEqual({
       findings: [],
       skipped: false,
       skipReason: null,
       summary: null,
+      checks: [],
     });
   });
 
@@ -178,6 +207,7 @@ describe('parsePerspectiveAnalysis', () => {
       skipped: false,
       skipReason: null,
       summary: null,
+      checks: [],
     });
   });
 });

@@ -190,6 +190,23 @@ export interface ReviewBoardChatReply {
   answer: string;
 }
 
+/** Outcome of one concrete inspection the reviewer performed for a lens. */
+export type CheckStatus = 'pass' | 'concern' | 'na';
+
+/**
+ * A single line-item in the reviewer's audit trail: the specific thing that was
+ * inspected, what was observed, and the outcome. Lets the UI show a line-by-line
+ * account of what was actually analysed instead of a generic verdict.
+ */
+export interface PerspectiveCheck {
+  /** The concrete file/symbol or aspect that was inspected. */
+  item: string;
+  /** What the reviewer observed when inspecting it. */
+  finding: string;
+  /** The outcome of the inspection. */
+  status: CheckStatus;
+}
+
 /** The AI's per-perspective verdict: findings, or an explicit skip + reason. */
 export interface PerspectiveAnalysis {
   perspectiveId: string;
@@ -205,6 +222,11 @@ export interface PerspectiveAnalysis {
    * Present whether or not findings were raised; null when the model omitted it.
    */
   summary: string | null;
+  /**
+   * A line-by-line audit trail of what the reviewer actually inspected and the
+   * outcome of each inspection. Empty when the model supplied none.
+   */
+  checks: PerspectiveCheck[];
 }
 
 /** Application service backing the Project Review Board page. */

@@ -9,7 +9,9 @@
 
 import { statusForSeverity } from './review-board-builder.js';
 import type {
+  CheckStatus,
   FindingSeverity,
+  PerspectiveCheck,
   ReviewEvidence,
   ReviewFinding,
 } from './review-board-contract.js';
@@ -21,6 +23,8 @@ const SEVERITIES: readonly FindingSeverity[] = [
   'low',
   'suggestion',
 ];
+
+const CHECK_STATUSES: readonly CheckStatus[] = ['pass', 'concern', 'na'];
 
 /** Extract the JSON array from a completion, tolerating fences and prose. */
 function extractJsonArray(text: string): unknown {
@@ -137,6 +141,36 @@ export function parseAiFindings(
   return findings;
 }
 
+/** Coerce an unknown check status into a valid one, defaulting to 'pass'. */
+function toCheckStatus(value: unknown): CheckStatus {
+  return CHECK_STATUSES.includes(value as CheckStatus)
+    ? (value as CheckStatus)
+    : 'pass';
+}
+
+/** Build one validated line-item check from a raw record, or null. */
+function toCheck(raw: unknown): PerspectiveCheck | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  if (!isText(record.item) || !isText(record.finding)) return null;
+  return {
+    item: record.item.trim(),
+    finding: record.finding.trim(),
+    status: toCheckStatus(record.status),
+  };
+}
+
+/** Parse the optional `checks` array from a perspective record. */
+function parseChecks(value: unknown): PerspectiveCheck[] {
+  if (!Array.isArray(value)) return [];
+  const checks: PerspectiveCheck[] = [];
+  value.forEach((raw) => {
+    const check = toCheck(raw);
+    if (check) checks.push(check);
+  });
+  return checks;
+}
+
 /** The parsed outcome of a single-perspective AI review. */
 export interface ParsedPerspectiveAnalysis {
   findings: ReviewFinding[];
@@ -144,14 +178,16 @@ export interface ParsedPerspectiveAnalysis {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null when omitted. */
   summary: string | null;
+  /** Line-by-line audit trail of what was inspected and each outcome. */
+  checks: PerspectiveCheck[];
 }
 
 /**
  * Parse the model's single-perspective response: a JSON object with an optional
- * `skipped`/`reason`, a `summary` of what was checked, and a `findings` array.
- * Totally defensive — a malformed completion yields no findings and no skip, so
- * the perspective simply shows its deterministic result. All findings are
- * attributed to `perspectiveId`.
+ * `skipped`/`reason`, a `summary` of what was checked, a `checks` audit trail,
+ * and a `findings` array. Totally defensive — a malformed completion yields no
+ * findings and no skip, so the perspective simply shows its deterministic
+ * result. All findings are attributed to `perspectiveId`.
  */
 export function parsePerspectiveAnalysis(
   text: string,
@@ -159,14 +195,21 @@ export function parsePerspectiveAnalysis(
 ): ParsedPerspectiveAnalysis {
   const record = extractJsonObject(text);
   if (record === null) {
-    return { findings: [], skipped: false, skipReason: null, summary: null };
+    return {
+      findings: [],
+      skipped: false,
+      skipReason: null,
+      summary: null,
+      checks: [],
+    };
   }
   const summary = isText(record.summary) ? record.summary.trim() : null;
+  const checks = parseChecks(record.checks);
   if (record.skipped === true) {
     const skipReason = isText(record.reason)
       ? record.reason.trim()
       : 'The reviewer judged this perspective not applicable to the change.';
-    return { findings: [], skipped: true, skipReason, summary };
+    return { findings: [], skipped: true, skipReason, summary, checks };
   }
   const rawFindings = Array.isArray(record.findings) ? record.findings : [];
   const findings: ReviewFinding[] = [];
@@ -174,7 +217,7 @@ export function parsePerspectiveAnalysis(
     const finding = toFinding(raw, perspectiveId, index);
     if (finding) findings.push(finding);
   });
-  return { findings, skipped: false, skipReason: null, summary };
+  return { findings, skipped: false, skipReason: null, summary, checks };
 }
 
 /**

@@ -244,7 +244,9 @@ describe('createReviewBoardService.analyze', () => {
 
 describe('createReviewBoardService.analyzePerspective', () => {
   const objectJson = `\`\`\`json
-{"skipped": false, "summary": "Inspected svc/cache.cs BuildKey for tainted input.", "findings": [
+{"skipped": false, "summary": "Inspected svc/cache.cs BuildKey for tainted input.",
+ "checks": [{"item":"svc/cache.cs — BuildKey","finding":"key derived from request","status":"concern"}],
+ "findings": [
   {"title":"Unvalidated cache key","detail":"key from user input","severity":"high","evidence":[{"source":"svc/cache.cs","reason":"key from request","confidence":0.8}]}
 ]}
 \`\`\``;
@@ -259,6 +261,13 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.summary).toBe(
       'Inspected svc/cache.cs BuildKey for tainted input.',
     );
+    expect(result.checks).toEqual([
+      {
+        item: 'svc/cache.cs — BuildKey',
+        finding: 'key derived from request',
+        status: 'concern',
+      },
+    ]);
     expect(result.perspective.id).toBe('security');
     expect(result.perspective.findings).toHaveLength(1);
     expect(result.perspective.status).toBe('blocked');

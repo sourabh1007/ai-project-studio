@@ -13,7 +13,11 @@
  * that drives it — the same ports-and-adapters split the backend uses.
  */
 
-import type { PerspectiveAnalysis, ReviewBoard } from '../../lib/types.js';
+import type {
+  PerspectiveAnalysis,
+  PerspectiveCheck,
+  ReviewBoard,
+} from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
 import {
   mapWithConcurrency,
@@ -53,6 +57,8 @@ export interface PerspectiveProgress {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null. */
   checked: string | null;
+  /** Line-by-line audit trail of what was inspected and each outcome. */
+  checks: PerspectiveCheck[];
   error: string | null;
   /** 1-based attempt currently running (>1 means a self-healing retry). */
   attempt: number;
@@ -229,6 +235,7 @@ class ReviewBoardRunStore {
             status: 'pending',
             skipReason: null,
             checked: null,
+            checks: [],
             error: null,
             attempt: 0,
           },
@@ -247,6 +254,7 @@ class ReviewBoardRunStore {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
               checked: null,
+              checks: [],
               error: null,
               attempt,
             });
@@ -275,6 +283,7 @@ class ReviewBoardRunStore {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
           checked: result.summary,
+          checks: result.checks,
           error: null,
           attempt: 0,
         });
@@ -284,6 +293,7 @@ class ReviewBoardRunStore {
           status: 'error',
           skipReason: null,
           checked: null,
+          checks: [],
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });
@@ -322,6 +332,7 @@ class ReviewBoardRunStore {
             status: 'pending',
             skipReason: null,
             checked: null,
+            checks: [],
             error: null,
             attempt: 0,
           },
@@ -339,6 +350,7 @@ class ReviewBoardRunStore {
               status: attempt > 1 ? 'retrying' : 'analyzing',
               skipReason: null,
               checked: null,
+              checks: [],
               error: null,
               attempt,
             });
@@ -367,6 +379,7 @@ class ReviewBoardRunStore {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
           checked: result.summary,
+          checks: result.checks,
           error: null,
           attempt: 0,
         });
@@ -376,6 +389,7 @@ class ReviewBoardRunStore {
           status: 'error',
           skipReason: null,
           checked: null,
+          checks: [],
           error: messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });

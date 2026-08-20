@@ -462,6 +462,16 @@ export interface ReviewBoardChatReply {
   answer: string;
 }
 
+/** Outcome of one concrete inspection the reviewer performed for a lens. */
+export type CheckStatus = 'pass' | 'concern' | 'na';
+
+/** A single line-item in the reviewer's audit trail. */
+export interface PerspectiveCheck {
+  item: string;
+  finding: string;
+  status: CheckStatus;
+}
+
 /** The AI's verdict for a single perspective: rolled-up result + skip info. */
 export interface PerspectiveAnalysis {
   perspectiveId: string;
@@ -470,6 +480,8 @@ export interface PerspectiveAnalysis {
   skipReason: string | null;
   /** What the reviewer checked to justify the rating, or null when omitted. */
   summary: string | null;
+  /** Line-by-line audit trail of what was inspected and each outcome. */
+  checks: PerspectiveCheck[];
 }
 
 

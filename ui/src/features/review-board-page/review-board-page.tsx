@@ -9,11 +9,15 @@ import {
 import {
   AiChatIcon,
   AiMagicIcon,
+  CloseIcon,
+  ExpandIcon,
   PrReviewIcon,
   RefreshIcon,
+  RestoreIcon,
   SendIcon,
 } from '../../components/icons.js';
 import type {
+  CheckStatus,
   DetectedItem,
   ReviewBoard,
   ReviewBoardChatMessage,
@@ -43,6 +47,18 @@ const RECOMMENDATION_LABEL: Record<ReviewBoard['recommendation'], string> = {
   approve: 'Approve',
   'request-changes': 'Request changes',
   'needs-review': 'Needs review',
+};
+
+const CHECK_STATUS_LABEL: Record<CheckStatus, string> = {
+  pass: 'Verified — no issue',
+  concern: 'Concern raised',
+  na: 'Not applicable',
+};
+
+const CHECK_STATUS_GLYPH: Record<CheckStatus, string> = {
+  pass: '✓',
+  concern: '!',
+  na: '–',
 };
 
 /** A tiny coloured marker for a status/risk, kept text-labelled for a11y. */
@@ -110,56 +126,48 @@ function ExplainModel({
   onOpenCodeReview?: () => void;
 }) {
   const { model } = board;
+  const languages =
+    [...model.primaryLanguages, ...model.secondaryLanguages].join(', ') ||
+    'None detected';
   return (
-    <div className="rb-explain">
-      <h3 className="rb-card-header">Why this review model</h3>
-      <div className="rb-explain-grid">
-        <div>
-          <span className="rb-meta-label">Detected project type</span>
-          <span className="rb-meta-value">
-            {model.projectType}{' '}
-            <span className="rb-confidence">
-              ({Math.round(model.projectTypeConfidence * 100)}% confidence)
+    <details className="rb-explain">
+      <summary className="rb-explain-summary">
+        <span className="rb-explain-title">Why this review model</span>
+        <span className="rb-explain-inline">
+          {model.projectType} ({Math.round(model.projectTypeConfidence * 100)}%)
+          {' · '}
+          {languages}
+          {' · '}
+          {model.deploymentModel || 'no deployment model'}
+        </span>
+      </summary>
+      <div className="rb-explain-body">
+        <div className="rb-explain-grid">
+          <div>
+            <span className="rb-meta-label">Blast-radius dimensions</span>
+            <span className="rb-meta-value">
+              {model.blastRadiusDimensions.join(', ')}
             </span>
-          </span>
+          </div>
+          <DetectedList title="Configuration" items={model.configurationSystems} />
+          <DetectedList title="Contracts" items={model.contracts} />
+          <DetectedList title="Test signals" items={model.testSignals} />
         </div>
-        <div>
-          <span className="rb-meta-label">Languages</span>
-          <span className="rb-meta-value">
-            {[...model.primaryLanguages, ...model.secondaryLanguages].join(', ') ||
-              'None detected'}
-          </span>
-        </div>
-        <div>
-          <span className="rb-meta-label">Deployment model</span>
-          <span className="rb-meta-value">
-            {model.deploymentModel || 'None detected'}
-          </span>
-        </div>
-        <div>
-          <span className="rb-meta-label">Blast-radius dimensions</span>
-          <span className="rb-meta-value">
-            {model.blastRadiusDimensions.join(', ')}
-          </span>
-        </div>
+        {model.evidence.length > 0 && (
+          <ul className="rb-evidence">
+            {model.evidence.map((e, i) => (
+              <li key={i}>
+                <EvidenceSource
+                  source={e.source}
+                  onOpenCodeReview={onOpenCodeReview}
+                />
+                <span className="rb-evidence-reason">{e.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      <DetectedList title="Configuration" items={model.configurationSystems} />
-      <DetectedList title="Contracts" items={model.contracts} />
-      <DetectedList title="Test signals" items={model.testSignals} />
-      {model.evidence.length > 0 && (
-        <ul className="rb-evidence">
-          {model.evidence.map((e, i) => (
-            <li key={i}>
-              <EvidenceSource
-                source={e.source}
-                onOpenCodeReview={onOpenCodeReview}
-              />
-              <span className="rb-evidence-reason">{e.reason}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </details>
   );
 }
 
@@ -168,10 +176,14 @@ function ReviewAgent({
   featureId,
   pullNumber,
   perspective,
+  focused,
+  onToggleFocus,
 }: {
   featureId: string;
   pullNumber: number;
   perspective: ReviewPerspective | null;
+  focused: boolean;
+  onToggleFocus: () => void;
 }) {
   const api = useApi();
   const [messages, setMessages] = useState<ReviewBoardChatMessage[]>([]);
@@ -211,9 +223,16 @@ function ReviewAgent({
 
   return (
     <aside className="rb-agent" aria-label="Review agent">
-      <h3 className="rb-card-header">
-        <AiChatIcon size={16} /> Engineering Review Agent
-      </h3>
+      <div className="rb-agent-head">
+        <h3 className="rb-card-header">
+          <AiChatIcon size={16} /> Engineering Review Agent
+        </h3>
+        <FocusToggle
+          active={focused}
+          label="review agent"
+          onToggle={onToggleFocus}
+        />
+      </div>
       <p className="rb-agent-context">
         Context: #{pullNumber}
         {perspective ? ` · ${perspective.name}` : ' · whole board'}
@@ -287,6 +306,11 @@ export function ReviewBoardPage({
   const { board, loading, loadError: error, analyzed, progress } = state;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Which of the three panels is expanded to fill the body, or null for the
+  // default three-column layout.
+  const [focus, setFocus] = useState<'nav' | 'canvas' | 'agent' | null>(null);
+  // Lets the reviewer dismiss the "reviewing…" progress banner for the run.
+  const [bannerHidden, setBannerHidden] = useState(false);
   useEffect(() => {
     if (board && selectedId === null) {
       setSelectedId(board.perspectives[0]?.id ?? null);
@@ -298,7 +322,10 @@ export function ReviewBoardPage({
     [featureId, runApi],
   );
   const analyze = useMemo(
-    () => () => reviewBoardRunStore.analyze(featureId, runApi),
+    () => () => {
+      setBannerHidden(false);
+      return reviewBoardRunStore.analyze(featureId, runApi);
+    },
     [featureId, runApi],
   );
   const retryFailed = useMemo(
@@ -322,6 +349,7 @@ export function ReviewBoardPage({
       status: 'idle',
       skipReason: null,
       checked: null,
+      checks: [],
       error: null,
       attempt: 0,
     };
@@ -427,7 +455,7 @@ export function ReviewBoardPage({
         </div>
       )}
 
-      {analyzing && (
+      {analyzing && !bannerHidden && (
         <div className="rb-analyzing" role="status">
           <span className="spinner" aria-hidden="true" />
           <span>
@@ -435,6 +463,15 @@ export function ReviewBoardPage({
             findings appear as each one completes. Runs one at a time and keeps
             going if you switch tabs. Select any perspective to follow along.
           </span>
+          <button
+            type="button"
+            className="rb-banner-close"
+            aria-label="Dismiss progress message"
+            title="Dismiss"
+            onClick={() => setBannerHidden(true)}
+          >
+            <CloseIcon size={14} />
+          </button>
         </div>
       )}
 
@@ -457,8 +494,16 @@ export function ReviewBoardPage({
         </span>
       </div>
 
-      <div className="rb-body">
+      <div className="rb-body" data-focus={focus ?? undefined}>
         <nav className="rb-nav" aria-label="Review perspectives">
+          <div className="rb-panel-bar">
+            <span className="rb-panel-bar-title">Perspectives</span>
+            <FocusToggle
+              active={focus === 'nav'}
+              label="perspectives list"
+              onToggle={() => setFocus(focus === 'nav' ? null : 'nav')}
+            />
+          </div>
           {board.perspectives.map((p) => {
             const state = progress[p.id]?.status ?? 'idle';
             return (
@@ -516,6 +561,14 @@ export function ReviewBoardPage({
         </nav>
 
         <main className="rb-canvas">
+          <div className="rb-panel-bar">
+            <span className="rb-panel-bar-title">Detail</span>
+            <FocusToggle
+              active={focus === 'canvas'}
+              label="detail panel"
+              onToggle={() => setFocus(focus === 'canvas' ? null : 'canvas')}
+            />
+          </div>
           {selected && (
             <section className="rb-detail" ref={detailRef}>
               <div className="rb-detail-head">
@@ -558,6 +611,34 @@ export function ReviewBoardPage({
                     Disagree with this rating? Challenge it with the review agent
                     on the right — point at the code and it will re-evaluate. →
                   </p>
+                </div>
+              )}
+
+              {selectedProgress.checks.length > 0 && (
+                <div className="rb-checks">
+                  <span className="rb-checks-label">
+                    What was analysed — line by line
+                  </span>
+                  <ul className="rb-checks-list">
+                    {selectedProgress.checks.map((c, i) => (
+                      <li
+                        key={i}
+                        className={`rb-check rb-check-${c.status}`}
+                      >
+                        <span
+                          className="rb-check-status"
+                          title={CHECK_STATUS_LABEL[c.status]}
+                          aria-label={CHECK_STATUS_LABEL[c.status]}
+                        >
+                          {CHECK_STATUS_GLYPH[c.status]}
+                        </span>
+                        <span className="rb-check-body">
+                          <span className="rb-check-item">{c.item}</span>
+                          <span className="rb-check-finding">{c.finding}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
@@ -671,10 +752,36 @@ export function ReviewBoardPage({
           featureId={featureId}
           pullNumber={board.pull.number}
           perspective={selected}
+          focused={focus === 'agent'}
+          onToggleFocus={() => setFocus(focus === 'agent' ? null : 'agent')}
         />
 
         <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
       </div>
     </div>
+  );
+}
+
+/** Small expand/restore toggle used in each panel's header bar. */
+function FocusToggle({
+  active,
+  label,
+  onToggle,
+}: {
+  active: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="rb-focus-toggle"
+      aria-pressed={active}
+      title={active ? 'Restore layout' : `Expand ${label}`}
+      aria-label={active ? 'Restore layout' : `Expand ${label}`}
+      onClick={onToggle}
+    >
+      {active ? <RestoreIcon size={14} /> : <ExpandIcon size={14} />}
+    </button>
   );
 }

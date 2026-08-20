@@ -28,6 +28,8 @@ import {
   Info,
   Layers,
   ListChecks,
+  Maximize2,
+  Minimize2,
   Moon,
   MoreHorizontal,
   PanelLeftClose,
@@ -97,6 +99,8 @@ export const TrashIcon = makeIcon(Trash2);
 export const ImportIcon = makeIcon(Download);
 export const CheckIcon = makeIcon(Check);
 export const CloseIcon = makeIcon(X);
+export const ExpandIcon = makeIcon(Maximize2);
+export const RestoreIcon = makeIcon(Minimize2);
 export const CollapseSidebarIcon = makeIcon(PanelLeftClose);
 export const CircleIcon = makeIcon(Circle);
 export const ClockIcon = makeIcon(Clock);
