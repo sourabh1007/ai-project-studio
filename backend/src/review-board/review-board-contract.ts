@@ -248,6 +248,27 @@ export interface PerspectiveAnalysis {
   checks: PerspectiveCheck[];
 }
 
+/**
+ * A single live activity line produced while a perspective is being analysed.
+ * Streamed over the workspace event bus so the UI can show, in real time, what
+ * the AI reviewer is actually doing for a given perspective. `sessionId` lets
+ * the client detect a fresh run/attempt (a new metasession) and reset the
+ * accumulated activity for that perspective.
+ */
+export interface ReviewBoardActivity {
+  featureId: string;
+  perspectiveId: string;
+  /** The metasession the line came from; changes on each new run/attempt. */
+  sessionId: string;
+  /** One concise, human-readable line of what the reviewer is doing. */
+  line: string;
+}
+
+/** Events the review board publishes onto the workspace bus. */
+export type ReviewBoardEventMap = {
+  'review.board.activity': ReviewBoardActivity;
+};
+
 /** Application service backing the Project Review Board page. */
 export interface ReviewBoardService {
   /** The board for a review feature, or throws when no review exists. */

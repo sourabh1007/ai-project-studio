@@ -9149,6 +9149,43 @@ body.is-resizing {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
+.rb-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-strong));
+}
+.rb-activity-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rb-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.rb-activity-line {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  word-break: break-word;
+}
 .rb-banner-queued {
   color: var(--text-muted);
   border-style: dashed;

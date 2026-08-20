@@ -85,6 +85,7 @@ function baseDeps(
     config: reviewBoardDefaults,
     clock: createClock(() => Date.parse('2026-02-02T00:00:00.000Z')),
     ai: { runDetailed: vi.fn(async () => ({ text: '', sessionId: 's0' })) },
+    bus: { emit: vi.fn() },
     temporaryPrompts: fakeTemporaryPrompts(),
     sleep: vi.fn(async () => {}),
     ...overrides,
@@ -323,6 +324,59 @@ describe('createReviewBoardService.analyzePerspective', () => {
     await expect(
       service.analyzePerspective('f9', 'ghost'),
     ).rejects.toThrow('Unknown perspective: ghost');
+  });
+
+  it('streams live activity for the perspective over the bus (inline path)', async () => {
+    const emit = vi.fn();
+    const runDetailed = vi.fn(async (r: MetaRequest) => {
+      r.onStart?.('meta-123');
+      r.onActivity?.('Reading svc/cache.cs…');
+      r.onActivity?.('Assessing BuildKey…');
+      return { text: objectJson, sessionId: 'meta-123' };
+    });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, bus: { emit }, inlinePrompts: true }),
+    );
+    await service.analyzePerspective('f9', 'security');
+    // The onStart banner line plus each activity line, all tagged with the
+    // metasession id and the perspective they belong to.
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: 'meta-123',
+      line: 'Reviewer session started — reading the change evidence…',
+    });
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: 'meta-123',
+      line: 'Reading svc/cache.cs…',
+    });
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: 'meta-123',
+      line: 'Assessing BuildKey…',
+    });
+  });
+
+  it('streams live activity over the bus on the attachment (cold) path', async () => {
+    const emit = vi.fn();
+    const runDetailed = vi.fn(async (r: MetaRequest) => {
+      r.onStart?.('meta-cold');
+      r.onActivity?.('Inspecting the diff…');
+      return { text: objectJson, sessionId: 'meta-cold' };
+    });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, bus: { emit } }),
+    );
+    await service.analyzePerspective('f9', 'security');
+    expect(emit).toHaveBeenCalledWith('review.board.activity', {
+      featureId: 'f9',
+      perspectiveId: 'security',
+      sessionId: 'meta-cold',
+      line: 'Inspecting the diff…',
+    });
   });
 });
 

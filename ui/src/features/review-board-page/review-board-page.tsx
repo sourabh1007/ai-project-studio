@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
+import { useUsageStream } from '../../hooks/use-usage-stream.js';
+import { reviewBoardActivityLines } from '../../lib/stream.js';
 import {
   reviewBoardRunStore,
   type PerspectiveProgress,
@@ -356,6 +358,12 @@ export function ReviewBoardPage({
     };
 
   const progressValues = Object.values(progress);
+  // Live per-perspective activity streamed from the backend over SSE — shows,
+  // in real time, exactly what the AI reviewer is doing for the selected lens.
+  const live = useUsageStream();
+  const activityLines = selectedId
+    ? reviewBoardActivityLines(live, featureId, selectedId)
+    : [];
   const analyzing = progressValues.some(
     (p) =>
       p.status === 'analyzing' ||
@@ -702,6 +710,22 @@ export function ReviewBoardPage({
                   by one.
                 </div>
               )}
+              {(selectedProgress.status === 'analyzing' ||
+                selectedProgress.status === 'retrying') &&
+                activityLines.length > 0 && (
+                  <div className="rb-activity" role="log" aria-live="polite">
+                    <span className="rb-activity-label">
+                      Live analysis — what the reviewer is doing now
+                    </span>
+                    <ul className="rb-activity-list">
+                      {activityLines.map((line, i) => (
+                        <li key={i} className="rb-activity-line">
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
               {selected.findings.length === 0 ? (
                 <div className="rb-detail-empty">

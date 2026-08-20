@@ -6,6 +6,7 @@ import {
   liveSignal,
   parseServerEvent,
   resolveSessionMetrics,
+  reviewBoardActivityLines,
   sessionLiveTotals,
   usageKey,
   workspaceLiveTotals,
@@ -404,6 +405,76 @@ describe('applyStreamEvent', () => {
       subagent,
     });
     expect(state.subagents['g1']).toEqual(subagent);
+  });
+
+  it('parses and accumulates review-board activity, resetting on a new session', () => {
+    const parsed = parseServerEvent(
+      'review.board.activity',
+      JSON.stringify({
+        featureId: 'f1',
+        perspectiveId: 'security',
+        sessionId: 'm1',
+        line: 'Reading svc/cache.cs…',
+      }),
+    );
+    expect(parsed).toEqual({
+      type: 'review.board.activity',
+      activity: {
+        featureId: 'f1',
+        perspectiveId: 'security',
+        sessionId: 'm1',
+        line: 'Reading svc/cache.cs…',
+      },
+    });
+    let state = applyStreamEvent(initialLiveState, parsed!);
+    state = applyStreamEvent(state, {
+      type: 'review.board.activity',
+      activity: {
+        featureId: 'f1',
+        perspectiveId: 'security',
+        sessionId: 'm1',
+        line: 'Assessing BuildKey…',
+      },
+    });
+    // Same session id → lines accumulate in order.
+    expect(reviewBoardActivityLines(state, 'f1', 'security')).toEqual([
+      'Reading svc/cache.cs…',
+      'Assessing BuildKey…',
+    ]);
+    // A different perspective keeps its own independent buffer.
+    expect(reviewBoardActivityLines(state, 'f1', 'impact')).toEqual([]);
+    // A new metasession id (fresh run/attempt) resets the buffer.
+    state = applyStreamEvent(state, {
+      type: 'review.board.activity',
+      activity: {
+        featureId: 'f1',
+        perspectiveId: 'security',
+        sessionId: 'm2',
+        line: 'Restarting review…',
+      },
+    });
+    expect(reviewBoardActivityLines(state, 'f1', 'security')).toEqual([
+      'Restarting review…',
+    ]);
+  });
+
+  it('caps accumulated activity lines to the trailing window', () => {
+    let state = initialLiveState;
+    for (let i = 0; i < 80; i += 1) {
+      state = applyStreamEvent(state, {
+        type: 'review.board.activity',
+        activity: {
+          featureId: 'f1',
+          perspectiveId: 'security',
+          sessionId: 'm1',
+          line: `line ${i}`,
+        },
+      });
+    }
+    const lines = reviewBoardActivityLines(state, 'f1', 'security');
+    expect(lines).toHaveLength(60);
+    expect(lines[0]).toBe('line 20');
+    expect(lines[59]).toBe('line 79');
   });
 });
 

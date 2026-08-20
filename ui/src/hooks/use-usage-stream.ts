@@ -20,6 +20,7 @@ const STREAM_EVENT_NAMES = [
   'automation.updated',
   'automation.removed',
   'subagent.updated',
+  'review.board.activity',
 ] as const;
 
 function reducer(state: LiveState, event: StreamEvent): LiveState {

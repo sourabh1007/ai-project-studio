@@ -3,6 +3,7 @@ import type {
   ContextStatusPhase,
   PrReview,
   RepositoryContext,
+  ReviewBoardActivity,
   Session,
   StoredUsage,
   Automation,
@@ -22,12 +23,32 @@ export type StreamEvent =
   | { type: 'context.status'; status: ContextStatus }
   | { type: 'automation.updated'; automation: Automation }
   | { type: 'automation.removed'; id: string }
-  | { type: 'subagent.updated'; subagent: Subagent };
+  | { type: 'subagent.updated'; subagent: Subagent }
+  | { type: 'review.board.activity'; activity: ReviewBoardActivity };
 
 /** Stable key for a context-status entry: one live phase per scope target. */
 export function contextStatusKey(scope: string, scopeId: string): string {
   return `${scope}:${scopeId}`;
 }
+
+/** Stable key for a perspective's live activity: one stream per feature+lens. */
+export function reviewBoardActivityKey(
+  featureId: string,
+  perspectiveId: string,
+): string {
+  return `${featureId}:${perspectiveId}`;
+}
+
+/** The most recent live activity captured for one perspective's run. */
+export interface ReviewBoardActivityState {
+  /** The metasession the lines belong to; a new id resets the buffer. */
+  sessionId: string;
+  /** Most recent activity lines, oldest first, capped to the tail. */
+  lines: string[];
+}
+
+/** How many trailing activity lines to keep per perspective run. */
+const MAX_ACTIVITY_LINES = 60;
 
 export interface LiveState {
   sessions: Record<string, Session>;
@@ -38,6 +59,8 @@ export interface LiveState {
   contextStatus: Record<string, ContextStatusPhase>;
   automations: Record<string, Automation>;
   subagents: Record<string, Subagent>;
+  /** Live per-perspective review-board activity, keyed by feature+perspective. */
+  reviewBoardActivity: Record<string, ReviewBoardActivityState>;
   /**
    * Per-session count of observed file create/edit events. Bumps on every
    * `session.file`; consumers use it as an effect dependency to re-fetch the
@@ -55,6 +78,7 @@ export const initialLiveState: LiveState = {
   contextStatus: {},
   automations: {},
   subagents: {},
+  reviewBoardActivity: {},
   fileChangesBySession: {},
 };
 
@@ -128,6 +152,11 @@ export function parseServerEvent(
       return {
         type: 'subagent.updated',
         subagent: JSON.parse(data) as Subagent,
+      };
+    case 'review.board.activity':
+      return {
+        type: 'review.board.activity',
+        activity: JSON.parse(data) as ReviewBoardActivity,
       };
     default:
       return null;
@@ -220,7 +249,38 @@ export function applyStreamEvent(
           [event.subagent.id]: event.subagent,
         },
       };
+    case 'review.board.activity': {
+      const { featureId, perspectiveId, sessionId, line } = event.activity;
+      const key = reviewBoardActivityKey(featureId, perspectiveId);
+      const previous = state.reviewBoardActivity[key];
+      // A new metasession id means a fresh run/attempt — reset the buffer so
+      // stale lines from a prior run never bleed into the new one.
+      const lines =
+        previous && previous.sessionId === sessionId
+          ? [...previous.lines, line].slice(-MAX_ACTIVITY_LINES)
+          : [line];
+      return {
+        ...state,
+        reviewBoardActivity: {
+          ...state.reviewBoardActivity,
+          [key]: { sessionId, lines },
+        },
+      };
+    }
   }
+}
+
+/** The live activity lines captured for one perspective, oldest first. */
+export function reviewBoardActivityLines(
+  state: LiveState,
+  featureId: string,
+  perspectiveId: string,
+): string[] {
+  return (
+    state.reviewBoardActivity[
+      reviewBoardActivityKey(featureId, perspectiveId)
+    ]?.lines ?? []
+  );
 }
 
 export interface SessionLiveTotals {

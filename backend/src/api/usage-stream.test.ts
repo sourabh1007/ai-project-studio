@@ -38,6 +38,12 @@ describe('subscribeStream', () => {
     bus.emit('automation.updated', { id: 'a1' } as never);
     bus.emit('automation.removed', { id: 'a1' } as never);
     bus.emit('subagent.updated', { id: 'g1' } as never);
+    bus.emit('review.board.activity', {
+      featureId: 'f1',
+      perspectiveId: 'security',
+      sessionId: 'm1',
+      line: 'Reading the diff…',
+    });
 
     expect(events.map((e) => e.event)).toEqual([
       'session.started',
@@ -52,11 +58,12 @@ describe('subscribeStream', () => {
       'automation.updated',
       'automation.removed',
       'subagent.updated',
+      'review.board.activity',
     ]);
 
     off();
     bus.emit('session.started', { id: 's2' } as never);
-    expect(events).toHaveLength(12);
+    expect(events).toHaveLength(13);
   });
 
   it('does not stream internal session lifecycle or output events', () => {

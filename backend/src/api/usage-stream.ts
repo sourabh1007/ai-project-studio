@@ -6,6 +6,7 @@ import type { PrReviewEventMap } from '../pr-review/pr-review-contract.js';
 import type { ContextStatusEventMap } from '../context-store/context-status.js';
 import type { AutomationEventMap } from '../automation/automation-service.js';
 import type { SubagentEventMap } from '../automation/subagent-service.js';
+import type { ReviewBoardEventMap } from '../review-board/review-board-contract.js';
 
 /** Combined event map streamed to clients over SSE. */
 export type StreamEventMap = SessionEventMap &
@@ -14,7 +15,8 @@ export type StreamEventMap = SessionEventMap &
   PrReviewEventMap &
   ContextStatusEventMap &
   AutomationEventMap &
-  SubagentEventMap;
+  SubagentEventMap &
+  ReviewBoardEventMap;
 
 export type StreamEventName = keyof StreamEventMap;
 
@@ -36,6 +38,7 @@ const STREAM_EVENTS: StreamEventName[] = [
   'automation.updated',
   'automation.removed',
   'subagent.updated',
+  'review.board.activity',
 ];
 
 /**

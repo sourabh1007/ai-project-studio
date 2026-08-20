@@ -492,6 +492,18 @@ export interface PerspectiveAnalysis {
   checks: PerspectiveCheck[];
 }
 
+/**
+ * A single live activity line streamed while a perspective is being analysed.
+ * `sessionId` identifies the metasession; a new id means a fresh run/attempt,
+ * so the client resets the accumulated activity for that perspective.
+ */
+export interface ReviewBoardActivity {
+  featureId: string;
+  perspectiveId: string;
+  sessionId: string;
+  line: string;
+}
+
 
 /** A single comment within a review thread on the pull request. */
 export interface PrComment {

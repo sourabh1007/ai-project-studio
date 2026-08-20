@@ -13,6 +13,7 @@
  */
 
 import type { Clock } from '../kernel/clock.js';
+import type { EventBus } from '../kernel/event-bus.js';
 import { ValidationError } from '../kernel/error-types.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
@@ -38,6 +39,7 @@ import type {
   ReviewBoard,
   ReviewBoardChatMessage,
   ReviewBoardChatReply,
+  ReviewBoardEventMap,
   ReviewBoardService,
   ReviewPerspective,
 } from './review-board-contract.js';
@@ -59,12 +61,22 @@ export interface ReviewBoardServiceDeps {
   clock: Clock;
   /** The reusable "run an AI prompt" primitive. */
   ai: Pick<MetaRunner, 'runDetailed'>;
+  /** Publishes live per-perspective activity so the UI can stream it. */
+  bus: Pick<EventBus<ReviewBoardEventMap>, 'emit'>;
   /** Writes a step's prompt to a short-lived attachment (cold path). */
   temporaryPrompts: TemporaryPromptFileFactory;
   /** Waits `ms` before a transient-failure retry; injected so tests stay fast. */
   sleep: (ms: number) => Promise<void>;
   /** When true the prompt is carried inline over stdio (warm pool). */
   inlinePrompts?: boolean;
+}
+
+/** Optional live-progress hooks forwarded to the AI runner for a prompt. */
+interface PromptHooks {
+  /** Invoked with the metasession id the moment the run launches. */
+  onStart?: (sessionId: string) => void;
+  /** Invoked with each concise activity line the run produces. */
+  onActivity?: (line: string) => void;
 }
 
 /** Project the persisted PR review down to the discovery engine's inputs. */
@@ -151,6 +163,7 @@ export function createReviewBoardService(
   async function runPromptAttempt(
     review: PrReview,
     prompt: string,
+    hooks?: PromptHooks,
   ): Promise<string> {
     if (deps.inlinePrompts) {
       const { text } = await deps.ai.runDetailed({
@@ -160,6 +173,8 @@ export function createReviewBoardService(
         scope: 'internal',
         noTools: true,
         timeoutMs: deps.config.stepTimeoutMs,
+        onStart: hooks?.onStart,
+        onActivity: hooks?.onActivity,
       });
       return text;
     }
@@ -176,6 +191,8 @@ export function createReviewBoardService(
         scope: 'internal',
         noTools: true,
         timeoutMs: deps.config.stepTimeoutMs,
+        onStart: hooks?.onStart,
+        onActivity: hooks?.onActivity,
       });
       return text;
     } finally {
@@ -184,20 +201,24 @@ export function createReviewBoardService(
   }
 
   /** Run a prompt, retrying only *transient* provider failures. */
-  async function runPrompt(review: PrReview, prompt: string): Promise<string> {
+  async function runPrompt(
+    review: PrReview,
+    prompt: string,
+    hooks?: PromptHooks,
+  ): Promise<string> {
     for (
       let retry = 0;
       retry < deps.config.transientRetryAttempts;
       retry += 1
     ) {
       try {
-        return await runPromptAttempt(review, prompt);
+        return await runPromptAttempt(review, prompt, hooks);
       } catch (error) {
         if (!isTransientProviderFailure(errorMessage(error))) throw error;
         await deps.sleep(deps.config.transientRetryBackoffMs);
       }
     }
-    return runPromptAttempt(review, prompt);
+    return runPromptAttempt(review, prompt, hooks);
   }
 
   return {
@@ -251,7 +272,25 @@ export function createReviewBoardService(
         changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
       });
-      const text = await runPrompt(review, prompt);
+      // Stream what the reviewer is doing for this lens in real time. A fresh
+      // metasession id (new run or self-healing attempt) lets the client reset
+      // the accumulated activity for this perspective.
+      let sessionId = '';
+      const emit = (line: string): void => {
+        deps.bus.emit('review.board.activity', {
+          featureId,
+          perspectiveId,
+          sessionId,
+          line,
+        });
+      };
+      const text = await runPrompt(review, prompt, {
+        onStart: (id) => {
+          sessionId = id;
+          emit('Reviewer session started — reading the change evidence…');
+        },
+        onActivity: (line) => emit(line),
+      });
       const parsed = parsePerspectiveAnalysis(text, perspectiveId);
       const aiFindings = capPerspectiveFindings(
         parsed.findings,

@@ -343,6 +343,7 @@ import {
   type ReviewBoardConfig,
 } from './review-board/config.js';
 import { createReviewBoardService } from './review-board/review-board-service.js';
+import type { ReviewBoardEventMap } from './review-board/review-board-contract.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
 import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
 import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
@@ -1527,6 +1528,7 @@ function main(): void {
     inlinePrompts: warmMetaRunner !== null,
     temporaryPrompts: createTemporaryPromptFileFactory(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    bus: bus as unknown as EventBus<ReviewBoardEventMap>,
   });
   // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
   // Azure DevOps (REST) gateway from the repo's provider, so the comments
