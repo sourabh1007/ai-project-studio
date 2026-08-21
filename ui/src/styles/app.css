@@ -563,6 +563,78 @@
   -webkit-backdrop-filter: blur(2px);
 }
 
+/* --- Code Review modal (full-screen overlay, replaces the old blade/tab) --- */
+.crm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  background: rgba(3, 6, 16, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.crm-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1600px, 96vw);
+  height: 94vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  outline: none;
+  overflow: hidden;
+}
+.crm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.crm-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.crm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.crm-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+.crm-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.crm-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .cmdk-panel {
   width: min(640px, 92vw);
   max-height: 60vh;
