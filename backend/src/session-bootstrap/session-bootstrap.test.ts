@@ -335,4 +335,16 @@ describe('session bootstrap', () => {
     );
     expect(composeBootstrappedPrompt('', 'USER')).toBe('USER');
   });
+
+  it('always injects the monitoring policy directing monitors to create_monitor', async () => {
+    const h = harness();
+    const result = await h.bootstrap.composeForSession(baseSession);
+    expect(result).toContain('## Monitoring & Automations');
+    expect(result).toContain('create_monitor');
+    expect(result).toContain('ai-project-studio');
+    // The standing policy leads the bootstrap, ahead of repository context.
+    expect(result.indexOf('## Monitoring & Automations')).toBeLessThan(
+      result.indexOf('## Repository Context'),
+    );
+  });
 });

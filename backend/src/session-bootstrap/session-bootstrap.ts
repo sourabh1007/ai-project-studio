@@ -29,6 +29,31 @@ const section = (heading: string, content: string): string =>
   `## ${heading}\n\n${content}`;
 
 /**
+ * Standing policy injected into every dev session so ANY request to observe
+ * something over time is captured as a real Studio monitor (and therefore shows
+ * up in — and is controllable from — the Monitors panel) instead of the CLI
+ * hand-rolling its own polling loop or firing a bespoke tracking skill that the
+ * app can never see. This is the app's only reliable lever over model/skill
+ * behaviour, so it is deliberately explicit and directive.
+ */
+const MONITORING_POLICY = [
+  'When the user asks you to monitor, watch, track, tail, poll, or be',
+  'notified/alerted when something changes or completes — a CI/CD pipeline,',
+  'build or release, a pull request, a deployment, an HTTP endpoint, a file, a',
+  'long-running command, or any recurring condition — you MUST register it as a',
+  'Studio monitor by calling the `create_monitor` tool on the',
+  '`ai-project-studio` MCP server. That is the only way the monitor appears in,',
+  'and can be paused/resumed/cancelled from, the Monitors panel. Do NOT instead',
+  'hand-roll your own polling loop, background shell `while` loop, `/every`',
+  'schedule, or a separate tracking/monitoring skill — the Studio engine owns',
+  'the polling once the monitor is registered and keeps running even after this',
+  'session ends. Pick an appropriate check, condition, and action, with `mode`',
+  '"short" to fire once or "long" to keep watching, call `create_monitor`',
+  'exactly once for the request, then report that monitoring is registered and',
+  'stop. This applies no matter how the user phrases the request.',
+].join(' ');
+
+/**
  * Resolves the repository context for a feature WITHOUT ever blocking a session
  * launch on it. Calling `ensureFresh` triggers (and keeps alive) the background
  * repository analysis, but analysis for a large repo can take a while. Rather
@@ -123,6 +148,7 @@ export function createSessionBootstrap(
         : deps.skills.instructionsForFeature(session.featureId);
 
       const sections = [
+        section('Monitoring & Automations', MONITORING_POLICY),
         context ? section('Repository Context', context) : '',
         shared,
         section(

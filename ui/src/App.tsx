@@ -172,9 +172,9 @@ export function App() {
       },
       {
         id: 'view-automations',
-        title: 'Open Automations',
+        title: 'Open Monitors',
         section: 'Navigation',
-        keywords: ['monitors', 'agents', 'pipelines'],
+        keywords: ['monitors', 'automations', 'agents', 'pipelines', 'watch'],
         run: goto('automations'),
       },
       {
@@ -297,8 +297,8 @@ export function App() {
               className={`activity-item ${
                 view === 'automations' ? 'is-active' : ''
               }`.trim()}
-              title="Automations"
-              aria-label="Automations"
+              title="Monitors"
+              aria-label="Monitors"
               onClick={() => setView('automations')}
             >
               <AutomationIcon size={22} />
@@ -370,7 +370,7 @@ export function App() {
                 : view === 'mcp'
                   ? 'MCP Servers'
                   : view === 'automations'
-                    ? 'Automations'
+                  ? 'Monitors'
                     : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>

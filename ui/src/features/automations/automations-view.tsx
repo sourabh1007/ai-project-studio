@@ -83,7 +83,7 @@ export function AutomationsView({ live }: { live: LiveState }) {
             glow
           />
           <div>
-            <h2 className="page-title">Automations</h2>
+            <h2 className="page-title">Monitors</h2>
             <p className="page-subtitle">
               Background monitors that watch a check on an interval and run an
               action when a condition matches. Short monitors fire once; long
@@ -110,7 +110,7 @@ export function AutomationsView({ live }: { live: LiveState }) {
       {!loading && automations.length === 0 && sortedSubagents.length === 0 && (
         <EmptyState
           icon={<AutomationIcon size={20} />}
-          title="No automations yet"
+          title="No monitors yet"
           description="Monitors run background checks and report back. Ask the in-session assistant to set one up, e.g. “monitor my CI pipeline and report when it finishes.”"
         />
       )}
