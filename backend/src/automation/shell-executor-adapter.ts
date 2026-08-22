@@ -8,13 +8,14 @@ import type { ShellExecutor } from './automation-ports.js';
  */
 export function createShellExecutor(timeoutMs: number): ShellExecutor {
   return {
-    exec(command, cwd) {
+    exec(command, cwd, signal) {
       return new Promise((resolve) => {
         exec(
           command,
           {
             cwd,
             timeout: timeoutMs,
+            signal,
             windowsHide: true,
             encoding: 'utf8',
             maxBuffer: 10 * 1024 * 1024,

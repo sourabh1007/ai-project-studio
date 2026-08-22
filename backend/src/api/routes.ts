@@ -72,6 +72,7 @@ import { createWorktreeRoutes } from './worktree-controller.js';
 import type { WorktreeService } from '../worktrees/worktree-contract.js';
 import { createAutomationRoutes } from './automation-controller.js';
 import type { AutomationService } from '../automation/automation-service.js';
+import type { AutomationScheduler } from '../automation/automation-scheduler.js';
 import type { SubagentService } from '../automation/subagent-service.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
 import { createContextRoutes } from './context-controller.js';
@@ -165,6 +166,8 @@ export interface ApiRoutesDeps {
   context: Pick<ContextService, 'get' | 'setContent' | 'remember'>;
   /** Monitors & automations engine surfaced in the Automations menu. */
   automations: AutomationService;
+  /** Live scheduler used to wake/abort lifecycle changes. */
+  automationScheduler?: Pick<AutomationScheduler, 'abort' | 'kick'>;
   /** Tracked background AI subagents. */
   subagents: SubagentService;
   /** Per-launch token accepted by Studio MCP control routes. */
@@ -225,6 +228,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createContextRoutes({ context: deps.context }),
     ...createAutomationRoutes({
       automations: deps.automations,
+      scheduler: deps.automationScheduler,
       subagents: deps.subagents,
       controlToken: deps.controlToken,
     }),

@@ -229,6 +229,8 @@ export interface SubagentRepo {
 export interface RunContext {
   automationId: string;
   origin: AutomationOrigin;
+  /** Aborted when a lifecycle command stops the in-flight tick. */
+  signal?: AbortSignal;
 }
 
 /** Runs a {@link CheckSpec} and returns a normalized {@link CheckResult}. */

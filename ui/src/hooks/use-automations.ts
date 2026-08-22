@@ -62,9 +62,8 @@ export function useAutomations(live: LiveState): AutomationsLive {
     };
   }, [api, nonce]);
 
-  // Merge the persisted snapshot with live events. Live wins for present ids;
-  // ids removed via automation.removed are dropped from the live map, so we
-  // exclude any snapshot id no longer present live only when it was ever live.
+  // Merge the persisted snapshot with live events. Newest updatedAt wins so a
+  // stale live event cannot mask a fresh reload after Pause/Cancel/Run now.
   const automations = mergeById(snapshot.automations, live.automations);
   const subagents = mergeById(snapshot.subagents, live.subagents);
 
@@ -82,5 +81,23 @@ function mergeById<T>(
   liveMap: Record<string, T>,
 ): T[] {
   const merged: Record<string, T> = { ...snapshot, ...liveMap };
+  for (const [id, snapshotValue] of Object.entries(snapshot)) {
+    const liveValue = liveMap[id];
+    if (!liveValue) {
+      continue;
+    }
+    if (updatedAt(snapshotValue) >= updatedAt(liveValue)) {
+      merged[id] = snapshotValue;
+    }
+  }
   return Object.values(merged);
+}
+
+function updatedAt(value: unknown): string {
+  return typeof value === 'object' &&
+    value !== null &&
+    'updatedAt' in value &&
+    typeof value.updatedAt === 'string'
+    ? value.updatedAt
+    : '';
 }

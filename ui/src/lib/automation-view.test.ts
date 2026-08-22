@@ -7,6 +7,7 @@ import {
   groupAutomations,
   sortSubagents,
   describeCheck,
+  intervalLabel,
   nextRunLabel,
   runCountLabel,
   originLabel,
@@ -84,8 +85,8 @@ describe('statusLabel', () => {
 
 describe('modeLabel', () => {
   it('labels both modes', () => {
-    expect(modeLabel('short')).toBe('Short');
-    expect(modeLabel('long')).toBe('Long');
+    expect(modeLabel('short')).toBe('One-time monitor');
+    expect(modeLabel('long')).toBe('Continuous monitor');
   });
 });
 
@@ -123,13 +124,27 @@ describe('sortSubagents', () => {
 
 describe('describeCheck', () => {
   it('describes shell with and without command', () => {
-    expect(describeCheck({ type: 'shell', command: 'ls' })).toBe('ls');
-    expect(describeCheck({ type: 'shell', command: '' })).toBe('Shell command');
-    expect(describeCheck({ type: 'shell' })).toBe('Shell command');
+    expect(describeCheck({ type: 'shell', command: 'ls' })).toBe('Shell check');
+    expect(describeCheck({ type: 'shell', command: 'powershell -c x' })).toBe(
+      'Shell check · PowerShell',
+    );
+    expect(describeCheck({ type: 'shell', command: '' })).toBe('Shell check');
+    expect(describeCheck({ type: 'shell' })).toBe('Shell check');
   });
   it('describes http with and without url', () => {
     expect(describeCheck({ type: 'http', url: 'http://x' })).toBe('http://x');
     expect(describeCheck({ type: 'http' })).toBe('HTTP endpoint');
+  });
+
+  describe('intervalLabel', () => {
+    it('formats seconds, minutes, and hours', () => {
+      expect(intervalLabel(1000)).toBe('Every 1 second');
+      expect(intervalLabel(30_000)).toBe('Every 30 seconds');
+      expect(intervalLabel(60_000)).toBe('Every 1 minute');
+      expect(intervalLabel(120_000)).toBe('Every 2 minutes');
+      expect(intervalLabel(3_600_000)).toBe('Every 1 hour');
+      expect(intervalLabel(7_200_000)).toBe('Every 2 hours');
+    });
   });
   it('describes ai with and without prompt', () => {
     expect(describeCheck({ type: 'ai', prompt: 'done?' })).toBe('done?');
@@ -174,11 +189,17 @@ describe('nextRunLabel', () => {
 
 describe('runCountLabel', () => {
   it('shows a capped count', () => {
-    expect(runCountLabel(automation({ runCount: 2, maxRuns: 5 }))).toBe('2/5 runs');
+    expect(runCountLabel(automation({ runCount: 2, maxRuns: 5 }))).toBe(
+      '2/5 triggers',
+    );
   });
   it('shows singular and plural uncapped counts', () => {
-    expect(runCountLabel(automation({ runCount: 1, maxRuns: null }))).toBe('1 run');
-    expect(runCountLabel(automation({ runCount: 3, maxRuns: null }))).toBe('3 runs');
+    expect(runCountLabel(automation({ runCount: 1, maxRuns: null }))).toBe(
+      '1 trigger',
+    );
+    expect(runCountLabel(automation({ runCount: 3, maxRuns: null }))).toBe(
+      '3 triggers',
+    );
   });
 });
 
@@ -186,7 +207,9 @@ describe('originLabel', () => {
   it('prefers feature, then session, then manual', () => {
     expect(originLabel({ featureId: 'f1', sessionId: 's1' })).toBe('Feature f1');
     expect(originLabel({ featureId: null, sessionId: 's1' })).toBe('Session s1');
-    expect(originLabel({ featureId: null, sessionId: null })).toBe('Manual');
+    expect(originLabel({ featureId: null, sessionId: null })).toBe(
+      'Studio monitor',
+    );
   });
 });
 

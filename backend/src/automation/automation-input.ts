@@ -224,6 +224,16 @@ function assertPlannedStep(value: unknown): PlannedStep {
   };
 }
 
+function optionalPlannedSteps(value: unknown): PlannedStep[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new ValidationError('plannedSteps must be an array');
+  }
+  return value.map(assertPlannedStep);
+}
+
 function bodyString(body: unknown, field: string): string {
   const input = asObject(body, 'body');
   return asString(input[field], field);
@@ -247,6 +257,7 @@ export function assertCreateAutomationInput(
     action: assertAction(input.action),
     intervalMs: optionalInterval(input.intervalMs),
     maxRuns: optionalMaxRuns(input.maxRuns),
+    plannedSteps: optionalPlannedSteps(input.plannedSteps),
   };
 }
 

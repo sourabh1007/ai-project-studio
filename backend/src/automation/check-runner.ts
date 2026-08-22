@@ -37,8 +37,9 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
   const runShell = async (
     command: string,
     cwd: string | undefined,
+    signal: AbortSignal | undefined,
   ): Promise<CheckResult> => {
-    const { code, stdout, stderr } = await deps.shell.exec(command, cwd);
+    const { code, stdout, stderr } = await deps.shell.exec(command, cwd, signal);
     const text = `${stdout}${stderr}`.trim();
     return {
       code,
@@ -52,8 +53,9 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
   const runHttp = async (
     url: string,
     method: 'GET' | 'POST',
+    signal: AbortSignal | undefined,
   ): Promise<CheckResult> => {
-    const { status, body } = await deps.http.fetch(url, method);
+    const { status, body } = await deps.http.fetch(url, method, signal);
     return {
       code: status,
       status: String(status),
@@ -72,6 +74,7 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       featureId: attributionFeatureId(ctx),
       prompt: `${prompt}\n\nAnswer strictly with "yes" or "no" on the first line.`,
       cwd,
+      signal: ctx.signal,
     });
     const verdict = isAffirmative(text) ? 1 : 0;
     return {
@@ -107,9 +110,9 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
     run(spec, ctx) {
       switch (spec.type) {
         case 'shell':
-          return runShell(spec.command, spec.cwd);
+          return runShell(spec.command, spec.cwd, ctx.signal);
         case 'http':
-          return runHttp(spec.url, spec.method ?? 'GET');
+          return runHttp(spec.url, spec.method ?? 'GET', ctx.signal);
         case 'ai':
           return runAi(spec.prompt, spec.cwd, ctx);
         case 'ci-pipeline':

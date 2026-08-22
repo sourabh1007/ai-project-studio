@@ -36,7 +36,7 @@ export function statusLabel(status: AutomationStatus): string {
 
 /** A short badge label for a monitor's mode. */
 export function modeLabel(mode: Automation['mode']): string {
-  return mode === 'short' ? 'Short' : 'Long';
+  return mode === 'short' ? 'One-time monitor' : 'Continuous monitor';
 }
 
 /** A human label for a subagent's status. */
@@ -94,9 +94,12 @@ export function sortSubagents(list: Subagent[]): Subagent[] {
 export function describeCheck(check: Automation['check']): string {
   switch (check.type) {
     case 'shell':
-      return typeof check.command === 'string' && check.command
-        ? check.command
-        : 'Shell command';
+      if (typeof check.command !== 'string' || !check.command) {
+        return 'Shell check';
+      }
+      return /\bpowershell(?:\.exe)?\b/i.test(check.command)
+        ? 'Shell check · PowerShell'
+        : 'Shell check';
     case 'http':
       return typeof check.url === 'string' && check.url
         ? check.url
@@ -112,6 +115,20 @@ export function describeCheck(check: Automation['check']): string {
     default:
       return check.type;
   }
+}
+
+/** A human interval label for monitor cards. */
+export function intervalLabel(intervalMs: number): string {
+  const seconds = Math.max(1, Math.round(intervalMs / 1000));
+  if (seconds < 60) {
+    return seconds === 1 ? 'Every 1 second' : `Every ${seconds} seconds`;
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return minutes === 1 ? 'Every 1 minute' : `Every ${minutes} minutes`;
+  }
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? 'Every 1 hour' : `Every ${hours} hours`;
 }
 
 /**
@@ -148,14 +165,14 @@ export function nextRunLabel(
 /** A run-count label, respecting an optional cap. */
 export function runCountLabel(automation: Automation): string {
   if (automation.maxRuns !== null) {
-    return `${automation.runCount}/${automation.maxRuns} runs`;
+    return `${automation.runCount}/${automation.maxRuns} triggers`;
   }
   return automation.runCount === 1
-    ? '1 run'
-    : `${automation.runCount} runs`;
+    ? '1 trigger'
+    : `${automation.runCount} triggers`;
 }
 
-/** The origin label for a card: feature, session, or manual. */
+/** The origin label for a card: feature, session, or Studio-level monitor. */
 export function originLabel(origin: Automation['origin']): string {
   if (origin.featureId) {
     return `Feature ${origin.featureId}`;
@@ -163,7 +180,7 @@ export function originLabel(origin: Automation['origin']): string {
   if (origin.sessionId) {
     return `Session ${origin.sessionId}`;
   }
-  return 'Manual';
+  return 'Studio monitor';
 }
 
 /** Whether a monitor can be paused (only while active). */

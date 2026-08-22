@@ -18,6 +18,8 @@ describe('copilot-env-mapper', () => {
     expect(env.EMPTY).toBeUndefined();
     expect(env.COPILOT_OTEL_ENABLED).toBe('true');
     expect(env.COPILOT_OTEL_FILE_EXPORTER_PATH).toBe('/tmp/usage.jsonl');
+    expect(env.STUDIO_SESSION_ID).toBe('sess-1');
+    expect(env.STUDIO_FEATURE_ID).toBe('feat-1');
     expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe(
       'feature.id=feat-1,session.id=sess-1,cw.session.kind=meta',
     );

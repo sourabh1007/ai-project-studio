@@ -8,9 +8,11 @@ import type { HttpProbe } from './automation-ports.js';
  */
 export function createHttpProbe(timeoutMs: number): HttpProbe {
   return {
-    async fetch(url, method) {
+    async fetch(url, method, signal) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const abort = () => controller.abort();
+      signal?.addEventListener('abort', abort, { once: true });
       try {
         const response = await fetch(url, {
           method,
@@ -25,6 +27,7 @@ export function createHttpProbe(timeoutMs: number): HttpProbe {
         };
       } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
       }
     },
   };

@@ -34,7 +34,12 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
     cwd: string | undefined,
     ctx: RunContext,
   ): Promise<{ text: string; sessionId: string }> =>
-    deps.ai.run({ featureId: attributionFeatureId(ctx), prompt, cwd });
+    deps.ai.run({
+      featureId: attributionFeatureId(ctx),
+      prompt,
+      cwd,
+      signal: ctx.signal,
+    });
 
   return {
     async run(spec, ctx): Promise<ActionResult> {
@@ -76,6 +81,7 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
           const { code, stdout, stderr } = await deps.shell.exec(
             spec.command,
             spec.cwd,
+            ctx.signal,
           );
           const output = truncate(`${stdout}${stderr}`);
           return {

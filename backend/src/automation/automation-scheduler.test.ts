@@ -6,7 +6,10 @@ import type {
   AutomationEventMap,
   CreateAutomationInput,
 } from './automation-service.js';
-import { createAutomationScheduler } from './automation-scheduler.js';
+import {
+  createAutomationScheduler,
+  describeWaitingProgress,
+} from './automation-scheduler.js';
 import type {
   ActionResult,
   Automation,
@@ -160,7 +163,9 @@ describe('automation-scheduler', () => {
     ).tick();
     const runs = repo.listRuns(a.id);
     expect(runs[0]?.detail).toBe('Checked: pending output');
-    expect(service.get(a.id).progress).toBe('Waiting · pending output');
+    expect(service.get(a.id).progress).toBe(
+      'Waiting for status "completed" · last result: pending output',
+    );
   });
 
   it('records a non-triggering check and reschedules a long monitor', async () => {
@@ -176,7 +181,43 @@ describe('automation-scheduler', () => {
     const after = service.get(a.id);
     expect(after.status).toBe('active');
     expect(after.nextRunAt).toBe(new Date(time + a.intervalMs).toISOString());
-    expect(after.progress).toContain('Waiting');
+    expect(after.progress).toBe(
+      'Waiting for status "completed" · last result: in_progress',
+    );
+  });
+
+  it.each([
+    [
+      { type: 'exit-code' as const, equals: 0 },
+      { ...okResult, code: 1, status: '1', text: 'still running' },
+      'Waiting for exit code 0 · last result: exit 1',
+    ],
+    [
+      { type: 'conclusion-equals' as const, value: 'success' },
+      { ...okResult, conclusion: 'failure' },
+      'Waiting for conclusion "success" · last result: completed',
+    ],
+    [
+      { type: 'text-contains' as const, value: 'done' },
+      { ...okResult, text: 'not yet' },
+      'Waiting for text containing "done" · last result: completed',
+    ],
+    [
+      { type: 'ai-verdict' as const },
+      { ...okResult, code: 0, status: 'no' },
+      'Waiting for an affirmative AI verdict · last result: no',
+    ],
+  ])('records meaningful waiting progress for %s', async (condition, result, progress) => {
+    const a = dueAutomation({ condition });
+    await scheduler(checkReturning(result), actionReturning(action)).tick();
+    expect(service.get(a.id).progress).toBe(progress);
+  });
+
+  it('describes the always condition for defensive callers', () => {
+    const a = dueAutomation({ condition: { type: 'always' } });
+    expect(describeWaitingProgress(a, { ...okResult, status: 'pending' })).toBe(
+      'Waiting for the condition · last result: pending',
+    );
   });
 
   it('fires the action for a matching long monitor and reschedules', async () => {
@@ -373,6 +414,67 @@ describe('automation-scheduler', () => {
       scheduler(checks, actionReturning(action)).tick(),
     ).resolves.toBeUndefined();
     expect(service.list().some((x) => x.id === a.id)).toBe(false);
+  });
+
+  it('aborts an in-flight check when requested', async () => {
+    const a = dueAutomation();
+    let signal: AbortSignal | undefined;
+    let resolveCheck!: () => void;
+    const checks: CheckRunner = {
+      run: (_spec, ctx) =>
+        new Promise<CheckResult>((resolve) => {
+          signal = ctx.signal;
+          resolveCheck = () =>
+            resolve({ ...okResult, status: 'in_progress' });
+        }),
+    };
+    const sched = scheduler(checks, actionReturning(action));
+    const running = sched.tick();
+    await Promise.resolve();
+    service.cancel(a.id);
+    sched.abort(a.id);
+    expect(signal?.aborted).toBe(true);
+    resolveCheck();
+    await running;
+    expect(service.get(a.id).status).toBe('cancelled');
+    expect(repo.listRuns(a.id)).toHaveLength(0);
+  });
+
+  it('kick starts one due automation immediately', async () => {
+    const a = dueAutomation();
+    const checks = checkReturning({ ...okResult, occurrenceKey: 'run-1' });
+    const sched = scheduler(checks, actionReturning(action));
+    sched.kick(a.id);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(service.get(a.id).runCount).toBe(1);
+  });
+
+  it('kick ignores missing, future, and already running automations', async () => {
+    const a = service.create({
+      name: 'Future',
+      mode: 'long',
+      check: { type: 'shell', command: 'echo' },
+      condition: { type: 'always' },
+      action: { type: 'report', prompt: 'go' },
+    });
+    let checksRun = 0;
+    const checks: CheckRunner = {
+      run: async () => {
+        checksRun++;
+        return okResult;
+      },
+    };
+    const sched = scheduler(checks, actionReturning(action));
+    sched.kick('missing');
+    sched.kick(a.id);
+    await Promise.resolve();
+    expect(checksRun).toBe(0);
+    service.runNow(a.id);
+    sched.kick(a.id);
+    sched.kick(a.id);
+    await Promise.resolve();
+    expect(checksRun).toBe(1);
   });
 
   it('start schedules ticks and stop clears the loop (idempotent)', () => {

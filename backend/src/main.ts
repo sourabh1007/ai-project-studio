@@ -1825,6 +1825,7 @@ function main(): void {
       worktrees: worktreeService,
       context: contextService,
       automations: automationService,
+      automationScheduler,
       subagents: subagentService,
       controlToken: studioControlToken,
       logger,

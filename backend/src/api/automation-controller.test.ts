@@ -130,7 +130,10 @@ describe('createAutomationRoutes', () => {
     ['post /automations/:id/run', 'runNow'],
   ])('drives lifecycle route %s', async (signature, method) => {
     const { automations, subagents } = services();
-    const routes = routeMap(createAutomationRoutes({ automations, subagents }));
+    const scheduler = { abort: vi.fn(), kick: vi.fn() };
+    const routes = routeMap(
+      createAutomationRoutes({ automations, subagents, scheduler }),
+    );
     const res = await routes.get(signature)!.handler({
       params: { id: 'a1' },
       query: {},
@@ -138,6 +141,14 @@ describe('createAutomationRoutes', () => {
     });
     expect(res.status).toBe(200);
     expect(automations[method]).toHaveBeenCalledWith('a1');
+    if (method === 'pause' || method === 'cancel') {
+      expect(scheduler.abort).toHaveBeenCalledWith('a1');
+    } else if (method === 'runNow') {
+      expect(scheduler.kick).toHaveBeenCalledWith('a1');
+    } else {
+      expect(scheduler.abort).not.toHaveBeenCalled();
+      expect(scheduler.kick).not.toHaveBeenCalled();
+    }
   });
 
   it('updates automation progress', async () => {
@@ -204,7 +215,10 @@ describe('createAutomationRoutes', () => {
 
   it('deletes an automation and returns its id', async () => {
     const { automations, subagents } = services();
-    const routes = routeMap(createAutomationRoutes({ automations, subagents }));
+    const scheduler = { abort: vi.fn(), kick: vi.fn() };
+    const routes = routeMap(
+      createAutomationRoutes({ automations, subagents, scheduler }),
+    );
     const res = await routes.get('delete /automations/:id')!.handler({
       params: { id: 'a1' },
       query: {},
@@ -212,5 +226,6 @@ describe('createAutomationRoutes', () => {
     });
     expect(res).toEqual({ status: 200, body: { id: 'a1' } });
     expect(automations.remove).toHaveBeenCalledWith('a1');
+    expect(scheduler.abort).toHaveBeenCalledWith('a1');
   });
 });

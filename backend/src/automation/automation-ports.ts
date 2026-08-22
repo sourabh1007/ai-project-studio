@@ -12,6 +12,7 @@ export interface ShellExecutor {
   exec(
     command: string,
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
@@ -20,6 +21,7 @@ export interface HttpProbe {
   fetch(
     url: string,
     method: 'GET' | 'POST',
+    signal?: AbortSignal,
   ): Promise<{ status: number; body: string }>;
 }
 
@@ -29,6 +31,7 @@ export interface AiInvoker {
     featureId: string;
     prompt: string;
     cwd?: string;
+    signal?: AbortSignal;
   }): Promise<{ text: string; sessionId: string }>;
 }
 

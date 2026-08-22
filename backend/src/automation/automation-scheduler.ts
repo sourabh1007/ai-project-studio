@@ -24,6 +24,10 @@ export interface AutomationSchedulerDeps {
 export interface AutomationScheduler {
   /** Processes every automation whose next run is due. */
   tick(): Promise<void>;
+  /** Wakes a single due automation without waiting for the next interval tick. */
+  kick(id: string): void;
+  /** Aborts a currently running check/action for a lifecycle change. */
+  abort(id: string): void;
   /** Reschedules persisted active automations so they resume after restart. */
   resume(): void;
   /** Begins the background tick loop. */
@@ -51,6 +55,31 @@ async function runPool<T>(
   await Promise.all(workers);
 }
 
+export function describeWaitingProgress(
+  automation: Automation,
+  checkResult: CheckResult,
+): string {
+  const condition =
+    automation.condition.type === 'status-equals'
+      ? `status "${automation.condition.value}"`
+      : automation.condition.type === 'conclusion-equals'
+        ? `conclusion "${automation.condition.value}"`
+        : automation.condition.type === 'exit-code'
+          ? `exit code ${automation.condition.equals}`
+          : automation.condition.type === 'text-contains'
+            ? `text containing "${automation.condition.value}"`
+            : automation.condition.type === 'ai-verdict'
+              ? 'an affirmative AI verdict'
+              : 'the condition';
+  const signal =
+    automation.check.type === 'shell' &&
+    checkResult.status !== null &&
+    /^-?\d+$/.test(checkResult.status)
+      ? `exit ${checkResult.status}`
+      : (checkResult.status ?? checkResult.text);
+  return `Waiting for ${condition} · last result: ${signal}`;
+}
+
 /**
  * Background engine for **Monitors & Automations**. On each {@link tick} it runs
  * every due monitor's check, evaluates its condition, and — when the condition
@@ -63,6 +92,7 @@ export function createAutomationScheduler(
   deps: AutomationSchedulerDeps,
 ): AutomationScheduler {
   const inFlight = new Set<string>();
+  const abortControllers = new Map<string, AbortController>();
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const rescheduleAt = (automation: Automation): string =>
@@ -101,6 +131,9 @@ export function createAutomationScheduler(
     });
   };
 
+  const isStillActive = (id: string): boolean =>
+    deps.repo.get(id)?.status === 'active';
+
   /**
    * Parks a monitor in `needs-auth` (stops polling) with a clear login prompt
    * when a check hits an authentication wall, so the user can sign in and resume
@@ -131,12 +164,14 @@ export function createAutomationScheduler(
     automation: Automation,
     startedAt: string,
     checkResult: CheckResult,
+    signal: AbortSignal,
   ): Promise<void> => {
     let action;
     try {
       action = await deps.actions.run(automation.action, {
         automationId: automation.id,
         origin: automation.origin,
+        signal,
       });
     } catch (error) {
       const message = errorMessage(error);
@@ -180,13 +215,21 @@ export function createAutomationScheduler(
 
   const runOnce = async (automation: Automation): Promise<void> => {
     inFlight.add(automation.id);
+    const controller = new AbortController();
+    abortControllers.set(automation.id, controller);
     const startedAt = deps.clock.isoNow();
     try {
+      persistIfActive({
+        ...automation,
+        nextRunAt: null,
+        progress: 'Checking now',
+      });
       let checkResult: CheckResult;
       try {
         checkResult = await deps.checks.run(automation.check, {
           automationId: automation.id,
           origin: automation.origin,
+          signal: controller.signal,
         });
       } catch (error) {
         const authMessage = detectAuthFromError(error);
@@ -207,6 +250,10 @@ export function createAutomationScheduler(
           nextRunAt: rescheduleAt(automation),
           progress: `Check failed: ${message}`,
         });
+        return;
+      }
+
+      if (controller.signal.aborted || !isStillActive(automation.id)) {
         return;
       }
 
@@ -235,14 +282,15 @@ export function createAutomationScheduler(
           ...automation,
           lastCheckedAt: startedAt,
           nextRunAt: rescheduleAt(automation),
-          progress: `Waiting · ${checkResult.status ?? checkResult.text}`,
+          progress: describeWaitingProgress(automation, checkResult),
         });
         return;
       }
 
-      await fireAction(automation, startedAt, checkResult);
+      await fireAction(automation, startedAt, checkResult, controller.signal);
     } finally {
       inFlight.delete(automation.id);
+      abortControllers.delete(automation.id);
     }
   };
 
@@ -257,6 +305,16 @@ export function createAutomationScheduler(
       const now = deps.clock.now().getTime();
       const due = deps.service.list().filter((a) => isDue(a, now));
       await runPool(due, deps.config.maxConcurrentChecks, runOnce);
+    },
+    kick(id) {
+      const automation = deps.repo.get(id);
+      if (automation === null || !isDue(automation, deps.clock.now().getTime())) {
+        return;
+      }
+      void runOnce(automation).catch(() => undefined);
+    },
+    abort(id) {
+      abortControllers.get(id)?.abort();
     },
     resume() {
       const now = deps.clock.isoNow();

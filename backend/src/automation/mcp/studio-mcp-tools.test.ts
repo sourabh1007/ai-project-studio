@@ -3,6 +3,7 @@ import {
   STUDIO_CONTROL_TOKEN_HEADER,
   asToolResult,
   createStudioApiClient,
+  envOrigin,
   createStudioMcpToolHandlers,
   registerStudioMcpTools,
   type StudioApiRequest,
@@ -73,6 +74,16 @@ describe('createStudioApiClient', () => {
 });
 
 describe('createStudioMcpToolHandlers', () => {
+  it('builds a default origin from Studio session environment variables', () => {
+    expect(
+      envOrigin({ STUDIO_SESSION_ID: ' s1 ', STUDIO_FEATURE_ID: ' f1 ' }),
+    ).toEqual({ sessionId: 's1', featureId: 'f1' });
+    expect(envOrigin({ STUDIO_SESSION_ID: '', STUDIO_FEATURE_ID: 'f1' })).toEqual(
+      { sessionId: null, featureId: 'f1' },
+    );
+    expect(envOrigin({})).toBeUndefined();
+  });
+
   it('maps each tool to the expected Studio API request', async () => {
     const requests: StudioApiRequest[] = [];
     const handlers = createStudioMcpToolHandlers({
@@ -80,7 +91,7 @@ describe('createStudioMcpToolHandlers', () => {
         requests.push(input);
         return { ok: true };
       },
-    });
+    }, { sessionId: 's1', featureId: 'f1' });
     const step = { id: 's1', label: 'Start', status: 'pending' as const, detail: null };
     await handlers.createMonitor({
       name: 'Monitor',
@@ -108,6 +119,7 @@ describe('createStudioMcpToolHandlers', () => {
           check: { type: 'ai', prompt: 'ready?' },
           condition: { type: 'always' },
           action: { type: 'report', prompt: 'summarize' },
+          origin: { sessionId: 's1', featureId: 'f1' },
         },
       },
       {
@@ -132,6 +144,30 @@ describe('createStudioMcpToolHandlers', () => {
       },
       { method: 'GET', path: '/automations' },
     ]);
+  });
+
+  it('preserves an explicit monitor origin over the default', async () => {
+    const requests: StudioApiRequest[] = [];
+    const handlers = createStudioMcpToolHandlers(
+      {
+        request: async (input) => {
+          requests.push(input);
+          return { ok: true };
+        },
+      },
+      { sessionId: 'default-session', featureId: 'default-feature' },
+    );
+    await handlers.createMonitor({
+      name: 'Monitor',
+      mode: 'long',
+      origin: { sessionId: 's1' },
+      check: { type: 'shell', command: 'echo' },
+      condition: { type: 'always' },
+      action: { type: 'report', prompt: 'go' },
+    });
+    expect(requests[0]?.body).toMatchObject({
+      origin: { sessionId: 's1' },
+    });
   });
 });
 

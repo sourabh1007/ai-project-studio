@@ -17,6 +17,8 @@ export function buildCopilotEnv(
   }
   env.COPILOT_OTEL_ENABLED = 'true';
   env.COPILOT_OTEL_FILE_EXPORTER_PATH = spec.otelFilePath;
+  env.STUDIO_SESSION_ID = spec.sessionId;
+  env.STUDIO_FEATURE_ID = spec.featureId;
   env.OTEL_RESOURCE_ATTRIBUTES = [
     `feature.id=${spec.featureId}`,
     `session.id=${spec.sessionId}`,

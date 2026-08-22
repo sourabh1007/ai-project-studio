@@ -10,6 +10,7 @@ import {
   modeLabel,
   subagentStatusLabel,
   describeCheck,
+  intervalLabel,
   nextRunLabel,
   runCountLabel,
   originLabel,
@@ -200,7 +201,14 @@ function AutomationCard({
 
       <div className="automation-meta">
         <span title="Origin">{originLabel(automation.origin)}</span>
+        <span>{intervalLabel(automation.intervalMs)}</span>
         <span>{runCountLabel(automation)}</span>
+        {automation.lastCheckedAt && (
+          <span>
+            Last checked{' '}
+            {new Date(automation.lastCheckedAt).toLocaleTimeString()}
+          </span>
+        )}
         {countdown && (
           <span className="automation-countdown">
             <ClockIcon size={12} /> {countdown}

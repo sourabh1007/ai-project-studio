@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { AutomationOrigin } from '../automation-contract.js';
 
 export const STUDIO_CONTROL_TOKEN_HEADER = 'x-studio-control-token';
 
@@ -198,10 +199,37 @@ export function asToolResult(value: unknown): CallToolResult {
   };
 }
 
-export function createStudioMcpToolHandlers(api: StudioApiClient) {
+export function envOrigin(
+  env: Record<string, string | undefined>,
+): AutomationOrigin | undefined {
+  const sessionId = env.STUDIO_SESSION_ID?.trim() || null;
+  const featureId = env.STUDIO_FEATURE_ID?.trim() || null;
+  return sessionId || featureId ? { sessionId, featureId } : undefined;
+}
+
+type CreateMonitorToolInput = z.infer<z.ZodObject<typeof createMonitorSchema>>;
+
+function withDefaultOrigin(
+  input: CreateMonitorToolInput,
+  defaultOrigin: AutomationOrigin | undefined,
+): CreateMonitorToolInput {
+  if (input.origin !== undefined || defaultOrigin === undefined) {
+    return input;
+  }
+  return { ...input, origin: defaultOrigin };
+}
+
+export function createStudioMcpToolHandlers(
+  api: StudioApiClient,
+  defaultOrigin = envOrigin(process.env),
+) {
   return {
-    createMonitor: (input: z.infer<z.ZodObject<typeof createMonitorSchema>>) =>
-      api.request({ method: 'POST', path: '/automations', body: input }),
+    createMonitor: (input: CreateMonitorToolInput) =>
+      api.request({
+        method: 'POST',
+        path: '/automations',
+        body: withDefaultOrigin(input, defaultOrigin),
+      }),
     updateMonitorProgress: (input: z.infer<z.ZodObject<typeof progressSchema>>) =>
       api.request({
         method: 'POST',

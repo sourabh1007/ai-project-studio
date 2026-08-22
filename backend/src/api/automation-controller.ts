@@ -1,5 +1,6 @@
 import type { Route } from './http-contract.js';
 import type { AutomationService } from '../automation/automation-service.js';
+import type { AutomationScheduler } from '../automation/automation-scheduler.js';
 import type { SubagentService } from '../automation/subagent-service.js';
 import { ValidationError } from '../kernel/error-types.js';
 import {
@@ -14,6 +15,7 @@ import {
 export interface AutomationControllerDeps {
   automations: AutomationService;
   subagents: SubagentService;
+  scheduler?: Pick<AutomationScheduler, 'abort' | 'kick'>;
   controlToken?: string;
 }
 
@@ -124,10 +126,11 @@ export function createAutomationRoutes(
     {
       method: 'post',
       path: '/automations/:id/pause',
-      handler: (req) => ({
-        status: 200,
-        body: deps.automations.pause(req.params.id),
-      }),
+      handler: (req) => {
+        const body = deps.automations.pause(req.params.id);
+        deps.scheduler?.abort(req.params.id);
+        return { status: 200, body };
+      },
     },
     {
       method: 'post',
@@ -140,18 +143,20 @@ export function createAutomationRoutes(
     {
       method: 'post',
       path: '/automations/:id/cancel',
-      handler: (req) => ({
-        status: 200,
-        body: deps.automations.cancel(req.params.id),
-      }),
+      handler: (req) => {
+        const body = deps.automations.cancel(req.params.id);
+        deps.scheduler?.abort(req.params.id);
+        return { status: 200, body };
+      },
     },
     {
       method: 'post',
       path: '/automations/:id/run',
-      handler: (req) => ({
-        status: 200,
-        body: deps.automations.runNow(req.params.id),
-      }),
+      handler: (req) => {
+        const body = deps.automations.runNow(req.params.id);
+        deps.scheduler?.kick(req.params.id);
+        return { status: 200, body };
+      },
     },
     {
       method: 'post',
@@ -194,6 +199,7 @@ export function createAutomationRoutes(
       path: '/automations/:id',
       handler: (req) => {
         deps.automations.remove(req.params.id);
+        deps.scheduler?.abort(req.params.id);
         return { status: 200, body: { id: req.params.id } };
       },
     },

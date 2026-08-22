@@ -24,6 +24,7 @@ describe('assertCreateAutomationInput', () => {
     expect(input.origin).toBeUndefined();
     expect(input.intervalMs).toBeUndefined();
     expect(input.maxRuns).toBeUndefined();
+    expect(input.plannedSteps).toBeUndefined();
   });
 
   describe('automation control input validators', () => {
@@ -292,6 +293,23 @@ describe('assertCreateAutomationInput', () => {
       expect(() =>
         assertCreateAutomationInput({ ...base, maxRuns: 1.5 }),
       ).toThrow(/maxRuns/);
+    });
+  });
+
+  describe('plannedSteps', () => {
+    it('accepts planned steps during monitor creation', () => {
+      const steps = [
+        { id: 's1', label: 'Check build', status: 'pending' as const, detail: null },
+      ];
+      expect(
+        assertCreateAutomationInput({ ...base, plannedSteps: steps })
+          .plannedSteps,
+      ).toEqual(steps);
+    });
+    it('rejects a malformed plannedSteps value', () => {
+      expect(() =>
+        assertCreateAutomationInput({ ...base, plannedSteps: 'x' }),
+      ).toThrow(/plannedSteps/);
     });
   });
 
