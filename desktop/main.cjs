@@ -356,7 +356,9 @@ function createWindow(loadUrl) {
 
   // Open external links in the system browser, keep app links in-window.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (ipcInput.isExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
     return { action: 'deny' };
   });
 
@@ -372,7 +374,9 @@ function createWindow(loadUrl) {
     }
     if (!sameOrigin) {
       event.preventDefault();
-      void shell.openExternal(url);
+      if (ipcInput.isExternalUrl(url)) {
+        void shell.openExternal(url);
+      }
     }
   });
 
@@ -483,9 +487,9 @@ async function bootstrap() {
     }
   });
 
-  // Open an external https link (e.g. the GitHub device-flow verification page)
-  // in the user's default browser. Restricted to http/https so the renderer
-  // can't ask the OS to launch arbitrary protocols.
+  // Open an external link (e.g. the GitHub device-flow verification page) in
+  // the user's default browser. Restricted to web/mail protocols so the
+  // renderer can't ask the OS to launch arbitrary protocols.
   ipcMain.on('link:open', (event, url) => {
     if (!isTrustedSender(event)) {
       return;

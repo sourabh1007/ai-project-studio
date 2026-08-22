@@ -2,6 +2,20 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+function isExternalUrl(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return false;
+  }
+  try {
+    const protocol = new URL(value).protocol;
+    return (
+      protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Minimal, safe bridge exposed to the renderer. Lets the web UI tell the main
  * process which theme is active so the native window chrome (title bar and
@@ -19,7 +33,7 @@ contextBridge.exposeInMainWorld('desktop', {
     }
   },
   openExternal(url) {
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+    if (isExternalUrl(url)) {
       ipcRenderer.send('link:open', url);
     }
   },

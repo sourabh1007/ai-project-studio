@@ -47,9 +47,19 @@ function isRevealablePath(value) {
   return isPosixAbsolute || isWindowsDrive || isWindowsUnc;
 }
 
-/** True when `value` is an http(s) URL safe to hand to `shell.openExternal`. */
+/** True when `value` is a URL safe to hand to `shell.openExternal`. */
 function isExternalUrl(value) {
-  return isBoundedString(value) && /^https?:\/\//i.test(value);
+  if (!isBoundedString(value)) {
+    return false;
+  }
+  try {
+    const protocol = new URL(value).protocol;
+    return (
+      protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:'
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** True when `value` is acceptable clipboard text. */

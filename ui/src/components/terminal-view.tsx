@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import type { ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { resolveApiBase } from '../lib/api-base.js';
@@ -65,6 +66,7 @@ function xtermTheme(mode: ThemeMode): ITheme {
 
 /** The subset of the Electron preload bridge this component uses. */
 interface DesktopClipboard {
+  openExternal?: (url: string) => void;
   copyText?: (text: string) => void;
   readText?: () => Promise<string>;
   readImage?: () => Promise<string>;
@@ -72,6 +74,29 @@ interface DesktopClipboard {
 
 function desktopBridge(): DesktopClipboard | undefined {
   return (window as unknown as { desktop?: DesktopClipboard }).desktop;
+}
+
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+    return (
+      protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function openExternal(url: string): void {
+  if (!isAllowedExternalUrl(url)) {
+    return;
+  }
+  const bridge = desktopBridge();
+  if (bridge?.openExternal) {
+    bridge.openExternal(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 /**
@@ -230,11 +255,17 @@ export function TerminalView({
       lineHeight: 1.2,
       letterSpacing: 0,
       allowProposedApi: true,
+      linkHandler: {
+        activate: (_event, uri) => openExternal(uri),
+        allowNonHttpProtocols: true,
+      },
       scrollback: 5000,
       theme: xtermTheme(themeModeRef.current),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const webLinks = new WebLinksAddon((_event, uri) => openExternal(uri));
+    term.loadAddon(webLinks);
     term.open(host);
     termRef.current = term;
 
@@ -547,6 +578,7 @@ export function TerminalView({
       ws.onmessage = null;
       ws.close();
       webgl?.dispose();
+      webLinks.dispose();
       term.dispose();
       termRef.current = null;
     };
