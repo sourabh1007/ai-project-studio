@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildPerspectiveEvidenceFloor } from './review-board-evidence.js';
+import {
+  buildPerspectiveEvidenceFloor,
+  buildProblemSolutionFloor,
+  buildSolutionSummary,
+} from './review-board-evidence.js';
 import type {
   ProjectModel,
   ReviewFinding,
@@ -151,5 +155,111 @@ describe('buildPerspectiveEvidenceFloor', () => {
     expect(floor.rationale[1].detail).toContain('No changed files were resolved');
     expect(floor.checks).toHaveLength(1);
     expect(floor.checks[0].status).toBe('na');
+  });
+});
+
+describe('buildProblemSolutionFloor', () => {
+  it('frames a clean verdict as an aligned problem/solution narrative', () => {
+    const floor = buildProblemSolutionFloor({
+      perspective: perspective([]),
+      problemStatement: 'Users cannot cache reads, so latency is high.',
+      problemSufficient: true,
+      solutionSummary: 'The change spans 2 file(s) (2 code, 0 test) across Cache.',
+    });
+    expect(floor.rationale.map((r) => r.label)).toEqual([
+      'Problem',
+      'Solution implemented',
+      'Why they align',
+      'Verdict',
+    ]);
+    expect(floor.rationale[0].detail).toBe(
+      'Users cannot cache reads, so latency is high.',
+    );
+    expect(floor.rationale[2].detail).toContain('align');
+    expect(floor.summary).toContain('Problem:');
+    expect(floor.summary).toContain('approved / low');
+    // No file-level line-by-line audit for this lens.
+    expect(floor.checks).toEqual([]);
+  });
+
+  it('records gaps and a non-aligned narrative when findings exist', () => {
+    const floor = buildProblemSolutionFloor({
+      perspective: perspective([finding('Retry path unaddressed')], {
+        status: 'needs-review',
+        risk: 'medium',
+      }),
+      problemStatement: 'p',
+      problemSufficient: true,
+      solutionSummary: 'The change spans 1 file(s) (1 code, 0 test).',
+    });
+    expect(floor.rationale[2].detail).toContain('does not fully solve');
+    expect(floor.rationale[2].detail).toContain('Retry path unaddressed');
+    expect(floor.summary).toContain('do not fully align');
+    expect(floor.summary).toContain('needs-review / medium');
+  });
+
+  it('pluralises multiple gaps', () => {
+    const floor = buildProblemSolutionFloor({
+      perspective: perspective([finding('A'), finding('B')]),
+      problemStatement: 'p',
+      problemSufficient: true,
+      solutionSummary: 's',
+    });
+    expect(floor.rationale[2].detail).toContain('2 gaps were');
+  });
+
+  it('notes when no self-contained problem statement was distilled', () => {
+    const floor = buildProblemSolutionFloor({
+      perspective: perspective([]),
+      problemStatement: null,
+      problemSufficient: false,
+      solutionSummary: 's',
+    });
+    expect(floor.rationale[0].detail).toContain(
+      'did not carry a self-contained problem statement',
+    );
+  });
+
+  it('treats an insufficient problem statement as missing', () => {
+    const floor = buildProblemSolutionFloor({
+      perspective: perspective([]),
+      problemStatement: 'some text',
+      problemSufficient: false,
+      solutionSummary: 's',
+    });
+    expect(floor.rationale[0].detail).toContain(
+      'did not carry a self-contained problem statement',
+    );
+  });
+});
+
+describe('buildSolutionSummary', () => {
+  it('notes when nothing changed', () => {
+    expect(
+      buildSolutionSummary({ changedCount: 0, codeCount: 0, components: [] }),
+    ).toContain('No changed files were resolved');
+  });
+
+  it('splits code/test and lists touched components', () => {
+    expect(
+      buildSolutionSummary({
+        changedCount: 3,
+        codeCount: 2,
+        components: ['Cache', 'Config'],
+      }),
+    ).toBe('The change spans 3 file(s) (2 code, 1 test) across Cache, Config.');
+  });
+
+  it('omits the component clause when none are known', () => {
+    expect(
+      buildSolutionSummary({ changedCount: 1, codeCount: 1, components: [] }),
+    ).toBe('The change spans 1 file(s) (1 code, 0 test).');
+  });
+
+  it('caps the component list at six with an overflow marker', () => {
+    const components = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    expect(
+      buildSolutionSummary({ changedCount: 8, codeCount: 8, components }),
+    ).toContain('across a, b, c, d, e, f, +2 more.');
   });
 });

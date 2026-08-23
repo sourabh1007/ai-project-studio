@@ -224,6 +224,170 @@ export function buildPerspectivePrompt(input: {
     'Do not add prose outside the code block.',
   ].join('\n');
 }
+/** The id of the Problem ↔ Solution lens, which gets a dedicated prompt. */
+export const PROBLEM_SOLUTION_PERSPECTIVE_ID = 'problem-solution';
+
+/**
+ * The minimal per-file signal the solution digest needs. Kept structural (no
+ * import from the pr-review contract) so this pure module stays decoupled.
+ */
+export interface SolutionNode {
+  path: string;
+  module: string | null;
+  category: 'code' | 'test';
+  kind: 'changed' | 'boundary';
+  changeKind: string | null;
+  /** What this PR changed in the file (distilled), when known. */
+  whatChanged: string;
+  /** What the file does independent of this PR, when known. */
+  whatItDoes: string;
+  /** The per-file unified diff, when available. */
+  diff: string;
+}
+
+/** The best available per-file signal describing what the change did. */
+function solutionNodeSignal(node: SolutionNode): string | null {
+  const whatChanged = node.whatChanged.trim();
+  if (whatChanged) return whatChanged;
+  const diff = node.diff.trim();
+  if (diff) return clamp(diff, 500);
+  const whatItDoes = node.whatItDoes.trim();
+  if (whatItDoes) return `Existing role: ${whatItDoes}`;
+  return null;
+}
+
+/**
+ * A general, holistic digest of what the PR *implements* — grouped material the
+ * model synthesizes into a plain-English "solution implemented" narrative. It
+ * deliberately carries per-file signal (distilled `whatChanged` or a bounded
+ * diff) as raw evidence, but is fed to a prompt that forbids file-by-file
+ * grading, so the model produces a general assessment rather than a file audit.
+ */
+export function buildSolutionDigest(input: {
+  title: string;
+  nodes: readonly SolutionNode[];
+  maxChars: number;
+}): string {
+  const changed = input.nodes.filter((n) => n.kind === 'changed');
+  if (changed.length === 0) {
+    return '(no changed files were resolved from the change graph)';
+  }
+  const code = changed.filter((n) => n.category === 'code').length;
+  const test = changed.length - code;
+  const lines: string[] = [
+    `PR "${input.title}" changes ${changed.length} file(s) — ${code} code, ${test} test.`,
+    '',
+  ];
+  const shown = changed.slice(0, 60);
+  for (const node of shown) {
+    const suffix = node.changeKind ? ` — ${node.changeKind}` : '';
+    const module = node.module ? ` (${node.module})` : '';
+    lines.push(`- ${node.path}${module}${suffix}`);
+    const signal = solutionNodeSignal(node);
+    if (signal) lines.push(`  ${signal}`);
+  }
+  if (changed.length > shown.length) {
+    lines.push(`- …and ${changed.length - shown.length} more changed file(s)`);
+  }
+  return clamp(lines.join('\n'), input.maxChars);
+}
+
+/**
+ * Build the dedicated prompt for the **Problem ↔ Solution** lens. Unlike the
+ * generic per-perspective prompt (which demands file/symbol-grounded findings),
+ * this asks for a *general*, plain-English judgement: what problem the PR
+ * targets (from the description + any linked work item + the distilled problem
+ * statement), what the change implements as a solution, and — the crux —
+ * whether the solution actually solves that problem. It never grades files one
+ * by one; the verdict is about problem/solution alignment as a whole.
+ */
+export function buildProblemSolutionPrompt(input: {
+  board: ReviewBoard;
+  perspective: ReviewPerspective;
+  description: string | null;
+  problemStatement: string | null;
+  problemSufficient: boolean;
+  solutionDigest: string;
+  config: { maxContextChars: number };
+}): string {
+  const { board } = input;
+  const description = clamp(
+    (input.description ?? '').trim() || '(no description provided)',
+    input.config.maxContextChars,
+  );
+  const distilled =
+    input.problemStatement && input.problemStatement.trim() && input.problemSufficient
+      ? clamp(input.problemStatement.trim(), input.config.maxContextChars)
+      : '(no self-contained problem statement could be distilled from the ' +
+        'description — derive the problem from the description above and any ' +
+        'linked work item it references)';
+  return [
+    'You are a staff engineer deciding one thing: does this pull request\'s',
+    'solution actually solve the problem it set out to solve? Judge the change',
+    'as a whole — a general, plain-English assessment. Do NOT evaluate files',
+    'one by one and do NOT produce a file-by-file audit; this lens is about the',
+    'problem and the solution, not individual lines.',
+    '',
+    '## Pull request',
+    `- Number: #${board.pull.number}`,
+    `- Title: ${board.pull.title}`,
+    `- Files changed: ${board.changedFiles}`,
+    '',
+    '## The problem this PR targets',
+    'Raw PR description (may embed a linked work item):',
+    description,
+    '',
+    'Distilled problem statement:',
+    distilled,
+    '',
+    '## What the PR implements (the solution)',
+    'Synthesize a GENERAL description of the solution from the change below —',
+    'what capability or behaviour it introduces or fixes. Do not list files.',
+    input.solutionDigest,
+    '',
+    '## What to decide',
+    '1. Problem: state, in plain language, the problem the PR is solving (from',
+    '   the description + linked work item). Be specific about the user-facing',
+    '   or system need — not a summary of the code.',
+    '2. Solution implemented: describe generally what the change does to address',
+    '   it — the approach, not a file list.',
+    '3. Why they align: explain concretely why the solution does (or does not)',
+    '   solve the stated problem. Call out any unaddressed requirement, scope',
+    '   gap, or mismatch. This is the reasoning the reader most needs.',
+    '4. Verdict: rate the alignment. Approve (low risk) only when the solution',
+    '   clearly and fully addresses the problem. Raise the risk / needs-review',
+    '   when there are gaps, and record each gap as a finding.',
+    '',
+    '## Response format',
+    'Reply with ONLY a fenced ```json code block containing a single object:',
+    '{',
+    '  "skipped": false,',
+    '  "summary": string — REQUIRED: one or two plain sentences of the form',
+    '    "The problem is …; the solution …; they align because … (or the gap',
+    '    is …), so it is rated <verdict>." No file names, no jargon dump,',
+    '  "rationale": [  — REQUIRED: exactly these four steps, in this order,',
+    '      each a concrete plain-English explanation (no file-by-file grading):',
+    '    { "label": "Problem", "detail": the problem the PR targets },',
+    '    { "label": "Solution implemented", "detail": what the change does },',
+    '    { "label": "Why they align", "detail": why the solution does or does',
+    '      not solve the problem, naming any gap },',
+    '    { "label": "Verdict", "detail": the rating and the one-line reason } ],',
+    '  "checks": [] — leave empty; this lens is general, not line-by-line,',
+    '  "findings": [ {  — one per real gap where the solution fails to solve the',
+    '      problem; empty when the solution fully solves it:',
+    '    "title": short headline naming the unmet need or mismatch,',
+    '    "detail": what part of the problem is not solved and what is missing,',
+    '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
+    '    "evidence": [ { "source": the unmet requirement or the change area that',
+    '      leaves it unmet, "reason": why it is unsolved, "confidence": 0..1 } ]',
+    '  } ]',
+    '}',
+    'Never assume the change is fine: your "Why they align" MUST give the',
+    'reasoning, so the reader never has to guess why it was approved. Do not add',
+    'prose outside the code block.',
+  ].join('\n');
+}
+
 export function buildAgentChatPrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective | null;

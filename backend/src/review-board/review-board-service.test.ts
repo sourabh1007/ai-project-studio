@@ -299,6 +299,50 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.perspective.findings.length).toBeGreaterThan(0);
   });
 
+  it('uses the problem/solution prompt and floor for the problem-solution lens', async () => {
+    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
+    const result = await service.analyzePerspective('f9', 'problem-solution');
+    // Dedicated prompt was used (general problem/solution, not file-by-file).
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).toContain('does this pull request');
+    expect(request.prompt).toContain('Do NOT evaluate files');
+    expect(request.prompt).toContain('Distilled problem statement:');
+    // Floor frames the fallback as Problem / Solution / Why they align / Verdict
+    // with NO file-level line-by-line checks.
+    expect(result.rationale.map((r) => r.label)).toEqual([
+      'Problem',
+      'Solution implemented',
+      'Why they align',
+      'Verdict',
+    ]);
+    expect(result.rationale[1].detail).toContain('The change spans');
+    expect(result.checks).toEqual([]);
+    expect(result.summary).toContain('Problem:');
+  });
+
+  it('reads the solution from the description when nothing changed resolves', async () => {
+    const boundaryOnly: PrReview = {
+      ...review,
+      changeGraph: {
+        ...review.changeGraph,
+        nodes: review.changeGraph.nodes.map((n) => ({
+          ...n,
+          kind: 'boundary' as const,
+        })),
+      },
+    };
+    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, reviews: { get: () => boundaryOnly } }),
+    );
+    const result = await service.analyzePerspective('f9', 'problem-solution');
+    expect(result.rationale[1].detail).toContain(
+      'No changed files were resolved',
+    );
+  });
+
   it('marks a reviewed-but-clean perspective Approved / Low', async () => {
     const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
     const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));

@@ -27,8 +27,8 @@ import {
   buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
-import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt } from './review-board-prompt.js';
-import { buildPerspectiveEvidenceFloor } from './review-board-evidence.js';
+import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt, buildProblemSolutionPrompt, buildSolutionDigest, PROBLEM_SOLUTION_PERSPECTIVE_ID, type SolutionNode } from './review-board-prompt.js';
+import { buildPerspectiveEvidenceFloor, buildProblemSolutionFloor, buildSolutionSummary } from './review-board-evidence.js';
 import {
   capPerspectiveFindings,
   parseAiFindings,
@@ -112,6 +112,30 @@ function errorMessage(error: unknown): string {
  */
 function changedPathsOf(input: BuildBoardInput): string[] {
   return input.nodes.filter((n) => n.kind === 'changed').map((n) => n.path);
+}
+
+/** Map the review's change-graph nodes to the solution-digest input shape. */
+function toSolutionNodes(review: PrReview): SolutionNode[] {
+  return review.changeGraph.nodes.map((n) => ({
+    path: n.path,
+    module: n.module,
+    category: n.category,
+    kind: n.kind,
+    changeKind: n.changeKind,
+    whatChanged: n.whatChanged,
+    whatItDoes: n.whatItDoes,
+    diff: n.diff,
+  }));
+}
+
+/** The general "solution implemented" line for the Problem ↔ Solution floor. */
+function solutionSummaryOf(input: BuildBoardInput): string {
+  const changed = input.nodes.filter((n) => n.kind === 'changed');
+  return buildSolutionSummary({
+    changedCount: changed.length,
+    codeCount: changed.filter((n) => n.category === 'code').length,
+    components: input.model.changedComponents,
+  });
 }
 
 /**
@@ -267,13 +291,27 @@ export function createReviewBoardService(
           field: 'perspectiveId',
         });
       }
-      const prompt = buildPerspectivePrompt({
-        board,
-        perspective,
-        description: review.description,
-        changedPaths: changedPathsOf(input),
-        config: { maxContextChars: deps.config.maxContextChars },
-      });
+      const prompt = perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID
+        ? buildProblemSolutionPrompt({
+            board,
+            perspective,
+            description: review.description,
+            problemStatement: review.problemStatement.content,
+            problemSufficient: review.problemStatement.sufficient,
+            solutionDigest: buildSolutionDigest({
+              title: review.pull.title,
+              nodes: toSolutionNodes(review),
+              maxChars: deps.config.maxContextChars,
+            }),
+            config: { maxContextChars: deps.config.maxContextChars },
+          })
+        : buildPerspectivePrompt({
+            board,
+            perspective,
+            description: review.description,
+            changedPaths: changedPathsOf(input),
+            config: { maxContextChars: deps.config.maxContextChars },
+          });
       // Stream what the reviewer is doing for this lens in real time. A fresh
       // metasession id (new run or self-healing attempt) lets the client reset
       // the accumulated activity for this perspective.
@@ -325,11 +363,18 @@ export function createReviewBoardService(
       // message, layer a deterministic, evidence-grounded floor (built from the
       // real changed files, the lens' concern and the verdict) beneath the
       // model's output and fill any field it left empty.
-      const floor = buildPerspectiveEvidenceFloor({
-        perspective: finalized,
-        changedPaths: changedPathsOf(input),
-        model: input.model,
-      });
+      const floor = perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID
+        ? buildProblemSolutionFloor({
+            perspective: finalized,
+            problemStatement: review.problemStatement.content,
+            problemSufficient: review.problemStatement.sufficient,
+            solutionSummary: solutionSummaryOf(input),
+          })
+        : buildPerspectiveEvidenceFloor({
+            perspective: finalized,
+            changedPaths: changedPathsOf(input),
+            model: input.model,
+          });
       return {
         perspectiveId,
         perspective: finalized,

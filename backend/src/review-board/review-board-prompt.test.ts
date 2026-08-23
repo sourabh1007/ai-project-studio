@@ -3,6 +3,9 @@ import {
   buildAgentChatPrompt,
   buildFindingsPrompt,
   buildPerspectivePrompt,
+  buildProblemSolutionPrompt,
+  buildSolutionDigest,
+  type SolutionNode,
 } from './review-board-prompt.js';
 import type {
   ProjectModel,
@@ -227,6 +230,143 @@ describe('buildPerspectivePrompt', () => {
       perspective,
       description: 'x'.repeat(100),
       changedPaths: ['a.cs'],
+      config: { maxContextChars: 10 },
+    });
+    expect(prompt).toContain('…');
+  });
+});
+
+function solNode(overrides: Partial<SolutionNode> = {}): SolutionNode {
+  return {
+    path: 'src/Cache.cs',
+    module: 'Cache',
+    category: 'code',
+    kind: 'changed',
+    changeKind: 'modified',
+    whatChanged: '',
+    whatItDoes: '',
+    diff: '',
+    ...overrides,
+  };
+}
+
+describe('buildSolutionDigest', () => {
+  it('notes when no changed files resolve', () => {
+    const digest = buildSolutionDigest({
+      title: 'PR',
+      nodes: [solNode({ kind: 'boundary' })],
+      maxChars: 20_000,
+    });
+    expect(digest).toContain('(no changed files were resolved');
+  });
+
+  it('counts code/test and prefers distilled whatChanged', () => {
+    const digest = buildSolutionDigest({
+      title: 'Add caching',
+      nodes: [
+        solNode({ path: 'a.cs', whatChanged: 'Adds an LRU cache.' }),
+        solNode({ path: 'a.test.cs', category: 'test' }),
+      ],
+      maxChars: 20_000,
+    });
+    expect(digest).toContain('PR "Add caching" changes 2 file(s) — 1 code, 1 test.');
+    expect(digest).toContain('- a.cs (Cache) — modified');
+    expect(digest).toContain('Adds an LRU cache.');
+  });
+
+  it('falls back to a bounded diff, then whatItDoes, then nothing', () => {
+    const diffDigest = buildSolutionDigest({
+      title: 'PR',
+      nodes: [solNode({ diff: 'y'.repeat(800) })],
+      maxChars: 20_000,
+    });
+    expect(diffDigest).toContain('…');
+    const roleDigest = buildSolutionDigest({
+      title: 'PR',
+      nodes: [solNode({ whatItDoes: 'Holds cache entries.' })],
+      maxChars: 20_000,
+    });
+    expect(roleDigest).toContain('Existing role: Holds cache entries.');
+    const bare = buildSolutionDigest({
+      title: 'PR',
+      nodes: [solNode({ module: null, changeKind: null })],
+      maxChars: 20_000,
+    });
+    expect(bare).toContain('- src/Cache.cs');
+    expect(bare).not.toContain('  '); // no signal line
+  });
+
+  it('caps the enumerated files and records an overflow row', () => {
+    const nodes = Array.from({ length: 61 }, (_, i) => solNode({ path: `f${i}.cs` }));
+    const digest = buildSolutionDigest({ title: 'PR', nodes, maxChars: 20_000 });
+    expect(digest).toContain('…and 1 more changed file(s)');
+  });
+
+  it('clamps the whole digest to maxChars', () => {
+    const digest = buildSolutionDigest({
+      title: 'PR',
+      nodes: [solNode({ whatChanged: 'z'.repeat(500) })],
+      maxChars: 40,
+    });
+    expect(digest.length).toBeLessThanOrEqual(40);
+    expect(digest).toContain('…');
+  });
+});
+
+describe('buildProblemSolutionPrompt', () => {
+  it('asks for a general problem/solution verdict fed the distilled problem', () => {
+    const prompt = buildProblemSolutionPrompt({
+      board,
+      perspective,
+      description: 'Adds a cache layer.',
+      problemStatement: 'Reads are slow.',
+      problemSufficient: true,
+      solutionDigest: 'PR "Add caching" changes 1 file(s).',
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('does this pull request');
+    expect(prompt).toContain('Do NOT evaluate files');
+    expect(prompt).toContain('Distilled problem statement:');
+    expect(prompt).toContain('Reads are slow.');
+    expect(prompt).toContain('Adds a cache layer.');
+    expect(prompt).toContain('"label": "Problem"');
+    expect(prompt).toContain('"label": "Why they align"');
+    expect(prompt).toContain('"checks": []');
+    expect(prompt).toContain('PR "Add caching" changes 1 file(s).');
+  });
+
+  it('notes when no distilled problem statement is available', () => {
+    const insufficient = buildProblemSolutionPrompt({
+      board,
+      perspective,
+      description: 'd',
+      problemStatement: 'partial',
+      problemSufficient: false,
+      solutionDigest: 's',
+      config: { maxContextChars: 20_000 },
+    });
+    expect(insufficient).toContain('no self-contained problem statement');
+    const missing = buildProblemSolutionPrompt({
+      board,
+      perspective,
+      description: null,
+      problemStatement: null,
+      problemSufficient: true,
+      solutionDigest: 's',
+      config: { maxContextChars: 20_000 },
+    });
+    expect(missing).toContain('no self-contained problem statement');
+    expect(missing).toContain('(no description provided)');
+  });
+
+  it('clamps a very long distilled problem statement', () => {
+    const prompt = buildProblemSolutionPrompt({
+      board,
+      perspective,
+      description: 'd',
+      problemStatement: 'p'.repeat(100),
+      problemSufficient: true,
+      solutionDigest: 's',
       config: { maxContextChars: 10 },
     });
     expect(prompt).toContain('…');

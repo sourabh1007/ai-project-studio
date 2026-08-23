@@ -110,6 +110,78 @@ export function buildPerspectiveEvidenceFloor(input: {
   return { summary, rationale, checks };
 }
 
+/**
+ * Build the deterministic floor for the **Problem ↔ Solution** lens. Unlike the
+ * generic floor (which enumerates changed files), this frames the fallback as a
+ * problem/solution narrative — the distilled problem, a general description of
+ * what the change implements, and whether they align — with NO file-level
+ * checks. It only fills fields the model left empty, so a fresh, tool-less run
+ * still shows *why* the solution was judged to solve (or not solve) the problem
+ * instead of a file audit.
+ */
+export function buildProblemSolutionFloor(input: {
+  perspective: ReviewPerspective;
+  problemStatement: string | null;
+  problemSufficient: boolean;
+  solutionSummary: string;
+}): PerspectiveEvidenceFloor {
+  const { perspective } = input;
+  const hasFindings = perspective.findings.length > 0;
+  const verdict = `${perspective.status} / ${perspective.risk}`;
+  const problem =
+    input.problemStatement && input.problemStatement.trim() && input.problemSufficient
+      ? input.problemStatement.trim()
+      : 'The PR description did not carry a self-contained problem statement, so the problem was read directly from the description and any linked work item it references.';
+  const align = hasFindings
+    ? `The solution does not fully solve the problem: ${countLabel(
+        perspective.findings.length,
+        'gap',
+      )} recorded in the findings below (${perspective.findings
+        .map((f) => f.title)
+        .join('; ')}).`
+    : 'The implemented change addresses the stated problem with no unmet requirement surfaced, so problem and solution align.';
+
+  const summary = hasFindings
+    ? `Problem: ${problem} Solution: ${input.solutionSummary} They do not fully align — see the gaps below. Rated ${verdict}.`
+    : `Problem: ${problem} Solution: ${input.solutionSummary} They align, so it is rated ${verdict}.`;
+
+  const rationale: RationalePoint[] = [
+    { label: 'Problem', detail: problem },
+    { label: 'Solution implemented', detail: input.solutionSummary },
+    { label: 'Why they align', detail: align },
+    { label: 'Verdict', detail: `Rated ${verdict} on the reasoning above.` },
+  ];
+
+  return { summary, rationale, checks: [] };
+}
+
+/**
+ * The general "solution implemented" line for the Problem ↔ Solution lens —
+ * describes what the change *spans* (file counts split code/test, plus the
+ * touched components) without ever enumerating individual files. Used both as
+ * the floor's solution line and, indirectly, to keep the narrative general.
+ */
+export function buildSolutionSummary(input: {
+  changedCount: number;
+  codeCount: number;
+  components: readonly string[];
+}): string {
+  if (input.changedCount === 0) {
+    return 'No changed files were resolved from the change graph, so the solution was read from the change description alone.';
+  }
+  const test = input.changedCount - input.codeCount;
+  const shown = input.components.slice(0, 6);
+  const where =
+    input.components.length > 0
+      ? ` across ${shown.join(', ')}${
+          input.components.length > shown.length
+            ? `, +${input.components.length - shown.length} more`
+            : ''
+        }`
+      : '';
+  return `The change spans ${input.changedCount} file(s) (${input.codeCount} code, ${test} test)${where}.`;
+}
+
 /** "1 changed file" / "N changed files". */
 function fileLabel(count: number): string {
   return `${count} changed file${count === 1 ? '' : 's'}`;
