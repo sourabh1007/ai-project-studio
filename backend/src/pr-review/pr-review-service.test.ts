@@ -116,6 +116,7 @@ function harness(options: {
   usage?: (sessionId: string) => MetaUsage | null;
   activityLines?: number;
   inlinePrompts?: boolean;
+  config?: typeof prReviewDefaults;
 } = {}) {
   const reviews = memoryRepo();
   const bus = createEventBus<PrReviewEventMap>();
@@ -136,7 +137,7 @@ function harness(options: {
     sleep: async (ms) => {
       sleeps.push(ms);
     },
-    config: prReviewDefaults,
+    config: options.config ?? prReviewDefaults,
     inlinePrompts: options.inlinePrompts,
     analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
     changeGraphFs: options.fs ?? fakeFs(),
@@ -203,7 +204,7 @@ async function settle(): Promise<void> {
 
 describe('createPrReviewService', () => {
   it('runs the problem statement via AI and builds the change graph deterministically', async () => {
-    const h = harness();
+    const h = harness({ config: { ...prReviewDefaults, coldInlineMaxChars: 0 } });
     const started = h.service.start(startInput);
     expect(started.problemStatement.status).toBe('pending');
     expect(started.changeGraph.status).toBe('pending');

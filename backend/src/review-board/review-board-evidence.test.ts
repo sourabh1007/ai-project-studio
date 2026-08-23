@@ -3,6 +3,7 @@ import {
   buildPerspectiveEvidenceFloor,
   buildProblemSolutionFloor,
   buildSolutionSummary,
+  usableProblemStatement,
 } from './review-board-evidence.js';
 import type {
   ProjectModel,
@@ -261,5 +262,38 @@ describe('buildSolutionSummary', () => {
     expect(
       buildSolutionSummary({ changedCount: 8, codeCount: 8, components }),
     ).toContain('across a, b, c, d, e, f, +2 more.');
+  });
+});
+
+describe('usableProblemStatement', () => {
+  it('returns the trimmed statement when sufficient and non-refusal', () => {
+    expect(usableProblemStatement('  Cache misses on cold start.  ', true)).toBe(
+      'Cache misses on cold start.',
+    );
+  });
+
+  it('rejects a null statement', () => {
+    expect(usableProblemStatement(null, true)).toBeNull();
+  });
+
+  it('rejects an empty/whitespace statement', () => {
+    expect(usableProblemStatement('   ', true)).toBeNull();
+  });
+
+  it('rejects a statement flagged insufficient', () => {
+    expect(usableProblemStatement('A real problem.', false)).toBeNull();
+  });
+
+  it('rejects a content-access policy refusal even when marked sufficient', () => {
+    const refusal =
+      "I can't analyze the attachment because access to C:\\Windows\\Temp\\p.pdf " +
+      'is restricted by the environment\'s content-access policy.';
+    expect(usableProblemStatement(refusal, true)).toBeNull();
+  });
+
+  it('rejects a generic "cannot read" refusal', () => {
+    expect(
+      usableProblemStatement('I cannot read the provided file.', true),
+    ).toBeNull();
   });
 });

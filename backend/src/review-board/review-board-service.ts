@@ -28,7 +28,7 @@ import {
   type BuildBoardInput,
 } from './review-board-builder.js';
 import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt, buildProblemSolutionPrompt, buildSolutionDigest, PROBLEM_SOLUTION_PERSPECTIVE_ID, type SolutionNode } from './review-board-prompt.js';
-import { buildPerspectiveEvidenceFloor, buildProblemSolutionFloor, buildSolutionSummary } from './review-board-evidence.js';
+import { buildPerspectiveEvidenceFloor, buildProblemSolutionFloor, buildSolutionSummary, usableProblemStatement } from './review-board-evidence.js';
 import {
   capPerspectiveFindings,
   parseAiFindings,
@@ -191,7 +191,9 @@ export function createReviewBoardService(
     prompt: string,
     hooks?: PromptHooks,
   ): Promise<string> {
-    if (deps.inlinePrompts) {
+    const deliverInline =
+      deps.inlinePrompts || prompt.length <= deps.config.coldInlineMaxChars;
+    if (deliverInline) {
       const { text } = await deps.ai.runDetailed({
         featureId: review.featureId,
         prompt,
@@ -291,17 +293,21 @@ export function createReviewBoardService(
           field: 'perspectiveId',
         });
       }
+      const usableProblem = usableProblemStatement(
+        review.problemStatement.content,
+        review.problemStatement.sufficient,
+      );
       const prompt = perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID
         ? buildProblemSolutionPrompt({
             board,
             perspective,
             description: review.description,
-            problemStatement: review.problemStatement.content,
-            problemSufficient: review.problemStatement.sufficient,
+            problemStatement: usableProblem,
+            problemSufficient: usableProblem !== null,
             solutionDigest: buildSolutionDigest({
               title: review.pull.title,
               nodes: toSolutionNodes(review),
-              maxChars: deps.config.maxContextChars,
+              maxChars: Math.min(deps.config.maxContextChars, 10_000),
             }),
             config: { maxContextChars: deps.config.maxContextChars },
           })
@@ -366,8 +372,8 @@ export function createReviewBoardService(
       const floor = perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID
         ? buildProblemSolutionFloor({
             perspective: finalized,
-            problemStatement: review.problemStatement.content,
-            problemSufficient: review.problemStatement.sufficient,
+            problemStatement: usableProblem,
+            problemSufficient: usableProblem !== null,
             solutionSummary: solutionSummaryOf(input),
           })
         : buildPerspectiveEvidenceFloor({

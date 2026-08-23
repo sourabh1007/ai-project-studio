@@ -257,8 +257,12 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     onActivity: (line: string) => void;
   }): Promise<{ text: string; sessionId: string }> {
     // Warm path: the pool carries the prompt inline over stdio (no argv limit),
-    // so no attachment file is needed.
-    if (deps.inlinePrompts) {
+    // so no attachment file is needed. On the cold path we still deliver small
+    // prompts inline as a CLI argument — this bypasses the temporary-file
+    // attachment, which some environments' content-access policies block. Only
+    // oversized prompts fall back to the attachment (to stay within the OS
+    // command-line length limit).
+    if (deps.inlinePrompts || params.prompt.length <= deps.config.coldInlineMaxChars) {
       return deps.ai.runDetailed({
         featureId: params.review.featureId,
         prompt: params.prompt,

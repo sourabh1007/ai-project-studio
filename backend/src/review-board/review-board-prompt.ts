@@ -311,13 +311,18 @@ export function buildProblemSolutionPrompt(input: {
   config: { maxContextChars: number };
 }): string {
   const { board } = input;
+  // Keep each section modest so the assembled prompt stays under the cold-path
+  // inline delivery threshold (a large attachment is blocked by some
+  // environments' content-access policies). A general problem/solution
+  // assessment does not need the full context budget.
+  const sectionBudget = Math.min(input.config.maxContextChars, 6_000);
   const description = clamp(
     (input.description ?? '').trim() || '(no description provided)',
-    input.config.maxContextChars,
+    sectionBudget,
   );
   const distilled =
     input.problemStatement && input.problemStatement.trim() && input.problemSufficient
-      ? clamp(input.problemStatement.trim(), input.config.maxContextChars)
+      ? clamp(input.problemStatement.trim(), sectionBudget)
       : '(no self-contained problem statement could be distilled from the ' +
         'description — derive the problem from the description above and any ' +
         'linked work item it references)';

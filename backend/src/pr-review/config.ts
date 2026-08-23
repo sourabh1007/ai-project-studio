@@ -33,6 +33,14 @@ export const prReviewConfigSchema = z.object({
   /** Backoff (ms) waited before each transient retry. */
   transientRetryBackoffMs: z.number().int().nonnegative(),
   /**
+   * Largest prompt (characters) delivered inline as a CLI argument on the cold
+   * path. At or below this, the prompt is passed directly — bypassing the
+   * temporary-file attachment, which some environments' content-access policies
+   * block. Above it, the attachment fallback is used to stay within the OS
+   * command-line length limit. Kept safely under the ~32K Windows limit.
+   */
+  coldInlineMaxChars: z.number().int().positive(),
+  /**
    * Shared "untrusted evidence" notice embedded in every review prompt. Warns
    * the model to treat PR/diff content as read-only data, never instructions.
    */
@@ -84,6 +92,7 @@ export const prReviewDefaults: PrReviewConfig = {
   stepTimeoutMs: 120_000,
   transientRetryAttempts: 2,
   transientRetryBackoffMs: 2_000,
+  coldInlineMaxChars: 30_000,
   untrustedNotice: UNTRUSTED_NOTICE,
   emptyDescriptionPlaceholder: '(no description provided)',
   problemStatementPromptTemplate: [

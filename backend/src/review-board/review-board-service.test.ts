@@ -158,7 +158,11 @@ describe('createReviewBoardService.analyze', () => {
     const temporaryPrompts = fakeTemporaryPrompts();
     const ai = aiReturning(findingsJson);
     const service = createReviewBoardService(
-      baseDeps({ ai, temporaryPrompts }),
+      baseDeps({
+        ai,
+        temporaryPrompts,
+        config: { ...reviewBoardDefaults, coldInlineMaxChars: 0 },
+      }),
     );
     const board = await service.analyze('f9');
     const security = board.perspectives.find((p) => p.id === 'security');
@@ -179,6 +183,20 @@ describe('createReviewBoardService.analyze', () => {
     const ai = aiReturning('```json\n[]\n```');
     const service = createReviewBoardService(
       baseDeps({ ai, temporaryPrompts, inlinePrompts: true }),
+    );
+    await service.analyze('f9');
+    expect(temporaryPrompts.created).toHaveLength(0);
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.attachments).toBeUndefined();
+    expect(request.prompt).toContain('review findings');
+  });
+
+  it('carries a small prompt inline on the cold path (under coldInlineMaxChars)', async () => {
+    const temporaryPrompts = fakeTemporaryPrompts();
+    const ai = aiReturning('```json\n[]\n```');
+    const service = createReviewBoardService(
+      baseDeps({ ai, temporaryPrompts }),
     );
     await service.analyze('f9');
     expect(temporaryPrompts.created).toHaveLength(0);
@@ -450,7 +468,11 @@ describe('createReviewBoardService.analyzePerspective', () => {
       return { text: objectJson, sessionId: 'meta-cold' };
     });
     const service = createReviewBoardService(
-      baseDeps({ ai: { runDetailed }, bus: { emit } }),
+      baseDeps({
+        ai: { runDetailed },
+        bus: { emit },
+        config: { ...reviewBoardDefaults, coldInlineMaxChars: 0 },
+      }),
     );
     await service.analyzePerspective('f9', 'security');
     expect(emit).toHaveBeenCalledWith('review.board.activity', {
@@ -465,7 +487,9 @@ describe('createReviewBoardService.analyzePerspective', () => {
 describe('createReviewBoardService.chat', () => {
   it('answers with the trimmed completion, scoped to a perspective', async () => {
     const ai = aiReturning('  The blast radius is wide.  ');
-    const service = createReviewBoardService(baseDeps({ ai }));
+    const service = createReviewBoardService(
+      baseDeps({ ai, config: { ...reviewBoardDefaults, coldInlineMaxChars: 0 } }),
+    );
     const reply = await service.chat('f9', 'impact-blast-radius', [
       { role: 'user', content: 'Why is this risky?' },
     ]);

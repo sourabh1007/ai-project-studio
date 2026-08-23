@@ -119,6 +119,27 @@ export function buildPerspectiveEvidenceFloor(input: {
  * still shows *why* the solution was judged to solve (or not solve) the problem
  * instead of a file audit.
  */
+/**
+ * Guard against a poisoned "distilled problem statement". The headless CLI can
+ * refuse to read the attached review request (content-access policy) and store
+ * that refusal as the problem statement. Such text must never be surfaced as
+ * "the problem"; callers fall back to deriving the problem from the raw
+ * description instead. Returns the trimmed statement when it is usable, else
+ * `null`.
+ */
+export function usableProblemStatement(
+  content: string | null,
+  sufficient: boolean,
+): string | null {
+  if (!content) return null;
+  const trimmed = content.trim();
+  if (!trimmed || !sufficient) return null;
+  const refusal =
+    /content[- ]access policy|content[- ]exclusion|can'?t (analyze|access|read|open)|cannot (analyze|access|read|open)|restricted by|not able to (access|read|open)|access to .* is restricted/i;
+  if (refusal.test(trimmed)) return null;
+  return trimmed;
+}
+
 export function buildProblemSolutionFloor(input: {
   perspective: ReviewPerspective;
   problemStatement: string | null;

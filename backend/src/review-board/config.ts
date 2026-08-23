@@ -30,6 +30,14 @@ export const reviewBoardConfigSchema = z.object({
   transientRetryBackoffMs: z.number().int().nonnegative(),
   /** Upper bound on AI findings kept per perspective, newest wins. */
   maxFindingsPerPerspective: z.number().int().positive(),
+  /**
+   * Largest prompt (characters) delivered inline as a CLI argument on the cold
+   * path. At or below this, the prompt is passed directly — bypassing the
+   * temporary-file attachment (which some environments' content-access policies
+   * block). Above it, the attachment fallback is used to stay within the OS
+   * command-line length limit. Kept safely under the ~32K Windows limit.
+   */
+  coldInlineMaxChars: z.number().int().positive(),
 });
 
 export type ReviewBoardConfig = z.infer<typeof reviewBoardConfigSchema>;
@@ -43,4 +51,5 @@ export const reviewBoardDefaults: ReviewBoardConfig = {
   transientRetryAttempts: 2,
   transientRetryBackoffMs: 2_000,
   maxFindingsPerPerspective: 6,
+  coldInlineMaxChars: 30_000,
 };
