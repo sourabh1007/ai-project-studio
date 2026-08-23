@@ -11,10 +11,7 @@ import type { LiveState } from '../../lib/stream.js';
 import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
 import type {
   Feature,
-  MetaUsage,
   MoveNodeInput,
-  PrReview,
-  PrReviewStepStatus,
   Repository,
   RepositoryContext,
   Session,
@@ -288,116 +285,6 @@ function SessionRow({
   );
 }
 
-/** Sum of the metasession usage a PR review spent across its four steps. */
-interface PrReviewUsageTotals {
-  nanoAiu: number;
-  inputTokens: number;
-  outputTokens: number;
-  credits: number;
-  /** How many of the steps have reported metasession usage. */
-  metaSessions: number;
-}
-
-/** Aggregates the per-step metasession usage of a review into one total. */
-function aggregatePrReviewUsage(review: PrReview): PrReviewUsageTotals {
-  const steps = [review.problemStatement, review.changeGraph];
-  return steps.reduce<PrReviewUsageTotals>(
-    (acc, step) => {
-      const usage: MetaUsage | null = step.usage;
-      if (usage) {
-        acc.nanoAiu += usage.nanoAiu;
-        acc.inputTokens += usage.inputTokens;
-        acc.outputTokens += usage.outputTokens;
-        acc.credits += usage.credits;
-        acc.metaSessions += 1;
-      }
-      return acc;
-    },
-    { nanoAiu: 0, inputTokens: 0, outputTokens: 0, credits: 0, metaSessions: 0 },
-  );
-}
-
-/** Wall-clock span of a review, in ms, from its create/update timestamps. */
-function prReviewElapsedMs(review: PrReview): number {
-  const start = Date.parse(review.timestamps.createdAt);
-  const end = Date.parse(review.timestamps.updatedAt);
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
-    return 0;
-  }
-  return end - start;
-}
-
-function PrReviewChild({
-  feature,
-  active,
-  status,
-  review,
-  onOpen,
-}: {
-  feature: Feature;
-  active: boolean;
-  status?: PrReviewStepStatus | 'mixed';
-  review?: PrReview;
-  onOpen: () => void;
-}) {
-  const working = status === 'pending' || status === 'generating' || status === 'mixed';
-  const usage = review ? aggregatePrReviewUsage(review) : null;
-  const hasUsage = !!usage && usage.metaSessions > 0;
-  return (
-    <div className={`session-card pr-review-child ${active ? 'is-active' : ''}`.trim()}>
-      <div className="session-card-head">
-        <button
-          type="button"
-          className="session-open"
-          aria-current={active ? 'true' : undefined}
-          onClick={onOpen}
-          title={`Code Review for ${feature.name}`}
-        >
-          <span className="pr-review-child-icon" aria-hidden="true">
-            <PrReviewIcon size={14} />
-          </span>
-          <span className="session-name">Code Review</span>
-          {working && (
-            <span className="pr-review-child-working" aria-hidden="true" />
-          )}
-        </button>
-      </div>
-
-      {hasUsage && usage && review && (
-        <>
-          <div
-            className="session-meta-row"
-            title={`${usage.metaSessions} metasession${
-              usage.metaSessions === 1 ? '' : 's'
-            } powering this review`}
-          >
-            {usage.metaSessions} metasession{usage.metaSessions === 1 ? '' : 's'}
-          </div>
-          <div className="session-metrics-row">
-            <span
-              className="session-metrics-open pr-review-child-metrics"
-              title="Credits and tokens the review's metasessions spent"
-            >
-              <span className="metric metric-credits">
-                <UsageIcon size={11} /> {formatAic(usage.nanoAiu)}
-              </span>
-              <span className="metric">
-                <ArrowUpIcon size={11} /> {formatCompactNumber(usage.inputTokens)}
-              </span>
-              <span className="metric">
-                <ArrowDownIcon size={11} /> {formatCompactNumber(usage.outputTokens)}
-              </span>
-              <span className="metric">
-                <TimeIcon size={11} /> {formatDuration(prReviewElapsedMs(review))}
-              </span>
-            </span>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 function ReviewBoardChild({
   feature,
   active,
@@ -434,7 +321,6 @@ function FeatureNode({
   names,
   onOpenSession,
   onOpenFeature,
-  onOpenPrReview,
   onOpenReviewBoard,
   onRenameSession,
   onRenameFeature,
@@ -452,7 +338,6 @@ function FeatureNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onOpenPrReview: (feature: Feature) => void;
   onOpenReviewBoard: (feature: Feature) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -822,24 +707,6 @@ function FeatureNode({
       {expanded && (
         <div className="tree-children">
           {(feature.checkoutPath !== null || live.prReviews[feature.id]) && (
-            <PrReviewChild
-              feature={feature}
-              active={false}
-              status={
-                live.prReviews[feature.id]
-                  ? [
-                        live.prReviews[feature.id].problemStatement.status,
-                        live.prReviews[feature.id].changeGraph.status,
-                      ].some((s) => s === 'pending' || s === 'generating')
-                    ? 'generating'
-                    : 'ready'
-                  : undefined
-              }
-              onOpen={() => onOpenPrReview(feature)}
-              review={live.prReviews[feature.id]}
-            />
-          )}
-          {(feature.checkoutPath !== null || live.prReviews[feature.id]) && (
             <ReviewBoardChild
               feature={feature}
               active={false}
@@ -1060,7 +927,6 @@ function RepoNode({
   names,
   onOpenSession,
   onOpenFeature,
-  onOpenPrReview,
   onOpenReviewBoard,
   onOpenRepo,
   onRenameSession,
@@ -1087,7 +953,6 @@ function RepoNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onOpenPrReview: (feature: Feature) => void;
   onOpenReviewBoard: (feature: Feature) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
@@ -1298,7 +1163,6 @@ function RepoNode({
                 names={names}
                 onOpenSession={onOpenSession}
                 onOpenFeature={onOpenFeature}
-                onOpenPrReview={onOpenPrReview}
                 onOpenReviewBoard={onOpenReviewBoard}
                 onRenameSession={onRenameSession}
                 onRenameFeature={onRenameFeature}
@@ -1638,7 +1502,6 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
-            onOpenPrReview={onOpenPrReview}
             onOpenReviewBoard={onOpenReviewBoard}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
@@ -1668,7 +1531,6 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
-            onOpenPrReview={onOpenPrReview}
             onOpenReviewBoard={onOpenReviewBoard}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}

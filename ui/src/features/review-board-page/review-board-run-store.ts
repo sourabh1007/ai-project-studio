@@ -224,6 +224,9 @@ class ReviewBoardRunStore {
    * "Analyze with AI" button always starts a clean pass.
    */
   async analyze(featureId: string, api: ReviewBoardRunApi): Promise<void> {
+    // Take the latest board before a full pass, so the analysis reflects the
+    // current PR state rather than a stale snapshot from a previous visit.
+    await this.load(featureId, api, true);
     const rec = this.record(featureId);
     const board = rec.state.board;
     if (!board) return;
@@ -313,6 +316,105 @@ class ReviewBoardRunStore {
         });
       }
     });
+
+    if (!isStale()) {
+      this.update(featureId, (prev) => ({ ...prev, running: false }));
+    }
+  }
+
+  /**
+   * Analyze a single perspective on demand, leaving every other perspective's
+   * rating and findings untouched. The backend reads the latest persisted PR
+   * review on each call, so this always re-rates against the current state. Used
+   * when the reviewer asks to (re)analyze just the perspective they are looking
+   * at rather than the whole board.
+   */
+  async analyzeOne(
+    featureId: string,
+    perspectiveId: string,
+    api: ReviewBoardRunApi,
+  ): Promise<void> {
+    const rec = this.record(featureId);
+    if (!rec.state.board) return;
+
+    const controller = rec.controller?.signal.aborted
+      ? new AbortController()
+      : (rec.controller ?? new AbortController());
+    rec.controller = controller;
+    const token = rec.runToken;
+    const isStale = () => this.record(featureId).runToken !== token;
+
+    this.update(featureId, (prev) => ({
+      ...prev,
+      analyzed: true,
+      running: true,
+    }));
+    this.setProgress(featureId, perspectiveId, {
+      status: 'pending',
+      skipReason: null,
+      checked: null,
+      rationale: [],
+      checks: [],
+      error: null,
+      attempt: 0,
+    });
+
+    try {
+      const result = await runWithRetry(
+        async (attempt) => {
+          this.setProgress(featureId, perspectiveId, {
+            status: attempt > 1 ? 'retrying' : 'analyzing',
+            skipReason: null,
+            checked: null,
+            rationale: [],
+            checks: [],
+            error: null,
+            attempt,
+          });
+          return await api.analyzeReviewBoardPerspective(
+            featureId,
+            perspectiveId,
+            controller.signal,
+          );
+        },
+        {
+          attempts: MAX_ATTEMPTS,
+          delay: (ms) => new Promise((r) => setTimeout(r, ms)),
+          backoffMs: (attempt) => RETRY_BACKOFF_MS * attempt,
+          cancelled: () => isStale() || controller.signal.aborted,
+          shouldRetry: (error) => !isAbort(error),
+        },
+      );
+      if (!isStale()) {
+        this.update(featureId, (prev) => ({
+          ...prev,
+          board: prev.board
+            ? mergeAnalyzedPerspective(prev.board, result.perspective)
+            : prev.board,
+        }));
+        this.setProgress(featureId, perspectiveId, {
+          status: result.skipped ? 'skipped' : 'done',
+          skipReason: result.skipReason,
+          checked: result.summary,
+          rationale: result.rationale,
+          checks: result.checks,
+          error: null,
+          attempt: 0,
+        });
+      }
+    } catch (error) {
+      if (!isStale() && !isAbort(error)) {
+        this.setProgress(featureId, perspectiveId, {
+          status: 'error',
+          skipReason: null,
+          checked: null,
+          rationale: [],
+          checks: [],
+          error: messageOf(error, 'This perspective could not be analysed.'),
+          attempt: 0,
+        });
+      }
+    }
 
     if (!isStale()) {
       this.update(featureId, (prev) => ({ ...prev, running: false }));

@@ -343,6 +343,13 @@ export function ReviewBoardPage({
     },
     [featureId, runApi],
   );
+  const analyzeOne = useMemo(
+    () => (perspectiveId: string) => {
+      setBannerHidden(false);
+      return reviewBoardRunStore.analyzeOne(featureId, perspectiveId, runApi);
+    },
+    [featureId, runApi],
+  );
   const retryFailed = useMemo(
     () => () => reviewBoardRunStore.retryFailed(featureId, runApi),
     [featureId, runApi],
@@ -608,6 +615,21 @@ export function ReviewBoardPage({
                   </span>
                 )}
                 <span className="rb-detail-spacer" />
+                <Button
+                  variant="ghost"
+                  onClick={() => void analyzeOne(selected.id)}
+                  disabled={
+                    selectedProgress.status === 'analyzing' ||
+                    selectedProgress.status === 'retrying' ||
+                    selectedProgress.status === 'pending'
+                  }
+                >
+                  <AiMagicIcon size={13} />{' '}
+                  {selectedProgress.status === 'done' ||
+                  selectedProgress.status === 'skipped'
+                    ? 'Re-analyze this'
+                    : 'Analyze this'}
+                </Button>
                 <Marker kind="status" value={selected.status} />
                 <Marker kind="risk" value={selected.risk} />
               </div>
@@ -774,8 +796,12 @@ export function ReviewBoardPage({
                   {!analyzed && (
                     <Button
                       variant="primary"
-                      onClick={() => void analyze()}
-                      disabled={analyzing}
+                      onClick={() => void analyzeOne(selected.id)}
+                      disabled={
+                        selectedProgress.status === 'analyzing' ||
+                        selectedProgress.status === 'retrying' ||
+                        selectedProgress.status === 'pending'
+                      }
                     >
                       <AiMagicIcon size={14} /> Analyze with AI
                     </Button>
