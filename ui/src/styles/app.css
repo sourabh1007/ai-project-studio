@@ -8669,6 +8669,11 @@ body.is-resizing {
   border-color: color-mix(in srgb, var(--success) 40%, transparent);
   background: color-mix(in srgb, var(--success) 12%, transparent);
 }
+.rb-reco-reviewing {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .rb-review-progress {
   font-size: 12px;
   font-weight: 500;
@@ -8765,6 +8770,7 @@ body.is-resizing {
 .rb-act-success:hover:not(:disabled) {
   background: color-mix(in srgb, var(--success) 20%, transparent);
 }
+.rb-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
@@ -9079,12 +9085,24 @@ body.is-resizing {
   color: var(--success);
   border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
+.rb-status-needs-review {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.rb-status-not-applicable {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+.rb-status-not-started,
+.rb-risk-unknown {
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+  border-color: var(--border);
+}
 .rb-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background: currentColor;
-  color: var(--text-muted);
   flex-shrink: 0;
   display: inline-block;
 }

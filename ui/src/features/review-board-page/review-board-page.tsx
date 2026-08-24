@@ -483,11 +483,15 @@ export function ReviewBoardPage({
         <div className="rb-header-side">
           <span
             className={`rb-reco rb-reco-${
-              prReviewed ? 'approve' : board.recommendation
+              analyzing
+                ? 'reviewing'
+                : prReviewed
+                  ? 'approve'
+                  : board.recommendation
             }`}
           >
             {analyzing
-              ? 'Reviewing'
+              ? `Reviewing ${analyzedCount}/${totalPerspectives}`
               : prReviewed
                 ? 'PR reviewed'
                 : RECOMMENDATION_LABEL[board.recommendation]}
