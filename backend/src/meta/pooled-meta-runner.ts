@@ -36,10 +36,14 @@ export const GENERAL_PURPOSE = 'general';
 /**
  * A {@link MetaRunner} that prefers warm `copilot --acp` sessions and falls back
  * to the cold runner transparently. Requests route to the pool matching
- * {@link MetaRequest.purpose} (or the shared `general` pool). If the chosen pool
- * is still warming, or a warm turn throws, the cold runner serves the request so
- * callers never fail just because the pool isn't ready — they only get faster
- * when it is.
+ * {@link MetaRequest.purpose} (or the shared `general` pool).
+ *
+ * Parallelism is bounded by each pool's size: a warm turn is only taken when the
+ * pool reports a session ready to lease ({@link PurposePool.ready}), so at most
+ * `size` turns run warm-concurrently per purpose. When a pool is still warming,
+ * saturated (every warm session busy), or a warm turn throws, the request spills
+ * to the cold runner instead of blocking on a queue — callers never fail or
+ * stall just because the pool isn't ready; they only get faster when it is.
  */
 export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
   const byPurpose = new Map(deps.pools.map((pool) => [pool.purpose, pool]));
@@ -57,6 +61,9 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
 
   async function runDetailed(request: MetaRequest): Promise<MetaRunResult> {
     const pool = select(request.purpose);
+    // `ready()` is idle>0 and is claimed synchronously by the warm turn before
+    // any await, so a ready pool never queues: overflow past `size` concurrent
+    // turns falls through to the cold path below.
     if (pool && pool.ready()) {
       try {
         return await pool.runDetailed(request);

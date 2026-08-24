@@ -8137,32 +8137,82 @@ body.is-resizing {
 }
 
 /* --- Metasession pools (Settings) --- */
-.metapool-list {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
+.metapool-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
 }
-.metapool-item {
+.metapool-enable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.metapool-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.metapool-row {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px;
   background: var(--panel);
-}
-.metapool-item-head {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  flex-direction: column;
+  gap: 10px;
 }
-.metapool-purpose {
-  font-size: 13px;
+.metapool-row-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.metapool-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.metapool-field-size {
+  flex: 0 0 140px;
+}
+.metapool-field-label {
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text);
-  text-transform: capitalize;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.metapool-remove {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.metapool-remove:hover:not(:disabled) {
+  color: var(--danger, #ef4444);
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 45%, var(--border));
+}
+.metapool-remove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.metapool-live {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .metapool-badge {
   font-size: 10px;
@@ -8192,6 +8242,18 @@ body.is-resizing {
 .metapool-stats strong {
   color: var(--text);
   font-weight: 600;
+}
+.metapool-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.metapool-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 
