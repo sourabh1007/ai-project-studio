@@ -32,6 +32,8 @@ export interface ProvisionedWorktree {
   worktreePath: string;
   /** Local branch the worktree tracks the PR head on. */
   branch: string;
+  /** The commit SHA the worktree was checked out at (the PR head fetched). */
+  headSha: string;
   /**
    * True when `branch` is the PR's own head branch, tracking its `origin`
    * remote, so commits pushed from a session update the pull request. False for
@@ -247,5 +249,5 @@ export async function provisionPrWorktree(
     ]);
   }
 
-  return { worktreePath, branch, tracksPullRequest };
+  return { worktreePath, branch, tracksPullRequest, headSha };
 }

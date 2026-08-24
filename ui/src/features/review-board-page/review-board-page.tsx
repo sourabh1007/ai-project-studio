@@ -542,6 +542,14 @@ export function ReviewBoardPage({
           </h2>
           <p className="rb-subtitle">
             #{board.pull.number} · {board.pull.title}
+            {board.pull.headSha ? (
+              <span
+                className="rb-commit"
+                title={`Reviewing commit ${board.pull.headSha}`}
+              >
+                @ {board.pull.headSha.slice(0, 8)}
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="rb-header-side">

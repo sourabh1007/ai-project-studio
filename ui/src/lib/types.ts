@@ -321,6 +321,8 @@ export interface PrReviewPull {
   number: number;
   title: string;
   url: string;
+  /** Commit SHA under review (present on the board's pull); null until known. */
+  headSha?: string | null;
 }
 
 /** A multi-step AI review of a pull request, keyed by its review feature. */

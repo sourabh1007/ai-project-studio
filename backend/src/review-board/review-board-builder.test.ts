@@ -58,7 +58,7 @@ function node(over: Partial<DiscoveryNode> & { path: string }): DiscoveryNode {
 function build(over: Partial<BuildBoardInput>) {
   return buildReviewBoard({
     featureId: 'f1',
-    pull: { number: 1, title: 't', url: 'u' },
+    pull: { number: 1, title: 't', url: 'u', headSha: null },
     worktreePath: 'w',
     baseBranch: 'main',
     description: 'A sufficiently long description of the change here.',
@@ -74,7 +74,7 @@ function build(over: Partial<BuildBoardInput>) {
 describe('buildEmptyBoard', () => {
   const emptyInput: BuildBoardInput = {
     featureId: 'f1',
-    pull: { number: 7, title: 't', url: 'u' },
+    pull: { number: 7, title: 't', url: 'u', headSha: null },
     worktreePath: 'w',
     baseBranch: 'main',
     description: 'short',

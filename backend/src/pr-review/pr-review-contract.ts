@@ -245,6 +245,8 @@ export interface PrReview {
   pull: PrReviewPull;
   /** The PR's git worktree the review analyses and reruns against. */
   worktreePath: string;
+  /** The commit SHA currently checked out for review; null until provisioned. */
+  headSha: string | null;
   /** Base branch the diff is computed against; null when unknown. */
   baseBranch: string | null;
   /** The raw PR description as fetched, before AI distillation; null when none. */
@@ -326,6 +328,7 @@ export interface StartPrReviewInput {
   repoId: string;
   pull: RemotePullRequest;
   worktreePath: string;
+  headSha: string | null;
   baseBranch: string | null;
 }
 

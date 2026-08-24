@@ -58,6 +58,7 @@ function harness(overrides: {
         worktreePath: 'C:/wt/app-pr-12',
         branch: 'pr-12',
         tracksPullRequest: false,
+        headSha: 'provisionedsha',
       });
     },
     features: {
@@ -125,6 +126,7 @@ describe('pr-feature-service', () => {
         repoId: 'r1',
         pull,
         worktreePath: 'C:/wt/app-pr-12',
+        headSha: 'provisionedsha',
         baseBranch: 'main',
       },
     ]);
@@ -142,6 +144,7 @@ describe('pr-feature-service', () => {
         repoId: 'r1',
         pull: { ...pull, targetBranch: 'release/2.0' },
         worktreePath: 'C:/wt/app-pr-12',
+        headSha: 'provisionedsha',
         baseBranch: 'release/2.0',
       },
     ]);
@@ -158,6 +161,7 @@ describe('pr-feature-service', () => {
           worktreePath: 'C:/wt/app-pr-12',
           branch: 'pr-12',
           tracksPullRequest: false,
+          headSha: 'provisionedsha',
         }),
       features: {
         create: (input) => ({
@@ -190,6 +194,7 @@ describe('pr-feature-service', () => {
         repoId: 'r1',
         pull,
         worktreePath: 'C:/wt/app-pr-12',
+        headSha: 'provisionedsha',
         baseBranch: null,
       },
     ]);

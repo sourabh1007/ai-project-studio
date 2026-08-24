@@ -136,6 +136,8 @@ export interface ReviewBoardPull {
   number: number;
   title: string;
   url: string;
+  /** Commit SHA under review, so the board can confirm it reflects the latest. */
+  headSha: string | null;
 }
 
 /**

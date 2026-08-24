@@ -26,6 +26,7 @@ function review(overrides: Partial<PrReview> = {}): PrReview {
     repoId: 'r1',
     pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
     worktreePath: 'C:\\work\\pr-7',
+    headSha: 'reposha7890',
     baseBranch: 'main',
     description: 'Requests fail transiently.',
     problemStatement: {
@@ -193,6 +194,7 @@ describe('pr-review-repo', () => {
       repoId: 'r9',
       pull: { number: 42, title: 'Legacy PR', url: 'https://example.com/pr/42' },
       worktreePath: 'C:\\work\\pr-42',
+      headSha: null,
       baseBranch: null,
       description: null,
       problemStatement: {

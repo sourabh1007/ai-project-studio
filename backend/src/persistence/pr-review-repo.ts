@@ -80,6 +80,7 @@ function normalizeDocument(
     return {
       featureId,
       ...(doc as PrReviewDocument),
+      headSha: (doc as { headSha?: string | null }).headSha ?? null,
       problemStatement: withActivity(doc.problemStatement),
       changeGraph,
     };
@@ -89,6 +90,7 @@ function normalizeDocument(
     repoId: legacy.repoId,
     pull: legacy.pull,
     worktreePath: legacy.worktreePath,
+    headSha: null,
     baseBranch: legacy.baseBranch ?? null,
     description: legacy.description ?? null,
     problemStatement: { ...pendingStep(), content: null, sufficient: true },

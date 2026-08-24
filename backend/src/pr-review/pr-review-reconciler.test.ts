@@ -41,6 +41,7 @@ function review(
     repoId: 'r1',
     pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
     worktreePath: 'C:\\work\\pr-7',
+    headSha: null,
     baseBranch: 'main',
     description: 'Requests fail transiently.',
     problemStatement: {

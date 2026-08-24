@@ -62,6 +62,7 @@ const startInput: StartPrReviewInput = {
   repoId: 'r1',
   pull,
   worktreePath: 'C:\\work\\pr-7',
+  headSha: 'headsha012345',
   baseBranch: 'main',
 };
 
@@ -526,6 +527,7 @@ describe('createPrReviewService', () => {
       repoId: 'r1',
       pull: { number: 7, title: 'old', url: 'u' },
       worktreePath: 'C:\\work\\pr-7',
+      headSha: null,
       baseBranch: 'main',
       description: null,
       problemStatement: {
@@ -736,6 +738,7 @@ describe('createPrReviewService', () => {
       repoId: 'r1',
       pull: { number: 7, title: 'Fallback title', url: 'u' },
       worktreePath: 'C:\\work\\pr-7',
+      headSha: null,
       baseBranch: 'main',
       description,
       problemStatement: {

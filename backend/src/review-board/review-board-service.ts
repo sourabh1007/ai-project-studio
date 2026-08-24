@@ -169,6 +169,7 @@ export function createReviewBoardService(
         number: review.pull.number,
         title: review.pull.title,
         url: review.pull.url,
+        headSha: review.headSha,
       },
       worktreePath: review.worktreePath,
       baseBranch: review.baseBranch,

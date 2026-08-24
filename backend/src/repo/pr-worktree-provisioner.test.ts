@@ -42,6 +42,7 @@ describe('provisionPrWorktree', () => {
       worktreePath,
       branch: 'feature-x',
       tracksPullRequest: true,
+      headSha: 'abc123',
     });
     expect(calls[0]).toEqual([
       '-C',
@@ -95,6 +96,7 @@ describe('provisionPrWorktree', () => {
       worktreePath,
       branch: 'pr-12',
       tracksPullRequest: false,
+      headSha: 'abc123',
     });
     expect(calls[3][calls[3].length - 2]).toBe(worktreePath);
     expect(calls[3]).toContain('pr-12');
@@ -160,6 +162,7 @@ describe('provisionPrWorktree', () => {
       worktreePath,
       branch: 'pr-7',
       tracksPullRequest: false,
+      headSha: 'sha789',
     });
     expect(calls[0]).toEqual(['-C', repoLocalPath, 'fetch', 'origin', 'topic/x']);
     expect(calls[1]).toEqual([
@@ -208,6 +211,7 @@ describe('provisionPrWorktree', () => {
       worktreePath,
       branch: 'feat',
       tracksPullRequest: true,
+      headSha: 'def456',
     });
     expect(calls[0]).toEqual([
       '-C',

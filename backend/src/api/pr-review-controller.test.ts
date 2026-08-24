@@ -38,6 +38,7 @@ const review: PrReview = {
   repoId: 'r1',
   pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
   worktreePath: 'C:\\work\\pr-7',
+  headSha: 'abc1234def5678',
   baseBranch: 'main',
   description: 'desc',
   problemStatement: { ...step('ready'), content: 'p', sufficient: true },

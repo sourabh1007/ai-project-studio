@@ -25,6 +25,7 @@ const review: PrReview = {
   repoId: 'r1',
   pull: { number: 42, title: 'Add caching', url: 'https://example.com/pr/42' },
   worktreePath: 'C:/work/pr-42',
+  headSha: 'cafe1234babe',
   baseBranch: 'main',
   description: 'short',
   problemStatement: { ...step('ready'), content: 'p', sufficient: true },

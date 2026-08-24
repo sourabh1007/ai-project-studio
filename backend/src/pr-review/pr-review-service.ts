@@ -90,8 +90,12 @@ export interface PrReviewService {
   findByPull(repoId: string, pullNumber: number): string | null;
   /** Begins generation for a newly-created PR review feature. */
   start(input: StartPrReviewInput): PrReview;
-  /** Re-runs every step for an existing review. */
-  refresh(featureId: string): PrReview;
+  /**
+   * Re-runs every step for an existing review. Pass `headSha` when the worktree
+   * was just re-provisioned to a new remote head (take-latest) so the review
+   * records the commit it now reflects; omit it for a plain in-place refresh.
+   */
+  refresh(featureId: string, headSha?: string): PrReview;
   /** Re-runs a single step for an existing review. */
   retryStep(featureId: string, step: PrReviewStepKey): PrReview;
   /** Deletes a review and suppresses any in-flight generation for it. */
@@ -168,6 +172,7 @@ interface NewReviewInput {
   repoId: string;
   pull: { number: number; title: string; url: string; body?: string | null };
   worktreePath: string;
+  headSha: string | null;
   baseBranch: string | null;
 }
 
@@ -181,6 +186,7 @@ function newReview(input: NewReviewInput, now: string, existingCreatedAt?: strin
       url: input.pull.url,
     },
     worktreePath: input.worktreePath,
+    headSha: input.headSha,
     baseBranch: input.baseBranch,
     description: input.pull.body ?? null,
     problemStatement: { ...pendingStep(), content: null, sufficient: true },
@@ -527,7 +533,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       runPipeline(review);
       return current;
     },
-    refresh(featureId) {
+    refresh(featureId, headSha) {
       const existing = deps.reviews.get(featureId);
       if (!existing) {
         throw new NotFoundError(`Code review is not available: ${featureId}`);
@@ -539,6 +545,9 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
           repoId: existing.repoId,
           pull: { ...existing.pull, body: existing.description },
           worktreePath: existing.worktreePath,
+          // A "take latest" re-provision passes the freshly checked-out head;
+          // a plain refresh reuses the existing worktree, so keep its head.
+          headSha: headSha ?? existing.headSha,
           baseBranch: existing.baseBranch,
         },
         deps.clock.isoNow(),

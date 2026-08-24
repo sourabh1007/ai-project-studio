@@ -51,6 +51,7 @@ function review(partial: {
     repoId: 'r1',
     pull: { number: 7, title: 'PR', url: 'https://example/pr/7' },
     worktreePath: '/wt',
+    headSha: null,
     baseBranch: 'main',
     description: null,
     problemStatement: {

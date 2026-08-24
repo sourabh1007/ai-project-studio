@@ -88,6 +88,7 @@ export function createPrFeatureService(
         repoId: repo.id,
         pull,
         worktreePath: worktree.worktreePath,
+        headSha: worktree.headSha,
         // The PR's own target branch is the correct diff base; fall back to the
         // repository default only when the provider didn't report one. Using the
         // repo default alone breaks reviews of PRs that target a non-default
@@ -111,9 +112,10 @@ export function createPrFeatureService(
       }
       // Re-provisioning does a fresh `origin` fetch and hard checkout of the
       // current head, so the worktree the review reruns against is the latest
-      // remote state. The refresh then rebuilds every step from that worktree.
-      await deps.provisionWorktree(repo, pull);
-      return deps.reviews.refresh(featureId);
+      // remote state. The refresh then rebuilds every step from that worktree,
+      // recording the new head SHA so the board shows the commit under review.
+      const worktree = await deps.provisionWorktree(repo, pull);
+      return deps.reviews.refresh(featureId, worktree.headSha);
     },
   };
 }
