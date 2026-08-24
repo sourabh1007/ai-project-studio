@@ -8643,6 +8643,8 @@ body.is-resizing {
 .rb-header-side {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 .rb-reco {
@@ -8713,6 +8715,55 @@ body.is-resizing {
   border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
   background: color-mix(in srgb, var(--success) 12%, transparent);
   white-space: nowrap;
+}
+.rb-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    filter var(--transition-fast),
+    opacity var(--transition-fast);
+}
+.rb-act:hover:not(:disabled) {
+  background: var(--surface-strong);
+}
+.rb-act:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rb-act-icon {
+  width: 28px;
+  padding: 0;
+}
+.rb-act-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.rb-act-primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
+.rb-act-success {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.rb-act-success:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--success) 20%, transparent);
 }
   display: flex;
   flex-wrap: wrap;

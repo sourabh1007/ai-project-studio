@@ -17,6 +17,7 @@ import {
 import {
   AiChatIcon,
   AiMagicIcon,
+  CheckIcon,
   CloseIcon,
   ExpandIcon,
   PrReviewIcon,
@@ -494,40 +495,58 @@ export function ReviewBoardPage({
             {reviewedN}/{totalPerspectives} reviewed
           </span>
           {prReviewed ? (
-            <Button variant="ghost" onClick={() => clearPrReviewed()}>
-              <RestoreIcon size={14} /> Re-open PR
-            </Button>
+            <button
+              type="button"
+              className="rb-act rb-act-success"
+              onClick={() => clearPrReviewed()}
+              title="PR marked reviewed — click to re-open"
+            >
+              <RestoreIcon size={14} /> Re-open
+            </button>
           ) : (
-            <Button
-              variant="primary"
+            <button
+              type="button"
+              className="rb-act rb-act-primary"
               onClick={() => markPrReviewed(perspectiveIds)}
               disabled={!allReviewed}
+              title={
+                allReviewed
+                  ? 'Mark the whole PR reviewed'
+                  : 'Review every perspective first'
+              }
             >
-              Mark PR reviewed
-            </Button>
+              <CheckIcon size={14} /> Mark PR reviewed
+            </button>
           )}
-          <Button
-            variant="primary"
+          <button
+            type="button"
+            className="rb-act rb-act-primary"
             onClick={() => void analyze()}
             disabled={analyzing}
+            title={
+              analyzing
+                ? 'Analyzing…'
+                : analyzed
+                  ? 'Re-analyze all perspectives with AI'
+                  : 'Analyze all perspectives with AI'
+            }
           >
             {analyzing ? (
               <span className="spinner" aria-hidden="true" />
             ) : (
               <AiMagicIcon size={14} />
             )}{' '}
-            {analyzing
-              ? 'Analyzing…'
-              : analyzed
-                ? 'Re-analyze with AI'
-                : 'Analyze with AI'}
-          </Button>
-          <Button
-            variant="ghost"
+            {analyzing ? 'Analyzing…' : analyzed ? 'Re-analyze' : 'Analyze'}
+          </button>
+          <button
+            type="button"
+            className="rb-act rb-act-icon"
             onClick={() => reset()}
+            title={analyzing ? 'Stop & reset' : 'Reset'}
+            aria-label={analyzing ? 'Stop & reset' : 'Reset'}
           >
-            <RefreshIcon size={14} /> {analyzing ? 'Stop & reset' : 'Reset'}
-          </Button>
+            <RefreshIcon size={14} />
+          </button>
         </div>
       </header>
 
@@ -703,30 +722,43 @@ export function ReviewBoardPage({
                   {perspectiveBadgeLabel(selectedAnalyzing, selected.status)}
                 </span>
                 <Marker kind="risk" value={selected.risk} />
-                <Button
-                  variant="ghost"
+                <button
+                  type="button"
+                  className="rb-act rb-act-icon"
                   onClick={() => void analyzeOne(selected.id)}
                   disabled={
                     selectedProgress.status === 'analyzing' ||
                     selectedProgress.status === 'retrying' ||
                     selectedProgress.status === 'pending'
                   }
+                  title={
+                    selectedProgress.status === 'done' ||
+                    selectedProgress.status === 'skipped'
+                      ? 'Re-analyze this perspective'
+                      : 'Analyze this perspective'
+                  }
+                  aria-label="Analyze this perspective"
                 >
-                  <AiMagicIcon size={13} />{' '}
-                  {selectedProgress.status === 'done' ||
-                  selectedProgress.status === 'skipped'
-                    ? 'Re-analyze this'
-                    : 'Analyze this'}
-                </Button>
-                <Button
-                  variant={selectedReviewed ? 'ghost' : 'primary'}
+                  <AiMagicIcon size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={`rb-act ${
+                    selectedReviewed ? 'rb-act-success' : 'rb-act-primary'
+                  }`}
                   onClick={() =>
                     setPerspectiveReviewed(selected.id, !selectedReviewed)
                   }
                   disabled={selectedAnalyzing}
+                  title={
+                    selectedReviewed
+                      ? 'You reviewed this perspective — click to undo'
+                      : 'Mark this perspective reviewed'
+                  }
                 >
-                  {selectedReviewed ? '✓ Reviewed by you' : 'Mark reviewed'}
-                </Button>
+                  <CheckIcon size={14} />{' '}
+                  {selectedReviewed ? 'Reviewed' : 'Mark reviewed'}
+                </button>
               </div>
               <p className="rb-detail-why">{selected.why}</p>
               <div className="rb-detail-meta">
