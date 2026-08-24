@@ -16,6 +16,7 @@
 import type {
   PerspectiveAnalysis,
   PerspectiveCheck,
+  PrReview,
   RationalePoint,
   ReviewBoard,
   ReviewBoardRatingChange,
@@ -50,6 +51,10 @@ const ANALYZE_CONCURRENCY = 1;
 const MAX_ATTEMPTS = 3;
 /** Backoff before the retry that follows a failed attempt (grows per attempt). */
 const RETRY_BACKOFF_MS = 1_500;
+/** Poll interval while waiting for the change graph to rebuild after a pull. */
+const PREP_POLL_MS = 1_500;
+/** Give up waiting for the change-graph rebuild after this long. */
+const PREP_TIMEOUT_MS = 180_000;
 
 /** The subset of the API client the store drives. */
 export interface ReviewBoardRunApi {
@@ -59,6 +64,10 @@ export interface ReviewBoardRunApi {
     perspectiveId: string,
     signal?: AbortSignal,
   ): Promise<PerspectiveAnalysis>;
+  /** Read the current PR review (used to poll the change-graph rebuild). */
+  getPrReview(featureId: string): Promise<PrReview>;
+  /** Re-provision the worktree to the latest remote head and rebuild. */
+  pullLatestPrReview(featureId: string): Promise<PrReview>;
 }
 
 export type PerspectiveStatus =
@@ -96,11 +105,26 @@ export interface ReviewBoardRunState {
   analyzed: boolean;
   running: boolean;
   progress: Record<string, PerspectiveProgress>;
+  /**
+   * "Take latest" preparation phase shown before an analysis pass: re-provision
+   * the PR worktree to the latest remote head, then wait for the change graph to
+   * rebuild. `active` drives the progress banner; `error` surfaces a failure.
+   */
+  prep: PrepPhase;
   /** Human sign-off layered over the AI verdict; persisted per feature. */
   signoff: SignoffState;
   /** Human resolve/ignore decisions per finding; persisted per feature. */
   resolutions: FindingResolutionMap;
 }
+
+/** Progress of the optional "take latest from remote" step before analysis. */
+export interface PrepPhase {
+  active: boolean;
+  message: string;
+  error: string | null;
+}
+
+const IDLE_PREP: PrepPhase = { active: false, message: '', error: null };
 
 const EMPTY_STATE: ReviewBoardRunState = {
   board: null,
@@ -109,6 +133,7 @@ const EMPTY_STATE: ReviewBoardRunState = {
   analyzed: false,
   running: false,
   progress: {},
+  prep: IDLE_PREP,
   signoff: emptySignoff(),
   resolutions: {},
 };
@@ -356,11 +381,91 @@ class ReviewBoardRunStore {
   }
 
   /**
+   * Take the latest from the remote before analysing: re-provision the PR
+   * worktree to the current remote head, then poll until the change graph has
+   * rebuilt (analysis reads the change graph, so it must be `ready` first).
+   * Returns `true` on success, `false` if the reviewer should not proceed
+   * (aborted by a newer run, or the pull/rebuild failed — surfaced via `prep`).
+   */
+  private async takeLatest(
+    featureId: string,
+    api: ReviewBoardRunApi,
+  ): Promise<boolean> {
+    const rec = this.record(featureId);
+    rec.controller?.abort();
+    rec.controller = null;
+    const token = (rec.runToken += 1);
+    const isStale = () => this.record(featureId).runToken !== token;
+
+    this.setPrep(featureId, {
+      active: true,
+      message: 'Fetching the latest from the remote…',
+      error: null,
+    });
+    try {
+      await api.pullLatestPrReview(featureId);
+      if (isStale()) return false;
+      this.setPrep(featureId, {
+        active: true,
+        message: 'Rebuilding the change graph…',
+        error: null,
+      });
+      const deadline = Date.now() + PREP_TIMEOUT_MS;
+      for (;;) {
+        if (isStale()) return false;
+        const review = await api.getPrReview(featureId);
+        const status = review.changeGraph.status;
+        if (status === 'ready') break;
+        if (status === 'failed') {
+          throw new Error(
+            review.changeGraph.failure?.message ??
+              'The change graph failed to rebuild.',
+          );
+        }
+        if (Date.now() > deadline) {
+          throw new Error('Timed out waiting for the change graph to rebuild.');
+        }
+        await new Promise((r) => setTimeout(r, PREP_POLL_MS));
+      }
+      if (isStale()) return false;
+      this.setPrep(featureId, IDLE_PREP);
+      return true;
+    } catch (error) {
+      if (isStale() || isAbort(error)) return false;
+      this.setPrep(featureId, {
+        active: false,
+        message: '',
+        error: messageOf(error, 'Failed to take the latest from the remote.'),
+      });
+      return false;
+    }
+  }
+
+  /** Replace the take-latest prep phase and notify subscribers. */
+  private setPrep(featureId: string, prep: PrepPhase): void {
+    this.update(featureId, (prev) => ({ ...prev, prep }));
+  }
+
+  /** Clear a lingering take-latest error (e.g. when the reviewer retries). */
+  clearPrepError(featureId: string): void {
+    this.update(featureId, (prev) =>
+      prev.prep.error ? { ...prev, prep: IDLE_PREP } : prev,
+    );
+  }
+
+  /**
    * Run the sequential, self-healing analysis over every perspective. Safe to
    * call repeatedly — a fresh call supersedes any prior run (aborting it) so the
-   * "Analyze with AI" button always starts a clean pass.
+   * "Analyze with AI" button always starts a clean pass. When `takeLatest` is
+   * set, the PR worktree is re-provisioned to the latest remote head (and the
+   * change graph rebuilt) before the pass begins.
    */
-  async analyze(featureId: string, api: ReviewBoardRunApi): Promise<void> {
+  async analyze(
+    featureId: string,
+    api: ReviewBoardRunApi,
+    opts: { takeLatest?: boolean } = {},
+  ): Promise<void> {
+    if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
     // Take the latest board before a full pass, so the analysis reflects the
     // current PR state rather than a stale snapshot from a previous visit.
     await this.load(featureId, api, true);
@@ -476,7 +581,9 @@ class ReviewBoardRunStore {
     featureId: string,
     perspectiveId: string,
     api: ReviewBoardRunApi,
+    opts: { takeLatest?: boolean } = {},
   ): Promise<void> {
+    if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
     const rec = this.record(featureId);
     if (!rec.state.board) return;
 

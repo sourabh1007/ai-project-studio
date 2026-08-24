@@ -117,6 +117,9 @@ function harness() {
       reviewed.push({ repoId, number });
       return reviewFeature;
     },
+    pullLatest: async () => {
+      throw new Error('not used in repo-controller tests');
+    },
   };
   const repositoryContexts: RepositoryContextCoordinator = {
     get: () => repositoryContext,

@@ -210,6 +210,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/pr-review/refresh`,
         jsonBody({}),
       ),
+    pullLatestPrReview: (featureId: string) =>
+      request<PrReview>(
+        `/features/${featureId}/pr-review/pull-latest`,
+        jsonBody({}),
+      ),
     retryPrReviewStep: (featureId: string, step: PrReviewStepKey) =>
       request<PrReview>(
         `/features/${featureId}/pr-review/steps/${step}/retry`,

@@ -822,6 +822,16 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({}));
   });
 
+  it('takes the latest for a PR review via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.pullLatestPrReview('f1');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/pull-latest');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
   it('retries a single PR review step via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
     const client = createApiClient({ fetchImpl });

@@ -225,6 +225,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prComments: deps.prComments,
       prApprovals: deps.prApprovals,
       prDescriptions: deps.prDescriptions,
+      prFeatures: deps.prFeatures,
     }),
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),

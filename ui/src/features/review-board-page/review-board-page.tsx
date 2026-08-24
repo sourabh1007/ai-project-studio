@@ -347,6 +347,8 @@ export function ReviewBoardPage({
     () => ({
       getReviewBoard: api.getReviewBoard,
       analyzeReviewBoardPerspective: api.analyzeReviewBoardPerspective,
+      getPrReview: api.getPrReview,
+      pullLatestPrReview: api.pullLatestPrReview,
     }),
     [api],
   );
@@ -354,10 +356,15 @@ export function ReviewBoardPage({
     (listener) => reviewBoardRunStore.subscribe(featureId, listener),
     () => reviewBoardRunStore.getState(featureId),
   );
-  const { board, loading, loadError: error, analyzed, progress, signoff, resolutions } =
+  const { board, loading, loadError: error, analyzed, progress, signoff, resolutions, prep } =
     state;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // A pending "Analyze with AI" click awaiting the take-latest confirmation.
+  // `scope` is 'all' (whole board) or a perspective id (single perspective).
+  const [pendingAnalyze, setPendingAnalyze] = useState<{ scope: string } | null>(
+    null,
+  );
   // Which of the three panels is expanded to fill the body, or null for the
   // default three-column layout.
   const [focus, setFocus] = useState<'nav' | 'canvas' | 'agent' | null>(null);
@@ -379,16 +386,33 @@ export function ReviewBoardPage({
     [featureId, runApi],
   );
   const analyze = useMemo(
-    () => () => {
-      setBannerHidden(false);
-      return reviewBoardRunStore.analyze(featureId, runApi);
-    },
-    [featureId, runApi],
+    () => () => setPendingAnalyze({ scope: 'all' }),
+    [],
   );
   const analyzeOne = useMemo(
-    () => (perspectiveId: string) => {
-      setBannerHidden(false);
-      return reviewBoardRunStore.analyzeOne(featureId, perspectiveId, runApi);
+    () => (perspectiveId: string) => setPendingAnalyze({ scope: perspectiveId }),
+    [],
+  );
+  // Runs the analysis the reviewer just confirmed, optionally taking the latest
+  // from the remote first (re-provision the PR worktree + rebuild the graph).
+  const runPending = useMemo(
+    () => (takeLatest: boolean) => {
+      setPendingAnalyze((pending) => {
+        if (pending) {
+          setBannerHidden(false);
+          if (pending.scope === 'all') {
+            void reviewBoardRunStore.analyze(featureId, runApi, { takeLatest });
+          } else {
+            void reviewBoardRunStore.analyzeOne(
+              featureId,
+              pending.scope,
+              runApi,
+              { takeLatest },
+            );
+          }
+        }
+        return null;
+      });
     },
     [featureId, runApi],
   );
@@ -448,12 +472,14 @@ export function ReviewBoardPage({
   const activityLines = selectedId
     ? reviewBoardActivityLines(live, featureId, selectedId)
     : [];
-  const analyzing = progressValues.some(
-    (p) =>
-      p.status === 'analyzing' ||
-      p.status === 'pending' ||
-      p.status === 'retrying',
-  );
+  const analyzing =
+    prep.active ||
+    progressValues.some(
+      (p) =>
+        p.status === 'analyzing' ||
+        p.status === 'pending' ||
+        p.status === 'retrying',
+    );
   const analyzedCount = progressValues.filter(
     (p) => p.status === 'done' || p.status === 'skipped' || p.status === 'error',
   ).length;
@@ -625,6 +651,61 @@ export function ReviewBoardPage({
           >
             <CloseIcon size={14} />
           </button>
+        </div>
+      )}
+
+      {prep.active && (
+        <div className="rb-analyzing" role="status">
+          <span className="spinner" aria-hidden="true" />
+          <span>{prep.message}</span>
+        </div>
+      )}
+
+      {prep.error && (
+        <div className="rb-analyze-error" role="alert">
+          <ErrorText error={prep.error} />
+          <Button
+            variant="ghost"
+            onClick={() => reviewBoardRunStore.clearPrepError(featureId)}
+          >
+            <CloseIcon size={14} /> Dismiss
+          </Button>
+        </div>
+      )}
+
+      {pendingAnalyze && (
+        <div
+          className="rb-confirm-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Analyze with AI"
+          onClick={() => setPendingAnalyze(null)}
+        >
+          <div
+            className="rb-confirm"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="rb-confirm-title">Take the latest first?</h3>
+            <p className="rb-confirm-body">
+              Fetch the latest from the remote branch and rebuild the change
+              graph before analyzing, or analyze the version you have now.
+            </p>
+            <div className="rb-confirm-actions">
+              <Button variant="primary" onClick={() => runPending(true)}>
+                <RefreshIcon size={14} /> Take latest &amp; analyze
+              </Button>
+              <Button variant="ghost" onClick={() => runPending(false)}>
+                <AiMagicIcon size={14} /> Analyze current
+              </Button>
+              <button
+                type="button"
+                className="rb-confirm-cancel"
+                onClick={() => setPendingAnalyze(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

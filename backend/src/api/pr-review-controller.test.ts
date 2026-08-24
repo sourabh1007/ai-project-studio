@@ -109,12 +109,18 @@ function harness() {
       Promise.resolve({ updated: true as const, url: 'https://example/pr/1' })
     ),
   } as unknown as PrDescriptionService;
+  const prFeatures = {
+    pullLatest: (id: string) => (
+      (calls.pullLatest = [id]), Promise.resolve(review)
+    ),
+  };
   return {
     routes: createPrReviewRoutes({
       prReviews,
       prComments,
       prApprovals,
       prDescriptions,
+      prFeatures,
     }),
     calls,
     thread,
@@ -138,6 +144,17 @@ describe('pr-review-controller', () => {
     );
     expect(res).toEqual({ status: 200, body: review });
     expect(calls.refresh).toEqual(['f1']);
+  });
+
+  it('takes the latest from the remote and rebuilds the review', async () => {
+    const { routes, calls } = harness();
+    const res = await pick(
+      routes,
+      'post',
+      '/features/:featureId/pr-review/pull-latest',
+    )(req({ params: { featureId: 'f1' } }));
+    expect(res).toEqual({ status: 200, body: review });
+    expect(calls.pullLatest).toEqual(['f1']);
   });
 
   it('retries a single valid step', () => {

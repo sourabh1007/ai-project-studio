@@ -1,4 +1,5 @@
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
+import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type {
   ChangeGraphCategory,
   PrReviewChatMessage,
@@ -19,6 +20,8 @@ export interface PrReviewControllerDeps {
   prComments: PrCommentsService;
   prApprovals: PrApprovalService;
   prDescriptions: PrDescriptionService;
+  /** Owns re-provisioning the worktree from the remote for "take latest". */
+  prFeatures: Pick<PrFeatureService, 'pullLatest'>;
 }
 
 const STEP_KEYS: PrReviewStepKey[] = ['problemStatement', 'changeGraph'];
@@ -94,6 +97,14 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
       handler: (req) => ({
         status: 200,
         body: deps.prReviews.refresh(req.params.featureId),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/pr-review/pull-latest',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.prFeatures.pullLatest(req.params.featureId),
       }),
     },
     {

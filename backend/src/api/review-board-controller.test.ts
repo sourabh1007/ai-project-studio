@@ -28,8 +28,11 @@ function service(overrides: Partial<ReviewBoardService> = {}): ReviewBoardServic
       perspective: { id: perspectiveId } as never,
       skipped: false,
       skipReason: null,
+      summary: null,
+      rationale: [],
+      checks: [],
     })),
-    chat: vi.fn(async () => ({ answer: 'ok' })),
+    chat: vi.fn(async () => ({ answer: 'ok', ratingChange: null })),
     ...overrides,
   };
 }
@@ -63,6 +66,9 @@ describe('createReviewBoardRoutes', () => {
       perspective: { id: pid } as never,
       skipped: true,
       skipReason: 'n/a',
+      summary: null,
+      rationale: [],
+      checks: [],
     }));
     const routes = createReviewBoardRoutes({
       reviewBoard: service({ analyzePerspective }),
@@ -81,7 +87,7 @@ describe('createReviewBoardRoutes', () => {
   });
 
   it('routes a chat turn to the agent with a perspective', async () => {
-    const chat = vi.fn(async () => ({ answer: 'because' }));
+    const chat = vi.fn(async () => ({ answer: 'because', ratingChange: null }));
     const routes = createReviewBoardRoutes({ reviewBoard: service({ chat }) });
     const handler = pick(
       routes,
@@ -105,7 +111,7 @@ describe('createReviewBoardRoutes', () => {
   });
 
   it('defaults a missing/omitted perspectiveId to null', async () => {
-    const chat = vi.fn(async () => ({ answer: 'ok' }));
+    const chat = vi.fn(async () => ({ answer: 'ok', ratingChange: null }));
     const routes = createReviewBoardRoutes({ reviewBoard: service({ chat }) });
     const handler = pick(
       routes,
@@ -124,7 +130,7 @@ describe('createReviewBoardRoutes', () => {
   });
 
   it('accepts an explicit null perspectiveId', async () => {
-    const chat = vi.fn(async () => ({ answer: 'ok' }));
+    const chat = vi.fn(async () => ({ answer: 'ok', ratingChange: null }));
     const routes = createReviewBoardRoutes({ reviewBoard: service({ chat }) });
     const handler = pick(
       routes,

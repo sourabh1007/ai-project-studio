@@ -8613,6 +8613,7 @@ body.is-resizing {
   overflow: hidden;
   padding: 16px 24px;
   gap: 16px;
+  position: relative;
 }
 .rb-state {
   align-items: center;
@@ -9309,6 +9310,7 @@ body.is-resizing {
   z-index: 6;
   display: flex;
   min-height: 0;
+  background: var(--panel);
   box-shadow: -12px 0 32px rgba(15, 23, 42, 0.24);
   animation: rb-agent-slide var(--transition-fast, 0.15s) ease;
 }
@@ -9321,6 +9323,7 @@ body.is-resizing {
   min-height: 0;
   overflow-y: auto;
   border-radius: 12px;
+  background: var(--panel);
 }
 @keyframes rb-agent-slide {
   from {
@@ -9348,6 +9351,61 @@ body.is-resizing {
     color var(--transition-fast, 0.15s) ease;
 }
 .rb-agent-close:hover {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+/* "Take latest?" confirmation shown on every Analyze-with-AI click. */
+.rb-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(7, 11, 24, 0.55);
+  backdrop-filter: blur(2px);
+}
+.rb-confirm {
+  width: min(420px, 100%);
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: 0 24px 60px rgba(7, 11, 24, 0.4);
+}
+.rb-confirm-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--text);
+}
+.rb-confirm-body {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+.rb-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rb-confirm-cancel {
+  margin-left: auto;
+  padding: 0 12px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.15s) ease,
+    color var(--transition-fast, 0.15s) ease;
+}
+.rb-confirm-cancel:hover {
   background: var(--surface-strong);
   color: var(--text);
 }

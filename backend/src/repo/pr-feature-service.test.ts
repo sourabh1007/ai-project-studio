@@ -26,10 +26,12 @@ const pull: RemotePullRequest = {
 function harness(overrides: {
   getPull?: () => Promise<RemotePullRequest | null>;
   findByPull?: (repoId: string, pullNumber: number) => string | null;
+  find?: (featureId: string) => { repoId: string; pull: { number: number } } | null;
 } = {}) {
   const created: unknown[] = [];
   const started: unknown[] = [];
   const provisioned: unknown[] = [];
+  const refreshed: string[] = [];
   const existingFeature = {
     id: 'existing-f',
     name: 'PR #12: Add login',
@@ -79,9 +81,14 @@ function harness(overrides: {
         return undefined as never;
       },
       findByPull: overrides.findByPull ?? (() => null),
+      find: (overrides.find ?? (() => ({ repoId: repo.id, pull: { number: 12 } }))) as never,
+      refresh: (featureId) => {
+        refreshed.push(featureId);
+        return { featureId } as never;
+      },
     },
   });
-  return { svc, created, started, provisioned, existingFeature };
+  return { svc, created, started, provisioned, refreshed, existingFeature };
 }
 
 describe('pr-feature-service', () => {
@@ -172,6 +179,8 @@ describe('pr-feature-service', () => {
           return undefined as never;
         },
         findByPull: () => null,
+        find: () => null,
+        refresh: (featureId) => ({ featureId }) as never,
       },
     });
     await noBranch.createFromPull('r1', 12);
@@ -207,5 +216,33 @@ describe('pr-feature-service', () => {
   it('propagates an unknown repository from createFromPull', async () => {
     const { svc } = harness();
     await expect(svc.createFromPull('nope', 12)).rejects.toThrow(AppError);
+  });
+
+  describe('pullLatest', () => {
+    it('re-provisions the worktree from the remote and refreshes the review', async () => {
+      const { svc, provisioned, refreshed } = harness();
+      const result = await svc.pullLatest('f1');
+      expect(provisioned).toEqual([true]);
+      expect(refreshed).toEqual(['f1']);
+      expect(result).toMatchObject({ featureId: 'f1' });
+    });
+
+    it('throws NotFound when the review does not exist', async () => {
+      const { svc, provisioned } = harness({ find: () => null });
+      await expect(svc.pullLatest('missing')).rejects.toThrow(
+        'Code review is not available: missing',
+      );
+      expect(provisioned).toEqual([]);
+    });
+
+    it('throws NotFound when the pull request is gone from the remote', async () => {
+      const { svc, provisioned } = harness({
+        getPull: () => Promise.resolve(null),
+      });
+      await expect(svc.pullLatest('f1')).rejects.toThrow(
+        'Pull request #12 not found',
+      );
+      expect(provisioned).toEqual([]);
+    });
   });
 });

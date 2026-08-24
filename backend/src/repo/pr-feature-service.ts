@@ -8,6 +8,7 @@ import type {
   PullFilter,
 } from './remote-pr-contract.js';
 import type { ProvisionedWorktree } from './pr-worktree-provisioner.js';
+import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 
 export interface PrFeatureServiceDeps {
@@ -29,7 +30,7 @@ export interface PrFeatureServiceDeps {
   ) => Promise<ProvisionedWorktree>;
   features: Pick<FeatureService, 'create' | 'get'>;
   /** Kicks off the automated AI review for the new PR feature. */
-  reviews: Pick<PrReviewService, 'start' | 'findByPull'>;
+  reviews: Pick<PrReviewService, 'start' | 'findByPull' | 'find' | 'refresh'>;
 }
 
 /**
@@ -41,6 +42,15 @@ export interface PrFeatureServiceDeps {
 export interface PrFeatureService {
   listPulls(repoId: string, filter?: PullFilter): Promise<RemotePullRequest[]>;
   createFromPull(repoId: string, number: number): Promise<Feature>;
+  /**
+   * Re-fetches the pull request from its remote and rebuilds the review against
+   * the latest head — the "take the latest / rebase the remote branch" action.
+   * The PR's worktree is re-provisioned (a fresh `origin` fetch + hard checkout
+   * of the current head), then the whole review pipeline is re-run so the change
+   * graph and diffs reflect the newest commits. Returns the reset review whose
+   * steps then repopulate asynchronously.
+   */
+  pullLatest(featureId: string): Promise<PrReview>;
 }
 
 export function createPrFeatureService(
@@ -85,6 +95,25 @@ export function createPrFeatureService(
         baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
       });
       return feature;
+    },
+
+    async pullLatest(featureId) {
+      const review = deps.reviews.find(featureId);
+      if (!review) {
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
+      }
+      const repo = deps.repos.get(review.repoId);
+      const pull = await deps.getPull(repo, review.pull.number);
+      if (!pull) {
+        throw new NotFoundError(
+          `Pull request #${review.pull.number} not found in ${repo.name}`,
+        );
+      }
+      // Re-provisioning does a fresh `origin` fetch and hard checkout of the
+      // current head, so the worktree the review reruns against is the latest
+      // remote state. The refresh then rebuilds every step from that worktree.
+      await deps.provisionWorktree(repo, pull);
+      return deps.reviews.refresh(featureId);
     },
   };
 }
