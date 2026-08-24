@@ -167,9 +167,11 @@ function StepStatus({
 export function PrReviewPage({
   featureId,
   liveReview,
+  focusFile,
 }: {
   featureId: string;
   liveReview?: PrReview;
+  focusFile?: { path: string } | null;
 }) {
   const api = useApi();
   const [review, setReview] = useState<PrReview | null>(liveReview ?? null);
@@ -515,6 +517,7 @@ export function PrReviewPage({
                   onExplainFile={explainFile}
                   onChat={chatGraph('code')}
                   comments={comments}
+                  focusPath={focusFile?.path ?? null}
                 />
               </div>
               <div className="pr-graph-group">
@@ -535,6 +538,7 @@ export function PrReviewPage({
                   onExplainFile={explainFile}
                   onChat={chatGraph('test')}
                   comments={comments}
+                  focusPath={focusFile?.path ?? null}
                 />
               </div>
             </div>

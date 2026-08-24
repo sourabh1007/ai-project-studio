@@ -103,6 +103,11 @@ export function WorkspaceView({
   const [codeReviewFeature, setCodeReviewFeature] = useState<Feature | null>(
     null,
   );
+  // Optional file the Code Review should open focused on (from a Review Board
+  // evidence link), so its diff opens straight away with an inline comment box.
+  const [codeReviewFocus, setCodeReviewFocus] = useState<{
+    path: string;
+  } | null>(null);
   const [explorerWidth, setExplorerWidth] = usePersistentState(
     'cw-explorer-width',
     260,
@@ -130,8 +135,9 @@ export function WorkspaceView({
     });
   }
 
-  function openCodeReview(feature: Feature) {
+  function openCodeReview(feature: Feature, focus?: { path?: string }) {
     setCodeReviewFeature(feature);
+    setCodeReviewFocus(focus?.path ? { path: focus.path } : null);
   }
 
   function openReviewBoard(feature: Feature) {
@@ -368,7 +374,9 @@ export function WorkspaceView({
                 <ReviewBoardPage
                   key={active.feature.id}
                   featureId={active.feature.id}
-                  onOpenCodeReview={() => openCodeReview(active.feature)}
+                  onOpenCodeReview={(target) =>
+                    openCodeReview(active.feature, target)
+                  }
                 />
               </Suspense>
             </ErrorBoundary>
@@ -395,7 +403,11 @@ export function WorkspaceView({
         <CodeReviewModal
           feature={codeReviewFeature}
           liveReview={live.prReviews[codeReviewFeature.id]}
-          onClose={() => setCodeReviewFeature(null)}
+          focusFile={codeReviewFocus}
+          onClose={() => {
+            setCodeReviewFeature(null);
+            setCodeReviewFocus(null);
+          }}
         />
       )}
     </div>
@@ -412,10 +424,12 @@ export function WorkspaceView({
 function CodeReviewModal({
   feature,
   liveReview,
+  focusFile,
   onClose,
 }: {
   feature: Feature;
   liveReview?: PrReview;
+  focusFile?: { path: string } | null;
   onClose: () => void;
 }) {
   return createPortal(
@@ -463,6 +477,7 @@ function CodeReviewModal({
                 key={feature.id}
                 featureId={feature.id}
                 liveReview={liveReview}
+                focusFile={focusFile ?? null}
               />
             </Suspense>
           </ErrorBoundary>

@@ -15,6 +15,7 @@ import {
   reviewedCount,
 } from '../../lib/review-signoff.js';
 import {
+  evidencePath,
   resolutionOf,
   splitIntoBullets,
   type FindingResolution,
@@ -106,27 +107,38 @@ function DetectedList({ title, items }: { title: string; items: DetectedItem[] }
   );
 }
 
+/** Where an evidence link should open the Code Review — optionally a file. */
+export interface CodeReviewTarget {
+  path?: string;
+}
+
 /**
  * An evidence source label. When the board can open the underlying Code Review
  * (where the change graph, diffs and changed files live), it renders as a real
- * link that jumps there; otherwise it's a plain label.
+ * link that jumps there — straight to the referenced file's diff (with an
+ * inline comment box) when the source names one; otherwise it's a plain label.
  */
 function EvidenceSource({
   source,
   onOpenCodeReview,
 }: {
   source: string;
-  onOpenCodeReview?: () => void;
+  onOpenCodeReview?: (target?: CodeReviewTarget) => void;
 }) {
   if (!onOpenCodeReview) {
     return <span className="rb-evidence-source">{source}</span>;
   }
+  const path = evidencePath(source);
   return (
     <button
       type="button"
       className="rb-evidence-source rb-evidence-link"
-      onClick={onOpenCodeReview}
-      title="Open in Code Review"
+      onClick={() => onOpenCodeReview(path ? { path } : undefined)}
+      title={
+        path
+          ? `Open ${path} diff and comment inline`
+          : 'Open in Code Review'
+      }
     >
       {source}
     </button>
@@ -139,7 +151,7 @@ function ExplainModel({
   onOpenCodeReview,
 }: {
   board: ReviewBoard;
-  onOpenCodeReview?: () => void;
+  onOpenCodeReview?: (target?: CodeReviewTarget) => void;
 }) {
   const { model } = board;
   const languages =
@@ -324,7 +336,7 @@ export function ReviewBoardPage({
   onOpenCodeReview,
 }: {
   featureId: string;
-  onOpenCodeReview?: () => void;
+  onOpenCodeReview?: (target?: CodeReviewTarget) => void;
 }) {
   const api = useApi();
   // The analysis run lives in a persistent, per-feature store so it keeps going
@@ -969,6 +981,10 @@ export function ReviewBoardPage({
                 <ul className="rb-findings">
                   {selected.findings.map((f) => {
                     const resolution = resolutionOf(resolutions, f.id);
+                    const findingPath =
+                      f.evidence
+                        .map((e) => evidencePath(e.source))
+                        .find((p): p is string => Boolean(p)) ?? null;
                     return (
                     <li
                       key={f.id}
@@ -1005,6 +1021,18 @@ export function ReviewBoardPage({
                         </ul>
                       )}
                       <div className="rb-finding-actions">
+                        {onOpenCodeReview && findingPath && (
+                          <button
+                            type="button"
+                            className="rb-finding-act rb-finding-act-diff"
+                            onClick={() =>
+                              onOpenCodeReview({ path: findingPath })
+                            }
+                            title={`Open ${findingPath} diff and comment inline`}
+                          >
+                            <PrReviewIcon size={13} /> Open diff
+                          </button>
+                        )}
                         {resolution ? (
                           <button
                             type="button"

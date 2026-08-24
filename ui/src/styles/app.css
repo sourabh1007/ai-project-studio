@@ -9752,6 +9752,15 @@ body.is-resizing {
   border-color: var(--success, #2ea043);
   color: var(--success, #2ea043);
 }
+.rb-finding-act-diff {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.rb-finding-act-diff:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .rb-checked-bullets,
 .rb-rationale-bullets {
   margin: 6px 0 0;

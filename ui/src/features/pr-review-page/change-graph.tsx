@@ -1115,6 +1115,7 @@ export function ChangeGraph({
   onExplainFile,
   onChat,
   comments,
+  focusPath,
 }: {
   step: ChangeGraphStep;
   category: ChangeGraphCategory;
@@ -1126,6 +1127,12 @@ export function ChangeGraph({
   onChat?: GraphChatSend;
   /** Live PR comments controller; enables the inline comment box in the popup. */
   comments?: PrCommentsController;
+  /**
+   * A changed-file path to open focused (e.g. from a Review Board evidence
+   * link): when it names a changed file in THIS category, its diff popup opens
+   * automatically so the reviewer lands on the code with the inline comment box.
+   */
+  focusPath?: string | null;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -1160,6 +1167,24 @@ export function ChangeGraph({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [fullscreen]);
+  // Open the requested file's popup when the board hands us a focus path that
+  // names a changed file in THIS category. Guarded by category+kind so only the
+  // matching graph (code vs test) opens, never both. Re-runs when the focus
+  // path changes so successive evidence clicks re-open the right file.
+  useEffect(() => {
+    if (!focusPath) {
+      return;
+    }
+    const match = step.nodes.some(
+      (node) =>
+        node.path === focusPath &&
+        node.category === category &&
+        node.kind === 'changed',
+    );
+    if (match) {
+      setSelected(focusPath);
+    }
+  }, [focusPath, step, category]);
   // Project ids the user has expanded from their default collapsed module tile.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set<string>(),

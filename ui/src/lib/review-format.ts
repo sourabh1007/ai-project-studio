@@ -75,3 +75,23 @@ export function parseResolutions(raw: unknown): FindingResolutionMap {
   }
   return out;
 }
+
+/**
+ * Extract the changed-file path an evidence entry points at. Evidence sources
+ * are authored as `"<path> — <symbol/region>"` (em-dash, en-dash or hyphen
+ * separated), so the path is the leading segment. Returns null when the source
+ * carries no file-like path (e.g. a bare symbol or prose), so callers can fall
+ * back to opening the Code Review at the top instead of a specific file.
+ */
+export function evidencePath(source: string): string | null {
+  const head = source.split(/\s[—–-]\s/)[0].trim();
+  // Strip a trailing `:line` / `:line:col` locator and surrounding backticks.
+  const cleaned = head.replace(/^`|`$/g, '').replace(/:\d+(?::\d+)?$/, '').trim();
+  if (cleaned.length === 0) return null;
+  // Must look like a real path: a slash, or a file with an extension.
+  const looksLikePath = /[\\/]/.test(cleaned) || /\.[A-Za-z0-9]{1,8}$/.test(cleaned);
+  if (!looksLikePath) return null;
+  // Reject obvious prose (spaces mean it isn't a single path token).
+  if (/\s/.test(cleaned)) return null;
+  return cleaned;
+}

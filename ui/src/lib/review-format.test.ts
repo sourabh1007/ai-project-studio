@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evidencePath,
   openFindingCount,
   parseResolutions,
   resolutionOf,
@@ -45,6 +46,49 @@ describe('splitIntoBullets', () => {
 
   it('returns the trailing semicolon token as its own bullet', () => {
     expect(splitIntoBullets('first; ;')).toEqual(['first', ';']);
+  });
+});
+
+describe('evidencePath', () => {
+  it('extracts the leading path before an em-dash separator', () => {
+    expect(
+      evidencePath('backend/src/config.ts — TryGetScopedValue'),
+    ).toBe('backend/src/config.ts');
+  });
+
+  it('handles en-dash and hyphen separators', () => {
+    expect(evidencePath('src/a.cs – SymbolA')).toBe('src/a.cs');
+    expect(evidencePath('src/b.cs - SymbolB')).toBe('src/b.cs');
+  });
+
+  it('strips a trailing line/column locator and backticks', () => {
+    expect(evidencePath('`src/x.ts:42:7` — foo')).toBe('src/x.ts');
+  });
+
+  it('accepts a bare filename with an extension and no separator', () => {
+    expect(evidencePath('schema.sql')).toBe('schema.sql');
+  });
+
+  it('accepts a path with directory separators and no extension', () => {
+    expect(evidencePath('src/services/Auth — the guard')).toBe(
+      'src/services/Auth',
+    );
+  });
+
+  it('returns null for a bare symbol with no path shape', () => {
+    expect(evidencePath('TenantContainerBuilder — removed static')).toBeNull();
+  });
+
+  it('returns null for prose', () => {
+    expect(evidencePath('the change overall')).toBeNull();
+  });
+
+  it('returns null when the leading token is empty', () => {
+    expect(evidencePath(' — orphan')).toBeNull();
+  });
+
+  it('returns null when the path token contains spaces', () => {
+    expect(evidencePath('my file.cs')).toBeNull();
   });
 });
 
