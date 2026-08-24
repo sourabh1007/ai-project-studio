@@ -17,6 +17,7 @@ import { SoftwareUpdateSection } from '../updates/software-update-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
 import { WorktreesSection } from './worktrees-section.js';
+import { MetasessionPoolsSection } from './metasession-pools-section.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DesktopBridge {
@@ -377,6 +378,8 @@ export function SettingsView() {
       </Card>
 
       <SoftwareUpdateSection />
+
+      <MetasessionPoolsSection />
 
       <NetworkActivitySection />
 

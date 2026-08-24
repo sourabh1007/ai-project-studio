@@ -52,6 +52,8 @@ import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createUsageDetailRoutes } from './usage-detail-controller.js';
 import { createConfigRoutes } from './config-controller.js';
+import { createMetaPoolsRoutes } from './meta-pools-controller.js';
+import type { MetaPoolsStatus } from '../meta/pooled-meta-runner.js';
 import { createFeatureRoutes } from './feature-controller.js';
 import { createProviderRoutes } from './provider-controller.js';
 import { createMcpRoutes } from './mcp-controller.js';
@@ -124,6 +126,8 @@ export interface ApiRoutesDeps {
   configSecretPaths: readonly string[];
   /** Persisted, per-namespace config override editing. */
   configOverrides: ConfigOverrideService;
+  /** Live warm metasession pool status for the Settings page. */
+  metaPools: () => MetaPoolsStatus;
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
@@ -238,6 +242,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       secretPaths: deps.configSecretPaths,
       overrides: deps.configOverrides,
     }),
+    ...createMetaPoolsRoutes({ status: deps.metaPools }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
     ...createGithubRoutes({
       githubStatus: deps.githubStatus,

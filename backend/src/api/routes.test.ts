@@ -31,6 +31,7 @@ function deps(): ApiRoutesDeps {
     currentConfig: {},
     configSecretPaths: [],
     configOverrides: empty,
+    metaPools: () => ({ enabled: false, pools: [] }),
     agencyStatus: () => ({ installed: true }),
     githubStatus: () => Promise.resolve({ authenticated: true, login: 'x' }),
     githubSignInStart: () =>
@@ -166,6 +167,7 @@ describe('createApiRoutes', () => {
       'get /config',
       'put /config/:namespace',
       'delete /config/:namespace',
+      'get /meta/pools',
       'get /agency/status',
       'get /github/status',
       'post /github/signin/start',

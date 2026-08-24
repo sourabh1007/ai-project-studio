@@ -245,6 +245,11 @@ import { AcpClient } from './meta/acp/acp-client.js';
 import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
 import { createAcpMetaRunner } from './meta/acp/acp-meta-runner.js';
 import {
+  createPooledMetaRunner,
+  metaPoolsStatus,
+  type PurposePool,
+} from './meta/pooled-meta-runner.js';
+import {
   META_NAMESPACE,
   metaConfigSchema,
   metaDefaults,
@@ -1343,11 +1348,65 @@ function main(): void {
     transcripts: transcriptRepo,
     config: metaConfig,
   });
+  // Warm ACP metasession pools. When enabled they keep several live
+  // `copilot --acp` sessions ready — one pool per configured purpose — so every
+  // meta AI turn (summaries, repo context, PR review, review board, monitors, …)
+  // leases a warm session instead of cold-spawning a CLI (MCP proxies + auth)
+  // per request. The cold `metaRunner` stays the automatic fallback while a pool
+  // is warming or if a warm turn fails, so enabling the pools only adds speed.
+  const warmPoolCfg = metaConfig.warmPool;
+  const warmExecutable =
+    warmPoolCfg.executable === 'copilot'
+      ? copilotConfig.executable
+      : warmPoolCfg.executable;
+  const warmPurposePools: PurposePool[] = [];
+  let metaPoolsStatusFn: () => ReturnType<typeof metaPoolsStatus> = () =>
+    metaPoolsStatus(false, []);
+  let metaAi: typeof metaRunner = metaRunner;
+  let warmInlinePrompts = false;
+  if (warmPoolCfg.enabled) {
+    for (const poolCfg of warmPoolCfg.pools) {
+      const pool = new MetaSessionPool({
+        size: poolCfg.size,
+        createClient: () =>
+          new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
+            initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
+            turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
+          }),
+      });
+      pool.start().catch((error: unknown) => {
+        logger.error(
+          `Warm ACP pool '${poolCfg.purpose}' failed to start; using cold path`,
+          { error: error instanceof Error ? error.message : String(error) },
+        );
+      });
+      const runner = createAcpMetaRunner({
+        pool,
+        newSessionId: () => `acp-${randomUUID()}`,
+      });
+      warmPurposePools.push({
+        purpose: poolCfg.purpose,
+        ready: () => pool.ready,
+        stats: () => pool.stats(),
+        runDetailed: (request) => runner.runDetailed(request),
+      });
+    }
+    metaAi = createPooledMetaRunner({
+      pools: warmPurposePools,
+      fallback: metaRunner,
+      onFallback: (purpose, error) =>
+        logger.warn(`Warm turn on pool '${purpose}' failed; using cold path`, {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    });
+    warmInlinePrompts = true;
+    metaPoolsStatusFn = () => metaPoolsStatus(true, warmPurposePools);
+  }
   // Provider-agnostic MCP server management. The provider's own CLI reports
   // where its MCP config lives (via a meta-session), so no path is hardcoded.
   const mcpService = createMcpService({
     registry: providers,
-    meta: metaRunner,
+    meta: metaAi,
     files: createMcpConfigFileStore(),
     tools: createMcpToolInspector(),
     config: mcpConfig,
@@ -1380,7 +1439,7 @@ function main(): void {
     evidence: repositoryEvidence,
     generator: createRepositoryContextGenerator({
       executor: createRepositoryAnalysisExecutor(
-        metaRunner,
+        metaAi,
         createTemporaryPromptFileFactory(),
       ),
       config: repositoryContextConfig,
@@ -1467,38 +1526,6 @@ function main(): void {
     },
     config: prReviewConfig,
   });
-  // Warm ACP metasession pool (opt-in). When enabled it keeps a few live
-  // `copilot --acp` sessions ready so PR review steps lease a warm session
-  // instead of cold-spawning a CLI (MCP proxies + auth) per request. The cold
-  // `metaRunner` remains the fallback and the default for every other feature.
-  const warmPoolCfg = metaConfig.warmPool;
-  const warmExecutable =
-    warmPoolCfg.executable === 'copilot'
-      ? copilotConfig.executable
-      : warmPoolCfg.executable;
-  let warmMetaRunner: Pick<typeof metaRunner, 'runDetailed'> | null = null;
-  if (warmPoolCfg.enabled) {
-    const pool = new MetaSessionPool({
-      size: warmPoolCfg.size,
-      createClient: () =>
-        new AcpClient(
-          new AcpProcessAdapter({ executable: warmExecutable }),
-          {
-            initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
-            turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
-          },
-        ),
-    });
-    pool.start().catch((error: unknown) => {
-      logger.error('Warm ACP pool failed to start; falling back to cold path', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    warmMetaRunner = createAcpMetaRunner({
-      pool,
-      newSessionId: () => `acp-${randomUUID()}`,
-    });
-  }
   const prReviewService = createPrReviewService({
     reviews: prReviewRepo,
     diffs: prDiffCollector,
@@ -1511,8 +1538,8 @@ function main(): void {
       createServiceFabricAnalyzer(),
     ]),
     changeGraphFs: nodeChangeGraphFs,
-    ai: warmMetaRunner ?? metaRunner,
-    inlinePrompts: warmMetaRunner !== null,
+    ai: metaAi,
+    inlinePrompts: warmInlinePrompts,
     metaUsage: createMetaUsageReader({ usage: usageRepo }),
     temporaryPrompts: createTemporaryPromptFileFactory(),
     clock,
@@ -1524,8 +1551,8 @@ function main(): void {
     reviews: { get: (featureId) => prReviewService.get(featureId) },
     config: reviewBoardConfig,
     clock,
-    ai: warmMetaRunner ?? metaRunner,
-    inlinePrompts: warmMetaRunner !== null,
+    ai: metaAi,
+    inlinePrompts: warmInlinePrompts,
     temporaryPrompts: createTemporaryPromptFileFactory(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     bus: bus as unknown as EventBus<ReviewBoardEventMap>,
@@ -1681,7 +1708,7 @@ function main(): void {
   const featureTasksService = createFeatureTasksService({
     repo: featureTasksRepo,
     runner: createTaskPlanRunner({
-      meta: metaRunner,
+      meta: metaAi,
       features: featureService,
       repo: featureTasksRepo,
       ids,
@@ -1708,7 +1735,7 @@ function main(): void {
   // their AI usage folds into the existing cost accounting.
   const automationAi: AiInvoker = {
     run: (input) =>
-      metaRunner.runDetailed({
+      metaAi.runDetailed({
         featureId: input.featureId,
         prompt: input.prompt,
         cwd: input.cwd,
@@ -1803,6 +1830,7 @@ function main(): void {
       currentConfig: config,
       configSecretPaths,
       configOverrides: configOverrideService,
+      metaPools: metaPoolsStatusFn,
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
       githubSignInStart: () => githubDeviceAuth.start(),

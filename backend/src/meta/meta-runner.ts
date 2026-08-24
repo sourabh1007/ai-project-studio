@@ -107,6 +107,13 @@ export interface MetaRequest {
    */
   scope?: SessionScope;
   /**
+   * Warm-pool routing key. When warm pools are enabled the request leases a
+   * live session from the pool whose configured `purpose` matches this value;
+   * unset or unmatched requests use the shared `general` pool. Ignored on the
+   * cold path.
+   */
+  purpose?: string;
+  /**
    * Invoked with the metasession id the moment it launches, before completion,
    * so callers can attribute in-flight progress (e.g. stream live activity) to
    * the session while it runs.

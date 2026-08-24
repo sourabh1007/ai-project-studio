@@ -1,6 +1,7 @@
 import type {
   ConfigResponse,
   ConfigUpdateResult,
+  MetaPoolsStatus,
   CreateFeatureInput,
   CreateGroupInput,
   CreateSkillInput,
@@ -427,6 +428,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/config/${encodeURIComponent(namespace)}`,
         del(),
       ),
+    getMetaPools: () => request<MetaPoolsStatus>('/meta/pools'),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>

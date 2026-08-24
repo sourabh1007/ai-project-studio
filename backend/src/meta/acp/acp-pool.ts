@@ -24,6 +24,20 @@ export interface MetaSessionPoolConfig {
   createClient: () => PooledClient;
 }
 
+/** Live warm-capacity snapshot for a single pool. */
+export interface MetaSessionPoolStats {
+  /** Target number of warm sessions. */
+  size: number;
+  /** Sessions currently booted (idle + busy). */
+  live: number;
+  /** Sessions ready to lease right now. */
+  idle: number;
+  /** Sessions currently serving a turn. */
+  busy: number;
+  /** True once at least one session is ready to serve a turn. */
+  ready: boolean;
+}
+
 interface Waiter {
   resolve: (client: PooledClient) => void;
   reject: (error: Error) => void;
@@ -96,6 +110,22 @@ export class MetaSessionPool {
   /** Number of sessions currently idle (for tests/diagnostics). */
   get idleCount(): number {
     return this.idle.length;
+  }
+
+  /** True once at least one warm session is live and ready to serve a turn. */
+  get ready(): boolean {
+    return !this.closed && this.idle.length > 0;
+  }
+
+  /** Live snapshot of the pool's warm capacity for status surfaces. */
+  stats(): MetaSessionPoolStats {
+    return {
+      size: this.config.size,
+      live: this.liveCount,
+      idle: this.idle.length,
+      busy: this.liveCount - this.idle.length,
+      ready: this.ready,
+    };
   }
 
   private async spawn(): Promise<void> {

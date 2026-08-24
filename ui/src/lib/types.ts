@@ -935,6 +935,22 @@ export interface ConfigUpdateResult {
   requiresRestart: boolean;
 }
 
+/** Live warm-capacity snapshot for one metasession pool. */
+export interface MetaPoolStat {
+  purpose: string;
+  size: number;
+  live: number;
+  idle: number;
+  busy: number;
+  ready: boolean;
+}
+
+/** Aggregate warm metasession pool status for the Settings page. */
+export interface MetaPoolsStatus {
+  enabled: boolean;
+  pools: MetaPoolStat[];
+}
+
 export interface CreateFeatureInput {
   name: string;
   description: string;

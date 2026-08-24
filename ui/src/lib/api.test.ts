@@ -392,6 +392,15 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/config');
   });
 
+  it('reads the warm metasession pool status', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ enabled: true, pools: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getMetaPools();
+    expect(calls[0][0]).toBe('/api/meta/pools');
+  });
+
   it('updates a namespace override with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({

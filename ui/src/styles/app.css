@@ -8136,7 +8136,65 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
-/* --- Staged AI-progress read-out (Phase 5a) --- */
+/* --- Metasession pools (Settings) --- */
+.metapool-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.metapool-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--panel);
+}
+.metapool-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.metapool-purpose {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: capitalize;
+}
+.metapool-badge {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.metapool-badge-ready {
+  border-color: color-mix(in srgb, var(--success, #16a34a) 45%, var(--border));
+  color: var(--success, #16a34a);
+}
+.metapool-badge-warming {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  color: var(--warning);
+}
+.metapool-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metapool-stats strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+
 .stage-progress {
   margin: 0 0 4px;
   padding: 8px 12px;

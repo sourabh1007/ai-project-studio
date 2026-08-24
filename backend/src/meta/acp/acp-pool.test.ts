@@ -189,4 +189,32 @@ describe('MetaSessionPool', () => {
     expect(created).toHaveLength(0);
     expect(pool.idleCount).toBe(0);
   });
+
+  it('reports readiness and warm-capacity stats', async () => {
+    const pool = new MetaSessionPool({
+      size: 2,
+      createClient: () => new FakeClient(),
+    });
+    expect(pool.ready).toBe(false);
+    expect(pool.stats()).toEqual({
+      size: 2,
+      live: 0,
+      idle: 0,
+      busy: 0,
+      ready: false,
+    });
+    await pool.start();
+    expect(pool.ready).toBe(true);
+    const leased = await pool.acquire();
+    expect(pool.stats()).toEqual({
+      size: 2,
+      live: 2,
+      idle: 1,
+      busy: 1,
+      ready: true,
+    });
+    pool.release(leased);
+    pool.close();
+    expect(pool.ready).toBe(false);
+  });
 });
