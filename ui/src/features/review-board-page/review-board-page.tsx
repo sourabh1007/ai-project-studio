@@ -8,6 +8,7 @@ import {
   reviewBoardRunStore,
   type PerspectiveProgress,
 } from './review-board-run-store.js';
+import { ChangeGraph } from '../pr-review-page/change-graph.js';
 import {
   allPerspectivesReviewed,
   isPerspectiveReviewed,
@@ -33,6 +34,7 @@ import {
   SendIcon,
 } from '../../components/icons.js';
 import type {
+  ChangeGraphStep,
   CheckStatus,
   DetectedItem,
   ReviewBoard,
@@ -452,8 +454,31 @@ export function ReviewBoardPage({
     void reviewBoardRunStore.load(featureId, runApi);
   }, [featureId, runApi]);
 
+  // The change graph drives the Architecture & Code Flow perspective's code-flow
+  // diagram (the same graph the PR "code review" renders). It lives on the PR
+  // review, so fetch it here and refresh whenever the board is (re)generated —
+  // e.g. after taking the latest — so the diagram tracks the code under review.
+  const [changeGraph, setChangeGraph] = useState<ChangeGraphStep | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void runApi
+      .getPrReview(featureId)
+      .then((review) => {
+        if (!cancelled) setChangeGraph(review.changeGraph);
+      })
+      .catch(() => {
+        if (!cancelled) setChangeGraph(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [featureId, runApi, board?.generatedAt]);
+
   const selected =
     board?.perspectives.find((p) => p.id === selectedId) ?? null;
+  // The Architecture & Code Flow perspective renders a code-flow diagram (the PR
+  // change graph) in place of the verbose "what was checked" narrative.
+  const isArchitecture = selected?.id === 'architecture';
   const selectedProgress: PerspectiveProgress =
     (selectedId && progress[selectedId]) || {
       status: 'idle',
@@ -920,7 +945,33 @@ export function ReviewBoardPage({
                 </div>
               )}
 
-              {selectedProgress.checked && (
+              {isArchitecture &&
+                (changeGraph && changeGraph.nodes.length > 0 ? (
+                  <div className="rb-codeflow">
+                    <span className="rb-codeflow-label">
+                      Code flow — how the changed files connect
+                    </span>
+                    <div className="rb-codeflow-graph">
+                      <ChangeGraph step={changeGraph} category="code" />
+                    </div>
+                    <p className="rb-checked-hint">
+                      Orange nodes are files this PR changed; blue nodes are
+                      callers that reference them. Click a file to read its diff
+                      and comment. →
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rb-codeflow rb-codeflow-empty" role="note">
+                    <span className="rb-codeflow-label">Code flow</span>
+                    <p className="rb-checked-hint">
+                      {changeGraph
+                        ? 'No code-flow graph yet — run the analysis (or take the latest) to build it.'
+                        : 'Loading the code-flow graph…'}
+                    </p>
+                  </div>
+                ))}
+
+              {!isArchitecture && selectedProgress.checked && (
                 <div className="rb-checked" role="note">
                   <span className="rb-checked-label">
                     What was checked for this rating
@@ -957,7 +1008,7 @@ export function ReviewBoardPage({
                 </div>
               )}
 
-              {selectedProgress.checks.length > 0 && (
+              {!isArchitecture && selectedProgress.checks.length > 0 && (
                 <div className="rb-checks">
                   <span className="rb-checks-label">
                     What was analysed — line by line

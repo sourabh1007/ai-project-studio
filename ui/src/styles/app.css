@@ -8826,6 +8826,36 @@ body.is-resizing {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
+.rb-codeflow {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rb-codeflow-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rb-codeflow-graph {
+  position: relative;
+  min-height: 320px;
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.rb-codeflow-empty {
+  background: color-mix(in srgb, var(--text-muted) 4%, transparent);
+}
 .rb-checked-label {
   display: block;
   font-size: 12px;
