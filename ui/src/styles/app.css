@@ -9079,6 +9079,40 @@ body.is-resizing {
   color: var(--success);
   border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
+.rb-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: inline-block;
+}
+.rb-dot-ring {
+  background: transparent;
+  border: 2px solid currentColor;
+  width: 10px;
+  height: 10px;
+}
+.rb-dot-reviewing {
+  color: var(--accent);
+}
+.rb-nav-skip-dot {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.rb-nav-ico {
+  flex-shrink: 0;
+}
+.rb-nav-queued-ico {
+  color: var(--text-muted);
+}
+.rb-nav-clean-ico {
+  color: var(--success);
+}
+.rb-nav-reviewed-ico {
+  color: var(--success);
+}
 .rb-detail-why {
   margin: 0 0 12px;
   font-size: 14px;

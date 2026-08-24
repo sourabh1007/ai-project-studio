@@ -18,6 +18,7 @@ import {
   AiChatIcon,
   AiMagicIcon,
   CheckIcon,
+  ClockIcon,
   CloseIcon,
   ExpandIcon,
   PrReviewIcon,
@@ -497,16 +498,17 @@ export function ReviewBoardPage({
           {prReviewed ? (
             <button
               type="button"
-              className="rb-act rb-act-success"
+              className="rb-act rb-act-icon rb-act-success"
               onClick={() => clearPrReviewed()}
               title="PR marked reviewed — click to re-open"
+              aria-label="Re-open PR"
             >
-              <RestoreIcon size={14} /> Re-open
+              <RestoreIcon size={14} />
             </button>
           ) : (
             <button
               type="button"
-              className="rb-act rb-act-primary"
+              className="rb-act rb-act-icon rb-act-primary"
               onClick={() => markPrReviewed(perspectiveIds)}
               disabled={!allReviewed}
               title={
@@ -514,13 +516,14 @@ export function ReviewBoardPage({
                   ? 'Mark the whole PR reviewed'
                   : 'Review every perspective first'
               }
+              aria-label="Mark PR reviewed"
             >
-              <CheckIcon size={14} /> Mark PR reviewed
+              <CheckIcon size={15} />
             </button>
           )}
           <button
             type="button"
-            className="rb-act rb-act-primary"
+            className="rb-act rb-act-icon rb-act-primary"
             onClick={() => void analyze()}
             disabled={analyzing}
             title={
@@ -530,13 +533,13 @@ export function ReviewBoardPage({
                   ? 'Re-analyze all perspectives with AI'
                   : 'Analyze all perspectives with AI'
             }
+            aria-label={analyzing ? 'Analyzing' : 'Analyze with AI'}
           >
             {analyzing ? (
               <span className="spinner" aria-hidden="true" />
             ) : (
-              <AiMagicIcon size={14} />
-            )}{' '}
-            {analyzing ? 'Analyzing…' : analyzed ? 'Re-analyze' : 'Analyze'}
+              <AiMagicIcon size={15} />
+            )}
           </button>
           <button
             type="button"
@@ -631,9 +634,10 @@ export function ReviewBoardPage({
                 <span className="rb-nav-name">{p.name}</span>
                 <span className="rb-nav-markers">
                   {state === 'pending' && (
-                    <span className="rb-nav-queued" title="Queued for review">
-                      Queued
-                    </span>
+                    <ClockIcon
+                      size={13}
+                      className="rb-nav-ico rb-nav-queued-ico"
+                    />
                   )}
                   {(state === 'analyzing' || state === 'retrying') && (
                     <span
@@ -642,43 +646,39 @@ export function ReviewBoardPage({
                       role="status"
                     />
                   )}
-                  {state === 'retrying' && (
-                    <span
-                      className="rb-nav-queued"
-                      title="Retrying after a transient failure"
-                    >
-                      Retry {progress[p.id]?.attempt ?? 2}/{3}
-                    </span>
-                  )}
-                  {state === 'skipped' && (
-                    <span className="rb-nav-skip">Skipped</span>
-                  )}
                   {state === 'error' && (
                     <span className="rb-nav-err" title="Analysis failed">
                       !
                     </span>
                   )}
+                  {state === 'skipped' && (
+                    <span
+                      className="rb-dot rb-dot-ring rb-nav-skip-dot"
+                      title="Skipped by the AI reviewer"
+                    />
+                  )}
                   {state === 'done' && p.findings.length === 0 && (
-                    <span className="rb-nav-clean" title="Analyzed — no findings">
-                      ✓
-                    </span>
+                    <CheckIcon
+                      size={13}
+                      className="rb-nav-ico rb-nav-clean-ico"
+                    />
                   )}
                   <span
-                    className={`rb-nav-verdict rb-verdict-${
-                      navAnalyzing ? 'reviewing' : p.status
+                    className={`rb-dot ${
+                      navAnalyzing ? 'rb-dot-reviewing' : `rb-status-${p.status}`
                     }`}
-                  >
-                    {perspectiveBadgeLabel(navAnalyzing, p.status)}
-                  </span>
+                    title={perspectiveBadgeLabel(navAnalyzing, p.status)}
+                  />
+                  <span
+                    className={`rb-dot rb-dot-ring rb-risk-${p.risk}`}
+                    title={`Risk: ${RISK_LABEL[p.risk]}`}
+                  />
                   {navReviewed && (
-                    <span
-                      className="rb-nav-reviewed"
-                      title="You marked this perspective reviewed"
-                    >
-                      ✓ You
-                    </span>
+                    <CheckIcon
+                      size={14}
+                      className="rb-nav-ico rb-nav-reviewed-ico"
+                    />
                   )}
-                  <Marker kind="risk" value={p.risk} />
                   {p.findings.length > 0 && (
                     <span className="rb-nav-count">{p.findings.length}</span>
                   )}
@@ -743,7 +743,7 @@ export function ReviewBoardPage({
                 </button>
                 <button
                   type="button"
-                  className={`rb-act ${
+                  className={`rb-act rb-act-icon ${
                     selectedReviewed ? 'rb-act-success' : 'rb-act-primary'
                   }`}
                   onClick={() =>
@@ -755,9 +755,13 @@ export function ReviewBoardPage({
                       ? 'You reviewed this perspective — click to undo'
                       : 'Mark this perspective reviewed'
                   }
+                  aria-label={
+                    selectedReviewed
+                      ? 'Reviewed by you'
+                      : 'Mark this perspective reviewed'
+                  }
                 >
-                  <CheckIcon size={14} />{' '}
-                  {selectedReviewed ? 'Reviewed' : 'Mark reviewed'}
+                  <CheckIcon size={15} />
                 </button>
               </div>
               <p className="rb-detail-why">{selected.why}</p>
