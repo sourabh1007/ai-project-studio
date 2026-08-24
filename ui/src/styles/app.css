@@ -8788,11 +8788,12 @@ body.is-resizing {
 }
 .rb-body {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 260px;
+  grid-template-columns: 220px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 16px;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 .rb-body > .rb-explain {
   grid-column: 1 / 3;
@@ -9275,6 +9276,81 @@ body.is-resizing {
 .rb-body[data-focus='agent'] > :not(.rb-agent) {
   display: none;
 }
+/* Review agent: minimised launcher pill + slide-over drawer. */
+.rb-agent-launcher {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
+  transition: filter var(--transition-fast, 0.15s) ease;
+}
+.rb-agent-launcher:hover {
+  filter: brightness(1.06);
+}
+.rb-agent-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 82%);
+  z-index: 6;
+  display: flex;
+  min-height: 0;
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.24);
+  animation: rb-agent-slide var(--transition-fast, 0.15s) ease;
+}
+.rb-agent-drawer.is-expanded {
+  width: min(560px, 94%);
+}
+.rb-agent-drawer > .rb-agent {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  border-radius: 12px;
+}
+@keyframes rb-agent-slide {
+  from {
+    transform: translateX(12px);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+.rb-agent-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.15s) ease,
+    color var(--transition-fast, 0.15s) ease;
+}
+.rb-agent-close:hover {
+  background: var(--surface-strong);
+  color: var(--text);
+}
 /* Evidence-backed verdict rationale (problem → solution → why → verdict). */
 .rb-rationale {
   margin: 12px 0 4px;
@@ -9618,6 +9694,80 @@ body.is-resizing {
   font-size: 13px;
   color: var(--text-muted);
   line-height: 18px;
+}
+.rb-finding.is-resolved,
+.rb-finding.is-ignored {
+  opacity: 0.55;
+}
+.rb-finding.is-resolved {
+  border-left-color: var(--success, #2ea043);
+}
+.rb-finding.is-ignored {
+  border-left-color: var(--text-muted);
+}
+.rb-finding-state {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.rb-finding-resolved {
+  color: var(--success, #2ea043);
+  background: color-mix(in srgb, var(--success, #2ea043) 14%, transparent);
+}
+.rb-finding-ignored {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+}
+.rb-finding-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.rb-finding-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.15s) ease,
+    color var(--transition-fast, 0.15s) ease,
+    border-color var(--transition-fast, 0.15s) ease;
+}
+.rb-finding-act:hover {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+.rb-finding-act-resolve:hover {
+  border-color: var(--success, #2ea043);
+  color: var(--success, #2ea043);
+}
+.rb-checked-bullets,
+.rb-rationale-bullets {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rb-checked-bullets li {
+  font-size: 14px;
+  line-height: 20px;
+}
+.rb-rationale-bullets li {
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--text-muted);
 }
 .rb-empty {
   font-size: 13px;

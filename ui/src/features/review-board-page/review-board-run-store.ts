@@ -37,6 +37,12 @@ import {
   withPrReviewed,
   type SignoffState,
 } from '../../lib/review-signoff.js';
+import {
+  parseResolutions,
+  withResolution,
+  type FindingResolution,
+  type FindingResolutionMap,
+} from '../../lib/review-format.js';
 
 /** How many perspectives are analysed at once — strictly one, in order. */
 const ANALYZE_CONCURRENCY = 1;
@@ -92,6 +98,8 @@ export interface ReviewBoardRunState {
   progress: Record<string, PerspectiveProgress>;
   /** Human sign-off layered over the AI verdict; persisted per feature. */
   signoff: SignoffState;
+  /** Human resolve/ignore decisions per finding; persisted per feature. */
+  resolutions: FindingResolutionMap;
 }
 
 const EMPTY_STATE: ReviewBoardRunState = {
@@ -102,6 +110,7 @@ const EMPTY_STATE: ReviewBoardRunState = {
   running: false,
   progress: {},
   signoff: emptySignoff(),
+  resolutions: {},
 };
 
 /** Internal per-feature record: public state plus the live run's control. */
@@ -134,7 +143,11 @@ class ReviewBoardRunStore {
     let rec = this.records.get(featureId);
     if (!rec) {
       rec = {
-        state: { ...EMPTY_STATE, signoff: this.loadSignoff(featureId) },
+        state: {
+          ...EMPTY_STATE,
+          signoff: this.loadSignoff(featureId),
+          resolutions: this.loadResolutions(featureId),
+        },
         runToken: 0,
         controller: null,
       };
@@ -208,6 +221,43 @@ class ReviewBoardRunStore {
   /** Re-open a PR that was marked reviewed, keeping per-perspective sign-offs. */
   clearPrReviewed(featureId: string): void {
     this.updateSignoff(featureId, (prev) => withPrReviewCleared(prev));
+  }
+
+  /** localStorage key holding a feature's finding resolve/ignore decisions. */
+  private resolutionsKey(featureId: string): string {
+    return `rb-resolutions:${featureId}`;
+  }
+
+  /** Read persisted resolutions, tolerating an absent or corrupt store. */
+  private loadResolutions(featureId: string): FindingResolutionMap {
+    try {
+      const raw = globalThis.localStorage?.getItem(
+        this.resolutionsKey(featureId),
+      );
+      return raw ? parseResolutions(JSON.parse(raw)) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Set (or clear, when null) the reviewer's decision for a single finding. */
+  setFindingResolution(
+    featureId: string,
+    findingId: string,
+    resolution: FindingResolution | null,
+  ): void {
+    this.update(featureId, (prev) => {
+      const resolutions = withResolution(prev.resolutions, findingId, resolution);
+      try {
+        globalThis.localStorage?.setItem(
+          this.resolutionsKey(featureId),
+          JSON.stringify(resolutions),
+        );
+      } catch {
+        /* best-effort persistence only */
+      }
+      return { ...prev, resolutions };
+    });
   }
 
   /** Current immutable snapshot for a feature (stable identity between edits). */
@@ -295,9 +345,11 @@ class ReviewBoardRunStore {
     rec.state = {
       ...EMPTY_STATE,
       // Keep the current board visible until the reload lands, and preserve the
-      // reviewer's sign-off — resetting the AI run must not discard human sign-off.
+      // reviewer's sign-off and finding decisions — resetting the AI run must
+      // not discard human decisions.
       board: rec.state.board,
       signoff: rec.state.signoff,
+      resolutions: rec.state.resolutions,
     };
     this.emit(featureId);
     void this.load(featureId, api, true);

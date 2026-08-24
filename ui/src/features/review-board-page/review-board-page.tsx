@@ -15,6 +15,11 @@ import {
   reviewedCount,
 } from '../../lib/review-signoff.js';
 import {
+  resolutionOf,
+  splitIntoBullets,
+  type FindingResolution,
+} from '../../lib/review-format.js';
+import {
   AiChatIcon,
   AiMagicIcon,
   CheckIcon,
@@ -190,6 +195,7 @@ function ReviewAgent({
   focused,
   onToggleFocus,
   onRatingChange,
+  onClose,
 }: {
   featureId: string;
   pullNumber: number;
@@ -197,6 +203,7 @@ function ReviewAgent({
   focused: boolean;
   onToggleFocus: () => void;
   onRatingChange: (change: ReviewBoardRatingChange) => void;
+  onClose: () => void;
 }) {
   const api = useApi();
   const [messages, setMessages] = useState<ReviewBoardChatMessage[]>([]);
@@ -248,6 +255,15 @@ function ReviewAgent({
           label="review agent"
           onToggle={onToggleFocus}
         />
+        <button
+          type="button"
+          className="rb-agent-close"
+          onClick={onClose}
+          title="Minimise the review agent"
+          aria-label="Minimise the review agent"
+        >
+          <CloseIcon size={15} />
+        </button>
       </div>
       <p className="rb-agent-context">
         Context: #{pullNumber}
@@ -326,7 +342,7 @@ export function ReviewBoardPage({
     (listener) => reviewBoardRunStore.subscribe(featureId, listener),
     () => reviewBoardRunStore.getState(featureId),
   );
-  const { board, loading, loadError: error, analyzed, progress, signoff } =
+  const { board, loading, loadError: error, analyzed, progress, signoff, resolutions } =
     state;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -335,6 +351,11 @@ export function ReviewBoardPage({
   const [focus, setFocus] = useState<'nav' | 'canvas' | 'agent' | null>(null);
   // Lets the reviewer dismiss the "reviewing…" progress banner for the run.
   const [bannerHidden, setBannerHidden] = useState(false);
+  // The review agent is minimised by default (chat-style) so it never competes
+  // with the findings for horizontal space; the reviewer opens it on demand.
+  const [agentOpen, setAgentOpen] = useState(false);
+  // Whether the opened agent drawer is expanded to a wider reading width.
+  const [agentExpanded, setAgentExpanded] = useState(false);
   useEffect(() => {
     if (board && selectedId === null) {
       setSelectedId(board.perspectives[0]?.id ?? null);
@@ -382,6 +403,11 @@ export function ReviewBoardPage({
   );
   const clearPrReviewed = useMemo(
     () => () => reviewBoardRunStore.clearPrReviewed(featureId),
+    [featureId],
+  );
+  const setFindingResolution = useMemo(
+    () => (findingId: string, resolution: FindingResolution | null) =>
+      reviewBoardRunStore.setFindingResolution(featureId, findingId, resolution),
     [featureId],
   );
 
@@ -798,10 +824,14 @@ export function ReviewBoardPage({
                   <span className="rb-checked-label">
                     What was checked for this rating
                   </span>
-                  <p className="rb-checked-text">{selectedProgress.checked}</p>
+                  <ul className="rb-checked-bullets">
+                    {splitIntoBullets(selectedProgress.checked).map((b, i) => (
+                      <li key={i}>{b}</li>
+                    ))}
+                  </ul>
                   <p className="rb-checked-hint">
                     Disagree with this rating? Challenge it with the review agent
-                    on the right — point at the code and it will re-evaluate. →
+                    — point at the code and it will re-evaluate. →
                   </p>
                 </div>
               )}
@@ -813,7 +843,13 @@ export function ReviewBoardPage({
                     {selectedProgress.rationale.map((r, i) => (
                       <div key={i} className="rb-rationale-row">
                         <dt className="rb-rationale-term">{r.label}</dt>
-                        <dd className="rb-rationale-detail">{r.detail}</dd>
+                        <dd className="rb-rationale-detail">
+                          <ul className="rb-rationale-bullets">
+                            {splitIntoBullets(r.detail).map((b, j) => (
+                              <li key={j}>{b}</li>
+                            ))}
+                          </ul>
+                        </dd>
                       </div>
                     ))}
                   </dl>
@@ -931,14 +967,26 @@ export function ReviewBoardPage({
                 </div>
               ) : (
                 <ul className="rb-findings">
-                  {selected.findings.map((f) => (
-                    <li key={f.id} className={`rb-finding rb-sev-${f.severity}`}>
+                  {selected.findings.map((f) => {
+                    const resolution = resolutionOf(resolutions, f.id);
+                    return (
+                    <li
+                      key={f.id}
+                      className={`rb-finding rb-sev-${f.severity}${
+                        resolution ? ` is-${resolution}` : ''
+                      }`}
+                    >
                       <div className="rb-finding-head">
                         <span className="rb-finding-title">{f.title}</span>
                         <span className={`rb-sev-tag rb-sev-tag-${f.severity}`}>
                           {f.severity}
                         </span>
                         <Marker kind="status" value={f.status} />
+                        {resolution && (
+                          <span className={`rb-finding-state rb-finding-${resolution}`}>
+                            {resolution === 'resolved' ? 'Resolved' : 'Ignored'}
+                          </span>
+                        )}
                       </div>
                       <p className="rb-finding-detail">{f.detail}</p>
                       {f.evidence.length > 0 && (
@@ -956,24 +1004,76 @@ export function ReviewBoardPage({
                           ))}
                         </ul>
                       )}
+                      <div className="rb-finding-actions">
+                        {resolution ? (
+                          <button
+                            type="button"
+                            className="rb-finding-act"
+                            onClick={() => setFindingResolution(f.id, null)}
+                          >
+                            <RestoreIcon size={13} /> Reopen
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="rb-finding-act rb-finding-act-resolve"
+                              onClick={() =>
+                                setFindingResolution(f.id, 'resolved')
+                              }
+                              title="Mark this comment resolved"
+                            >
+                              <CheckIcon size={13} /> Resolve
+                            </button>
+                            <button
+                              type="button"
+                              className="rb-finding-act"
+                              onClick={() =>
+                                setFindingResolution(f.id, 'ignored')
+                              }
+                              title="Ignore this comment"
+                            >
+                              <CloseIcon size={13} /> Ignore
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </section>
           )}
         </main>
 
-        <ReviewAgent
-          featureId={featureId}
-          pullNumber={board.pull.number}
-          perspective={selected}
-          focused={focus === 'agent'}
-          onToggleFocus={() => setFocus(focus === 'agent' ? null : 'agent')}
-          onRatingChange={(change) =>
-            reviewBoardRunStore.applyRatingChange(featureId, change)
-          }
-        />
+        {agentOpen ? (
+          <div
+            className={`rb-agent-drawer${agentExpanded ? ' is-expanded' : ''}`}
+          >
+            <ReviewAgent
+              featureId={featureId}
+              pullNumber={board.pull.number}
+              perspective={selected}
+              focused={agentExpanded}
+              onToggleFocus={() => setAgentExpanded((v) => !v)}
+              onClose={() => setAgentOpen(false)}
+              onRatingChange={(change) =>
+                reviewBoardRunStore.applyRatingChange(featureId, change)
+              }
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="rb-agent-launcher"
+            onClick={() => setAgentOpen(true)}
+            title="Discuss the findings with the review agent"
+          >
+            <AiChatIcon size={18} />
+            <span>Review agent</span>
+          </button>
+        )}
 
         <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
       </div>
