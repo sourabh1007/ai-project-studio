@@ -615,6 +615,8 @@ export function ReviewBoardPage({
                   </span>
                 )}
                 <span className="rb-detail-spacer" />
+                <Marker kind="status" value={selected.status} />
+                <Marker kind="risk" value={selected.risk} />
                 <Button
                   variant="ghost"
                   onClick={() => void analyzeOne(selected.id)}
@@ -630,8 +632,6 @@ export function ReviewBoardPage({
                     ? 'Re-analyze this'
                     : 'Analyze this'}
                 </Button>
-                <Marker kind="status" value={selected.status} />
-                <Marker kind="risk" value={selected.risk} />
               </div>
               <p className="rb-detail-why">{selected.why}</p>
               <div className="rb-detail-meta">
@@ -793,19 +793,6 @@ export function ReviewBoardPage({
                                 : 'The AI reviewer raised no findings for this perspective — nothing here needs your attention.'
                               : 'Not analysed yet. Run the AI reviewer to author evidence-backed findings for this perspective.'}
                   </p>
-                  {!analyzed && (
-                    <Button
-                      variant="primary"
-                      onClick={() => void analyzeOne(selected.id)}
-                      disabled={
-                        selectedProgress.status === 'analyzing' ||
-                        selectedProgress.status === 'retrying' ||
-                        selectedProgress.status === 'pending'
-                      }
-                    >
-                      <AiMagicIcon size={14} /> Analyze with AI
-                    </Button>
-                  )}
                 </div>
               ) : (
                 <ul className="rb-findings">

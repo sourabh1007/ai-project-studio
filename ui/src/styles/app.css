@@ -8932,11 +8932,14 @@ body.is-resizing {
 .rb-detail-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
 }
 .rb-detail-head .rb-section-header {
   margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .rb-detail-spacer {
   flex: 1 1 auto;
