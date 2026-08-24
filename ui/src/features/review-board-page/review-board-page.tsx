@@ -9,6 +9,12 @@ import {
   type PerspectiveProgress,
 } from './review-board-run-store.js';
 import {
+  allPerspectivesReviewed,
+  isPerspectiveReviewed,
+  perspectiveBadgeLabel,
+  reviewedCount,
+} from '../../lib/review-signoff.js';
+import {
   AiChatIcon,
   AiMagicIcon,
   CloseIcon,
@@ -318,7 +324,8 @@ export function ReviewBoardPage({
     (listener) => reviewBoardRunStore.subscribe(featureId, listener),
     () => reviewBoardRunStore.getState(featureId),
   );
-  const { board, loading, loadError: error, analyzed, progress } = state;
+  const { board, loading, loadError: error, analyzed, progress, signoff } =
+    state;
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Which of the three panels is expanded to fill the body, or null for the
@@ -357,6 +364,23 @@ export function ReviewBoardPage({
   const reset = useMemo(
     () => () => reviewBoardRunStore.reset(featureId, runApi),
     [featureId, runApi],
+  );
+  const setPerspectiveReviewed = useMemo(
+    () => (perspectiveId: string, reviewed: boolean) =>
+      reviewBoardRunStore.setPerspectiveReviewed(
+        featureId,
+        perspectiveId,
+        reviewed,
+      ),
+    [featureId],
+  );
+  const markPrReviewed = useMemo(
+    () => (ids: string[]) => reviewBoardRunStore.markPrReviewed(featureId, ids),
+    [featureId],
+  );
+  const clearPrReviewed = useMemo(
+    () => () => reviewBoardRunStore.clearPrReviewed(featureId),
+    [featureId],
   );
 
   // Load the clean board on mount; the store no-ops if a run is already live.
@@ -397,6 +421,18 @@ export function ReviewBoardPage({
     (p) => p.status === 'error',
   ).length;
   const totalPerspectives = board?.perspectives.length ?? 0;
+
+  const perspectiveIds = board?.perspectives.map((p) => p.id) ?? [];
+  const reviewedN = reviewedCount(signoff, perspectiveIds);
+  const allReviewed = allPerspectivesReviewed(signoff, perspectiveIds);
+  const prReviewed = signoff.prReviewedAt !== null;
+  const selectedReviewed = selectedId
+    ? isPerspectiveReviewed(signoff, selectedId)
+    : false;
+  const selectedAnalyzing =
+    selectedProgress.status === 'analyzing' ||
+    selectedProgress.status === 'retrying' ||
+    selectedProgress.status === 'pending';
 
   const detailRef = useRef<HTMLElement | null>(null);
   const firstSelection = useRef(true);
@@ -443,9 +479,33 @@ export function ReviewBoardPage({
           </p>
         </div>
         <div className="rb-header-side">
-          <span className={`rb-reco rb-reco-${board.recommendation}`}>
-            {RECOMMENDATION_LABEL[board.recommendation]}
+          <span
+            className={`rb-reco rb-reco-${
+              prReviewed ? 'approve' : board.recommendation
+            }`}
+          >
+            {analyzing
+              ? 'Reviewing'
+              : prReviewed
+                ? 'PR reviewed'
+                : RECOMMENDATION_LABEL[board.recommendation]}
           </span>
+          <span className="rb-review-progress" title="Perspectives you have reviewed">
+            {reviewedN}/{totalPerspectives} reviewed
+          </span>
+          {prReviewed ? (
+            <Button variant="ghost" onClick={() => clearPrReviewed()}>
+              <RestoreIcon size={14} /> Re-open PR
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => markPrReviewed(perspectiveIds)}
+              disabled={!allReviewed}
+            >
+              Mark PR reviewed
+            </Button>
+          )}
           <Button
             variant="primary"
             onClick={() => void analyze()}
@@ -535,6 +595,11 @@ export function ReviewBoardPage({
           </div>
           {board.perspectives.map((p) => {
             const state = progress[p.id]?.status ?? 'idle';
+            const navAnalyzing =
+              state === 'analyzing' ||
+              state === 'retrying' ||
+              state === 'pending';
+            const navReviewed = isPerspectiveReviewed(signoff, p.id);
             return (
               <button
                 key={p.id}
@@ -579,6 +644,21 @@ export function ReviewBoardPage({
                       ✓
                     </span>
                   )}
+                  <span
+                    className={`rb-nav-verdict rb-verdict-${
+                      navAnalyzing ? 'reviewing' : p.status
+                    }`}
+                  >
+                    {perspectiveBadgeLabel(navAnalyzing, p.status)}
+                  </span>
+                  {navReviewed && (
+                    <span
+                      className="rb-nav-reviewed"
+                      title="You marked this perspective reviewed"
+                    >
+                      ✓ You
+                    </span>
+                  )}
                   <Marker kind="risk" value={p.risk} />
                   {p.findings.length > 0 && (
                     <span className="rb-nav-count">{p.findings.length}</span>
@@ -615,7 +695,13 @@ export function ReviewBoardPage({
                   </span>
                 )}
                 <span className="rb-detail-spacer" />
-                <Marker kind="status" value={selected.status} />
+                <span
+                  className={`rb-nav-verdict rb-verdict-${
+                    selectedAnalyzing ? 'reviewing' : selected.status
+                  }`}
+                >
+                  {perspectiveBadgeLabel(selectedAnalyzing, selected.status)}
+                </span>
                 <Marker kind="risk" value={selected.risk} />
                 <Button
                   variant="ghost"
@@ -631,6 +717,15 @@ export function ReviewBoardPage({
                   selectedProgress.status === 'skipped'
                     ? 'Re-analyze this'
                     : 'Analyze this'}
+                </Button>
+                <Button
+                  variant={selectedReviewed ? 'ghost' : 'primary'}
+                  onClick={() =>
+                    setPerspectiveReviewed(selected.id, !selectedReviewed)
+                  }
+                  disabled={selectedAnalyzing}
+                >
+                  {selectedReviewed ? '✓ Reviewed by you' : 'Mark reviewed'}
                 </Button>
               </div>
               <p className="rb-detail-why">{selected.why}</p>

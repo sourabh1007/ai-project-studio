@@ -28,6 +28,15 @@ import {
   runWithRetry,
   RetryCancelledError,
 } from '../../lib/review-board-progress.js';
+import {
+  clearPerspectivesReviewed,
+  emptySignoff,
+  parseSignoff,
+  withPerspectiveReviewed,
+  withPrReviewCleared,
+  withPrReviewed,
+  type SignoffState,
+} from '../../lib/review-signoff.js';
 
 /** How many perspectives are analysed at once — strictly one, in order. */
 const ANALYZE_CONCURRENCY = 1;
@@ -81,6 +90,8 @@ export interface ReviewBoardRunState {
   analyzed: boolean;
   running: boolean;
   progress: Record<string, PerspectiveProgress>;
+  /** Human sign-off layered over the AI verdict; persisted per feature. */
+  signoff: SignoffState;
 }
 
 const EMPTY_STATE: ReviewBoardRunState = {
@@ -90,6 +101,7 @@ const EMPTY_STATE: ReviewBoardRunState = {
   analyzed: false,
   running: false,
   progress: {},
+  signoff: emptySignoff(),
 };
 
 /** Internal per-feature record: public state plus the live run's control. */
@@ -121,10 +133,81 @@ class ReviewBoardRunStore {
   private record(featureId: string): FeatureRecord {
     let rec = this.records.get(featureId);
     if (!rec) {
-      rec = { state: EMPTY_STATE, runToken: 0, controller: null };
+      rec = {
+        state: { ...EMPTY_STATE, signoff: this.loadSignoff(featureId) },
+        runToken: 0,
+        controller: null,
+      };
       this.records.set(featureId, rec);
     }
     return rec;
+  }
+
+  /** localStorage key holding a feature's persisted human sign-off. */
+  private signoffKey(featureId: string): string {
+    return `rb-signoff:${featureId}`;
+  }
+
+  /** Read persisted sign-off, tolerating an absent or corrupt store. */
+  private loadSignoff(featureId: string): SignoffState {
+    try {
+      const raw = globalThis.localStorage?.getItem(this.signoffKey(featureId));
+      return raw ? parseSignoff(JSON.parse(raw)) : emptySignoff();
+    } catch {
+      return emptySignoff();
+    }
+  }
+
+  /** Persist sign-off, ignoring any storage failure (private mode, quota). */
+  private saveSignoff(featureId: string, signoff: SignoffState): void {
+    try {
+      globalThis.localStorage?.setItem(
+        this.signoffKey(featureId),
+        JSON.stringify(signoff),
+      );
+    } catch {
+      /* best-effort persistence only */
+    }
+  }
+
+  /** Apply a pure transform to the sign-off, then persist and emit. */
+  private updateSignoff(
+    featureId: string,
+    change: (prev: SignoffState) => SignoffState,
+  ): void {
+    this.update(featureId, (prev) => {
+      const signoff = change(prev.signoff);
+      if (signoff === prev.signoff) return prev;
+      this.saveSignoff(featureId, signoff);
+      return { ...prev, signoff };
+    });
+  }
+
+  /** Mark a single perspective reviewed (or clear it) by the human reviewer. */
+  setPerspectiveReviewed(
+    featureId: string,
+    perspectiveId: string,
+    reviewed: boolean,
+  ): void {
+    this.updateSignoff(featureId, (prev) =>
+      withPerspectiveReviewed(
+        prev,
+        perspectiveId,
+        reviewed ? new Date().toISOString() : null,
+      ),
+    );
+  }
+
+  /** Mark the whole PR reviewed; the pure guard ignores it unless all are. */
+  markPrReviewed(featureId: string, perspectiveIds: readonly string[]): void {
+    this.updateSignoff(featureId, (prev) =>
+      withPrReviewed(prev, perspectiveIds, new Date().toISOString()),
+    );
+  }
+
+  /** Re-open a PR that was marked reviewed, keeping per-perspective sign-offs. */
+  clearPrReviewed(featureId: string): void {
+    this.updateSignoff(featureId, (prev) => withPrReviewCleared(prev));
   }
 
   /** Current immutable snapshot for a feature (stable identity between edits). */
@@ -211,8 +294,10 @@ class ReviewBoardRunStore {
     rec.controller = null;
     rec.state = {
       ...EMPTY_STATE,
-      // Keep the current board visible until the reload lands.
+      // Keep the current board visible until the reload lands, and preserve the
+      // reviewer's sign-off — resetting the AI run must not discard human sign-off.
       board: rec.state.board,
+      signoff: rec.state.signoff,
     };
     this.emit(featureId);
     void this.load(featureId, api, true);
@@ -231,6 +316,12 @@ class ReviewBoardRunStore {
     const board = rec.state.board;
     if (!board) return;
     const ids = board.perspectives.map((p) => p.id);
+
+    // A fresh full pass re-rates every perspective, so any prior human sign-off
+    // (and the PR sign-off) is stale — clear it so the reviewer re-confirms.
+    this.updateSignoff(featureId, (prev) =>
+      clearPerspectivesReviewed(prev, ids),
+    );
 
     rec.controller?.abort();
     const controller = new AbortController();
@@ -336,6 +427,11 @@ class ReviewBoardRunStore {
   ): Promise<void> {
     const rec = this.record(featureId);
     if (!rec.state.board) return;
+
+    // Re-rating this perspective invalidates its human sign-off (and the PR's).
+    this.updateSignoff(featureId, (prev) =>
+      clearPerspectivesReviewed(prev, [perspectiveId]),
+    );
 
     const controller = rec.controller?.signal.aborted
       ? new AbortController()
