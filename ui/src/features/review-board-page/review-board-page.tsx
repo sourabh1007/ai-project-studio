@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, useSyncExternalStore } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
@@ -9,7 +9,7 @@ import {
   type PerspectiveProgress,
 } from './review-board-run-store.js';
 import { ChangeGraph } from '../pr-review-page/change-graph.js';
-import { usePrComments } from '../pr-review-page/pr-comments.js';
+import { usePrComments, CommentableDiff } from '../pr-review-page/pr-comments.js';
 import {
   allPerspectivesReviewed,
   isPerspectiveReviewed,
@@ -463,6 +463,33 @@ export function ReviewBoardPage({
   // Live PR comment threads — lets reviewers comment directly on a line in the
   // focused code-flow diagram, exactly as they can on the PR code review page.
   const comments = usePrComments(featureId);
+  // Clicking an evidence link opens the referenced file's diff *inline* here (a
+  // focused, commentable diff) instead of navigating to the full Code Review
+  // page. We source the per-file diff from the change graph the page already
+  // loaded; only when no diff is available do we fall back to the full review.
+  const [diffTarget, setDiffTarget] = useState<{
+    path: string;
+    diff: string;
+  } | null>(null);
+  const openEvidence = useCallback(
+    (target?: CodeReviewTarget) => {
+      const path = target?.path;
+      if (path && changeGraph) {
+        const base = path.split(/[\\/]/).pop() ?? path;
+        const match =
+          changeGraph.nodes.find((n) => n.path === path && n.diff) ??
+          changeGraph.nodes.find(
+            (n) => n.diff && (n.path.endsWith(path) || n.path.endsWith(base)),
+          );
+        if (match) {
+          setDiffTarget({ path: match.path, diff: match.diff });
+          return;
+        }
+      }
+      onOpenCodeReview?.(target);
+    },
+    [changeGraph, onOpenCodeReview],
+  );
   useEffect(() => {
     let cancelled = false;
     void runApi
@@ -1159,7 +1186,7 @@ export function ReviewBoardPage({
                             <li key={i}>
                               <EvidenceSource
                                 source={e.source}
-                                onOpenCodeReview={onOpenCodeReview}
+                                onOpenCodeReview={openEvidence}
                               />
                               <span className="rb-evidence-reason">
                                 {e.reason}
@@ -1169,12 +1196,12 @@ export function ReviewBoardPage({
                         </ul>
                       )}
                       <div className="rb-finding-actions">
-                        {onOpenCodeReview && findingPath && (
+                        {findingPath && (
                           <button
                             type="button"
                             className="rb-finding-act rb-finding-act-diff"
                             onClick={() =>
-                              onOpenCodeReview({ path: findingPath })
+                              openEvidence({ path: findingPath })
                             }
                             title={`Open ${findingPath} diff and comment inline`}
                           >
@@ -1251,8 +1278,46 @@ export function ReviewBoardPage({
           </button>
         )}
 
-        <ExplainModel board={board} onOpenCodeReview={onOpenCodeReview} />
+        <ExplainModel board={board} onOpenCodeReview={openEvidence} />
       </div>
+
+      {diffTarget && (
+        <div
+          className="rb-diff-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Diff for ${diffTarget.path}`}
+          onClick={() => setDiffTarget(null)}
+        >
+          <div
+            className="rb-diff-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="rb-diff-modal-head">
+              <div className="rb-diff-modal-titles">
+                <span className="rb-diff-modal-label">Code diff — click a line to comment</span>
+                <span className="rb-diff-modal-path">{diffTarget.path}</span>
+              </div>
+              <button
+                type="button"
+                className="rb-diff-modal-close"
+                onClick={() => setDiffTarget(null)}
+                aria-label="Close diff"
+                title="Close"
+              >
+                <CloseIcon size={16} />
+              </button>
+            </header>
+            <div className="rb-diff-modal-body">
+              <CommentableDiff
+                comments={comments}
+                path={diffTarget.path}
+                diff={diffTarget.diff}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
