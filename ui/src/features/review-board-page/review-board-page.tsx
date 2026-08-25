@@ -9,6 +9,7 @@ import {
   type PerspectiveProgress,
 } from './review-board-run-store.js';
 import { ChangeGraph } from '../pr-review-page/change-graph.js';
+import { usePrComments } from '../pr-review-page/pr-comments.js';
 import {
   allPerspectivesReviewed,
   isPerspectiveReviewed,
@@ -459,6 +460,9 @@ export function ReviewBoardPage({
   // review, so fetch it here and refresh whenever the board is (re)generated —
   // e.g. after taking the latest — so the diagram tracks the code under review.
   const [changeGraph, setChangeGraph] = useState<ChangeGraphStep | null>(null);
+  // Live PR comment threads — lets reviewers comment directly on a line in the
+  // focused code-flow diagram, exactly as they can on the PR code review page.
+  const comments = usePrComments(featureId);
   useEffect(() => {
     let cancelled = false;
     void runApi
@@ -952,7 +956,11 @@ export function ReviewBoardPage({
                       Code flow — how the changed files connect
                     </span>
                     <div className="rb-codeflow-graph">
-                      <ChangeGraph step={changeGraph} category="code" />
+                      <ChangeGraph
+                        step={changeGraph}
+                        category="code"
+                        comments={comments}
+                      />
                     </div>
                     <p className="rb-checked-hint">
                       Orange nodes are files this PR changed; blue nodes are
