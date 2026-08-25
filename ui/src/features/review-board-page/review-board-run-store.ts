@@ -54,7 +54,7 @@ const RETRY_BACKOFF_MS = 1_500;
 /** Poll interval while waiting for the change graph to rebuild after a pull. */
 const PREP_POLL_MS = 1_500;
 /** Give up waiting for the change-graph rebuild after this long. */
-const PREP_TIMEOUT_MS = 180_000;
+const PREP_TIMEOUT_MS = 600_000;
 
 /** The subset of the API client the store drives. */
 export interface ReviewBoardRunApi {
@@ -410,7 +410,8 @@ class ReviewBoardRunStore {
         message: 'Rebuilding the change graph…',
         error: null,
       });
-      const deadline = Date.now() + PREP_TIMEOUT_MS;
+      const startedAt = Date.now();
+      const deadline = startedAt + PREP_TIMEOUT_MS;
       for (;;) {
         if (isStale()) return false;
         const review = await api.getPrReview(featureId);
@@ -425,6 +426,14 @@ class ReviewBoardRunStore {
         if (Date.now() > deadline) {
           throw new Error('Timed out waiting for the change graph to rebuild.');
         }
+        // Large PRs build big reference graphs (hundreds of nodes), so surface
+        // the elapsed time to make clear the rebuild is still progressing.
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        this.setPrep(featureId, {
+          active: true,
+          message: `Rebuilding the change graph… (${elapsed}s)`,
+          error: null,
+        });
         await new Promise((r) => setTimeout(r, PREP_POLL_MS));
       }
       if (isStale()) return false;
