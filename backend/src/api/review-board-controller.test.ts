@@ -184,7 +184,7 @@ describe('createReviewBoardRoutes', () => {
       );
     }
     for (const call of chat.mock.calls) {
-      expect(call[3]).toBeNull();
+      expect((call as unknown[])[3]).toBeNull();
     }
   });
 

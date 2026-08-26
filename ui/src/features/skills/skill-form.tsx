@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Skill, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
@@ -41,6 +41,25 @@ export function SkillForm({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Load a text/markdown file into the instructions, appending under any
+  // existing text so long guidance can come straight from a file.
+  async function attachInstructionsFile(file: File) {
+    setError(null);
+    try {
+      const text = (await file.text()).trim();
+      if (text.length === 0) {
+        setError('That file is empty.');
+        return;
+      }
+      setInstructions((current) =>
+        current.trim() ? `${current.trim()}\n\n${text}` : text,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function submit() {
     if (!name.trim()) {
@@ -117,7 +136,27 @@ export function SkillForm({
         </p>
       </div>
       <div className="field">
-        <label htmlFor="skill-instructions">Instructions</label>
+        <div className="field-label-row">
+          <label htmlFor="skill-instructions">Instructions</label>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".md,.markdown,.txt,.mdx,.rst,text/*"
+            style={{ display: 'none' }}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void attachInstructionsFile(file);
+              event.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            className="field-attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            Attach file
+          </button>
+        </div>
         <textarea
           id="skill-instructions"
           className="textarea textarea-lg"

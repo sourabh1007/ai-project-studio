@@ -48,6 +48,7 @@ export function SharedContextPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const base = doc?.content ?? '';
   const {
@@ -119,6 +120,24 @@ export function SharedContextPanel({
     }
   }
 
+  // Attach a text/markdown file as shared context: read it locally and merge its
+  // contents into the editor (appending under existing text), then the reviewer
+  // saves as usual. Keeps the flow client-side — no upload endpoint needed.
+  async function attachFile(file: File) {
+    setError(null);
+    try {
+      const text = (await file.text()).trim();
+      if (text.length === 0) {
+        setError('That file is empty.');
+        return;
+      }
+      const existing = draft.trim();
+      setDraft(existing ? `${existing}\n\n${text}` : text);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const activePhase =
     livePhase && livePhase !== 'idle' ? livePhase : undefined;
 
@@ -185,6 +204,24 @@ export function SharedContextPanel({
             <span className="shared-context-note">
               Injected into every session in this scope.
             </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md,.markdown,.txt,.mdx,.rst,text/*"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void attachFile(file);
+                e.target.value = '';
+              }}
+            />
+            <Button
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={saving}
+            >
+              Attach file
+            </Button>
             <Button onClick={() => void save()} disabled={saving || !dirty}>
               {saving ? 'Saving…' : 'Save'}
             </Button>

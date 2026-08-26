@@ -6,7 +6,11 @@ export const SKILLS_NAMESPACE = 'skills';
 export const skillsConfigSchema = z.object({
   /** Maximum length of a skill name. */
   maxNameLength: z.number().int().positive(),
-  /** Maximum length of a skill's instruction text. */
+  /**
+   * Upper bound on a skill's instruction text. Set effectively unlimited so
+   * reviewers can paste or attach large playbooks; the cap only guards against
+   * pathological input.
+   */
   maxInstructionsLength: z.number().int().positive(),
   /** Version stamped onto exported skill files and required on import. */
   exportSchemaVersion: z.number().int().positive(),
@@ -38,7 +42,7 @@ export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 
 export const skillsDefaults: SkillsConfig = {
   maxNameLength: 80,
-  maxInstructionsLength: 8000,
+  maxInstructionsLength: 1_000_000,
   exportSchemaVersion: 1,
   injectionHeader: [
     'The following project skills apply to this work.',

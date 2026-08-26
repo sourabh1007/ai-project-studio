@@ -17,9 +17,17 @@ export const contextConfigSchema = z.object({
     repo: z.string().min(1),
     feature: z.string().min(1),
   }),
-  /** Hard cap on characters injected per layer at launch (keeps prompts small). */
+  /**
+   * Upper bound on characters injected per layer at launch. Effectively
+   * unlimited so full durable context reaches every session; the cap only
+   * guards against pathological input.
+   */
   maxInjectCharsPerLayer: z.number().int().positive(),
-  /** Hard cap on characters stored in any single document. */
+  /**
+   * Upper bound on characters stored in any single document. Effectively
+   * unlimited so hand-edited or file-attached context is never silently
+   * truncated; the cap only guards against pathological input.
+   */
   maxDocChars: z.number().int().positive(),
   /** Hard cap on transcript output fed into a merge session. */
   maxMergeInputChars: z.number().int().positive(),
@@ -49,8 +57,8 @@ export const contextDefaults: ContextConfig = {
     repo: '### Repository',
     feature: '### Feature',
   },
-  maxInjectCharsPerLayer: 2000,
-  maxDocChars: 4000,
+  maxInjectCharsPerLayer: 1_000_000,
+  maxDocChars: 1_000_000,
   maxMergeInputChars: 4000,
   mergePromptTemplate: [
     'You maintain a durable, shared knowledge base for a software feature.',
