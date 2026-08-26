@@ -18,6 +18,7 @@ import {
 } from '../../lib/review-signoff.js';
 import {
   evidencePath,
+  openFindingCount,
   resolutionOf,
   splitIntoBullets,
   type FindingResolution,
@@ -651,6 +652,26 @@ export function ReviewBoardPage({
 
   const perspectiveIds = board?.perspectives.map((p) => p.id) ?? [];
   const reviewedN = reviewedCount(signoff, perspectiveIds);
+
+  // Roll-up counts that reflect the reviewer's live resolve/ignore decisions —
+  // resolved or ignored findings drop out of the open/blocking/warning/suggestion
+  // totals immediately, so the header tracks the perspective list live.
+  const liveSummary = useMemo(() => {
+    let open = 0;
+    let blocking = 0;
+    let warnings = 0;
+    let suggestions = 0;
+    for (const p of board?.perspectives ?? []) {
+      for (const f of p.findings) {
+        if (resolutionOf(resolutions, f.id)) continue;
+        open += 1;
+        if (f.severity === 'critical' || f.severity === 'high') blocking += 1;
+        else if (f.severity === 'suggestion') suggestions += 1;
+        else warnings += 1;
+      }
+    }
+    return { open, blocking, warnings, suggestions };
+  }, [board?.perspectives, resolutions]);
   const allReviewed = allPerspectivesReviewed(signoff, perspectiveIds);
   const prReviewed = signoff.prReviewedAt !== null;
   const selectedReviewed = selectedId
@@ -660,6 +681,18 @@ export function ReviewBoardPage({
     selectedProgress.status === 'analyzing' ||
     selectedProgress.status === 'retrying' ||
     selectedProgress.status === 'pending';
+  // Live open-finding count / verdict for the selected perspective, reflecting
+  // the reviewer's resolve/ignore decisions (mirrors the nav list roll-up).
+  const selectedOpen = selected
+    ? openFindingCount(
+        resolutions,
+        selected.findings.map((f) => f.id),
+      )
+    : 0;
+  const selectedClean =
+    selectedProgress.status === 'done' && selectedOpen === 0;
+  const selectedStatus =
+    selected && selectedClean ? 'approved' : selected?.status;
 
   const detailRef = useRef<HTMLElement | null>(null);
   const firstSelection = useRef(true);
@@ -880,16 +913,16 @@ export function ReviewBoardPage({
 
       <div className="rb-summary">
         <span>
-          <strong>{board.summary.open}</strong> open
+          <strong>{liveSummary.open}</strong> open
         </span>
         <span>
-          <strong>{board.summary.blocking}</strong> blocking
+          <strong>{liveSummary.blocking}</strong> blocking
         </span>
         <span>
-          <strong>{board.summary.warnings}</strong> warnings
+          <strong>{liveSummary.warnings}</strong> warnings
         </span>
         <span>
-          <strong>{board.summary.suggestions}</strong> suggestions
+          <strong>{liveSummary.suggestions}</strong> suggestions
         </span>
         <span className="rb-summary-model">
           {board.model.projectType} · {board.changedFiles} file
@@ -914,6 +947,15 @@ export function ReviewBoardPage({
               state === 'retrying' ||
               state === 'pending';
             const navReviewed = isPerspectiveReviewed(signoff, p.id);
+            // Reflect the reviewer's resolve/ignore decisions live: once every
+            // finding is resolved/ignored (or there were none), the perspective
+            // reads as clean/approved and the open-count badge disappears.
+            const navOpen = openFindingCount(
+              resolutions,
+              p.findings.map((f) => f.id),
+            );
+            const navClean = state === 'done' && navOpen === 0;
+            const navStatus = navClean ? 'approved' : p.status;
             return (
               <button
                 key={p.id}
@@ -949,7 +991,7 @@ export function ReviewBoardPage({
                       title="Skipped by the AI reviewer"
                     />
                   )}
-                  {state === 'done' && p.findings.length === 0 && (
+                  {state === 'done' && navClean && (
                     <CheckIcon
                       size={13}
                       className="rb-nav-ico rb-nav-clean-ico"
@@ -957,9 +999,9 @@ export function ReviewBoardPage({
                   )}
                   <span
                     className={`rb-dot ${
-                      navAnalyzing ? 'rb-dot-reviewing' : `rb-status-${p.status}`
+                      navAnalyzing ? 'rb-dot-reviewing' : `rb-status-${navStatus}`
                     }`}
-                    title={perspectiveBadgeLabel(navAnalyzing, p.status)}
+                    title={perspectiveBadgeLabel(navAnalyzing, navStatus)}
                   />
                   <span
                     className={`rb-dot rb-dot-ring rb-risk-${p.risk}`}
@@ -971,8 +1013,8 @@ export function ReviewBoardPage({
                       className="rb-nav-ico rb-nav-reviewed-ico"
                     />
                   )}
-                  {p.findings.length > 0 && (
-                    <span className="rb-nav-count">{p.findings.length}</span>
+                  {navOpen > 0 && (
+                    <span className="rb-nav-count">{navOpen}</span>
                   )}
                 </span>
               </button>
@@ -1008,10 +1050,10 @@ export function ReviewBoardPage({
                 <span className="rb-detail-spacer" />
                 <span
                   className={`rb-nav-verdict rb-verdict-${
-                    selectedAnalyzing ? 'reviewing' : selected.status
+                    selectedAnalyzing ? 'reviewing' : selectedStatus
                   }`}
                 >
-                  {perspectiveBadgeLabel(selectedAnalyzing, selected.status)}
+                  {perspectiveBadgeLabel(selectedAnalyzing, selectedStatus ?? selected.status)}
                 </span>
                 <Marker kind="risk" value={selected.risk} />
                 <button
@@ -1059,8 +1101,11 @@ export function ReviewBoardPage({
               <p className="rb-detail-why">{selected.why}</p>
               <div className="rb-detail-meta">
                 <span>
-                  <strong>{selected.findings.length}</strong> finding
-                  {selected.findings.length === 1 ? '' : 's'}
+                  <strong>{selectedOpen}</strong> open
+                  {selectedOpen !== selected.findings.length && (
+                    <> · {selected.findings.length} total</>
+                  )}{' '}
+                  finding{selected.findings.length === 1 ? '' : 's'}
                 </span>
                 <span>·</span>
                 <span>
