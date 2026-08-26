@@ -2498,6 +2498,13 @@ body.is-resizing {
   opacity: 1;
 }
 
+.cg-diff-marker {
+  flex: none;
+  width: 1.2ch;
+  text-align: center;
+  font-weight: 700;
+  user-select: none;
+}
 .cg-diff-code {
   flex: 1 1 auto;
   white-space: pre;
@@ -8927,6 +8934,53 @@ body.is-resizing {
   padding: 12px 16px 16px;
   overflow: auto;
 }
+.rb-diff-modal-detail {
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.rb-diff-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.rb-diff-file[open] {
+  background: var(--panel);
+}
+.rb-diff-file-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+}
+.rb-diff-file-summary::-webkit-details-marker {
+  display: none;
+}
+.rb-diff-file-summary:hover {
+  background: var(--surface-strong);
+}
+.rb-diff-file-path {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.rb-diff-file-body {
+  padding: 0 12px 12px;
+}
+.rb-diff-file-body .cg-diff {
+  max-height: 420px;
+}
 .rb-checked-label {
   display: block;
   font-size: 12px;
@@ -9088,12 +9142,16 @@ body.is-resizing {
 }
 .rb-evidence li {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
+  min-width: 0;
 }
 .rb-evidence-source {
   color: var(--text-muted);
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
   font-family: var(--mono, monospace);
   font-size: 11px;
   padding: 1px 6px;
@@ -9101,6 +9159,10 @@ body.is-resizing {
   background: var(--surface-strong);
   border: 1px solid var(--border);
   align-self: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
 }
 .rb-evidence-link {
   color: var(--accent);
@@ -9863,6 +9925,59 @@ body.is-resizing {
   font-size: 13px;
   color: var(--text-muted);
   line-height: 18px;
+}
+.rb-finding-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 2px;
+  min-width: 0;
+}
+.rb-finding-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rb-finding-section-label {
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+.rb-fs-problem {
+  color: #f0883e;
+  border-color: color-mix(in srgb, #f0883e 40%, var(--border));
+  background: color-mix(in srgb, #f0883e 10%, transparent);
+}
+.rb-fs-fixverify,
+.rb-fs-fix,
+.rb-fs-verify,
+.rb-fs-recommendation {
+  color: #3fb950;
+  border-color: color-mix(in srgb, #3fb950 40%, var(--border));
+  background: color-mix(in srgb, #3fb950 10%, transparent);
+}
+.rb-fs-where,
+.rb-fs-impact,
+.rb-fs-risk {
+  color: #58a6ff;
+  border-color: color-mix(in srgb, #58a6ff 40%, var(--border));
+  background: color-mix(in srgb, #58a6ff 10%, transparent);
+}
+.rb-finding-section-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 19px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .rb-finding.is-resolved,
 .rb-finding.is-ignored {

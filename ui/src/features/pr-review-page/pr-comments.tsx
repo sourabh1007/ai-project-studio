@@ -343,6 +343,14 @@ export function CommentableDiffLines({
         const lineThreads =
           ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
         const isActive = activeLine !== null && ln.rightLine === activeLine;
+        // Show the +/− change marker in its own narrow column and strip it from
+        // the code text, so a reviewer reads clean source instead of "+ +code".
+        const marker =
+          ln.kind === 'add' ? '+' : ln.kind === 'del' ? '−' : '';
+        const code =
+          ln.kind === 'add' || ln.kind === 'del' || ln.kind === 'ctx'
+            ? ln.raw.replace(/^[+\- ]/, '')
+            : ln.raw;
         return (
           <div key={i} className="cg-diff-row">
             <div
@@ -376,12 +384,15 @@ export function CommentableDiffLines({
               <span className="cg-diff-gutter" aria-hidden="true">
                 {ln.rightLine ?? ''}
               </span>
+              <span className="cg-diff-marker" aria-hidden="true">
+                {marker}
+              </span>
+              <span className="cg-diff-code">{code || ' '}</span>
               {commentable && (
                 <span className="cg-diff-add-comment" aria-hidden="true">
                   {lineThreads.length > 0 ? '💬' : '+'}
                 </span>
               )}
-              <span className="cg-diff-code">{ln.raw || ' '}</span>
             </div>
             {lineThreads.length > 0 && (
               <div className="pr-comment-threads cg-diff-linethreads">

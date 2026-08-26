@@ -41,6 +41,7 @@ import type {
   ReviewBoard,
   ReviewBoardChatMessage,
   ReviewBoardRatingChange,
+  ReviewFinding,
   ReviewPerspective,
   ReviewRisk,
   ReviewStatus,
@@ -145,6 +146,73 @@ function EvidenceSource({
     >
       {source}
     </button>
+  );
+}
+
+/** Section labels an AI finding uses; parsed out for clean, structured display. */
+const DETAIL_LABELS = [
+  'Problem',
+  'Where',
+  'Impact',
+  'Risk',
+  'Why',
+  'Fix/verify',
+  'Fix',
+  'Verify',
+  'Recommendation',
+  'Evidence',
+];
+
+interface DetailSection {
+  label: string | null;
+  body: string;
+}
+
+/**
+ * Split a finding's free-text detail into its labelled sections ("Problem:",
+ * "Where:", "Fix/verify:", …) so we can render each as its own block instead of
+ * one dense wall of text. Text before the first label becomes an unlabelled lead.
+ */
+function parseFindingDetail(detail: string): DetailSection[] {
+  const text = detail.trim();
+  if (!text) return [];
+  const alt = DETAIL_LABELS.map((l) => l.replace('/', '\\/')).join('|');
+  const re = new RegExp(`(?:^|[\\s.;])(${alt}):\\s+`, 'g');
+  const sections: DetailSection[] = [];
+  let lastIndex = 0;
+  let lastLabel: string | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const chunk = text.slice(lastIndex, m.index).trim();
+    if (chunk) sections.push({ label: lastLabel, body: chunk });
+    lastLabel = m[1];
+    lastIndex = re.lastIndex;
+  }
+  const tail = text.slice(lastIndex).trim();
+  if (tail) sections.push({ label: lastLabel, body: tail });
+  return sections.length > 0 ? sections : [{ label: null, body: text }];
+}
+
+/** Renders a finding's detail as structured Problem / Where / Fix-verify blocks. */
+function FindingDetail({ detail }: { detail: string }) {
+  const sections = parseFindingDetail(detail);
+  return (
+    <div className="rb-finding-sections">
+      {sections.map((s, i) => (
+        <div key={i} className="rb-finding-section">
+          {s.label && (
+            <span
+              className={`rb-finding-section-label rb-fs-${s.label
+                .toLowerCase()
+                .replace(/[^a-z]/g, '')}`}
+            >
+              {s.label}
+            </span>
+          )}
+          <p className="rb-finding-section-body">{s.body}</p>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -463,32 +531,69 @@ export function ReviewBoardPage({
   // Live PR comment threads — lets reviewers comment directly on a line in the
   // focused code-flow diagram, exactly as they can on the PR code review page.
   const comments = usePrComments(featureId);
-  // Clicking an evidence link opens the referenced file's diff *inline* here (a
-  // focused, commentable diff) instead of navigating to the full Code Review
-  // page. We source the per-file diff from the change graph the page already
-  // loaded; only when no diff is available do we fall back to the full review.
+  // Clicking "Open diff" on a finding opens its referenced file diffs *inline*
+  // here (focused, commentable, with the problem/fix framing) instead of
+  // navigating to the full Code Review page. Per-file diffs come from the change
+  // graph the page already loaded; we fall back to the full review only when no
+  // diff is available for any referenced path.
   const [diffTarget, setDiffTarget] = useState<{
-    path: string;
-    diff: string;
+    title: string;
+    detail: string | null;
+    files: { path: string; diff: string }[];
   } | null>(null);
+  const resolveNodeDiff = useCallback(
+    (path: string): { path: string; diff: string } | null => {
+      if (!changeGraph) return null;
+      const base = path.split(/[\\/]/).pop() ?? path;
+      const match =
+        changeGraph.nodes.find((n) => n.path === path && n.diff) ??
+        changeGraph.nodes.find(
+          (n) => n.diff && (n.path.endsWith(path) || n.path.endsWith(base)),
+        );
+      return match ? { path: match.path, diff: match.diff } : null;
+    },
+    [changeGraph],
+  );
   const openEvidence = useCallback(
     (target?: CodeReviewTarget) => {
       const path = target?.path;
-      if (path && changeGraph) {
-        const base = path.split(/[\\/]/).pop() ?? path;
-        const match =
-          changeGraph.nodes.find((n) => n.path === path && n.diff) ??
-          changeGraph.nodes.find(
-            (n) => n.diff && (n.path.endsWith(path) || n.path.endsWith(base)),
-          );
-        if (match) {
-          setDiffTarget({ path: match.path, diff: match.diff });
+      if (path) {
+        const file = resolveNodeDiff(path);
+        if (file) {
+          setDiffTarget({ title: file.path, detail: null, files: [file] });
           return;
         }
       }
       onOpenCodeReview?.(target);
     },
     [changeGraph, onOpenCodeReview],
+  );
+  const openFindingDiff = useCallback(
+    (finding: ReviewFinding) => {
+      // Gather every distinct file the finding cites, in evidence order, and
+      // resolve each to its diff from the change graph.
+      const seen = new Set<string>();
+      const files: { path: string; diff: string }[] = [];
+      for (const e of finding.evidence) {
+        const p = evidencePath(e.source);
+        if (!p) continue;
+        const file = resolveNodeDiff(p);
+        if (file && !seen.has(file.path)) {
+          seen.add(file.path);
+          files.push(file);
+        }
+      }
+      if (files.length === 0) {
+        onOpenCodeReview?.();
+        return;
+      }
+      setDiffTarget({
+        title: finding.title,
+        detail: finding.detail,
+        files,
+      });
+    },
+    [resolveNodeDiff, onOpenCodeReview],
   );
   useEffect(() => {
     let cancelled = false;
@@ -1179,7 +1284,7 @@ export function ReviewBoardPage({
                           </span>
                         )}
                       </div>
-                      <p className="rb-finding-detail">{f.detail}</p>
+                      <FindingDetail detail={f.detail} />
                       {f.evidence.length > 0 && (
                         <ul className="rb-evidence">
                           {f.evidence.map((e, i) => (
@@ -1200,10 +1305,8 @@ export function ReviewBoardPage({
                           <button
                             type="button"
                             className="rb-finding-act rb-finding-act-diff"
-                            onClick={() =>
-                              openEvidence({ path: findingPath })
-                            }
-                            title={`Open ${findingPath} diff and comment inline`}
+                            onClick={() => openFindingDiff(f)}
+                            title="Open the referenced file diffs and comment inline"
                           >
                             <PrReviewIcon size={13} /> Open diff
                           </button>
@@ -1286,7 +1389,7 @@ export function ReviewBoardPage({
           className="rb-diff-modal-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label={`Diff for ${diffTarget.path}`}
+          aria-label={`Diff for ${diffTarget.title}`}
           onClick={() => setDiffTarget(null)}
         >
           <div
@@ -1295,8 +1398,12 @@ export function ReviewBoardPage({
           >
             <header className="rb-diff-modal-head">
               <div className="rb-diff-modal-titles">
-                <span className="rb-diff-modal-label">Code diff — click a line to comment</span>
-                <span className="rb-diff-modal-path">{diffTarget.path}</span>
+                <span className="rb-diff-modal-label">
+                  {diffTarget.files.length > 1
+                    ? `${diffTarget.files.length} files · click a line to comment`
+                    : 'Code diff · click a line to comment'}
+                </span>
+                <span className="rb-diff-modal-path">{diffTarget.title}</span>
               </div>
               <button
                 type="button"
@@ -1309,11 +1416,30 @@ export function ReviewBoardPage({
               </button>
             </header>
             <div className="rb-diff-modal-body">
-              <CommentableDiff
-                comments={comments}
-                path={diffTarget.path}
-                diff={diffTarget.diff}
-              />
+              {diffTarget.detail && (
+                <div className="rb-diff-modal-detail">
+                  <FindingDetail detail={diffTarget.detail} />
+                </div>
+              )}
+              {diffTarget.files.map((file, i) => (
+                <details
+                  key={file.path}
+                  className="rb-diff-file"
+                  open={i === 0}
+                >
+                  <summary className="rb-diff-file-summary">
+                    <PrReviewIcon size={13} />
+                    <span className="rb-diff-file-path">{file.path}</span>
+                  </summary>
+                  <div className="rb-diff-file-body">
+                    <CommentableDiff
+                      comments={comments}
+                      path={file.path}
+                      diff={file.diff}
+                    />
+                  </div>
+                </details>
+              ))}
             </div>
           </div>
         </div>
