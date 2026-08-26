@@ -430,6 +430,31 @@ describe('buildAgentChatPrompt', () => {
     expect(prompt).toContain('none recorded yet');
   });
 
+  it('lists a finding\'s evidence sources so the agent can cite code', () => {
+    const withEvidence: ReviewPerspective = {
+      ...perspective,
+      findings: [
+        {
+          ...perspective.findings[0],
+          title: 'Double materialization',
+          evidence: [
+            { source: 'svc/heartbeat.cs', reason: 'r', confidence: 1, direct: true },
+            { source: '  ', reason: 'blank', confidence: 0.2, direct: false },
+          ],
+        },
+      ],
+    };
+    const prompt = buildAgentChatPrompt({
+      board,
+      perspective: withEvidence,
+      messages: [{ role: 'user', content: 'where?' }],
+      config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('Double materialization');
+    // Blank sources are filtered out; only the real path is cited.
+    expect(prompt).toContain('Evidence: svc/heartbeat.cs');
+  });
+
   it('clamps the full prompt to the context budget', () => {
     const prompt = buildAgentChatPrompt({
       board,

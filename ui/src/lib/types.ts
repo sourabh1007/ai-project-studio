@@ -459,6 +459,17 @@ export interface ReviewBoardChatMessage {
   content: string;
 }
 
+/**
+ * The analysed state of the focused perspective the reviewer is looking at,
+ * handed to the agent so it can reason about the concrete findings/evidence on
+ * screen instead of asking which code a question refers to.
+ */
+export interface ReviewBoardChatContext {
+  status: ReviewStatus;
+  risk: ReviewRisk;
+  findings: ReviewFinding[];
+}
+
 /** The review agent's answer to a chat turn. */
 export interface ReviewBoardChatReply {
   answer: string;

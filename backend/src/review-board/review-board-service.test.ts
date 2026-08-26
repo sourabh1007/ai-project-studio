@@ -553,4 +553,59 @@ describe('createReviewBoardService.chat', () => {
       justification: 'You showed the cap at line 42.',
     });
   });
+
+  it('prefers the analysed findings the client sends over the derived board', async () => {
+    const ai = aiReturning('Line 42 in svc/cache.cs BuildKey.');
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true }),
+    );
+    const reply = await service.chat(
+      'f9',
+      'security',
+      [{ role: 'user', content: 'where is this code?' }],
+      {
+        status: 'warning',
+        risk: 'high',
+        findings: [
+          {
+            id: 'af1',
+            perspectiveId: 'security',
+            title: 'Unbounded cache growth',
+            detail: 'BuildKey never caps the map.',
+            severity: 'high',
+            status: 'warning',
+            evidence: [
+              {
+                source: 'svc/cache.cs',
+                reason: 'BuildKey',
+                confidence: 1,
+                direct: true,
+              },
+            ],
+          },
+        ],
+      },
+    );
+    expect(reply.answer).toBe('Line 42 in svc/cache.cs BuildKey.');
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    // The client's analysed finding + its evidence source reaches the prompt.
+    expect(request.prompt).toContain('Unbounded cache growth');
+    expect(request.prompt).toContain('Evidence: svc/cache.cs');
+    expect(request.prompt).toContain('Risk: high');
+  });
+
+  it('ignores client context when the perspective is not on the board', async () => {
+    const ai = aiReturning('n/a');
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true }),
+    );
+    const reply = await service.chat(
+      'f9',
+      'ghost',
+      [{ role: 'user', content: 'Hi' }],
+      { status: 'warning', risk: 'high', findings: [] },
+    );
+    expect(reply.answer).toBe('n/a');
+  });
 });

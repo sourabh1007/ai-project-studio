@@ -45,6 +45,7 @@ import type {
   ReviewBoard,
   ReviewBoardChatMessage,
   ReviewBoardChatReply,
+  ReviewBoardChatContext,
   PerspectiveAnalysis,
   ManagedWorktree,
   AddPrCommentInput,
@@ -200,10 +201,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
       featureId: string,
       perspectiveId: string | null,
       messages: ReviewBoardChatMessage[],
+      context?: ReviewBoardChatContext | null,
     ) =>
       request<ReviewBoardChatReply>(
         `/features/${featureId}/review-board/chat`,
-        jsonBody({ perspectiveId, messages }),
+        jsonBody({ perspectiveId, messages, context: context ?? null }),
       ),
     refreshPrReview: (featureId: string) =>
       request<PrReview>(

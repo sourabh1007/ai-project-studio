@@ -11,6 +11,7 @@
 import type {
   ReviewBoard,
   ReviewBoardChatMessage,
+  ReviewFinding,
   ReviewPerspective,
   ProjectModel,
 } from './review-board-contract.js';
@@ -393,6 +394,20 @@ export function buildProblemSolutionPrompt(input: {
   ].join('\n');
 }
 
+/**
+ * Render one finding for the agent's context, listing the evidence sources
+ * (file paths / signals) it draws on so the agent can point the reviewer at the
+ * concrete code a question refers to instead of asking "which code?".
+ */
+function renderChatFinding(f: ReviewFinding): string {
+  const sources = f.evidence
+    .map((e) => e.source)
+    .filter((s) => s.trim().length > 0);
+  const where =
+    sources.length > 0 ? `\n   Evidence: ${sources.join(', ')}` : '';
+  return `- [${f.severity}] ${f.title}: ${f.detail}${where}`;
+}
+
 export function buildAgentChatPrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective | null;
@@ -407,8 +422,8 @@ export function buildAgentChatPrompt(input: {
         `Why on the board: ${perspective.why}`,
         `Status: ${perspective.status} · Risk: ${perspective.risk}`,
         perspective.findings.length > 0
-          ? `Findings:\n${perspective.findings
-              .map((f) => `- [${f.severity}] ${f.title}: ${f.detail}`)
+          ? `Findings the reviewer is looking at:\n${perspective.findings
+              .map((f) => renderChatFinding(f))
               .join('\n')}`
           : 'Findings: none recorded yet.',
       ].join('\n')

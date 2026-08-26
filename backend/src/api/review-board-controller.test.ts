@@ -104,10 +104,88 @@ describe('createReviewBoardRoutes', () => {
       }),
     );
     expect(res.status).toBe(200);
-    expect(chat).toHaveBeenCalledWith('abc', 'security', [
-      { role: 'user', content: 'why?' },
-    ]);
+    expect(chat).toHaveBeenCalledWith(
+      'abc',
+      'security',
+      [{ role: 'user', content: 'why?' }],
+      null,
+    );
     expect((res.body as { answer: string }).answer).toBe('because');
+  });
+
+  it('forwards the analysed-perspective context to the agent', async () => {
+    const chat = vi.fn(async () => ({ answer: 'line 42', ratingChange: null }));
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ chat }) });
+    const handler = pick(
+      routes,
+      'post',
+      '/features/:featureId/review-board/chat',
+    );
+    const context = {
+      status: 'warning',
+      risk: 'medium',
+      findings: [
+        {
+          id: 'f1',
+          perspectiveId: 'performance',
+          title: 'Double materialization',
+          detail: 'JObject parsed twice',
+          severity: 'medium',
+          status: 'warning',
+          evidence: [
+            { source: 'svc/heartbeat.cs', reason: 'r', confidence: 1, direct: true },
+          ],
+        },
+      ],
+    };
+    await handler(
+      req({
+        params: { featureId: 'abc' },
+        body: {
+          perspectiveId: 'performance',
+          messages: [{ role: 'user', content: 'where?' }],
+          context,
+        },
+      }),
+    );
+    expect(chat).toHaveBeenCalledWith(
+      'abc',
+      'performance',
+      [{ role: 'user', content: 'where?' }],
+      context,
+    );
+  });
+
+  it('drops a malformed chat context to null', async () => {
+    const chat = vi.fn(async () => ({ answer: 'ok', ratingChange: null }));
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ chat }) });
+    const handler = pick(
+      routes,
+      'post',
+      '/features/:featureId/review-board/chat',
+    );
+    // status missing, findings not an array, and a non-object variant — each
+    // path should fall back to null rather than reject.
+    for (const bad of [
+      { risk: 'low', findings: [] },
+      { status: 'warning', risk: 'low', findings: 'nope' },
+      'not-an-object',
+      null,
+    ]) {
+      await handler(
+        req({
+          params: { featureId: 'abc' },
+          body: {
+            perspectiveId: 'security',
+            messages: [{ role: 'user', content: 'hi' }],
+            context: bad,
+          },
+        }),
+      );
+    }
+    for (const call of chat.mock.calls) {
+      expect(call[3]).toBeNull();
+    }
   });
 
   it('defaults a missing/omitted perspectiveId to null', async () => {
@@ -124,9 +202,12 @@ describe('createReviewBoardRoutes', () => {
         body: { messages: [{ role: 'user', content: 'hi' }] },
       }),
     );
-    expect(chat).toHaveBeenCalledWith('abc', null, [
-      { role: 'user', content: 'hi' },
-    ]);
+    expect(chat).toHaveBeenCalledWith(
+      'abc',
+      null,
+      [{ role: 'user', content: 'hi' }],
+      null,
+    );
   });
 
   it('accepts an explicit null perspectiveId', async () => {
@@ -146,7 +227,12 @@ describe('createReviewBoardRoutes', () => {
         },
       }),
     );
-    expect(chat).toHaveBeenCalledWith('abc', null, expect.any(Array));
+    expect(chat).toHaveBeenCalledWith(
+      'abc',
+      null,
+      expect.any(Array),
+      null,
+    );
   });
 
   it('rejects a non-string perspectiveId', async () => {

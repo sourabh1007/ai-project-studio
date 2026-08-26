@@ -187,6 +187,20 @@ export interface ReviewBoardChatMessage {
   content: string;
 }
 
+/**
+ * The live, analysed state of the focused perspective as the reviewer currently
+ * sees it on screen. The board is re-derived on demand server-side and only
+ * carries deterministic findings, so the client hands the agent the analysed
+ * findings (with their file/evidence sources) and the rolled-up status/risk it
+ * is looking at — otherwise the agent has no idea which code a question refers
+ * to. Absent for board-wide chats or when no analysis has run yet.
+ */
+export interface ReviewBoardChatContext {
+  status: ReviewStatus;
+  risk: ReviewRisk;
+  findings: ReviewFinding[];
+}
+
 /** The agent's answer to a chat turn. */
 export interface ReviewBoardChatReply {
   answer: string;
@@ -320,12 +334,15 @@ export interface ReviewBoardService {
   ): Promise<PerspectiveAnalysis>;
   /**
    * Ask the context-aware review agent a question. `perspectiveId` scopes the
-   * conversation to one lens (or is null for the whole board). Throws when no
-   * PR review exists.
+   * conversation to one lens (or is null for the whole board). `context` carries
+   * the analysed findings/rating the reviewer currently sees, so the agent can
+   * reason about concrete code; it is optional for board-wide or unanalysed
+   * chats. Throws when no PR review exists.
    */
   chat(
     featureId: string,
     perspectiveId: string | null,
     messages: ReviewBoardChatMessage[],
+    context?: ReviewBoardChatContext | null,
   ): Promise<ReviewBoardChatReply>;
 }

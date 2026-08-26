@@ -808,7 +808,19 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/features/f1/review-board/chat');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(
-      JSON.stringify({ perspectiveId: 'security', messages }),
+      JSON.stringify({ perspectiveId: 'security', messages, context: null }),
+    );
+  });
+
+  it('forwards the analysed-perspective context to the chat endpoint', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ answer: 'Line 42.' }));
+    const client = createApiClient({ fetchImpl });
+    const messages = [{ role: 'user' as const, content: 'Where?' }];
+    const context = { status: 'warning' as const, risk: 'high' as const, findings: [] };
+    await client.chatReviewBoard('f1', 'security', messages, context);
+    const [, init] = calls[0];
+    expect(init?.body).toBe(
+      JSON.stringify({ perspectiveId: 'security', messages, context }),
     );
   });
 

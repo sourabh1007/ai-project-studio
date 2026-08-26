@@ -41,6 +41,7 @@ import type {
   ReviewBoard,
   ReviewBoardChatMessage,
   ReviewBoardChatReply,
+  ReviewBoardChatContext,
   ReviewBoardEventMap,
   ReviewBoardService,
   ReviewPerspective,
@@ -398,14 +399,27 @@ export function createReviewBoardService(
       featureId: string,
       perspectiveId: string | null,
       messages: ReviewBoardChatMessage[],
+      context?: ReviewBoardChatContext | null,
     ): Promise<ReviewBoardChatReply> {
       const review = deps.reviews.get(featureId);
       const input = toBuildInput(review);
       const board = assembleBoard(input, buildDeterministicFindings(input));
-      const perspective =
+      const base =
         perspectiveId === null
           ? null
           : board.perspectives.find((p) => p.id === perspectiveId) ?? null;
+      // The re-derived board only carries deterministic findings; when the client
+      // sends the analysed state it is looking at, prefer it so the agent reasons
+      // about the real, evidence-backed findings on screen.
+      const perspective =
+        base && context
+          ? {
+              ...base,
+              status: context.status,
+              risk: context.risk,
+              findings: context.findings,
+            }
+          : base;
       const prompt = buildAgentChatPrompt({
         board,
         perspective,

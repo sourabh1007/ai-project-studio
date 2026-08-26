@@ -311,6 +311,13 @@ function ReviewAgent({
         featureId,
         perspective?.id ?? null,
         next,
+        perspective
+          ? {
+              status: perspective.status,
+              risk: perspective.risk,
+              findings: perspective.findings,
+            }
+          : null,
       );
       setMessages((prev) => [
         ...prev,

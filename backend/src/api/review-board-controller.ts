@@ -1,5 +1,6 @@
 import { ValidationError } from '../kernel/error-types.js';
 import type {
+  ReviewBoardChatContext,
   ReviewBoardChatMessage,
   ReviewBoardService,
 } from '../review-board/review-board-contract.js';
@@ -9,10 +10,28 @@ export interface ReviewBoardControllerDeps {
   reviewBoard: ReviewBoardService;
 }
 
+/**
+ * Defensively parse the optional analysed-perspective `context` a client may
+ * attach so the agent sees the on-screen findings. Anything malformed is
+ * dropped to null rather than rejected — the chat still works without it.
+ */
+function parseChatContext(raw: unknown): ReviewBoardChatContext | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { status, risk, findings } = raw as Record<string, unknown>;
+  if (typeof status !== 'string' || typeof risk !== 'string') return null;
+  if (!Array.isArray(findings)) return null;
+  return {
+    status: status as ReviewBoardChatContext['status'],
+    risk: risk as ReviewBoardChatContext['risk'],
+    findings: findings as ReviewBoardChatContext['findings'],
+  };
+}
+
 /** Validates and extracts the `{ perspectiveId, messages }` of a chat request. */
 function assertChat(body: unknown): {
   perspectiveId: string | null;
   messages: ReviewBoardChatMessage[];
+  context: ReviewBoardChatContext | null;
 } {
   const rawPerspective = (body as { perspectiveId?: unknown })?.perspectiveId;
   if (
@@ -45,7 +64,10 @@ function assertChat(body: unknown): {
   if (messages[messages.length - 1].role !== 'user') {
     throw new ValidationError('The last message must be from the reviewer.');
   }
-  return { perspectiveId, messages };
+  const context = parseChatContext(
+    (body as { context?: unknown })?.context,
+  );
+  return { perspectiveId, messages, context };
 }
 
 /**
@@ -90,13 +112,14 @@ export function createReviewBoardRoutes(
       method: 'post',
       path: '/features/:featureId/review-board/chat',
       handler: async (req) => {
-        const { perspectiveId, messages } = assertChat(req.body);
+        const { perspectiveId, messages, context } = assertChat(req.body);
         return {
           status: 200,
           body: await deps.reviewBoard.chat(
             req.params.featureId,
             perspectiveId,
             messages,
+            context,
           ),
         };
       },
