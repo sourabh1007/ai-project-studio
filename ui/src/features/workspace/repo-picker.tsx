@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { ApiError } from '../../lib/api.js';
 import type {
   RemoteRepo,
   RepoProvider,
@@ -8,8 +9,9 @@ import type {
   Repository,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { Loader } from '../../components/loading.js';
+import { Loader, Spinner } from '../../components/loading.js';
 import { RepoIcon } from '../../components/icons.js';
+import { GithubSignInModal } from '../github/github-signin.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
 
@@ -50,6 +52,9 @@ export function RepoPicker({
   const [orgDraft, setOrgDraft] = useState(org);
   const [selected, setSelected] = useState<RemoteRepo | null>(null);
   const [filter, setFilter] = useState('');
+  const [githubSignin, setGithubSignin] = useState(false);
+  const [azureSigningIn, setAzureSigningIn] = useState(false);
+  const [azureSigninError, setAzureSigninError] = useState<string | null>(null);
 
   const remote = useAsync<RemoteRepo[]>(
     () =>
@@ -60,6 +65,35 @@ export function RepoPicker({
           : Promise.resolve([]),
     [provider, org],
   );
+
+  // A 401 from the repo listing means the provider login is missing/expired —
+  // show a sign-in prompt instead of a raw "Internal server error".
+  const authRequired =
+    remote.cause instanceof ApiError && remote.cause.status === 401;
+
+  async function signInAzure() {
+    const target = (org || orgDraft).trim();
+    if (azureSigningIn || !target) {
+      return;
+    }
+    setAzureSigningIn(true);
+    setAzureSigninError(null);
+    try {
+      const result = await api.azureSignIn(target);
+      if (result.authenticated) {
+        setOrg(target);
+        remote.reload();
+      } else {
+        setAzureSigninError(
+          result.message ?? 'Sign-in did not complete. Please try again.',
+        );
+      }
+    } catch (err) {
+      setAzureSigninError(err instanceof Error ? err.message : 'Sign-in failed.');
+    } finally {
+      setAzureSigningIn(false);
+    }
+  }
 
   function loadAzure() {
     const next = orgDraft.trim();
@@ -160,34 +194,108 @@ export function RepoPicker({
 
         <div className="repo-list">
           {remote.loading && <Loader label="Loading repositories" />}
-          <ErrorText error={remote.error} />
-          {provider === 'azure-devops' && !org && !remote.loading && (
-            <EmptyState message="Enter an organization to list repositories." />
+          {!remote.loading && authRequired && (
+            <RepoAuthPrompt
+              provider={provider}
+              message={remote.error}
+              azureSigningIn={azureSigningIn}
+              azureSigninError={azureSigninError}
+              onGithubSignIn={() => setGithubSignin(true)}
+              onAzureSignIn={() => void signInAzure()}
+            />
           )}
-          {!remote.loading && (remote.data?.length ?? 0) === 0 && (org || provider === 'github') && (
-            <EmptyState message="No repositories found." />
-          )}
-          {!remote.loading && (remote.data?.length ?? 0) > 0 && filtered.length === 0 && (
-            <EmptyState message="No repositories match your search." />
-          )}
-          {filtered.map((repo) => (
-            <button
-              type="button"
-              key={`${repo.provider}:${repo.remoteUrl}`}
-              className="repo-list-item"
-              onClick={() => setSelected(repo)}
-              title={repo.remoteUrl}
-            >
-              <RepoIcon size={14} />
-              <span className="repo-list-name">{repo.name}</span>
-              {repo.defaultBranch && (
-                <span className="repo-list-branch">{repo.defaultBranch}</span>
+          {!remote.loading && !authRequired && (
+            <>
+              <ErrorText error={remote.error} />
+              {provider === 'azure-devops' && !org && (
+                <EmptyState message="Enter an organization to list repositories." />
               )}
-            </button>
-          ))}
+              {(remote.data?.length ?? 0) === 0 &&
+                !remote.error &&
+                (org || provider === 'github') && (
+                  <EmptyState message="No repositories found." />
+                )}
+              {(remote.data?.length ?? 0) > 0 && filtered.length === 0 && (
+                <EmptyState message="No repositories match your search." />
+              )}
+              {filtered.map((repo) => (
+                <button
+                  type="button"
+                  key={`${repo.provider}:${repo.remoteUrl}`}
+                  className="repo-list-item"
+                  onClick={() => setSelected(repo)}
+                  title={repo.remoteUrl}
+                >
+                  <RepoIcon size={14} />
+                  <span className="repo-list-name">{repo.name}</span>
+                  {repo.defaultBranch && (
+                    <span className="repo-list-branch">{repo.defaultBranch}</span>
+                  )}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
+      {githubSignin && (
+        <GithubSignInModal
+          onClose={() => setGithubSignin(false)}
+          onAuthenticated={() => {
+            setGithubSignin(false);
+            remote.reload();
+          }}
+        />
+      )}
     </Modal>
+  );
+}
+
+/**
+ * Shown when the repo listing fails with a 401 (the GitHub or Azure DevOps
+ * login is missing or expired). Explains that the provider isn't configured and
+ * offers a one-click sign-in instead of a bare error string.
+ */
+function RepoAuthPrompt({
+  provider,
+  message,
+  azureSigningIn,
+  azureSigninError,
+  onGithubSignIn,
+  onAzureSignIn,
+}: {
+  provider: RepoProvider;
+  message: string | null;
+  azureSigningIn: boolean;
+  azureSigninError: string | null;
+  onGithubSignIn: () => void;
+  onAzureSignIn: () => void;
+}) {
+  const label = provider === 'github' ? 'GitHub' : 'Azure DevOps';
+  return (
+    <div className="repo-auth-prompt" role="status">
+      <RepoIcon size={20} />
+      <p className="repo-auth-title">{label} isn’t connected</p>
+      <p className="repo-auth-message">
+        {message ??
+          `Sign in to ${label} to browse and add your repositories.`}
+      </p>
+      {provider === 'github' ? (
+        <Button onClick={onGithubSignIn}>Sign in to GitHub</Button>
+      ) : (
+        <>
+          <Button onClick={onAzureSignIn} disabled={azureSigningIn}>
+            {azureSigningIn ? (
+              <Spinner size={13} label="Signing in" />
+            ) : (
+              'Sign in to Azure DevOps'
+            )}
+          </Button>
+          {azureSigninError && (
+            <p className="repo-auth-error">{azureSigninError}</p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

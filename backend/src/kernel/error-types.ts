@@ -9,6 +9,7 @@ export type ErrorKind =
   | 'conflict'
   | 'provider'
   | 'config'
+  | 'auth_required'
   | 'internal';
 
 export class AppError extends Error {
@@ -50,6 +51,21 @@ export class ProviderError extends AppError {
 export class ConfigError extends AppError {
   constructor(message: string, details?: unknown) {
     super('config', message, details);
+  }
+}
+
+/**
+ * A provider (GitHub, Azure DevOps, …) rejected the request because the user is
+ * not signed in / the CLI or token is not configured. Maps to HTTP 401 so the
+ * UI can prompt for sign-in instead of showing a generic 500. `provider`
+ * identifies which login is missing.
+ */
+export class AuthRequiredError extends AppError {
+  readonly provider?: string;
+
+  constructor(message: string, provider?: string, details?: unknown) {
+    super('auth_required', message, details);
+    this.provider = provider;
   }
 }
 

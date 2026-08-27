@@ -98,4 +98,15 @@ describe('listGithubRepos', () => {
       listGithubRepos(async () => ({ code: 1, stdout: '', stderr: '' })),
     ).rejects.toThrow('Failed to list GitHub repositories');
   });
+
+  it('throws an auth-required error when gh reports the user is not logged in', async () => {
+    await expect(
+      listGithubRepos(async () => ({
+        code: 1,
+        stdout: '',
+        stderr:
+          'To get started with GitHub CLI, please run:  gh auth login',
+      })),
+    ).rejects.toMatchObject({ kind: 'auth_required', provider: 'github' });
+  });
 });

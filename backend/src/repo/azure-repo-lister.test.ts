@@ -116,16 +116,25 @@ describe('listAzureRepos', () => {
     ).rejects.toThrow('organization is required');
   });
 
-  it('throws when there is no cached token', async () => {
+  it('throws an auth-required error when there is no cached token', async () => {
     await expect(
       listAzureRepos(deps(null, () => okBody({ value: [] })), 'org'),
-    ).rejects.toThrow('Not signed in');
+    ).rejects.toMatchObject({ kind: 'auth_required', provider: 'azure-devops' });
   });
 
-  it('throws when the repositories request is not 200', async () => {
+  it('throws an auth-required error when the request is 401 or 403', async () => {
+    await expect(
+      listAzureRepos(deps('tok', () => ({ status: 401, body: null })), 'org'),
+    ).rejects.toMatchObject({ kind: 'auth_required' });
     await expect(
       listAzureRepos(deps('tok', () => ({ status: 403, body: null })), 'org'),
-    ).rejects.toThrow('HTTP 403');
+    ).rejects.toMatchObject({ kind: 'auth_required' });
+  });
+
+  it('throws a generic error when the repositories request fails otherwise', async () => {
+    await expect(
+      listAzureRepos(deps('tok', () => ({ status: 500, body: null })), 'org'),
+    ).rejects.toThrow('HTTP 500');
   });
 
   it('skips repos missing a name or project, and disabled repos', async () => {

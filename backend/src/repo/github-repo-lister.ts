@@ -1,4 +1,5 @@
 import type { GhRunner } from '../github-auth/github-auth-service.js';
+import { AuthRequiredError } from '../kernel/error-types.js';
 import type { RemoteRepo } from './remote-repo-contract.js';
 
 interface GhRepoJson {
@@ -54,7 +55,27 @@ export async function listGithubRepos(
     'nameWithOwner,url,defaultBranchRef',
   ]);
   if (res.code !== 0) {
-    throw new Error(res.stderr.trim() || 'Failed to list GitHub repositories');
+    const stderr = res.stderr.trim();
+    // `gh` exits non-zero with an auth hint when the user hasn't logged in.
+    // Surface that as an auth-required error (HTTP 401) so the UI can prompt a
+    // sign-in instead of showing a generic "internal server error".
+    if (isGithubAuthError(stderr)) {
+      throw new AuthRequiredError(
+        'Not signed in to GitHub. Sign in to GitHub, then try again.',
+        'github',
+      );
+    }
+    throw new Error(stderr || 'Failed to list GitHub repositories');
   }
   return parseGithubRepos(res.stdout);
+}
+
+/**
+ * True when `gh`'s stderr indicates the failure is an authentication problem
+ * (not signed in / no valid token) rather than a transient/API error.
+ */
+function isGithubAuthError(stderr: string): boolean {
+  return /auth login|not logged in|authentication|requires? authentication|gh auth|no accounts|logged into/i.test(
+    stderr,
+  );
 }

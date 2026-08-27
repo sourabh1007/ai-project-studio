@@ -1,3 +1,4 @@
+import { AuthRequiredError } from '../kernel/error-types.js';
 import type { RemoteRepo } from './remote-repo-contract.js';
 
 export interface AzureHttpResponse {
@@ -122,12 +123,22 @@ export async function listAzureRepos(
   }
   const token = await deps.token(trimmed);
   if (!token) {
-    throw new Error(
+    throw new AuthRequiredError(
       'Not signed in to Azure DevOps. Sign in first, then try again.',
+      'azure-devops',
     );
   }
 
   const res = await deps.httpGet(repositoriesUrl(trimmed), token);
+  if (res.status === 401 || res.status === 403) {
+    // The cached token is missing or expired for this org — prompt a re-sign-in
+    // (HTTP 401) rather than surfacing a generic failure.
+    throw new AuthRequiredError(
+      'Your Azure DevOps sign-in has expired or lacks access to this ' +
+        'organization. Sign in again, then try again.',
+      'azure-devops',
+    );
+  }
   if (res.status !== 200) {
     throw new Error(
       `Failed to list Azure DevOps repositories (HTTP ${res.status})`,

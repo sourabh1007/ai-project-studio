@@ -6,6 +6,7 @@ import {
   ConflictError,
   ProviderError,
   ConfigError,
+  AuthRequiredError,
   AppError,
 } from '../kernel/error-types.js';
 
@@ -16,6 +17,7 @@ describe('toErrorResult', () => {
     expect(toErrorResult(new ConflictError('x')).status).toBe(409);
     expect(toErrorResult(new ProviderError('x')).status).toBe(502);
     expect(toErrorResult(new ConfigError('x')).status).toBe(500);
+    expect(toErrorResult(new AuthRequiredError('x')).status).toBe(401);
     expect(toErrorResult(new AppError('internal', 'x')).status).toBe(500);
   });
 

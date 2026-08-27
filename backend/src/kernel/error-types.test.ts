@@ -6,6 +6,7 @@ import {
   ConflictError,
   ProviderError,
   ConfigError,
+  AuthRequiredError,
   isAppError,
 } from './error-types.js';
 
@@ -25,6 +26,16 @@ describe('error-types', () => {
     expect(new ConflictError('c').kind).toBe('conflict');
     expect(new ProviderError('p').kind).toBe('provider');
     expect(new ConfigError('cfg').kind).toBe('config');
+    expect(new AuthRequiredError('a').kind).toBe('auth_required');
+  });
+
+  it('AuthRequiredError carries the provider and forwards details', () => {
+    const e = new AuthRequiredError('sign in', 'github', { org: 'acme' });
+    expect(e.kind).toBe('auth_required');
+    expect(e.provider).toBe('github');
+    expect(e.details).toEqual({ org: 'acme' });
+    const bare = new AuthRequiredError('sign in');
+    expect(bare.provider).toBeUndefined();
   });
 
   it('subclasses forward details', () => {

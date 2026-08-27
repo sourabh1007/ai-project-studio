@@ -7,6 +7,7 @@ const STATUS_BY_KIND: Record<ErrorKind, number> = {
   conflict: 409,
   provider: 502,
   config: 500,
+  auth_required: 401,
   internal: 500,
 };
 
