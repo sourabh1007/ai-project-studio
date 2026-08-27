@@ -387,6 +387,16 @@ export function TerminalView({
       }
     });
 
+    // The WebGL renderer can leave stale, shifted rows behind when the user
+    // scrolls back over reflowed/wrapped output: rows that scroll into view keep
+    // pixels from whatever was previously painted at that grid position, so the
+    // scrollback looks garbled and horizontally clipped until the next write.
+    // Forcing a full repaint of the visible rows on every scroll keeps what is
+    // shown pixel-aligned with the buffer, whichever direction the user scrolls.
+    const scrollSub = term.onScroll(() => {
+      termRef.current?.refresh(0, term.rows - 1);
+    });
+
     // Collapse duplicate pastes delivered as one user action (see
     // createPasteGuard). 40ms is far below deliberate double-paste speed, so a
     // real repeat is never suppressed, but a doubled single paste is.
@@ -574,6 +584,7 @@ export function TerminalView({
       }
       dataSub.dispose();
       selectionSub.dispose();
+      scrollSub.dispose();
       ws.onopen = null;
       ws.onmessage = null;
       ws.close();
