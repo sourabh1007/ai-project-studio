@@ -7004,6 +7004,13 @@ body.is-resizing {
   gap: 6px;
 }
 
+/* Push the trailing Sign in / Sign out action to the right edge of the row so
+   the GitHub and Azure DevOps buttons line up in a consistent column and stay
+   vertically centred with their status label. */
+.gh-status-wrap > .az-signin-btn {
+  margin-left: auto;
+}
+
 .gh-signin-btn {
   flex: none;
 }

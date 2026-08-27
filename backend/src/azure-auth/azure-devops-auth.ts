@@ -237,17 +237,26 @@ export function createAzureDevOpsAuth(deps: {
       return check(target, true);
     },
     async signOut(target) {
-      const res = await deps.credential('erase', buildCredentialQuery(target), {
-        interactive: false,
-      });
-      if (res.code !== 0) {
-        return {
-          authenticated: false,
-          account: null,
-          message: describeAzureFailure(res.stderr),
-        };
+      // GCM's Azure Repos OAuth credential is often cached at the ACCOUNT level
+      // (no org path) as well as (or instead of) under the org-scoped path, so a
+      // single org-scoped erase can leave a usable credential behind — the next
+      // silent status `get` then re-mints and the pill stays "signed in". Erase
+      // every variant the token could be stored under so sign-out actually
+      // sticks. Account-level is erased last so a shared token is fully cleared.
+      const targets: AzureTarget[] = [target];
+      if (target.org !== null) {
+        targets.push({ host: target.host, org: null });
       }
-      return { authenticated: false, account: null, message: null };
+      let failure: string | null = null;
+      for (const t of targets) {
+        const res = await deps.credential('erase', buildCredentialQuery(t), {
+          interactive: false,
+        });
+        if (res.code !== 0 && failure === null) {
+          failure = describeAzureFailure(res.stderr);
+        }
+      }
+      return { authenticated: false, account: null, message: failure };
     },
     async token(target) {
       const res = await deps.credential('get', buildCredentialQuery(target), {

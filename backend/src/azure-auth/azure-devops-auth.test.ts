@@ -272,7 +272,7 @@ describe('createAzureDevOpsAuth', () => {
     expect(result.message).toMatch(/does not have access/);
   });
 
-  it('signOut erases the cached credential and reports signed out', async () => {
+  it('signOut erases both the org-scoped and account-level credentials', async () => {
     const seen: { verb: string; input: string; interactive: boolean }[] = [];
     const auth = createAzureDevOpsAuth({
       config: async () => ok(''),
@@ -290,12 +290,34 @@ describe('createAzureDevOpsAuth', () => {
         input: 'protocol=https\nhost=dev.azure.com\npath=contoso\n\n',
         interactive: false,
       },
+      {
+        verb: 'erase',
+        input: 'protocol=https\nhost=dev.azure.com\n\n',
+        interactive: false,
+      },
     ]);
     expect(result).toEqual({
       authenticated: false,
       account: null,
       message: null,
     });
+  });
+
+  it('signOut erases only the account-level credential when no org is given', async () => {
+    const seen: string[] = [];
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (_verb, input) => {
+        seen.push(input);
+        return ok('');
+      },
+    });
+
+    const result = await auth.signOut({ host: 'dev.azure.com', org: null });
+
+    expect(seen).toEqual(['protocol=https\nhost=dev.azure.com\n\n']);
+    expect(result.authenticated).toBe(false);
+    expect(result.message).toBeNull();
   });
 
   it('signOut surfaces a reason when the erase fails', async () => {
@@ -307,6 +329,23 @@ describe('createAzureDevOpsAuth', () => {
     const result = await auth.signOut({ host: 'dev.azure.com', org: null });
 
     expect(result.authenticated).toBe(false);
+    expect(result.message).toMatch(/not installed/);
+  });
+
+  it('signOut reports the first failure reason when every erase fails', async () => {
+    const messages = [
+      'git-credential-manager is not recognized',
+      'some later unrelated error',
+    ];
+    let i = 0;
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async () => fail(messages[i++] ?? ''),
+    });
+
+    const result = await auth.signOut({ host: 'dev.azure.com', org: 'contoso' });
+
+    expect(i).toBe(2);
     expect(result.message).toMatch(/not installed/);
   });
 
