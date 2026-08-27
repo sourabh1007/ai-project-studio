@@ -1,6 +1,6 @@
 {
   "name": "@ai-project-studio/desktop",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "private": true,
   "description": "Electron desktop shell for AI Project Studio.",
   "author": "sourabh1007",
