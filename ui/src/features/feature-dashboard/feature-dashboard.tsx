@@ -20,6 +20,7 @@ import {
   buildUsageTree,
   type FeatureUsageTreeNode,
   type GroupUsageTreeNode,
+  type SessionUsageTreeNode,
   type UsageTreeNode,
 } from '../../lib/usage-tree.js';
 import type {
@@ -32,6 +33,7 @@ import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { Loader } from '../../components/loading.js';
 import {
   ActivityIcon,
+  ChevronIcon,
   OverviewIcon,
   UsageIcon,
 } from '../../components/icons.js';
@@ -201,66 +203,287 @@ function UsageTreeRows({
   colorIndex: (id: string) => number;
   labelFor: (sessionId: string) => string;
 }) {
+  // Split children so nested groups render first, then sessions are bucketed by
+  // their work title. Repeated IDE metasessions (same title) collapse into one
+  // summarised row whose totals sum the group, keeping the tree scannable.
+  const groupChildren = node.children.filter(
+    (c): c is GroupUsageTreeNode => c.type === 'group',
+  );
+  const sessionChildren = node.children.filter(
+    (c): c is SessionUsageTreeNode => c.type === 'session',
+  );
+  const buckets: Array<{ key: string; sessions: SessionUsageTreeNode[] }> = [];
+  const byKey = new Map<string, SessionUsageTreeNode[]>();
+  for (const session of sessionChildren) {
+    const key = labelFor(session.id);
+    let arr = byKey.get(key);
+    if (arr === undefined) {
+      arr = [];
+      byKey.set(key, arr);
+      buckets.push({ key, sessions: arr });
+    }
+    arr.push(session);
+  }
+
   return (
     <>
-      {node.children.map((child) => {
-        const aic = nanoAiuToAic(child.totals.nanoAiu);
-        const pct = Math.round((aic / maxAic) * 100);
-        const swatch = color(colorIndex(child.id));
-        const isSession = child.type === 'session';
-        const name = isSession ? labelFor(child.id) : child.name;
-        return (
-          <div key={`${child.type}-${child.id}`} className="dash-tree-branch">
-            <div
-              className={`dash-table-row dash-tree-row dash-tree-${child.type}`}
-              role="row"
-              style={{ '--usage-depth': depth } as React.CSSProperties}
-            >
-              <span className="dash-cell-name dash-tree-name" role="cell" title={name}>
-                <span
-                  className="dash-cell-swatch"
-                  style={{ background: swatch }}
-                  aria-hidden="true"
-                />
-                <span className="dash-tree-label">{name}</span>
-                {child.type === 'group' && child.kind === 'pr' && (
-                  <span className="dash-pr-badge">PR</span>
-                )}
-                {isSession && (
-                  <span className={`dash-origin-tag dash-origin-${child.origin}`}>
-                    {originLabel(child.origin)}
-                  </span>
-                )}
-              </span>
-              <span className="dash-cell-aic dash-num" role="cell">
-                <span className="dash-bar-track" aria-hidden="true">
-                  <span
-                    className="dash-bar-fill"
-                    style={{ width: `${pct}%`, background: swatch }}
-                  />
-                </span>
-                <span className="dash-cell-value">{aic.toFixed(2)}</span>
-              </span>
-              <span className="dash-num" role="cell">
-                {formatCompactNumber(nodeTokens(child))}
-              </span>
-              <span className="dash-num" role="cell">
-                {formatDuration(child.totals.activeMs)}
-              </span>
-            </div>
-            {child.type !== 'session' && (
-              <UsageTreeRows
-                node={child}
-                depth={depth + 1}
-                maxAic={maxAic}
-                colorIndex={colorIndex}
-                labelFor={labelFor}
-              />
-            )}
-          </div>
-        );
-      })}
+      {groupChildren.map((child) => (
+        <CollapsibleTreeNode
+          key={`group-${child.id}`}
+          node={child}
+          depth={depth}
+          maxAic={maxAic}
+          colorIndex={colorIndex}
+          labelFor={labelFor}
+        />
+      ))}
+      {buckets.map(({ key, sessions }) =>
+        sessions.length === 1 ? (
+          <SessionRow
+            key={`session-${sessions[0].id}`}
+            name={key}
+            session={sessions[0]}
+            depth={depth}
+            maxAic={maxAic}
+            colorIndex={colorIndex}
+          />
+        ) : (
+          <SessionBucket
+            key={`bucket-${key}`}
+            name={key}
+            sessions={sessions}
+            depth={depth}
+            maxAic={maxAic}
+            colorIndex={colorIndex}
+          />
+        ),
+      )}
     </>
+  );
+}
+
+function pctOf(aic: number, maxAic: number): number {
+  return Math.min(100, Math.max(0, Math.round((aic / maxAic) * 100)));
+}
+
+/** Shared presentational row used by every node type in the usage tree. */
+function TreeRow({
+  type,
+  name,
+  aic,
+  tokens,
+  activeMs,
+  swatch,
+  pct,
+  depth,
+  badge,
+  origin,
+  count,
+  open,
+  onToggle,
+}: {
+  type: 'group' | 'session' | 'bucket';
+  name: string;
+  aic: number;
+  tokens: number;
+  activeMs: number;
+  swatch: string;
+  pct: number;
+  depth: number;
+  badge?: 'pr';
+  origin?: 'ide' | 'user';
+  count?: number;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const collapsible = onToggle !== undefined;
+  return (
+    <div
+      className={`dash-table-row dash-tree-row dash-tree-${type}${
+        collapsible ? ' dash-tree-clickable' : ''
+      }`}
+      role="row"
+      style={{ '--usage-depth': depth } as React.CSSProperties}
+      onClick={collapsible ? onToggle : undefined}
+    >
+      <span className="dash-cell-name dash-tree-name" role="cell" title={name}>
+        {collapsible ? (
+          <button
+            type="button"
+            className="dash-tree-toggle"
+            aria-label={open ? 'Collapse' : 'Expand'}
+            aria-expanded={open}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle?.();
+            }}
+          >
+            <ChevronIcon size={13} open={open} />
+          </button>
+        ) : (
+          <span className="dash-tree-toggle-spacer" aria-hidden="true" />
+        )}
+        <span
+          className="dash-cell-swatch"
+          style={{ background: swatch }}
+          aria-hidden="true"
+        />
+        <span className="dash-tree-label">{name}</span>
+        {badge === 'pr' && <span className="dash-pr-badge">PR</span>}
+        {count !== undefined && (
+          <span className="dash-count-badge">{count} sessions</span>
+        )}
+        {origin && (
+          <span className={`dash-origin-tag dash-origin-${origin}`}>
+            {originLabel(origin)}
+          </span>
+        )}
+      </span>
+      <span className="dash-cell-aic dash-num" role="cell">
+        <span className="dash-bar-track" aria-hidden="true">
+          <span
+            className="dash-bar-fill"
+            style={{ width: `${pct}%`, background: swatch }}
+          />
+        </span>
+        <span className="dash-cell-value">{aic.toFixed(2)}</span>
+      </span>
+      <span className="dash-num" role="cell">
+        {formatCompactNumber(tokens)}
+      </span>
+      <span className="dash-num" role="cell">
+        {formatDuration(activeMs)}
+      </span>
+    </div>
+  );
+}
+
+/** A collapsible group/feature node — collapsed by default. */
+function CollapsibleTreeNode({
+  node,
+  depth,
+  maxAic,
+  colorIndex,
+  labelFor,
+}: {
+  node: GroupUsageTreeNode;
+  depth: number;
+  maxAic: number;
+  colorIndex: (id: string) => number;
+  labelFor: (sessionId: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const aic = nanoAiuToAic(node.totals.nanoAiu);
+  const swatch = color(colorIndex(node.id));
+  return (
+    <div className="dash-tree-branch">
+      <TreeRow
+        type="group"
+        name={node.name}
+        aic={aic}
+        tokens={nodeTokens(node)}
+        activeMs={node.totals.activeMs}
+        swatch={swatch}
+        pct={pctOf(aic, maxAic)}
+        depth={depth}
+        badge={node.kind === 'pr' ? 'pr' : undefined}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <UsageTreeRows
+          node={node}
+          depth={depth + 1}
+          maxAic={maxAic}
+          colorIndex={colorIndex}
+          labelFor={labelFor}
+        />
+      )}
+    </div>
+  );
+}
+
+/** A single session row. */
+function SessionRow({
+  name,
+  session,
+  depth,
+  maxAic,
+  colorIndex,
+}: {
+  name: string;
+  session: SessionUsageTreeNode;
+  depth: number;
+  maxAic: number;
+  colorIndex: (id: string) => number;
+}) {
+  const aic = nanoAiuToAic(session.totals.nanoAiu);
+  const swatch = color(colorIndex(session.id));
+  return (
+    <div className="dash-tree-branch">
+      <TreeRow
+        type="session"
+        name={name}
+        aic={aic}
+        tokens={nodeTokens(session)}
+        activeMs={session.totals.activeMs}
+        swatch={swatch}
+        pct={pctOf(aic, maxAic)}
+        depth={depth}
+        origin={session.origin}
+      />
+    </div>
+  );
+}
+
+/** A collapsed summary of several similar sessions; sums their usage. */
+function SessionBucket({
+  name,
+  sessions,
+  depth,
+  maxAic,
+  colorIndex,
+}: {
+  name: string;
+  sessions: SessionUsageTreeNode[];
+  depth: number;
+  maxAic: number;
+  colorIndex: (id: string) => number;
+}) {
+  const [open, setOpen] = useState(false);
+  const nanoAiu = sessions.reduce((sum, s) => sum + s.totals.nanoAiu, 0);
+  const tokens = sessions.reduce((sum, s) => sum + nodeTokens(s), 0);
+  const activeMs = sessions.reduce((sum, s) => sum + s.totals.activeMs, 0);
+  const aic = nanoAiuToAic(nanoAiu);
+  const swatch = color(colorIndex(sessions[0].id));
+  return (
+    <div className="dash-tree-branch">
+      <TreeRow
+        type="bucket"
+        name={name}
+        aic={aic}
+        tokens={tokens}
+        activeMs={activeMs}
+        swatch={swatch}
+        pct={pctOf(aic, maxAic)}
+        depth={depth}
+        count={sessions.length}
+        origin={sessions[0].origin}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open &&
+        sessions.map((session, i) => (
+          <SessionRow
+            key={`session-${session.id}`}
+            name={`Run ${i + 1}`}
+            session={session}
+            depth={depth + 1}
+            maxAic={maxAic}
+            colorIndex={colorIndex}
+          />
+        ))}
+    </div>
   );
 }
 
