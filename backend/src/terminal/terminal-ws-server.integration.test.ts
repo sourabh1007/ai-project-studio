@@ -90,6 +90,7 @@ function fakeTerminal(sessionId: string, scrollback: string) {
       };
     },
     kill: () => {},
+    notify: (data) => sink?.send(data),
     exited: false,
     exitCode: null,
     transcriptText: () => '',
@@ -193,6 +194,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => undefined,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, () => null);
@@ -209,6 +211,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => undefined,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -224,6 +227,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -249,6 +253,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -276,6 +281,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -308,6 +314,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -337,6 +344,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -360,6 +368,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -383,6 +392,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -403,6 +413,7 @@ describe('attachTerminalWs (integration)', () => {
       get: () => fake.terminal,
       close: () => {},
       injectInstructions: () => false,
+      observeInput: () => {},
       shutdown: () => {},
     };
     const url = await startServer(manager, (id) => sampleSession(id));
@@ -414,3 +425,4 @@ describe('attachTerminalWs (integration)', () => {
     await expect.poll(() => fake.isDetached()).toBe(true);
   });
 });
+

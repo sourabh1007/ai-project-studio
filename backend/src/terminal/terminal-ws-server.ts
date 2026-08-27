@@ -108,6 +108,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
       if (message.type === 'input') {
         if (terminal.inputReadiness === 'ready') {
           writeInput(message.data);
+          deps.manager.observeInput(sessionId, message.data);
         } else if (terminal.inputReadiness === 'pending') {
           const bytes = Buffer.byteLength(message.data);
           if (

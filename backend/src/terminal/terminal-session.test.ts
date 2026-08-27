@@ -156,6 +156,28 @@ describe('createTerminalSession', () => {
     expect(late.exits).toEqual([0]);
   });
 
+  it('displays a notice to live sinks and replays it, bounded to scrollback', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 's1',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 4,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    const live = recordingSink();
+    session.attach(live.sink);
+    session.notify('retrying');
+    // Sent to the live sink, but kept out of the CLI transcript.
+    expect(live.output).toEqual(['retrying']);
+    expect(session.transcriptText()).toBe('');
+    // Retained (bounded) scrollback replays to a late joiner.
+    const late = recordingSink();
+    session.attach(late.sink);
+    expect(late.output).toEqual(['ying']);
+  });
+
   it('settles pending input readiness as ready or closed exactly once', () => {
     const readyPty = fakePty();
     const session = createTerminalSession({

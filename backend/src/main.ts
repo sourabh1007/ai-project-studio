@@ -133,6 +133,7 @@ import { createSessionReconciler } from './session/session-reconciler.js';
 import { createNodePtySpawner } from './terminal/node-pty-spawner.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
 import { attachTerminalWs } from './terminal/terminal-ws-server.js';
+import { isTransientProviderFailure } from './pr-review/transient-failure.js';
 
 import { createUsageRecorder } from './usage/usage-recorder.js';
 import { createCliUsageTailer } from './usage/cli-usage-tailer.js';
@@ -1158,6 +1159,10 @@ function main(): void {
     // as the user changes model in the CLI, not just on the next usage row.
     onModelResolved: resolveSessionModel,
     home: homedir(),
+    // Auto-heal interactive sessions from the same transient upstream blips the
+    // IDE already retries for its metasessions: re-submit the user's last
+    // prompt on a transient (5xx / 429 / network) provider failure.
+    isTransientFailure: isTransientProviderFailure,
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
 

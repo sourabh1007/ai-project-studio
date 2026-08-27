@@ -49,6 +49,13 @@ export interface TerminalSession {
   attach(sink: TerminalOutputSink): () => void;
   /** Terminates the terminal process. */
   kill(): void;
+  /**
+   * Displays IDE-injected text to every attached client (and retained
+   * scrollback) without sending it to the PTY. Used for surfacing notices such
+   * as an automatic retry; kept out of the transcript so summaries reflect only
+   * the CLI's own output.
+   */
+  notify(text: string): void;
   readonly exited: boolean;
   readonly exitCode: number | null;
   /** ANSI-stripped accumulated output, for persistence / summarization. */
@@ -140,6 +147,15 @@ export function createTerminalSession(
       };
     },
     kill: () => pty.kill(),
+    notify(text) {
+      scrollback += text;
+      if (scrollback.length > scrollbackBytes) {
+        scrollback = scrollback.slice(scrollback.length - scrollbackBytes);
+      }
+      for (const sink of sinks) {
+        sink.send(text);
+      }
+    },
     get exited() {
       return exited;
     },

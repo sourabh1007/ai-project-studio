@@ -132,6 +132,7 @@ function makeManager(
   withScanner = false,
   bootstrapError?: Error,
   modelOpts: { withModelScanner?: boolean; trackModel?: boolean } = {},
+  isTransientFailure?: (line: string) => boolean,
 ) {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
@@ -178,6 +179,7 @@ function makeManager(
         : (sessionId, model) => {
             modelResolved.push({ sessionId, model });
           },
+    isTransientFailure,
     home: '/home/me',
   });
   return {
@@ -213,6 +215,38 @@ describe('createTerminalManager', () => {
     expect(req.cwd).toBe('/work');
     expect(started).toHaveLength(1);
     expect(started[0].status).toBe('running');
+  });
+
+  it('auto-retries the last typed prompt on a transient provider failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env } = makeManager('', false, undefined, {}, (line) =>
+        line.includes('503'),
+      );
+      await manager.getOrLaunch(sampleSession());
+      // The reviewer types a prompt; the ws-server routes keystrokes to the
+      // manager, which feeds the per-session auto-retry controller.
+      manager.observeInput('sess-1', 'fix it\r');
+      // The interactive CLI reports a transient provider failure on its output.
+      env.emitData('Execution failed: 503 Service Unavailable\n');
+      // After the backoff the manager re-submits the same prompt via the PTY.
+      vi.advanceTimersByTime(terminalDefaults.autoRetryBackoffMs);
+      expect(env.writes).toContain('fix it');
+      // The session exiting tears the controller's output sink down cleanly.
+      env.emitExit(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not auto-retry when no transient classifier is provided', async () => {
+    const { manager, env } = makeManager();
+    await manager.getOrLaunch(sampleSession());
+    // Without a classifier the controller is never attached, so routed input
+    // is a harmless no-op and no resend is written.
+    manager.observeInput('sess-1', 'fix it\r');
+    env.emitData('Execution failed: 503 Service Unavailable\n');
+    expect(env.writes).not.toContain('fix it');
   });
 
   it('falls back to default terminal size when unspecified', async () => {

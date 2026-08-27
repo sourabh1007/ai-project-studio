@@ -51,6 +51,18 @@ export const terminalConfigSchema = z.object({
    * even if the CLI never stops emitting output (e.g. an animated spinner).
    */
   instructionSeedSubmitMaxWaitMs: z.number().int().nonnegative(),
+  /**
+   * Whether an interactive session automatically re-submits the user's last
+   * prompt when the CLI reports a *transient* provider failure (upstream
+   * 5xx / 429 / network reset). Lets the IDE heal the same blips it already
+   * retries for its own metasessions, so a momentary upstream hiccup does not
+   * force the user to manually re-run their prompt.
+   */
+  autoRetryEnabled: z.boolean(),
+  /** Extra automatic re-submits of the last prompt per transient-failure streak. */
+  autoRetryMaxAttempts: z.number().int().nonnegative(),
+  /** Delay (ms) before an automatic re-submit, letting the upstream recover. */
+  autoRetryBackoffMs: z.number().int().nonnegative(),
 });
 
 export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
@@ -68,4 +80,7 @@ export const terminalDefaults: TerminalConfig = {
   instructionSeedReadyTimeoutMs: 15000,
   instructionSeedSubmitDelayMs: 500,
   instructionSeedSubmitMaxWaitMs: 10000,
+  autoRetryEnabled: true,
+  autoRetryMaxAttempts: 2,
+  autoRetryBackoffMs: 2500,
 };

@@ -12,6 +12,10 @@ import {
   createTerminalSession,
   type TerminalSession,
 } from './terminal-session.js';
+import {
+  createSessionAutoRetry,
+  type SessionAutoRetry,
+} from './session-auto-retry.js';
 import { stripAnsi } from './ansi.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 
@@ -36,6 +40,13 @@ export interface TerminalManagerDeps {
   onModelResolved?: (sessionId: string, model: string) => void;
   /** User home directory, for a scanner to expand `~`-relative tool paths. */
   home: string;
+  /**
+   * Classifies a completed CLI output line as a *transient*, retryable provider
+   * failure (upstream 5xx / 429 / network reset). When provided and
+   * `config.autoRetryEnabled`, interactive sessions auto-resubmit the user's
+   * last prompt on such a failure. Omitted to disable interactive auto-retry.
+   */
+  isTransientFailure?: (line: string) => boolean;
 }
 
 export interface LaunchOptions {
@@ -63,6 +74,14 @@ export interface TerminalManager {
    * seeding). Returns false when no live terminal exists or the block is empty.
    */
   injectInstructions(sessionId: string, instructions: string): boolean;
+  /**
+   * Feeds user keystrokes for a live session into its auto-retry controller so
+   * the last submitted prompt is tracked. Only browser input should be fed
+   * here — programmatic writes (skill seeding, an auto-retry resend) must not,
+   * or a resend would be mistaken for a fresh prompt. No-op when the session
+   * has no controller (auto-retry disabled or a non-interactive session).
+   */
+  observeInput(sessionId: string, data: string): void;
   close(sessionId: string): void;
   /**
    * Kills every live terminal without emitting `session.ended` /
@@ -76,6 +95,10 @@ export function createTerminalManager(
   deps: TerminalManagerDeps,
 ): TerminalManager {
   const sessions = new Map<string, TerminalSession>();
+  // Per-session interactive auto-retry controllers, keyed by session id. Only
+  // present for interactive dev sessions when auto-retry is enabled; removed on
+  // exit alongside the terminal.
+  const retries = new Map<string, SessionAutoRetry>();
   // Sessions whose terminals are being killed as part of deletion. Their exit
   // must not be recorded as `session.ended` (which would re-persist the row we
   // are deleting); it is reported as `session.discarded` instead.
@@ -130,6 +153,7 @@ export function createTerminalManager(
       transcriptBytes: deps.config.transcriptBytes,
       onExit: (code) => {
         sessions.delete(session.id);
+        retries.delete(session.id);
         if (discarded.has(session.id)) {
           // Deleted out from under us: drop the terminal without persisting an
           // ended snapshot, but let listeners release the usage tailer.
@@ -168,7 +192,42 @@ export function createTerminalManager(
       seedInstructionsWhenReady(terminal, bootstrap);
     }
 
+    attachAutoRetry(terminal, session);
+
     return terminal;
+  }
+
+  /**
+   * Attaches an auto-retry controller that re-submits the user's last prompt
+   * when the interactive CLI reports a transient provider failure. Only wired
+   * for interactive dev sessions (a human types prompts there) when a
+   * transient classifier is provided and auto-retry is enabled. The controller
+   * observes output via a sink, resends via {@link seedNow} (a programmatic
+   * write that bypasses input observation, so a resend cannot reset the attempt
+   * budget), and surfaces a notice through {@link TerminalSession.notify}.
+   */
+  function attachAutoRetry(terminal: TerminalSession, session: Session): void {
+    const isTransient = deps.isTransientFailure;
+    if (
+      !deps.config.autoRetryEnabled ||
+      !isTransient ||
+      session.kind !== 'dev' ||
+      session.scope === 'internal'
+    ) {
+      return;
+    }
+    const controller = createSessionAutoRetry({
+      isTransient,
+      maxAttempts: deps.config.autoRetryMaxAttempts,
+      backoffMs: deps.config.autoRetryBackoffMs,
+      resubmit: (prompt) => seedNow(terminal, prompt),
+      notify: (text) => terminal.notify(text),
+    });
+    retries.set(session.id, controller);
+    terminal.attach({
+      send: (data) => controller.observeOutput(data),
+      exit: () => {},
+    });
   }
 
   /**
@@ -366,6 +425,9 @@ export function createTerminalManager(
       }
       seedNow(terminal, instructions);
       return true;
+    },
+    observeInput(sessionId, data) {
+      retries.get(sessionId)?.observeInput(data);
     },
     close(sessionId) {
       // A terminal is only in the map while live: its exit handler removes it.
