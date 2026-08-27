@@ -109,4 +109,14 @@ describe('createWorktreeService.removeForFeature', () => {
     await service.removeForFeature('f1');
     expect(run).not.toHaveBeenCalled();
   });
+
+  it('does not remove an in-place review that used the repo primary checkout', async () => {
+    const run = vi.fn(async () => ok());
+    const { service } = harness({
+      review: { repoId: 'r1', worktreePath: '/repos/app' },
+      run,
+    });
+    await service.removeForFeature('f1');
+    expect(run).not.toHaveBeenCalled();
+  });
 });

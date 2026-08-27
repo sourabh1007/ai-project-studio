@@ -103,6 +103,17 @@ export function describeFetchFailure(
 }
 
 /**
+ * Parses the checkout path git names when a branch is already checked out in
+ * another worktree — the "...used by worktree at '<path>'" tail of errors like
+ * `fatal: cannot force update the branch 'X' used by worktree at 'Q:/src/repo'`.
+ * Returns null when the error is something else.
+ */
+export function checkedOutWorktreePath(stderr: string): string | null {
+  const match = /used by worktree at '([^']+)'/i.exec(stderr);
+  return match ? match[1] : null;
+}
+
+/**
  * Checks a pull request out into a dedicated git worktree so it can be reviewed
  * in its own session without disturbing the repository's primary checkout (and
  * so multiple PR reviews can run concurrently). GitHub PRs are fetched via the
@@ -193,6 +204,23 @@ export async function provisionPrWorktree(
   const tracksPullRequest = trackFetch.code === 0;
   const branch = tracksPullRequest ? input.sourceBranch : `pr-${input.number}`;
 
+  // When the PR's head branch is already checked out in another worktree
+  // (commonly the repo's own primary working tree), git refuses to reset it
+  // ("used by worktree at '<path>'"). Rather than failing, review that checkout
+  // in place — the user's existing working copy is exactly what they want to
+  // review, so we adopt its path and current HEAD without disturbing it.
+  const reviewInPlace = async (
+    inUsePath: string,
+  ): Promise<ProvisionedWorktree> => {
+    const rev = await deps.git(['-C', inUsePath, 'rev-parse', 'HEAD']);
+    return {
+      worktreePath: inUsePath,
+      branch,
+      tracksPullRequest,
+      headSha: rev.code === 0 ? rev.stdout.trim() : headSha,
+    };
+  };
+
   if (deps.pathExists(worktreePath)) {
     const checkout = await deps.git([
       '-c',
@@ -206,6 +234,10 @@ export async function provisionPrWorktree(
       headSha,
     ]);
     if (checkout.code !== 0) {
+      const inUse = checkedOutWorktreePath(checkout.stderr);
+      if (inUse) {
+        return reviewInPlace(inUse);
+      }
       throw new ValidationError(
         describeWorktreeFailure(
           checkout.stderr,
@@ -228,6 +260,10 @@ export async function provisionPrWorktree(
       headSha,
     ]);
     if (add.code !== 0) {
+      const inUse = checkedOutWorktreePath(add.stderr);
+      if (inUse) {
+        return reviewInPlace(inUse);
+      }
       throw new ValidationError(
         describeWorktreeFailure(
           add.stderr,

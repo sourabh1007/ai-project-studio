@@ -90,6 +90,12 @@ export function createWorktreeService(
       if (!repo) {
         return;
       }
+      // A review that ran in place (its head branch was already checked out in
+      // the repo's primary working tree) points at a non-managed path; never
+      // attempt to remove the user's own checkout.
+      if (!belongsToRepo(review.worktreePath, repo.localPath)) {
+        return;
+      }
       await removeAt(repo.localPath, review.worktreePath);
     },
   };

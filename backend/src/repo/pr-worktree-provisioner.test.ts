@@ -5,6 +5,7 @@ import {
   prWorktreePath,
   describeWorktreeFailure,
   describeFetchFailure,
+  checkedOutWorktreePath,
   type GitRunResult,
 } from './pr-worktree-provisioner.js';
 
@@ -344,6 +345,99 @@ describe('provisionPrWorktree', () => {
         { repoLocalPath, provider: 'github', number: 9, sourceBranch: 'b' },
       ),
     ).rejects.toThrow(/long paths/i);
+  });
+
+  it('reviews in place when worktree add reports the branch is checked out elsewhere', async () => {
+    const { git, calls } = gitRecorder([
+      ok,
+      { code: 0, stdout: 'fetched\n', stderr: '' },
+      ok,
+      {
+        code: 1,
+        stdout: '',
+        stderr:
+          "fatal: cannot force update the branch 'b' used by worktree at 'Q:/src/CosmosDB'",
+      },
+      { code: 0, stdout: 'local-sha\n', stderr: '' },
+    ]);
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => false },
+      { repoLocalPath, provider: 'github', number: 9, sourceBranch: 'b' },
+    );
+    expect(result).toEqual({
+      worktreePath: 'Q:/src/CosmosDB',
+      branch: 'b',
+      tracksPullRequest: true,
+      headSha: 'local-sha',
+    });
+    expect(calls[calls.length - 1]).toEqual([
+      '-C',
+      'Q:/src/CosmosDB',
+      'rev-parse',
+      'HEAD',
+    ]);
+  });
+
+  it('reviews in place when the existing-worktree checkout hits the same conflict', async () => {
+    const { git } = gitRecorder([
+      ok,
+      { code: 0, stdout: 'fetched\n', stderr: '' },
+      ok,
+      {
+        code: 1,
+        stdout: '',
+        stderr: "cannot force update the branch 'b' used by worktree at 'Q:/existing'",
+      },
+      { code: 0, stdout: 'local-sha\n', stderr: '' },
+    ]);
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => true },
+      { repoLocalPath, provider: 'github', number: 9, sourceBranch: 'b' },
+    );
+    expect(result).toEqual({
+      worktreePath: 'Q:/existing',
+      branch: 'b',
+      tracksPullRequest: true,
+      headSha: 'local-sha',
+    });
+  });
+
+  it('falls back to the fetched head when the in-place HEAD cannot be resolved', async () => {
+    const { git } = gitRecorder([
+      ok,
+      { code: 0, stdout: 'fetched\n', stderr: '' },
+      ok,
+      {
+        code: 1,
+        stdout: '',
+        stderr: "used by worktree at 'Q:/src/CosmosDB'",
+      },
+      { code: 1, stdout: '', stderr: 'no HEAD' },
+    ]);
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => false },
+      { repoLocalPath, provider: 'github', number: 9, sourceBranch: 'b' },
+    );
+    expect(result).toEqual({
+      worktreePath: 'Q:/src/CosmosDB',
+      branch: 'b',
+      tracksPullRequest: true,
+      headSha: 'fetched',
+    });
+  });
+});
+
+describe('checkedOutWorktreePath', () => {
+  it('extracts the path a branch is already checked out in', () => {
+    expect(
+      checkedOutWorktreePath(
+        "fatal: cannot force update the branch 'x' used by worktree at 'Q:/src/CosmosDB'",
+      ),
+    ).toBe('Q:/src/CosmosDB');
+  });
+
+  it('returns null for unrelated errors', () => {
+    expect(checkedOutWorktreePath('fatal: some other failure')).toBeNull();
   });
 });
 
