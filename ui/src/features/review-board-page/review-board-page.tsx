@@ -412,10 +412,8 @@ function ReviewAgent({
 
 export function ReviewBoardPage({
   featureId,
-  onOpenCodeReview,
 }: {
   featureId: string;
-  onOpenCodeReview?: (target?: CodeReviewTarget) => void;
 }) {
   const api = useApi();
   // The analysis run lives in a persistent, per-feature store so it keeps going
@@ -571,10 +569,13 @@ export function ReviewBoardPage({
           setDiffTarget({ title: file.path, detail: null, files: [file] });
           return;
         }
+        // No diff captured for this path in the change graph — still open the
+        // modal so the reviewer sees which file is referenced instead of a
+        // dead click. (The Code Review page has been retired.)
+        setDiffTarget({ title: path, detail: null, files: [] });
       }
-      onOpenCodeReview?.(target);
     },
-    [changeGraph, onOpenCodeReview],
+    [resolveNodeDiff],
   );
   const openFindingDiff = useCallback(
     (finding: ReviewFinding) => {
@@ -591,17 +592,16 @@ export function ReviewBoardPage({
           files.push(file);
         }
       }
-      if (files.length === 0) {
-        onOpenCodeReview?.();
-        return;
-      }
+      // Even when no per-file diff is available, open the modal with the
+      // finding's problem/fix framing so clicking "Open diff" always surfaces
+      // context inline. (The dedicated Code Review page has been retired.)
       setDiffTarget({
         title: finding.title,
         detail: finding.detail,
         files,
       });
     },
-    [resolveNodeDiff, onOpenCodeReview],
+    [resolveNodeDiff],
   );
   useEffect(() => {
     let cancelled = false;
@@ -1472,6 +1472,12 @@ export function ReviewBoardPage({
                 <div className="rb-diff-modal-detail">
                   <FindingDetail detail={diffTarget.detail} />
                 </div>
+              )}
+              {diffTarget.files.length === 0 && (
+                <p className="rb-checked-hint">
+                  No file diff was captured for this reference. Run the analysis
+                  (or take the latest) to build the change graph, then reopen.
+                </p>
               )}
               {diffTarget.files.map((file, i) => (
                 <details

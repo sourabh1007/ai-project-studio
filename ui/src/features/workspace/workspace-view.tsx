@@ -1,7 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
-import { createPortal } from 'react-dom';
 import type { LiveState } from '../../lib/stream.js';
-import type { PrReview } from '../../lib/types.js';
 import type { Feature, Repository, Session } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
@@ -28,11 +26,6 @@ const TerminalView = lazy(() =>
 const FeatureDashboard = lazy(() =>
   import('../feature-dashboard/feature-dashboard.js').then((m) => ({
     default: m.FeatureDashboard,
-  })),
-);
-const PrReviewPage = lazy(() =>
-  import('../pr-review-page/pr-review-page.js').then((m) => ({
-    default: m.PrReviewPage,
   })),
 );
 const ReviewBoardPage = lazy(() =>
@@ -97,17 +90,6 @@ export function WorkspaceView({
   );
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  // The Code Review is no longer a blade/tab — it opens as a full-screen modal
-  // overlay on top of the current window (e.g. from the Review Board's evidence
-  // links or the Explorer's "Code Review" node). null when closed.
-  const [codeReviewFeature, setCodeReviewFeature] = useState<Feature | null>(
-    null,
-  );
-  // Optional file the Code Review should open focused on (from a Review Board
-  // evidence link), so its diff opens straight away with an inline comment box.
-  const [codeReviewFocus, setCodeReviewFocus] = useState<{
-    path: string;
-  } | null>(null);
   const [explorerWidth, setExplorerWidth] = usePersistentState(
     'cw-explorer-width',
     260,
@@ -133,11 +115,6 @@ export function WorkspaceView({
       label: feature.name,
       feature,
     });
-  }
-
-  function openCodeReview(feature: Feature, focus?: { path?: string }) {
-    setCodeReviewFeature(feature);
-    setCodeReviewFocus(focus?.path ? { path: focus.path } : null);
   }
 
   function openReviewBoard(feature: Feature) {
@@ -208,9 +185,6 @@ export function WorkspaceView({
 
   async function deleteFeature(feature: Feature) {
     await api.deleteFeature(feature.id);
-    setCodeReviewFeature((current) =>
-      current?.id === feature.id ? null : current,
-    );
     setTabs((prev) => {
       const next = prev.filter(
         (tab) =>
@@ -284,7 +258,7 @@ export function WorkspaceView({
             names={names}
             onOpenSession={openSession}
             onOpenFeature={openFeature}
-            onOpenPrReview={openCodeReview}
+            onOpenPrReview={openReviewBoard}
             onOpenReviewBoard={openReviewBoard}
             onOpenRepo={openRepo}
             onRenameSession={renameSession}
@@ -374,9 +348,6 @@ export function WorkspaceView({
                 <ReviewBoardPage
                   key={active.feature.id}
                   featureId={active.feature.id}
-                  onOpenCodeReview={(target) =>
-                    openCodeReview(active.feature, target)
-                  }
                 />
               </Suspense>
             </ErrorBoundary>
@@ -398,92 +369,6 @@ export function WorkspaceView({
           )}
         </div>
       </section>
-
-      {codeReviewFeature && (
-        <CodeReviewModal
-          feature={codeReviewFeature}
-          liveReview={live.prReviews[codeReviewFeature.id]}
-          focusFile={codeReviewFocus}
-          onClose={() => {
-            setCodeReviewFeature(null);
-            setCodeReviewFocus(null);
-          }}
-        />
-      )}
     </div>
-  );
-}
-
-/**
- * The Code Review shown as a full-screen modal overlay instead of a workspace
- * blade/tab. It hosts the same `PrReviewPage` (problem statement, change graph,
- * per-file diffs) but layers it over the current window so opening it from the
- * Review Board or Explorer never navigates away. Closes on backdrop click or
- * Escape.
- */
-function CodeReviewModal({
-  feature,
-  liveReview,
-  focusFile,
-  onClose,
-}: {
-  feature: Feature;
-  liveReview?: PrReview;
-  focusFile?: { path: string } | null;
-  onClose: () => void;
-}) {
-  return createPortal(
-    <div
-      className="crm-overlay"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div
-        className="crm-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Code Review for ${feature.name}`}
-        tabIndex={-1}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            onClose();
-          }
-        }}
-        ref={(node) => node?.focus()}
-      >
-        <header className="crm-header">
-          <div className="crm-heading">
-            <span className="crm-title">Code Review</span>
-            <span className="crm-subtitle">{feature.name}</span>
-          </div>
-          <button
-            type="button"
-            className="crm-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </header>
-        <div className="crm-body">
-          <ErrorBoundary label="Code Review">
-            <Suspense fallback={<ViewSkeleton label="code review" />}>
-              <PrReviewPage
-                key={feature.id}
-                featureId={feature.id}
-                liveReview={liveReview}
-                focusFile={focusFile ?? null}
-              />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      </div>
-    </div>,
-    document.body,
   );
 }
