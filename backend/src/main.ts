@@ -117,6 +117,7 @@ import {
 } from './github-auth/github-auth-service.js';
 import { buildGithubCredentialEnv } from './github-auth/github-credential-env.js';
 import { createGithubDeviceAuth } from './github-auth/github-device-auth.js';
+import { resolveGhExecutable } from './github-auth/gh-executable.js';
 import {
   createAzureDevOpsAuth,
   type GitRunResult,
@@ -679,6 +680,12 @@ function main(): void {
   // into each session, so all sessions inherit the same login automatically.
   const GH_NOT_FOUND_MESSAGE =
     'GitHub CLI (gh) was not found. Install it from https://cli.github.com and make sure it is on your PATH, then try again.';
+  // Resolve `gh` to a concrete path once, searching PATH plus well-known install
+  // dirs. A GUI-launched desktop app often inherits a narrower PATH than a shell
+  // (missing `C:\Program Files\GitHub CLI`), so a bare `execFile('gh')` would
+  // ENOENT even though `gh` works in a terminal. Resolving up-front makes every
+  // gh invocation below (status, token, sign-in) find the binary regardless.
+  const ghCommand = resolveGhExecutable();
   // The GitHub token we propagate to sessions is injected into THIS process's
   // env (below). But `gh` itself reads `GH_TOKEN`/`GITHUB_TOKEN` from its env
   // and, when present, treats that as the active credential — which makes
@@ -700,7 +707,7 @@ function main(): void {
       // backend (and any awaiting /github/status request) indefinitely. Bound
       // it and treat "gh not found" as a clear, non-hanging failure.
       execFile(
-        'gh',
+        ghCommand,
         args,
         {
           windowsHide: true,
@@ -740,7 +747,7 @@ function main(): void {
   const refreshGithubCredentialEnv = (): Promise<void> =>
     new Promise((resolve) => {
       execFile(
-        'gh',
+        ghCommand,
         ['auth', 'token'],
         {
           encoding: 'utf8',
@@ -811,7 +818,7 @@ function main(): void {
     ghLogin: (token) =>
       new Promise((resolve) => {
         const child = execFile(
-          'gh',
+          ghCommand,
           ['auth', 'login', '--with-token'],
           { windowsHide: true, timeout: 20_000, env: ghEnvWithoutToken() },
           (err, _stdout, stderr) => {
