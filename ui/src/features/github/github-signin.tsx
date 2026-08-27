@@ -45,6 +45,14 @@ export function GithubSignInModal({
   // Bumping this restarts the whole flow (used by "Try again").
   const [attempt, setAttempt] = useState(0);
   const cancelled = useRef(false);
+  // Keep the latest onAuthenticated in a ref so the sign-in effect does NOT
+  // depend on its identity. Parents (e.g. the GitHub status badge, which
+  // re-checks status every 30s) pass a fresh closure on every render; if the
+  // effect depended on it, each parent re-render would cancel the in-flight
+  // device flow and start a new one with a new code — so the code the user is
+  // entering never completes and sign-in appears to hang forever.
+  const onAuthenticatedRef = useRef(onAuthenticated);
+  onAuthenticatedRef.current = onAuthenticated;
 
   const retry = useCallback(() => {
     setCopied(false);
@@ -83,7 +91,7 @@ export function GithubSignInModal({
           if (result.status === 'success') {
             setPhase({ kind: 'success' });
             await sleep(800);
-            if (!cancelled.current) onAuthenticated();
+            if (!cancelled.current) onAuthenticatedRef.current();
             return;
           }
           if (result.status === 'error') {
@@ -112,7 +120,7 @@ export function GithubSignInModal({
     return () => {
       cancelled.current = true;
     };
-  }, [api, onAuthenticated, attempt]);
+  }, [api, attempt]);
 
   return (
     <Modal title="Sign in to GitHub" onClose={onClose}>
