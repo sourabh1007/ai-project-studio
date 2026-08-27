@@ -215,16 +215,18 @@ export function SharedContextPanel({
                 e.target.value = '';
               }}
             />
-            <Button
-              variant="ghost"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={saving}
-            >
-              Attach file
-            </Button>
-            <Button onClick={() => void save()} disabled={saving || !dirty}>
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
+            <div className="shared-context-buttons">
+              <Button
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={saving}
+              >
+                Attach file
+              </Button>
+              <Button onClick={() => void save()} disabled={saving || !dirty}>
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
           </div>
         </>
       )}

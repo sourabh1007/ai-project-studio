@@ -7292,6 +7292,13 @@ body.is-resizing {
   gap: var(--space-3);
 }
 
+.shared-context-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
 .shared-context-note {
   font-size: 11px;
   color: var(--text-faint);
