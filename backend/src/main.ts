@@ -185,6 +185,14 @@ import type {
   PullFilter,
 } from './repo/remote-pr-contract.js';
 import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
+import type { AzureTarget } from './azure-auth/azure-devops-auth.js';
+import {
+  AUTH_WARMER_NAMESPACE,
+  authWarmerConfigSchema,
+  authWarmerDefaults,
+  type AuthWarmerConfig,
+} from './auth-warmer/config.js';
+import { createCredentialWarmer } from './auth-warmer/credential-warmer.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
 import { createTranscriptRepo } from './persistence/transcript-repo.js';
@@ -424,6 +432,11 @@ function main(): void {
     schema: automationConfigSchema,
     defaults: automationDefaults,
   });
+  registry.register({
+    namespace: AUTH_WARMER_NAMESPACE,
+    schema: authWarmerConfigSchema,
+    defaults: authWarmerDefaults,
+  });
 
   // Phase 1 (bootstrap): resolve just enough config from defaults + environment
   // to locate on-disk storage and configure logging. Persisted overrides live
@@ -562,6 +575,7 @@ function main(): void {
   const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
   const reviewBoardConfig = config[REVIEW_BOARD_NAMESPACE] as ReviewBoardConfig;
   const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
+  const authWarmerConfig = config[AUTH_WARMER_NAMESPACE] as AuthWarmerConfig;
 
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
@@ -756,9 +770,10 @@ function main(): void {
       );
     });
   void refreshGithubCredentialEnv();
-  // Re-read the token hourly so a long-running IDE never spawns sessions with an
-  // expired GitHub token.
-  setInterval(() => void refreshGithubCredentialEnv(), 60 * 60 * 1000).unref();
+  // A unified background credential warm loop (created after azureAuth below)
+  // re-reads the GitHub token and silently refreshes the Azure OAuth tokens on a
+  // single interval, so a long-running IDE never spawns sessions with an expired
+  // credential and never needs an interactive re-authentication mid-session.
 
   // In-app GitHub sign-in via the OAuth device flow, for users who have never
   // run `gh auth login`. The minted token is handed to `gh auth login
@@ -897,6 +912,27 @@ function main(): void {
         interactive: credOpts.interactive,
       }),
   });
+  // Make every git subprocess that inherits THIS process's environment -- the
+  // spawned CLI sessions, MCP servers and meta-sessions -- acquire Azure DevOps
+  // credentials non-interactively. Those children have no TTY/parent window, so
+  // if GCM ever went interactive it would pop a browser (or hang) in the middle
+  // of a session or MCP tool call. With GCM_INTERACTIVE=never inherited, GCM
+  // instead silently refreshes the OAuth access token from its cached refresh
+  // token (a background token exchange, no UI) and only fails fast if that is
+  // impossible -- so a session/MCP server never blocks on re-authentication.
+  // We set it on process.env (not the user's global git config) so the user's
+  // OWN terminal git keeps its normal interactive prompts. The IDE's explicit
+  // sign-in overrides this per-call via GCM_INTERACTIVE=auto in gitRun's env.
+  process.env.GCM_INTERACTIVE = 'never';
+  // Track every Azure DevOps target the IDE actually talks to so the warm loop
+  // can refresh exactly those OAuth tokens. The account-level target is always
+  // present so warming keeps the shared Entra refresh token alive even before
+  // any org-scoped call happens.
+  const azureWarmTargets = new Map<string, AzureTarget>();
+  const rememberAzureTarget = (target: AzureTarget): void => {
+    azureWarmTargets.set(`${target.host}|${target.org ?? ''}`, target);
+  };
+  rememberAzureTarget({ host: 'dev.azure.com', org: null });
   void azureAuth
     .configure()
     .then(() =>
@@ -1808,6 +1844,28 @@ function main(): void {
   });
   automationScheduler.resume();
   automationScheduler.start();
+  // Unified background credential warm loop: keeps the GitHub token and every
+  // observed Azure DevOps OAuth token fresh so sessions/MCP servers never block
+  // on an interactive re-authentication.
+  const credentialWarmer = createCredentialWarmer({
+    intervalMs: authWarmerConfig.intervalMs,
+    onError: (error) =>
+      logger.warn('Credential warm failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    refresh: async () => {
+      await refreshGithubCredentialEnv();
+      for (const target of azureWarmTargets.values()) {
+        await azureAuth.token(target);
+      }
+    },
+  });
+  if (authWarmerConfig.enabled) {
+    credentialWarmer.start();
+    logger.info('Background credential warm loop started', {
+      intervalMs: authWarmerConfig.intervalMs,
+    });
+  }
   const studioControlToken = randomUUID();
 
   // HTTP API.
@@ -1868,8 +1926,15 @@ function main(): void {
       githubSignInStart: () => githubDeviceAuth.start(),
       githubSignInPoll,
       githubSignOut,
-      azureStatus: (target) => azureAuth.status(target),
-      azureSignIn: (target) => azureAuth.signIn(target),
+      azureStatus: (target) => {
+        rememberAzureTarget(target);
+        return azureAuth.status(target);
+      },
+      azureSignIn: (target) => {
+        rememberAzureTarget(target);
+        return azureAuth.signIn(target);
+      },
+      azureSignOut: (target) => azureAuth.signOut(target),
       repos: repoService,
       repositoryContexts: repositoryContextCoordinator,
       repoInsights: repoInsightsService,
@@ -2054,6 +2119,7 @@ function main(): void {
     for (const tailer of tailers.values()) {
       tailer.stop();
     }
+    credentialWarmer.stop();
     terminalManager!.shutdown();
     server.close();
     try {

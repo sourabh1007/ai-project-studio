@@ -49,6 +49,8 @@ function deps(): ApiRoutesDeps {
       Promise.resolve({ authenticated: true, account: 'x', message: null }),
     azureSignIn: () =>
       Promise.resolve({ authenticated: true, account: 'x', message: null }),
+    azureSignOut: () =>
+      Promise.resolve({ authenticated: false, account: null, message: null }),
     repos: empty,
     repositoryContexts: empty,
     repoInsights: empty,
@@ -176,6 +178,7 @@ describe('createApiRoutes', () => {
       'post /github/signout',
       'get /azure-devops/status',
       'post /azure-devops/signin',
+      'post /azure-devops/signout',
       'get /repos',
       'post /repos',
       'get /repos/:id/context',

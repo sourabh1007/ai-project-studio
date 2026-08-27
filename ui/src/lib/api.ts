@@ -463,6 +463,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
         '/azure-devops/signin',
         jsonBody(url ? { url } : {}),
       ),
+    azureSignOut: (url?: string) =>
+      request<AzureDevOpsStatus>(
+        '/azure-devops/signout',
+        jsonBody(url ? { url } : {}),
+      ),
     listAutomations: () =>
       request<{ automations: Automation[]; subagents: Subagent[] }>(
         '/automations',

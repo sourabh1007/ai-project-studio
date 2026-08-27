@@ -10,6 +10,8 @@ export interface AzureControllerDeps {
   azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** Erases GCM's cached Azure DevOps credential for the target. */
+  azureSignOut: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
 }
 
 /**
@@ -40,6 +42,18 @@ export function createAzureRoutes(deps: AzureControllerDeps): Route[] {
         return {
           status: 200,
           body: await deps.azureSignIn(parseAzureTarget(url)),
+        };
+      },
+    },
+    {
+      method: 'post',
+      path: '/azure-devops/signout',
+      handler: async (req) => {
+        const body = (req.body ?? {}) as { url?: unknown };
+        const url = typeof body.url === 'string' ? body.url : null;
+        return {
+          status: 200,
+          body: await deps.azureSignOut(parseAzureTarget(url)),
         };
       },
     },

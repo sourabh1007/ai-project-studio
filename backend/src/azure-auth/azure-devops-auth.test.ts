@@ -272,6 +272,44 @@ describe('createAzureDevOpsAuth', () => {
     expect(result.message).toMatch(/does not have access/);
   });
 
+  it('signOut erases the cached credential and reports signed out', async () => {
+    const seen: { verb: string; input: string; interactive: boolean }[] = [];
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (verb, input, opts) => {
+        seen.push({ verb, input, interactive: opts.interactive });
+        return ok('');
+      },
+    });
+
+    const result = await auth.signOut({ host: 'dev.azure.com', org: 'contoso' });
+
+    expect(seen).toEqual([
+      {
+        verb: 'erase',
+        input: 'protocol=https\nhost=dev.azure.com\npath=contoso\n\n',
+        interactive: false,
+      },
+    ]);
+    expect(result).toEqual({
+      authenticated: false,
+      account: null,
+      message: null,
+    });
+  });
+
+  it('signOut surfaces a reason when the erase fails', async () => {
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async () => fail('git-credential-manager is not recognized'),
+    });
+
+    const result = await auth.signOut({ host: 'dev.azure.com', org: null });
+
+    expect(result.authenticated).toBe(false);
+    expect(result.message).toMatch(/not installed/);
+  });
+
   it('reports unauthenticated when the credential runner fails', async () => {
     const auth = createAzureDevOpsAuth({
       config: async () => ok(''),

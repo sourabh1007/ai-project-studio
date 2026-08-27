@@ -58,6 +58,12 @@ export interface AzureDevOpsAuth {
   /** Trigger an interactive browser sign-in and cache the credential. */
   signIn(target: AzureTarget): Promise<AzureDevOpsStatus>;
   /**
+   * Erase GCM's cached credential for the target so subsequent sessions (and
+   * the status pill) reflect a signed-out state. Returns the resulting
+   * unauthenticated status.
+   */
+  signOut(target: AzureTarget): Promise<AzureDevOpsStatus>;
+  /**
    * The cached OAuth access token for the target (used as a Bearer token for
    * Azure DevOps REST calls), or null when not signed in.
    */
@@ -229,6 +235,19 @@ export function createAzureDevOpsAuth(deps: {
     },
     signIn(target) {
       return check(target, true);
+    },
+    async signOut(target) {
+      const res = await deps.credential('erase', buildCredentialQuery(target), {
+        interactive: false,
+      });
+      if (res.code !== 0) {
+        return {
+          authenticated: false,
+          account: null,
+          message: describeAzureFailure(res.stderr),
+        };
+      }
+      return { authenticated: false, account: null, message: null };
     },
     async token(target) {
       const res = await deps.credential('get', buildCredentialQuery(target), {

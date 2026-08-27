@@ -142,6 +142,8 @@ export interface ApiRoutesDeps {
   azureStatus: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Triggers an interactive Azure DevOps sign-in and caches the credential. */
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** Erases GCM's cached Azure DevOps credential for the target. */
+  azureSignOut: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** The repository layer the workspace is organized around. */
   repos: RepoService;
   repositoryContexts: RepositoryContextCoordinator;
@@ -254,6 +256,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createAzureRoutes({
       azureStatus: deps.azureStatus,
       azureSignIn: deps.azureSignIn,
+      azureSignOut: deps.azureSignOut,
     }),
     ...createRepoRoutes({
       repos: deps.repos,

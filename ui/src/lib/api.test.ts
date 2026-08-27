@@ -480,6 +480,19 @@ describe('createApiClient', () => {
     expect(calls[1][1]?.body).toBe(JSON.stringify({}));
   });
 
+  it('triggers an Azure DevOps sign-out', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ authenticated: false, account: null, message: null }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.azureSignOut('contoso');
+    await client.azureSignOut();
+    expect(calls[0][0]).toBe('/api/azure-devops/signout');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ url: 'contoso' }));
+    expect(calls[1][1]?.body).toBe(JSON.stringify({}));
+  });
+
   it('lists importable sessions and imports one', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });

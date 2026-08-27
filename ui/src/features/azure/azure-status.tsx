@@ -26,6 +26,7 @@ export function AzureStatusBadge() {
   const [org, setOrg] = useState(readSavedOrg);
   const [draft, setDraft] = useState(org);
   const [signingIn, setSigningIn] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data, loading, reload } = useAsync<AzureDevOpsStatus>(
@@ -79,20 +80,51 @@ export function AzureStatusBadge() {
     }
   };
 
+  const signOut = async () => {
+    if (signingOut) {
+      return;
+    }
+    setSigningOut(true);
+    setError(null);
+    try {
+      const result = await api.azureSignOut(org || undefined);
+      if (result.message) {
+        setError(result.message);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-out failed.');
+    } finally {
+      setSigningOut(false);
+      reload();
+    }
+  };
+
   if (authenticated) {
     return (
-      <button
-        type="button"
-        className="gh-status gh-status-on"
-        onClick={reload}
-        disabled={loading}
-        title="Signed in to Azure DevOps. All sessions inherit this login automatically. Click to re-check."
-      >
-        <span className="gh-status-dot" aria-hidden="true" />
-        <span className="gh-status-label">
-          Azure DevOps · {org || data?.account || 'signed in'}
-        </span>
-      </button>
+      <div className="gh-status-wrap">
+        <button
+          type="button"
+          className="gh-status gh-status-on"
+          onClick={reload}
+          disabled={loading}
+          title="Signed in to Azure DevOps. All sessions inherit this login automatically. Click to re-check."
+        >
+          <span className="gh-status-dot" aria-hidden="true" />
+          <span className="gh-status-label">
+            Azure DevOps · {org || data?.account || 'signed in'}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="az-signin-btn gh-signout-btn"
+          onClick={() => void signOut()}
+          disabled={signingOut}
+          title="Sign out of Azure DevOps on this device"
+        >
+          {signingOut ? <Spinner size={12} label="Signing out" /> : 'Sign out'}
+        </button>
+        {error && <p className="az-signin-error">{error}</p>}
+      </div>
     );
   }
 
