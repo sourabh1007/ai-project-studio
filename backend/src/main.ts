@@ -665,6 +665,20 @@ function main(): void {
   // into each session, so all sessions inherit the same login automatically.
   const GH_NOT_FOUND_MESSAGE =
     'GitHub CLI (gh) was not found. Install it from https://cli.github.com and make sure it is on your PATH, then try again.';
+  // The GitHub token we propagate to sessions is injected into THIS process's
+  // env (below). But `gh` itself reads `GH_TOKEN`/`GITHUB_TOKEN` from its env
+  // and, when present, treats that as the active credential — which makes
+  // `gh auth logout` a no-op and keeps `gh auth status` reporting signed-in even
+  // after the keyring credential is gone. So every `gh` invocation runs with the
+  // token vars stripped, so gh always reflects the real keyring state (sign-out
+  // works, external logouts are detected) while sessions still inherit the token
+  // from process.env.
+  const ghEnvWithoutToken = (): NodeJS.ProcessEnv => {
+    const env = { ...process.env };
+    delete env.GH_TOKEN;
+    delete env.GITHUB_TOKEN;
+    return env;
+  };
   const ghRun: GhRunner = (args) =>
     new Promise((resolve) => {
       // `gh auth status` / `logout` can stall on a locked keyring or a hidden
@@ -674,7 +688,12 @@ function main(): void {
       execFile(
         'gh',
         args,
-        { windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 },
+        {
+          windowsHide: true,
+          timeout: 15_000,
+          maxBuffer: 1024 * 1024,
+          env: ghEnvWithoutToken(),
+        },
         (err, stdout, stderr) => {
           const enoent =
             !!err && (err as { code?: unknown }).code === 'ENOENT';
@@ -709,21 +728,29 @@ function main(): void {
       execFile(
         'gh',
         ['auth', 'token'],
-        { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
+        {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 15_000,
+          env: ghEnvWithoutToken(),
+        },
         (err, stdout) => {
-          if (!err) {
-            const token = (stdout ?? '').trim();
+          const token = !err ? (stdout ?? '').trim() : '';
+          if (token) {
             for (const [key, value] of Object.entries(
               buildGithubCredentialEnv(token),
             )) {
               process.env[key] = value;
             }
-            if (token) {
-              logger.info('GitHub auth propagated to sessions', {});
+            logger.info('GitHub auth propagated to sessions', {});
+          } else {
+            // No keyring token (signed out here or elsewhere): drop the stale
+            // propagated credential so new sessions don't inherit a revoked
+            // token and /github/status reflects the signed-out state.
+            for (const key of Object.keys(buildGithubCredentialEnv('token'))) {
+              delete process.env[key];
             }
           }
-          // gh missing or not logged in — sessions keep whatever git credentials
-          // the host already provides; /github/status surfaces this state.
           resolve();
         },
       );
@@ -771,7 +798,7 @@ function main(): void {
         const child = execFile(
           'gh',
           ['auth', 'login', '--with-token'],
-          { windowsHide: true, timeout: 20_000 },
+          { windowsHide: true, timeout: 20_000, env: ghEnvWithoutToken() },
           (err, _stdout, stderr) => {
             const enoent =
               !!err && (err as { code?: unknown }).code === 'ENOENT';
