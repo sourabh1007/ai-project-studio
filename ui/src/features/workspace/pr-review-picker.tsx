@@ -27,10 +27,13 @@ export function parsePullNumber(input: string): number | null {
  */
 export function PrReviewPicker({
   repo,
+  parentFeatureId,
   onClose,
   onCreated,
 }: {
   repo: Repository;
+  /** Feature to nest the PR review under; null/omitted for a top-level review. */
+  parentFeatureId?: string | null;
   onClose: () => void;
   onCreated: (feature: Feature) => void;
 }) {
@@ -80,7 +83,11 @@ export function PrReviewPicker({
     setBusyNumber(number);
     setError(null);
     try {
-      const feature = await api.createPrFeature(repo.id, number);
+      const feature = await api.createPrFeature(
+        repo.id,
+        number,
+        parentFeatureId ?? null,
+      );
       onCreated(feature);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

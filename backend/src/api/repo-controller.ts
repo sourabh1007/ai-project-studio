@@ -20,6 +20,7 @@ const createRepoSchema = z.object({
 
 const reviewPullSchema = z.object({
   number: z.number().int().positive(),
+  parentFeatureId: z.string().min(1).nullish(),
 });
 
 const refreshContextSchema = z.object({}).strict().optional();
@@ -144,6 +145,7 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
         const feature = await deps.prFeatures.createFromPull(
           req.params.id,
           input.number,
+          input.parentFeatureId ?? null,
         );
         return { status: 201, body: feature };
       },

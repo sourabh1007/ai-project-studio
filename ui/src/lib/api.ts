@@ -177,8 +177,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<RemotePullRequest[]>(
         `/repos/${repoId}/pulls?filter=${filter}`,
       ),
-    createPrFeature: (repoId: string, number: number) =>
-      request<Feature>(`/repos/${repoId}/pulls`, jsonBody({ number })),
+    createPrFeature: (
+      repoId: string,
+      number: number,
+      parentFeatureId?: string | null,
+    ) =>
+      request<Feature>(
+        `/repos/${repoId}/pulls`,
+        jsonBody({ number, parentFeatureId: parentFeatureId ?? null }),
+      ),
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),
     getReviewBoard: (featureId: string) =>

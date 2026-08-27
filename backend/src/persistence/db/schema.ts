@@ -451,6 +451,11 @@ const ADDED_COLUMNS: readonly {
     ddl: 'ALTER TABLE features ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0',
   },
   {
+    table: 'features',
+    column: 'parent_feature_id',
+    ddl: 'ALTER TABLE features ADD COLUMN parent_feature_id TEXT',
+  },
+  {
     table: 'repository_contexts',
     column: 'failure_step',
     ddl: 'ALTER TABLE repository_contexts ADD COLUMN failure_step TEXT',

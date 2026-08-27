@@ -15,6 +15,13 @@ export interface Feature {
    */
   checkoutPath?: string | null;
   /**
+   * Parent feature this one is nested under in the explorer tree; null for a
+   * top-level feature. Set when a PR review is opened from within an existing
+   * feature, so the PR's review feature (with its own worktree + Review Board)
+   * renders as a child of that feature instead of as a sibling.
+   */
+  parentFeatureId?: string | null;
+  /**
    * Sort position among sibling features that share the same repository group
    * (repo-less features form their own group). Lower sorts first; ties fall
    * back to creation order. Defaults to 0 until a feature is reordered.
@@ -29,6 +36,8 @@ export interface CreateFeatureInput {
   repoId?: string | null;
   /** Working directory override (a PR worktree); null for the repo checkout. */
   checkoutPath?: string | null;
+  /** Parent feature to nest this one under; null/omitted for a top-level feature. */
+  parentFeatureId?: string | null;
 }
 
 /**

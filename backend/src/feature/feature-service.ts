@@ -52,6 +52,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
       summary: null,
       repoId: input.repoId ?? null,
       checkoutPath: input.checkoutPath ?? null,
+      parentFeatureId: input.parentFeatureId ?? null,
     };
     deps.repo.create(feature);
     return feature;

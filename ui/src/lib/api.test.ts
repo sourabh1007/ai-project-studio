@@ -743,7 +743,18 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/repos/r1/pulls');
     expect(init?.method).toBe('POST');
     expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
-    expect(init?.body).toBe(JSON.stringify({ number: 42 }));
+    expect(init?.body).toBe(
+      JSON.stringify({ number: 42, parentFeatureId: null }),
+    );
+  });
+
+  it('nests a review feature under a parent feature when given one', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f2' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createPrFeature('r1', 42, 'parent-1');
+    expect(calls[0][1]?.body).toBe(
+      JSON.stringify({ number: 42, parentFeatureId: 'parent-1' }),
+    );
   });
 
   it('reads a PR review for a feature', async () => {

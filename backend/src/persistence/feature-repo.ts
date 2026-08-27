@@ -10,6 +10,7 @@ interface FeatureRow {
   summary: string | null;
   repo_id: string | null;
   checkout_path: string | null;
+  parent_feature_id: string | null;
   order_index: number;
 }
 
@@ -22,6 +23,7 @@ function mapFeature(row: FeatureRow): Feature {
     summary: row.summary,
     repoId: row.repo_id ?? null,
     checkoutPath: row.checkout_path ?? null,
+    parentFeatureId: row.parent_feature_id ?? null,
     orderIndex: row.order_index,
   };
 }
@@ -29,7 +31,7 @@ function mapFeature(row: FeatureRow): Feature {
 /** SQLite-backed implementation of the FeatureRepo port. */
 export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const insert = db.prepare(
-    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path, parent_feature_id, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const selectOne = db.prepare('SELECT * FROM features WHERE id = ?');
   const selectAll = db.prepare(
@@ -52,6 +54,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
         feature.summary,
         feature.repoId ?? null,
         feature.checkoutPath ?? null,
+        feature.parentFeatureId ?? null,
         feature.orderIndex ?? 0,
       );
     },

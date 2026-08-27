@@ -39,6 +39,7 @@ function feature(overrides: Partial<Feature> = {}): Feature {
     summary: null,
     repoId: null,
     checkoutPath: null,
+    parentFeatureId: null,
     orderIndex: 0,
     ...overrides,
   };
@@ -141,6 +142,16 @@ describe('feature-repo', () => {
     const repo = createFeatureRepo(db);
     repo.create(feature({ id: 'f1', checkoutPath: 'C:/wt/app-pr-3' }));
     expect(repo.get('f1')?.checkoutPath).toBe('C:/wt/app-pr-3');
+    db.close();
+  });
+
+  it('round-trips a parent feature id on a nested feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'parent' }));
+    repo.create(feature({ id: 'child', parentFeatureId: 'parent' }));
+    expect(repo.get('child')?.parentFeatureId).toBe('parent');
+    expect(repo.get('parent')?.parentFeatureId).toBeNull();
     db.close();
   });
 

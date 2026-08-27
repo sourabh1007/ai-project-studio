@@ -41,7 +41,11 @@ export interface PrFeatureServiceDeps {
  */
 export interface PrFeatureService {
   listPulls(repoId: string, filter?: PullFilter): Promise<RemotePullRequest[]>;
-  createFromPull(repoId: string, number: number): Promise<Feature>;
+  createFromPull(
+    repoId: string,
+    number: number,
+    parentFeatureId?: string | null,
+  ): Promise<Feature>;
   /**
    * Re-fetches the pull request from its remote and rebuilds the review against
    * the latest head — the "take the latest / rebase the remote branch" action.
@@ -62,7 +66,7 @@ export function createPrFeatureService(
       return deps.listPulls(repo, filter);
     },
 
-    async createFromPull(repoId, number) {
+    async createFromPull(repoId, number, parentFeatureId = null) {
       const repo = deps.repos.get(repoId);
       // Opening a PR that already has a review must not create a duplicate: reuse
       // its existing review feature (and its checked-out worktree) instead.
@@ -82,6 +86,9 @@ export function createPrFeatureService(
         description: pull.url,
         repoId: repo.id,
         checkoutPath: worktree.worktreePath,
+        // Nest the review under the feature it was opened from, when any, so it
+        // renders as a child rather than a sibling in the explorer tree.
+        parentFeatureId,
       });
       deps.reviews.start({
         featureId: feature.id,

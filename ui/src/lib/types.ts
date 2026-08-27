@@ -628,6 +628,11 @@ export interface Feature {
   repoId: string | null;
   /** Overrides the session working directory (e.g. a PR review worktree). */
   checkoutPath: string | null;
+  /**
+   * Parent feature this one nests under in the explorer tree; null for a
+   * top-level feature. Set when a PR review is opened from within a feature.
+   */
+  parentFeatureId?: string | null;
   /** Sort position among sibling features in the same repository group. */
   orderIndex?: number;
 }

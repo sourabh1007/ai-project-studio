@@ -72,6 +72,7 @@ describe('feature-service', () => {
       summary: null,
       repoId: null,
       checkoutPath: null,
+      parentFeatureId: null,
     });
     expect(svc.get('feat-1')).toEqual(feature);
   });
@@ -101,6 +102,7 @@ describe('feature-service', () => {
       summary: null,
       repoId: null,
       checkoutPath: null,
+      parentFeatureId: null,
     });
   });
 

@@ -4,6 +4,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
+  type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
@@ -331,6 +332,8 @@ function FeatureNode({
   onStartReview,
   treeRevision,
   onMoveNode,
+  childFeatures,
+  renderChildFeature,
 }: {
   feature: Feature;
   live: LiveState;
@@ -349,6 +352,10 @@ function FeatureNode({
   onStartReview?: () => void;
   treeRevision: number;
   onMoveNode: (input: MoveNodeInput) => Promise<void>;
+  /** PR-review features nested under this one; rendered inside its subtree. */
+  childFeatures?: Feature[];
+  /** Renders a nested child feature (recursive), supplied by the parent list. */
+  renderChildFeature?: (feature: Feature) => ReactNode;
 }) {
   const api = useApi();
   const nodeStore = useNodeDragStore();
@@ -779,6 +786,15 @@ function FeatureNode({
             )}
           />
           <ErrorText error={actionError} />
+          {childFeatures && childFeatures.length > 0 && (
+            <div className="feature-child-features">
+              {childFeatures.map((child) => (
+                <Fragment key={child.id}>
+                  {renderChildFeature?.(child)}
+                </Fragment>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {prPickerParent !== false && feature.repoId && (
@@ -960,7 +976,7 @@ function RepoNode({
   onDeleteFeature: (feature: Feature) => Promise<void>;
   onDeleteSession: (session: Session) => Promise<void>;
   onAddFeature: (repoId: string | null) => void;
-  onStartReview: (repo: Repository) => void;
+  onStartReview: (repo: Repository, parentFeatureId?: string | null) => void;
   onDeleteRepo: (repo: Repository) => void;
   onContextUpdated: (context: RepositoryContext) => void;
   draggingFeature: Feature | null;
@@ -986,6 +1002,49 @@ function RepoNode({
   // repo's header to append it to the end of this group.
   const canAcceptDrop =
     draggingFeature !== null && (draggingFeature.repoId ?? null) !== repoId;
+
+  // Nest PR-review features (opened from within a feature) under their parent.
+  // Features whose parent is missing from this group fall back to top level so
+  // a dangling parent (e.g. the parent was deleted) never hides them.
+  const featureIds = new Set(features.map((f) => f.id));
+  const childrenByParent = new Map<string, Feature[]>();
+  for (const f of features) {
+    const parentId = f.parentFeatureId ?? null;
+    if (parentId && featureIds.has(parentId)) {
+      const siblings = childrenByParent.get(parentId) ?? [];
+      siblings.push(f);
+      childrenByParent.set(parentId, siblings);
+    }
+  }
+  const topFeatures = features.filter((f) => {
+    const parentId = f.parentFeatureId ?? null;
+    return !parentId || !featureIds.has(parentId);
+  });
+
+  const renderFeatureNode = (feature: Feature): ReactNode => (
+    <FeatureNode
+      feature={feature}
+      live={live}
+      activeSessionId={activeSessionId}
+      names={names}
+      onOpenSession={onOpenSession}
+      onOpenFeature={onOpenFeature}
+      onOpenReviewBoard={onOpenReviewBoard}
+      onRenameSession={onRenameSession}
+      onRenameFeature={onRenameFeature}
+      onDeleteFeature={onDeleteFeature}
+      onDeleteSession={onDeleteSession}
+      onFeatureDragStart={onFeatureDragStart}
+      onFeatureDragEnd={onFeatureDragEnd}
+      onStartReview={
+        repo ? () => onStartReview(repo, feature.id) : undefined
+      }
+      treeRevision={treeRevision}
+      onMoveNode={onMoveNode}
+      childFeatures={childrenByParent.get(feature.id) ?? []}
+      renderChildFeature={renderFeatureNode}
+    />
+  );
 
   return (
     <div className={`repo-node ${repo ? '' : 'repo-node-orphan'}`.trim()}>
@@ -1144,41 +1203,24 @@ function RepoNode({
 
       {expanded && (
         <div className="tree-children repo-children">
-          {features.length === 0 && (
+          {topFeatures.length === 0 && (
             <EmptyState message="No features yet." />
           )}
           <FeatureDropSlot
             dragging={draggingFeature}
             repoId={repoId}
             index={0}
-            features={features}
+            features={topFeatures}
             onMoveFeature={onMoveFeature}
           />
-          {features.map((feature, index) => (
+          {topFeatures.map((feature, index) => (
             <Fragment key={feature.id}>
-              <FeatureNode
-                feature={feature}
-                live={live}
-                activeSessionId={activeSessionId}
-                names={names}
-                onOpenSession={onOpenSession}
-                onOpenFeature={onOpenFeature}
-                onOpenReviewBoard={onOpenReviewBoard}
-                onRenameSession={onRenameSession}
-                onRenameFeature={onRenameFeature}
-                onDeleteFeature={onDeleteFeature}
-                onDeleteSession={onDeleteSession}
-                onFeatureDragStart={onFeatureDragStart}
-                onFeatureDragEnd={onFeatureDragEnd}
-                onStartReview={repo ? () => onStartReview(repo) : undefined}
-                treeRevision={treeRevision}
-                onMoveNode={onMoveNode}
-              />
+              {renderFeatureNode(feature)}
               <FeatureDropSlot
                 dragging={draggingFeature}
                 repoId={repoId}
                 index={index + 1}
-                features={features}
+                features={topFeatures}
                 onMoveFeature={onMoveFeature}
               />
             </Fragment>
@@ -1228,7 +1270,10 @@ export function Explorer({
   const repos = useAsync(() => api.listRepos(), []);
   const features = useAsync(() => api.listFeatures(), []);
   const [addingRepo, setAddingRepo] = useState(false);
-  const [reviewRepo, setReviewRepo] = useState<Repository | null>(null);
+  const [reviewRepo, setReviewRepo] = useState<{
+    repo: Repository;
+    parentFeatureId: string | null;
+  } | null>(null);
   const [adding, setAdding] = useState(false);
   const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -1424,7 +1469,8 @@ export function Explorer({
 
       {reviewRepo && (
         <PrReviewPicker
-          repo={reviewRepo}
+          repo={reviewRepo.repo}
+          parentFeatureId={reviewRepo.parentFeatureId}
           onClose={() => setReviewRepo(null)}
           onCreated={(feature) => {
             setReviewRepo(null);
@@ -1509,7 +1555,9 @@ export function Explorer({
             onDeleteFeature={deleteFeature}
             onDeleteSession={onDeleteSession}
             onAddFeature={openFeatureForm}
-            onStartReview={setReviewRepo}
+            onStartReview={(repo, parentFeatureId = null) =>
+              setReviewRepo({ repo, parentFeatureId })
+            }
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
             draggingFeature={draggingFeature}
@@ -1538,7 +1586,9 @@ export function Explorer({
             onDeleteFeature={deleteFeature}
             onDeleteSession={onDeleteSession}
             onAddFeature={openFeatureForm}
-            onStartReview={setReviewRepo}
+            onStartReview={(repo, parentFeatureId = null) =>
+              setReviewRepo({ repo, parentFeatureId })
+            }
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
             draggingFeature={draggingFeature}
@@ -1559,3 +1609,4 @@ export function Explorer({
     </div>
   );
 }
+
