@@ -194,6 +194,13 @@ import {
   type AuthWarmerConfig,
 } from './auth-warmer/config.js';
 import { createCredentialWarmer } from './auth-warmer/credential-warmer.js';
+import {
+  SELF_RECOVERY_NAMESPACE,
+  selfRecoveryConfigSchema,
+  selfRecoveryDefaults,
+  type SelfRecoveryConfig,
+} from './self-recovery/config.js';
+import { isRecoverableSessionError } from './self-recovery/recoverable-error.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
 import { createTranscriptRepo } from './persistence/transcript-repo.js';
@@ -438,6 +445,11 @@ function main(): void {
     schema: authWarmerConfigSchema,
     defaults: authWarmerDefaults,
   });
+  registry.register({
+    namespace: SELF_RECOVERY_NAMESPACE,
+    schema: selfRecoveryConfigSchema,
+    defaults: selfRecoveryDefaults,
+  });
 
   // Phase 1 (bootstrap): resolve just enough config from defaults + environment
   // to locate on-disk storage and configure logging. Persisted overrides live
@@ -577,6 +589,9 @@ function main(): void {
   const reviewBoardConfig = config[REVIEW_BOARD_NAMESPACE] as ReviewBoardConfig;
   const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
   const authWarmerConfig = config[AUTH_WARMER_NAMESPACE] as AuthWarmerConfig;
+  const selfRecoveryConfig = config[
+    SELF_RECOVERY_NAMESPACE
+  ] as SelfRecoveryConfig;
 
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
@@ -1206,6 +1221,13 @@ function main(): void {
   };
 
   let terminalManager: ReturnType<typeof createTerminalManager> | null = null;
+  // Self-recovery metasession analyzer, assigned once the meta runner is built
+  // below (it is created after the terminal manager). Rejecting when unset — or
+  // when the meta runner itself cannot spin up — is the signal the coordinator
+  // uses to report that automatic analysis was unavailable.
+  let analyzeSessionError:
+    | ((errorText: string) => Promise<string | null>)
+    | undefined;
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
   // reusing the same usage-capture pipeline via session.started/ended events.
   terminalManager = createTerminalManager({
@@ -1229,10 +1251,26 @@ function main(): void {
     // as the user changes model in the CLI, not just on the next usage row.
     onModelResolved: resolveSessionModel,
     home: homedir(),
-    // Auto-heal interactive sessions from the same transient upstream blips the
-    // IDE already retries for its metasessions: re-submit the user's last
-    // prompt on a transient (5xx / 429 / network) provider failure.
-    isTransientFailure: isTransientProviderFailure,
+    // Auto-heal interactive sessions. With self-recovery on, a broadened
+    // classifier also treats corrupted-conversation errors (e.g. a 400 the CLI
+    // rejects, a slow MCP handshake) as recoverable; otherwise only the shared
+    // transient upstream blips (5xx / 429 / network) trigger a re-submit.
+    isTransientFailure: selfRecoveryConfig.enabled
+      ? isRecoverableSessionError
+      : isTransientProviderFailure,
+    // Escalation ladder once the non-destructive re-submits are spent: analyze
+    // via a metasession, then restart the CLI in a fresh conversation replaying
+    // the prompt, then report to the status bar if even that could not recover.
+    selfRecovery: {
+      enabled: selfRecoveryConfig.enabled,
+      useMetaAnalysis: selfRecoveryConfig.useMetaAnalysis,
+      analyze: (errorText) =>
+        analyzeSessionError
+          ? analyzeSessionError(errorText)
+          : Promise.reject(new Error('self-recovery analysis unavailable')),
+      report: (sessionId, message) =>
+        bus.emit('session.notice', { sessionId, level: 'error', message }),
+    },
   });
   const terminalCwd = process.env.CW_WORKSPACE_CWD ?? process.cwd();
 
@@ -1477,6 +1515,26 @@ function main(): void {
     warmInlinePrompts = true;
     metaPoolsStatusFn = () => metaPoolsStatus(true, warmPurposePools);
   }
+  // Wire the self-recovery analyzer now that the meta runner is final. Runs a
+  // read-only diagnosis turn; a thrown error (meta cannot spin up) propagates to
+  // the coordinator, which then reports that automatic analysis was unavailable.
+  analyzeSessionError = async (errorText) => {
+    const diagnosis = await metaAi.run({
+      featureId: 'self-recovery',
+      scope: 'internal',
+      prompt:
+        'An interactive AI coding CLI session just failed with the error ' +
+        'output below. In 1-2 short sentences, state the most likely cause ' +
+        'and whether restarting the session should clear it. Be concise; do ' +
+        'not use tools.\n\n---\n' +
+        errorText,
+      cwd: terminalCwd,
+      noTools: true,
+      purpose: 'self-recovery',
+    });
+    const trimmed = diagnosis.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
   // Provider-agnostic MCP server management. The provider's own CLI reports
   // where its MCP config lives (via a meta-session), so no path is hardcoded.
   const mcpService = createMcpService({

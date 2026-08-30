@@ -162,6 +162,32 @@ describe('parseServerEvent', () => {
     expect(event).toEqual({ type: 'session.file', sessionId: 's1' });
   });
 
+  it('parses an error session.notice', () => {
+    const event = parseServerEvent(
+      'session.notice',
+      JSON.stringify({ sessionId: 's1', level: 'error', message: 'boom' }),
+    );
+    expect(event).toEqual({
+      type: 'session.notice',
+      sessionId: 's1',
+      level: 'error',
+      message: 'boom',
+    });
+  });
+
+  it('defaults an unknown session.notice level to info', () => {
+    const event = parseServerEvent(
+      'session.notice',
+      JSON.stringify({ sessionId: 's1', message: 'fyi' }),
+    );
+    expect(event).toEqual({
+      type: 'session.notice',
+      sessionId: 's1',
+      level: 'info',
+      message: 'fyi',
+    });
+  });
+
   it('parses a stdout output frame', () => {
     const event = parseServerEvent(
       'session.output',
@@ -264,6 +290,16 @@ describe('applyStreamEvent', () => {
     state = applyStreamEvent(state, { type: 'session.file', sessionId: 's2' });
     expect(state.fileChangesBySession['s1']).toBe(2);
     expect(state.fileChangesBySession['s2']).toBe(1);
+  });
+
+  it('leaves live state unchanged for a session.notice (status-bar only)', () => {
+    const state = applyStreamEvent(initialLiveState, {
+      type: 'session.notice',
+      sessionId: 's1',
+      level: 'error',
+      message: 'boom',
+    });
+    expect(state).toBe(initialLiveState);
   });
 
   it('appends output lines per session', () => {

@@ -17,6 +17,12 @@ export type StreamEvent =
   | { type: 'session.updated'; session: Session }
   | { type: 'session.output'; sessionId: string; line: string }
   | { type: 'session.file'; sessionId: string }
+  | {
+      type: 'session.notice';
+      sessionId: string;
+      level: 'info' | 'error';
+      message: string;
+    }
   | { type: 'usage.recorded'; usage: StoredUsage }
   | { type: 'repository.context.updated'; context: RepositoryContext }
   | { type: 'pr.review.updated'; review: PrReview }
@@ -121,6 +127,19 @@ export function parseServerEvent(
         type: 'session.file',
         sessionId: (JSON.parse(data) as { sessionId: string }).sessionId,
       };
+    case 'session.notice': {
+      const payload = JSON.parse(data) as {
+        sessionId: string;
+        level?: 'info' | 'error';
+        message: string;
+      };
+      return {
+        type: 'session.notice',
+        sessionId: payload.sessionId,
+        level: payload.level === 'error' ? 'error' : 'info',
+        message: payload.message,
+      };
+    }
     case 'usage.recorded':
       return { type: 'usage.recorded', usage: JSON.parse(data) as StoredUsage };
     case 'repository.context.updated':
@@ -196,6 +215,11 @@ export function applyStreamEvent(
         },
       };
     }
+    case 'session.notice':
+      // A transient IDE notice (e.g. a self-recovery failure). It drives the
+      // status bar directly in the stream hook and holds no live state, so the
+      // reduced snapshot is unchanged.
+      return state;
     case 'usage.recorded': {
       const key = usageKey(event.usage.sessionId, event.usage.turnIndex);
       return {

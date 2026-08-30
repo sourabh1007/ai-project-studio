@@ -31,6 +31,7 @@ const STREAM_EVENTS: StreamEventName[] = [
   'session.ended',
   'session.updated',
   'session.file',
+  'session.notice',
   'usage.recorded',
   'repository.context.updated',
   'pr.review.updated',

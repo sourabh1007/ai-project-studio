@@ -24,6 +24,14 @@ export interface SessionAutoRetryDeps {
   resubmit: (prompt: string) => void;
   /** Optional user-visible notice shown when an automatic retry fires. */
   notify?: (text: string) => void;
+  /**
+   * Invoked once per failure streak when the automatic re-submit budget is
+   * spent but the session is still failing on a recoverable error. Lets a
+   * higher tier (metasession analysis, a CLI restart) take over. Fires at most
+   * once until a fresh user prompt resets the streak, so escalation never
+   * loops. Carries the prompt that could not be recovered and the failing line.
+   */
+  onExhausted?: (info: { prompt: string; line: string }) => void;
   /** Injected timer so tests stay deterministic; defaults to setTimeout. */
   setTimer?: (fn: () => void, ms: number) => void;
 }
@@ -59,6 +67,9 @@ export function createSessionAutoRetry(
   // Guards a single failure streak: cleared while a retry is pending so a burst
   // of failure lines can't schedule multiple resends, re-armed on each resend.
   let armed = false;
+  // Ensures the exhaustion escalation fires at most once per streak, however
+  // many failure lines the CLI prints after the budget is spent.
+  let exhaustedFired = false;
   let outputBuffer = '';
 
   const submitInputLine = (): void => {
@@ -70,6 +81,7 @@ export function createSessionAutoRetry(
     lastPrompt = prompt;
     attempts = 0;
     armed = true;
+    exhaustedFired = false;
   };
 
   const observeInput = (data: string): void => {
@@ -106,12 +118,16 @@ export function createSessionAutoRetry(
   };
 
   const maybeRetry = (line: string): void => {
-    if (
-      !armed ||
-      lastPrompt === null ||
-      attempts >= deps.maxAttempts ||
-      !deps.isTransient(line)
-    ) {
+    if (!armed || lastPrompt === null || !deps.isTransient(line)) {
+      return;
+    }
+    if (attempts >= deps.maxAttempts) {
+      // Non-destructive re-submits are spent: hand off once to the escalation
+      // tier (metasession analysis / CLI restart) rather than looping forever.
+      if (!exhaustedFired) {
+        exhaustedFired = true;
+        deps.onExhausted?.({ prompt: lastPrompt, line });
+      }
       return;
     }
     armed = false;

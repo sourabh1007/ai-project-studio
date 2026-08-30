@@ -45,6 +45,18 @@ export type SessionEventMap = {
    * file list so the left-panel Files view updates live as the CLI works.
    */
   'session.file': { sessionId: string };
+  /**
+   * An IDE-level notice about a session that the UI surfaces outside the
+   * terminal — currently a self-recovery failure the status bar shows when
+   * automatic healing (re-submit → analysis → restart) could not recover a
+   * session. `level` lets the UI style it (an `error` drives the bottom-bar
+   * error state); `message` is user-facing text.
+   */
+  'session.notice': {
+    sessionId: string;
+    level: 'info' | 'error';
+    message: string;
+  };
 };
 
 export interface SessionLauncherDeps {

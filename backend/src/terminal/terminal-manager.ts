@@ -16,6 +16,10 @@ import {
   createSessionAutoRetry,
   type SessionAutoRetry,
 } from './session-auto-retry.js';
+import {
+  createSelfRecoveryCoordinator,
+  type SelfRecoveryCoordinatorDeps,
+} from '../self-recovery/self-recovery-coordinator.js';
 import { stripAnsi } from './ansi.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 
@@ -47,12 +51,34 @@ export interface TerminalManagerDeps {
    * last prompt on such a failure. Omitted to disable interactive auto-retry.
    */
   isTransientFailure?: (line: string) => boolean;
+  /**
+   * Enables the self-recovery escalation ladder for interactive dev sessions:
+   * once the non-destructive re-submits (see {@link isTransientFailure}) are
+   * exhausted on a recoverable error, optionally analyze it via a metasession,
+   * then kill and relaunch the CLI in a fresh conversation replaying the user's
+   * last prompt, and finally report to the status bar if even that fails.
+   * Omitted to disable escalation (only the plain re-submit auto-retry runs).
+   */
+  selfRecovery?: {
+    enabled: boolean;
+    useMetaAnalysis: boolean;
+    /** Analyzes the failing output via a metasession; rejects if it can't start. */
+    analyze?: (errorText: string) => Promise<string | null>;
+    /** Reports an unrecoverable failure to the UI status bar for a session. */
+    report: (sessionId: string, message: string) => void;
+  };
 }
 
 export interface LaunchOptions {
   cols?: number;
   rows?: number;
   cwd?: string;
+  /**
+   * A prompt to replay once the freshly-launched CLI is ready, seeded after any
+   * bootstrap context. Set only by the self-recovery restart path, so a relaunch
+   * re-drives the user's last prompt in a clean conversation.
+   */
+  replaySeed?: string;
 }
 
 export interface TerminalManager {
@@ -99,6 +125,9 @@ export function createTerminalManager(
   // present for interactive dev sessions when auto-retry is enabled; removed on
   // exit alongside the terminal.
   const retries = new Map<string, SessionAutoRetry>();
+  // Last launch options per live session, so the self-recovery restart path can
+  // relaunch a session with the same viewport/cwd it was originally opened in.
+  const launchOptions = new Map<string, LaunchOptions>();
   // Sessions whose terminals are being killed as part of deletion. Their exit
   // must not be recorded as `session.ended` (which would re-persist the row we
   // are deleting); it is reported as `session.discarded` instead.
@@ -144,16 +173,23 @@ export function createTerminalManager(
       rows: options.rows ?? deps.config.defaultRows,
     });
 
+    // Blocks to seed once the CLI is ready, in order: repository/feature/skill
+    // bootstrap first, then any replay prompt from a self-recovery restart.
+    const seeds = [bootstrap, options.replaySeed ?? ''].filter(
+      (block) => block.length > 0,
+    );
+
     let terminal!: TerminalSession;
     terminal = createTerminalSession({
       sessionId: session.id,
       pty,
-      inputReady: bootstrap.length === 0,
+      inputReady: seeds.length === 0,
       scrollbackBytes: deps.config.scrollbackBytes,
       transcriptBytes: deps.config.transcriptBytes,
       onExit: (code) => {
         sessions.delete(session.id);
         retries.delete(session.id);
+        launchOptions.delete(session.id);
         if (discarded.has(session.id)) {
           // Deleted out from under us: drop the terminal without persisting an
           // ended snapshot, but let listeners release the usage tailer.
@@ -178,6 +214,7 @@ export function createTerminalManager(
     });
 
     sessions.set(session.id, terminal);
+    launchOptions.set(session.id, options);
 
     // Track files this session creates/edits by parsing the tool's own output.
     // Each PTY is one session, so attribution is unambiguous — unlike watching
@@ -188,8 +225,8 @@ export function createTerminalManager(
     // resolved model shown in the UI follows the CLI immediately.
     attachModelScanner(terminal, provider, session.id);
 
-    if (bootstrap.length > 0) {
-      seedInstructionsWhenReady(terminal, bootstrap);
+    if (seeds.length > 0) {
+      seedSequence(terminal, seeds);
     }
 
     attachAutoRetry(terminal, session);
@@ -208,8 +245,11 @@ export function createTerminalManager(
    */
   function attachAutoRetry(terminal: TerminalSession, session: Session): void {
     const isTransient = deps.isTransientFailure;
+    const selfRecovery = deps.selfRecovery;
+    const autoRetry = deps.config.autoRetryEnabled;
+    const escalate = selfRecovery?.enabled === true;
     if (
-      !deps.config.autoRetryEnabled ||
+      (!autoRetry && !escalate) ||
       !isTransient ||
       session.kind !== 'dev' ||
       session.scope === 'internal'
@@ -218,15 +258,97 @@ export function createTerminalManager(
     }
     const controller = createSessionAutoRetry({
       isTransient,
-      maxAttempts: deps.config.autoRetryMaxAttempts,
+      // With auto-retry off but self-recovery on, skip the non-destructive
+      // re-submits and escalate straight to analysis + restart.
+      maxAttempts: autoRetry ? deps.config.autoRetryMaxAttempts : 0,
       backoffMs: deps.config.autoRetryBackoffMs,
       resubmit: (prompt) => seedNow(terminal, prompt),
       notify: (text) => terminal.notify(text),
+      onExhausted:
+        escalate && selfRecovery
+          ? ({ prompt, line }) => {
+              void escalateRecovery(
+                terminal,
+                session,
+                selfRecovery,
+                prompt,
+                line,
+              );
+            }
+          : undefined,
     });
     retries.set(session.id, controller);
     terminal.attach({
       send: (data) => controller.observeOutput(data),
       exit: () => {},
+    });
+  }
+
+  /**
+   * Runs the self-recovery escalation ladder once a session's non-destructive
+   * re-submits are spent: optional metasession analysis, then a last-resort CLI
+   * restart replaying the prompt, then a status-bar report if nothing recovered
+   * it. Bound to the failing terminal/session so notices land where the user is
+   * looking.
+   */
+  async function escalateRecovery(
+    terminal: TerminalSession,
+    session: Session,
+    selfRecovery: NonNullable<TerminalManagerDeps['selfRecovery']>,
+    prompt: string,
+    line: string,
+  ): Promise<void> {
+    const coordinatorDeps: SelfRecoveryCoordinatorDeps = {
+      useMetaAnalysis: selfRecovery.useMetaAnalysis,
+      analyze: selfRecovery.analyze,
+      restart: () => restartSession(session, prompt),
+      notify: (text) => terminal.notify(text),
+      report: (message) => selfRecovery.report(session.id, message),
+    };
+    await createSelfRecoveryCoordinator(coordinatorDeps).escalate(line);
+  }
+
+  /**
+   * Last-resort recovery: kills the session's current PTY (suppressing the
+   * spurious `failed` snapshot a deliberate teardown would record) and relaunches
+   * the CLI in a fresh conversation, replaying the user's last prompt after any
+   * bootstrap context. Resolves true when the relaunch was carried out, false if
+   * it threw (so the caller can report the failure to the status bar).
+   */
+  async function restartSession(
+    session: Session,
+    prompt: string,
+  ): Promise<boolean> {
+    try {
+      const options = launchOptions.get(session.id) ?? {};
+      const existing = sessions.get(session.id);
+      if (existing && !existing.exited) {
+        // Treat the kill as a discard so its exit does not persist a `failed`
+        // snapshot; the fresh launch below re-emits `session.started`.
+        discarded.add(session.id);
+        const exited = awaitExit(existing);
+        existing.kill();
+        await exited;
+      }
+      await launch(session, { ...options, replaySeed: prompt });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Resolves once the terminal's PTY has exited (immediately if already gone). */
+  function awaitExit(terminal: TerminalSession): Promise<void> {
+    // An already-exited terminal fires the exit sink synchronously on attach, so
+    // this resolves immediately in that case without a special-cased guard.
+    return new Promise((resolve) => {
+      const detach = terminal.attach({
+        send: () => {},
+        exit: () => {
+          detach();
+          resolve();
+        },
+      });
     });
   }
 
@@ -370,6 +492,7 @@ export function createTerminalManager(
   function seedInstructionsWhenReady(
     terminal: TerminalSession,
     instructions: string,
+    onComplete: () => void,
   ): void {
     const readyPattern = new RegExp(deps.config.instructionSeedReadyPattern);
     let observed = '';
@@ -381,7 +504,7 @@ export function createTerminalManager(
       submitted = true;
       clearTimeout(readyTimer);
       detach();
-      seedNow(terminal, instructions, () => terminal.markInputReady());
+      seedNow(terminal, instructions, onComplete);
     };
 
     detach = terminal.attach({
@@ -405,6 +528,28 @@ export function createTerminalManager(
         deps.config.instructionSeedReadyTimeoutMs,
       );
     }
+  }
+
+  /**
+   * Seeds an ordered list of instruction blocks into a freshly-launched CLI: the
+   * first waits for the ready marker, and each subsequent block is submitted only
+   * once the previous one has settled. Input readiness is marked after the final
+   * block, so browser input is unblocked exactly when seeding completes. Used by
+   * the self-recovery restart path to re-seed bootstrap context and then replay
+   * the user's prompt without the two writes racing.
+   */
+  function seedSequence(
+    terminal: TerminalSession,
+    blocks: readonly string[],
+  ): void {
+    const seedRest = (index: number): void => {
+      if (index >= blocks.length) {
+        terminal.markInputReady();
+        return;
+      }
+      seedNow(terminal, blocks[index], () => seedRest(index + 1));
+    };
+    seedInstructionsWhenReady(terminal, blocks[0], () => seedRest(1));
   }
 
   return {

@@ -7,6 +7,7 @@ import {
   type StreamEvent,
 } from '../lib/stream.js';
 import { resolveApiBase } from '../lib/api-base.js';
+import { failActivity } from '../lib/activity.js';
 
 const STREAM_EVENT_NAMES = [
   'session.started',
@@ -14,6 +15,7 @@ const STREAM_EVENT_NAMES = [
   'session.ended',
   'session.updated',
   'session.file',
+  'session.notice',
   'usage.recorded',
   'repository.context.updated',
   'context.status',
@@ -44,9 +46,19 @@ export function useUsageStream(): LiveState {
     const handlers = STREAM_EVENT_NAMES.map((name) => {
       const handler = (raw: MessageEvent<string>) => {
         const parsed = parseServerEvent(name, raw.data);
-        if (parsed) {
-          dispatch(parsed);
+        if (!parsed) {
+          return;
         }
+        // A self-recovery failure surfaces on the status bar rather than the
+        // live session state, so route error notices straight to the activity
+        // store and skip the reducer.
+        if (parsed.type === 'session.notice') {
+          if (parsed.level === 'error') {
+            failActivity(parsed.message);
+          }
+          return;
+        }
+        dispatch(parsed);
       };
       source.addEventListener(name, handler as EventListener);
       return { name, handler };

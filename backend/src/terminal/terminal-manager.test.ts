@@ -133,6 +133,16 @@ function makeManager(
   bootstrapError?: Error,
   modelOpts: { withModelScanner?: boolean; trackModel?: boolean } = {},
   isTransientFailure?: (line: string) => boolean,
+  extra: {
+    selfRecovery?: {
+      enabled: boolean;
+      useMetaAnalysis: boolean;
+      analyze?: (errorText: string) => Promise<string | null>;
+      report: (sessionId: string, message: string) => void;
+    };
+    configOverride?: Partial<typeof terminalDefaults>;
+    composeFailOnCall?: number;
+  } = {},
 ) {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
@@ -157,13 +167,21 @@ function makeManager(
     providers,
     bus,
     clock: createClock(() => 0),
-    config: terminalDefaults,
+    config: extra.configOverride
+      ? { ...terminalDefaults, ...extra.configOverride }
+      : terminalDefaults,
     transcriptStore: ts.store,
     bootstrap: {
       composeForSession: async (session) => {
         instructionCalls.push(session.id);
         if (bootstrapError) {
           throw bootstrapError;
+        }
+        if (
+          extra.composeFailOnCall !== undefined &&
+          instructionCalls.length === extra.composeFailOnCall
+        ) {
+          throw new Error('compose failed on restart');
         }
         return instructions;
       },
@@ -180,6 +198,7 @@ function makeManager(
             modelResolved.push({ sessionId, model });
           },
     isTransientFailure,
+    selfRecovery: extra.selfRecovery,
     home: '/home/me',
   });
   return {
@@ -247,6 +266,195 @@ describe('createTerminalManager', () => {
     manager.observeInput('sess-1', 'fix it\r');
     env.emitData('Execution failed: 503 Service Unavailable\n');
     expect(env.writes).not.toContain('fix it');
+  });
+
+  describe('self-recovery escalation', () => {
+    const flush = async (times = 8): Promise<void> => {
+      for (let i = 0; i < times; i += 1) {
+        await Promise.resolve();
+      }
+    };
+
+    function makeSelfRecovering(
+      opts: {
+        analyze?: (errorText: string) => Promise<string | null>;
+        composeFailOnCall?: number;
+        instructions?: string;
+      } = {},
+    ) {
+      const report = vi.fn<(sessionId: string, message: string) => void>();
+      const h = makeManager(
+        opts.instructions ?? '',
+        false,
+        undefined,
+        {},
+        (line) => line.includes('400'),
+        {
+          selfRecovery: {
+            enabled: true,
+            useMetaAnalysis: opts.analyze !== undefined,
+            analyze: opts.analyze,
+            report,
+          },
+          // Skip the non-destructive re-submits so the first 400 escalates.
+          configOverride: { autoRetryEnabled: false },
+          composeFailOnCall: opts.composeFailOnCall,
+        },
+      );
+      return { ...h, report };
+    }
+
+    it('restarts the CLI and replays the prompt once re-submits are spent', async () => {
+      const analyze = vi
+        .fn<(text: string) => Promise<string | null>>()
+        .mockResolvedValue('History too large; a restart clears it.');
+      const h = makeSelfRecovering({ analyze });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+
+      // The CLI rejects the corrupted conversation; escalation kicks off.
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      // The escalation is now awaiting the old PTY's exit; release it.
+      h.env.emitExit(0);
+      await flush();
+
+      expect(analyze).toHaveBeenCalledWith('Error: 400 Bad Request');
+      // A fresh CLI was spawned (relaunch) and the old one discarded, not ended.
+      expect(h.env.requests).toHaveLength(2);
+      expect(h.started).toHaveLength(2);
+      expect(h.discarded).toEqual(['sess-1']);
+      expect(h.ended).toHaveLength(0);
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('replays the last prompt after the relaunched CLI is ready', async () => {
+      vi.useFakeTimers();
+      try {
+        const h = makeSelfRecovering();
+        await h.manager.getOrLaunch(sampleSession());
+        h.manager.observeInput('sess-1', 'try again\r');
+        h.env.emitData('Error: 400 Bad Request\n');
+        await flush();
+        h.env.emitExit(0);
+        await flush();
+
+        // The relaunched terminal seeds the replayed prompt on its ready marker.
+        h.env.emitData('type / for commands');
+        expect(h.env.writes).toContain('try again');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(h.manager.get('sess-1')?.inputReadiness).toBe('ready');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports to the status bar when the restart cannot be carried out', async () => {
+      // Fail the second compose (the relaunch) so restartSession returns false.
+      const h = makeSelfRecovering({ composeFailOnCall: 2 });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+
+      expect(h.report).toHaveBeenCalledWith(
+        'sess-1',
+        'Automatic recovery failed. Restart the session to continue.',
+      );
+      // Only the original spawn happened; the relaunch threw.
+      expect(h.env.requests).toHaveLength(1);
+    });
+
+    it('notes analysis was unavailable when the metasession cannot start and restart fails', async () => {
+      const analyze = vi
+        .fn<(text: string) => Promise<string | null>>()
+        .mockRejectedValue(new Error('meta down'));
+      const h = makeSelfRecovering({ analyze, composeFailOnCall: 2 });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+
+      expect(h.report).toHaveBeenCalledWith(
+        'sess-1',
+        'Automatic recovery failed and the analysis session could not start. Restart the session to continue.',
+      );
+    });
+
+    it('skips the kill when the session already exited before escalation restarts it', async () => {
+      const analyze = vi
+        .fn<(text: string) => Promise<string | null>>()
+        .mockResolvedValue('diagnosis');
+      const h = makeSelfRecovering({ analyze, composeFailOnCall: 2 });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+      // Escalation begins and suspends on the analysis; while it is pending the
+      // PTY exits on its own, so by the time the restart runs there is no live
+      // terminal to kill and it goes straight to (a failing) relaunch.
+      h.env.emitData('Error: 400 Bad Request\n');
+      h.env.emitExit(0);
+      await flush();
+
+      expect(h.report).toHaveBeenCalledWith(
+        'sess-1',
+        'Automatic recovery failed. Restart the session to continue.',
+      );
+      // The exit was a normal end (never marked discarded by a restart kill).
+      expect(h.ended).toHaveLength(1);
+    });
+
+    it('re-seeds bootstrap context then replays the prompt on restart', async () => {
+      vi.useFakeTimers();
+      try {
+        const h = makeSelfRecovering({ instructions: 'Follow the rules.' });
+        await h.manager.getOrLaunch(sampleSession());
+        // Clear the launch-time bootstrap seeding on the first terminal.
+        h.env.emitData('type / for commands');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        h.manager.observeInput('sess-1', 'try again\r');
+
+        h.env.emitData('Error: 400 Bad Request\n');
+        await flush();
+        h.env.emitExit(0);
+        await flush();
+
+        // The relaunched terminal seeds bootstrap first, then the replay prompt.
+        h.env.emitData('type / for commands');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(h.env.writes).toContain('Follow the rules.');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(h.env.writes).toContain('try again');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(h.manager.get('sess-1')?.inputReadiness).toBe('ready');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not escalate when self-recovery is disabled', async () => {
+      const report = vi.fn<(sessionId: string, message: string) => void>();
+      const h = makeManager('', false, undefined, {}, (line) =>
+        line.includes('400'),
+        {
+          selfRecovery: {
+            enabled: false,
+            useMetaAnalysis: true,
+            report,
+          },
+          configOverride: { autoRetryEnabled: false },
+        },
+      );
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      expect(report).not.toHaveBeenCalled();
+      expect(h.env.requests).toHaveLength(1);
+    });
   });
 
   it('falls back to default terminal size when unspecified', async () => {

@@ -190,4 +190,47 @@ describe('createSessionAutoRetry', () => {
       vi.useRealTimers();
     }
   });
+
+  it('escalates once via onExhausted after the re-submit budget is spent', () => {
+    const exhausted: Array<{ prompt: string; line: string }> = [];
+    const h = harness({ onExhausted: (info) => exhausted.push(info) });
+    h.controller.observeInput('heal me\r');
+    h.controller.observeOutput('503 #1\n');
+    h.fireTimer();
+    h.controller.observeOutput('503 #2\n');
+    h.fireTimer(); // budget now exhausted
+    h.controller.observeOutput('503 #3\n'); // triggers escalation
+    h.controller.observeOutput('503 #4\n'); // must not escalate again
+    expect(exhausted).toEqual([{ prompt: 'heal me', line: '503 #3' }]);
+  });
+
+  it('escalates immediately when auto-retry is off (maxAttempts 0)', () => {
+    const exhausted: Array<{ prompt: string; line: string }> = [];
+    const h = harness({
+      maxAttempts: 0,
+      onExhausted: (info) => exhausted.push(info),
+    });
+    h.controller.observeInput('go\r');
+    h.controller.observeOutput('503 straight away\n');
+    expect(h.resends).toHaveLength(0);
+    expect(exhausted).toEqual([
+      { prompt: 'go', line: '503 straight away' },
+    ]);
+  });
+
+  it('re-arms escalation for a fresh prompt after a prior streak escalated', () => {
+    const exhausted: Array<{ prompt: string; line: string }> = [];
+    const h = harness({
+      maxAttempts: 0,
+      onExhausted: (info) => exhausted.push(info),
+    });
+    h.controller.observeInput('first\r');
+    h.controller.observeOutput('503 a\n');
+    h.controller.observeInput('second\r');
+    h.controller.observeOutput('503 b\n');
+    expect(exhausted).toEqual([
+      { prompt: 'first', line: '503 a' },
+      { prompt: 'second', line: '503 b' },
+    ]);
+  });
 });
