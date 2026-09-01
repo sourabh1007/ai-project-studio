@@ -2,12 +2,13 @@ import { useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import type { LiveState } from '../../lib/stream.js';
 import { useAutomations } from '../../hooks/use-automations.js';
-import type { Automation, Subagent } from '../../lib/types.js';
+import type { Automation, AutomationRun, Subagent } from '../../lib/types.js';
 import {
   groupAutomations,
   sortSubagents,
   statusLabel,
   modeLabel,
+  monitorMotion,
   subagentStatusLabel,
   describeCheck,
   intervalLabel,
@@ -18,6 +19,13 @@ import {
   canResume,
   canCancel,
   needsAuth,
+  progressPercent,
+  etaLabel,
+  activeStepLabel,
+  intervalOptions,
+  snapIntervalMs,
+  runStatusLabel,
+  runSummary,
 } from '../../lib/automation-view.js';
 import {
   Card,
@@ -35,6 +43,11 @@ import {
   ActivityIcon,
   HistoryIcon,
   AiChatIcon,
+  PauseIcon,
+  PlayIcon,
+  StopIcon,
+  ChevronIcon,
+  LogsIcon,
 } from '../../components/icons.js';
 
 type LifecycleAction = 'pause' | 'resume' | 'cancel' | 'run' | 'delete';
@@ -70,8 +83,53 @@ export function AutomationsView({ live }: { live: LiveState }) {
     }
   }
 
+  async function changeInterval(id: string, intervalMs: number) {
+    setBusyKey(`interval:${id}`);
+    setActionError(null);
+    try {
+      await api.updateAutomationInterval(id, intervalMs);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   const groups = groupAutomations(automations);
   const sortedSubagents = sortSubagents(subagents);
+
+  const sections: {
+    key: string;
+    title: string;
+    icon: JSX.Element;
+    items: Automation[];
+  }[] = [
+    {
+      key: 'running',
+      title: 'Running',
+      icon: <ActivityIcon size={14} />,
+      items: groups.running,
+    },
+    {
+      key: 'attention',
+      title: 'Needs sign-in',
+      icon: <ClockIcon size={14} />,
+      items: groups.attention,
+    },
+    {
+      key: 'paused',
+      title: 'Paused',
+      icon: <PauseIcon size={14} />,
+      items: groups.paused,
+    },
+    {
+      key: 'finished',
+      title: 'Finished',
+      icon: <HistoryIcon size={14} />,
+      items: groups.finished,
+    },
+  ];
 
   return (
     <Card>
@@ -116,48 +174,38 @@ export function AutomationsView({ live }: { live: LiveState }) {
         />
       )}
 
-      {groups.active.length > 0 && (
-        <section className="automation-section">
-          <h3 className="automation-section-title">
-            <ActivityIcon size={14} /> Active monitors
-          </h3>
-          <div className="automation-list">
-            {groups.active.map((automation) => (
-              <AutomationCard
-                key={automation.id}
-                automation={automation}
-                nowMs={nowMs}
-                busyKey={busyKey}
-                onAction={act}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {groups.finished.length > 0 && (
-        <section className="automation-section">
-          <h3 className="automation-section-title">
-            <HistoryIcon size={14} /> Finished monitors
-          </h3>
-          <div className="automation-list">
-            {groups.finished.map((automation) => (
-              <AutomationCard
-                key={automation.id}
-                automation={automation}
-                nowMs={nowMs}
-                busyKey={busyKey}
-                onAction={act}
-              />
-            ))}
-          </div>
-        </section>
+      {sections.map((section) =>
+        section.items.length > 0 ? (
+          <section key={section.key} className="automation-section">
+            <h3 className="automation-section-title">
+              {section.icon} {section.title}
+              <span className="automation-section-count">
+                {section.items.length}
+              </span>
+            </h3>
+            <div className="automation-list">
+              {section.items.map((automation) => (
+                <AutomationCard
+                  key={automation.id}
+                  automation={automation}
+                  nowMs={nowMs}
+                  busyKey={busyKey}
+                  onAction={act}
+                  onInterval={changeInterval}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null,
       )}
 
       {sortedSubagents.length > 0 && (
         <section className="automation-section">
           <h3 className="automation-section-title">
             <AiChatIcon size={14} /> Subagents
+            <span className="automation-section-count">
+              {sortedSubagents.length}
+            </span>
           </h3>
           <div className="automation-list">
             {sortedSubagents.map((subagent) => (
@@ -170,22 +218,72 @@ export function AutomationsView({ live }: { live: LiveState }) {
   );
 }
 
+/** An animated status indicator: pulses while running, steady/dim otherwise. */
+function MonitorStatusDot({ automation }: { automation: Automation }) {
+  const motion = monitorMotion(automation.status);
+  return (
+    <span
+      className="monitor-status-dot"
+      data-motion={motion}
+      role="img"
+      aria-label={`${statusLabel(automation.status)} monitor`}
+      title={statusLabel(automation.status)}
+    >
+      <span className="monitor-status-core" aria-hidden="true" />
+    </span>
+  );
+}
+
 function AutomationCard({
   automation,
   nowMs,
   busyKey,
   onAction,
+  onInterval,
 }: {
   automation: Automation;
   nowMs: number;
   busyKey: string | null;
   onAction: (id: string, action: LifecycleAction) => void;
+  onInterval: (id: string, intervalMs: number) => void;
 }) {
+  const api = useApi();
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [runs, setRuns] = useState<AutomationRun[] | null>(null);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [logsLoading, setLogsLoading] = useState(false);
+
   const countdown = nextRunLabel(automation, nowMs);
   const steps = automation.plannedSteps;
+  const percent = progressPercent(automation);
+  const eta = etaLabel(automation);
+  const currentCall = activeStepLabel(automation);
+  const editable = canCancel(automation.status);
+
+  async function toggleLogs() {
+    const next = !logsOpen;
+    setLogsOpen(next);
+    if (next && runs === null) {
+      setLogsLoading(true);
+      setLogsError(null);
+      try {
+        const detail = await api.getAutomation(automation.id);
+        setRuns(detail.runs);
+      } catch (err) {
+        setLogsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLogsLoading(false);
+      }
+    }
+  }
+
   return (
-    <div className="automation-card">
+    <div
+      className="automation-card"
+      data-motion={monitorMotion(automation.status)}
+    >
       <div className="automation-card-head">
+        <MonitorStatusDot automation={automation} />
         <span className="automation-mode" data-mode={automation.mode}>
           {modeLabel(automation.mode)}
         </span>
@@ -199,10 +297,21 @@ function AutomationCard({
         {describeCheck(automation.check)}
       </p>
 
+      {percent !== null && (
+        <div className="automation-progressbar" title={`${percent}% of runs`}>
+          <div
+            className="automation-progressbar-fill"
+            data-motion={monitorMotion(automation.status)}
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      )}
+
       <div className="automation-meta">
         <span title="Origin">{originLabel(automation.origin)}</span>
         <span>{intervalLabel(automation.intervalMs)}</span>
         <span>{runCountLabel(automation)}</span>
+        {eta && <span title="Estimated time to finish">{eta}</span>}
         {automation.lastCheckedAt && (
           <span>
             Last checked{' '}
@@ -215,6 +324,12 @@ function AutomationCard({
           </span>
         )}
       </div>
+
+      {currentCall && (
+        <p className="automation-current-call">
+          <ActivityIcon size={12} /> Now: {currentCall}
+        </p>
+      )}
 
       {automation.progress && !needsAuth(automation.status) && (
         <p className="automation-progress">{automation.progress}</p>
@@ -251,6 +366,26 @@ function AutomationCard({
       )}
 
       <div className="automation-actions">
+        {editable && (
+          <label className="automation-freq" title="Change poll frequency">
+            <ClockIcon size={12} />
+            <select
+              className="automation-freq-select"
+              aria-label={`Poll frequency for ${automation.name}`}
+              value={snapIntervalMs(automation.intervalMs)}
+              disabled={busyKey === `interval:${automation.id}`}
+              onChange={(event) =>
+                onInterval(automation.id, Number(event.target.value))
+              }
+            >
+              {intervalOptions.map((option) => (
+                <option key={option.ms} value={option.ms}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {canPause(automation.status) && (
           <button
             type="button"
@@ -258,7 +393,7 @@ function AutomationCard({
             disabled={busyKey === `pause:${automation.id}`}
             onClick={() => onAction(automation.id, 'pause')}
           >
-            Pause
+            <PauseIcon size={14} /> Pause
           </button>
         )}
         {canResume(automation.status) && (
@@ -270,6 +405,7 @@ function AutomationCard({
             disabled={busyKey === `resume:${automation.id}`}
             onClick={() => onAction(automation.id, 'resume')}
           >
+            <PlayIcon size={14} />{' '}
             {needsAuth(automation.status) ? 'Signed in — resume' : 'Resume'}
           </button>
         )}
@@ -281,7 +417,7 @@ function AutomationCard({
               disabled={busyKey === `run:${automation.id}`}
               onClick={() => onAction(automation.id, 'run')}
             >
-              Run now
+              <PlayIcon size={14} /> Run now
             </button>
             <button
               type="button"
@@ -289,10 +425,18 @@ function AutomationCard({
               disabled={busyKey === `cancel:${automation.id}`}
               onClick={() => onAction(automation.id, 'cancel')}
             >
-              Cancel
+              <StopIcon size={14} /> Stop
             </button>
           </>
         )}
+        <button
+          type="button"
+          className="ghost-button"
+          aria-expanded={logsOpen}
+          onClick={() => void toggleLogs()}
+        >
+          <LogsIcon size={14} /> Logs <ChevronIcon size={12} open={logsOpen} />
+        </button>
         <button
           type="button"
           className="tree-action"
@@ -304,6 +448,42 @@ function AutomationCard({
           <TrashIcon size={14} />
         </button>
       </div>
+
+      {logsOpen && (
+        <div className="automation-logs">
+          <ErrorText error={logsError} />
+          {logsLoading && (
+            <p className="automation-logs-empty">Loading logs…</p>
+          )}
+          {!logsLoading && runs !== null && runs.length === 0 && (
+            <p className="automation-logs-empty">No runs recorded yet.</p>
+          )}
+          {!logsLoading && runs !== null && runs.length > 0 && (
+            <ol className="automation-run-list">
+              {runs.map((run) => (
+                <li
+                  key={run.id}
+                  className="automation-run"
+                  data-status={run.status}
+                >
+                  <span className="automation-run-status">
+                    {runStatusLabel(run.status)}
+                  </span>
+                  <span className="automation-run-time">
+                    {new Date(run.startedAt).toLocaleString()}
+                  </span>
+                  <span
+                    className="automation-run-detail"
+                    title={runSummary(run)}
+                  >
+                    {runSummary(run)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
     </div>
   );
 }

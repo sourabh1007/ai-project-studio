@@ -237,4 +237,34 @@ describe('automation-service', () => {
     const steps = [{ id: 'p1', label: 'Go', status: 'active' as const, detail: null }];
     expect(service.setPlannedSteps(a.id, steps).plannedSteps).toEqual(steps);
   });
+
+  it('updateInterval clamps and reschedules an active monitor', () => {
+    const a = service.create(baseInput);
+    time += 5_000;
+    const updatedInterval = service.updateInterval(a.id, 120_000);
+    expect(updatedInterval.intervalMs).toBe(120_000);
+    expect(updatedInterval.nextRunAt).toBe(new Date(time + 120_000).toISOString());
+  });
+
+  it('updateInterval clamps a too-small interval to the floor', () => {
+    const a = service.create(baseInput);
+    expect(service.updateInterval(a.id, 1_000).intervalMs).toBe(10_000);
+  });
+
+  it('updateInterval keeps the paused next-run untouched', () => {
+    const a = service.create(baseInput);
+    const paused = service.pause(a.id);
+    expect(paused.nextRunAt).toBeNull();
+    const changed = service.updateInterval(a.id, 30_000);
+    expect(changed.intervalMs).toBe(30_000);
+    expect(changed.nextRunAt).toBeNull();
+  });
+
+  it('updateInterval rejects a finished monitor', () => {
+    const a = service.create(baseInput);
+    service.cancel(a.id);
+    expect(() => service.updateInterval(a.id, 30_000)).toThrow(
+      /already finished/,
+    );
+  });
 });

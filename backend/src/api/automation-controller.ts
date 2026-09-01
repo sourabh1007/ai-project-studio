@@ -6,6 +6,7 @@ import { ValidationError } from '../kernel/error-types.js';
 import {
   assertCreateAutomationInput,
   assertErrorBody,
+  assertIntervalBody,
   assertPlannedStepsBody,
   assertProgressBody,
   assertRegisterSubagentBody,
@@ -154,6 +155,18 @@ export function createAutomationRoutes(
       path: '/automations/:id/run',
       handler: (req) => {
         const body = deps.automations.runNow(req.params.id);
+        deps.scheduler?.kick(req.params.id);
+        return { status: 200, body };
+      },
+    },
+    {
+      method: 'post',
+      path: '/automations/:id/interval',
+      handler: (req) => {
+        const body = deps.automations.updateInterval(
+          req.params.id,
+          assertIntervalBody(req.body),
+        );
         deps.scheduler?.kick(req.params.id);
         return { status: 200, body };
       },

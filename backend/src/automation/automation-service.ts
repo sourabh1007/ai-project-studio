@@ -58,6 +58,12 @@ export interface AutomationService {
   remove(id: string): void;
   updateProgress(id: string, progress: string): Automation;
   setPlannedSteps(id: string, steps: PlannedStep[]): Automation;
+  /**
+   * Changes a monitor's poll interval. The requested value is clamped to the
+   * configured floor. Reschedules the next tick when the monitor is active;
+   * leaves the (null) next-run untouched while paused/awaiting sign-in.
+   */
+  updateInterval(id: string, intervalMs: number): Automation;
 }
 
 const TERMINAL: ReadonlySet<Automation['status']> = new Set([
@@ -194,6 +200,18 @@ export function createAutomationService(
     setPlannedSteps(id, steps) {
       const automation = require(id);
       return publish({ ...automation, plannedSteps: steps });
+    },
+    updateInterval(id, intervalMs) {
+      const automation = require(id);
+      if (TERMINAL.has(automation.status)) {
+        throw new ConflictError(`Automation is already finished: ${id}`);
+      }
+      const clamped = Math.max(deps.config.minIntervalMs, Math.round(intervalMs));
+      const nextRunAt =
+        automation.status === 'active'
+          ? new Date(deps.clock.now().getTime() + clamped).toISOString()
+          : automation.nextRunAt;
+      return publish({ ...automation, intervalMs: clamped, nextRunAt });
     },
   };
 }

@@ -28,6 +28,7 @@ function services() {
     runNow: vi.fn(() => 'ran'),
     updateProgress: vi.fn(() => 'automation-progress'),
     setPlannedSteps: vi.fn(() => 'planned'),
+    updateInterval: vi.fn(() => 'interval-updated'),
     remove: vi.fn(),
   } as unknown as AutomationService & Record<string, ReturnType<typeof vi.fn>>;
   const subagents = {
@@ -149,6 +150,34 @@ describe('createAutomationRoutes', () => {
       expect(scheduler.abort).not.toHaveBeenCalled();
       expect(scheduler.kick).not.toHaveBeenCalled();
     }
+  });
+
+  it('updates the poll interval and reschedules', async () => {
+    const { automations, subagents } = services();
+    const scheduler = { abort: vi.fn(), kick: vi.fn() };
+    const routes = routeMap(
+      createAutomationRoutes({ automations, subagents, scheduler }),
+    );
+    const res = await routes.get('post /automations/:id/interval')!.handler({
+      params: { id: 'a1' },
+      query: {},
+      body: { intervalMs: 120_000 },
+    });
+    expect(res).toEqual({ status: 200, body: 'interval-updated' });
+    expect(automations.updateInterval).toHaveBeenCalledWith('a1', 120_000);
+    expect(scheduler.kick).toHaveBeenCalledWith('a1');
+  });
+
+  it('rejects a malformed interval body', () => {
+    const { automations, subagents } = services();
+    const routes = routeMap(createAutomationRoutes({ automations, subagents }));
+    expect(() =>
+      routes.get('post /automations/:id/interval')!.handler({
+        params: { id: 'a1' },
+        query: {},
+        body: { intervalMs: -1 },
+      }),
+    ).toThrow(/positive/);
   });
 
   it('updates automation progress', async () => {

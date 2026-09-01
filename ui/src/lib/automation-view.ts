@@ -1,5 +1,6 @@
 import type {
   Automation,
+  AutomationRun,
   AutomationStatus,
   Subagent,
 } from './types.js';
@@ -14,6 +15,23 @@ export function isActiveStatus(status: AutomationStatus): boolean {
   return (
     status === 'active' || status === 'paused' || status === 'needs-auth'
   );
+}
+
+/**
+ * The visual motion state that drives a monitor's status indicator: `running`
+ * pulses, `paused` is held steady, `stopped` is dimmed. Awaiting sign-in counts
+ * as paused (it is not actively polling).
+ */
+export function monitorMotion(
+  status: AutomationStatus,
+): 'running' | 'paused' | 'stopped' {
+  if (status === 'active') {
+    return 'running';
+  }
+  if (status === 'paused' || status === 'needs-auth') {
+    return 'paused';
+  }
+  return 'stopped';
 }
 
 /** A human label for a monitor's lifecycle status. */
@@ -54,26 +72,46 @@ export function subagentStatusLabel(status: Subagent['status']): string {
 }
 
 export interface AutomationGroups {
-  active: Automation[];
+  /** Actively polling monitors (status `active`). */
+  running: Automation[];
+  /** Manually paused monitors (status `paused`). */
+  paused: Automation[];
+  /** Monitors parked awaiting the user to authenticate (status `needs-auth`). */
+  attention: Automation[];
+  /** Terminal monitors (completed/failed/cancelled). */
   finished: Automation[];
 }
 
 /**
- * Splits monitors into the still-running group (active/paused) and the terminal
- * group (completed/failed/cancelled), each sorted newest-updated first.
+ * Segregates monitors into clearly-labelled lifecycle buckets so the page never
+ * lumps running and stopped monitors under one heading. Each bucket is sorted
+ * newest-updated first.
  */
 export function groupAutomations(list: Automation[]): AutomationGroups {
-  const active: Automation[] = [];
+  const running: Automation[] = [];
+  const paused: Automation[] = [];
+  const attention: Automation[] = [];
   const finished: Automation[] = [];
   for (const automation of list) {
-    if (isActiveStatus(automation.status)) {
-      active.push(automation);
-    } else {
-      finished.push(automation);
+    switch (automation.status) {
+      case 'active':
+        running.push(automation);
+        break;
+      case 'paused':
+        paused.push(automation);
+        break;
+      case 'needs-auth':
+        attention.push(automation);
+        break;
+      default:
+        finished.push(automation);
+        break;
     }
   }
   return {
-    active: sortByUpdatedDesc(active),
+    running: sortByUpdatedDesc(running),
+    paused: sortByUpdatedDesc(paused),
+    attention: sortByUpdatedDesc(attention),
     finished: sortByUpdatedDesc(finished),
   };
 }
@@ -201,4 +239,109 @@ export function needsAuth(status: AutomationStatus): boolean {
 /** Whether a monitor can be cancelled (while still non-terminal). */
 export function canCancel(status: AutomationStatus): boolean {
   return isActiveStatus(status);
+}
+
+/**
+ * Completion percentage (0–100) for a capped monitor, from triggers fired vs.
+ * the cap. Returns null for uncapped monitors (no meaningful denominator).
+ */
+export function progressPercent(automation: Automation): number | null {
+  if (automation.maxRuns === null || automation.maxRuns <= 0) {
+    return null;
+  }
+  const ratio = automation.runCount / automation.maxRuns;
+  return Math.min(100, Math.max(0, Math.round(ratio * 100)));
+}
+
+/** Formats a millisecond duration into a compact human label (e.g. `1h 5m`). */
+export function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.round(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+/**
+ * An estimated "time to finish" label for a capped, still-running monitor, based
+ * on the remaining triggers times the poll interval. Returns null when the
+ * monitor is uncapped, already at its cap, or terminal.
+ */
+export function etaLabel(automation: Automation): string | null {
+  if (automation.maxRuns === null || automation.status !== 'active') {
+    return null;
+  }
+  const remaining = automation.maxRuns - automation.runCount;
+  if (remaining <= 0) {
+    return null;
+  }
+  return `~${formatDuration(remaining * automation.intervalMs)} left`;
+}
+
+/**
+ * The label of the currently-active planned step ("what call it is making"),
+ * or null when no step is active.
+ */
+export function activeStepLabel(automation: Automation): string | null {
+  const active = automation.plannedSteps.find(
+    (step) => step.status === 'active',
+  );
+  return active ? active.label : null;
+}
+
+/** A curated set of selectable poll frequencies for the frequency picker. */
+export interface IntervalOption {
+  label: string;
+  ms: number;
+}
+
+export const intervalOptions: readonly IntervalOption[] = [
+  { label: 'Every 30 seconds', ms: 30_000 },
+  { label: 'Every 1 minute', ms: 60_000 },
+  { label: 'Every 2 minutes', ms: 120_000 },
+  { label: 'Every 5 minutes', ms: 300_000 },
+  { label: 'Every 10 minutes', ms: 600_000 },
+  { label: 'Every 15 minutes', ms: 900_000 },
+  { label: 'Every 30 minutes', ms: 1_800_000 },
+  { label: 'Every 1 hour', ms: 3_600_000 },
+];
+
+/**
+ * Snaps an arbitrary interval to the nearest preset option so the frequency
+ * `<select>` always has a matching value to show.
+ */
+export function snapIntervalMs(intervalMs: number): number {
+  let best = intervalOptions[0];
+  for (const option of intervalOptions) {
+    if (
+      Math.abs(option.ms - intervalMs) < Math.abs(best.ms - intervalMs)
+    ) {
+      best = option;
+    }
+  }
+  return best.ms;
+}
+
+/** A human label for one detailed-log run outcome. */
+export function runStatusLabel(status: AutomationRun['status']): string {
+  switch (status) {
+    case 'ok':
+      return 'Succeeded';
+    case 'failed':
+      return 'Failed';
+    case 'skipped':
+      return 'Skipped';
+  }
+}
+
+/** A one-line summary of a single run for the detailed-log timeline. */
+export function runSummary(run: AutomationRun): string {
+  const outcome = run.triggered ? 'Triggered' : 'Checked';
+  return run.detail ? `${outcome} · ${run.detail}` : outcome;
 }

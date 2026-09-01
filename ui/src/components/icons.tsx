@@ -34,8 +34,10 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
+  Play,
   Plug,
   Plus,
+  Pause,
   Radar,
   RefreshCw,
   Rocket,
@@ -46,6 +48,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Square,
   Sun,
   Tag,
   Timer,
@@ -107,6 +110,9 @@ export const ClockIcon = makeIcon(Clock);
 export const RefreshIcon = makeIcon(RefreshCw);
 export const MoreIcon = makeIcon(MoreHorizontal);
 export const SearchIcon = makeIcon(Search);
+export const PauseIcon = makeIcon(Pause);
+export const PlayIcon = makeIcon(Play);
+export const StopIcon = makeIcon(Square);
 
 // Navigation icons.
 export const FilesIcon = makeIcon(Files);

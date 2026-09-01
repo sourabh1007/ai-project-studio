@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isActiveStatus,
+  monitorMotion,
   statusLabel,
   modeLabel,
   subagentStatusLabel,
@@ -15,8 +16,16 @@ import {
   canResume,
   canCancel,
   needsAuth,
+  progressPercent,
+  formatDuration,
+  etaLabel,
+  activeStepLabel,
+  intervalOptions,
+  snapIntervalMs,
+  runStatusLabel,
+  runSummary,
 } from './automation-view.js';
-import type { Automation, Subagent } from './types.js';
+import type { Automation, AutomationRun, Subagent } from './types.js';
 
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
@@ -100,17 +109,37 @@ describe('subagentStatusLabel', () => {
 });
 
 describe('groupAutomations', () => {
-  it('splits active from finished and sorts each newest-first', () => {
+  it('segregates running, paused, attention, and finished newest-first', () => {
     const a = automation({ id: 'a', status: 'active', updatedAt: '2024-01-02T00:00:00.000Z' });
+    const a2 = automation({ id: 'a2', status: 'active', updatedAt: '2024-01-06T00:00:00.000Z' });
     const b = automation({ id: 'b', status: 'paused', updatedAt: '2024-01-03T00:00:00.000Z' });
+    const n = automation({ id: 'n', status: 'needs-auth', updatedAt: '2024-01-05T00:00:00.000Z' });
     const c = automation({ id: 'c', status: 'completed', updatedAt: '2024-01-01T00:00:00.000Z' });
     const d = automation({ id: 'd', status: 'failed', updatedAt: '2024-01-04T00:00:00.000Z' });
-    const groups = groupAutomations([a, b, c, d]);
-    expect(groups.active.map((x) => x.id)).toEqual(['b', 'a']);
+    const groups = groupAutomations([a, a2, b, n, c, d]);
+    expect(groups.running.map((x) => x.id)).toEqual(['a2', 'a']);
+    expect(groups.paused.map((x) => x.id)).toEqual(['b']);
+    expect(groups.attention.map((x) => x.id)).toEqual(['n']);
     expect(groups.finished.map((x) => x.id)).toEqual(['d', 'c']);
   });
   it('handles an empty list', () => {
-    expect(groupAutomations([])).toEqual({ active: [], finished: [] });
+    expect(groupAutomations([])).toEqual({
+      running: [],
+      paused: [],
+      attention: [],
+      finished: [],
+    });
+  });
+});
+
+describe('monitorMotion', () => {
+  it('maps status to a motion state', () => {
+    expect(monitorMotion('active')).toBe('running');
+    expect(monitorMotion('paused')).toBe('paused');
+    expect(monitorMotion('needs-auth')).toBe('paused');
+    expect(monitorMotion('completed')).toBe('stopped');
+    expect(monitorMotion('failed')).toBe('stopped');
+    expect(monitorMotion('cancelled')).toBe('stopped');
   });
 });
 
@@ -232,5 +261,110 @@ describe('lifecycle guards', () => {
     expect(needsAuth('needs-auth')).toBe(true);
     expect(needsAuth('active')).toBe(false);
     expect(needsAuth('paused')).toBe(false);
+  });
+});
+
+describe('progressPercent', () => {
+  it('returns null for uncapped or non-positive caps', () => {
+    expect(progressPercent(automation({ maxRuns: null, runCount: 3 }))).toBeNull();
+    expect(progressPercent(automation({ maxRuns: 0, runCount: 3 }))).toBeNull();
+  });
+  it('computes a clamped percentage for capped monitors', () => {
+    expect(progressPercent(automation({ maxRuns: 10, runCount: 0 }))).toBe(0);
+    expect(progressPercent(automation({ maxRuns: 10, runCount: 5 }))).toBe(50);
+    expect(progressPercent(automation({ maxRuns: 10, runCount: 10 }))).toBe(100);
+    expect(progressPercent(automation({ maxRuns: 10, runCount: 20 }))).toBe(100);
+  });
+});
+
+describe('formatDuration', () => {
+  it('formats seconds, minutes, and hours', () => {
+    expect(formatDuration(0)).toBe('0s');
+    expect(formatDuration(-5)).toBe('0s');
+    expect(formatDuration(45_000)).toBe('45s');
+    expect(formatDuration(90_000)).toBe('2m');
+    expect(formatDuration(600_000)).toBe('10m');
+    expect(formatDuration(3_600_000)).toBe('1h');
+    expect(formatDuration(3_900_000)).toBe('1h 5m');
+  });
+});
+
+describe('etaLabel', () => {
+  it('returns null when uncapped, not active, or at the cap', () => {
+    expect(etaLabel(automation({ maxRuns: null }))).toBeNull();
+    expect(
+      etaLabel(automation({ maxRuns: 10, runCount: 2, status: 'paused' })),
+    ).toBeNull();
+    expect(
+      etaLabel(automation({ maxRuns: 10, runCount: 10, status: 'active' })),
+    ).toBeNull();
+  });
+  it('estimates the remaining time for an active capped monitor', () => {
+    expect(
+      etaLabel(
+        automation({
+          maxRuns: 288,
+          runCount: 284,
+          intervalMs: 300_000,
+          status: 'active',
+        }),
+      ),
+    ).toBe('~20m left');
+  });
+});
+
+describe('activeStepLabel', () => {
+  it('returns the active step label or null', () => {
+    expect(activeStepLabel(automation({ plannedSteps: [] }))).toBeNull();
+    expect(
+      activeStepLabel(
+        automation({
+          plannedSteps: [
+            { id: 's1', label: 'Wait', status: 'done', detail: null },
+            { id: 's2', label: 'Deploy', status: 'active', detail: null },
+          ],
+        }),
+      ),
+    ).toBe('Deploy');
+  });
+});
+
+describe('interval picker helpers', () => {
+  it('exposes ascending preset options', () => {
+    expect(intervalOptions[0].ms).toBe(30_000);
+    expect(intervalOptions.at(-1)?.ms).toBe(3_600_000);
+  });
+  it('snaps arbitrary intervals to the nearest preset', () => {
+    expect(snapIntervalMs(10_000)).toBe(30_000);
+    expect(snapIntervalMs(61_000)).toBe(60_000);
+    expect(snapIntervalMs(280_000)).toBe(300_000);
+    expect(snapIntervalMs(9_999_999)).toBe(3_600_000);
+  });
+});
+
+describe('run log helpers', () => {
+  function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
+    return {
+      id: 'r1',
+      automationId: 'a1',
+      startedAt: '2024-01-01T00:00:00.000Z',
+      endedAt: '2024-01-01T00:00:01.000Z',
+      triggered: false,
+      status: 'ok',
+      detail: null,
+      sessionId: null,
+      ...overrides,
+    };
+  }
+  it('labels each run status', () => {
+    expect(runStatusLabel('ok')).toBe('Succeeded');
+    expect(runStatusLabel('failed')).toBe('Failed');
+    expect(runStatusLabel('skipped')).toBe('Skipped');
+  });
+  it('summarizes triggered and checked runs with and without detail', () => {
+    expect(runSummary(run({ triggered: true, detail: 'went green' }))).toBe(
+      'Triggered · went green',
+    );
+    expect(runSummary(run({ triggered: false, detail: null }))).toBe('Checked');
   });
 });

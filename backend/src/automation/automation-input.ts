@@ -281,6 +281,15 @@ export function assertPlannedStepsBody(body: unknown): PlannedStep[] {
   return input.steps.map(assertPlannedStep);
 }
 
+export function assertIntervalBody(body: unknown): number {
+  const input = asObject(body, 'body');
+  const value = input.intervalMs;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new ValidationError('intervalMs must be a positive number');
+  }
+  return value;
+}
+
 export function assertRegisterSubagentBody(
   body: unknown,
   automationId: string,

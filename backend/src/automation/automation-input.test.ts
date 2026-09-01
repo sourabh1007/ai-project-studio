@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   assertCreateAutomationInput,
   assertErrorBody,
+  assertIntervalBody,
   assertPlannedStepsBody,
   assertProgressBody,
   assertRegisterSubagentBody,
@@ -39,6 +40,20 @@ describe('assertCreateAutomationInput', () => {
       expect(() => assertProgressBody({ progress: '' })).toThrow(/progress/);
       expect(() => assertResultBody({ result: 1 })).toThrow(/result/);
       expect(() => assertErrorBody({ error: [] })).toThrow(/error/);
+    });
+
+    it('accepts a positive interval body', () => {
+      expect(assertIntervalBody({ intervalMs: 30_000 })).toBe(30_000);
+    });
+
+    it('rejects a malformed interval body', () => {
+      expect(() => assertIntervalBody(null)).toThrow(/body/);
+      expect(() => assertIntervalBody({ intervalMs: 0 })).toThrow(/positive/);
+      expect(() => assertIntervalBody({ intervalMs: -5 })).toThrow(/positive/);
+      expect(() => assertIntervalBody({ intervalMs: 'x' })).toThrow(/positive/);
+      expect(() =>
+        assertIntervalBody({ intervalMs: Number.POSITIVE_INFINITY }),
+      ).toThrow(/positive/);
     });
 
     it('accepts planned steps', () => {
