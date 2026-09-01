@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
     refresh: ReturnType<typeof import('vitest').vi.fn>;
     scrollHandlers: Array<() => void>;
     selectionHandlers: Array<() => void>;
+    dataHandlers: Array<(data: string) => void>;
     keyHandler: ((event: KeyboardEvent) => boolean) | null;
     getSelection: ReturnType<typeof import('vitest').vi.fn>;
     hasSelection: ReturnType<typeof import('vitest').vi.fn>;
@@ -36,6 +37,7 @@ vi.mock('@xterm/xterm', () => {
     refresh = vi.fn();
     scrollHandlers: Array<() => void> = [];
     selectionHandlers: Array<() => void> = [];
+    dataHandlers: Array<(data: string) => void> = [];
     keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -43,7 +45,10 @@ vi.mock('@xterm/xterm', () => {
     }
     loadAddon = vi.fn();
     open = vi.fn();
-    onData = vi.fn(() => disposable());
+    onData = vi.fn((cb: (data: string) => void) => {
+      this.dataHandlers.push(cb);
+      return disposable();
+    });
     onSelectionChange = vi.fn((cb: () => void) => {
       this.selectionHandlers.push(cb);
       return disposable();
@@ -262,5 +267,27 @@ describe('TerminalView scrollback repaint', () => {
       String(call[0]).includes('resize'),
     );
     expect(resizeSends).toHaveLength(1);
+  });
+
+  it('strips OSC color-query replies from terminal input before sending to the PTY', () => {
+    render(<TerminalView sessionId="s1" />);
+
+    const term = h.term!;
+    const ws = h.ws!;
+    ws.readyState = MockWebSocket.OPEN;
+    ws.send.mockClear();
+    expect(term.dataHandlers.length).toBeGreaterThan(0);
+
+    // A palette report followed by a real keystroke: only the keystroke is sent.
+    term.dataHandlers[0]('\x1b]4;0;rgb:2e2e/3434/3636\x07w');
+    // A pure report produces no send at all.
+    term.dataHandlers[0]('\x1b]11;rgb:0000/0000/0000\x07');
+
+    const inputs = ws.send.mock.calls
+      .map((call) => String(call[0]))
+      .filter((msg) => msg.includes('input'));
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('"data":"w"');
+    expect(inputs[0]).not.toContain('rgb');
   });
 });

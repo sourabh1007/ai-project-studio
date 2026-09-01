@@ -12,6 +12,7 @@ import {
   encodeClientMessage,
 } from '../lib/terminal-protocol.js';
 import { toClipboardText, createPasteGuard } from '../lib/clipboard.js';
+import { stripTerminalColorReports } from '../lib/terminal-input.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -396,8 +397,13 @@ export function TerminalView({
     }
 
     const dataSub = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeClientMessage({ type: 'input', data }));
+      // Strip xterm's OSC color-query replies before they reach the PTY: the
+      // hosted CLI mis-parses them and injects their printable body into its
+      // input line, mixing garbage like `4;0;rgb:2e2e/3434/3636` into what the
+      // user is typing. Keystrokes and CSI cursor/DA replies are unaffected.
+      const outbound = stripTerminalColorReports(data);
+      if (outbound && ws.readyState === WebSocket.OPEN) {
+        ws.send(encodeClientMessage({ type: 'input', data: outbound }));
       }
     });
 
