@@ -122,6 +122,10 @@ import {
   createAzureDevOpsAuth,
   type GitRunResult,
 } from './azure-auth/azure-devops-auth.js';
+import {
+  AZURE_DEVOPS_CREDENTIAL_ENV_KEYS,
+  buildAzureDevOpsCredentialEnv,
+} from './azure-auth/azure-devops-credential-env.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
@@ -955,7 +959,45 @@ function main(): void {
   const rememberAzureTarget = (target: AzureTarget): void => {
     azureWarmTargets.set(`${target.host}|${target.org ?? ''}`, target);
   };
+  const applyAzureCredentialEnv = (token: string | null): void => {
+    if (token) {
+      for (const [key, value] of Object.entries(
+        buildAzureDevOpsCredentialEnv(token),
+      )) {
+        process.env[key] = value;
+      }
+      logger.info('Azure DevOps auth propagated to sessions and MCP servers', {});
+      return;
+    }
+    for (const key of AZURE_DEVOPS_CREDENTIAL_ENV_KEYS) {
+      delete process.env[key];
+    }
+    process.env.GCM_INTERACTIVE = 'never';
+    process.env.GIT_TERMINAL_PROMPT = '0';
+    process.env.GCM_MSAUTH_USEBROKER = 'false';
+    process.env.GCM_AZREPOS_CREDENTIALTYPE = 'oauth';
+  };
+  const azureTokenFor = async (input: string): Promise<string | null> => {
+    const target = parseAzureTarget(input);
+    rememberAzureTarget(target);
+    const token = await azureAuth.token(target);
+    if (token) {
+      applyAzureCredentialEnv(token);
+    }
+    return token;
+  };
+  const refreshAzureDevOpsCredentialEnv = async (): Promise<void> => {
+    for (const target of azureWarmTargets.values()) {
+      const token = await azureAuth.token(target);
+      if (token) {
+        applyAzureCredentialEnv(token);
+        return;
+      }
+    }
+    applyAzureCredentialEnv(null);
+  };
   rememberAzureTarget({ host: 'dev.azure.com', org: null });
+  void refreshAzureDevOpsCredentialEnv();
   void azureAuth
     .configure()
     .then(() =>
@@ -1047,7 +1089,7 @@ function main(): void {
   const listAzureReposFor = (org: string) =>
     listAzureRepos(
       {
-        token: (o) => azureAuth.token(parseAzureTarget(o)),
+        token: azureTokenFor,
         httpGet: azureHttpGet,
       },
       org,
@@ -1060,7 +1102,7 @@ function main(): void {
   // multiple reviews can run at once. The provider dispatch lives here (the
   // composition root) so the review service stays pure and unit-tested.
   const azurePullDeps = {
-    token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+    token: azureTokenFor,
     httpGet: azureHttpGet,
   };
   const listPullsFor = async (
@@ -1729,7 +1771,7 @@ function main(): void {
       }
       return createAzureCommentsGateway(
         {
-          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          token: azureTokenFor,
           httpGet: azureHttpGet,
           httpPost: azureHttpPost,
           httpPatch: azureHttpPatch,
@@ -1759,7 +1801,7 @@ function main(): void {
       }
       return createAzureApprovalGateway(
         {
-          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          token: azureTokenFor,
           httpGet: azureHttpGet,
           httpPut: azureHttpPut,
         },
@@ -1788,7 +1830,7 @@ function main(): void {
       }
       return createAzureDescriptionGateway(
         {
-          token: (o: string) => azureAuth.token(parseAzureTarget(o)),
+          token: azureTokenFor,
           httpGet: azureHttpGet,
           httpPatch: azureHttpPatch,
         },
@@ -1940,9 +1982,7 @@ function main(): void {
       }),
     refresh: async () => {
       await refreshGithubCredentialEnv();
-      for (const target of azureWarmTargets.values()) {
-        await azureAuth.token(target);
-      }
+      await refreshAzureDevOpsCredentialEnv();
     },
   });
   if (authWarmerConfig.enabled) {
@@ -2021,15 +2061,27 @@ function main(): void {
       githubSignInStart: () => githubDeviceAuth.start(),
       githubSignInPoll,
       githubSignOut,
-      azureStatus: (target) => {
+      azureStatus: async (target) => {
         rememberAzureTarget(target);
-        return azureAuth.status(target);
+        const status = await azureAuth.status(target);
+        if (status.authenticated) {
+          await refreshAzureDevOpsCredentialEnv();
+        }
+        return status;
       },
-      azureSignIn: (target) => {
+      azureSignIn: async (target) => {
         rememberAzureTarget(target);
-        return azureAuth.signIn(target);
+        const status = await azureAuth.signIn(target);
+        if (status.authenticated) {
+          await refreshAzureDevOpsCredentialEnv();
+        }
+        return status;
       },
-      azureSignOut: (target) => azureAuth.signOut(target),
+      azureSignOut: async (target) => {
+        const status = await azureAuth.signOut(target);
+        applyAzureCredentialEnv(null);
+        return status;
+      },
       repos: repoService,
       repositoryContexts: repositoryContextCoordinator,
       repoInsights: repoInsightsService,
