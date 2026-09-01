@@ -63,6 +63,8 @@ describe('provisionPrWorktree', () => {
     expect(calls[3]).toEqual([
       '-c',
       'core.longpaths=true',
+      '-c',
+      'checkout.workers=0',
       '-C',
       repoLocalPath,
       'worktree',
@@ -225,6 +227,8 @@ describe('provisionPrWorktree', () => {
     expect(calls[3]).toEqual([
       '-c',
       'core.longpaths=true',
+      '-c',
+      'checkout.workers=0',
       '-C',
       worktreePath,
       'checkout',

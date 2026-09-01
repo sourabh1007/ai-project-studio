@@ -221,10 +221,18 @@ export async function provisionPrWorktree(
     };
   };
 
+  // `checkout.workers=0` turns on git's parallel checkout, spreading the
+  // working-tree file writes across one worker thread per CPU instead of the
+  // serial default (`checkout.workers=1`). For a large repository (e.g. CosmosDB)
+  // materialising the worktree is the dominant cost, so this is what makes the
+  // review checkout noticeably faster. Unknown to older git, the setting is
+  // simply ignored, so it is safe to always pass.
   if (deps.pathExists(worktreePath)) {
     const checkout = await deps.git([
       '-c',
       'core.longpaths=true',
+      '-c',
+      'checkout.workers=0',
       '-C',
       worktreePath,
       'checkout',
@@ -249,6 +257,8 @@ export async function provisionPrWorktree(
     const add = await deps.git([
       '-c',
       'core.longpaths=true',
+      '-c',
+      'checkout.workers=0',
       '-C',
       input.repoLocalPath,
       'worktree',
