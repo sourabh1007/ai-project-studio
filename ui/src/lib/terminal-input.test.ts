@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { stripTerminalColorReports } from './terminal-input.js';
+import {
+  COLOR_QUERY_OSC_IDENTS,
+  isColorQuery,
+  stripTerminalColorReports,
+} from './terminal-input.js';
 
 describe('stripTerminalColorReports', () => {
   it('returns plain keystrokes untouched (fast path, no OSC)', () => {
@@ -43,5 +47,24 @@ describe('stripTerminalColorReports', () => {
   it('does not strip an unrelated OSC (e.g. title set) sequence', () => {
     const title = '\x1b]0;my title\x07';
     expect(stripTerminalColorReports(title)).toBe(title);
+  });
+});
+
+describe('isColorQuery', () => {
+  it('treats payloads containing "?" as queries', () => {
+    expect(isColorQuery('0;?')).toBe(true);
+    expect(isColorQuery('?')).toBe(true);
+  });
+
+  it('treats palette-set payloads (no "?") as non-queries', () => {
+    expect(isColorQuery('0;rgb:2e2e/3434/3636')).toBe(false);
+    expect(isColorQuery('rgb:ffff/ffff/ffff')).toBe(false);
+    expect(isColorQuery('#1e1e1e')).toBe(false);
+  });
+});
+
+describe('COLOR_QUERY_OSC_IDENTS', () => {
+  it('covers the palette, fg, bg and cursor color OSC idents', () => {
+    expect([...COLOR_QUERY_OSC_IDENTS]).toEqual([4, 10, 11, 12]);
   });
 });

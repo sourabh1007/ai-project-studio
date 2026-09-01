@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
     scrollHandlers: Array<() => void>;
     selectionHandlers: Array<() => void>;
     dataHandlers: Array<(data: string) => void>;
+    oscHandlers: Record<number, (data: string) => boolean>;
     keyHandler: ((event: KeyboardEvent) => boolean) | null;
     getSelection: ReturnType<typeof import('vitest').vi.fn>;
     hasSelection: ReturnType<typeof import('vitest').vi.fn>;
@@ -38,6 +39,15 @@ vi.mock('@xterm/xterm', () => {
     scrollHandlers: Array<() => void> = [];
     selectionHandlers: Array<() => void> = [];
     dataHandlers: Array<(data: string) => void> = [];
+    oscHandlers: Record<number, (data: string) => boolean> = {};
+    parser = {
+      registerOscHandler: vi.fn(
+        (ident: number, cb: (data: string) => boolean) => {
+          this.oscHandlers[ident] = cb;
+          return disposable();
+        },
+      ),
+    };
     keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -289,5 +299,21 @@ describe('TerminalView scrollback repaint', () => {
     expect(inputs).toHaveLength(1);
     expect(inputs[0]).toContain('"data":"w"');
     expect(inputs[0]).not.toContain('rgb');
+  });
+
+  it('suppresses xterm auto-replies to OSC color queries but allows palette sets', () => {
+    render(<TerminalView sessionId="s1" />);
+
+    const term = h.term!;
+    // A handler is registered for each color-query OSC ident.
+    for (const ident of [4, 10, 11, 12]) {
+      expect(typeof term.oscHandlers[ident]).toBe('function');
+    }
+    // Queries (contain '?') are handled (return true) → xterm's reply is suppressed.
+    expect(term.oscHandlers[4]('0;?')).toBe(true);
+    expect(term.oscHandlers[11]('?')).toBe(true);
+    // Sets fall through (return false) so the CLI can still recolor the terminal.
+    expect(term.oscHandlers[4]('0;rgb:2e2e/3434/3636')).toBe(false);
+    expect(term.oscHandlers[10]('rgb:ffff/ffff/ffff')).toBe(false);
   });
 });

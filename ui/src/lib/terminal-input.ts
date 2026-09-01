@@ -27,3 +27,21 @@ export function stripTerminalColorReports(data: string): string {
   }
   return data.replace(COLOR_REPORT, '');
 }
+
+/**
+ * OSC identifiers whose *query* form makes xterm emit a reply the hosted CLI
+ * mis-parses: 4 (indexed ANSI palette), 10 (foreground), 11 (background),
+ * 12 (cursor).
+ */
+export const COLOR_QUERY_OSC_IDENTS = [4, 10, 11, 12] as const;
+
+/**
+ * True when an OSC 4/10/11/12 payload is a color *query* (contains `?`) rather
+ * than a *set* (`rgb:…`/`#rrggbb`). Registering an OSC handler that returns this
+ * lets us suppress xterm's auto-reply at the source for queries — so the reply
+ * is never generated, regardless of onData chunking/timing — while still
+ * letting the CLI *set* palette colors (return false → xterm's default runs).
+ */
+export function isColorQuery(payload: string): boolean {
+  return payload.includes('?');
+}

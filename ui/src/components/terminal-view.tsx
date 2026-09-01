@@ -12,7 +12,11 @@ import {
   encodeClientMessage,
 } from '../lib/terminal-protocol.js';
 import { toClipboardText, createPasteGuard } from '../lib/clipboard.js';
-import { stripTerminalColorReports } from '../lib/terminal-input.js';
+import {
+  COLOR_QUERY_OSC_IDENTS,
+  isColorQuery,
+  stripTerminalColorReports,
+} from '../lib/terminal-input.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -273,6 +277,19 @@ export function TerminalView({
     term.loadAddon(webLinks);
     term.open(host);
     termRef.current = term;
+
+    // Suppress xterm's automatic reply to the CLI's OSC color-palette *queries*
+    // at the source. xterm answers OSC 4/10/11/12 `?` queries by emitting the
+    // reply through onData (the PTY stdin channel); the hosted CLI mis-parses it
+    // and injects the printable body (`4;0;rgb:2e2e/3434/3636…`) into its input
+    // line. A custom OSC handler that returns true marks the sequence handled so
+    // xterm's built-in responder never runs — killing the reply before it can be
+    // generated, regardless of onData chunking. Palette *sets* (no `?`) return
+    // false and fall through to xterm's default handler, so the CLI can still
+    // recolor the terminal. The onData strip below stays as defense-in-depth.
+    for (const ident of COLOR_QUERY_OSC_IDENTS) {
+      term.parser.registerOscHandler(ident, (payload) => isColorQuery(payload));
+    }
     // Focus immediately on open so keyboard copy (Ctrl/Cmd+C on a selection)
     // works right away on a fresh session, rather than only after the WebSocket
     // connects and calls focus() in ws.onopen.
