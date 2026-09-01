@@ -236,6 +236,9 @@ export function TerminalView({
       return;
     }
 
+    const windowsPtyOptions = hostIsWindows()
+      ? { windowsPty: { backend: 'conpty' as const } }
+      : {};
     const term = new Terminal({
       // The hosted CLI is a full-screen TUI that draws and blinks its own
       // cursor via escape sequences. Letting xterm ALSO run its own blink timer
@@ -261,6 +264,7 @@ export function TerminalView({
       },
       scrollback: 5000,
       theme: xtermTheme(themeModeRef.current),
+      ...windowsPtyOptions,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -268,6 +272,10 @@ export function TerminalView({
     term.loadAddon(webLinks);
     term.open(host);
     termRef.current = term;
+    // Focus immediately on open so keyboard copy (Ctrl/Cmd+C on a selection)
+    // works right away on a fresh session, rather than only after the WebSocket
+    // connects and calls focus() in ws.onopen.
+    term.focus();
 
     // Render with the GPU (WebGL) instead of xterm's default DOM renderer.
     // The DOM renderer positions each row as a separate element and, when the
@@ -290,8 +298,23 @@ export function TerminalView({
       webgl = null;
     }
 
+    const repaintViewport = () => {
+      webgl?.clearTextureAtlas();
+      termRef.current?.refresh(0, term.rows - 1);
+    };
+
     const safeFit = () => {
       if (host.clientWidth === 0 || host.clientHeight === 0) {
+        return;
+      }
+      // Never refit while the user has an active selection. FitAddon.fit() calls
+      // term.resize(), and xterm clears the visual selection on any real resize.
+      // On a fresh session the initial fit-retry burst (0/60/160/320/600ms)
+      // would otherwise wipe a selection the instant the user makes it, so
+      // Ctrl+C / copy-on-select appears to "do nothing" until the burst ends —
+      // then starts working once fits settle. Deferring the fit keeps the
+      // selection intact so copying works immediately, even on a new session.
+      if (term.hasSelection()) {
         return;
       }
       try {
@@ -316,8 +339,21 @@ export function TerminalView({
       buildTerminalWsUrl(base, sessionId, window.location),
     );
 
+    let lastSentCols = 0;
+    let lastSentRows = 0;
+
     const sendResize = () => {
-      if (ws.readyState === WebSocket.OPEN) {
+      // Only notify the PTY when the grid dimensions actually change. The fresh
+      // session fit-retry burst calls applyFit five times in the first 600ms;
+      // without this guard each one re-sends the same cols/rows, flooding the
+      // CLI TUI with redundant SIGWINCH redraws that can garble input being
+      // pasted at that moment. Deduping keeps at most one resize per real size.
+      if (
+        ws.readyState === WebSocket.OPEN &&
+        (term.cols !== lastSentCols || term.rows !== lastSentRows)
+      ) {
+        lastSentCols = term.cols;
+        lastSentRows = term.rows;
         ws.send(
           encodeClientMessage({
             type: 'resize',
@@ -347,9 +383,9 @@ export function TerminalView({
       settleTimer = window.setTimeout(() => {
         settleTimer = undefined;
         applyFit();
-        // Ask the terminal to repaint so any stale reflowed cells from the
-        // intermediate widths are cleared.
-        termRef.current?.refresh(0, term.rows - 1);
+        // Clear cached glyphs and repaint so any stale cells from the old width
+        // cannot survive into the newly wrapped viewport.
+        repaintViewport();
       }, 120);
       timeoutIds.push(settleTimer);
     };
@@ -394,7 +430,7 @@ export function TerminalView({
     // Forcing a full repaint of the visible rows on every scroll keeps what is
     // shown pixel-aligned with the buffer, whichever direction the user scrolls.
     const scrollSub = term.onScroll(() => {
-      termRef.current?.refresh(0, term.rows - 1);
+      repaintViewport();
     });
 
     // Collapse duplicate pastes delivered as one user action (see

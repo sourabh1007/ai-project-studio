@@ -71,17 +71,25 @@ export function fieldSelectionText(field: SelectableField): string {
 }
 
 /**
- * Normalises copied terminal text to the host clipboard's line-ending
- * convention. xterm's `getSelection()` joins rows with a bare LF, but on Windows
- * the clipboard convention is CRLF — pasting LF-only text into Notepad and many
- * native apps collapses every line onto one, reading as "broken formatting".
- * Converting to CRLF on Windows keeps multi-line copies correct; other
- * platforms keep LF. Any existing CR is stripped first so the result is never
- * doubled. Kept DOM-free (the caller passes the platform) so it unit-tests to
- * 100%.
+ * Normalises copied terminal text. xterm selections can include frame/seam
+ * pipes from the CLI's bordered, wrapped output; strip only those padded edge
+ * artifacts while preserving real inline pipes. Then apply the host clipboard's
+ * line-ending convention (CRLF on Windows, LF elsewhere) without doubling CRs.
+ * Kept DOM-free (the caller passes the platform) so it unit-tests to 100%.
  */
 export function toClipboardText(text: string, isWindows: boolean): string {
-  return isWindows ? text.replace(/\r?\n/g, '\r\n') : text;
+  const cleaned = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const withoutTrailingFrame = line.replace(/[ \t]{2,}[|│][ \t]*$/, '');
+      return (withoutTrailingFrame === line
+        ? line
+        : withoutTrailingFrame.replace(/^[ \t]*[|│][ \t]?/, '')
+      ).replace(/[ \t]{2,}[|│][ \t]{1,}/g, ' ');
+    })
+    .join('\n');
+  return isWindows ? cleaned.replace(/\n/g, '\r\n') : cleaned;
 }
 
 /** Guards against the same paste being delivered more than once in a burst. */

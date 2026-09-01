@@ -71,6 +71,47 @@ describe('fieldSelectionText', () => {
 });
 
 describe('toClipboardText', () => {
+  it('removes terminal frame pipes injected at wrapped row boundaries', () => {
+    expect(
+      toClipboardText(
+        '   at Service.OpenAsync(IStatelessServicePartition   |  partition, CancellationToken cancellationToken)   |',
+        false,
+      ),
+    ).toBe(
+      '   at Service.OpenAsync(IStatelessServicePartition partition, CancellationToken cancellationToken)',
+    );
+  });
+
+  it('removes selected terminal side borders without flattening real lines', () => {
+    expect(
+      toClipboardText(
+        '| System.InvalidOperationException: boom   |\n|   at Service.OpenAsync()                |\nplain A|B text',
+        false,
+      ),
+    ).toBe(
+      'System.InvalidOperationException: boom\n  at Service.OpenAsync()\nplain A|B text',
+    );
+  });
+
+  it('preserves real leading pipes when there is no matching terminal frame edge', () => {
+    expect(toClipboardText('| grep-ready output\nA|B', false)).toBe(
+      '| grep-ready output\nA|B',
+    );
+  });
+
+  it('cleans phantom separators from serialized wrapped scrollback after repaint', () => {
+    const serializedAfterNarrowReflow =
+      'System.InvalidOperationException: Example failure      |     \n' +
+      '   at Worker.OpenAsync(IStatelessServicePartition   |  partition, CancellationToken cancellationToken)\n' +
+      '   at Worker.RunAsync(CancellationToken cancellationToken)      |     ';
+
+    expect(toClipboardText(serializedAfterNarrowReflow, false)).toBe(
+      'System.InvalidOperationException: Example failure\n' +
+        '   at Worker.OpenAsync(IStatelessServicePartition partition, CancellationToken cancellationToken)\n' +
+        '   at Worker.RunAsync(CancellationToken cancellationToken)',
+    );
+  });
+
   it('converts LF to CRLF on Windows', () => {
     expect(toClipboardText('a\nb\nc', true)).toBe('a\r\nb\r\nc');
   });
