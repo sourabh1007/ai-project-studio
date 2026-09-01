@@ -75,6 +75,15 @@ describe('config-controller', () => {
       body: {
         namespaces: ['demo'],
         defaults: { demo: { enabled: true, label: 'default' } },
+        schema: {
+          demo: {
+            kind: 'object',
+            fields: {
+              enabled: { kind: 'boolean' },
+              label: { kind: 'string' },
+            },
+          },
+        },
         current: { demo: { enabled: false } },
         overrides: { demo: { label: 'custom' } },
       },

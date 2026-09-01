@@ -3,6 +3,7 @@ import type { ConfigObject } from '../config/config-contract.js';
 import type { ConfigSchemaRegistry } from '../config/config-schema-registry.js';
 import type { ConfigOverrideService } from '../config/config-override-service.js';
 import { redactSecretPaths } from '../config/config-redactor.js';
+import { describeNamespaces } from '../config/config-schema-describe.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 
@@ -39,6 +40,10 @@ export function createConfigRoutes(deps: ConfigControllerDeps): Route[] {
         body: {
           namespaces: deps.registry.namespaces(),
           defaults: deps.registry.defaults(),
+          // Per-setting schema metadata (type, bounds, enum options, nested
+          // shape, description) so the UI can render typed, validated controls
+          // for every registered setting without hardcoding any of them.
+          schema: describeNamespaces(deps.registry),
           current: redactSecretPaths(deps.current, deps.secretPaths),
           overrides: Object.fromEntries(
             deps.registry
