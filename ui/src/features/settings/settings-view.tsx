@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import type { ConfigUpdateResult, ConfigValue } from '../../lib/types.js';
+import type {
+  ConfigUpdateResult,
+  ConfigValue,
+  FieldMeta,
+} from '../../lib/types.js';
+import {
+  buildConfigTabs,
+  buildFields,
+  matchesQuery,
+  parseInput,
+  sameValue,
+  seedValue,
+  type SettingField,
+} from '../../lib/settings-model.js';
 import { Button, Card, EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
 import {
   InfoIcon,
@@ -31,103 +44,95 @@ function desktopBridge(): DesktopBridge | undefined {
   return (window as unknown as { desktop?: DesktopBridge }).desktop;
 }
 
-type FieldKind = 'boolean' | 'number' | 'string' | 'multiline' | 'json';
-
-/** Long or multi-line strings (e.g. prompt templates) get a textarea editor. */
-function isMultiline(value: string): boolean {
-  return value.includes('\n') || value.length > 60;
-}
-
-function kindOf(value: ConfigValue): FieldKind {
-  if (typeof value === 'boolean') {
-    return 'boolean';
+/** Renders the editor control for one setting inside a namespace. */
+function FieldControl({
+  field,
+  draft,
+  disabled,
+  onChange,
+}: {
+  field: SettingField;
+  draft: string | boolean;
+  disabled: boolean;
+  onChange: (next: string | boolean) => void;
+}) {
+  if (field.control === 'boolean') {
+    return (
+      <input
+        type="checkbox"
+        checked={draft as boolean}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    );
   }
-  if (typeof value === 'number') {
-    return 'number';
+  if (field.control === 'enum') {
+    const options = field.meta?.options ?? [];
+    return (
+      <select
+        className="input"
+        value={draft as string}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
   }
-  if (typeof value === 'string') {
-    return isMultiline(value) ? 'multiline' : 'string';
+  if (field.control === 'json' || field.control === 'multiline') {
+    return (
+      <textarea
+        className={field.control === 'json' ? 'input config-json' : 'input'}
+        rows={field.control === 'json' ? 5 : 4}
+        value={draft as string}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
   }
-  return 'json';
-}
-
-function seedValue(value: ConfigValue, kind: FieldKind): string | boolean {
-  if (kind === 'boolean') {
-    return value as boolean;
-  }
-  if (kind === 'json') {
-    return JSON.stringify(value, null, 2);
-  }
-  return String(value);
-}
-
-/** Converts an editor input back to its typed value; throws on malformed input. */
-function fromInput(raw: string | boolean, kind: FieldKind): unknown {
-  if (kind === 'boolean') {
-    return raw as boolean;
-  }
-  if (kind === 'number') {
-    const n = Number(raw);
-    if (raw === '' || Number.isNaN(n)) {
-      throw new Error('Enter a valid number.');
-    }
-    return n;
-  }
-  if (kind === 'json') {
-    return JSON.parse(raw as string);
-  }
-  return raw as string;
-}
-
-function sameValue(
-  raw: string | boolean,
-  original: ConfigValue,
-  kind: FieldKind,
-): boolean {
-  try {
-    return JSON.stringify(fromInput(raw, kind)) === JSON.stringify(original);
-  } catch {
-    return false;
-  }
-}
-
-function renderValue(value: ConfigValue): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  return JSON.stringify(value);
-}
-
-interface Field {
-  key: string;
-  kind: FieldKind;
+  return (
+    <input
+      className="input"
+      type={field.control === 'number' ? 'number' : 'text'}
+      value={draft as string}
+      min={field.meta?.min}
+      max={field.meta?.max}
+      step={field.control === 'number' && field.meta?.int ? 1 : undefined}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
 }
 
 /** Editable form for one config namespace, persisting overrides on save. */
 function NamespaceEditor({
   namespace,
   values,
+  fieldsMeta,
+  overrideKeys,
   overridden,
+  query,
   onSaved,
 }: {
   namespace: string;
   values: Record<string, ConfigValue>;
+  fieldsMeta: Record<string, FieldMeta> | undefined;
+  overrideKeys: Set<string>;
   overridden: boolean;
+  query: string;
   onSaved: (result: ConfigUpdateResult) => void;
 }) {
   const api = useApi();
-  const fields = useMemo<Field[]>(
-    () =>
-      Object.entries(values).map(([key, value]) => ({
-        key,
-        kind: kindOf(value),
-      })),
-    [values],
+  const fields = useMemo<SettingField[]>(
+    () => buildFields(values, fieldsMeta),
+    [values, fieldsMeta],
   );
   const [draft, setDraft] = useState<Record<string, string | boolean>>(() =>
-    Object.fromEntries(
-      fields.map((f) => [f.key, seedValue(values[f.key], f.kind)]),
-    ),
+    Object.fromEntries(fields.map((f) => [f.key, seedValue(f.value, f.control)])),
   );
   const [busy, setBusy] = useState<null | 'save' | 'reset'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -135,24 +140,25 @@ function NamespaceEditor({
   useEffect(() => {
     setDraft(
       Object.fromEntries(
-        fields.map((f) => [f.key, seedValue(values[f.key], f.kind)]),
+        fields.map((f) => [f.key, seedValue(f.value, f.control)]),
       ),
     );
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values]);
+  }, [values, fieldsMeta]);
 
   const changed = fields.filter(
-    (f) => !sameValue(draft[f.key], values[f.key], f.kind),
+    (f) => !sameValue(draft[f.key], f.value, f.control, f.meta),
   );
   const dirty = changed.length > 0;
+  const visible = fields.filter((f) => matchesQuery(namespace, f.key, query));
 
   async function save() {
     setError(null);
     const patch: Record<string, unknown> = {};
     try {
       for (const f of changed) {
-        patch[f.key] = fromInput(draft[f.key], f.kind);
+        patch[f.key] = parseInput(draft[f.key], f.control, f.meta);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -180,84 +186,94 @@ function NamespaceEditor({
     }
   }
 
+  if (visible.length === 0) {
+    return null;
+  }
+
   return (
-    <div className="config-editor">
-      <div className="config-fields">
-        {fields.map((f) => (
-          <label key={f.key} className="config-field">
-            <span className="config-field-key">{f.key}</span>
-            {f.kind === 'boolean' ? (
-              <input
-                type="checkbox"
-                checked={draft[f.key] as boolean}
-                disabled={busy !== null}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, [f.key]: e.target.checked }))
-                }
-              />
-            ) : f.kind === 'json' ? (
-              <textarea
-                className="input config-json"
-                rows={4}
-                value={draft[f.key] as string}
-                disabled={busy !== null}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, [f.key]: e.target.value }))
-                }
-              />
-            ) : f.kind === 'multiline' ? (
-              <textarea
-                className="input config-multiline"
-                rows={6}
-                value={draft[f.key] as string}
-                disabled={busy !== null}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, [f.key]: e.target.value }))
-                }
-              />
+    <div className="config-module-card">
+      <div className="config-module-head">
+        <div className="config-module-title">
+          <span>{namespace}</span>
+          {overridden && <span className="config-badge">overridden</span>}
+        </div>
+        <div className="config-editor-actions">
+          <Button onClick={save} disabled={!dirty || busy !== null}>
+            {busy === 'save' ? (
+              <>
+                <Spinner size={13} label="Saving" /> Saving…
+              </>
             ) : (
-              <input
-                className="input"
-                type={f.kind === 'number' ? 'number' : 'text'}
-                value={draft[f.key] as string}
+              'Save'
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={reset}
+            disabled={!overridden || busy !== null}
+          >
+            {busy === 'reset' ? (
+              <>
+                <Spinner size={13} label="Resetting" /> Resetting…
+              </>
+            ) : (
+              'Reset'
+            )}
+          </Button>
+        </div>
+      </div>
+      <div className="config-fields">
+        {visible.map((f) => (
+          <div key={f.key} className="config-field-row">
+            <div className="config-field-label">
+              <span className="config-field-name">{f.key}</span>
+              {f.meta?.description && (
+                <span className="config-field-desc">{f.meta.description}</span>
+              )}
+              {overrideKeys.has(f.key) && (
+                <span className="config-field-badge">overridden</span>
+              )}
+            </div>
+            <div className="config-field-control">
+              <FieldControl
+                field={f}
+                draft={draft[f.key]}
                 disabled={busy !== null}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, [f.key]: e.target.value }))
+                onChange={(next) =>
+                  setDraft((d) => ({ ...d, [f.key]: next }))
                 }
               />
-            )}
-          </label>
+            </div>
+          </div>
         ))}
       </div>
       <ErrorText error={error} />
-      <div className="config-editor-actions">
-        <Button onClick={save} disabled={!dirty || busy !== null}>
-          {busy === 'save' ? (
-            <>
-              <Spinner size={13} label="Saving" /> Saving…
-            </>
-          ) : (
-            'Save changes'
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={reset}
-          disabled={!overridden || busy !== null}
-        >
-          {busy === 'reset' ? (
-            <>
-              <Spinner size={13} label="Resetting" /> Resetting…
-            </>
-          ) : (
-            'Reset to default'
-          )}
-        </Button>
-        {dirty && <span className="config-dirty">Unsaved changes</span>}
-      </div>
+      {dirty && <span className="config-dirty">Unsaved changes</span>}
     </div>
   );
 }
+
+type TabId =
+  | 'general'
+  | 'config'
+  | 'metasession'
+  | 'network'
+  | 'context'
+  | 'diagnostics';
+
+interface TabDef {
+  id: TabId;
+  label: string;
+}
+
+const TABS: TabDef[] = [
+  { id: 'general', label: 'General' },
+  { id: 'config', label: 'Configuration' },
+  { id: 'metasession', label: 'Metasession' },
+  { id: 'network', label: 'Network' },
+  { id: 'context', label: 'Workspace context' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+];
 
 export function SettingsView() {
   const api = useApi();
@@ -265,7 +281,9 @@ export function SettingsView() {
     () => api.getConfig(),
     [],
   );
+  const [tab, setTab] = useState<TabId>('general');
   const [query, setQuery] = useState('');
+  const [subTab, setSubTab] = useState<string | null>(null);
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
@@ -288,21 +306,16 @@ export function SettingsView() {
     };
   }, [bridge]);
 
-  const namespaces = useMemo(() => {
-    if (!data) {
-      return [];
-    }
-    const term = query.trim().toLowerCase();
-    return data.namespaces
-      .map((namespace) => {
-        const settings = data.current[namespace] ?? {};
-        const entries = Object.entries(settings).filter(
-          ([key]) => !term || `${namespace}.${key}`.toLowerCase().includes(term),
-        );
-        return { namespace, entries };
-      })
-      .filter((group) => group.entries.length > 0);
-  }, [data, query]);
+  const configTabs = useMemo(
+    () => (data ? buildConfigTabs(data.namespaces) : []),
+    [data],
+  );
+  const activeSubTab =
+    subTab && configTabs.some((t) => t.id === subTab)
+      ? subTab
+      : configTabs[0]?.id ?? null;
+  const activeNamespaces =
+    configTabs.find((t) => t.id === activeSubTab)?.namespaces ?? [];
 
   const logDirectory =
     typeof data?.current.logging?.directory === 'string'
@@ -352,183 +365,225 @@ export function SettingsView() {
         </div>
       )}
 
-      <Card>
-        <div className="page-header">
-          <div className="page-header-main">
-            <IconBadge icon={<InfoIcon size={22} />} tone="accent" />
-            <div>
-              <h2 className="page-title">About</h2>
-              <p className="page-subtitle">
-                AI Project Studio — an IDE-style workspace for AI coding CLIs.
-              </p>
+      <div className="settings-tabs" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`settings-tab${tab === t.id ? ' is-active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            {t.id === 'config' && data && (
+              <span className="settings-tab-count">{data.namespaces.length}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'general' && (
+        <div className="settings-panel">
+          <Card>
+            <div className="page-header">
+              <div className="page-header-main">
+                <IconBadge icon={<InfoIcon size={22} />} tone="accent" />
+                <div>
+                  <h2 className="page-title">About</h2>
+                  <p className="page-subtitle">
+                    AI Project Studio — an IDE-style workspace for AI coding CLIs.
+                  </p>
+                </div>
+              </div>
+              {bridge?.openDocs && (
+                <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
+                  Open documentation
+                </Button>
+              )}
             </div>
-          </div>
-          {bridge?.openDocs && (
-            <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
-              Open documentation
-            </Button>
-          )}
+            <dl className="kv">
+              <div style={{ display: 'contents' }}>
+                <dt>Version</dt>
+                <dd>{version ?? '—'}</dd>
+              </div>
+            </dl>
+          </Card>
+          <SoftwareUpdateSection />
         </div>
-        <dl className="kv">
-          <div style={{ display: 'contents' }}>
-            <dt>Version</dt>
-            <dd>{version ?? '—'}</dd>
-          </div>
-        </dl>
-      </Card>
+      )}
 
-      <SoftwareUpdateSection />
-
-      <MetasessionPoolsSection />
-
-      <NetworkActivitySection />
-
-      <Card>
-        <div className="shared-context-card-head">
-          <div className="page-header-main">
-            <IconBadge icon={<WorkspaceContextIcon size={22} />} tone="accent" />
-            <div>
-              <h2 className="page-title">Workspace context</h2>
-              <p className="page-subtitle">
-                Global knowledge shared with every repository, feature, and session.
-                Promote durable, workspace-wide conventions here — it is manual-only
-                and never auto-written.
-              </p>
+      {tab === 'config' && (
+        <div className="settings-panel">
+          <Card>
+            <div className="page-header">
+              <div className="page-header-main">
+                <IconBadge icon={<ConfigIcon size={22} />} tone="accent" />
+                <div>
+                  <h2 className="page-title">Configuration</h2>
+                  <p className="page-subtitle">
+                    Every module setting, grouped and editable. Values are typed
+                    from each module's schema; saved changes apply after a
+                    restart. Environment variables still take precedence.
+                  </p>
+                </div>
+              </div>
+              <input
+                className="input"
+                style={{ maxWidth: 260 }}
+                placeholder="Filter settings…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
             </div>
-          </div>
+            {loading && <Loader label="Loading configuration" />}
+            {error && <ErrorState error={cause ?? error} onRetry={reload} />}
+            {data && (
+              <>
+                <div className="config-subtabs" role="tablist">
+                  {configTabs.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeSubTab === t.id}
+                      className={`config-subtab${
+                        activeSubTab === t.id ? ' is-active' : ''
+                      }`}
+                      onClick={() => setSubTab(t.id)}
+                    >
+                      {t.label}
+                      <span className="settings-tab-count">
+                        {t.namespaces.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                {activeNamespaces.length === 0 && (
+                  <EmptyState message="No settings to show." />
+                )}
+                {activeNamespaces.map((namespace) => {
+                  const overrideKeys = new Set(
+                    Object.keys(data.overrides[namespace] ?? {}),
+                  );
+                  return (
+                    <NamespaceEditor
+                      key={namespace}
+                      namespace={namespace}
+                      values={data.current[namespace] ?? {}}
+                      fieldsMeta={data.schema?.[namespace]?.fields}
+                      overrideKeys={overrideKeys}
+                      overridden={overrideKeys.size > 0}
+                      query={query.trim().toLowerCase()}
+                      onSaved={onSaved}
+                    />
+                  );
+                })}
+              </>
+            )}
+          </Card>
         </div>
-        <SharedContextPanel
-          scope="workspace"
-          scopeId=""
-          title="Workspace shared context"
-        />
-      </Card>
+      )}
 
-      <Card>
-        <div className="page-header">
-          <div className="page-header-main">
-            <IconBadge icon={<LogsIcon size={22} />} tone="neutral" />
-            <div>
-              <h2 className="page-title">Logs &amp; diagnostics</h2>
-              <p className="page-subtitle">
-                The app writes structured logs to a daily file. Open the folder to
-                inspect or share them when reporting an issue.
-              </p>
-            </div>
-          </div>
-          {logDirectory && bridge && (
-            <Button
-              variant="ghost"
-              onClick={() => bridge.revealFile(logDirectory)}
-            >
-              Open logs folder
-            </Button>
-          )}
+      {tab === 'metasession' && (
+        <div className="settings-panel">
+          <MetasessionPoolsSection />
         </div>
-        <dl className="kv">
-          <div style={{ display: 'contents' }}>
-            <dt>Log level</dt>
-            <dd>{logLevel ?? '—'}</dd>
-          </div>
-          <div style={{ display: 'contents' }}>
-            <dt>Log directory</dt>
-            <dd className="config-path">{logDirectory ?? '—'}</dd>
-          </div>
-        </dl>
-      </Card>
+      )}
 
-      <DiagnosticsSection
-        version={version}
-        logDirectory={logDirectory ?? null}
-        bridge={bridge}
-      />
+      {tab === 'network' && (
+        <div className="settings-panel">
+          <NetworkActivitySection />
+        </div>
+      )}
 
-      <WorktreesSection />
-
-      <Card>
-        <div className="page-header">
-          <div className="page-header-main">
-            <IconBadge icon={<ConfigIcon size={22} />} tone="accent" />
-            <div>
-              <h2 className="page-title">Settings</h2>
-              <p className="page-subtitle">
-                Effective configuration, grouped by module. Every value is
-                config-driven — nothing is hardcoded.
-              </p>
+      {tab === 'context' && (
+        <div className="settings-panel">
+          <Card>
+            <div className="shared-context-card-head">
+              <div className="page-header-main">
+                <IconBadge
+                  icon={<WorkspaceContextIcon size={22} />}
+                  tone="accent"
+                />
+                <div>
+                  <h2 className="page-title">Workspace context</h2>
+                  <p className="page-subtitle">
+                    Global knowledge shared with every repository, feature, and
+                    session. Promote durable, workspace-wide conventions here — it
+                    is manual-only and never auto-written.
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
-          <input
-            className="input"
-            style={{ maxWidth: 260 }}
-            placeholder="Filter settings…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            <SharedContextPanel
+              scope="workspace"
+              scopeId=""
+              title="Workspace shared context"
+            />
+          </Card>
+        </div>
+      )}
+
+      {tab === 'diagnostics' && (
+        <div className="settings-panel">
+          <Card>
+            <div className="page-header">
+              <div className="page-header-main">
+                <IconBadge icon={<LogsIcon size={22} />} tone="neutral" />
+                <div>
+                  <h2 className="page-title">Logs &amp; diagnostics</h2>
+                  <p className="page-subtitle">
+                    The app writes structured logs to a daily file. Open the
+                    folder to inspect or share them when reporting an issue.
+                  </p>
+                </div>
+              </div>
+              {logDirectory && bridge && (
+                <Button
+                  variant="ghost"
+                  onClick={() => bridge.revealFile(logDirectory)}
+                >
+                  Open logs folder
+                </Button>
+              )}
+            </div>
+            <dl className="kv">
+              <div style={{ display: 'contents' }}>
+                <dt>Log level</dt>
+                <dd>{logLevel ?? '—'}</dd>
+              </div>
+              <div style={{ display: 'contents' }}>
+                <dt>Log directory</dt>
+                <dd className="config-path">{logDirectory ?? '—'}</dd>
+              </div>
+            </dl>
+          </Card>
+          <DiagnosticsSection
+            version={version}
+            logDirectory={logDirectory ?? null}
+            bridge={bridge}
           />
-        </div>
-        {loading && <Loader label="Loading configuration" />}
-        {error && (
-          <ErrorState error={cause ?? error} onRetry={reload} />
-        )}
-        {data && namespaces.length === 0 && (
-          <EmptyState message="No matching settings." />
-        )}
-        <div style={{ marginTop: 'var(--space-4)' }}>
-          {namespaces.map((group) => (
-            <div key={group.namespace} className="config-namespace">
-              <h3>{group.namespace}</h3>
-              <dl className="kv">
-                {group.entries.map(([key, value]) => (
-                  <div key={key} style={{ display: 'contents' }}>
-                    <dt>{key}</dt>
-                    <dd>{renderValue(value)}</dd>
-                  </div>
-                ))}
-              </dl>
+          <WorktreesSection />
+          <Card>
+            <div className="page-header">
+              <div className="page-header-main">
+                <IconBadge icon={<AdvancedIcon size={22} />} tone="neutral" />
+                <div>
+                  <h2 className="page-title">Advanced</h2>
+                  <p className="page-subtitle">
+                    Looking for a specific setting? Every module is editable under
+                    the Configuration tab.
+                  </p>
+                </div>
+              </div>
+              <Button variant="ghost" onClick={() => setTab('config')}>
+                Open Configuration
+              </Button>
             </div>
-          ))}
+          </Card>
         </div>
-      </Card>
-
-      <Card>
-        <div className="page-header">
-          <div className="page-header-main">
-            <IconBadge icon={<AdvancedIcon size={22} />} tone="neutral" />
-            <div>
-              <h2 className="page-title">Advanced</h2>
-              <p className="page-subtitle">
-                Reconfigure any module. Saved values persist and take effect after
-                a restart. Environment variables, when set, still take precedence.
-              </p>
-            </div>
-          </div>
-        </div>
-        {loading && <Loader label="Loading configuration" />}
-        {data && (
-          <div className="config-advanced">
-            {data.namespaces.map((namespace) => {
-              const values = data.current[namespace] ?? {};
-              const overridden =
-                Object.keys(data.overrides[namespace] ?? {}).length > 0;
-              return (
-                <details key={namespace} className="config-module">
-                  <summary>
-                    <span className="config-module-name">{namespace}</span>
-                    {overridden && (
-                      <span className="config-badge">overridden</span>
-                    )}
-                  </summary>
-                  <NamespaceEditor
-                    namespace={namespace}
-                    values={values}
-                    overridden={overridden}
-                    onSaved={onSaved}
-                  />
-                </details>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+      )}
     </>
   );
 }

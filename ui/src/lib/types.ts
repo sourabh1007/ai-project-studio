@@ -938,9 +938,41 @@ export interface ImportSessionInput {
 
 export type ConfigValue = unknown;
 
+/**
+ * Structural metadata for a single setting, mirrored from the backend
+ * (`config-schema-describe.ts`). Lets the Settings UI render the right control
+ * for every setting without hardcoding any module's shape.
+ */
+export type FieldMetaKind =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'enum'
+  | 'array'
+  | 'object'
+  | 'unknown';
+
+export interface FieldMeta {
+  kind: FieldMetaKind;
+  optional?: boolean;
+  nullable?: boolean;
+  description?: string;
+  default?: ConfigValue;
+  min?: number;
+  max?: number;
+  int?: boolean;
+  minLength?: number;
+  maxLength?: number;
+  options?: string[];
+  element?: FieldMeta;
+  fields?: Record<string, FieldMeta>;
+}
+
 export interface ConfigResponse {
   namespaces: string[];
   defaults: Record<string, Record<string, ConfigValue>>;
+  /** Per-namespace schema metadata; present on newer backends. */
+  schema?: Record<string, FieldMeta>;
   current: Record<string, Record<string, ConfigValue>>;
   overrides: Record<string, Record<string, ConfigValue>>;
 }
