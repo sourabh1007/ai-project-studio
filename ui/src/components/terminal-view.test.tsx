@@ -316,4 +316,18 @@ describe('TerminalView scrollback repaint', () => {
     expect(term.oscHandlers[4]('0;rgb:2e2e/3434/3636')).toBe(false);
     expect(term.oscHandlers[10]('rgb:ffff/ffff/ffff')).toBe(false);
   });
+
+  it('regression: suppresses every palette+fg/bg/cursor color query so none can reply', () => {
+    render(<TerminalView sessionId="s1" />);
+
+    const term = h.term!;
+    // The CLI queries all 16 ANSI palette indices: each must be suppressed.
+    for (let index = 0; index < 16; index += 1) {
+      expect(term.oscHandlers[4](`${index};?`)).toBe(true);
+    }
+    // ...plus foreground (10), background (11) and cursor (12) color queries.
+    expect(term.oscHandlers[10]('?')).toBe(true);
+    expect(term.oscHandlers[11]('?')).toBe(true);
+    expect(term.oscHandlers[12]('?')).toBe(true);
+  });
 });
