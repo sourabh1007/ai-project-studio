@@ -38,6 +38,7 @@ function harness(
     kill?: () => void;
     timeoutMs?: number;
     events?: SessionEvent[];
+    settings?: { get: () => { providerId: string; model: string } };
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
@@ -79,6 +80,7 @@ function harness(
     launcher,
     transcripts,
     config: { ...metaDefaults, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) },
+    settings: options.settings,
   });
   return { runner, requests };
 }
@@ -101,6 +103,25 @@ describe('meta-runner', () => {
       model: metaDefaults.model,
       prompt: 'do it',
       kind: 'meta',
+    });
+  });
+
+  it('prefers the runtime settings provider/model over the static config', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'the answer' })],
+        stderr: [],
+        exitCode: 0,
+      },
+      { settings: { get: () => ({ providerId: 'copilot', model: 'gpt-5' }) } },
+    );
+
+    await h.runner.run({ featureId: 'f1', prompt: 'do it' });
+
+    expect(h.requests[0]).toMatchObject({
+      providerId: 'copilot',
+      model: 'gpt-5',
     });
   });
 

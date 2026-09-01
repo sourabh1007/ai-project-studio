@@ -5,6 +5,7 @@ import type {
 import type { Session, SessionScope } from '../session/session-contract.js';
 import type { TranscriptStore } from '../session/transcript-store-port.js';
 import type { MetaConfig } from './config.js';
+import type { MetaSettings } from './meta-settings.js';
 import { extractResponseText } from './meta-response-extractor.js';
 import { describeMetaActivity } from './meta-activity.js';
 import type { Transcript } from '../session/transcript-capture.js';
@@ -74,6 +75,13 @@ export interface MetaRunnerDeps {
   launcher: SessionLauncher;
   transcripts: TranscriptStore;
   config: MetaConfig;
+  /**
+   * Runtime-mutable provider/model override read fresh on every run. When
+   * present its values take precedence over the static {@link config}, so the
+   * IDE can change which model powers new metasessions without a restart. When
+   * omitted the runner falls back to the config's `providerId`/`model`.
+   */
+  settings?: Pick<MetaSettings, 'get'>;
 }
 
 /** A single headless AI request: a prompt run against a feature's context. */
@@ -152,10 +160,14 @@ export interface MetaRunResult {
 
 export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
   const runDetailed = async (request: MetaRequest): Promise<MetaRunResult> => {
-    const launched = await deps.launcher.start({
-      featureId: request.featureId,
+    const resolved = deps.settings?.get() ?? {
       providerId: deps.config.providerId,
       model: deps.config.model,
+    };
+    const launched = await deps.launcher.start({
+      featureId: request.featureId,
+      providerId: resolved.providerId,
+      model: resolved.model,
       prompt: request.prompt,
       attachments: request.attachments,
       kind: 'meta',

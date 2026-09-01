@@ -257,6 +257,7 @@ import {
   type SkillsConfig,
 } from './skills/config.js';
 import { createMetaRunner } from './meta/meta-runner.js';
+import { createMetaSettings } from './meta/meta-settings.js';
 import { MetaSessionPool } from './meta/acp/acp-pool.js';
 import { AcpClient } from './meta/acp/acp-client.js';
 import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
@@ -1454,12 +1455,21 @@ function main(): void {
   // exists), so the Skills view is useful out of the box.
   seedBuiltinSkills(skillsService);
 
+  // Runtime-mutable meta AI provider/model. Seeded from the persisted `meta`
+  // config; the status bar reads and updates it so the model powering new
+  // metasessions can change without an IDE restart. The cold `metaRunner` reads
+  // it fresh on every run, so changes apply to all *new* metasessions at once.
+  const metaSettings = createMetaSettings({
+    providerId: metaConfig.providerId,
+    model: metaConfig.model,
+  });
   // Shared headless-AI primitive reused by every AI feature (summaries,
   // task plans, …) so they drive the CLI the same config-driven way.
   const metaRunner = createMetaRunner({
     launcher,
     transcripts: transcriptRepo,
     config: metaConfig,
+    settings: metaSettings,
   });
   // Warm ACP metasession pools. When enabled they keep several live
   // `copilot --acp` sessions ready — one pool per configured purpose — so every
@@ -1507,6 +1517,16 @@ function main(): void {
     metaAi = createPooledMetaRunner({
       pools: warmPurposePools,
       fallback: metaRunner,
+      // Warm ACP sessions are pinned to the CLI's default model, so once the
+      // user picks a provider/model different from the originally-configured
+      // one, route new turns to the cold path where that choice is honored.
+      bypass: () => {
+        const live = metaSettings.get();
+        return (
+          live.providerId !== metaConfig.providerId ||
+          live.model !== metaConfig.model
+        );
+      },
       onFallback: (purpose, error) =>
         logger.warn(`Warm turn on pool '${purpose}' failed; using cold path`, {
           error: error instanceof Error ? error.message : String(error),
@@ -1986,6 +2006,16 @@ function main(): void {
       configSecretPaths,
       configOverrides: configOverrideService,
       metaPools: metaPoolsStatusFn,
+      metaSettings: () => ({
+        ...metaSettings.get(),
+        warmPoolEnabled: warmPoolCfg.enabled,
+      }),
+      updateMetaSettings: (patch) => {
+        const next = metaSettings.set(patch);
+        // Persist so the choice survives an IDE restart.
+        configOverrideService.update(META_NAMESPACE, { ...patch });
+        return { ...next, warmPoolEnabled: warmPoolCfg.enabled };
+      },
       agencyStatus: () => agencyBootstrapper.status(),
       githubStatus: () => githubAuth.status(),
       githubSignInStart: () => githubDeviceAuth.start(),

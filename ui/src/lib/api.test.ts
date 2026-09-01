@@ -401,6 +401,29 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/meta/pools');
   });
 
+  it('reads the runtime meta AI settings', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ providerId: 'agency', model: 'auto', warmPoolEnabled: true }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getMetaSettings();
+    expect(calls[0][0]).toBe('/api/meta/settings');
+  });
+
+  it('updates the runtime meta AI settings with a JSON PUT body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ providerId: 'copilot', model: 'gpt-5', warmPoolEnabled: true }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.updateMetaSettings({ providerId: 'copilot', model: 'gpt-5' });
+    expect(calls[0][0]).toBe('/api/meta/settings');
+    expect(calls[0][1]?.method).toBe('PUT');
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      providerId: 'copilot',
+      model: 'gpt-5',
+    });
+  });
+
   it('updates a namespace override with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({
@@ -1074,13 +1097,16 @@ describe('createApiClient', () => {
     await client.resumeAutomation('a1');
     await client.cancelAutomation('a1');
     await client.runAutomation('a1');
+    await client.updateAutomationInterval('a1', 300_000);
     await client.deleteAutomation('a1');
     expect(calls.map((c) => `${c[1]?.method ?? 'GET'} ${c[0]}`)).toEqual([
       'POST /api/automations/a1/pause',
       'POST /api/automations/a1/resume',
       'POST /api/automations/a1/cancel',
       'POST /api/automations/a1/run',
+      'POST /api/automations/a1/interval',
       'DELETE /api/automations/a1',
     ]);
+    expect(calls[4][1]?.body).toBe(JSON.stringify({ intervalMs: 300_000 }));
   });
 });

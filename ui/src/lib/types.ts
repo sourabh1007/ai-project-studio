@@ -969,6 +969,17 @@ export interface MetaPoolsStatus {
   pools: MetaPoolStat[];
 }
 
+/** Runtime meta AI provider/model powering new metasessions (status bar). */
+export interface MetaSettings {
+  providerId: string;
+  model: string;
+  /**
+   * True when warm ACP pools are on. Choosing a specific model routes new
+   * metasessions to the cold path so the chosen model is honored.
+   */
+  warmPoolEnabled: boolean;
+}
+
 export interface CreateFeatureInput {
   name: string;
   description: string;

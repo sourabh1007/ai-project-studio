@@ -2,6 +2,7 @@ import type {
   ConfigResponse,
   ConfigUpdateResult,
   MetaPoolsStatus,
+  MetaSettings,
   CreateFeatureInput,
   CreateGroupInput,
   CreateSkillInput,
@@ -443,6 +444,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
         del(),
       ),
     getMetaPools: () => request<MetaPoolsStatus>('/meta/pools'),
+    getMetaSettings: () => request<MetaSettings>('/meta/settings'),
+    updateMetaSettings: (patch: Partial<Pick<MetaSettings, 'providerId' | 'model'>>) =>
+      request<MetaSettings>('/meta/settings', putBody(patch)),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>
@@ -484,6 +488,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Automation>(`/automations/${id}/cancel`, jsonBody({})),
     runAutomation: (id: string) =>
       request<Automation>(`/automations/${id}/run`, jsonBody({})),
+    updateAutomationInterval: (id: string, intervalMs: number) =>
+      request<Automation>(
+        `/automations/${id}/interval`,
+        jsonBody({ intervalMs }),
+      ),
     deleteAutomation: (id: string) =>
       request<{ id: string }>(`/automations/${id}`, del()),
   };

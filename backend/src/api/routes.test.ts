@@ -32,6 +32,16 @@ function deps(): ApiRoutesDeps {
     configSecretPaths: [],
     configOverrides: empty,
     metaPools: () => ({ enabled: false, pools: [] }),
+    metaSettings: () => ({
+      providerId: 'agency',
+      model: 'auto',
+      warmPoolEnabled: false,
+    }),
+    updateMetaSettings: () => ({
+      providerId: 'agency',
+      model: 'auto',
+      warmPoolEnabled: false,
+    }),
     agencyStatus: () => ({ installed: true }),
     githubStatus: () => Promise.resolve({ authenticated: true, login: 'x' }),
     githubSignInStart: () =>
@@ -163,6 +173,7 @@ describe('createApiRoutes', () => {
       'post /automations/:id/resume',
       'post /automations/:id/cancel',
       'post /automations/:id/run',
+      'post /automations/:id/interval',
       'post /subagents/:id/progress',
       'post /subagents/:id/complete',
       'post /subagents/:id/fail',
@@ -171,6 +182,8 @@ describe('createApiRoutes', () => {
       'put /config/:namespace',
       'delete /config/:namespace',
       'get /meta/pools',
+      'get /meta/settings',
+      'put /meta/settings',
       'get /agency/status',
       'get /github/status',
       'post /github/signin/start',

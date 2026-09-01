@@ -53,6 +53,10 @@ import { createAggregateRoutes } from './aggregate-controller.js';
 import { createUsageDetailRoutes } from './usage-detail-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createMetaPoolsRoutes } from './meta-pools-controller.js';
+import {
+  createMetaSettingsRoutes,
+  type MetaSettingsView,
+} from './meta-settings-controller.js';
 import type { MetaPoolsStatus } from '../meta/pooled-meta-runner.js';
 import { createFeatureRoutes } from './feature-controller.js';
 import { createProviderRoutes } from './provider-controller.js';
@@ -128,6 +132,13 @@ export interface ApiRoutesDeps {
   configOverrides: ConfigOverrideService;
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
+  /** Current runtime meta AI provider/model for the status bar. */
+  metaSettings: () => MetaSettingsView;
+  /** Applies a runtime meta AI provider/model change (no restart). */
+  updateMetaSettings: (patch: {
+    providerId?: string;
+    model?: string;
+  }) => MetaSettingsView;
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */
@@ -246,6 +257,10 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       overrides: deps.configOverrides,
     }),
     ...createMetaPoolsRoutes({ status: deps.metaPools }),
+    ...createMetaSettingsRoutes({
+      get: deps.metaSettings,
+      update: deps.updateMetaSettings,
+    }),
     ...createAgencyRoutes({ agencyStatus: deps.agencyStatus }),
     ...createGithubRoutes({
       githubStatus: deps.githubStatus,

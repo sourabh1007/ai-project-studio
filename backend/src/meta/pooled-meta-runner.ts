@@ -28,6 +28,13 @@ export interface PooledMetaRunnerDeps {
   fallback: MetaRunner;
   /** Logs a warm-turn failure before falling back (optional). */
   onFallback?: (purpose: string, error: unknown) => void;
+  /**
+   * When it returns `true` the warm pools are skipped entirely and the request
+   * runs on the cold {@link fallback}. Used to honor a runtime model override:
+   * warm ACP sessions are pinned to the CLI's default model, so a request that
+   * needs a specific model must take the cold path where the model is applied.
+   */
+  bypass?: () => boolean;
 }
 
 /** Purpose used for requests that don't match a dedicated pool. */
@@ -60,6 +67,9 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
   }
 
   async function runDetailed(request: MetaRequest): Promise<MetaRunResult> {
+    if (deps.bypass?.()) {
+      return deps.fallback.runDetailed(request);
+    }
     const pool = select(request.purpose);
     // `ready()` is idle>0 and is claimed synchronously by the warm turn before
     // any await, so a ready pool never queues: overflow past `size` concurrent

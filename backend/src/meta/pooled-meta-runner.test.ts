@@ -55,6 +55,33 @@ const req = (extra: Partial<MetaRequest> = {}): MetaRequest => ({
 });
 
 describe('createPooledMetaRunner', () => {
+  it('bypasses the warm pools and uses the cold path when bypass() is true', async () => {
+    const general = pool('general');
+    const cold = coldRunner();
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      fallback: cold,
+      bypass: () => true,
+    });
+    const result = await runner.runDetailed(req());
+    expect(result.text).toBe('cold');
+    expect(cold.calls).toHaveLength(1);
+    expect(general.calls).toHaveLength(0);
+  });
+
+  it('uses the warm pool when bypass() is false', async () => {
+    const general = pool('general');
+    const cold = coldRunner();
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      fallback: cold,
+      bypass: () => false,
+    });
+    const result = await runner.runDetailed(req());
+    expect(result.text).toBe('warm:general');
+    expect(cold.calls).toHaveLength(0);
+  });
+
   it('routes to the pool matching the request purpose', async () => {
     const review = pool('review');
     const general = pool('general');

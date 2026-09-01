@@ -47,6 +47,7 @@ import {
 } from './components/command-palette.js';
 import { ShortcutsSheet } from './components/shortcuts-sheet.js';
 import { NetworkCenter } from './features/network-center/network-center.js';
+import { MetaModelStatus } from './features/status-bar/meta-model-status.js';
 import {
   matchShortcut,
   type ShortcutBinding,
@@ -400,6 +401,7 @@ export function App() {
           </span>
         </div>
         <div className="statusbar-group">
+          <MetaModelStatus />
           <span
             className="statusbar-item statusbar-ide"
             title="IDE AI overhead — AIC spent by the assistant's own meta sessions (summaries, task plans). Separate from feature dev cost."
