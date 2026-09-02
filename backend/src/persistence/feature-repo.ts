@@ -40,7 +40,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const updateSummary = db.prepare('UPDATE features SET summary = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE features SET name = ? WHERE id = ?');
   const updatePlacement = db.prepare(
-    'UPDATE features SET repo_id = ?, order_index = ? WHERE id = ?',
+    'UPDATE features SET repo_id = ?, parent_feature_id = ?, order_index = ? WHERE id = ?',
   );
   const deleteOne = db.prepare('DELETE FROM features WHERE id = ?');
 
@@ -72,7 +72,12 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
       updateName.run(name, id);
     },
     updatePlacement(id, placement) {
-      updatePlacement.run(placement.repoId ?? null, placement.orderIndex, id);
+      updatePlacement.run(
+        placement.repoId ?? null,
+        placement.parentFeatureId ?? null,
+        placement.orderIndex,
+        id,
+      );
     },
     delete(id) {
       deleteOne.run(id);

@@ -151,7 +151,7 @@ describe('feature-controller', () => {
     expect(result.status).toBe(200);
     expect((result.body as Feature).id).toBe('f1');
     expect(h.moved).toEqual([
-      { id: 'f1', targetRepoId: 'r2', targetIndex: 1 },
+      { id: 'f1', targetRepoId: 'r2', targetIndex: 1, targetParentFeatureId: null },
     ]);
   });
 
@@ -165,7 +165,21 @@ describe('feature-controller', () => {
     );
     expect(result.status).toBe(200);
     expect(h.moved).toEqual([
-      { id: 'f1', targetRepoId: null, targetIndex: 0 },
+      { id: 'f1', targetRepoId: null, targetIndex: 0, targetParentFeatureId: null },
+    ]);
+  });
+
+  it('nests a feature under a parent when targetParentFeatureId is given', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features/:id/move')(
+      req({
+        params: { id: 'f1' },
+        body: { targetRepoId: 'r2', targetIndex: 0, targetParentFeatureId: 'p9' },
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(h.moved).toEqual([
+      { id: 'f1', targetRepoId: 'r2', targetIndex: 0, targetParentFeatureId: 'p9' },
     ]);
   });
 

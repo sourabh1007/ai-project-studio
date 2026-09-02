@@ -30,6 +30,7 @@ function inMemoryRepo(): FeatureRepo {
         store.set(id, {
           ...f,
           repoId: placement.repoId,
+          parentFeatureId: placement.parentFeatureId,
           orderIndex: placement.orderIndex,
         });
       }
@@ -265,5 +266,114 @@ describe('feature-service', () => {
       .filter((f) => f.repoId === 'repo-9')
       .sort((l, r) => (l.orderIndex ?? 0) - (r.orderIndex ?? 0));
     expect(ordered.map((f) => f.id)).toEqual(['aaa', 'bbb', 'later', 'ext']);
+  });
+
+  it('nests a feature under a parent and inherits the parent repo', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'Parent', description: 'p', repoId: 'repo-9' });
+    svc.create({ name: 'Child', description: 'c' }); // repo-less, top-level
+    svc.moveFeature({
+      id: 'feat-2',
+      targetRepoId: null,
+      targetIndex: 0,
+      targetParentFeatureId: 'feat-1',
+    });
+    const child = svc.get('feat-2');
+    expect(child.parentFeatureId).toBe('feat-1');
+    expect(child.repoId).toBe('repo-9');
+    expect(child.orderIndex).toBe(0);
+  });
+
+  it('nests under a repo-less parent, inheriting a null repo', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'Parent', description: 'p' }); // repo-less, top-level
+    svc.create({ name: 'Child', description: 'c', repoId: 'repo-9' });
+    svc.moveFeature({
+      id: 'feat-2',
+      targetRepoId: 'repo-9',
+      targetIndex: 0,
+      targetParentFeatureId: 'feat-1',
+    });
+    const child = svc.get('feat-2');
+    expect(child.parentFeatureId).toBe('feat-1');
+    expect(child.repoId).toBeNull();
+  });
+
+  it('reorders a feature among its parent\'s existing children', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'Parent', description: 'p', repoId: 'repo-9' });
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' });
+    svc.create({ name: 'B', description: 'b', repoId: 'repo-9' });
+    // Nest both A and B under the parent, then move B ahead of A.
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-1' });
+    svc.moveFeature({ id: 'feat-3', targetRepoId: 'repo-9', targetIndex: 1, targetParentFeatureId: 'feat-1' });
+    svc.moveFeature({ id: 'feat-3', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-1' });
+    const children = svc
+      .list()
+      .filter((f) => f.parentFeatureId === 'feat-1')
+      .sort((l, r) => (l.orderIndex ?? 0) - (r.orderIndex ?? 0));
+    expect(children.map((f) => f.id)).toEqual(['feat-3', 'feat-2']);
+  });
+
+  it('un-nests a feature back to the top level', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'Parent', description: 'p', repoId: 'repo-9' });
+    svc.create({ name: 'Child', description: 'c', repoId: 'repo-9' });
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-1' });
+    expect(svc.get('feat-2').parentFeatureId).toBe('feat-1');
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0 });
+    expect(svc.get('feat-2').parentFeatureId).toBeNull();
+  });
+
+  it('rejects nesting a feature under itself', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' });
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentFeatureId: 'feat-1',
+      }),
+    ).toThrow(AppError);
+  });
+
+  it('rejects nesting a feature under one of its own descendants', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' }); // feat-1
+    svc.create({ name: 'B', description: 'b', repoId: 'repo-9' }); // feat-2
+    svc.create({ name: 'C', description: 'c', repoId: 'repo-9' }); // feat-3
+    // B under A, then C under B → A's descendants are B and C.
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-1' });
+    svc.moveFeature({ id: 'feat-3', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-2' });
+    // Nesting A under C (its grandchild) must be rejected.
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentFeatureId: 'feat-3',
+      }),
+    ).toThrow(AppError);
+  });
+
+  it('rejects nesting under an unknown parent feature', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' });
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentFeatureId: 'ghost',
+      }),
+    ).toThrow(AppError);
   });
 });

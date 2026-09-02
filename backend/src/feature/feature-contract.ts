@@ -50,4 +50,12 @@ export interface MoveFeatureInput {
   targetRepoId: string | null;
   /** Zero-based insertion position among the destination group's features. */
   targetIndex: number;
+  /**
+   * Feature to nest the moved feature under, or null to place it at the top
+   * level of the destination repository group. When set, the moved feature
+   * inherits its new parent's repository and is reordered among that parent's
+   * children. Nesting a feature under itself or one of its own descendants is
+   * rejected.
+   */
+  targetParentFeatureId?: string | null;
 }

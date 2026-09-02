@@ -642,6 +642,8 @@ export interface MoveFeatureInput {
   id: string;
   targetRepoId: string | null;
   targetIndex: number;
+  /** When set, nest the feature under this parent feature. Null moves it to the top level. */
+  targetParentFeatureId?: string | null;
 }
 
 export type SessionStatus =

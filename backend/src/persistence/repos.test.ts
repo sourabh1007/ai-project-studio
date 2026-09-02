@@ -159,12 +159,21 @@ describe('feature-repo', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const repo = createFeatureRepo(db);
     repo.create(feature({ id: 'f1' }));
-    repo.updatePlacement('f1', { repoId: 'repo-7', orderIndex: 3 });
+    repo.updatePlacement('f1', {
+      repoId: 'repo-7',
+      parentFeatureId: null,
+      orderIndex: 3,
+    });
     const moved = repo.get('f1');
     expect(moved?.repoId).toBe('repo-7');
     expect(moved?.orderIndex).toBe(3);
-    repo.updatePlacement('f1', { repoId: null, orderIndex: 0 });
+    repo.updatePlacement('f1', {
+      repoId: null,
+      parentFeatureId: 'p9',
+      orderIndex: 0,
+    });
     expect(repo.get('f1')?.repoId).toBeNull();
+    expect(repo.get('f1')?.parentFeatureId).toBe('p9');
     db.close();
   });
 

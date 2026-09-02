@@ -1,4 +1,4 @@
-import { NotFoundError } from '../kernel/error-types.js';
+import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import type { Clock } from '../kernel/clock.js';
 import type { IdGenerator } from '../kernel/id-generator.js';
 import type {
@@ -90,15 +90,35 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
     },
     moveFeature(input) {
       requireFeature(input.id);
-      const targetRepoId = input.targetRepoId ?? null;
-      if (targetRepoId !== null) {
+      const targetParentFeatureId = input.targetParentFeatureId ?? null;
+      const all = deps.repo.list();
+      let targetRepoId = input.targetRepoId ?? null;
+      if (targetParentFeatureId !== null) {
+        const parent = requireFeature(targetParentFeatureId);
+        // Reject nesting a feature under itself or one of its own descendants,
+        // which would orphan a cycle. Walk up from the intended parent: if we
+        // reach the feature being moved, the parent is a descendant of it.
+        const byId = new Map(all.map((feature) => [feature.id, feature]));
+        let cursor: string | null = targetParentFeatureId;
+        while (cursor !== null) {
+          if (cursor === input.id) {
+            throw new ValidationError(
+              'Cannot nest a feature inside itself or one of its descendants.',
+            );
+          }
+          cursor = byId.get(cursor)!.parentFeatureId ?? null;
+        }
+        // Nested features live in their parent's repository group.
+        targetRepoId = parent.repoId ?? null;
+      } else if (targetRepoId !== null) {
         deps.repos.get(targetRepoId);
       }
-      const siblings = deps.repo
-        .list()
+      const siblings = all
         .filter(
           (feature) =>
-            (feature.repoId ?? null) === targetRepoId && feature.id !== input.id,
+            (feature.repoId ?? null) === targetRepoId &&
+            (feature.parentFeatureId ?? null) === targetParentFeatureId &&
+            feature.id !== input.id,
         )
         .sort(
           (left, right) =>
@@ -115,6 +135,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
       ordered.forEach((feature, position) => {
         deps.repo.updatePlacement(feature.id, {
           repoId: targetRepoId,
+          parentFeatureId: targetParentFeatureId,
           orderIndex: position,
         });
       });

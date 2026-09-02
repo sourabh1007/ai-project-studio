@@ -330,6 +330,8 @@ function FeatureNode({
   onDeleteSession,
   onFeatureDragStart,
   onFeatureDragEnd,
+  onNestFeature,
+  draggingFeature,
   onStartReview,
   treeRevision,
   onMoveNode,
@@ -349,6 +351,10 @@ function FeatureNode({
   onDeleteSession: (session: Session) => Promise<void>;
   onFeatureDragStart: (feature: Feature) => void;
   onFeatureDragEnd: () => void;
+  /** Nests `moved` under this feature (drag a feature row onto another). */
+  onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
+  /** The feature currently being dragged, if any, used to highlight nest targets. */
+  draggingFeature: Feature | null;
   /** Starts the PR-review flow for this feature's repository, when it has one. */
   onStartReview?: () => void;
   treeRevision: number;
@@ -369,6 +375,7 @@ function FeatureNode({
   const [viewingUsage, setViewingUsage] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nodeDropTarget, setNodeDropTarget] = useState(false);
+  const [featureDropTarget, setFeatureDropTarget] = useState(false);
   const [prPickerParent, setPrPickerParent] = useState<string | null | false>(
     false,
   );
@@ -538,12 +545,31 @@ function FeatureNode({
   }
 
   const canAcceptNode = Boolean(nodeStore?.dragging);
+  // A feature row also accepts another feature dragged onto it, nesting the
+  // dropped feature beneath this one. Guard against self-drops and no-op
+  // re-parenting onto the current parent.
+  const canAcceptFeature = Boolean(
+    draggingFeature &&
+      draggingFeature.id !== feature.id &&
+      (draggingFeature.parentFeatureId ?? null) !== feature.id,
+  );
+
+  function handleFeatureNestDrop() {
+    if (!draggingFeature || !canAcceptFeature) {
+      return;
+    }
+    setFeatureDropTarget(false);
+    setExpanded(true);
+    void onNestFeature(draggingFeature, feature.id);
+  }
 
   return (
     <div className="tree-node" style={{ '--feature-accent': accent } as CSSProperties}>
       <div
         className={`tree-branch ${
-          nodeDropTarget && canAcceptNode ? 'is-drop-target' : ''
+          (nodeDropTarget && canAcceptNode) || (featureDropTarget && canAcceptFeature)
+            ? 'is-drop-target'
+            : ''
         }`.trim()}
         draggable={!editing}
         onDragStart={(event) => {
@@ -562,16 +588,27 @@ function FeatureNode({
           if (canAcceptNode) {
             event.preventDefault();
             setNodeDropTarget(true);
+          } else if (canAcceptFeature) {
+            event.preventDefault();
+            setFeatureDropTarget(true);
           }
         }}
-        onDragLeave={() => setNodeDropTarget(false)}
+        onDragLeave={() => {
+          setNodeDropTarget(false);
+          setFeatureDropTarget(false);
+        }}
         onDrop={(event) => {
-          if (!canAcceptNode) {
+          if (canAcceptNode) {
+            event.preventDefault();
+            event.stopPropagation();
+            handleNodeDrop();
             return;
           }
-          event.preventDefault();
-          event.stopPropagation();
-          handleNodeDrop();
+          if (canAcceptFeature) {
+            event.preventDefault();
+            event.stopPropagation();
+            handleFeatureNestDrop();
+          }
         }}
       >
         <button
@@ -956,6 +993,7 @@ function RepoNode({
   onFeatureDragStart,
   onFeatureDragEnd,
   onMoveFeature,
+  onNestFeature,
   treeRevision,
   onMoveNode,
 }: {
@@ -986,6 +1024,7 @@ function RepoNode({
     targetRepoId: string | null,
     targetIndex: number,
   ) => void;
+  onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
   treeRevision: number;
   onMoveNode: (input: MoveNodeInput) => Promise<void>;
 }) {
@@ -1035,6 +1074,8 @@ function RepoNode({
       onDeleteSession={onDeleteSession}
       onFeatureDragStart={onFeatureDragStart}
       onFeatureDragEnd={onFeatureDragEnd}
+      onNestFeature={onNestFeature}
+      draggingFeature={draggingFeature}
       onStartReview={
         repo ? () => onStartReview(repo, feature.id) : undefined
       }
@@ -1354,6 +1395,23 @@ export function Explorer({
     }
   }
 
+  async function nestFeature(moved: Feature, parentFeatureId: string) {
+    setDraggingFeature(null);
+    try {
+      await api.moveFeature({
+        id: moved.id,
+        // The backend inherits the parent's repository, so targetRepoId here is
+        // advisory; pass the moved feature's current repo to keep it stable if
+        // the parent happens to be repo-less.
+        targetRepoId: moved.repoId ?? null,
+        targetIndex: APPEND_INDEX,
+        targetParentFeatureId: parentFeatureId,
+      });
+    } finally {
+      features.reload();
+    }
+  }
+
   async function deleteRepo(repo: Repository) {
     await api.deleteRepo(repo.id);
     repos.reload();
@@ -1562,7 +1620,7 @@ export function Explorer({
             draggingFeature={draggingFeature}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
-            onMoveFeature={moveFeature}
+            onMoveFeature={moveFeature}            onNestFeature={nestFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
           />
@@ -1593,7 +1651,7 @@ export function Explorer({
             draggingFeature={draggingFeature}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
-            onMoveFeature={moveFeature}
+            onMoveFeature={moveFeature}            onNestFeature={nestFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
           />

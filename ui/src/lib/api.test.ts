@@ -83,7 +83,7 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/features/f1/move');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(
-      JSON.stringify({ targetRepoId: 'r2', targetIndex: 2 }),
+      JSON.stringify({ targetRepoId: 'r2', targetIndex: 2, targetParentFeatureId: null }),
     );
   });
 

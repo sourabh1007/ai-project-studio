@@ -17,6 +17,7 @@ const renameFeatureSchema = z.object({
 const moveFeatureSchema = z.object({
   targetRepoId: z.string().nullable(),
   targetIndex: z.number().int().nonnegative(),
+  targetParentFeatureId: z.string().nullish(),
 });
 
 export interface FeatureControllerDeps {
@@ -68,6 +69,7 @@ export function createFeatureRoutes(deps: FeatureControllerDeps): Route[] {
           id: req.params.id,
           targetRepoId: input.targetRepoId,
           targetIndex: input.targetIndex,
+          targetParentFeatureId: input.targetParentFeatureId ?? null,
         });
         return { status: 200, body: deps.features.get(req.params.id) };
       },

@@ -287,6 +287,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Feature>(`/features/${input.id}/move`, jsonBody({
         targetRepoId: input.targetRepoId,
         targetIndex: input.targetIndex,
+        targetParentFeatureId: input.targetParentFeatureId ?? null,
       })),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),

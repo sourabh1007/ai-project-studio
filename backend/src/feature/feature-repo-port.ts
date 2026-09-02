@@ -7,10 +7,14 @@ export interface FeatureRepo {
   list(): Feature[];
   setSummary(id: string, summary: string): void;
   rename(id: string, name: string): void;
-  /** Re-homes a feature to a repository group at a given sort position. */
+  /** Re-homes a feature to a repository group and parent at a given sort position. */
   updatePlacement(
     id: string,
-    placement: { repoId: string | null; orderIndex: number },
+    placement: {
+      repoId: string | null;
+      parentFeatureId: string | null;
+      orderIndex: number;
+    },
   ): void;
   delete(id: string): void;
 }
