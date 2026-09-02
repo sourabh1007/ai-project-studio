@@ -9015,6 +9015,124 @@ body.is-resizing {
 .metasession-chip-warming {
   border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
 }
+
+/* A running session slated to stop on the next restart (draft target < live). */
+.metasession-chip-surplus {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface, var(--panel)));
+  animation: metasession-surplus-pulse 1.6s ease-in-out infinite;
+}
+
+/* A placeholder for a session that will warm on the next restart (target > live). */
+.metasession-chip-ghost {
+  color: var(--text-muted);
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metasession-chip-ghost:hover {
+  border-color: var(--border);
+  box-shadow: none;
+}
+.metasession-dot-ghost {
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+/* Pending target pill — appears when the draft size differs from the running
+   pool, so applying a suggestion produces a visible, animated acknowledgement. */
+.metapool-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 9px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metapool-target strong {
+  font-weight: 700;
+}
+.metapool-target-grow {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+.metapool-target-shrink {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+.metapool-target.is-pulse {
+  animation: metapool-target-pop 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.metapool-live-applied {
+  transition: background var(--transition-fast);
+}
+
+.metapool-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+}
+.metapool-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.metapool-legend i {
+  display: inline-block;
+}
+.metapool-legend-hint {
+  margin-left: auto;
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.metapool-pending {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--fs-secondary);
+  line-height: var(--lh-secondary);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius-md);
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metapool-pending strong {
+  font-weight: 700;
+}
+
+@keyframes metapool-target-pop {
+  0% {
+    transform: scale(0.85);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  40% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@keyframes metasession-surplus-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 16%, transparent);
+  }
+}
 .metasession-detail {
   display: flex;
   flex-direction: column;
@@ -9121,6 +9239,11 @@ body.is-resizing {
   .metapool-help,
   .metasession-chip,
   .metasession-chip-exit,
+  .metasession-chip-surplus,
+  .metasession-chip-ghost,
+  .metapool-target,
+  .metapool-target.is-pulse,
+  .metapool-pending,
   .metasession-dot-busy,
   .metasession-dot-warming {
     animation: none;

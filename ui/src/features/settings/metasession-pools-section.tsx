@@ -222,18 +222,45 @@ function PoolStatus({
   const rendered = useAnimatedSessions(pool.sessions);
   const [detail, setDetail] = useState<MetaSessionInfo | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [justApplied, setJustApplied] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  // Briefly flash the target after a suggestion is applied so the (restart-
+  // deferred) change is acknowledged in the live view instead of silently
+  // mutating the size input.
+  useEffect(() => {
+    if (!justApplied) {
+      return;
+    }
+    const timer = setTimeout(() => setJustApplied(false), 900);
+    return () => clearTimeout(timer);
+  }, [justApplied]);
+
+  const target = Number.isFinite(draftSize) ? draftSize : pool.size;
   const suggestionDiffers =
     Number.isFinite(draftSize) && pool.suggestedSize !== draftSize;
+  // The running pool still reflects `pool.size`; `target` is the edited draft.
+  // Their difference is the change that will take effect on the next restart.
+  const pendingDelta = target - pool.size;
+  const hasPending = pendingDelta !== 0;
+  const liveCount = rendered.filter((r) => !r.exiting).length;
+  const ghostCount =
+    hasPending && pendingDelta > 0 ? Math.max(0, target - liveCount) : 0;
+
+  function handleApply() {
+    setJustApplied(true);
+    onApplySuggestion(pool.suggestedSize);
+  }
 
   return (
     <div className="metapool-live">
-      <div className="metapool-live-head">
+      <div
+        className={`metapool-live-head${justApplied ? ' metapool-live-applied' : ''}`}
+      >
         <span
           className={`metapool-badge ${
             pool.ready ? 'metapool-badge-ready' : 'metapool-badge-warming'
@@ -255,6 +282,16 @@ function PoolStatus({
             <strong>{pool.served}</strong> served
           </span>
         </span>
+        {hasPending && (
+          <span
+            className={`metapool-target metapool-target-${
+              pendingDelta > 0 ? 'grow' : 'shrink'
+            }${justApplied ? ' is-pulse' : ''}`}
+            title="Pending target — applies after a restart"
+          >
+            → target <strong>{target}</strong>
+          </span>
+        )}
         <span
           className="metapool-suggest"
           title="Suggested warm size from observed peak concurrency in the recent telemetry window"
@@ -264,7 +301,7 @@ function PoolStatus({
             <button
               type="button"
               className="metapool-suggest-apply"
-              onClick={() => onApplySuggestion(pool.suggestedSize)}
+              onClick={handleApply}
             >
               Apply
             </button>
@@ -272,27 +309,80 @@ function PoolStatus({
         </span>
       </div>
 
-      {rendered.length > 0 && (
+      {(rendered.length > 0 || ghostCount > 0) && (
         <div className="metapool-sessions" role="list">
-          {rendered.map(({ info, exiting }) => (
-            <button
-              type="button"
+          {rendered.map(({ info, exiting }) => {
+            const surplus =
+              hasPending &&
+              pendingDelta < 0 &&
+              !exiting &&
+              sessionSeq(info.id) > target;
+            return (
+              <button
+                type="button"
+                role="listitem"
+                key={info.id}
+                className={`metasession-chip metasession-chip-${info.state}${
+                  exiting ? ' metasession-chip-exit' : ''
+                }${surplus ? ' metasession-chip-surplus' : ''}`}
+                title={`${info.id} · ${STATE_LABEL[info.state]} · ${info.served} served${
+                  surplus ? ' · will stop after restart' : ''
+                }`}
+                onClick={() => !exiting && setDetail(info)}
+              >
+                <span
+                  className={`metasession-chip-dot metasession-dot-${info.state}`}
+                />
+                <span className="metasession-chip-id">{info.id}</span>
+                <span className="metasession-chip-served">{info.served}</span>
+              </button>
+            );
+          })}
+          {Array.from({ length: ghostCount }, (_, i) => (
+            <span
+              key={`ghost-${i}`}
+              className="metasession-chip metasession-chip-ghost"
               role="listitem"
-              key={info.id}
-              className={`metasession-chip metasession-chip-${info.state}${
-                exiting ? ' metasession-chip-exit' : ''
-              }`}
-              title={`${info.id} · ${STATE_LABEL[info.state]} · ${info.served} served`}
-              onClick={() => !exiting && setDetail(info)}
+              title="Will warm after restart"
             >
-              <span
-                className={`metasession-chip-dot metasession-dot-${info.state}`}
-              />
-              <span className="metasession-chip-id">{info.id}</span>
-              <span className="metasession-chip-served">{info.served}</span>
-            </button>
+              <span className="metasession-chip-dot metasession-dot-ghost" />
+              <span className="metasession-chip-id">+1</span>
+            </span>
           ))}
         </div>
+      )}
+
+      <div className="metapool-legend" role="note">
+        <span>
+          <i className="metasession-chip-dot metasession-dot-idle" /> idle
+        </span>
+        <span>
+          <i className="metasession-chip-dot metasession-dot-busy" /> busy
+        </span>
+        <span>
+          <i className="metasession-chip-dot metasession-dot-warming" /> warming
+        </span>
+        <span className="metapool-legend-hint">
+          Click a session for live details
+        </span>
+      </div>
+
+      {hasPending && (
+        <p className="metapool-pending" role="status">
+          {pendingDelta > 0 ? (
+            <>
+              Pool will grow by <strong>+{pendingDelta}</strong> to{' '}
+              <strong>{target}</strong> warm sessions — save changes, then
+              restart to warm the new sessions.
+            </>
+          ) : (
+            <>
+              Pool will shrink by <strong>{pendingDelta}</strong> to{' '}
+              <strong>{target}</strong> warm sessions — save changes, then
+              restart; the highlighted sessions will stop.
+            </>
+          )}
+        </p>
       )}
 
       {detail && (
