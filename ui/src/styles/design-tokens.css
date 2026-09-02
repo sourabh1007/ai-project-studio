@@ -4,29 +4,31 @@
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
 
-  /* Strict typography scale (px-based so it never drifts with rem roots). */
-  --fs-page-title: 24px;
-  --lh-page-title: 32px;
-  --fs-section: 18px;
-  --lh-section: 24px;
-  --fs-card-title: 16px;
-  --lh-card-title: 22px;
-  --fs-body: 14px;
-  --lh-body: 20px;
-  --fs-secondary: 13px;
-  --lh-secondary: 18px;
-  --fs-meta: 12px;
-  --lh-meta: 16px;
+  /* Enterprise typography scale — compact, desktop-first (px so it never
+     drifts with rem roots). Window title 18 · section 14 · body 12–13 ·
+     caption 11. */
+  --fs-page-title: 18px;
+  --lh-page-title: 24px;
+  --fs-section: 14px;
+  --lh-section: 20px;
+  --fs-card-title: 13px;
+  --lh-card-title: 18px;
+  --fs-body: 13px;
+  --lh-body: 18px;
+  --fs-secondary: 12px;
+  --lh-secondary: 16px;
+  --fs-meta: 11px;
+  --lh-meta: 14px;
 
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
   --weight-bold: 700;
 
-  /* Compact, enterprise-grade radii (cards 10–12px). */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
+  /* Compact, enterprise-grade radii. */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
 
   /* 8px spacing grid. XS=4 SM=8 MD=16 LG=24 XL=32 XXL=48. */
   --space-1: 4px;
@@ -37,15 +39,17 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  /* Standard control sizing. */
-  --control-height: 36px;
-  --control-height-sm: 32px;
+  /* Standard control sizing — dense desktop controls. */
+  --control-height: 32px;
+  --control-height-sm: 28px;
 
-  --shadow-glass: 0 8px 32px rgba(15, 23, 42, 0.18);
-  --shadow-soft: 0 2px 10px rgba(15, 23, 42, 0.1);
+  /* Minimal, enterprise shadows (subtle depth, no glassy bloom). */
+  --shadow-glass: 0 4px 16px rgba(15, 23, 42, 0.12);
+  --shadow-soft: 0 1px 3px rgba(15, 23, 42, 0.08);
 
-  --transition-fast: 140ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-med: 260ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* Fast, professional motion. Fast = hover/press; med = panels/dialogs. */
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-med: 180ms cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Editor panel foreground. Per-theme below: the panel is bright in light
      mode (the terminal itself is themed white) and dark in dark mode. */
