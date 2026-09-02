@@ -89,6 +89,7 @@ function harness() {
   const refreshed: string[] = [];
   const contextRemoved: string[] = [];
   const insightsLoaded: string[] = [];
+  const insightsRefresh: boolean[] = [];
   const definitionReads: Array<{ id: string; path: string }> = [];
   let azureOrg = '';
   const service = {
@@ -143,8 +144,9 @@ function harness() {
     repos: service,
     repositoryContexts,
     repoInsights: {
-      load: async (id) => {
+      load: async (id, options) => {
         insightsLoaded.push(id);
+        insightsRefresh.push(options?.refresh ?? false);
         return repoInsights;
       },
       readDefinition: async (id, path) => {
@@ -181,6 +183,7 @@ function harness() {
     refreshed,
     contextRemoved,
     insightsLoaded,
+    insightsRefresh,
     definitionReads,
     getAzureOrg: () => azureOrg,
   };
@@ -243,6 +246,16 @@ describe('repo-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: repoInsights });
     expect(h.insightsLoaded).toEqual(['r1']);
+    expect(h.insightsRefresh).toEqual([false]);
+  });
+
+  it('forces a rescan when the refresh query is set', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/insights')(
+      req({ params: { id: 'r1' }, query: { refresh: 'true' } }),
+    );
+    expect(result).toEqual({ status: 200, body: repoInsights });
+    expect(h.insightsRefresh).toEqual([true]);
   });
 
   it('reads a definition file by path query', async () => {

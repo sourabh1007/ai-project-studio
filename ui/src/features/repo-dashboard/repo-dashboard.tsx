@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
@@ -28,6 +28,13 @@ const NOT_READY_COLOR = '#fbbf24';
 const SKILLS_COLOR = '#818cf8';
 const AGENTS_COLOR = '#22d3ee';
 const DOCS_COLOR = '#f472b6';
+
+/**
+ * Process-lifetime cache of the last scan per repository. Once a repo has been
+ * scanned its insights stay available for every later open of the tab; only an
+ * explicit Rescan recomputes them (and refreshes this cache).
+ */
+const insightsCache = new Map<string, RepoInsights>();
 
 function Kpi({
   value,
@@ -311,15 +318,46 @@ function RepoContextBanner({ repo }: { repo: Repository }) {
  */
 export function RepoDashboard({ repo }: { repo: Repository }) {
   const api = useApi();
-  const insights = useAsync<RepoInsights | null>(
-    () => api.getRepoInsights(repo.id),
-    [repo.id],
+  const [data, setData] = useState<RepoInsights | null>(
+    () => insightsCache.get(repo.id) ?? null,
   );
+  const [scanning, setScanning] = useState<boolean>(
+    () => !insightsCache.has(repo.id),
+  );
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  const runScan = useCallback(
+    async (refresh: boolean) => {
+      setScanning(true);
+      setScanError(null);
+      try {
+        const result = await api.getRepoInsights(repo.id, refresh);
+        insightsCache.set(repo.id, result);
+        setData(result);
+      } catch (err) {
+        setScanError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setScanning(false);
+      }
+    },
+    [api, repo.id],
+  );
+
+  useEffect(() => {
+    const cached = insightsCache.get(repo.id);
+    if (cached) {
+      // Already scanned this session — surface it instantly, no rescan.
+      setData(cached);
+      setScanning(false);
+      return;
+    }
+    void runScan(false);
+  }, [repo.id, runScan]);
+
   const [viewingUsage, setViewingUsage] = useState(false);
   const [viewing, setViewing] = useState<RepoDefinitionEntry | null>(null);
   const [query, setQuery] = useState('');
 
-  const data = insights.data;
   const providerLabel =
     repo.provider === 'azure-devops' ? 'Azure DevOps' : 'GitHub';
   const passed = data
@@ -351,19 +389,19 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
           <button
             type="button"
             className="dash-refresh"
-            onClick={() => insights.reload()}
-            disabled={insights.loading}
+            onClick={() => void runScan(true)}
+            disabled={scanning}
             title="Re-scan the default branch"
           >
             <RefreshIcon size={13} />
-            {insights.loading && data ? 'Rescanning…' : 'Rescan'}
+            {scanning && data ? 'Rescanning…' : 'Rescan'}
           </button>
         </div>
       </header>
 
-      <ErrorText error={insights.error} />
+      <ErrorText error={scanError} />
       <RepoContextBanner repo={repo} />
-      {insights.loading && !data && (
+      {scanning && !data && (
         <BrandedLoader
           title="Scanning repository"
           detail={`Reading the default branch of ${repo.name}`}
@@ -498,7 +536,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
         </>
       )}
 
-      {!insights.loading && !insights.error && !data && (
+      {!scanning && !scanError && !data && (
         <EmptyState message="No insights are available for this repository yet." />
       )}
 

@@ -162,8 +162,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/repos/${id}/context/refresh`,
         jsonBody({}),
       ),
-    getRepoInsights: (id: string) =>
-      request<RepoInsights>(`/repos/${id}/insights`),
+    getRepoInsights: (id: string, refresh = false) =>
+      request<RepoInsights>(
+        `/repos/${id}/insights${refresh ? '?refresh=true' : ''}`,
+      ),
     getRepoDefinition: (id: string, path: string) =>
       request<RepoDefinitionContent>(
         `/repos/${id}/insights/file?path=${encodeURIComponent(path)}`,

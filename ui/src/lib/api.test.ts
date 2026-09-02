@@ -104,6 +104,8 @@ describe('createApiClient', () => {
     await client.getRepoInsights('r1');
     expect(calls[0][0]).toBe('/api/repos/r1/insights');
     expect(calls[0][1]).toBeUndefined();
+    await client.getRepoInsights('r1', true);
+    expect(calls[1][0]).toBe('/api/repos/r1/insights?refresh=true');
   });
 
   it('gets a repository definition file', async () => {

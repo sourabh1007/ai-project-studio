@@ -74,7 +74,9 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       path: '/repos/:id/insights',
       handler: async (req) => ({
         status: 200,
-        body: await deps.repoInsights.load(req.params.id),
+        body: await deps.repoInsights.load(req.params.id, {
+          refresh: req.query.refresh === 'true',
+        }),
       }),
     },
     {

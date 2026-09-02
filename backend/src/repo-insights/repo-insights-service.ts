@@ -26,8 +26,14 @@ export interface RepoInsightsServiceDeps {
 }
 
 export interface RepoInsightsService {
-  /** Builds insights for a repository from its default branch. */
-  load(repositoryId: string): Promise<RepoInsights>;
+  /**
+   * Builds insights for a repository from its default branch. The first scan is
+   * cached and reused for every later load; pass `refresh` to force a rescan.
+   */
+  load(
+    repositoryId: string,
+    options?: { refresh?: boolean },
+  ): Promise<RepoInsights>;
   /**
    * Reads the full text of one discovered skill/agent/doc file from the default
    * branch. The path must sit under a configured directory and carry the
@@ -87,29 +93,30 @@ export function createRepoInsightsService(
     ref: string,
     directories: string[],
   ): Promise<RepoDefinitionEntry[]> {
+    // List every directory concurrently, then dedupe shared files preserving
+    // first-encounter order before building entries in parallel.
+    const fileLists = await Promise.all(
+      directories.map((directory) =>
+        git.listFiles(repositoryPath, ref, directory, config.recursiveScan),
+      ),
+    );
     const seen = new Set<string>();
-    const entries: RepoDefinitionEntry[] = [];
-    for (const directory of directories) {
-      const files = (
-        await git.listFiles(
-          repositoryPath,
-          ref,
-          directory,
-          config.recursiveScan,
-        )
-      ).filter(hasDefinitionExtension);
-      for (const file of files) {
-        if (seen.has(file)) {
+    const files: string[] = [];
+    for (const list of fileLists) {
+      for (const file of list) {
+        if (!hasDefinitionExtension(file) || seen.has(file)) {
           continue;
         }
         seen.add(file);
-        const entry = await buildEntry(repositoryPath, ref, file);
-        if (entry !== null) {
-          entries.push(entry);
-        }
+        files.push(file);
       }
     }
-    return entries.sort((left, right) => left.path.localeCompare(right.path));
+    const built = await Promise.all(
+      files.map((file) => buildEntry(repositoryPath, ref, file)),
+    );
+    return built
+      .filter((entry): entry is RepoDefinitionEntry => entry !== null)
+      .sort((left, right) => left.path.localeCompare(right.path));
   }
 
   async function evaluateRequirement(
@@ -118,12 +125,15 @@ export function createRepoInsightsService(
     requirement: ReadinessRequirement,
   ): Promise<{ status: ReadinessCheck['status']; detail: string | null }> {
     if (requirement.kind === 'anyFileExists') {
-      for (const path of requirement.paths) {
-        if (await git.fileExists(repositoryPath, ref, path)) {
-          return { status: 'pass', detail: path };
-        }
-      }
-      return { status: 'fail', detail: null };
+      const results = await Promise.all(
+        requirement.paths.map((path) =>
+          git.fileExists(repositoryPath, ref, path),
+        ),
+      );
+      const index = results.findIndex(Boolean);
+      return index >= 0
+        ? { status: 'pass', detail: requirement.paths[index] }
+        : { status: 'fail', detail: null };
     }
     const matches = (
       await git.listFiles(repositoryPath, ref, requirement.directory)
@@ -137,22 +147,23 @@ export function createRepoInsightsService(
     repositoryPath: string,
     ref: string,
   ): Promise<ReadinessCheck[]> {
-    const checks: ReadinessCheck[] = [];
-    for (const definition of config.readinessChecks) {
-      const { status, detail } = await evaluateRequirement(
-        repositoryPath,
-        ref,
-        definition.test,
-      );
-      checks.push({
-        key: definition.key,
-        label: definition.label,
-        requirement: definition.requirement,
-        status,
-        detail,
-      });
-    }
-    return checks;
+    // All checks are independent, so evaluate them concurrently.
+    return Promise.all(
+      config.readinessChecks.map(async (definition) => {
+        const { status, detail } = await evaluateRequirement(
+          repositoryPath,
+          ref,
+          definition.test,
+        );
+        return {
+          key: definition.key,
+          label: definition.label,
+          requirement: definition.requirement,
+          status,
+          detail,
+        };
+      }),
+    );
   }
 
   async function resolveBranch(repository: Repository): Promise<string> {
@@ -182,36 +193,57 @@ export function createRepoInsightsService(
     );
   }
 
+  /** Reads the default branch once and assembles a fresh insights snapshot. */
+  async function compute(repositoryId: string): Promise<RepoInsights> {
+    const repository = deps.repos.get(repositoryId);
+    const branch = await resolveBranch(repository);
+    // Directory scans and readiness checks are independent — run concurrently.
+    const [agents, skills, docs, readiness] = await Promise.all([
+      scanDirectories(repository.localPath, branch, config.agentsDirectories),
+      scanDirectories(repository.localPath, branch, config.skillsDirectories),
+      scanDirectories(repository.localPath, branch, config.docsDirectories),
+      evaluateReadiness(repository.localPath, branch),
+    ]);
+    return {
+      repositoryId,
+      branch,
+      agents,
+      skills,
+      docs,
+      readiness,
+      agentReady: readiness.every((check) => check.status === 'pass'),
+      generatedAt: deps.clock.isoNow(),
+    };
+  }
+
+  // Once a repository has been scanned its snapshot stays available for every
+  // subsequent open; only an explicit refresh (Rescan) recomputes it. Inflight
+  // promises dedupe concurrent first-time loads so a scan never runs twice.
+  const cache = new Map<string, RepoInsights>();
+  const inflight = new Map<string, Promise<RepoInsights>>();
+
   return {
-    async load(repositoryId) {
-      const repository = deps.repos.get(repositoryId);
-      const branch = await resolveBranch(repository);
-      const agents = await scanDirectories(
-        repository.localPath,
-        branch,
-        config.agentsDirectories,
-      );
-      const skills = await scanDirectories(
-        repository.localPath,
-        branch,
-        config.skillsDirectories,
-      );
-      const docs = await scanDirectories(
-        repository.localPath,
-        branch,
-        config.docsDirectories,
-      );
-      const readiness = await evaluateReadiness(repository.localPath, branch);
-      return {
-        repositoryId,
-        branch,
-        agents,
-        skills,
-        docs,
-        readiness,
-        agentReady: readiness.every((check) => check.status === 'pass'),
-        generatedAt: deps.clock.isoNow(),
-      };
+    async load(repositoryId, options) {
+      const refresh = options?.refresh ?? false;
+      const cached = cache.get(repositoryId);
+      if (!refresh && cached !== undefined) {
+        return cached;
+      }
+      const existing = inflight.get(repositoryId);
+      if (!refresh && existing !== undefined) {
+        return existing;
+      }
+      const run = (async () => {
+        try {
+          const result = await compute(repositoryId);
+          cache.set(repositoryId, result);
+          return result;
+        } finally {
+          inflight.delete(repositoryId);
+        }
+      })();
+      inflight.set(repositoryId, run);
+      return run;
     },
 
     async readDefinition(repositoryId, filePath) {

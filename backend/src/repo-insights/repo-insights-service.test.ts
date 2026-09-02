@@ -239,4 +239,54 @@ describe('createRepoInsightsService', () => {
     });
     expect(insights.agentReady).toBe(false);
   });
+
+  it('caches the first scan and reuses it for later loads', async () => {
+    let scans = 0;
+    const git = fakeGit({ defaultBranch: 'main' });
+    const counting: RepoInsightsGit = {
+      ...git,
+      resolveDefaultBranch: async (path) => {
+        scans += 1;
+        return git.resolveDefaultBranch(path);
+      },
+    };
+    const svc = serviceWith(counting, repo());
+    const first = await svc.load('r1');
+    const second = await svc.load('r1');
+    expect(scans).toBe(1);
+    expect(second).toBe(first);
+  });
+
+  it('forces a fresh scan when refresh is requested', async () => {
+    let scans = 0;
+    const git = fakeGit({ defaultBranch: 'main' });
+    const counting: RepoInsightsGit = {
+      ...git,
+      resolveDefaultBranch: async (path) => {
+        scans += 1;
+        return git.resolveDefaultBranch(path);
+      },
+    };
+    const svc = serviceWith(counting, repo());
+    await svc.load('r1');
+    const refreshed = await svc.load('r1', { refresh: true });
+    expect(scans).toBe(2);
+    expect(refreshed.branch).toBe('main');
+  });
+
+  it('dedupes concurrent first-time loads into a single scan', async () => {
+    let scans = 0;
+    const git = fakeGit({ defaultBranch: 'main' });
+    const counting: RepoInsightsGit = {
+      ...git,
+      resolveDefaultBranch: async (path) => {
+        scans += 1;
+        return git.resolveDefaultBranch(path);
+      },
+    };
+    const svc = serviceWith(counting, repo());
+    const [a, b] = await Promise.all([svc.load('r1'), svc.load('r1')]);
+    expect(scans).toBe(1);
+    expect(a).toBe(b);
+  });
 });
