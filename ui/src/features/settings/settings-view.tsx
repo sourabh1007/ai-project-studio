@@ -9,6 +9,8 @@ import type {
 import {
   buildConfigTabs,
   buildFields,
+  fieldHelp,
+  fieldLabel,
   matchesQuery,
   parseInput,
   sameValue,
@@ -226,10 +228,9 @@ function NamespaceEditor({
         {visible.map((f) => (
           <div key={f.key} className="config-field-row">
             <div className="config-field-label">
-              <span className="config-field-name">{f.key}</span>
-              {f.meta?.description && (
-                <span className="config-field-desc">{f.meta.description}</span>
-              )}
+              <span className="config-field-name">{fieldLabel(f.key)}</span>
+              <code className="config-field-key">{f.key}</code>
+              <span className="config-field-desc">{fieldHelp(f)}</span>
               {overrideKeys.has(f.key) && (
                 <span className="config-field-badge">overridden</span>
               )}

@@ -11257,15 +11257,21 @@ body.is-resizing {
   gap: 2px;
 }
 .config-field-name {
-  font-size: 13px;
+  font-size: var(--fs-body);
   font-weight: 600;
-  font-family: var(--font-mono, monospace);
+  color: var(--text);
+  word-break: break-word;
+}
+.config-field-key {
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
+  color: var(--text-muted);
   word-break: break-word;
 }
 .config-field-desc {
-  font-size: 12px;
+  font-size: var(--fs-secondary);
   color: var(--text-muted);
-  line-height: 16px;
+  line-height: var(--lh-secondary);
 }
 .config-field-control {
   display: flex;

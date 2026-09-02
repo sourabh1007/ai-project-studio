@@ -142,6 +142,144 @@ export interface SettingField {
   value: ConfigValue;
 }
 
+/**
+ * Tokens that read better fully upper-cased in a humanized label than
+ * title-cased (e.g. `providerId` → "Provider ID", not "Provider Id").
+ */
+const LABEL_ACRONYMS = new Set([
+  'id',
+  'url',
+  'uri',
+  'api',
+  'ui',
+  'ip',
+  'ttl',
+  'mcp',
+  'json',
+  'http',
+  'https',
+  'sql',
+  'pr',
+  'cli',
+  'uuid',
+  'db',
+  'sdk',
+  'os',
+  'css',
+  'html',
+  'acp',
+  'ide',
+  'ai',
+  'sse',
+  'ws',
+]);
+
+/**
+ * Turns a raw config key (`providerId`, `response_text_keys`, `timeoutMs`)
+ * into a readable Title Case label ("Provider ID", "Response Text Keys",
+ * "Timeout (ms)"). camelCase, snake_case and kebab-case boundaries all split;
+ * known acronyms upper-case and a trailing `ms` renders as the unit "(ms)".
+ */
+export function fieldLabel(key: string): string {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean);
+  if (words.length === 0) {
+    return key;
+  }
+  return words
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (lower === 'ms') {
+        return '(ms)';
+      }
+      if (LABEL_ACRONYMS.has(lower)) {
+        return lower.toUpperCase();
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
+function formatDefault(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+}
+
+/**
+ * Generates fallback help text for a field with no schema description, derived
+ * from its control, constraints and default, so every setting shows guidance
+ * even before a module adds an explicit `.describe()`.
+ */
+function generatedHelp(field: SettingField): string {
+  const meta = field.meta;
+  const parts: string[] = [];
+  switch (field.control) {
+    case 'boolean':
+      parts.push('On/off toggle.');
+      break;
+    case 'number':
+      parts.push(meta?.int ? 'Whole number.' : 'Numeric value.');
+      if (meta?.min != null && meta?.max != null) {
+        parts.push(`Between ${meta.min} and ${meta.max}.`);
+      } else if (meta?.min != null) {
+        parts.push(`At least ${meta.min}.`);
+      } else if (meta?.max != null) {
+        parts.push(`At most ${meta.max}.`);
+      }
+      break;
+    case 'enum':
+      parts.push(
+        meta?.options && meta.options.length > 0
+          ? `One of: ${meta.options.join(', ')}.`
+          : 'Choose a value.',
+      );
+      break;
+    case 'text':
+    case 'multiline':
+      parts.push('Text value.');
+      if (meta?.minLength != null && meta?.maxLength != null) {
+        parts.push(`${meta.minLength}–${meta.maxLength} characters.`);
+      } else if (meta?.minLength != null) {
+        parts.push(`At least ${meta.minLength} characters.`);
+      } else if (meta?.maxLength != null) {
+        parts.push(`Up to ${meta.maxLength} characters.`);
+      }
+      break;
+    default:
+      parts.push(
+        meta?.kind === 'array'
+          ? 'Editable list (JSON).'
+          : 'Structured value (JSON).',
+      );
+      break;
+  }
+  if (meta?.default !== undefined) {
+    parts.push(`Default: ${formatDefault(meta.default)}.`);
+  }
+  if (meta?.optional) {
+    parts.push('Optional.');
+  }
+  if (meta?.nullable) {
+    parts.push('May be null.');
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Help text for a field: the schema's own `.describe()` when present, otherwise
+ * a generated summary of the field's type, constraints and default — so there
+ * is always guidance under every label.
+ */
+export function fieldHelp(field: SettingField): string {
+  if (field.meta?.description) {
+    return field.meta.description;
+  }
+  return generatedHelp(field);
+}
+
 /** Builds the ordered editable fields for one namespace. */
 export function buildFields(
   values: Record<string, ConfigValue>,

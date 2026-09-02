@@ -8,8 +8,12 @@ import {
   buildFields,
   matchesQuery,
   buildConfigTabs,
+  fieldLabel,
+  fieldHelp,
+  type SettingField,
+  type ControlKind,
 } from './settings-model.js';
-import type { FieldMeta } from './types.js';
+import type { ConfigValue, FieldMeta } from './types.js';
 
 describe('isMultiline', () => {
   it('is true for newlines or long strings', () => {
@@ -163,5 +167,124 @@ describe('buildConfigTabs', () => {
 
   it('returns no tabs for no namespaces', () => {
     expect(buildConfigTabs([])).toEqual([]);
+  });
+});
+
+describe('fieldLabel', () => {
+  it('humanizes camelCase keys with acronyms and units', () => {
+    expect(fieldLabel('providerId')).toBe('Provider ID');
+    expect(fieldLabel('responseTextKeys')).toBe('Response Text Keys');
+    expect(fieldLabel('timeoutMs')).toBe('Timeout (ms)');
+    expect(fieldLabel('model')).toBe('Model');
+    expect(fieldLabel('warmPool')).toBe('Warm Pool');
+  });
+
+  it('splits snake_case and kebab-case', () => {
+    expect(fieldLabel('response_text_keys')).toBe('Response Text Keys');
+    expect(fieldLabel('warm-pool')).toBe('Warm Pool');
+  });
+
+  it('handles acronym-to-word boundaries', () => {
+    expect(fieldLabel('httpUrl')).toBe('HTTP URL');
+    expect(fieldLabel('HTTPServer')).toBe('HTTP Server');
+  });
+
+  it('returns the raw key when there are no word characters', () => {
+    expect(fieldLabel('')).toBe('');
+    expect(fieldLabel('__')).toBe('__');
+  });
+});
+
+describe('fieldHelp', () => {
+  function field(
+    control: ControlKind,
+    meta?: FieldMeta,
+    value: ConfigValue = null,
+  ): SettingField {
+    return { key: 'k', control, meta, value };
+  }
+
+  it('prefers the schema description when present', () => {
+    expect(
+      fieldHelp(field('text', { kind: 'string', description: 'The model id.' })),
+    ).toBe('The model id.');
+  });
+
+  it('describes booleans', () => {
+    expect(fieldHelp(field('boolean', { kind: 'boolean' }))).toBe(
+      'On/off toggle.',
+    );
+  });
+
+  it('describes numbers with bounds and integer flag', () => {
+    expect(
+      fieldHelp(field('number', { kind: 'number', int: true, min: 0, max: 10 })),
+    ).toBe('Whole number. Between 0 and 10.');
+    expect(fieldHelp(field('number', { kind: 'number', min: 1 }))).toBe(
+      'Numeric value. At least 1.',
+    );
+    expect(fieldHelp(field('number', { kind: 'number', max: 5 }))).toBe(
+      'Numeric value. At most 5.',
+    );
+    expect(fieldHelp(field('number', { kind: 'number' }))).toBe('Numeric value.');
+  });
+
+  it('describes enums with and without options', () => {
+    expect(
+      fieldHelp(field('enum', { kind: 'enum', options: ['a', 'b'] })),
+    ).toBe('One of: a, b.');
+    expect(fieldHelp(field('enum', { kind: 'enum', options: [] }))).toBe(
+      'Choose a value.',
+    );
+    expect(fieldHelp(field('enum', { kind: 'enum' }))).toBe('Choose a value.');
+  });
+
+  it('describes text and multiline with length constraints', () => {
+    expect(
+      fieldHelp(field('text', { kind: 'string', minLength: 1, maxLength: 5 })),
+    ).toBe('Text value. 1–5 characters.');
+    expect(fieldHelp(field('text', { kind: 'string', minLength: 2 }))).toBe(
+      'Text value. At least 2 characters.',
+    );
+    expect(
+      fieldHelp(field('multiline', { kind: 'string', maxLength: 10 })),
+    ).toBe('Text value. Up to 10 characters.');
+    expect(fieldHelp(field('text', { kind: 'string' }))).toBe('Text value.');
+  });
+
+  it('describes JSON arrays and objects', () => {
+    expect(
+      fieldHelp(field('json', { kind: 'array', element: { kind: 'string' } }, [])),
+    ).toBe('Editable list (JSON).');
+    expect(fieldHelp(field('json', { kind: 'object', fields: {} }, {}))).toBe(
+      'Structured value (JSON).',
+    );
+  });
+
+  it('appends default, optional and nullable notes', () => {
+    expect(
+      fieldHelp(
+        field('text', { kind: 'string', default: 'agency', optional: true }),
+      ),
+    ).toBe('Text value. Default: agency. Optional.');
+    expect(
+      fieldHelp(field('number', { kind: 'number', default: 300000 })),
+    ).toBe('Numeric value. Default: 300000.');
+    expect(
+      fieldHelp(field('json', { kind: 'object', nullable: true }, null)),
+    ).toBe('Structured value (JSON). May be null.');
+  });
+
+  it('truncates long default values', () => {
+    const help = fieldHelp(
+      field('json', { kind: 'array', default: ['x'.repeat(60)] }, []),
+    );
+    expect(help).toContain('Default: ');
+    expect(help).toContain('…');
+    expect(help.length).toBeLessThan(80);
+  });
+
+  it('generates help without metadata', () => {
+    expect(fieldHelp(field('boolean'))).toBe('On/off toggle.');
   });
 });
