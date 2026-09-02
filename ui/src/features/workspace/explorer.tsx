@@ -750,6 +750,7 @@ function FeatureNode({
           {!sessions.loading &&
             rows.length === 0 &&
             (groups.data?.length ?? 0) === 0 &&
+            (childFeatures?.length ?? 0) === 0 &&
             !creating &&
             !importing && (
               <EmptyState message="No sessions yet. Start one from the + above." />
