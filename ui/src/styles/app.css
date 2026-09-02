@@ -688,7 +688,7 @@
   min-width: 0;
 }
 .crm-title {
-  font-size: 16px;
+  font-size: var(--fs-section);
   font-weight: 600;
   color: var(--text);
 }
@@ -704,7 +704,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: var(--fs-section);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
@@ -2471,7 +2471,7 @@ body.is-resizing {
 
 .cg-note-text {
   fill: var(--text);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 500;
   pointer-events: none;
 }
@@ -3290,7 +3290,7 @@ body.is-resizing {
 }
 
 .cg-test-method-name {
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -3461,7 +3461,7 @@ body.is-resizing {
 
 .pr-comment-body code,
 .pr-comment-body pre {
-  font-family: var(--mono-font, "SFMono-Regular", Consolas, "Liberation Mono", monospace);
+  font-family: var(--font-mono);
 }
 
 .pr-comment-body code {
@@ -7246,7 +7246,7 @@ body.is-resizing {
 }
 
 .device-code {
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 1.7rem;
   letter-spacing: 0.35em;
   font-weight: 600;
@@ -7764,7 +7764,7 @@ body.is-resizing {
   stroke-width: 4px;
   stroke-linejoin: round;
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   pointer-events: none;
   user-select: none;
@@ -8652,7 +8652,7 @@ body.is-resizing {
   flex-shrink: 0;
 }
 .netact-badge {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   padding: 1px 7px;
   border-radius: 999px;
@@ -8788,7 +8788,7 @@ body.is-resizing {
   gap: 12px;
 }
 .metapool-badge {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 1.4;
   padding: 1px 8px;
@@ -8982,7 +8982,7 @@ body.is-resizing {
   min-width: 16px;
   text-align: center;
   padding: 0 5px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 700;
   color: var(--text-muted);
   background: color-mix(in srgb, var(--border) 40%, transparent);
@@ -9307,7 +9307,7 @@ body.is-resizing {
 }
 .netcenter-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-section);
   font-weight: 600;
   color: var(--text);
 }
@@ -9322,7 +9322,7 @@ body.is-resizing {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: var(--fs-section);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
@@ -9427,7 +9427,7 @@ body.is-resizing {
   flex-wrap: wrap;
 }
 .netcenter-badge {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   padding: 2px 7px;
   border-radius: 999px;
   color: var(--text-muted);
@@ -9502,9 +9502,9 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 24px;
+  font-size: var(--fs-page-title);
   font-weight: 700;
-  line-height: 32px;
+  line-height: var(--lh-page-title);
   margin: 0;
 }
 .rb-subtitle {
@@ -9947,9 +9947,9 @@ body.is-resizing {
   padding-right: 4px;
 }
 .rb-card-header {
-  font-size: 16px;
+  font-size: var(--fs-section);
   font-weight: 600;
-  line-height: 22px;
+  line-height: var(--lh-section);
   margin: 0 0 12px;
 }
 .rb-section-header {
@@ -10016,7 +10016,7 @@ body.is-resizing {
   flex-shrink: 1;
   min-width: 0;
   max-width: 100%;
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 6px;
@@ -10413,7 +10413,7 @@ body.is-resizing {
 }
 .rb-confirm-title {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-size: var(--fs-section);
   font-weight: 600;
   line-height: 22px;
   color: var(--text);
@@ -10607,7 +10607,7 @@ body.is-resizing {
   border-width: 2px;
 }
 .rb-nav-skip {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -10729,7 +10729,7 @@ body.is-resizing {
   background: var(--surface-strong);
 }
 .rb-nav-queued {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -10805,7 +10805,7 @@ body.is-resizing {
 }
 .rb-finding-section-label {
   align-self: flex-start;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
