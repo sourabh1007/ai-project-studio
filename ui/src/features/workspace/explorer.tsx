@@ -23,7 +23,7 @@ import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
-import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Button, ConfirmDialog, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { SkeletonList } from '../../components/loading.js';
 import {
   ChevronIcon,
@@ -45,6 +45,7 @@ import {
   TimeIcon,
   TrashIcon,
   UsageIcon,
+  WarningIcon,
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
@@ -626,33 +627,31 @@ function FeatureNode({
           <PlusIcon />
         </button>
         {confirming ? (
-          <span className="row-confirm" role="group" aria-label="Confirm delete">
-            <button
-              type="button"
-              className="row-confirm-yes"
-              title="Confirm delete"
-              aria-label={`Confirm delete ${feature.name}`}
-              onClick={() => {
-                setConfirming(false);
-                void onDeleteFeature(feature);
-              }}
-            >
-              <CheckIcon />
-            </button>
-            <button
-              type="button"
-              className="row-confirm-no"
-              title="Cancel"
-              aria-label="Cancel delete"
-              onClick={() => setConfirming(false)}
-            >
-              <CloseIcon />
-            </button>
-          </span>
-        ) : (
-          <OverflowMenu
-            label={`Actions for ${feature.name}`}
-            actions={[
+          <ConfirmDialog
+            title="Delete feature"
+            icon={<WarningIcon />}
+            confirmLabel="Delete feature"
+            message={
+              <>
+                <p className="confirm-dialog-lead">
+                  Delete <strong>{feature.name}</strong>?
+                </p>
+                <p className="confirm-dialog-note">
+                  All of its sessions, transcripts and usage history will be
+                  permanently removed. This can&apos;t be undone.
+                </p>
+              </>
+            }
+            onCancel={() => setConfirming(false)}
+            onConfirm={() => {
+              setConfirming(false);
+              void onDeleteFeature(feature);
+            }}
+          />
+        ) : null}
+        <OverflowMenu
+          label={`Actions for ${feature.name}`}
+          actions={[
               {
                 label: 'Rename',
                 icon: <PencilIcon />,
@@ -697,7 +696,6 @@ function FeatureNode({
               },
             ]}
           />
-        )}
       </div>
 
       <div className="feature-tags">

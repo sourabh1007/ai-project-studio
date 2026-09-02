@@ -19,6 +19,18 @@ export interface PrReviewRemover {
   removeForFeature(featureId: string): void;
 }
 
+/**
+ * Stops a session's live usage tailer immediately. Deletion kills the terminal
+ * asynchronously, but the tailer keeps polling the CLI's usage store until the
+ * PTY actually exits — long enough to re-record usage AFTER we purge it, which
+ * both leaves a stray usage row behind and resurrects the just-deleted feature
+ * in the live view (forcing a second delete). Releasing the tailer up front,
+ * before purging usage, closes that race.
+ */
+export interface LiveUsageReleaser {
+  release(sessionId: string): void;
+}
+
 /** Removes the on-disk git worktree a feature's PR review checked out into. */
 export interface WorktreeRemover {
   removeForFeature(featureId: string): Promise<void>;
@@ -32,6 +44,8 @@ export interface WorkspaceAdminDeps {
   summaries: Pick<SummaryStore, 'delete'>;
   sessionFiles: Pick<SessionFilesStore, 'deleteBySession'>;
   terminals: TerminalCloser;
+  /** Optional: stops a session's live usage tailer before its usage is purged. */
+  liveUsage?: LiveUsageReleaser;
   /** Optional: purges a feature's PR review when the feature is deleted. */
   prReviews?: PrReviewRemover;
   /** Optional: removes a feature's PR review worktree from disk when deleted. */
@@ -55,6 +69,9 @@ export interface WorkspaceAdmin {
 
 export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
   async function purgeSession(sessionId: string): Promise<void> {
+    // Stop the live usage tailer FIRST so it cannot re-record usage after we
+    // purge it (which would leave a stray row and resurrect the feature).
+    deps.liveUsage?.release(sessionId);
     deps.terminals.close(sessionId);
     deps.usage.deleteBySession(sessionId);
     deps.sessionFiles.deleteBySession(sessionId);

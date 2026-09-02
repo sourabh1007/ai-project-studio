@@ -1366,13 +1366,18 @@ function main(): void {
   bus.on('session.discarded', (sessionId: string) => {
     // The session is being deleted: release its live usage tailer without a
     // final drain (its usage rows are being purged) and without re-persisting.
+    releaseTailer(sessionId);
+  });
+
+  /** Stops and forgets a session's live usage tailer (no final drain). */
+  function releaseTailer(sessionId: string): void {
     const tailer = tailers.get(sessionId);
     if (!tailer) {
       return;
     }
     tailers.delete(sessionId);
     tailer.stop();
-  });
+  }
 
   // Feature + summarizer.
   const featureService = createFeatureService({
@@ -1883,6 +1888,7 @@ function main(): void {
     summaries: summaryRepo,
     sessionFiles: sessionFilesRepo,
     terminals: terminalManager!,
+    liveUsage: { release: releaseTailer },
     prReviews: prReviewService,
     worktrees: worktreeService,
     sharedContext: contextService,

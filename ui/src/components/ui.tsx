@@ -212,3 +212,56 @@ export function ErrorText({ error }: { error: string | null }) {
   }
   return <p className="error-text">{error}</p>;
 }
+
+/**
+ * A focused confirmation dialog for destructive actions. Renders a warning
+ * icon, a headline, a body message, and Cancel / Confirm buttons. The confirm
+ * button is styled as a danger action by default.
+ */
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Delete',
+  cancelLabel = 'Cancel',
+  icon,
+  danger = true,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  icon?: ReactNode;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onCancel}>
+      <div className="confirm-dialog">
+        {icon ? (
+          <span
+            className={`confirm-dialog-icon ${danger ? 'is-danger' : ''}`.trim()}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+        ) : null}
+        <div className="confirm-dialog-body">{message}</div>
+        <div className="confirm-dialog-actions">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}

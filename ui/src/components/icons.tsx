@@ -7,6 +7,7 @@
 import type { ComponentType } from 'react';
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   BookOpen,
@@ -99,6 +100,7 @@ function makeIcon(Component: ComponentType<LucideProps>) {
 export const PencilIcon = makeIcon(Pencil);
 export const PlusIcon = makeIcon(Plus);
 export const TrashIcon = makeIcon(Trash2);
+export const WarningIcon = makeIcon(AlertTriangle);
 export const ImportIcon = makeIcon(Download);
 export const CheckIcon = makeIcon(Check);
 export const CloseIcon = makeIcon(X);

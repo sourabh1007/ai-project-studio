@@ -40,6 +40,7 @@ function harness(
     withContext?: boolean;
     withWorktrees?: boolean;
     worktreeFails?: boolean;
+    withoutLiveUsage?: boolean;
   } = {},
 ) {
   const calls: string[] = [];
@@ -95,6 +96,11 @@ function harness(
     terminals: {
       close: (id) => calls.push(`terminals.close:${id}`),
     },
+    liveUsage: options.withoutLiveUsage
+      ? undefined
+      : {
+          release: (id) => calls.push(`liveUsage.release:${id}`),
+        },
     prReviews: options.withPrReviews
       ? { removeForFeature: (id) => calls.push(`prReviews.removeForFeature:${id}`) }
       : undefined,
@@ -153,10 +159,12 @@ describe('workspace-admin-service', () => {
     expect(calls).toEqual([
       'feature.get:f1',
       'sessions.listByFeature:f1',
+      'liveUsage.release:s1',
       'terminals.close:s1',
       'usage.deleteBySession:s1',
       'sessionFiles.deleteBySession:s1',
       'transcripts.delete:s1',
+      'liveUsage.release:s2',
       'terminals.close:s2',
       'usage.deleteBySession:s2',
       'sessionFiles.deleteBySession:s2',
@@ -243,6 +251,7 @@ describe('workspace-admin-service', () => {
     const { admin, calls } = harness([session('s1')]);
     await admin.deleteSession('s1');
     expect(calls).toEqual([
+      'liveUsage.release:s1',
       'terminals.close:s1',
       'usage.deleteBySession:s1',
       'sessionFiles.deleteBySession:s1',
@@ -256,5 +265,19 @@ describe('workspace-admin-service', () => {
     await expect(admin.deleteSession('ghost')).rejects.toBeInstanceOf(
       NotFoundError,
     );
+  });
+
+  it('deletes a session when no live-usage releaser is wired', async () => {
+    const { admin, calls } = harness([session('s1')], {
+      withoutLiveUsage: true,
+    });
+    await admin.deleteSession('s1');
+    expect(calls).toEqual([
+      'terminals.close:s1',
+      'usage.deleteBySession:s1',
+      'sessionFiles.deleteBySession:s1',
+      'transcripts.delete:s1',
+      'sessions.delete:s1',
+    ]);
   });
 });
