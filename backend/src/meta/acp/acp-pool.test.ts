@@ -202,6 +202,7 @@ describe('MetaSessionPool', () => {
       idle: 0,
       busy: 0,
       ready: false,
+      served: 0,
     });
     await pool.start();
     expect(pool.ready).toBe(true);
@@ -212,9 +213,23 @@ describe('MetaSessionPool', () => {
       idle: 1,
       busy: 1,
       ready: true,
+      served: 0,
     });
     pool.release(leased);
     pool.close();
     expect(pool.ready).toBe(false);
+  });
+
+  it('counts each successfully served warm turn', async () => {
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => new FakeClient(),
+    });
+    await pool.start();
+    expect(pool.stats().served).toBe(0);
+    await pool.run({ prompt: 'one' });
+    await pool.run({ prompt: 'two' });
+    expect(pool.stats().served).toBe(2);
+    pool.close();
   });
 });

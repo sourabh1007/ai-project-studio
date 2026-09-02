@@ -36,6 +36,12 @@ export interface MetaSessionPoolStats {
   busy: number;
   /** True once at least one session is ready to serve a turn. */
   ready: boolean;
+  /**
+   * Cumulative count of warm turns successfully served since the pool started.
+   * A climbing value is live evidence that the IDE is really leasing warm
+   * sessions (rather than cold-spawning a CLI per request).
+   */
+  served: number;
 }
 
 interface Waiter {
@@ -54,6 +60,7 @@ export class MetaSessionPool {
   private readonly idle: PooledClient[] = [];
   private readonly waiters: Waiter[] = [];
   private liveCount = 0;
+  private servedCount = 0;
   private closed = false;
 
   constructor(private readonly config: MetaSessionPoolConfig) {}
@@ -90,7 +97,9 @@ export class MetaSessionPool {
   async run(request: AcpTurnRequest): Promise<AcpTurnResult> {
     const client = await this.acquire();
     try {
-      return await client.runTurn(request);
+      const result = await client.runTurn(request);
+      this.servedCount += 1;
+      return result;
     } finally {
       this.release(client);
     }
@@ -125,6 +134,7 @@ export class MetaSessionPool {
       idle: this.idle.length,
       busy: this.liveCount - this.idle.length,
       ready: this.ready,
+      served: this.servedCount,
     };
   }
 

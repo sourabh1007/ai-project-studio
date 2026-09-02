@@ -7,7 +7,7 @@ describe('createMetaPoolsRoutes', () => {
     const status: MetaPoolsStatus = {
       enabled: true,
       pools: [
-        { purpose: 'general', size: 5, live: 5, idle: 3, busy: 2, ready: true },
+        { purpose: 'general', size: 5, live: 5, idle: 3, busy: 2, ready: true, served: 12 },
       ],
     };
     const routes = createMetaPoolsRoutes({ status: () => status });

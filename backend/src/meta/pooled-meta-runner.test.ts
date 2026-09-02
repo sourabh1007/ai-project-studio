@@ -8,7 +8,7 @@ import {
 } from './pooled-meta-runner.js';
 
 function stats(overrides: Partial<MetaSessionPoolStats> = {}): MetaSessionPoolStats {
-  return { size: 1, live: 1, idle: 1, busy: 0, ready: true, ...overrides };
+  return { size: 1, live: 1, idle: 1, busy: 0, ready: true, served: 0, ...overrides };
 }
 
 function pool(
@@ -157,7 +157,7 @@ describe('createPooledMetaRunner', () => {
 describe('metaPoolsStatus', () => {
   it('projects each pool into a status entry', () => {
     const status = metaPoolsStatus(true, [
-      { purpose: 'general', stats: () => stats({ idle: 4, live: 5, size: 5 }) },
+      { purpose: 'general', stats: () => stats({ idle: 4, live: 5, size: 5, served: 7 }) },
       {
         purpose: 'review',
         stats: () => stats({ ready: false, idle: 0, live: 0, size: 2, busy: 0 }),
@@ -166,8 +166,8 @@ describe('metaPoolsStatus', () => {
     expect(status).toEqual({
       enabled: true,
       pools: [
-        { purpose: 'general', size: 5, live: 5, idle: 4, busy: 0, ready: true },
-        { purpose: 'review', size: 2, live: 0, idle: 0, busy: 0, ready: false },
+        { purpose: 'general', size: 5, live: 5, idle: 4, busy: 0, ready: true, served: 7 },
+        { purpose: 'review', size: 2, live: 0, idle: 0, busy: 0, ready: false, served: 0 },
       ],
     });
   });

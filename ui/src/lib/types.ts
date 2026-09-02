@@ -993,6 +993,8 @@ export interface MetaPoolStat {
   idle: number;
   busy: number;
   ready: boolean;
+  /** Cumulative warm turns served since start — climbs as the IDE uses the pool. */
+  served: number;
 }
 
 /** Aggregate warm metasession pool status for the Settings page. */

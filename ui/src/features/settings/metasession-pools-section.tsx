@@ -66,6 +66,9 @@ function PoolStatus({ pool }: { pool: MetaPoolStat }) {
         <span>
           <strong>{pool.live}</strong>/{pool.size} warm
         </span>
+        <span title="Warm turns served by this pool since it started">
+          <strong>{pool.served}</strong> served
+        </span>
       </span>
     </div>
   );
