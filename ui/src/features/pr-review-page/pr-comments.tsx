@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
-import { annotateDiffLines, type DiffLineKind, type DiffDisplayLine } from '../../lib/diff-lines.js';
+import {
+  annotateDiffLines,
+  rightSideLines,
+  type DiffLineKind,
+  type DiffDisplayLine,
+} from '../../lib/diff-lines.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import type {
   AddPrCommentInput,
@@ -19,6 +24,8 @@ export interface PrCommentsController {
   threads: PrCommentThread[];
   loading: boolean;
   error: string | null;
+  /** The PR review feature id these threads belong to (for file-content loads). */
+  featureId: string;
   reload: () => void;
   add: (input: AddPrCommentInput) => Promise<PrCommentThread | null>;
   setStatus: (
@@ -96,7 +103,7 @@ export function usePrComments(featureId: string): PrCommentsController {
     [api, featureId],
   );
 
-  return { threads, loading, error, reload, add, setStatus };
+  return { threads, loading, error, featureId, reload, add, setStatus };
 }
 
 function anchorLabel(thread: PrCommentThread): string {
@@ -307,21 +314,33 @@ export function FileLevelThreads({
 }
 
 /**
- * Renders a block of already-annotated diff lines with click-to-comment: any
- * new-side line (added or context) opens an in-place composer and existing
- * threads render inline beneath their anchored line. This is the reusable core
- * shared by the whole-file code diff and each per-test-method test segment; it
- * deliberately does NOT render file-level threads (the caller renders those once
- * so they are not duplicated across test-method segments).
+ * One prepared source line for the commentable renderer: the display text with
+ * any diff marker already stripped, the marker to show in its own column, the
+ * colour-coding class, and the new-side line number a comment anchors to (null =
+ * not commentable). Both the diff view and the full-file view build these.
  */
-export function CommentableDiffLines({
+interface PreparedLine {
+  code: string;
+  marker: string;
+  kind: DiffLineKind;
+  rightLine: number | null;
+}
+
+/**
+ * The reusable click-to-comment line list. Renders prepared lines with a gutter
+ * line number, change marker and code, opens an in-place composer on any
+ * commentable line, and shows existing threads inline beneath their anchored
+ * line. Shared by the diff view, the per-test-method segments and the full-file
+ * view so commenting behaves identically everywhere.
+ */
+function CommentableLines({
   comments,
   path,
-  lines,
+  prepared,
 }: {
   comments: PrCommentsController;
   path: string;
-  lines: DiffDisplayLine[];
+  prepared: PreparedLine[];
 }) {
   const [activeLine, setActiveLine] = useState<number | null>(null);
 
@@ -338,19 +357,11 @@ export function CommentableDiffLines({
 
   return (
     <div className="cg-diff" aria-label="File diff">
-      {lines.map((ln, i) => {
+      {prepared.map((ln, i) => {
         const commentable = ln.rightLine !== null;
         const lineThreads =
           ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
         const isActive = activeLine !== null && ln.rightLine === activeLine;
-        // Show the +/− change marker in its own narrow column and strip it from
-        // the code text, so a reviewer reads clean source instead of "+ +code".
-        const marker =
-          ln.kind === 'add' ? '+' : ln.kind === 'del' ? '−' : '';
-        const code =
-          ln.kind === 'add' || ln.kind === 'del' || ln.kind === 'ctx'
-            ? ln.raw.replace(/^[+\- ]/, '')
-            : ln.raw;
         return (
           <div key={i} className="cg-diff-row">
             <div
@@ -385,9 +396,9 @@ export function CommentableDiffLines({
                 {ln.rightLine ?? ''}
               </span>
               <span className="cg-diff-marker" aria-hidden="true">
-                {marker}
+                {ln.marker}
               </span>
-              <span className="cg-diff-code">{code || ' '}</span>
+              <span className="cg-diff-code">{ln.code || ' '}</span>
               {commentable && (
                 <span className="cg-diff-add-comment" aria-hidden="true">
                   {lineThreads.length > 0 ? '💬' : '+'}
@@ -423,11 +434,112 @@ export function CommentableDiffLines({
 }
 
 /**
+ * Renders a block of already-annotated diff lines with click-to-comment: any
+ * new-side line (added or context) opens an in-place composer and existing
+ * threads render inline beneath their anchored line. This is the reusable core
+ * shared by the whole-file code diff and each per-test-method test segment; it
+ * deliberately does NOT render file-level threads (the caller renders those once
+ * so they are not duplicated across test-method segments).
+ */
+export function CommentableDiffLines({
+  comments,
+  path,
+  lines,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  lines: DiffDisplayLine[];
+}) {
+  const prepared = useMemo<PreparedLine[]>(
+    () =>
+      lines.map((ln) => ({
+        kind: ln.kind,
+        rightLine: ln.rightLine,
+        // Show the +/− change marker in its own narrow column and strip it from
+        // the code text, so a reviewer reads clean source instead of "+ +code".
+        marker: ln.kind === 'add' ? '+' : ln.kind === 'del' ? '−' : '',
+        code:
+          ln.kind === 'add' || ln.kind === 'del' || ln.kind === 'ctx'
+            ? ln.raw.replace(/^[+\- ]/, '')
+            : ln.raw,
+      })),
+    [lines],
+  );
+  return <CommentableLines comments={comments} path={path} prepared={prepared} />;
+}
+
+/**
+ * The whole current file with the PR's changes highlighted (added lines get the
+ * "add" colouring) so a reviewer can read a change in full context — not just
+ * the bounded diff hunks — and comment on ANY line, not only the lines the diff
+ * happened to include. Existing threads render inline beneath their line and
+ * file-level threads render above.
+ */
+export function CommentableFullFile({
+  comments,
+  path,
+  content,
+  changedLines,
+}: {
+  comments: PrCommentsController;
+  path: string;
+  content: string;
+  changedLines: ReadonlySet<number>;
+}) {
+  const prepared = useMemo<PreparedLine[]>(() => {
+    const body = content.replace(/\n$/, '');
+    if (body.length === 0) {
+      return [];
+    }
+    return body.split('\n').map((text, i) => {
+      const lineNo = i + 1;
+      const changed = changedLines.has(lineNo);
+      return {
+        code: text,
+        marker: '',
+        // Highlight the PR's added lines; everything else reads as context.
+        kind: changed ? 'add' : 'ctx',
+        rightLine: lineNo,
+      };
+    });
+  }, [content, changedLines]);
+
+  const presentLines = useMemo(() => {
+    const set = new Set<number>();
+    for (const line of prepared) {
+      if (line.rightLine !== null) {
+        set.add(line.rightLine);
+      }
+    }
+    return set;
+  }, [prepared]);
+
+  if (prepared.length === 0) {
+    return <p className="muted">This file is empty.</p>;
+  }
+
+  return (
+    <div className="cg-diff-wrap cg-fullfile">
+      <FileLevelThreads
+        comments={comments}
+        path={path}
+        presentLines={presentLines}
+      />
+      <CommentableLines comments={comments} path={path} prepared={prepared} />
+    </div>
+  );
+}
+
+/**
  * The change-graph file popup's code diff, rendered so a reviewer can click any
  * new-side line (added or context) to open an in-place comment composer and post
  * straight to the PR at that file + line — no line-number dropdown. Existing
  * threads render inline beneath their anchored line, and file-level threads (no
  * line) render above the diff.
+ *
+ * When available, a "Full file" toggle lets the reviewer swap the bounded diff
+ * for the whole file (changes highlighted) and comment on any line; the file
+ * content is fetched lazily on first switch.
  */
 export function CommentableDiff({
   comments,
@@ -438,7 +550,45 @@ export function CommentableDiff({
   path: string;
   diff: string;
 }) {
+  const api = useApi();
+  const featureId = comments.featureId;
   const lines = useMemo(() => annotateDiffLines(diff), [diff]);
+  const changedLines = useMemo(() => {
+    const set = new Set<number>();
+    for (const line of rightSideLines(diff)) {
+      if (line.kind === 'added') {
+        set.add(line.line);
+      }
+    }
+    return set;
+  }, [diff]);
+
+  const [mode, setMode] = useState<'diff' | 'full'>('diff');
+  const [full, setFull] = useState<{ content: string | null } | null>(null);
+  const [loadingFull, setLoadingFull] = useState(false);
+  const [fullError, setFullError] = useState<string | null>(null);
+
+  const loadFull = useCallback(() => {
+    if (!featureId) {
+      return;
+    }
+    setLoadingFull(true);
+    setFullError(null);
+    api
+      .getPrReviewFileContent(featureId, path)
+      .then((res) => setFull({ content: res.content }))
+      .catch((err) =>
+        setFullError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setLoadingFull(false));
+  }, [api, featureId, path]);
+
+  const showFull = () => {
+    setMode('full');
+    if (full === null && !loadingFull) {
+      loadFull();
+    }
+  };
 
   if (lines.length === 0) {
     return (
@@ -458,8 +608,61 @@ export function CommentableDiff({
 
   return (
     <div className="cg-diff-wrap">
-      <FileLevelThreads comments={comments} path={path} presentLines={presentLines} />
-      <CommentableDiffLines comments={comments} path={path} lines={lines} />
+      {featureId && (
+        <div className="cg-diff-modeswitch" role="tablist" aria-label="Diff view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'diff'}
+            className={`cg-diff-mode${mode === 'diff' ? ' is-active' : ''}`}
+            onClick={() => setMode('diff')}
+          >
+            Diff
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'full'}
+            className={`cg-diff-mode${mode === 'full' ? ' is-active' : ''}`}
+            onClick={showFull}
+          >
+            Full file
+          </button>
+        </div>
+      )}
+      {mode === 'diff' ? (
+        <>
+          <FileLevelThreads
+            comments={comments}
+            path={path}
+            presentLines={presentLines}
+          />
+          <CommentableDiffLines comments={comments} path={path} lines={lines} />
+        </>
+      ) : loadingFull ? (
+        <p className="muted">Loading full file…</p>
+      ) : fullError !== null ? (
+        <div className="cg-fullfile-error">
+          <ErrorText error={fullError} />
+          <Button variant="ghost" onClick={loadFull}>
+            Retry
+          </Button>
+        </div>
+      ) : full !== null && full.content !== null ? (
+        <CommentableFullFile
+          comments={comments}
+          path={path}
+          content={full.content}
+          changedLines={changedLines}
+        />
+      ) : full !== null ? (
+        <p className="muted">
+          The full file couldn’t be read (it may have been deleted or is
+          binary). Switch back to the diff to review the changes.
+        </p>
+      ) : (
+        <p className="muted">Loading full file…</p>
+      )}
     </div>
   );
 }

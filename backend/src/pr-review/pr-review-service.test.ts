@@ -658,6 +658,41 @@ describe('createPrReviewService', () => {
     );
   });
 
+  it('reads the full worktree content of a file in the change graph', async () => {
+    const h = harness();
+    h.service.start(startInput);
+    await settle();
+    const result = await h.service.getFileContent('f1', 'src/Store.cs');
+    expect(result).toEqual({
+      path: 'src/Store.cs',
+      content: 'namespace App;\nclass Store { }',
+    });
+  });
+
+  it('returns null content when the worktree file cannot be read', async () => {
+    const h = harness({ fs: fakeFs({}) });
+    h.service.start(startInput);
+    await settle();
+    const result = await h.service.getFileContent('f1', 'src/Store.cs');
+    expect(result).toEqual({ path: 'src/Store.cs', content: null });
+  });
+
+  it('getFileContent rejects when the review is missing', async () => {
+    const h = harness();
+    await expect(h.service.getFileContent('missing', 'a.ts')).rejects.toThrow(
+      /not available/,
+    );
+  });
+
+  it('getFileContent rejects when the file is not in the change graph', async () => {
+    const h = harness();
+    h.service.start(startInput);
+    await settle();
+    await expect(h.service.getFileContent('f1', 'nope.ts')).rejects.toThrow(
+      /not in the change graph/,
+    );
+  });
+
   it('answers a change-graph chat question grounded in the diagram', async () => {
     const text = (prompt: string): string => {
       if (prompt.includes('Reviewer question')) {

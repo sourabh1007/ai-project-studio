@@ -2629,6 +2629,47 @@ body.is-resizing {
   margin-top: 6px;
 }
 
+/* Segmented Diff | Full file switch above the code view. */
+.cg-diff-modeswitch {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+}
+
+.cg-diff-mode {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.cg-diff-mode:hover {
+  color: var(--text);
+}
+
+.cg-diff-mode.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.cg-fullfile-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .cg-diff-filethreads {
   margin-bottom: 8px;
 }

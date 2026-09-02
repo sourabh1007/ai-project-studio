@@ -10,6 +10,7 @@ import type {
   PrReviewChatMessage,
   PrReviewChatReply,
   PrReviewEventMap,
+  PrReviewFileContent,
   PrReviewRepo,
   PrReviewStepKey,
   MetaUsageReader,
@@ -108,6 +109,14 @@ export interface PrReviewService {
    * on the review, so a second click returns immediately without re-running.
    */
   explainFile(featureId: string, path: string): Promise<PrReview>;
+  /**
+   * Reads the full current worktree content of one file in the review's change
+   * graph, so the reviewer can open the whole file (with the PR's changes
+   * highlighted) and comment on any line — not only the lines inside the bounded
+   * diff hunks. Throws when the review or the file (as a graph node) is unknown;
+   * returns null content when the file itself can't be read.
+   */
+  getFileContent(featureId: string, path: string): Promise<PrReviewFileContent>;
   /**
    * Answers a single question about the change graph for one category, grounded
    * in the diagram's data (modules, changed files, callers and references) plus
@@ -630,6 +639,21 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         ...existing,
         changeGraph: { ...existing.changeGraph, nodes },
       }));
+    },
+    async getFileContent(featureId, path) {
+      const existing = deps.reviews.get(featureId);
+      if (!existing) {
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
+      }
+      const file = existing.changeGraph.nodes.find((f) => f.path === path);
+      if (!file) {
+        throw new NotFoundError(`File is not in the change graph: ${path}`);
+      }
+      const content = await deps.changeGraphFs.readFile(
+        existing.worktreePath,
+        path,
+      );
+      return { path, content };
     },
     async chatAboutGraph(featureId, category, messages) {
       const existing = deps.reviews.get(featureId);

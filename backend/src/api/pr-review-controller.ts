@@ -42,6 +42,15 @@ function assertPath(body: unknown): string {
   return path;
 }
 
+/** Reads and validates the `path` query parameter of a file-content request. */
+function assertQueryPath(query: Record<string, string | undefined>): string {
+  const path = query.path;
+  if (typeof path !== 'string' || path.trim().length === 0) {
+    throw new ValidationError('A non-empty file "path" query is required.');
+  }
+  return path;
+}
+
 const CATEGORIES: ChangeGraphCategory[] = ['code', 'test'];
 
 /** Validates and extracts the `{ category, messages }` of a graph-chat request. */
@@ -126,6 +135,17 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
         body: await deps.prReviews.explainFile(
           req.params.featureId,
           assertPath(req.body),
+        ),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/features/:featureId/pr-review/files/content',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.prReviews.getFileContent(
+          req.params.featureId,
+          assertQueryPath(req.query),
         ),
       }),
     },

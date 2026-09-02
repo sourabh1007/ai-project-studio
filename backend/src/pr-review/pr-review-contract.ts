@@ -218,6 +218,18 @@ export interface PrReviewChatReply {
   annotations?: ChangeGraphAnnotations;
 }
 
+/**
+ * The full worktree content of one file in the review, so the reviewer can read
+ * and comment on the whole file — not only the diff hunks. `content` is null
+ * when the file can't be read from the worktree (e.g. deleted or binary).
+ */
+export interface PrReviewFileContent {
+  /** The repo-relative path requested (matches a change-graph node). */
+  path: string;
+  /** The whole current file text, or null when unreadable. */
+  content: string | null;
+}
+
 /** Minimal pull-request identity captured with a review so it can be re-run. */
 export interface PrReviewPull {
   number: number;

@@ -913,6 +913,20 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({ path: 'src/a.ts' }));
   });
 
+  it('gets a PR review file content via a GET with the encoded path', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ path: 'src/a b.ts', content: 'line1\nline2' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const res = await client.getPrReviewFileContent('f1', 'src/a b.ts');
+    expect(res).toEqual({ path: 'src/a b.ts', content: 'line1\nline2' });
+    const [url, init] = calls[0];
+    expect(url).toBe(
+      '/api/features/f1/pr-review/files/content?path=src%2Fa%20b.ts',
+    );
+    expect(init?.method).toBeUndefined();
+  });
+
   it('chats about a change graph via a JSON POST with category and messages', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ answer: 'Two files.' }));
     const client = createApiClient({ fetchImpl });

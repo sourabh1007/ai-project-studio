@@ -147,6 +147,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/pr-review/pull-latest',
       'post /features/:featureId/pr-review/steps/:step/retry',
       'post /features/:featureId/pr-review/files/explain',
+      'get /features/:featureId/pr-review/files/content',
       'post /features/:featureId/pr-review/graph-chat',
       'post /features/:featureId/pr-review/approve',
       'post /features/:featureId/pr-review/export-description',

@@ -77,6 +77,10 @@ function harness() {
     explainFile: (id: string, path: string) => (
       (calls.explainFile = [id, path]), Promise.resolve(review)
     ),
+    getFileContent: (id: string, path: string) => (
+      (calls.getFileContent = [id, path]),
+      Promise.resolve({ path, content: 'line1\nline2' })
+    ),
     chatAboutGraph: (id: string, category: string, messages: unknown) => (
       (calls.chatAboutGraph = [id, category, messages]),
       Promise.resolve({ answer: 'Two modules changed.' })
@@ -211,6 +215,42 @@ describe('pr-review-controller', () => {
         '/features/:featureId/pr-review/files/explain',
       )(req({ params: { featureId: 'f1' }, body: {} })),
     ).rejects.toThrow(/file "path" is required/);
+  });
+
+  it('reads the full file content from the path query', async () => {
+    const { routes, calls } = harness();
+    const res = await pick(
+      routes,
+      'get',
+      '/features/:featureId/pr-review/files/content',
+    )(req({ params: { featureId: 'f1' }, query: { path: 'a.ts' } }));
+    expect(res).toEqual({
+      status: 200,
+      body: { path: 'a.ts', content: 'line1\nline2' },
+    });
+    expect(calls.getFileContent).toEqual(['f1', 'a.ts']);
+  });
+
+  it('rejects a file-content request with a blank path query', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'get',
+        '/features/:featureId/pr-review/files/content',
+      )(req({ params: { featureId: 'f1' }, query: { path: '  ' } })),
+    ).rejects.toThrow(/file "path" query is required/);
+  });
+
+  it('rejects a file-content request with no path query', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'get',
+        '/features/:featureId/pr-review/files/content',
+      )(req({ params: { featureId: 'f1' }, query: {} })),
+    ).rejects.toThrow(/file "path" query is required/);
   });
 
   it('answers a graph-chat question from the request body', async () => {

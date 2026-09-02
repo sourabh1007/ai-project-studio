@@ -232,4 +232,93 @@ describe('CommentableDiff', () => {
       await screen.findByText(/No diff is available/),
     ).toBeInTheDocument();
   });
+
+  it('shows the full file and lets you comment on a line outside the diff', async () => {
+    const created = thread({ id: 'n', path: 'src/a.cs', line: 3, comments: [] });
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      getPrReviewFileContent: vi
+        .fn()
+        .mockResolvedValue({ path: 'src/a.cs', content: 'ctx\nadded\ntrailer' }),
+      addPrReviewComment: vi.fn().mockResolvedValue(created),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Full file' }));
+    // Line 3 (trailer) is not part of the bounded diff, but the full-file view
+    // makes every line commentable.
+    fireEvent.click(await screen.findByLabelText('Comment on line 3'));
+    fireEvent.change(screen.getByLabelText('Comment body'), {
+      target: { value: 'whole-file note' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    await waitFor(() =>
+      expect(client.addPrReviewComment).toHaveBeenCalledWith('f1', {
+        path: 'src/a.cs',
+        line: 3,
+        body: 'whole-file note',
+      }),
+    );
+    expect(client.getPrReviewFileContent).toHaveBeenCalledWith('f1', 'src/a.cs');
+  });
+
+  it('shows existing threads inline in the full-file view', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi
+        .fn()
+        .mockResolvedValue([thread({ id: 't1', path: 'src/a.cs', line: 3 })]),
+      getPrReviewFileContent: vi
+        .fn()
+        .mockResolvedValue({ path: 'src/a.cs', content: 'ctx\nadded\ntrailer' }),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Full file' }));
+    expect(await screen.findByText('a.cs:3')).toBeInTheDocument();
+  });
+
+  it('reports when the full file cannot be read', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      getPrReviewFileContent: vi
+        .fn()
+        .mockResolvedValue({ path: 'src/a.cs', content: null }),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Full file' }));
+    expect(
+      await screen.findByText(/full file couldn.t be read/i),
+    ).toBeInTheDocument();
+  });
+
+  it('shows an error and retries loading the full file', async () => {
+    const getContent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ path: 'src/a.cs', content: 'a\nb' });
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      getPrReviewFileContent: getContent,
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Full file' }));
+    expect(await screen.findByText('boom')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Comment on line 1')).toBeInTheDocument();
+    expect(getContent).toHaveBeenCalledTimes(2);
+  });
 });

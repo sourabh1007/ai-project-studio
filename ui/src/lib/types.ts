@@ -306,6 +306,16 @@ export interface ChangeGraphAnnotationNote {
   text: string;
 }
 
+/**
+ * The full current worktree content of one reviewed file, so the reviewer can
+ * open the whole file with the PR's changes highlighted and comment on any line.
+ * `content` is null when the file can't be read (deleted or binary).
+ */
+export interface PrReviewFileContent {
+  path: string;
+  content: string | null;
+}
+
 /** An overlay the "explain this diagram" chat attaches to enhance the diagram. */
 export interface ChangeGraphAnnotations {
   /** Node paths to spotlight. */

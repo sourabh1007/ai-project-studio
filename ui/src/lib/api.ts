@@ -38,6 +38,7 @@ import type {
   PrReviewStepKey,
   PrReviewChatMessage,
   PrReviewChatReply,
+  PrReviewFileContent,
   ChangeGraphCategory,
   PrCommentThread,
   PrCommentThreadStatus,
@@ -236,6 +237,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrReview>(
         `/features/${featureId}/pr-review/files/explain`,
         jsonBody({ path }),
+      ),
+    getPrReviewFileContent: (featureId: string, path: string) =>
+      request<PrReviewFileContent>(
+        `/features/${featureId}/pr-review/files/content?path=${encodeURIComponent(
+          path,
+        )}`,
       ),
     chatPrReviewGraph: (
       featureId: string,
