@@ -17,6 +17,7 @@ import {
   reviewedCount,
 } from '../../lib/review-signoff.js';
 import {
+  changeGraphDiffFiles,
   evidencePath,
   openFindingCount,
   resolutionOf,
@@ -573,9 +574,24 @@ export function ReviewBoardPage({
         // modal so the reviewer sees which file is referenced instead of a
         // dead click. (The Code Review page has been retired.)
         setDiffTarget({ title: path, detail: null, files: [] });
+        return;
       }
+      // No file path (e.g. the evidence source is literally "change graph"):
+      // take the reviewer to the change-graph diagram instead of dead-clicking.
+      // Prefer the Architecture perspective (which renders the diagram); if the
+      // board has no such perspective, fall back to a whole-change diff modal
+      // built from every graph node that captured a diff.
+      const hasArchitecture = board?.perspectives.some(
+        (p) => p.id === 'architecture',
+      );
+      if (hasArchitecture) {
+        setSelectedId('architecture');
+        return;
+      }
+      const files = changeGraphDiffFiles(changeGraph?.nodes ?? []);
+      setDiffTarget({ title: 'Change graph', detail: null, files });
     },
-    [resolveNodeDiff],
+    [resolveNodeDiff, board, changeGraph],
   );
   const openFindingDiff = useCallback(
     (finding: ReviewFinding) => {

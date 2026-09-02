@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  changeGraphDiffFiles,
   evidencePath,
   openFindingCount,
   parseResolutions,
@@ -89,6 +90,31 @@ describe('evidencePath', () => {
 
   it('returns null when the path token contains spaces', () => {
     expect(evidencePath('my file.cs')).toBeNull();
+  });
+});
+
+describe('changeGraphDiffFiles', () => {
+  it('collects distinct diffs in node order and skips diffless nodes', () => {
+    expect(
+      changeGraphDiffFiles([
+        { path: 'a.ts', diff: 'DIFF A' },
+        { path: 'b.ts', diff: null },
+        { path: 'a.ts', diff: 'DIFF A DUP' },
+        { path: 'c.ts', diff: 'DIFF C' },
+      ]),
+    ).toEqual([
+      { path: 'a.ts', diff: 'DIFF A' },
+      { path: 'c.ts', diff: 'DIFF C' },
+    ]);
+  });
+
+  it('returns an empty array when no node has a diff', () => {
+    expect(
+      changeGraphDiffFiles([
+        { path: 'a.ts', diff: null },
+        { path: 'b.ts', diff: null },
+      ]),
+    ).toEqual([]);
   });
 });
 

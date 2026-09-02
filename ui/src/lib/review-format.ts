@@ -95,3 +95,25 @@ export function evidencePath(source: string): string | null {
   if (/\s/.test(cleaned)) return null;
   return cleaned;
 }
+
+/**
+ * Collects the distinct per-file diffs captured in a change graph, in node
+ * order. Used to build the whole-change diff view when an evidence source names
+ * the change graph itself (e.g. "change graph") rather than a single file, so
+ * clicking that evidence still surfaces the relevant diffs instead of a dead
+ * click. Nodes without a captured diff (e.g. boundary callers) are skipped, and
+ * duplicate paths collapse to their first occurrence.
+ */
+export function changeGraphDiffFiles(
+  nodes: readonly { path: string; diff: string | null }[],
+): { path: string; diff: string }[] {
+  const seen = new Set<string>();
+  const files: { path: string; diff: string }[] = [];
+  for (const node of nodes) {
+    if (node.diff && !seen.has(node.path)) {
+      seen.add(node.path);
+      files.push({ path: node.path, diff: node.diff });
+    }
+  }
+  return files;
+}
