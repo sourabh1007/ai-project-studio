@@ -987,16 +987,37 @@ export interface ConfigUpdateResult {
   requiresRestart: boolean;
 }
 
+/** Lifecycle state of a single warm metasession. */
+export type MetaSessionState = 'warming' | 'idle' | 'busy';
+
+/** Live status of one warm metasession, for per-session status surfaces. */
+export interface MetaSessionInfo {
+  /** Stable id within the pool's lifetime (e.g. `s1`, `s2`). */
+  id: string;
+  /** What the session is doing right now. */
+  state: MetaSessionState;
+  /** Warm turns this specific session has served. */
+  served: number;
+  /** Epoch ms when the session began booting. */
+  startedAt: number;
+  /** Epoch ms of the most recent lease/turn, or null if never used. */
+  lastActiveAt: number | null;
+}
+
 /** Live warm-capacity snapshot for one metasession pool. */
 export interface MetaPoolStat {
   purpose: string;
   size: number;
+  /** Telemetry-suggested warm size from observed peak concurrency. */
+  suggestedSize: number;
   live: number;
   idle: number;
   busy: number;
   ready: boolean;
   /** Cumulative warm turns served since start — climbs as the IDE uses the pool. */
   served: number;
+  /** Per-session live status, ordered by creation. */
+  sessions: MetaSessionInfo[];
 }
 
 /** Aggregate warm metasession pool status for the Settings page. */

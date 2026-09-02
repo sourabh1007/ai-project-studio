@@ -193,6 +193,7 @@ describe('MetaSessionPool', () => {
   it('reports readiness and warm-capacity stats', async () => {
     const pool = new MetaSessionPool({
       size: 2,
+      now: () => 5000,
       createClient: () => new FakeClient(),
     });
     expect(pool.ready).toBe(false);
@@ -203,11 +204,13 @@ describe('MetaSessionPool', () => {
       busy: 0,
       ready: false,
       served: 0,
+      sessions: [],
     });
     await pool.start();
     expect(pool.ready).toBe(true);
     const leased = await pool.acquire();
-    expect(pool.stats()).toEqual({
+    const stats = pool.stats();
+    expect(stats).toMatchObject({
       size: 2,
       live: 2,
       idle: 1,
@@ -215,9 +218,79 @@ describe('MetaSessionPool', () => {
       ready: true,
       served: 0,
     });
+    expect(stats.sessions).toEqual([
+      { id: 's1', state: 'busy', served: 0, startedAt: 5000, lastActiveAt: 5000 },
+      { id: 's2', state: 'idle', served: 0, startedAt: 5000, lastActiveAt: null },
+    ]);
     pool.release(leased);
+    expect(pool.stats().sessions[0].state).toBe('idle');
     pool.close();
     expect(pool.ready).toBe(false);
+  });
+
+  it('exposes per-session served counts and warming state', async () => {
+    let now = 100;
+    const pool = new MetaSessionPool({
+      size: 1,
+      now: () => now,
+      createClient: () => new FakeClient(),
+    });
+    await pool.start();
+    now = 200;
+    await pool.run({ prompt: 'one' });
+    const [session] = pool.stats().sessions;
+    expect(session).toEqual({
+      id: 's1',
+      state: 'idle',
+      served: 1,
+      startedAt: 100,
+      lastActiveAt: 200,
+    });
+    pool.close();
+  });
+
+  it('shows a session as warming until it finishes booting', async () => {
+    let resolveInit: () => void = () => undefined;
+    const client = new FakeClient();
+    client.initialize = () =>
+      new Promise<void>((resolve) => {
+        resolveInit = resolve;
+      });
+    const pool = new MetaSessionPool({
+      size: 1,
+      now: () => 1,
+      createClient: () => client,
+    });
+    const starting = pool.start();
+    await flush();
+    expect(pool.stats().sessions).toEqual([
+      { id: 's1', state: 'warming', served: 0, startedAt: 1, lastActiveAt: null },
+    ]);
+    resolveInit();
+    await starting;
+    expect(pool.stats().sessions[0].state).toBe('idle');
+    pool.close();
+  });
+
+  it('drops a session that exits mid-turn without double-counting it', async () => {
+    const first = new FakeClient({
+      run: async () => {
+        first.exit();
+        return { text: 'ok', sessionId: 's', stopReason: 'end_turn', usage: null };
+      },
+    });
+    const queue: FakeClient[] = [first, new FakeClient()];
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => queue.shift() ?? new FakeClient(),
+    });
+    await pool.start();
+    const result = await pool.run({ prompt: 'x' });
+    expect(result.text).toBe('ok');
+    // Aggregate still counts the served turn, but the exited session is gone.
+    expect(pool.stats().served).toBe(1);
+    expect(pool.stats().sessions.every((s) => s.id !== 's1')).toBe(true);
+    pool.close();
   });
 
   it('counts each successfully served warm turn', async () => {

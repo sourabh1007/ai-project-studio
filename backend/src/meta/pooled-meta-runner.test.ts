@@ -8,7 +8,16 @@ import {
 } from './pooled-meta-runner.js';
 
 function stats(overrides: Partial<MetaSessionPoolStats> = {}): MetaSessionPoolStats {
-  return { size: 1, live: 1, idle: 1, busy: 0, ready: true, served: 0, ...overrides };
+  return {
+    size: 1,
+    live: 1,
+    idle: 1,
+    busy: 0,
+    ready: true,
+    served: 0,
+    sessions: [],
+    ...overrides,
+  };
 }
 
 function pool(
@@ -152,6 +161,72 @@ describe('createPooledMetaRunner', () => {
     expect(out).toBe('cold-text');
     expect(cold.calls).toHaveLength(1);
   });
+
+  it('records demand telemetry for the routed purpose on a warm turn', async () => {
+    const events: string[] = [];
+    const demand = {
+      begin: (purpose: string) => events.push(`begin:${purpose}`),
+      end: (purpose: string) => events.push(`end:${purpose}`),
+      suggestion: () => 1,
+    };
+    const runner = createPooledMetaRunner({
+      pools: [pool('general'), pool('review')],
+      fallback: coldRunner(),
+      demand,
+    });
+    await runner.runDetailed(req({ purpose: 'review' }));
+    expect(events).toEqual(['begin:review', 'end:review']);
+  });
+
+  it('records demand under general when no pool matches the purpose', async () => {
+    const events: string[] = [];
+    const demand = {
+      begin: (purpose: string) => events.push(`begin:${purpose}`),
+      end: (purpose: string) => events.push(`end:${purpose}`),
+      suggestion: () => 1,
+    };
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pools: [pool('review', { ready: true })],
+      fallback: cold,
+      demand,
+    });
+    await runner.run(req({ purpose: 'nope' }));
+    // No general pool, so it spills to cold but is still counted under the
+    // request's own purpose.
+    expect(events).toEqual(['begin:nope', 'end:nope']);
+  });
+
+  it('ends demand even when a warm turn throws and spills to cold', async () => {    const events: string[] = [];
+    const demand = {
+      begin: (purpose: string) => events.push(`begin:${purpose}`),
+      end: (purpose: string) => events.push(`end:${purpose}`),
+      suggestion: () => 1,
+    };
+    const runner = createPooledMetaRunner({
+      pools: [pool('general', { error: new Error('boom') })],
+      fallback: coldRunner('cold-text'),
+      demand,
+    });
+    await runner.run(req());
+    expect(events).toEqual(['begin:general', 'end:general']);
+  });
+
+  it('counts demand under general when no pool and no purpose are given', async () => {
+    const events: string[] = [];
+    const demand = {
+      begin: (purpose: string) => events.push(`begin:${purpose}`),
+      end: (purpose: string) => events.push(`end:${purpose}`),
+      suggestion: () => 1,
+    };
+    const runner = createPooledMetaRunner({
+      pools: [pool('review', { ready: true })],
+      fallback: coldRunner('cold-text'),
+      demand,
+    });
+    await runner.run(req());
+    expect(events).toEqual(['begin:general', 'end:general']);
+  });
 });
 
 describe('metaPoolsStatus', () => {
@@ -166,9 +241,38 @@ describe('metaPoolsStatus', () => {
     expect(status).toEqual({
       enabled: true,
       pools: [
-        { purpose: 'general', size: 5, live: 5, idle: 4, busy: 0, ready: true, served: 7 },
-        { purpose: 'review', size: 2, live: 0, idle: 0, busy: 0, ready: false, served: 0 },
+        {
+          purpose: 'general',
+          suggestedSize: 5,
+          size: 5,
+          live: 5,
+          idle: 4,
+          busy: 0,
+          ready: true,
+          served: 7,
+          sessions: [],
+        },
+        {
+          purpose: 'review',
+          suggestedSize: 2,
+          size: 2,
+          live: 0,
+          idle: 0,
+          busy: 0,
+          ready: false,
+          served: 0,
+          sessions: [],
+        },
       ],
     });
+  });
+
+  it('uses the demand telemetry to suggest a warm size when provided', () => {
+    const status = metaPoolsStatus(
+      true,
+      [{ purpose: 'general', stats: () => stats({ size: 5 }) }],
+      { suggestion: (purpose) => (purpose === 'general' ? 8 : 1) },
+    );
+    expect(status.pools[0].suggestedSize).toBe(8);
   });
 });

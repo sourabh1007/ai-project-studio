@@ -22,6 +22,25 @@ export interface MetaSessionPoolConfig {
   size: number;
   /** Creates a fresh, un-initialized client (spawns a real ACP process). */
   createClient: () => PooledClient;
+  /** Clock for session timestamps; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+/** Lifecycle state of a single warm session. */
+export type MetaSessionState = 'warming' | 'idle' | 'busy';
+
+/** Live status of one warm session, for per-session status surfaces. */
+export interface MetaSessionInfo {
+  /** Stable id within the pool's lifetime (e.g. `s1`, `s2`). */
+  id: string;
+  /** What the session is doing right now. */
+  state: MetaSessionState;
+  /** Warm turns this specific session has served. */
+  served: number;
+  /** Epoch ms when the session began booting. */
+  startedAt: number;
+  /** Epoch ms of the most recent lease/turn, or null if never used. */
+  lastActiveAt: number | null;
 }
 
 /** Live warm-capacity snapshot for a single pool. */
@@ -42,11 +61,23 @@ export interface MetaSessionPoolStats {
    * sessions (rather than cold-spawning a CLI per request).
    */
   served: number;
+  /** Per-session live status, ordered by creation. */
+  sessions: MetaSessionInfo[];
 }
 
 interface Waiter {
   resolve: (client: PooledClient) => void;
   reject: (error: Error) => void;
+}
+
+interface SessionRecord {
+  /** Creation order, used for stable sorting. */
+  seq: number;
+  id: string;
+  state: MetaSessionState;
+  served: number;
+  startedAt: number;
+  lastActiveAt: number | null;
 }
 
 /**
@@ -59,11 +90,16 @@ interface Waiter {
 export class MetaSessionPool {
   private readonly idle: PooledClient[] = [];
   private readonly waiters: Waiter[] = [];
+  private readonly records = new Map<PooledClient, SessionRecord>();
   private liveCount = 0;
   private servedCount = 0;
+  private seq = 0;
   private closed = false;
+  private readonly now: () => number;
 
-  constructor(private readonly config: MetaSessionPoolConfig) {}
+  constructor(private readonly config: MetaSessionPoolConfig) {
+    this.now = config.now ?? (() => Date.now());
+  }
 
   /** Warms the pool to its configured size. Resolves once all sessions boot. */
   async start(): Promise<void> {
@@ -81,6 +117,7 @@ export class MetaSessionPool {
     }
     const ready = this.idle.shift();
     if (ready) {
+      this.markBusy(ready);
       return Promise.resolve(ready);
     }
     return new Promise((resolve, reject) => {
@@ -99,6 +136,11 @@ export class MetaSessionPool {
     try {
       const result = await client.runTurn(request);
       this.servedCount += 1;
+      const record = this.records.get(client);
+      if (record) {
+        record.served += 1;
+        record.lastActiveAt = this.now();
+      }
       return result;
     } finally {
       this.release(client);
@@ -109,6 +151,7 @@ export class MetaSessionPool {
   close(): void {
     this.closed = true;
     for (const client of this.idle.splice(0)) {
+      this.records.delete(client);
       client.kill();
     }
     for (const waiter of this.waiters.splice(0)) {
@@ -128,6 +171,15 @@ export class MetaSessionPool {
 
   /** Live snapshot of the pool's warm capacity for status surfaces. */
   stats(): MetaSessionPoolStats {
+    const sessions = [...this.records.values()]
+      .sort((left, right) => left.seq - right.seq)
+      .map((record) => ({
+        id: record.id,
+        state: record.state,
+        served: record.served,
+        startedAt: record.startedAt,
+        lastActiveAt: record.lastActiveAt,
+      }));
     return {
       size: this.config.size,
       live: this.liveCount,
@@ -135,6 +187,7 @@ export class MetaSessionPool {
       busy: this.liveCount - this.idle.length,
       ready: this.ready,
       served: this.servedCount,
+      sessions,
     };
   }
 
@@ -143,15 +196,37 @@ export class MetaSessionPool {
       return;
     }
     this.liveCount += 1;
+    this.seq += 1;
     const client = this.config.createClient();
+    this.records.set(client, {
+      seq: this.seq,
+      id: `s${this.seq}`,
+      state: 'warming',
+      served: 0,
+      startedAt: this.now(),
+      lastActiveAt: null,
+    });
     client.onExit(() => this.handleExit(client));
     try {
       await client.initialize();
     } catch (error) {
       this.liveCount -= 1;
+      this.records.delete(client);
       throw error;
     }
     this.checkIn(client);
+  }
+
+  private markBusy(client: PooledClient): void {
+    // Only ever called for a live, checked-in client, so its record exists.
+    const record = this.records.get(client)!;
+    record.state = 'busy';
+    record.lastActiveAt = this.now();
+  }
+
+  private markIdle(client: PooledClient): void {
+    const record = this.records.get(client)!;
+    record.state = 'idle';
   }
 
   private checkIn(client: PooledClient): void {
@@ -160,14 +235,17 @@ export class MetaSessionPool {
     }
     const waiter = this.waiters.shift();
     if (waiter) {
+      this.markBusy(client);
       waiter.resolve(client);
       return;
     }
+    this.markIdle(client);
     this.idle.push(client);
   }
 
   private handleExit(client: PooledClient): void {
     this.liveCount -= 1;
+    this.records.delete(client);
     const index = this.idle.indexOf(client);
     if (index !== -1) {
       this.idle.splice(index, 1);

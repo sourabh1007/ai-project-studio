@@ -41,6 +41,14 @@ export const metaConfigSchema = z.object({
     /** Timeout (ms) for a single warm turn (session/new + session/prompt). */
     turnTimeoutMs: z.number().int().positive(),
     /**
+     * Rolling window (ms) over which per-purpose peak concurrency is measured
+     * to suggest a warm size. A longer window smooths spikes; a shorter one
+     * reacts faster to a change in load.
+     */
+    demandWindowMs: z.number().int().positive(),
+    /** Upper bound for a telemetry-suggested warm size. */
+    maxSuggestedSize: z.number().int().positive(),
+    /**
      * The warm pools to keep ready, one per purpose. Purposes must be unique;
      * the `general` pool is the fallback for any unrouted request, so a pool
      * with that purpose must exist.
@@ -95,6 +103,11 @@ export const metaDefaults: MetaConfig = {
     executable: 'copilot',
     initializeTimeoutMs: 120_000,
     turnTimeoutMs: 300_000,
+    // 10-minute window: long enough to capture a burst of parallel AI work
+    // (PR review + review board + summaries) without over-reacting to a blip.
+    demandWindowMs: 600_000,
+    // Never suggest keeping more than 12 warm sessions from telemetry alone.
+    maxSuggestedSize: 12,
     // One shared pool of 5 warm sessions. Add purpose-specific pools here to
     // dedicate warm capacity to a workflow; unrouted requests use 'general'.
     pools: [{ purpose: 'general', size: 5 }],

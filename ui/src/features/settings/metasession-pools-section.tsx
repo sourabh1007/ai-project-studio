@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import {
@@ -7,14 +7,47 @@ import {
   EmptyState,
   ErrorText,
   IconBadge,
+  Modal,
 } from '../../components/ui.js';
-import { ActivityIcon, PlusIcon, TrashIcon } from '../../components/icons.js';
+import {
+  ActivityIcon,
+  InfoIcon,
+  PlusIcon,
+  TrashIcon,
+} from '../../components/icons.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { ErrorState } from '../../components/error-state.js';
-import type { ConfigValue, MetaPoolStat } from '../../lib/types.js';
+import type {
+  ConfigValue,
+  MetaPoolStat,
+  MetaSessionInfo,
+  MetaSessionState,
+} from '../../lib/types.js';
 
 /** How often the live warm-pool status is refreshed while the page is open. */
 const POLL_MS = 4000;
+
+/** Milliseconds an exiting session chip lingers so its removal animates. */
+const EXIT_MS = 320;
+
+/**
+ * Purposes the IDE routes metasession work to. `general` is the required
+ * fallback for any request without a dedicated pool; the others are workflow
+ * routing keys used across the app. Surfaced so users don't have to guess what
+ * to type when adding a pool.
+ */
+const KNOWN_PURPOSES: Array<{ purpose: string; label: string; hint: string }> = [
+  {
+    purpose: 'general',
+    label: 'General',
+    hint: 'Fallback for every AI turn without a dedicated pool — PR review, summaries, repo context, review board, monitors.',
+  },
+  {
+    purpose: 'self-recovery',
+    label: 'Self-recovery',
+    hint: 'Read-only diagnosis turns that analyze a stuck session and suggest a fix.',
+  },
+];
 
 interface PoolDraft {
   purpose: string;
@@ -46,30 +79,229 @@ function readWarmPool(value: ConfigValue): WarmPoolConfig | null {
   return wp as unknown as WarmPoolConfig;
 }
 
-function PoolStatus({ pool }: { pool: MetaPoolStat }) {
+const STATE_LABEL: Record<MetaSessionState, string> = {
+  warming: 'Warming',
+  idle: 'Idle',
+  busy: 'Busy',
+};
+
+function sessionSeq(id: string): number {
+  const n = Number.parseInt(id.replace(/^\D+/, ''), 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return '0s';
+  }
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const parts: string[] = [];
+  if (h > 0) {
+    parts.push(`${h}h`);
+  }
+  if (h > 0 || m > 0) {
+    parts.push(`${m}m`);
+  }
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+
+function formatClock(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString();
+}
+
+/**
+ * Merges the live session list with recently-removed sessions so additions
+ * animate in and removals animate out before disappearing. Session ids are
+ * unique and monotonically increasing, so an id never re-enters after leaving.
+ */
+function useAnimatedSessions(
+  sessions: readonly MetaSessionInfo[],
+): Array<{ info: MetaSessionInfo; exiting: boolean }> {
+  const [rendered, setRendered] = useState<
+    Array<{ info: MetaSessionInfo; exiting: boolean }>
+  >([]);
+  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    const timersRef = timers.current;
+    setRendered((prev) => {
+      const liveIds = new Set(sessions.map((s) => s.id));
+      const next = sessions.map((info) => ({ info, exiting: false }));
+      for (const item of prev) {
+        if (!liveIds.has(item.info.id)) {
+          if (!timersRef.has(item.info.id)) {
+            const timer = setTimeout(() => {
+              timersRef.delete(item.info.id);
+              setRendered((cur) => cur.filter((x) => x.info.id !== item.info.id));
+            }, EXIT_MS);
+            timersRef.set(item.info.id, timer);
+          }
+          next.push({ info: item.info, exiting: true });
+        }
+      }
+      next.sort((a, b) => sessionSeq(a.info.id) - sessionSeq(b.info.id));
+      return next;
+    });
+  }, [sessions]);
+
+  useEffect(() => {
+    const timersRef = timers.current;
+    return () => {
+      for (const timer of timersRef.values()) {
+        clearTimeout(timer);
+      }
+      timersRef.clear();
+    };
+  }, []);
+
+  return rendered;
+}
+
+function SessionDetailsModal({
+  info,
+  now,
+  onClose,
+}: {
+  info: MetaSessionInfo;
+  now: number;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={`Metasession ${info.id}`} onClose={onClose}>
+      <div className="metasession-detail">
+        <div className="metasession-detail-head">
+          <span
+            className={`metasession-chip-dot metasession-dot-${info.state}`}
+          />
+          <span className="metasession-detail-state">
+            {STATE_LABEL[info.state]}
+          </span>
+        </div>
+        <dl className="metasession-detail-grid">
+          <dt>Session id</dt>
+          <dd>{info.id}</dd>
+          <dt>State</dt>
+          <dd>{STATE_LABEL[info.state]}</dd>
+          <dt>Turns served</dt>
+          <dd>{info.served}</dd>
+          <dt>Uptime</dt>
+          <dd>{formatDuration(Math.max(0, now - info.startedAt))}</dd>
+          <dt>Started</dt>
+          <dd>{formatClock(info.startedAt)}</dd>
+          <dt>Last active</dt>
+          <dd>
+            {info.lastActiveAt === null
+              ? 'Never leased yet'
+              : `${formatClock(info.lastActiveAt)} (${formatDuration(
+                  Math.max(0, now - info.lastActiveAt),
+                )} ago)`}
+          </dd>
+        </dl>
+        <p className="metasession-detail-note">
+          A climbing “turns served” is live evidence this warm session is really
+          handling IDE AI requests instead of a cold CLI spawn.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function PoolStatus({
+  pool,
+  draftSize,
+  onApplySuggestion,
+}: {
+  pool: MetaPoolStat;
+  draftSize: number;
+  onApplySuggestion: (size: number) => void;
+}) {
+  const rendered = useAnimatedSessions(pool.sessions);
+  const [detail, setDetail] = useState<MetaSessionInfo | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const suggestionDiffers =
+    Number.isFinite(draftSize) && pool.suggestedSize !== draftSize;
+
   return (
     <div className="metapool-live">
-      <span
-        className={`metapool-badge ${
-          pool.ready ? 'metapool-badge-ready' : 'metapool-badge-warming'
-        }`}
-      >
-        {pool.ready ? 'Ready' : 'Warming…'}
-      </span>
-      <span className="metapool-stats">
-        <span>
-          <strong>{pool.idle}</strong> idle
+      <div className="metapool-live-head">
+        <span
+          className={`metapool-badge ${
+            pool.ready ? 'metapool-badge-ready' : 'metapool-badge-warming'
+          }`}
+        >
+          {pool.ready ? 'Ready' : 'Warming…'}
         </span>
-        <span>
-          <strong>{pool.busy}</strong> busy
+        <span className="metapool-stats">
+          <span>
+            <strong>{pool.idle}</strong> idle
+          </span>
+          <span>
+            <strong>{pool.busy}</strong> busy
+          </span>
+          <span>
+            <strong>{pool.live}</strong>/{pool.size} warm
+          </span>
+          <span title="Warm turns served by this pool since it started">
+            <strong>{pool.served}</strong> served
+          </span>
         </span>
-        <span>
-          <strong>{pool.live}</strong>/{pool.size} warm
+        <span
+          className="metapool-suggest"
+          title="Suggested warm size from observed peak concurrency in the recent telemetry window"
+        >
+          Suggested <strong>{pool.suggestedSize}</strong>
+          {suggestionDiffers && (
+            <button
+              type="button"
+              className="metapool-suggest-apply"
+              onClick={() => onApplySuggestion(pool.suggestedSize)}
+            >
+              Apply
+            </button>
+          )}
         </span>
-        <span title="Warm turns served by this pool since it started">
-          <strong>{pool.served}</strong> served
-        </span>
-      </span>
+      </div>
+
+      {rendered.length > 0 && (
+        <div className="metapool-sessions" role="list">
+          {rendered.map(({ info, exiting }) => (
+            <button
+              type="button"
+              role="listitem"
+              key={info.id}
+              className={`metasession-chip metasession-chip-${info.state}${
+                exiting ? ' metasession-chip-exit' : ''
+              }`}
+              title={`${info.id} · ${STATE_LABEL[info.state]} · ${info.served} served`}
+              onClick={() => !exiting && setDetail(info)}
+            >
+              <span
+                className={`metasession-chip-dot metasession-dot-${info.state}`}
+              />
+              <span className="metasession-chip-id">{info.id}</span>
+              <span className="metasession-chip-served">{info.served}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {detail && (
+        <SessionDetailsModal
+          info={detail}
+          now={now}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </div>
   );
 }
@@ -96,6 +328,7 @@ export function MetasessionPoolsSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [showPurposes, setShowPurposes] = useState(false);
 
   useEffect(() => {
     if (savedWarmPool) {
@@ -124,6 +357,11 @@ export function MetasessionPoolsSection() {
     return map;
   }, [status.data]);
 
+  const usedPurposes = useMemo(
+    () => new Set(pools.map((p) => p.purpose.trim())),
+    [pools],
+  );
+
   function setPool(index: number, patch: Partial<PoolDraft>) {
     setPools((current) =>
       current.map((p, i) => (i === index ? { ...p, ...patch } : p)),
@@ -131,8 +369,8 @@ export function MetasessionPoolsSection() {
     setSaved(false);
   }
 
-  function addPool() {
-    setPools((current) => [...current, { purpose: '', size: '5' }]);
+  function addPool(purpose = '') {
+    setPools((current) => [...current, { purpose, size: '5' }]);
     setSaved(false);
   }
 
@@ -188,6 +426,9 @@ export function MetasessionPoolsSection() {
 
   const bridge = desktopBridge();
   const loading = config.loading && !config.data;
+  const suggestablePurposes = KNOWN_PURPOSES.filter(
+    (p) => !usedPurposes.has(p.purpose),
+  );
 
   return (
     <Card>
@@ -204,7 +445,44 @@ export function MetasessionPoolsSection() {
             </p>
           </div>
         </div>
+        <button
+          type="button"
+          className="metapool-help-toggle"
+          onClick={() => setShowPurposes((v) => !v)}
+        >
+          <InfoIcon size={14} /> What is a purpose?
+        </button>
       </div>
+
+      {showPurposes && (
+        <div className="metapool-help">
+          <p className="metapool-help-lead">
+            A <strong>purpose</strong> is a routing key. Every AI turn the IDE
+            runs carries a purpose; it leases a warm session from the pool with
+            the matching purpose, or the required <code>general</code> pool if
+            none matches. Dedicate a pool to a workflow to give it its own warm
+            capacity.
+          </p>
+          <ul className="metapool-help-list">
+            {KNOWN_PURPOSES.map((p) => (
+              <li key={p.purpose}>
+                <code>{p.purpose}</code>
+                <span>{p.hint}</span>
+                {!usedPurposes.has(p.purpose) && (
+                  <button
+                    type="button"
+                    className="metapool-help-add"
+                    disabled={busy}
+                    onClick={() => addPool(p.purpose)}
+                  >
+                    <PlusIcon size={12} /> Add
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {loading && <Loader label="Loading pool configuration" />}
       {config.error && (
@@ -278,7 +556,13 @@ export function MetasessionPoolsSection() {
                   </div>
                   {enabled &&
                     (live ? (
-                      <PoolStatus pool={live} />
+                      <PoolStatus
+                        pool={live}
+                        draftSize={Number(pool.size)}
+                        onApplySuggestion={(size) =>
+                          setPool(index, { size: String(size) })
+                        }
+                      />
                     ) : (
                       <div className="metapool-live">
                         <span className="metapool-badge metapool-badge-warming">
@@ -291,9 +575,23 @@ export function MetasessionPoolsSection() {
             })}
           </div>
 
-          <Button variant="ghost" onClick={addPool} disabled={busy}>
-            <PlusIcon size={13} /> Add pool
-          </Button>
+          <div className="metapool-add-row">
+            <Button variant="ghost" onClick={() => addPool()} disabled={busy}>
+              <PlusIcon size={13} /> Add pool
+            </Button>
+            {suggestablePurposes.map((p) => (
+              <button
+                key={p.purpose}
+                type="button"
+                className="metapool-purpose-chip"
+                disabled={busy}
+                title={p.hint}
+                onClick={() => addPool(p.purpose)}
+              >
+                <PlusIcon size={11} /> {p.purpose}
+              </button>
+            ))}
+          </div>
 
           <ErrorText error={error} />
 

@@ -4,6 +4,7 @@ import type {
   MetaRunner,
 } from './meta-runner.js';
 import type { MetaSessionPoolStats } from './acp/acp-pool.js';
+import type { PoolDemand } from './pool-demand.js';
 
 /**
  * One warm pool bound to a routing purpose. The pooled runner leases turns from
@@ -35,6 +36,12 @@ export interface PooledMetaRunnerDeps {
    * needs a specific model must take the cold path where the model is applied.
    */
   bypass?: () => boolean;
+  /**
+   * Optional demand telemetry. Every routed turn (warm or spilled to cold) is
+   * counted per purpose so the Settings page can suggest a warm size from
+   * observed peak concurrency.
+   */
+  demand?: PoolDemand;
 }
 
 /** Purpose used for requests that don't match a dedicated pool. */
@@ -71,17 +78,23 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
       return deps.fallback.runDetailed(request);
     }
     const pool = select(request.purpose);
-    // `ready()` is idle>0 and is claimed synchronously by the warm turn before
-    // any await, so a ready pool never queues: overflow past `size` concurrent
-    // turns falls through to the cold path below.
-    if (pool && pool.ready()) {
-      try {
-        return await pool.runDetailed(request);
-      } catch (error) {
-        deps.onFallback?.(pool.purpose, error);
+    const purpose = pool?.purpose ?? request.purpose ?? GENERAL_PURPOSE;
+    deps.demand?.begin(purpose);
+    try {
+      // `ready()` is idle>0 and is claimed synchronously by the warm turn before
+      // any await, so a ready pool never queues: overflow past `size` concurrent
+      // turns falls through to the cold path below.
+      if (pool && pool.ready()) {
+        try {
+          return await pool.runDetailed(request);
+        } catch (error) {
+          deps.onFallback?.(pool.purpose, error);
+        }
       }
+      return await deps.fallback.runDetailed(request);
+    } finally {
+      deps.demand?.end(purpose);
     }
-    return deps.fallback.runDetailed(request);
   }
 
   return {
@@ -95,16 +108,26 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
 /** Aggregate warm-pool status for the settings surface. */
 export interface MetaPoolsStatus {
   enabled: boolean;
-  pools: Array<{ purpose: string } & MetaSessionPoolStats>;
+  pools: Array<
+    { purpose: string; suggestedSize: number } & MetaSessionPoolStats
+  >;
 }
 
 /** Builds a live status snapshot from the configured purpose pools. */
 export function metaPoolsStatus(
   enabled: boolean,
   pools: readonly Pick<PurposePool, 'purpose' | 'stats'>[],
+  demand?: Pick<PoolDemand, 'suggestion'>,
 ): MetaPoolsStatus {
   return {
     enabled,
-    pools: pools.map((pool) => ({ purpose: pool.purpose, ...pool.stats() })),
+    pools: pools.map((pool) => {
+      const stats = pool.stats();
+      return {
+        purpose: pool.purpose,
+        suggestedSize: demand?.suggestion(pool.purpose) ?? stats.size,
+        ...stats,
+      };
+    }),
   };
 }

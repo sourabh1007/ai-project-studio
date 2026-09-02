@@ -263,6 +263,7 @@ import {
 import { createMetaRunner } from './meta/meta-runner.js';
 import { createMetaSettings } from './meta/meta-settings.js';
 import { MetaSessionPool } from './meta/acp/acp-pool.js';
+import { PoolDemand, PoolDemandTracker } from './meta/pool-demand.js';
 import { AcpClient } from './meta/acp/acp-client.js';
 import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
 import { createAcpMetaRunner } from './meta/acp/acp-meta-runner.js';
@@ -1530,6 +1531,14 @@ function main(): void {
       ? copilotConfig.executable
       : warmPoolCfg.executable;
   const warmPurposePools: PurposePool[] = [];
+  const warmDemand = new PoolDemand(
+    () =>
+      new PoolDemandTracker({
+        now: () => Date.now(),
+        windowMs: warmPoolCfg.demandWindowMs,
+        maxSize: warmPoolCfg.maxSuggestedSize,
+      }),
+  );
   let metaPoolsStatusFn: () => ReturnType<typeof metaPoolsStatus> = () =>
     metaPoolsStatus(false, []);
   let metaAi: typeof metaRunner = metaRunner;
@@ -1564,6 +1573,7 @@ function main(): void {
     metaAi = createPooledMetaRunner({
       pools: warmPurposePools,
       fallback: metaRunner,
+      demand: warmDemand,
       // Warm ACP sessions are pinned to the CLI's default model, so once the
       // user picks a provider/model different from the originally-configured
       // one, route new turns to the cold path where that choice is honored.
@@ -1580,7 +1590,7 @@ function main(): void {
         }),
     });
     warmInlinePrompts = true;
-    metaPoolsStatusFn = () => metaPoolsStatus(true, warmPurposePools);
+    metaPoolsStatusFn = () => metaPoolsStatus(true, warmPurposePools, warmDemand);
   }
   // Wire the self-recovery analyzer now that the meta runner is final. Runs a
   // read-only diagnosis turn; a thrown error (meta cannot spin up) propagates to

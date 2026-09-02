@@ -8788,6 +8788,304 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
+/* Purpose help + telemetry suggestion + live per-session chips */
+.metapool-help-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.metapool-help-toggle:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.metapool-help {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metapool-help-lead {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.metapool-help-lead code,
+.metapool-help-list code {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.metapool-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.metapool-help-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metapool-help-list li span {
+  flex: 1 1 auto;
+  line-height: 1.4;
+}
+.metapool-help-list li code {
+  flex: 0 0 auto;
+}
+.metapool-help-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  cursor: pointer;
+}
+.metapool-help-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.metapool-live-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.metapool-suggest {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metapool-suggest strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+.metapool-suggest-apply {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  cursor: pointer;
+}
+.metapool-suggest-apply:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.metapool-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.metasession-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface, var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transform-origin: center;
+  animation: metasession-enter var(--transition-med)
+    cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color var(--transition-fast),
+    box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+.metasession-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.metasession-chip-exit {
+  animation: metasession-exit var(--transition-med) ease-in forwards;
+  pointer-events: none;
+}
+.metasession-chip-id {
+  font-variant-numeric: tabular-nums;
+}
+.metasession-chip-served {
+  min-width: 16px;
+  text-align: center;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 999px;
+}
+.metasession-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-muted);
+}
+.metasession-dot-idle {
+  background: var(--success, #16a34a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #16a34a) 22%, transparent);
+}
+.metasession-dot-busy {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: metasession-pulse 1.4s ease-in-out infinite;
+}
+.metasession-dot-warming {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent);
+  animation: metasession-pulse 1.4s ease-in-out infinite;
+}
+.metasession-chip-busy {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.metasession-chip-warming {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+.metasession-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.metasession-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.metasession-detail-state {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.metasession-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.metasession-detail-grid dt {
+  color: var(--text-muted);
+}
+.metasession-detail-grid dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.metasession-detail-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.metapool-add-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.metapool-purpose-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.metapool-purpose-chip:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.metapool-purpose-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+@keyframes metapool-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes metasession-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.7) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes metasession-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+}
+@keyframes metasession-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .metapool-help,
+  .metasession-chip,
+  .metasession-chip-exit,
+  .metasession-dot-busy,
+  .metasession-dot-warming {
+    animation: none;
+  }
+}
+
 
 .stage-progress {
   margin: 0 0 4px;
