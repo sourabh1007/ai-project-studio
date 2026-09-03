@@ -132,6 +132,8 @@ export interface ApiRoutesDeps {
   configOverrides: ConfigOverrideService;
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
+  /** Live-resizes the warm pool for a purpose (no restart), returning status. */
+  resizeMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
   /** Current runtime meta AI provider/model for the status bar. */
   metaSettings: () => MetaSettingsView;
   /** Applies a runtime meta AI provider/model change (no restart). */
@@ -256,7 +258,10 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       secretPaths: deps.configSecretPaths,
       overrides: deps.configOverrides,
     }),
-    ...createMetaPoolsRoutes({ status: deps.metaPools }),
+    ...createMetaPoolsRoutes({
+      status: deps.metaPools,
+      resize: deps.resizeMetaPool,
+    }),
     ...createMetaSettingsRoutes({
       get: deps.metaSettings,
       update: deps.updateMetaSettings,

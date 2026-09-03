@@ -76,8 +76,22 @@ export class PoolDemandTracker {
   }
 }
 
+/**
+ * Structural port for per-purpose demand telemetry. Consumers depend on this
+ * interface rather than the concrete {@link PoolDemand} class (whose private
+ * fields would otherwise force callers and tests to build a real instance).
+ */
+export interface PoolDemandPort {
+  /** A turn for `purpose` started. */
+  begin(purpose: string): void;
+  /** A turn for `purpose` finished. */
+  end(purpose: string): void;
+  /** Suggested warm size for `purpose` from observed peak concurrency. */
+  suggestion(purpose: string): number;
+}
+
 /** Registry of per-purpose demand trackers, created lazily on first use. */
-export class PoolDemand {
+export class PoolDemand implements PoolDemandPort {
   private readonly byPurpose = new Map<string, PoolDemandTracker>();
 
   constructor(private readonly make: () => PoolDemandTracker) {}

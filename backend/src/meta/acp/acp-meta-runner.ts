@@ -13,11 +13,14 @@ function clip(value: string): string {
 
 /** The subset of the warm pool this adapter drives. */
 export interface AcpTurnPool {
-  run(request: {
-    prompt: string;
-    cwd?: string;
-    onActivity?: (text: string) => void;
-  }): Promise<AcpTurnResult>;
+  run(
+    request: {
+      prompt: string;
+      cwd?: string;
+      onActivity?: (text: string) => void;
+    },
+    context?: { purpose?: string },
+  ): Promise<AcpTurnResult>;
 }
 
 export interface AcpMetaRunnerDeps {
@@ -28,6 +31,12 @@ export interface AcpMetaRunnerDeps {
    * for the review's `metaSessionId` bookkeeping (usage reads back as null).
    */
   newSessionId: () => string;
+  /**
+   * Routing purpose this runner's pool serves. Recorded against each warm turn
+   * as the "where in the IDE" signal for the session's usage history. A
+   * request that carries its own {@link MetaRequest.purpose} overrides it.
+   */
+  purpose?: string;
 }
 
 /**
@@ -66,11 +75,14 @@ export function createAcpMetaRunner(
           }
         : undefined;
 
-      const result = await deps.pool.run({
-        prompt: request.prompt,
-        cwd: request.cwd,
-        onActivity,
-      });
+      const result = await deps.pool.run(
+        {
+          prompt: request.prompt,
+          cwd: request.cwd,
+          onActivity,
+        },
+        { purpose: request.purpose ?? deps.purpose },
+      );
 
       if (emit) {
         const trailing = clip(buffer);

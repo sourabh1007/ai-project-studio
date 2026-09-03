@@ -29,6 +29,21 @@ export interface MetaSessionPoolConfig {
 /** Lifecycle state of a single warm session. */
 export type MetaSessionState = 'warming' | 'idle' | 'busy';
 
+/** One warm turn a session served — the evidence behind its usage history. */
+export interface MetaSessionTurn {
+  /** Epoch ms the turn completed. */
+  at: number;
+  /**
+   * Routing purpose the turn served — the "where in the IDE" signal (e.g.
+   * `general`, `pr-review`, `self-recovery`). Defaults to `general`.
+   */
+  purpose: string;
+  /** Input tokens the turn consumed, or 0 when the CLI reported none. */
+  inputTokens: number;
+  /** Output tokens the turn produced, or 0 when the CLI reported none. */
+  outputTokens: number;
+}
+
 /** Live status of one warm session, for per-session status surfaces. */
 export interface MetaSessionInfo {
   /** Stable id within the pool's lifetime (e.g. `s1`, `s2`). */
@@ -41,6 +56,16 @@ export interface MetaSessionInfo {
   startedAt: number;
   /** Epoch ms of the most recent lease/turn, or null if never used. */
   lastActiveAt: number | null;
+  /** Cumulative input tokens across every turn this session served. */
+  inputTokens: number;
+  /** Cumulative output tokens across every turn this session served. */
+  outputTokens: number;
+  /**
+   * Most recent turns this session served (oldest first, newest last), capped
+   * to a bounded window. Each entry records where it was used and its tokens,
+   * so the UI can show a real usage history for the session.
+   */
+  history: MetaSessionTurn[];
 }
 
 /** Live warm-capacity snapshot for a single pool. */
@@ -78,6 +103,18 @@ interface SessionRecord {
   served: number;
   startedAt: number;
   lastActiveAt: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  history: MetaSessionTurn[];
+}
+
+/** Longest per-session usage history retained (older turns are dropped). */
+const MAX_HISTORY = 25;
+
+/** Context a caller attaches to a warm turn so its usage can be attributed. */
+export interface MetaTurnContext {
+  /** Routing purpose the turn is serving (its "where in the IDE"). */
+  purpose?: string;
 }
 
 /**
@@ -95,16 +132,18 @@ export class MetaSessionPool {
   private servedCount = 0;
   private seq = 0;
   private closed = false;
+  private targetSize: number;
   private readonly now: () => number;
 
   constructor(private readonly config: MetaSessionPoolConfig) {
     this.now = config.now ?? (() => Date.now());
+    this.targetSize = Math.max(0, Math.floor(config.size));
   }
 
   /** Warms the pool to its configured size. Resolves once all sessions boot. */
   async start(): Promise<void> {
     const spawns: Promise<void>[] = [];
-    for (let i = 0; i < this.config.size; i += 1) {
+    for (let i = 0; i < this.targetSize; i += 1) {
       spawns.push(this.spawn());
     }
     await Promise.all(spawns);
@@ -131,19 +170,67 @@ export class MetaSessionPool {
   }
 
   /** Convenience: leases a session, runs one turn, and releases it. */
-  async run(request: AcpTurnRequest): Promise<AcpTurnResult> {
+  async run(
+    request: AcpTurnRequest,
+    context?: MetaTurnContext,
+  ): Promise<AcpTurnResult> {
     const client = await this.acquire();
     try {
       const result = await client.runTurn(request);
       this.servedCount += 1;
       const record = this.records.get(client);
       if (record) {
+        const at = this.now();
+        const inputTokens = result.usage?.inputTokens ?? 0;
+        const outputTokens = result.usage?.outputTokens ?? 0;
         record.served += 1;
-        record.lastActiveAt = this.now();
+        record.lastActiveAt = at;
+        record.inputTokens += inputTokens;
+        record.outputTokens += outputTokens;
+        record.history.push({
+          at,
+          purpose: context?.purpose ?? 'general',
+          inputTokens,
+          outputTokens,
+        });
+        if (record.history.length > MAX_HISTORY) {
+          record.history.splice(0, record.history.length - MAX_HISTORY);
+        }
       }
       return result;
     } finally {
       this.release(client);
+    }
+  }
+
+  /**
+   * Live-resizes the warm pool to `size` sessions without a restart. Growing
+   * spawns new sessions immediately (they warm in the background); shrinking
+   * retires idle surplus at once and marks any busy surplus to retire the moment
+   * it finishes its current turn, so the change animates in the live view
+   * instead of forcing an app restart.
+   */
+  resize(size: number): void {
+    if (this.closed) {
+      return;
+    }
+    this.targetSize = Math.max(0, Math.floor(size));
+    while (this.liveCount < this.targetSize) {
+      void this.spawn().catch(() => undefined);
+    }
+    // Retire the highest-numbered idle sessions first so the survivors keep
+    // their stable low ids (matching the UI's "surplus" highlight). Idle
+    // clients always have a record, so the lookup is safe.
+    const seqOf = (client: PooledClient): number =>
+      this.records.get(client)!.seq;
+    const idleBySeqDesc = [...this.idle].sort(
+      (left, right) => seqOf(right) - seqOf(left),
+    );
+    for (const client of idleBySeqDesc) {
+      if (this.liveCount <= this.targetSize) {
+        break;
+      }
+      this.retire(client);
     }
   }
 
@@ -179,9 +266,12 @@ export class MetaSessionPool {
         served: record.served,
         startedAt: record.startedAt,
         lastActiveAt: record.lastActiveAt,
+        inputTokens: record.inputTokens,
+        outputTokens: record.outputTokens,
+        history: [...record.history],
       }));
     return {
-      size: this.config.size,
+      size: this.targetSize,
       live: this.liveCount,
       idle: this.idle.length,
       busy: this.liveCount - this.idle.length,
@@ -205,6 +295,9 @@ export class MetaSessionPool {
       served: 0,
       startedAt: this.now(),
       lastActiveAt: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      history: [],
     });
     client.onExit(() => this.handleExit(client));
     try {
@@ -239,18 +332,44 @@ export class MetaSessionPool {
       waiter.resolve(client);
       return;
     }
+    // A session that came free while the pool is over its (just-lowered) target
+    // is retired now rather than kept warm, completing a live shrink.
+    if (this.liveCount > this.targetSize) {
+      this.retire(client);
+      return;
+    }
     this.markIdle(client);
     this.idle.push(client);
   }
 
+  /**
+   * Removes a session from the pool and kills its process, doing the liveCount
+   * / record bookkeeping up front so the later {@link handleExit} callback is a
+   * no-op (its record is already gone) and never double-counts or respawns.
+   */
+  private retire(client: PooledClient): void {
+    this.records.delete(client);
+    this.liveCount -= 1;
+    const index = this.idle.indexOf(client);
+    if (index !== -1) {
+      this.idle.splice(index, 1);
+    }
+    client.kill();
+  }
+
   private handleExit(client: PooledClient): void {
+    // Ignore exits for sessions already retired via resize/close, so their
+    // bookkeeping (done up front) is not applied twice.
+    if (!this.records.has(client)) {
+      return;
+    }
     this.liveCount -= 1;
     this.records.delete(client);
     const index = this.idle.indexOf(client);
     if (index !== -1) {
       this.idle.splice(index, 1);
     }
-    if (!this.closed && this.liveCount < this.config.size) {
+    if (!this.closed && this.liveCount < this.targetSize) {
       void this.spawn().catch(() => undefined);
     }
   }

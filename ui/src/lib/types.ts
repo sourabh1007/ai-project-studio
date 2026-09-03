@@ -1000,6 +1000,18 @@ export interface ConfigUpdateResult {
 /** Lifecycle state of a single warm metasession. */
 export type MetaSessionState = 'warming' | 'idle' | 'busy';
 
+/** One warm turn a session served — the evidence behind its usage history. */
+export interface MetaSessionTurn {
+  /** Epoch ms the turn completed. */
+  at: number;
+  /** Routing purpose the turn served — its "where in the IDE". */
+  purpose: string;
+  /** Input tokens the turn consumed. */
+  inputTokens: number;
+  /** Output tokens the turn produced. */
+  outputTokens: number;
+}
+
 /** Live status of one warm metasession, for per-session status surfaces. */
 export interface MetaSessionInfo {
   /** Stable id within the pool's lifetime (e.g. `s1`, `s2`). */
@@ -1012,6 +1024,12 @@ export interface MetaSessionInfo {
   startedAt: number;
   /** Epoch ms of the most recent lease/turn, or null if never used. */
   lastActiveAt: number | null;
+  /** Cumulative input tokens across every turn this session served. */
+  inputTokens: number;
+  /** Cumulative output tokens across every turn this session served. */
+  outputTokens: number;
+  /** Most recent turns (oldest first) with where-used and per-turn tokens. */
+  history: MetaSessionTurn[];
 }
 
 /** Live warm-capacity snapshot for one metasession pool. */
@@ -1033,6 +1051,8 @@ export interface MetaPoolStat {
 /** Aggregate warm metasession pool status for the Settings page. */
 export interface MetaPoolsStatus {
   enabled: boolean;
+  /** Model powering warm sessions, when known (shared across every pool). */
+  model?: string;
   pools: MetaPoolStat[];
 }
 

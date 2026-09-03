@@ -11,6 +11,7 @@ import {
 } from '../../components/ui.js';
 import {
   ActivityIcon,
+  ChevronIcon,
   InfoIcon,
   PlusIcon,
   TrashIcon,
@@ -113,6 +114,17 @@ function formatClock(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString();
 }
 
+/** Formats a token count compactly (e.g. 1234 → "1,234", 0 → "0"). */
+function formatTokens(n: number): string {
+  return n.toLocaleString();
+}
+
+/** Human label for a routing purpose (the "where in the IDE" of a turn). */
+function purposeLabel(purpose: string): string {
+  const known = KNOWN_PURPOSES.find((p) => p.purpose === purpose);
+  return known ? known.label : purpose;
+}
+
 /**
  * Merges the live session list with recently-removed sessions so additions
  * animate in and removals animate out before disappearing. Session ids are
@@ -163,13 +175,19 @@ function useAnimatedSessions(
 
 function SessionDetailsModal({
   info,
+  model,
   now,
   onClose,
 }: {
   info: MetaSessionInfo;
+  model: string | undefined;
   now: number;
   onClose: () => void;
 }) {
+  const [showHistory, setShowHistory] = useState(true);
+  const totalTokens = info.inputTokens + info.outputTokens;
+  // Newest turn first so the most recent work is at the top of the history.
+  const history = [...info.history].reverse();
   return (
     <Modal title={`Metasession ${info.id}`} onClose={onClose}>
       <div className="metasession-detail">
@@ -186,8 +204,19 @@ function SessionDetailsModal({
           <dd>{info.id}</dd>
           <dt>State</dt>
           <dd>{STATE_LABEL[info.state]}</dd>
+          <dt>Model</dt>
+          <dd>{model ?? 'CLI default'}</dd>
           <dt>Turns served</dt>
           <dd>{info.served}</dd>
+          <dt>Tokens used</dt>
+          <dd>
+            {formatTokens(totalTokens)}
+            <span className="metasession-detail-sub">
+              {' '}
+              ({formatTokens(info.inputTokens)} in ·{' '}
+              {formatTokens(info.outputTokens)} out)
+            </span>
+          </dd>
           <dt>Uptime</dt>
           <dd>{formatDuration(Math.max(0, now - info.startedAt))}</dd>
           <dt>Started</dt>
@@ -201,9 +230,50 @@ function SessionDetailsModal({
                 )} ago)`}
           </dd>
         </dl>
+
+        <div className="metasession-history">
+          <button
+            type="button"
+            className="metasession-history-toggle"
+            aria-expanded={showHistory}
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <ChevronIcon size={14} open={showHistory} />
+            Usage history
+            <span className="metasession-history-count">
+              {info.history.length}
+            </span>
+          </button>
+          {showHistory &&
+            (history.length === 0 ? (
+              <p className="metasession-history-empty">
+                No turns served yet. When the IDE leases this warm session,
+                each turn appears here with where it was used and its tokens.
+              </p>
+            ) : (
+              <ol className="metasession-history-list">
+                {history.map((turn, i) => (
+                  <li key={`${turn.at}-${i}`} className="metasession-history-row">
+                    <span className="metasession-history-where">
+                      {purposeLabel(turn.purpose)}
+                    </span>
+                    <span className="metasession-history-when">
+                      {formatClock(turn.at)}
+                    </span>
+                    <span className="metasession-history-tokens">
+                      {formatTokens(turn.inputTokens + turn.outputTokens)} tok
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ))}
+        </div>
+
         <p className="metasession-detail-note">
-          A climbing “turns served” is live evidence this warm session is really
-          handling IDE AI requests instead of a cold CLI spawn.
+          A climbing “turns served” and real token counts are live evidence this
+          warm session is handling IDE AI requests instead of a cold CLI spawn.
+          Warm ACP turns report tokens; per-turn AIC is only attributed on the
+          cold path.
         </p>
       </div>
     </Modal>
@@ -212,17 +282,25 @@ function SessionDetailsModal({
 
 function PoolStatus({
   pool,
+  model,
   draftSize,
   onApplySuggestion,
 }: {
   pool: MetaPoolStat;
+  model: string | undefined;
   draftSize: number;
   onApplySuggestion: (size: number) => void;
 }) {
   const rendered = useAnimatedSessions(pool.sessions);
-  const [detail, setDetail] = useState<MetaSessionInfo | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [justApplied, setJustApplied] = useState(false);
+  // Resolve the open session's live data each render so its tokens/history keep
+  // updating while the modal is open; null once the session is gone.
+  const detail =
+    detailId === null
+      ? null
+      : (pool.sessions.find((s) => s.id === detailId) ?? null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -287,7 +365,7 @@ function PoolStatus({
             className={`metapool-target metapool-target-${
               pendingDelta > 0 ? 'grow' : 'shrink'
             }${justApplied ? ' is-pulse' : ''}`}
-            title="Pending target — applies after a restart"
+            title="Pending target — save to apply live"
           >
             → target <strong>{target}</strong>
           </span>
@@ -326,9 +404,9 @@ function PoolStatus({
                   exiting ? ' metasession-chip-exit' : ''
                 }${surplus ? ' metasession-chip-surplus' : ''}`}
                 title={`${info.id} · ${STATE_LABEL[info.state]} · ${info.served} served${
-                  surplus ? ' · will stop after restart' : ''
+                  surplus ? ' · retires on save' : ''
                 }`}
-                onClick={() => !exiting && setDetail(info)}
+                onClick={() => !exiting && setDetailId(info.id)}
               >
                 <span
                   className={`metasession-chip-dot metasession-dot-${info.state}`}
@@ -343,7 +421,7 @@ function PoolStatus({
               key={`ghost-${i}`}
               className="metasession-chip metasession-chip-ghost"
               role="listitem"
-              title="Will warm after restart"
+              title="Will warm on save"
             >
               <span className="metasession-chip-dot metasession-dot-ghost" />
               <span className="metasession-chip-id">+1</span>
@@ -372,14 +450,14 @@ function PoolStatus({
           {pendingDelta > 0 ? (
             <>
               Pool will grow by <strong>+{pendingDelta}</strong> to{' '}
-              <strong>{target}</strong> warm sessions — save changes, then
-              restart to warm the new sessions.
+              <strong>{target}</strong> warm sessions — save to apply live; the
+              new sessions warm in the background.
             </>
           ) : (
             <>
               Pool will shrink by <strong>{pendingDelta}</strong> to{' '}
-              <strong>{target}</strong> warm sessions — save changes, then
-              restart; the highlighted sessions will stop.
+              <strong>{target}</strong> warm sessions — save to apply live; the
+              highlighted sessions retire (busy ones finish first).
             </>
           )}
         </p>
@@ -388,8 +466,9 @@ function PoolStatus({
       {detail && (
         <SessionDetailsModal
           info={detail}
+          model={model}
           now={now}
-          onClose={() => setDetail(null)}
+          onClose={() => setDetailId(null)}
         />
       )}
     </div>
@@ -401,7 +480,8 @@ function PoolStatus({
  * `copilot --acp` sessions the IDE keeps ready so AI responses (PR review,
  * review board, summaries, monitors, …) skip the cold CLI spawn. Size, purposes
  * and the on/off switch are editable here and persist as `meta.warmPool`
- * overrides that apply after a restart; live warm capacity is shown per pool.
+ * overrides; size changes also apply live on save, and live warm capacity is
+ * shown per pool.
  */
 export function MetasessionPoolsSection() {
   const api = useApi();
@@ -505,6 +585,23 @@ export function MetasessionPoolsSection() {
       await api.updateConfig('meta', {
         warmPool: { ...savedWarmPool, enabled, pools: result },
       });
+      // Apply size changes live so pools grow/shrink immediately (with the
+      // chip animations) instead of forcing a restart. Only pools that are
+      // already running can be resized; adding, removing or toggling a pool
+      // still needs a restart, so those are left to the persisted config.
+      if (enabled) {
+        const running = new Set(
+          (status.data?.pools ?? []).map((p) => p.purpose),
+        );
+        await Promise.all(
+          result
+            .filter((pool) => running.has(pool.purpose))
+            .map((pool) =>
+              api.resizeMetaPool(pool.purpose, pool.size).catch(() => undefined),
+            ),
+        );
+        status.reload();
+      }
       setSaved(true);
       config.reload();
     } catch (err) {
@@ -531,7 +628,8 @@ export function MetasessionPoolsSection() {
               Warm AI sessions kept ready so the IDE responds instantly instead
               of spawning a CLI per request. Each pool bounds how many turns run
               in parallel; extra requests reuse the next free session or fall
-              back to a cold spawn. Changes apply after a restart.
+              back to a cold spawn. Size changes apply live on save; adding,
+              removing or toggling a pool needs a restart.
             </p>
           </div>
         </div>
@@ -648,6 +746,7 @@ export function MetasessionPoolsSection() {
                     (live ? (
                       <PoolStatus
                         pool={live}
+                        model={status.data?.model}
                         draftSize={Number(pool.size)}
                         onApplySuggestion={(size) =>
                           setPool(index, { size: String(size) })

@@ -275,4 +275,21 @@ describe('metaPoolsStatus', () => {
     );
     expect(status.pools[0].suggestedSize).toBe(8);
   });
+
+  it('includes the model powering warm sessions when provided', () => {
+    const status = metaPoolsStatus(
+      true,
+      [{ purpose: 'general', stats: () => stats({ size: 5 }) }],
+      undefined,
+      'claude-opus-4.8',
+    );
+    expect(status.model).toBe('claude-opus-4.8');
+  });
+
+  it('omits the model key when it is unknown', () => {
+    const status = metaPoolsStatus(true, [
+      { purpose: 'general', stats: () => stats({ size: 5 }) },
+    ]);
+    expect('model' in status).toBe(false);
+  });
 });

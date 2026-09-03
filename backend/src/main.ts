@@ -29,7 +29,7 @@ import {
   combineSinks,
 } from './logging/log-file-sink.js';
 import { createEventBus, type EventBus } from './kernel/event-bus.js';
-import { ValidationError } from './kernel/error-types.js';
+import { ValidationError, NotFoundError } from './kernel/error-types.js';
 
 import { createConfigSchemaRegistry } from './config/config-schema-registry.js';
 import { buildConfig } from './config/config-validator.js';
@@ -1541,6 +1541,14 @@ function main(): void {
   );
   let metaPoolsStatusFn: () => ReturnType<typeof metaPoolsStatus> = () =>
     metaPoolsStatus(false, []);
+  // Live pools by purpose, so the Settings page can resize one without a
+  // restart. Empty until warm pools are enabled/built below.
+  const warmPoolsByPurpose = new Map<string, MetaSessionPool>();
+  let resizeMetaPoolFn: (purpose: string, size: number) => ReturnType<
+    typeof metaPoolsStatus
+  > = () => {
+    throw new NotFoundError('Warm metasession pools are disabled');
+  };
   let metaAi: typeof metaRunner = metaRunner;
   let warmInlinePrompts = false;
   if (warmPoolCfg.enabled) {
@@ -1553,6 +1561,7 @@ function main(): void {
             turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
           }),
       });
+      warmPoolsByPurpose.set(poolCfg.purpose, pool);
       pool.start().catch((error: unknown) => {
         logger.error(
           `Warm ACP pool '${poolCfg.purpose}' failed to start; using cold path`,
@@ -1562,6 +1571,7 @@ function main(): void {
       const runner = createAcpMetaRunner({
         pool,
         newSessionId: () => `acp-${randomUUID()}`,
+        purpose: poolCfg.purpose,
       });
       warmPurposePools.push({
         purpose: poolCfg.purpose,
@@ -1590,7 +1600,16 @@ function main(): void {
         }),
     });
     warmInlinePrompts = true;
-    metaPoolsStatusFn = () => metaPoolsStatus(true, warmPurposePools, warmDemand);
+    metaPoolsStatusFn = () =>
+      metaPoolsStatus(true, warmPurposePools, warmDemand, metaSettings.get().model);
+    resizeMetaPoolFn = (purpose, size) => {
+      const pool = warmPoolsByPurpose.get(purpose);
+      if (!pool) {
+        throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
+      }
+      pool.resize(size);
+      return metaPoolsStatusFn();
+    };
   }
   // Wire the self-recovery analyzer now that the meta runner is final. Runs a
   // read-only diagnosis turn; a thrown error (meta cannot spin up) propagates to
@@ -2062,6 +2081,7 @@ function main(): void {
       configSecretPaths,
       configOverrides: configOverrideService,
       metaPools: metaPoolsStatusFn,
+      resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
       metaSettings: () => ({
         ...metaSettings.get(),
         warmPoolEnabled: warmPoolCfg.enabled,

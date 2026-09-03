@@ -403,6 +403,20 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/meta/pools');
   });
 
+  it('resizes a warm metasession pool with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ enabled: true, pools: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.resizeMetaPool('general', 4);
+    expect(calls[0][0]).toBe('/api/meta/pools/resize');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      purpose: 'general',
+      size: 4,
+    });
+  });
+
   it('reads the runtime meta AI settings', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ providerId: 'agency', model: 'auto', warmPoolEnabled: true }),

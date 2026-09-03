@@ -219,8 +219,26 @@ describe('MetaSessionPool', () => {
       served: 0,
     });
     expect(stats.sessions).toEqual([
-      { id: 's1', state: 'busy', served: 0, startedAt: 5000, lastActiveAt: 5000 },
-      { id: 's2', state: 'idle', served: 0, startedAt: 5000, lastActiveAt: null },
+      {
+        id: 's1',
+        state: 'busy',
+        served: 0,
+        startedAt: 5000,
+        lastActiveAt: 5000,
+        inputTokens: 0,
+        outputTokens: 0,
+        history: [],
+      },
+      {
+        id: 's2',
+        state: 'idle',
+        served: 0,
+        startedAt: 5000,
+        lastActiveAt: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        history: [],
+      },
     ]);
     pool.release(leased);
     expect(pool.stats().sessions[0].state).toBe('idle');
@@ -245,6 +263,11 @@ describe('MetaSessionPool', () => {
       served: 1,
       startedAt: 100,
       lastActiveAt: 200,
+      inputTokens: 0,
+      outputTokens: 0,
+      history: [
+        { at: 200, purpose: 'general', inputTokens: 0, outputTokens: 0 },
+      ],
     });
     pool.close();
   });
@@ -264,7 +287,16 @@ describe('MetaSessionPool', () => {
     const starting = pool.start();
     await flush();
     expect(pool.stats().sessions).toEqual([
-      { id: 's1', state: 'warming', served: 0, startedAt: 1, lastActiveAt: null },
+      {
+        id: 's1',
+        state: 'warming',
+        served: 0,
+        startedAt: 1,
+        lastActiveAt: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        history: [],
+      },
     ]);
     resolveInit();
     await starting;
@@ -304,5 +336,194 @@ describe('MetaSessionPool', () => {
     await pool.run({ prompt: 'two' });
     expect(pool.stats().served).toBe(2);
     pool.close();
+  });
+
+  it('records per-turn token usage and a capped usage history', async () => {
+    let now = 1000;
+    let tokens = 10;
+    const pool = new MetaSessionPool({
+      size: 1,
+      now: () => now,
+      createClient: () =>
+        new FakeClient({
+          run: () =>
+            Promise.resolve({
+              text: 'ok',
+              sessionId: 's',
+              stopReason: 'end_turn',
+              usage: { inputTokens: tokens, outputTokens: tokens * 2 },
+            }),
+        }),
+    });
+    await pool.start();
+    now = 1100;
+    tokens = 10;
+    await pool.run({ prompt: 'a' }, { purpose: 'pr-review' });
+    now = 1200;
+    tokens = 5;
+    await pool.run({ prompt: 'b' });
+    const [session] = pool.stats().sessions;
+    expect(session.inputTokens).toBe(15);
+    expect(session.outputTokens).toBe(30);
+    expect(session.history).toEqual([
+      { at: 1100, purpose: 'pr-review', inputTokens: 10, outputTokens: 20 },
+      { at: 1200, purpose: 'general', inputTokens: 5, outputTokens: 10 },
+    ]);
+    pool.close();
+  });
+
+  it('caps the history to the most recent turns', async () => {
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => new FakeClient(),
+    });
+    await pool.start();
+    for (let i = 0; i < 30; i += 1) {
+      await pool.run({ prompt: `turn-${i}` });
+    }
+    const [session] = pool.stats().sessions;
+    expect(session.served).toBe(30);
+    expect(session.history).toHaveLength(25);
+    pool.close();
+  });
+
+  it('returns a defensive copy of a session history', async () => {
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => new FakeClient(),
+    });
+    await pool.start();
+    await pool.run({ prompt: 'a' });
+    const history = pool.stats().sessions[0].history;
+    history.push({ at: 0, purpose: 'x', inputTokens: 9, outputTokens: 9 });
+    expect(pool.stats().sessions[0].history).toHaveLength(1);
+    pool.close();
+  });
+
+  it('grows the pool live when resized up', async () => {
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => {
+        const c = new FakeClient();
+        created.push(c);
+        return c;
+      },
+    });
+    await pool.start();
+    expect(pool.stats().size).toBe(1);
+    pool.resize(3);
+    await flush();
+    const stats = pool.stats();
+    expect(stats.size).toBe(3);
+    expect(stats.live).toBe(3);
+    expect(stats.idle).toBe(3);
+    expect(created).toHaveLength(3);
+    pool.close();
+  });
+
+  it('shrinks the pool live by retiring idle surplus highest-first', async () => {
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({
+      size: 3,
+      createClient: () => {
+        const c = new FakeClient();
+        created.push(c);
+        return c;
+      },
+    });
+    await pool.start();
+    pool.resize(1);
+    const stats = pool.stats();
+    expect(stats.size).toBe(1);
+    expect(stats.live).toBe(1);
+    expect(stats.sessions.map((s) => s.id)).toEqual(['s1']);
+    // The two highest-numbered idle sessions were killed.
+    expect(created[1].killed).toBe(1);
+    expect(created[2].killed).toBe(1);
+    expect(created[0].killed).toBe(0);
+    pool.close();
+  });
+
+  it('retires a busy surplus session only when it checks back in', async () => {
+    const created: FakeClient[] = [];
+    const resolvers: Array<() => void> = [];
+    const pool = new MetaSessionPool({
+      size: 2,
+      createClient: () => {
+        const c = new FakeClient({
+          run: () =>
+            new Promise((resolve) => {
+              resolvers.push(() =>
+                resolve({
+                  text: 'ok',
+                  sessionId: 's',
+                  stopReason: 'end_turn',
+                  usage: null,
+                }),
+              );
+            }),
+        });
+        created.push(c);
+        return c;
+      },
+    });
+    await pool.start();
+    // Lease both sessions so they are busy, then shrink to 1: no idle session
+    // exists to retire, so live stays 2 until a busy one checks back in.
+    const first = pool.run({ prompt: 'a' });
+    const second = pool.run({ prompt: 'b' });
+    await flush();
+    pool.resize(1);
+    expect(pool.stats().live).toBe(2);
+    expect(created[0].killed).toBe(0);
+    resolvers[0]();
+    await first;
+    // s1 was over target on check-in, so it retired instead of going idle.
+    expect(created[0].killed).toBe(1);
+    expect(pool.stats().live).toBe(1);
+    resolvers[1]();
+    await second;
+    // s2 is now exactly at target, so it stays warm.
+    expect(created[1].killed).toBe(0);
+    expect(pool.stats().live).toBe(1);
+    pool.close();
+  });
+
+  it('does not respawn after a shrink drops a session below the old size', async () => {
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({
+      size: 2,
+      createClient: () => {
+        const c = new FakeClient();
+        created.push(c);
+        return c;
+      },
+    });
+    await pool.start();
+    pool.resize(1);
+    // s2 was retired; simulate its process exit — no replacement should spawn.
+    created[1].exit();
+    await flush();
+    expect(created).toHaveLength(2);
+    expect(pool.stats().live).toBe(1);
+    pool.close();
+  });
+
+  it('ignores a resize once the pool is closed', async () => {
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => {
+        const c = new FakeClient();
+        created.push(c);
+        return c;
+      },
+    });
+    await pool.start();
+    pool.close();
+    pool.resize(5);
+    await flush();
+    expect(created).toHaveLength(1);
   });
 });

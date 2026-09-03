@@ -4,7 +4,7 @@ import type {
   MetaRunner,
 } from './meta-runner.js';
 import type { MetaSessionPoolStats } from './acp/acp-pool.js';
-import type { PoolDemand } from './pool-demand.js';
+import type { PoolDemand, PoolDemandPort } from './pool-demand.js';
 
 /**
  * One warm pool bound to a routing purpose. The pooled runner leases turns from
@@ -41,7 +41,7 @@ export interface PooledMetaRunnerDeps {
    * counted per purpose so the Settings page can suggest a warm size from
    * observed peak concurrency.
    */
-  demand?: PoolDemand;
+  demand?: PoolDemandPort;
 }
 
 /** Purpose used for requests that don't match a dedicated pool. */
@@ -108,6 +108,11 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
 /** Aggregate warm-pool status for the settings surface. */
 export interface MetaPoolsStatus {
   enabled: boolean;
+  /**
+   * Model powering warm sessions, when known. All warm sessions in every pool
+   * share the CLI's configured model, so it is reported once at the top level.
+   */
+  model?: string;
   pools: Array<
     { purpose: string; suggestedSize: number } & MetaSessionPoolStats
   >;
@@ -118,9 +123,11 @@ export function metaPoolsStatus(
   enabled: boolean,
   pools: readonly Pick<PurposePool, 'purpose' | 'stats'>[],
   demand?: Pick<PoolDemand, 'suggestion'>,
+  model?: string,
 ): MetaPoolsStatus {
   return {
     enabled,
+    ...(model === undefined ? {} : { model }),
     pools: pools.map((pool) => {
       const stats = pool.stats();
       return {
