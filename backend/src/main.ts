@@ -1532,6 +1532,9 @@ function main(): void {
       ? copilotConfig.executable
       : warmPoolCfg.executable;
   const warmPurposePools: PurposePool[] = [];
+  // Pools mid-removal, still reported (flagged draining) so the UI animates
+  // their sessions shutting down; each drops out once it has emptied.
+  const drainingPurposePools: Array<Pick<PurposePool, 'purpose' | 'stats'>> = [];
   const warmDemand = new PoolDemand(
     () =>
       new PoolDemandTracker({
@@ -1617,7 +1620,13 @@ function main(): void {
     });
     warmInlinePrompts = true;
     metaPoolsStatusFn = () =>
-      metaPoolsStatus(true, warmPurposePools, warmDemand, metaSettings.get().model);
+      metaPoolsStatus(
+        true,
+        warmPurposePools,
+        warmDemand,
+        metaSettings.get().model,
+        drainingPurposePools,
+      );
     resizeMetaPoolFn = (purpose, size) => {
       const pool = warmPoolsByPurpose.get(purpose);
       if (!pool) {
@@ -1643,12 +1652,36 @@ function main(): void {
       if (!pool) {
         throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
       }
-      pool.close();
+      // Stop routing new turns to it and lock it out of further edits at once.
       warmPoolsByPurpose.delete(purpose);
       const index = warmPurposePools.findIndex((p) => p.purpose === purpose);
       if (index !== -1) {
         warmPurposePools.splice(index, 1);
       }
+      // Drain gracefully instead of killing everything outright: retire one
+      // session at a time (busy ones finish their turn first) so the Settings
+      // page can animate each metasession shutting down. Keep reporting the
+      // pool (flagged draining) until it is empty, then close and drop it.
+      const draining = { purpose, stats: () => pool.stats() };
+      drainingPurposePools.push(draining);
+      const dropDraining = (): void => {
+        const di = drainingPurposePools.indexOf(draining);
+        if (di !== -1) {
+          drainingPurposePools.splice(di, 1);
+        }
+      };
+      pool.resize(Math.max(0, pool.stats().live - 1));
+      const timer = setInterval(() => {
+        const live = pool.stats().live;
+        if (live <= 0) {
+          clearInterval(timer);
+          pool.close();
+          dropDraining();
+          return;
+        }
+        pool.resize(live - 1);
+      }, 700);
+      timer.unref?.();
       return metaPoolsStatusFn();
     };
   }

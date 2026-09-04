@@ -117,27 +117,52 @@ export interface MetaPoolsStatus {
    */
   model?: string;
   pools: Array<
-    { purpose: string; suggestedSize: number } & MetaSessionPoolStats
+    {
+      purpose: string;
+      suggestedSize: number;
+      /**
+       * True while the pool is being removed and is draining its warm
+       * sessions. Such a pool no longer takes routing and disappears once
+       * every session has retired; the flag lets the UI show it shutting down
+       * live instead of yanking it away instantly.
+       */
+      draining?: boolean;
+    } & MetaSessionPoolStats
   >;
 }
 
-/** Builds a live status snapshot from the configured purpose pools. */
+/**
+ * Builds a live status snapshot from the configured purpose pools. Pools passed
+ * in `draining` are appended and flagged so the UI can animate them shutting
+ * down until they empty out and drop from the snapshot entirely.
+ */
 export function metaPoolsStatus(
   enabled: boolean,
   pools: readonly Pick<PurposePool, 'purpose' | 'stats'>[],
   demand?: Pick<PoolDemand, 'suggestion'>,
   model?: string,
+  draining: readonly Pick<PurposePool, 'purpose' | 'stats'>[] = [],
 ): MetaPoolsStatus {
+  const active = pools.map((pool) => {
+    const stats = pool.stats();
+    return {
+      purpose: pool.purpose,
+      suggestedSize: demand?.suggestion(pool.purpose) ?? stats.size,
+      ...stats,
+    };
+  });
+  const shuttingDown = draining.map((pool) => {
+    const stats = pool.stats();
+    return {
+      purpose: pool.purpose,
+      suggestedSize: stats.size,
+      ...stats,
+      draining: true,
+    };
+  });
   return {
     enabled,
     ...(model === undefined ? {} : { model }),
-    pools: pools.map((pool) => {
-      const stats = pool.stats();
-      return {
-        purpose: pool.purpose,
-        suggestedSize: demand?.suggestion(pool.purpose) ?? stats.size,
-        ...stats,
-      };
-    }),
+    pools: [...active, ...shuttingDown],
   };
 }

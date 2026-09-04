@@ -90,6 +90,32 @@ const STATE_LABEL: Record<MetaSessionState, string> = {
   busy: 'Busy',
 };
 
+/**
+ * Whether a session can take a command right now, in plain terms. "Idle" reads
+ * as ambiguous on its own, so the detail view spells out that it means ready to
+ * lease, versus warming (booting) or busy (mid-turn).
+ */
+const STATE_READINESS: Record<
+  MetaSessionState,
+  { ready: 'yes' | 'no' | 'busy'; pill: string; note: string }
+> = {
+  warming: {
+    ready: 'no',
+    pill: 'Not ready yet',
+    note: 'Booting up — it cannot take a command until it finishes warming.',
+  },
+  idle: {
+    ready: 'yes',
+    pill: 'Ready for a command',
+    note: 'Warm and waiting — the IDE can lease this session for its next turn immediately.',
+  },
+  busy: {
+    ready: 'busy',
+    pill: 'Serving a command',
+    note: 'Currently handling a turn — it takes the next command once this one finishes.',
+  },
+};
+
 function sessionSeq(id: string): number {
   const n = Number.parseInt(id.replace(/^\D+/, ''), 10);
   return Number.isNaN(n) ? 0 : n;
@@ -212,7 +238,15 @@ function SessionDetailsModal({
           <span className="metasession-detail-state">
             {STATE_LABEL[info.state]}
           </span>
+          <span
+            className={`metasession-ready-pill metasession-ready-${STATE_READINESS[info.state].ready}`}
+          >
+            {STATE_READINESS[info.state].pill}
+          </span>
         </div>
+        <p className="metasession-readiness-note">
+          {STATE_READINESS[info.state].note}
+        </p>
         <dl className="metasession-detail-grid">
           <dt>Session id</dt>
           <dd>{info.id}</dd>
@@ -385,11 +419,13 @@ function PoolStatus({
   model,
   draftSize,
   onApplySuggestion,
+  draining = false,
 }: {
   pool: MetaPoolStat;
   model: string | undefined;
   draftSize: number;
   onApplySuggestion: (size: number) => void;
+  draining?: boolean;
 }) {
   const rendered = useAnimatedSessions(pool.sessions);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -454,10 +490,14 @@ function PoolStatus({
       >
         <span
           className={`metapool-badge ${
-            pool.ready ? 'metapool-badge-ready' : 'metapool-badge-warming'
+            draining
+              ? 'metapool-badge-shutting'
+              : pool.ready
+                ? 'metapool-badge-ready'
+                : 'metapool-badge-warming'
           }`}
         >
-          {pool.ready ? 'Ready' : 'Warming…'}
+          {draining ? 'Shutting down…' : pool.ready ? 'Ready' : 'Warming…'}
         </span>
         <span className="metapool-stats">
           <span>
@@ -473,7 +513,7 @@ function PoolStatus({
             <strong>{pool.served}</strong> served
           </span>
         </span>
-        {hasPending && (
+        {!draining && hasPending && (
           <span
             className={`metapool-target metapool-target-${
               pendingDelta > 0 ? 'grow' : 'shrink'
@@ -483,37 +523,49 @@ function PoolStatus({
             → target <strong>{target}</strong>
           </span>
         )}
-        {converging && (
+        {draining ? (
           <span
-            className={`metapool-converge metapool-converge-${
-              growing ? 'grow' : 'shrink'
-            }`}
-            title={
-              growing
-                ? 'Warming new sessions up to the saved target'
-                : 'Retiring surplus sessions down to the saved target'
-            }
+            className="metapool-converge metapool-converge-shrink"
+            title="Retiring every warm session before the pool is removed"
           >
             <span className="metapool-converge-dot" />
-            {growing ? 'increasing' : 'decreasing'} →{' '}
-            <strong>{pool.size}</strong>
+            removing → <strong>0</strong>
+          </span>
+        ) : (
+          converging && (
+            <span
+              className={`metapool-converge metapool-converge-${
+                growing ? 'grow' : 'shrink'
+              }`}
+              title={
+                growing
+                  ? 'Warming new sessions up to the saved target'
+                  : 'Retiring surplus sessions down to the saved target'
+              }
+            >
+              <span className="metapool-converge-dot" />
+              {growing ? 'increasing' : 'decreasing'} →{' '}
+              <strong>{pool.size}</strong>
+            </span>
+          )
+        )}
+        {!draining && (
+          <span
+            className="metapool-suggest"
+            title="Suggested warm size from observed peak concurrency in the recent telemetry window"
+          >
+            Suggested <strong>{pool.suggestedSize}</strong>
+            {suggestionDiffers && (
+              <button
+                type="button"
+                className="metapool-suggest-apply"
+                onClick={handleApply}
+              >
+                Apply
+              </button>
+            )}
           </span>
         )}
-        <span
-          className="metapool-suggest"
-          title="Suggested warm size from observed peak concurrency in the recent telemetry window"
-        >
-          Suggested <strong>{pool.suggestedSize}</strong>
-          {suggestionDiffers && (
-            <button
-              type="button"
-              className="metapool-suggest-apply"
-              onClick={handleApply}
-            >
-              Apply
-            </button>
-          )}
-        </span>
       </div>
 
       {(rendered.length > 0 || ghostCount > 0) && (
@@ -574,7 +626,7 @@ function PoolStatus({
         </span>
       </div>
 
-      {hasPending && (
+      {!draining && hasPending && (
         <p className="metapool-pending" role="status">
           {pendingDelta > 0 ? (
             <>
@@ -592,28 +644,41 @@ function PoolStatus({
         </p>
       )}
 
-      {converging && (
+      {draining ? (
         <p
-          className={`metapool-transition metapool-transition-${
-            growing ? 'grow' : 'shrink'
-          }`}
+          className="metapool-transition metapool-transition-shutdown"
           role="status"
           aria-live="polite"
         >
-          {growing ? (
-            <>
-              Metasessions increasing to <strong>{pool.size}</strong> —{' '}
-              <strong>{readyCount}</strong> of <strong>{pool.size}</strong>{' '}
-              ready, <strong>{warmingCount}</strong> warming…
-            </>
-          ) : (
-            <>
-              Metasessions decreasing to <strong>{pool.size}</strong> —{' '}
-              <strong>{pool.live}</strong> still live,{' '}
-              <strong>{retiringCount}</strong> finishing before they retire…
-            </>
-          )}
+          Shutting down — <strong>{pool.live}</strong> metasession
+          {pool.live === 1 ? '' : 's'} still{' '}
+          {pool.busy > 0 ? 'finishing their turns before they' : 'to'} retire;
+          this pool disappears once every session is gone.
         </p>
+      ) : (
+        converging && (
+          <p
+            className={`metapool-transition metapool-transition-${
+              growing ? 'grow' : 'shrink'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {growing ? (
+              <>
+                Metasessions increasing to <strong>{pool.size}</strong> —{' '}
+                <strong>{readyCount}</strong> of <strong>{pool.size}</strong>{' '}
+                ready, <strong>{warmingCount}</strong> warming…
+              </>
+            ) : (
+              <>
+                Metasessions decreasing to <strong>{pool.size}</strong> —{' '}
+                <strong>{pool.live}</strong> still live,{' '}
+                <strong>{retiringCount}</strong> finishing before they retire…
+              </>
+            )}
+          </p>
+        )
       )}
 
       {detail && (
@@ -676,6 +741,7 @@ export function MetasessionPoolsSection() {
     () =>
       (status.data?.pools ?? []).some(
         (p) =>
+          p.draining ||
           p.sessions.some(
             (s) => s.state === 'warming' || s.state === 'busy',
           ) || p.live > p.size,
@@ -692,10 +758,20 @@ export function MetasessionPoolsSection() {
   const statusByPurpose = useMemo(() => {
     const map = new Map<string, MetaPoolStat>();
     for (const pool of status.data?.pools ?? []) {
-      map.set(pool.purpose, pool);
+      if (!pool.draining) {
+        map.set(pool.purpose, pool);
+      }
     }
     return map;
   }, [status.data]);
+
+  // Pools the backend is draining after a removal. They are no longer in the
+  // editable draft, so they render as read-only "shutting down" sections that
+  // animate each metasession retiring until the pool empties and drops out.
+  const drainingPools = useMemo(
+    () => (status.data?.pools ?? []).filter((p) => p.draining),
+    [status.data],
+  );
 
   const usedPurposes = useMemo(
     () => new Set(pools.map((p) => p.purpose.trim())),
@@ -947,6 +1023,39 @@ export function MetasessionPoolsSection() {
               );
             })}
           </div>
+
+          {enabled && drainingPools.length > 0 && (
+            <div className="metapool-rows metapool-rows-draining">
+              {drainingPools.map((pool) => (
+                <div
+                  className="metapool-row metapool-row-draining"
+                  key={`draining-${pool.purpose}`}
+                >
+                  <div className="metapool-row-fields">
+                    <label className="metapool-field">
+                      <span className="metapool-field-label">Purpose</span>
+                      <input
+                        className="input"
+                        value={pool.purpose}
+                        disabled
+                        readOnly
+                      />
+                    </label>
+                    <span className="metapool-draining-tag">
+                      <Spinner size={12} /> Removing…
+                    </span>
+                  </div>
+                  <PoolStatus
+                    pool={pool}
+                    model={status.data?.model}
+                    draftSize={0}
+                    onApplySuggestion={() => undefined}
+                    draining
+                  />
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="metapool-add-row">
             <Button variant="ghost" onClick={() => addPool()} disabled={busy}>

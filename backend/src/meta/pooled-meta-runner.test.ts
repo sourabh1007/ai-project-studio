@@ -312,4 +312,51 @@ describe('metaPoolsStatus', () => {
     ]);
     expect('model' in status).toBe(false);
   });
+
+  it('appends draining pools flagged so they animate shutting down', () => {
+    const status = metaPoolsStatus(
+      true,
+      [{ purpose: 'general', stats: () => stats({ idle: 5, live: 5, size: 5 }) }],
+      undefined,
+      undefined,
+      [
+        {
+          purpose: 'self-recovery',
+          stats: () => stats({ ready: false, idle: 0, live: 2, size: 0, busy: 2 }),
+        },
+      ],
+    );
+    expect(status.pools).toEqual([
+      {
+        purpose: 'general',
+        suggestedSize: 5,
+        size: 5,
+        live: 5,
+        idle: 5,
+        busy: 0,
+        ready: true,
+        served: 0,
+        sessions: [],
+      },
+      {
+        purpose: 'self-recovery',
+        suggestedSize: 0,
+        size: 0,
+        live: 2,
+        idle: 0,
+        busy: 2,
+        ready: false,
+        served: 0,
+        sessions: [],
+        draining: true,
+      },
+    ]);
+  });
+
+  it('has no draining pools when none are passed', () => {
+    const status = metaPoolsStatus(true, [
+      { purpose: 'general', stats: () => stats({ size: 5 }) },
+    ]);
+    expect(status.pools.every((p) => p.draining === undefined)).toBe(true);
+  });
 });

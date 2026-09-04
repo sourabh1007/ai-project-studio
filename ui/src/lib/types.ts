@@ -1077,6 +1077,12 @@ export interface MetaPoolStat {
   served: number;
   /** Per-session live status, ordered by creation. */
   sessions: MetaSessionInfo[];
+  /**
+   * True while the pool is being removed and draining its warm sessions. It no
+   * longer takes routing and disappears from the status once every session has
+   * retired; surfaced so the Settings page can show it shutting down live.
+   */
+  draining?: boolean;
 }
 
 /** Aggregate warm metasession pool status for the Settings page. */
