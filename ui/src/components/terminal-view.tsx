@@ -610,6 +610,28 @@ export function TerminalView({
       }
       if (message.type === 'output') {
         term.write(message.data);
+      } else if (message.type === 'resize') {
+        // Capture-size handshake sent right before the scrollback replay. Size
+        // the grid to the width the retained output was rendered at so the
+        // replayed full-screen TUI redraw lands aligned (not wrapped/garbled at
+        // this pane's default width). The scrollback 'output' frame is the very
+        // next message, so it is written at this width. Then, once that
+        // synchronous replay has flushed, fit back to the real pane: on Windows
+        // conpty (reflow disabled) the already-written history keeps its capture
+        // wrapping while the CLI redraws its current screen at the pane size.
+        if (message.cols > 0 && message.rows > 0) {
+          try {
+            term.resize(message.cols, message.rows);
+          } catch {
+            /* xterm may reject before layout; the fit burst still recovers */
+          }
+        }
+        timeoutIds.push(
+          window.setTimeout(() => {
+            applyFit();
+            repaintViewport();
+          }, 0),
+        );
       } else if (message.type === 'exit') {
         term.write(
           `\r\n\x1b[90m[session ended${

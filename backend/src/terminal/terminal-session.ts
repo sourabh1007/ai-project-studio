@@ -5,6 +5,14 @@ import { stripAnsi } from './ansi.js';
 export interface TerminalOutputSink {
   send(data: string): void;
   exit(code: number | null): void;
+  /**
+   * Optional. Invoked once on attach — before any scrollback replay — with the
+   * PTY's current viewport size. Lets a (re)connecting client size its terminal
+   * grid to the exact width the retained scrollback was rendered at, so the
+   * replayed full-screen TUI output stays aligned instead of garbling when the
+   * client's pane width differs from the capture width.
+   */
+  resize?(cols: number, rows: number): void;
 }
 
 export interface TerminalSessionDeps {
@@ -21,6 +29,13 @@ export interface TerminalSessionDeps {
    * dropped once the cap is exceeded.
    */
   transcriptBytes: number;
+  /**
+   * The PTY's initial viewport size, mirrored back to reconnecting clients on
+   * attach so they can render retained scrollback at its capture width. Updated
+   * as the client resizes; defaults to 0 (unknown) when not supplied.
+   */
+  initialCols?: number;
+  initialRows?: number;
   /** Invoked once when the underlying process exits. */
   onExit: (code: number | null) => void;
 }
@@ -72,6 +87,8 @@ export function createTerminalSession(
 ): TerminalSession {
   const { sessionId, pty, scrollbackBytes, transcriptBytes } = deps;
   const sinks = new Set<TerminalOutputSink>();
+  let cols = deps.initialCols ?? 0;
+  let rows = deps.initialRows ?? 0;
   let scrollback = '';
   let transcript = '';
   let exited = false;
@@ -133,8 +150,15 @@ export function createTerminalSession(
       return () => readinessListeners.delete(listener);
     },
     markInputReady: () => settleInputReadiness('ready'),
-    resize: (cols, rows) => pty.resize(cols, rows),
+    resize: (nextCols, nextRows) => {
+      cols = nextCols;
+      rows = nextRows;
+      pty.resize(nextCols, nextRows);
+    },
     attach(sink) {
+      // Tell the client the capture size before replaying, so it can match its
+      // grid width to the scrollback and avoid garbled/overlapping redraws.
+      sink.resize?.(cols, rows);
       if (scrollback.length > 0) {
         sink.send(scrollback);
       }

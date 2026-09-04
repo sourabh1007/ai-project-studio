@@ -11,6 +11,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'ready'; sessionId: string }
   | { type: 'output'; data: string }
+  | { type: 'resize'; cols: number; rows: number }
   | { type: 'exit'; code: number | null };
 
 /** Serializes a server->client message to a WebSocket text frame. */

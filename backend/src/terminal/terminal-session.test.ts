@@ -34,10 +34,25 @@ function fakePty() {
 function recordingSink() {
   const output: string[] = [];
   const exits: Array<number | null> = [];
+  const resizes: Array<[number, number]> = [];
   return {
-    sink: { send: (d: string) => output.push(d), exit: (c: number | null) => exits.push(c) },
+    sink: {
+      send: (d: string) => output.push(d),
+      exit: (c: number | null) => exits.push(c),
+      resize: (cols: number, rows: number) => resizes.push([cols, rows]),
+    },
     output,
     exits,
+    resizes,
+  };
+}
+
+/** A sink with no optional resize hook, to exercise the absent-hook branch. */
+function plainSink() {
+  const output: string[] = [];
+  return {
+    sink: { send: (d: string) => output.push(d), exit: () => {} },
+    output,
   };
 }
 
@@ -109,6 +124,53 @@ describe('createTerminalSession', () => {
     f.emitData('abcd');
     f.emitData('efgh');
     expect(session.transcriptText()).toBe('efgh');
+  });
+
+  it('emits the capture size to a resize-capable sink before replaying, and tracks resizes', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 's1',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 1000,
+      transcriptBytes: 1000,
+      initialCols: 120,
+      initialRows: 30,
+      onExit: () => {},
+    });
+    f.emitData('history');
+
+    const first = recordingSink();
+    session.attach(first.sink);
+    // Capture size arrives before the scrollback so the client can size its grid.
+    expect(first.resizes).toEqual([[120, 30]]);
+    expect(first.output).toEqual(['history']);
+
+    // A resize updates the tracked capture size forwarded to later joiners, and
+    // still reaches the PTY.
+    session.resize(80, 24);
+    expect(f.resizes).toEqual([[80, 24]]);
+    const late = recordingSink();
+    session.attach(late.sink);
+    expect(late.resizes).toEqual([[80, 24]]);
+  });
+
+  it('replays without error to a sink that omits the optional resize hook', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 's1',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 1000,
+      transcriptBytes: 1000,
+      initialCols: 100,
+      initialRows: 40,
+      onExit: () => {},
+    });
+    f.emitData('past');
+    const plain = plainSink();
+    session.attach(plain.sink);
+    expect(plain.output).toEqual(['past']);
   });
 
   it('forwards write, resize and kill to the pty', () => {

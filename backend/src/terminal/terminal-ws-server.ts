@@ -71,6 +71,8 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     const detach = terminal.attach({
       send: (data) =>
         socket.send(encodeServerMessage({ type: 'output', data })),
+      resize: (cols, rows) =>
+        socket.send(encodeServerMessage({ type: 'resize', cols, rows })),
       exit: (code) => socket.send(encodeServerMessage({ type: 'exit', code })),
     });
     const bufferedInput: string[] = [];

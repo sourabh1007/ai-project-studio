@@ -186,6 +186,8 @@ export function createTerminalManager(
       inputReady: seeds.length === 0,
       scrollbackBytes: deps.config.scrollbackBytes,
       transcriptBytes: deps.config.transcriptBytes,
+      initialCols: options.cols ?? deps.config.defaultCols,
+      initialRows: options.rows ?? deps.config.defaultRows,
       onExit: (code) => {
         sessions.delete(session.id);
         retries.delete(session.id);

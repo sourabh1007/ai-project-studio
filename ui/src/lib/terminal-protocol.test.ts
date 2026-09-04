@@ -25,6 +25,9 @@ describe('decodeServerMessage', () => {
       type: 'output',
       data: 'hi',
     });
+    expect(
+      decodeServerMessage('{"type":"resize","cols":120,"rows":30}'),
+    ).toEqual({ type: 'resize', cols: 120, rows: 30 });
     expect(decodeServerMessage('{"type":"exit","code":0}')).toEqual({
       type: 'exit',
       code: 0,
@@ -43,6 +46,7 @@ describe('decodeServerMessage', () => {
   it('rejects frames with wrong field types', () => {
     expect(decodeServerMessage('{"type":"ready","sessionId":1}')).toBeNull();
     expect(decodeServerMessage('{"type":"output","data":1}')).toBeNull();
+    expect(decodeServerMessage('{"type":"resize","cols":"x","rows":1}')).toBeNull();
     expect(decodeServerMessage('{"type":"exit","code":"x"}')).toBeNull();
   });
 

@@ -11,6 +11,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'ready'; sessionId: string }
   | { type: 'output'; data: string }
+  | { type: 'resize'; cols: number; rows: number }
   | { type: 'exit'; code: number | null };
 
 export function encodeClientMessage(message: ClientMessage): string {
@@ -40,6 +41,11 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
   if (parsed.type === 'output') {
     return typeof parsed.data === 'string'
       ? { type: 'output', data: parsed.data }
+      : null;
+  }
+  if (parsed.type === 'resize') {
+    return typeof parsed.cols === 'number' && typeof parsed.rows === 'number'
+      ? { type: 'resize', cols: parsed.cols, rows: parsed.rows }
       : null;
   }
   if (parsed.type === 'exit') {
