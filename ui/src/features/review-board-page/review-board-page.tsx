@@ -427,6 +427,7 @@ export function ReviewBoardPage({
       analyzeReviewBoardPerspective: api.analyzeReviewBoardPerspective,
       getPrReview: api.getPrReview,
       pullLatestPrReview: api.pullLatestPrReview,
+      getMetaPools: api.getMetaPools,
     }),
     [api],
   );
@@ -864,8 +865,9 @@ export function ReviewBoardPage({
           <span className="spinner" aria-hidden="true" />
           <span>
             Reviewing {analyzedCount} of {totalPerspectives} perspectives —
-            findings appear as each one completes. Runs one at a time and keeps
-            going if you switch tabs. Select any perspective to follow along.
+            findings appear as each one completes. Runs several in parallel
+            across the warm metasessions and keeps going if you switch tabs.
+            Select any perspective to follow along.
           </span>
           <button
             type="button"
@@ -1268,9 +1270,10 @@ export function ReviewBoardPage({
               )}
               {selectedProgress.status === 'pending' && (
                 <div className="rb-banner rb-banner-queued" role="status">
-                  <strong>Queued for review.</strong> The AI reviewer works
-                  through perspectives one at a time — this one is waiting its
-                  turn. Existing findings stay visible until it runs.
+                  <strong>Queued for review.</strong> The AI reviewer runs
+                  several perspectives in parallel across the warm metasessions
+                  — this one is waiting for a free session. Existing findings
+                  stay visible until it runs.
                 </div>
               )}
               {selectedProgress.status === 'retrying' && (
@@ -1285,8 +1288,8 @@ export function ReviewBoardPage({
                 <div className="rb-banner rb-banner-working" role="status">
                   <span className="spinner" aria-hidden="true" /> The AI reviewer
                   is examining this perspective. Existing findings stay visible
-                  while it works — remaining perspectives are queued and run one
-                  by one.
+                  while it works — other perspectives review in parallel across
+                  the warm metasessions.
                 </div>
               )}
               {(selectedProgress.status === 'analyzing' ||

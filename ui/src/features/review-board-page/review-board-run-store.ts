@@ -1,12 +1,13 @@
 /**
  * Persistent, per-feature store for the Review Board's AI analysis run.
  *
- * The analysis is **sequential and self-healing**: perspectives are reviewed
- * one at a time, each request is retried with backoff before it is surfaced as
- * an error, and the whole run keeps going even when the Review Board page
- * unmounts (the reviewer switched tabs/windows). The page is a thin subscriber
- * over this store via `useSyncExternalStore`, so navigating away and back shows
- * the live progress instead of restarting from scratch.
+ * The analysis is **parallel and self-healing**: perspectives are reviewed
+ * concurrently up to the warm metasession capacity (so 5 warm sessions judge 5
+ * perspectives at once instead of one-by-one), each request is retried with
+ * backoff before it is surfaced as an error, and the whole run keeps going even
+ * when the Review Board page unmounts (the reviewer switched tabs/windows). The
+ * page is a thin subscriber over this store via `useSyncExternalStore`, so
+ * navigating away and back shows the live progress instead of restarting.
  *
  * All pure decision logic lives in `../../lib/review-board-progress.ts` (which
  * the UI coverage gate exercises); this module is the thin, stateful IO shell
@@ -14,6 +15,7 @@
  */
 
 import type {
+  MetaPoolsStatus,
   PerspectiveAnalysis,
   PerspectiveCheck,
   PrReview,
@@ -22,6 +24,7 @@ import type {
   ReviewBoardRatingChange,
 } from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
+import { metaConcurrency } from '../../lib/meta-concurrency.js';
 import {
   applyAgentRatingChange,
   mapWithConcurrency,
@@ -45,8 +48,11 @@ import {
   type FindingResolutionMap,
 } from '../../lib/review-format.js';
 
-/** How many perspectives are analysed at once — strictly one, in order. */
-const ANALYZE_CONCURRENCY = 1;
+/**
+ * Default parallelism when the warm-pool status can't be read — a single turn
+ * at a time, matching the safe cold-path behaviour.
+ */
+const FALLBACK_CONCURRENCY = 1;
 /** Attempts (initial + retries) before a perspective is marked failed. */
 const MAX_ATTEMPTS = 3;
 /** Backoff before the retry that follows a failed attempt (grows per attempt). */
@@ -68,6 +74,12 @@ export interface ReviewBoardRunApi {
   getPrReview(featureId: string): Promise<PrReview>;
   /** Re-provision the worktree to the latest remote head and rebuild. */
   pullLatestPrReview(featureId: string): Promise<PrReview>;
+  /**
+   * Live warm-metasession pool status, used to size how many perspectives run
+   * in parallel so warm capacity is exploited. Optional so leaner callers/tests
+   * can omit it; absent or failing falls back to one-at-a-time.
+   */
+  getMetaPools?(): Promise<MetaPoolsStatus>;
 }
 
 export type PerspectiveStatus =
@@ -387,6 +399,20 @@ class ReviewBoardRunStore {
    * Returns `true` on success, `false` if the reviewer should not proceed
    * (aborted by a newer run, or the pull/rebuild failed — surfaced via `prep`).
    */
+  /**
+   * How many perspectives to review in parallel this pass: the warm-pool
+   * capacity so ready metasessions are all put to work, or one-at-a-time when
+   * the pool status can't be read (or warm pools are off).
+   */
+  private async resolveConcurrency(api: ReviewBoardRunApi): Promise<number> {
+    try {
+      const status = await api.getMetaPools?.();
+      return metaConcurrency(status);
+    } catch {
+      return FALLBACK_CONCURRENCY;
+    }
+  }
+
   private async takeLatest(
     featureId: string,
     api: ReviewBoardRunApi,
@@ -516,7 +542,8 @@ class ReviewBoardRunStore {
 
     const isStale = () => this.record(featureId).runToken !== token;
 
-    await mapWithConcurrency(ids, ANALYZE_CONCURRENCY, async (id) => {
+    const concurrency = await this.resolveConcurrency(api);
+    await mapWithConcurrency(ids, concurrency, async (id) => {
       if (isStale()) return;
       try {
         const result = await runWithRetry(
@@ -722,7 +749,8 @@ class ReviewBoardRunStore {
       },
     }));
 
-    await mapWithConcurrency(failed, ANALYZE_CONCURRENCY, async (id) => {
+    const concurrency = await this.resolveConcurrency(api);
+    await mapWithConcurrency(failed, concurrency, async (id) => {
       if (isStale()) return;
       try {
         const result = await runWithRetry(
