@@ -9110,6 +9110,74 @@ body.is-resizing {
   font-weight: 700;
 }
 
+.metapool-converge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metapool-converge strong {
+  font-weight: 700;
+}
+.metapool-converge-grow {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+.metapool-converge-shrink {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+.metapool-converge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: metapool-converge-pulse 1.1s ease-in-out infinite;
+}
+@keyframes metapool-converge-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.metapool-transition {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--fs-secondary);
+  line-height: var(--lh-secondary);
+  color: var(--text);
+  border-radius: var(--radius-md);
+  animation: metapool-fade-in var(--transition-med) ease-out;
+}
+.metapool-transition strong {
+  font-weight: 700;
+}
+.metapool-transition-grow {
+  background: color-mix(in srgb, var(--success) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--border));
+}
+.metapool-transition-shrink {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+}
+@media (prefers-reduced-motion: reduce) {
+  .metapool-converge-dot {
+    animation: none;
+  }
+}
+
 @keyframes metapool-target-pop {
   0% {
     transform: scale(0.85);

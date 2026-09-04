@@ -28,6 +28,9 @@ import type {
 /** How often the live warm-pool status is refreshed while the page is open. */
 const POLL_MS = 4000;
 
+/** Faster status cadence while a pool is actively growing or shrinking. */
+const CONVERGING_POLL_MS = 1000;
+
 /** Milliseconds an exiting session chip lingers so its removal animates. */
 const EXIT_MS = 320;
 
@@ -328,6 +331,19 @@ function PoolStatus({
   const liveCount = rendered.filter((r) => !r.exiting).length;
   const ghostCount =
     hasPending && pendingDelta > 0 ? Math.max(0, target - liveCount) : 0;
+  // Live convergence (a *saved* change the pool is still applying), as opposed
+  // to `hasPending` (an *unsaved* edit). The pool's own target is `pool.size`;
+  // it keeps moving toward it while sessions are still warming (growing) or a
+  // surplus session is finishing its turn before it retires (shrinking). This
+  // is what keeps the UI honest after save: the number isn't reverted, the pool
+  // is visibly climbing/dropping toward it.
+  const warmingCount = pool.sessions.filter(
+    (s) => s.state === 'warming',
+  ).length;
+  const retiringCount = Math.max(0, pool.live - pool.size);
+  const readyCount = Math.max(0, pool.live - warmingCount);
+  const growing = warmingCount > 0;
+  const converging = !hasPending && (growing || retiringCount > 0);
 
   function handleApply() {
     setJustApplied(true);
@@ -368,6 +384,22 @@ function PoolStatus({
             title="Pending target — save to apply live"
           >
             → target <strong>{target}</strong>
+          </span>
+        )}
+        {converging && (
+          <span
+            className={`metapool-converge metapool-converge-${
+              growing ? 'grow' : 'shrink'
+            }`}
+            title={
+              growing
+                ? 'Warming new sessions up to the saved target'
+                : 'Retiring surplus sessions down to the saved target'
+            }
+          >
+            <span className="metapool-converge-dot" />
+            {growing ? 'increasing' : 'decreasing'} →{' '}
+            <strong>{pool.size}</strong>
           </span>
         )}
         <span
@@ -463,6 +495,30 @@ function PoolStatus({
         </p>
       )}
 
+      {converging && (
+        <p
+          className={`metapool-transition metapool-transition-${
+            growing ? 'grow' : 'shrink'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {growing ? (
+            <>
+              Metasessions increasing to <strong>{pool.size}</strong> —{' '}
+              <strong>{readyCount}</strong> of <strong>{pool.size}</strong>{' '}
+              ready, <strong>{warmingCount}</strong> warming…
+            </>
+          ) : (
+            <>
+              Metasessions decreasing to <strong>{pool.size}</strong> —{' '}
+              <strong>{pool.live}</strong> still live,{' '}
+              <strong>{retiringCount}</strong> finishing before they retire…
+            </>
+          )}
+        </p>
+      )}
+
       {detail && (
         <SessionDetailsModal
           info={detail}
@@ -514,10 +570,22 @@ export function MetasessionPoolsSection() {
     }
   }, [savedWarmPool]);
 
+  // Poll faster while any pool is still converging on a saved size change, so
+  // the chips and counts update live (warming → idle, surplus retiring) instead
+  // of stepping every few seconds; fall back to the calm cadence once settled.
+  const anyConverging = useMemo(
+    () =>
+      (status.data?.pools ?? []).some(
+        (p) => p.sessions.some((s) => s.state === 'warming') || p.live > p.size,
+      ),
+    [status.data],
+  );
+
   useEffect(() => {
-    const timer = setInterval(status.reload, POLL_MS);
+    const intervalMs = anyConverging ? CONVERGING_POLL_MS : POLL_MS;
+    const timer = setInterval(status.reload, intervalMs);
     return () => clearInterval(timer);
-  }, [status.reload]);
+  }, [status.reload, anyConverging]);
 
   const statusByPurpose = useMemo(() => {
     const map = new Map<string, MetaPoolStat>();
