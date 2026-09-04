@@ -134,6 +134,10 @@ export interface ApiRoutesDeps {
   metaPools: () => MetaPoolsStatus;
   /** Live-resizes the warm pool for a purpose (no restart), returning status. */
   resizeMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
+  /** Live-creates a warm pool for a new purpose (no restart), returning status. */
+  createMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
+  /** Live-removes the warm pool for a purpose (no restart), returning status. */
+  removeMetaPool: (purpose: string) => MetaPoolsStatus;
   /** Current runtime meta AI provider/model for the status bar. */
   metaSettings: () => MetaSettingsView;
   /** Applies a runtime meta AI provider/model change (no restart). */
@@ -261,6 +265,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createMetaPoolsRoutes({
       status: deps.metaPools,
       resize: deps.resizeMetaPool,
+      create: deps.createMetaPool,
+      remove: deps.removeMetaPool,
     }),
     ...createMetaSettingsRoutes({
       get: deps.metaSettings,

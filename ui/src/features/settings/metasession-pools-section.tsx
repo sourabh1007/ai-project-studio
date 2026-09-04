@@ -651,6 +651,7 @@ export function MetasessionPoolsSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [needsRestart, setNeedsRestart] = useState(false);
   const [showPurposes, setShowPurposes] = useState(false);
 
   useEffect(() => {
@@ -754,23 +755,37 @@ export function MetasessionPoolsSection() {
       await api.updateConfig('meta', {
         warmPool: { ...savedWarmPool, enabled, pools: result },
       });
-      // Apply size changes live so pools grow/shrink immediately (with the
-      // chip animations) instead of forcing a restart. Only pools that are
-      // already running can be resized; adding, removing or toggling a pool
-      // still needs a restart, so those are left to the persisted config.
-      if (enabled) {
+      // Apply pool edits live so they take effect immediately (with the chip
+      // animations) instead of forcing a restart: resize running pools, spin up
+      // newly-added ones, and tear down removed ones. This only works once the
+      // warm-pool system is already running — turning the whole system on or
+      // off still needs a restart, so that case is left to the persisted config.
+      const systemRunning = status.data?.enabled === true;
+      if (enabled && systemRunning) {
         const running = new Set(
           (status.data?.pools ?? []).map((p) => p.purpose),
         );
-        await Promise.all(
-          result
-            .filter((pool) => running.has(pool.purpose))
-            .map((pool) =>
-              api.resizeMetaPool(pool.purpose, pool.size).catch(() => undefined),
-            ),
-        );
+        const desired = new Set(result.map((p) => p.purpose));
+        const ops: Array<Promise<unknown>> = [];
+        for (const pool of result) {
+          ops.push(
+            (running.has(pool.purpose)
+              ? api.resizeMetaPool(pool.purpose, pool.size)
+              : api.createMetaPool(pool.purpose, pool.size)
+            ).catch(() => undefined),
+          );
+        }
+        for (const purpose of running) {
+          if (!desired.has(purpose)) {
+            ops.push(api.removeMetaPool(purpose).catch(() => undefined));
+          }
+        }
+        await Promise.all(ops);
         status.reload();
       }
+      // A restart is only needed to turn the whole warm-pool system on or off;
+      // pool add/remove/resize already applied live above.
+      setNeedsRestart(savedWarmPool?.enabled !== enabled);
       setSaved(true);
       config.reload();
     } catch (err) {
@@ -797,8 +812,8 @@ export function MetasessionPoolsSection() {
               Warm AI sessions kept ready so the IDE responds instantly instead
               of spawning a CLI per request. Each pool bounds how many turns run
               in parallel; extra requests reuse the next free session or fall
-              back to a cold spawn. Size changes apply live on save; adding,
-              removing or toggling a pool needs a restart.
+              back to a cold spawn. Adding, removing and resizing pools apply
+              live on save; enabling or disabling warm pools needs a restart.
             </p>
           </div>
         </div>
@@ -924,7 +939,7 @@ export function MetasessionPoolsSection() {
                     ) : (
                       <div className="metapool-live">
                         <span className="metapool-badge metapool-badge-warming">
-                          {saved ? 'Restart to start' : 'Not running'}
+                          {saved ? 'Starting…' : 'Save to start live'}
                         </span>
                       </div>
                     ))}
@@ -965,11 +980,20 @@ export function MetasessionPoolsSection() {
             </Button>
             {saved && (
               <span className="metapool-saved">
-                Saved — restart to apply.
-                {bridge && (
-                  <Button variant="ghost" onClick={() => bridge.relaunch()}>
-                    Restart now
-                  </Button>
+                {needsRestart ? (
+                  <>
+                    Saved — restart to apply.
+                    {bridge && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => bridge.relaunch()}
+                      >
+                        Restart now
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  'Saved — applied live.'
                 )}
               </span>
             )}

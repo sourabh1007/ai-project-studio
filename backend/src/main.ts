@@ -269,6 +269,7 @@ import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
 import { createAcpMetaRunner } from './meta/acp/acp-meta-runner.js';
 import {
   createPooledMetaRunner,
+  GENERAL_PURPOSE,
   metaPoolsStatus,
   type PurposePool,
 } from './meta/pooled-meta-runner.js';
@@ -1549,36 +1550,51 @@ function main(): void {
   > = () => {
     throw new NotFoundError('Warm metasession pools are disabled');
   };
+  let createMetaPoolFn: (purpose: string, size: number) => ReturnType<
+    typeof metaPoolsStatus
+  > = () => {
+    throw new NotFoundError('Warm metasession pools are disabled');
+  };
+  let removeMetaPoolFn: (purpose: string) => ReturnType<
+    typeof metaPoolsStatus
+  > = () => {
+    throw new NotFoundError('Warm metasession pools are disabled');
+  };
   let metaAi: typeof metaRunner = metaRunner;
   let warmInlinePrompts = false;
   if (warmPoolCfg.enabled) {
-    for (const poolCfg of warmPoolCfg.pools) {
+    // Builds, registers and starts a warm pool for one purpose. Shared by the
+    // startup loop and live pool creation so both spawn sessions identically.
+    const buildWarmPool = (purpose: string, size: number): void => {
       const pool = new MetaSessionPool({
-        size: poolCfg.size,
+        size,
         createClient: () =>
           new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
             initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
             turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
           }),
       });
-      warmPoolsByPurpose.set(poolCfg.purpose, pool);
+      warmPoolsByPurpose.set(purpose, pool);
       pool.start().catch((error: unknown) => {
         logger.error(
-          `Warm ACP pool '${poolCfg.purpose}' failed to start; using cold path`,
+          `Warm ACP pool '${purpose}' failed to start; using cold path`,
           { error: error instanceof Error ? error.message : String(error) },
         );
       });
       const runner = createAcpMetaRunner({
         pool,
         newSessionId: () => `acp-${randomUUID()}`,
-        purpose: poolCfg.purpose,
+        purpose,
       });
       warmPurposePools.push({
-        purpose: poolCfg.purpose,
+        purpose,
         ready: () => pool.ready,
         stats: () => pool.stats(),
         runDetailed: (request) => runner.runDetailed(request),
       });
+    };
+    for (const poolCfg of warmPoolCfg.pools) {
+      buildWarmPool(poolCfg.purpose, poolCfg.size);
     }
     metaAi = createPooledMetaRunner({
       pools: warmPurposePools,
@@ -1608,6 +1624,31 @@ function main(): void {
         throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
       }
       pool.resize(size);
+      return metaPoolsStatusFn();
+    };
+    createMetaPoolFn = (purpose, size) => {
+      if (warmPoolsByPurpose.has(purpose)) {
+        throw new ValidationError(
+          `A warm metasession pool already serves purpose: ${purpose}`,
+        );
+      }
+      buildWarmPool(purpose, size);
+      return metaPoolsStatusFn();
+    };
+    removeMetaPoolFn = (purpose) => {
+      if (purpose === GENERAL_PURPOSE) {
+        throw new ValidationError('The general metasession pool cannot be removed');
+      }
+      const pool = warmPoolsByPurpose.get(purpose);
+      if (!pool) {
+        throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
+      }
+      pool.close();
+      warmPoolsByPurpose.delete(purpose);
+      const index = warmPurposePools.findIndex((p) => p.purpose === purpose);
+      if (index !== -1) {
+        warmPurposePools.splice(index, 1);
+      }
       return metaPoolsStatusFn();
     };
   }
@@ -2084,6 +2125,8 @@ function main(): void {
       configOverrides: configOverrideService,
       metaPools: metaPoolsStatusFn,
       resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
+      createMetaPool: (purpose, size) => createMetaPoolFn(purpose, size),
+      removeMetaPool: (purpose) => removeMetaPoolFn(purpose),
       metaSettings: () => ({
         ...metaSettings.get(),
         warmPoolEnabled: warmPoolCfg.enabled,

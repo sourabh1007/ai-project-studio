@@ -60,10 +60,13 @@ export const GENERAL_PURPOSE = 'general';
  * stall just because the pool isn't ready; they only get faster when it is.
  */
 export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
-  const byPurpose = new Map(deps.pools.map((pool) => [pool.purpose, pool]));
-  const general = byPurpose.get(GENERAL_PURPOSE);
-
+  // Resolve routing from the *current* pool set on every request so pools added
+  // or removed live (without a restart) take effect immediately — main.ts holds
+  // the same `deps.pools` array reference and mutates it as the user edits the
+  // Settings page.
   function select(purpose: string | undefined): PurposePool | undefined {
+    const byPurpose = new Map(deps.pools.map((pool) => [pool.purpose, pool]));
+    const general = byPurpose.get(GENERAL_PURPOSE);
     if (purpose) {
       const match = byPurpose.get(purpose);
       if (match) {

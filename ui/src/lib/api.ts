@@ -459,6 +459,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
         '/meta/pools/resize',
         jsonBody({ purpose, size }),
       ),
+    createMetaPool: (purpose: string, size: number) =>
+      request<MetaPoolsStatus>(
+        '/meta/pools/create',
+        jsonBody({ purpose, size }),
+      ),
+    removeMetaPool: (purpose: string) =>
+      request<MetaPoolsStatus>('/meta/pools/remove', jsonBody({ purpose })),
     getMetaSettings: () => request<MetaSettings>('/meta/settings'),
     updateMetaSettings: (patch: Partial<Pick<MetaSettings, 'providerId' | 'model'>>) =>
       request<MetaSettings>('/meta/settings', putBody(patch)),

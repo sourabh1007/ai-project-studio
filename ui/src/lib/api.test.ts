@@ -417,6 +417,33 @@ describe('createApiClient', () => {
     });
   });
 
+  it('creates a warm metasession pool with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ enabled: true, pools: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.createMetaPool('self-recovery', 2);
+    expect(calls[0][0]).toBe('/api/meta/pools/create');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      purpose: 'self-recovery',
+      size: 2,
+    });
+  });
+
+  it('removes a warm metasession pool with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ enabled: true, pools: [] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.removeMetaPool('self-recovery');
+    expect(calls[0][0]).toBe('/api/meta/pools/remove');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      purpose: 'self-recovery',
+    });
+  });
+
   it('reads the runtime meta AI settings', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ providerId: 'agency', model: 'auto', warmPoolEnabled: true }),

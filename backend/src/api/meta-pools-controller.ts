@@ -11,6 +11,19 @@ export interface MetaPoolsControllerDeps {
    * when no pool serves the purpose.
    */
   resize: (purpose: string, size: number) => MetaPoolsStatus;
+  /**
+   * Live-creates and starts a warm pool for a new purpose at `size` sessions
+   * (no restart), returning the refreshed status so the new pool's sessions
+   * animate in as they warm. Throws when warm pools are disabled or the purpose
+   * already has a pool.
+   */
+  create: (purpose: string, size: number) => MetaPoolsStatus;
+  /**
+   * Live-removes and shuts down the warm pool for a purpose (no restart),
+   * returning the refreshed status. Throws when warm pools are disabled or no
+   * pool serves the purpose.
+   */
+  remove: (purpose: string) => MetaPoolsStatus;
 }
 
 function assertResize(body: unknown): { purpose: string; size: number } {
@@ -35,10 +48,31 @@ function assertResize(body: unknown): { purpose: string; size: number } {
 }
 
 /**
+ * Validates a `{ purpose }` body for the create-with-size and remove routes.
+ * `create` reuses {@link assertResize} because it also needs a size; this
+ * covers the remove route, which needs only a purpose.
+ */
+function assertPurpose(body: unknown): { purpose: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new ValidationError('body must be an object');
+  }
+  const record = body as Record<string, unknown>;
+  if (
+    typeof record.purpose !== 'string' ||
+    record.purpose.trim().length === 0
+  ) {
+    throw new ValidationError('purpose must be a non-empty string');
+  }
+  return { purpose: record.purpose };
+}
+
+/**
  * Routes exposing the warm metasession pools so the Settings page can show how
- * much warm AI capacity is ready and live-resize a pool without a restart.
+ * much warm AI capacity is ready and live-edit pools without a restart.
  * `GET` reflects live pool state; `POST /meta/pools/resize` grows or shrinks a
- * pool immediately so the change animates in instead of forcing a restart.
+ * pool immediately; `POST /meta/pools/create` spins up a pool for a new
+ * purpose; `POST /meta/pools/remove` tears one down — all so the change
+ * animates in instead of forcing a restart.
  */
 export function createMetaPoolsRoutes(deps: MetaPoolsControllerDeps): Route[] {
   return [
@@ -53,6 +87,22 @@ export function createMetaPoolsRoutes(deps: MetaPoolsControllerDeps): Route[] {
       handler: (req) => {
         const { purpose, size } = assertResize(req.body);
         return { status: 200, body: deps.resize(purpose, size) };
+      },
+    },
+    {
+      method: 'post',
+      path: '/meta/pools/create',
+      handler: (req) => {
+        const { purpose, size } = assertResize(req.body);
+        return { status: 200, body: deps.create(purpose, size) };
+      },
+    },
+    {
+      method: 'post',
+      path: '/meta/pools/remove',
+      handler: (req) => {
+        const { purpose } = assertPurpose(req.body);
+        return { status: 200, body: deps.remove(purpose) };
       },
     },
   ];

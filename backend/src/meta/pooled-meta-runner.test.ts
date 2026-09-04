@@ -125,6 +125,26 @@ describe('createPooledMetaRunner', () => {
     expect(out).toBe('warm:general');
   });
 
+  it('routes to a pool added to the live pool set after construction', async () => {
+    const general = pool('general');
+    const pools: Array<ReturnType<typeof pool>> = [general];
+    const runner = createPooledMetaRunner({
+      pools,
+      fallback: coldRunner(),
+    });
+    // Before the pool exists, the purpose falls back to general.
+    await runner.runDetailed(req({ purpose: 'review' }));
+    expect(general.calls).toHaveLength(1);
+    // A pool added live (as main.ts does on a Settings save) takes effect at
+    // once, without rebuilding the runner.
+    const review = pool('review');
+    pools.push(review);
+    const result = await runner.runDetailed(req({ purpose: 'review' }));
+    expect(result.text).toBe('warm:review');
+    expect(review.calls).toHaveLength(1);
+    expect(general.calls).toHaveLength(1);
+  });
+
   it('uses the cold runner while the pool is warming', async () => {
     const general = pool('general', { ready: false });
     const cold = coldRunner('cold-text');

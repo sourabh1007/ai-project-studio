@@ -33,6 +33,8 @@ function deps(): ApiRoutesDeps {
     configOverrides: empty,
     metaPools: () => ({ enabled: false, pools: [] }),
     resizeMetaPool: () => ({ enabled: false, pools: [] }),
+    createMetaPool: () => ({ enabled: false, pools: [] }),
+    removeMetaPool: () => ({ enabled: false, pools: [] }),
     metaSettings: () => ({
       providerId: 'agency',
       model: 'auto',
@@ -185,6 +187,8 @@ describe('createApiRoutes', () => {
       'delete /config/:namespace',
       'get /meta/pools',
       'post /meta/pools/resize',
+      'post /meta/pools/create',
+      'post /meta/pools/remove',
       'get /meta/settings',
       'put /meta/settings',
       'get /agency/status',
