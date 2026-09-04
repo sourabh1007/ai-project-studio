@@ -38,6 +38,7 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
       featureId: attributionFeatureId(ctx),
       prompt,
       cwd,
+      label: 'Automation action',
       signal: ctx.signal,
     });
 

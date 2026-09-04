@@ -1006,6 +1006,12 @@ export interface MetaSessionTurn {
   at: number;
   /** Routing purpose the turn served — its "where in the IDE". */
   purpose: string;
+  /**
+   * Human-readable description of the concrete work the turn performed (e.g.
+   * "Repository analysis"). Absent when the caller supplied no label — the UI
+   * then falls back to the purpose.
+   */
+  label?: string;
   /** Input tokens the turn consumed. */
   inputTokens: number;
   /** Output tokens the turn produced. */

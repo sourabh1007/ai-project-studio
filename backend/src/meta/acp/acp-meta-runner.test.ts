@@ -10,15 +10,21 @@ function fakePool(
   }) => AcpTurnResult,
 ): {
   pool: AcpTurnPool;
-  calls: { prompt: string; cwd?: string; purpose?: string }[];
+  calls: { prompt: string; cwd?: string; purpose?: string; label?: string }[];
 } {
-  const calls: { prompt: string; cwd?: string; purpose?: string }[] = [];
+  const calls: {
+    prompt: string;
+    cwd?: string;
+    purpose?: string;
+    label?: string;
+  }[] = [];
   const pool: AcpTurnPool = {
     run(request, context) {
       calls.push({
         prompt: request.prompt,
         cwd: request.cwd,
         purpose: context?.purpose,
+        label: context?.label,
       });
       return Promise.resolve(behaviour(request));
     },
@@ -101,8 +107,14 @@ describe('createAcpMetaRunner', () => {
       newSessionId: () => 's',
       purpose: 'general',
     });
-    await runner.runDetailed({ featureId: 'f', prompt: 'p', purpose: 'pr-review' });
+    await runner.runDetailed({
+      featureId: 'f',
+      prompt: 'p',
+      purpose: 'pr-review',
+      label: 'PR review · problem statement',
+    });
     expect(calls[0].purpose).toBe('pr-review');
+    expect(calls[0].label).toBe('PR review · problem statement');
   });
 
   it("falls back to the pool's purpose when the request has none", async () => {

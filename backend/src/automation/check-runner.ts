@@ -74,6 +74,7 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       featureId: attributionFeatureId(ctx),
       prompt: `${prompt}\n\nAnswer strictly with "yes" or "no" on the first line.`,
       cwd,
+      label: 'Automation check',
       signal: ctx.signal,
     });
     const verdict = isAffirmative(text) ? 1 : 0;

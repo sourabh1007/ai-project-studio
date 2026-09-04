@@ -26,6 +26,7 @@ export function createRepositoryAnalysisExecutor(
           attachments: [temporaryPrompt.path],
           cwd: request.repositoryPath,
           scope: 'internal',
+          label: 'Repository analysis',
         });
         return content.slice(0, request.maxOutputChars);
       } finally {

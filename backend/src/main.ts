@@ -1627,6 +1627,7 @@ function main(): void {
       cwd: terminalCwd,
       noTools: true,
       purpose: 'self-recovery',
+      label: 'Self-recovery diagnosis',
     });
     const trimmed = diagnosis.trim();
     return trimmed.length > 0 ? trimmed : null;
@@ -1970,6 +1971,7 @@ function main(): void {
         prompt: input.prompt,
         cwd: input.cwd,
         scope: 'internal',
+        label: input.label,
       }),
   };
   const automationService = createAutomationService({

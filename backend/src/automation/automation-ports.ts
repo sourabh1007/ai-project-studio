@@ -31,6 +31,8 @@ export interface AiInvoker {
     featureId: string;
     prompt: string;
     cwd?: string;
+    /** Human-readable description of the work, for warm-session usage history. */
+    label?: string;
     signal?: AbortSignal;
   }): Promise<{ text: string; sessionId: string }>;
 }

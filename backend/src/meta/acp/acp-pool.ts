@@ -38,6 +38,13 @@ export interface MetaSessionTurn {
    * `general`, `pr-review`, `self-recovery`). Defaults to `general`.
    */
   purpose: string;
+  /**
+   * Short, human-readable description of the concrete work the turn performed
+   * (e.g. "PR review · change graph", "Repository analysis"). Lets the UI show
+   * *what* the session was used for; absent for turns whose caller supplied no
+   * label, where the UI falls back to the purpose.
+   */
+  label?: string;
   /** Input tokens the turn consumed, or 0 when the CLI reported none. */
   inputTokens: number;
   /** Output tokens the turn produced, or 0 when the CLI reported none. */
@@ -115,6 +122,8 @@ const MAX_HISTORY = 25;
 export interface MetaTurnContext {
   /** Routing purpose the turn is serving (its "where in the IDE"). */
   purpose?: string;
+  /** Human-readable description of the concrete work the turn performs. */
+  label?: string;
 }
 
 /**
@@ -190,6 +199,7 @@ export class MetaSessionPool {
         record.history.push({
           at,
           purpose: context?.purpose ?? 'general',
+          ...(context?.label ? { label: context.label } : {}),
           inputTokens,
           outputTokens,
         });

@@ -190,6 +190,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
           featureId: `mcp:${providerId}`,
           prompt: support.configPathPrompt,
           scope: 'internal',
+          label: 'MCP config discovery',
         }),
         deps.config.discoveryTimeoutMs,
       );

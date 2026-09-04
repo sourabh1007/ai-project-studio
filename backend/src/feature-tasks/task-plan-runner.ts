@@ -34,7 +34,11 @@ export function createTaskPlanRunner(deps: TaskPlanRunnerDeps): TaskPlanRunner {
       // Throws NotFoundError when the feature does not exist.
       const feature = deps.features.get(featureId);
       const prompt = buildTaskPlanPrompt(feature, deps.config);
-      const response = await deps.meta.run({ featureId, prompt });
+      const response = await deps.meta.run({
+        featureId,
+        prompt,
+        label: 'Task plan',
+      });
       const drafts = parseTaskPlan(response, deps.config);
 
       deps.repo.deleteByFeature(featureId);

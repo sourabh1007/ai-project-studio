@@ -19,7 +19,7 @@ export interface AcpTurnPool {
       cwd?: string;
       onActivity?: (text: string) => void;
     },
-    context?: { purpose?: string },
+    context?: { purpose?: string; label?: string },
   ): Promise<AcpTurnResult>;
 }
 
@@ -81,7 +81,7 @@ export function createAcpMetaRunner(
           cwd: request.cwd,
           onActivity,
         },
-        { purpose: request.purpose ?? deps.purpose },
+        { purpose: request.purpose ?? deps.purpose, label: request.label },
       );
 
       if (emit) {

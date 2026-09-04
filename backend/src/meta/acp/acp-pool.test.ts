@@ -358,7 +358,10 @@ describe('MetaSessionPool', () => {
     await pool.start();
     now = 1100;
     tokens = 10;
-    await pool.run({ prompt: 'a' }, { purpose: 'pr-review' });
+    await pool.run(
+      { prompt: 'a' },
+      { purpose: 'pr-review', label: 'PR review · problem statement' },
+    );
     now = 1200;
     tokens = 5;
     await pool.run({ prompt: 'b' });
@@ -366,7 +369,13 @@ describe('MetaSessionPool', () => {
     expect(session.inputTokens).toBe(15);
     expect(session.outputTokens).toBe(30);
     expect(session.history).toEqual([
-      { at: 1100, purpose: 'pr-review', inputTokens: 10, outputTokens: 20 },
+      {
+        at: 1100,
+        purpose: 'pr-review',
+        label: 'PR review · problem statement',
+        inputTokens: 10,
+        outputTokens: 20,
+      },
       { at: 1200, purpose: 'general', inputTokens: 5, outputTokens: 10 },
     ]);
     pool.close();

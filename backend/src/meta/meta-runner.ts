@@ -122,6 +122,14 @@ export interface MetaRequest {
    */
   purpose?: string;
   /**
+   * Short, human-readable description of the concrete work this turn performs
+   * (e.g. "PR review · problem statement", "Explain file src/foo.ts",
+   * "Repository analysis"). Recorded against the warm session's usage history so
+   * the Settings page can show *what* a session was used for, not just the
+   * coarse routing purpose. Falls back to the purpose when unset.
+   */
+  label?: string;
+  /**
    * Invoked with the metasession id the moment it launches, before completion,
    * so callers can attribute in-flight progress (e.g. stream live activity) to
    * the session while it runs.

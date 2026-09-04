@@ -106,6 +106,7 @@ export function createSubagentService(
             }),
           prompt: input.prompt,
           cwd: input.cwd,
+          label: 'Subagent task',
         })
         .then(
           (result) => {

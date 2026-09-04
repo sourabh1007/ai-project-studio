@@ -23,6 +23,7 @@ import type {
   MetaPoolStat,
   MetaSessionInfo,
   MetaSessionState,
+  MetaSessionTurn,
 } from '../../lib/types.js';
 
 /** How often the live warm-pool status is refreshed while the page is open. */
@@ -129,6 +130,15 @@ function purposeLabel(purpose: string): string {
 }
 
 /**
+ * What a turn was used for: the caller-supplied work label when present (e.g.
+ * "Repository analysis"), otherwise the coarse routing purpose. This is what
+ * turns the opaque "General" rows into a real description of the work.
+ */
+function turnWork(turn: MetaSessionTurn): string {
+  return turn.label ?? purposeLabel(turn.purpose);
+}
+
+/**
  * Merges the live session list with recently-removed sessions so additions
  * animate in and removals animate out before disappearing. Session ids are
  * unique and monotonically increasing, so an id never re-enters after leaving.
@@ -188,6 +198,7 @@ function SessionDetailsModal({
   onClose: () => void;
 }) {
   const [showHistory, setShowHistory] = useState(true);
+  const [openTurn, setOpenTurn] = useState<number | null>(null);
   const totalTokens = info.inputTokens + info.outputTokens;
   // Newest turn first so the most recent work is at the top of the history.
   const history = [...info.history].reverse();
@@ -251,23 +262,61 @@ function SessionDetailsModal({
             (history.length === 0 ? (
               <p className="metasession-history-empty">
                 No turns served yet. When the IDE leases this warm session,
-                each turn appears here with where it was used and its tokens.
+                each turn appears here — click one to see what work it did and
+                its tokens.
               </p>
             ) : (
               <ol className="metasession-history-list">
-                {history.map((turn, i) => (
-                  <li key={`${turn.at}-${i}`} className="metasession-history-row">
-                    <span className="metasession-history-where">
-                      {purposeLabel(turn.purpose)}
-                    </span>
-                    <span className="metasession-history-when">
-                      {formatClock(turn.at)}
-                    </span>
-                    <span className="metasession-history-tokens">
-                      {formatTokens(turn.inputTokens + turn.outputTokens)} tok
-                    </span>
-                  </li>
-                ))}
+                {history.map((turn, i) => {
+                  const open = openTurn === i;
+                  const where = purposeLabel(turn.purpose);
+                  const work = turnWork(turn);
+                  return (
+                    <li key={`${turn.at}-${i}`} className="metasession-history-item">
+                      <button
+                        type="button"
+                        className="metasession-history-row"
+                        aria-expanded={open}
+                        title="Show what this turn was used for"
+                        onClick={() => setOpenTurn((v) => (v === i ? null : i))}
+                      >
+                        <ChevronIcon size={12} open={open} />
+                        <span className="metasession-history-where">{work}</span>
+                        <span className="metasession-history-when">
+                          {formatClock(turn.at)}
+                        </span>
+                        <span className="metasession-history-tokens">
+                          {formatTokens(turn.inputTokens + turn.outputTokens)} tok
+                        </span>
+                      </button>
+                      {open && (
+                        <dl className="metasession-turn-detail">
+                          <dt>Work</dt>
+                          <dd>{work}</dd>
+                          <dt>Where in the IDE</dt>
+                          <dd>
+                            {where}
+                            <span className="metasession-detail-sub">
+                              {' '}
+                              (purpose <code>{turn.purpose}</code>)
+                            </span>
+                          </dd>
+                          <dt>When</dt>
+                          <dd>{formatClock(turn.at)}</dd>
+                          <dt>Tokens</dt>
+                          <dd>
+                            {formatTokens(turn.inputTokens + turn.outputTokens)}
+                            <span className="metasession-detail-sub">
+                              {' '}
+                              ({formatTokens(turn.inputTokens)} in ·{' '}
+                              {formatTokens(turn.outputTokens)} out)
+                            </span>
+                          </dd>
+                        </dl>
+                      )}
+                    </li>
+                  );
+                })}
               </ol>
             ))}
         </div>

@@ -268,6 +268,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
   async function runStepAttempt(params: {
     review: PrReview;
     prompt: string;
+    label: string;
     onStart: (sessionId: string) => void;
     onActivity: (line: string) => void;
   }): Promise<{ text: string; sessionId: string }> {
@@ -284,6 +285,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         cwd: params.review.worktreePath,
         scope: 'internal',
         noTools: true,
+        label: params.label,
         timeoutMs: deps.config.stepTimeoutMs,
         onStart: params.onStart,
         onActivity: params.onActivity,
@@ -305,6 +307,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         // single-shot completion that can't wedge in an agentic tool loop, and a
         // tight per-step timeout fails a stall fast instead of spinning forever.
         noTools: true,
+        label: params.label,
         timeoutMs: deps.config.stepTimeoutMs,
         onStart: params.onStart,
         onActivity: params.onActivity,
@@ -326,6 +329,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
   async function runStepPrompt(params: {
     review: PrReview;
     prompt: string;
+    label: string;
     onStart: (sessionId: string) => void;
     onActivity: (line: string) => void;
   }): Promise<{ text: string; sessionId: string }> {
@@ -381,6 +385,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       const { text, sessionId } = await runStepPrompt({
         review: live.review,
         prompt,
+        label: 'PR review · problem statement',
         onStart: (id) => {
           live.review = p(stamp({
             ...live.review,
@@ -620,6 +625,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       const { text } = await runStepPrompt({
         review: existing,
         prompt,
+        label: `PR review · explain ${file.path}`,
         onStart: () => {},
         onActivity: () => {},
       });
@@ -677,6 +683,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       const { text } = await runStepPrompt({
         review: existing,
         prompt,
+        label: 'PR review · graph chat',
         onStart: () => {},
         onActivity: () => {},
       });
