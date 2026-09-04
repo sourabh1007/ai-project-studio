@@ -245,6 +245,34 @@ function SessionDetailsModal({
           </dd>
         </dl>
 
+        {info.live && (
+          <div className="metasession-live">
+            <div className="metasession-live-head">
+              <span className="metasession-chip-dot metasession-dot-busy" />
+              <span className="metasession-live-title">Live conversation</span>
+              <span className="metasession-live-work">
+                {info.live.label ?? purposeLabel(info.live.purpose)}
+              </span>
+            </div>
+            <div className="metasession-turn-message">
+              <span className="metasession-turn-role">IDE → AI · prompt</span>
+              <pre className="metasession-turn-text">{info.live.prompt}</pre>
+            </div>
+            <div className="metasession-turn-message">
+              <span className="metasession-turn-role">AI → IDE · response</span>
+              {info.live.response.length === 0 ? (
+                <p className="metasession-turn-waiting">
+                  <Spinner /> Waiting for the assistant to respond…
+                </p>
+              ) : (
+                <pre className="metasession-turn-text">
+                  {info.live.response}
+                </pre>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="metasession-history">
           <button
             type="button"
@@ -262,8 +290,8 @@ function SessionDetailsModal({
             (history.length === 0 ? (
               <p className="metasession-history-empty">
                 No turns served yet. When the IDE leases this warm session,
-                each turn appears here — click one to see what work it did and
-                its tokens.
+                each turn appears here — click one to replay the prompt and
+                response it exchanged, and its tokens.
               </p>
             ) : (
               <ol className="metasession-history-list">
@@ -312,6 +340,26 @@ function SessionDetailsModal({
                               {formatTokens(turn.outputTokens)} out)
                             </span>
                           </dd>
+                          {turn.prompt !== undefined && (
+                            <>
+                              <dt>Prompt</dt>
+                              <dd>
+                                <pre className="metasession-turn-text">
+                                  {turn.prompt}
+                                </pre>
+                              </dd>
+                            </>
+                          )}
+                          {turn.response !== undefined && (
+                            <>
+                              <dt>Response</dt>
+                              <dd>
+                                <pre className="metasession-turn-text">
+                                  {turn.response}
+                                </pre>
+                              </dd>
+                            </>
+                          )}
                         </dl>
                       )}
                     </li>
@@ -619,13 +667,17 @@ export function MetasessionPoolsSection() {
     }
   }, [savedWarmPool]);
 
-  // Poll faster while any pool is still converging on a saved size change, so
-  // the chips and counts update live (warming → idle, surplus retiring) instead
-  // of stepping every few seconds; fall back to the calm cadence once settled.
+  // Poll faster while any pool is still converging on a saved size change or a
+  // session is actively serving a turn, so the chips, counts and the live
+  // conversation of a busy session update smoothly instead of stepping every
+  // few seconds; fall back to the calm cadence once settled and idle.
   const anyConverging = useMemo(
     () =>
       (status.data?.pools ?? []).some(
-        (p) => p.sessions.some((s) => s.state === 'warming') || p.live > p.size,
+        (p) =>
+          p.sessions.some(
+            (s) => s.state === 'warming' || s.state === 'busy',
+          ) || p.live > p.size,
       ),
     [status.data],
   );

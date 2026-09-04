@@ -49,6 +49,35 @@ export interface MetaSessionTurn {
   inputTokens: number;
   /** Output tokens the turn produced, or 0 when the CLI reported none. */
   outputTokens: number;
+  /**
+   * A capped preview of the inline prompt the IDE sent for this turn, so the UI
+   * can show the actual conversation it drove. Absent when the prompt was empty.
+   */
+  prompt?: string;
+  /**
+   * A capped preview of the assistant text this turn streamed back. Absent when
+   * the turn produced no streamed text.
+   */
+  response?: string;
+}
+
+/**
+ * The turn a warm session is running *right now*: the inline prompt the IDE
+ * sent and the assistant text streamed back so far. Present only while the
+ * session is busy serving a turn, so the UI can open a live view of the actual
+ * conversation flowing through the session instead of just a busy indicator.
+ */
+export interface MetaSessionLiveTurn {
+  /** Routing purpose the in-flight turn serves. */
+  purpose: string;
+  /** Human-readable description of the in-flight work, when the caller set one. */
+  label?: string;
+  /** The full inline prompt the IDE sent for this turn (the IDE → AI side). */
+  prompt: string;
+  /** Assistant text streamed back so far; grows as the turn runs (AI → IDE). */
+  response: string;
+  /** Epoch ms the turn began running. */
+  startedAt: number;
 }
 
 /** Live status of one warm session, for per-session status surfaces. */
@@ -73,6 +102,13 @@ export interface MetaSessionInfo {
    * so the UI can show a real usage history for the session.
    */
   history: MetaSessionTurn[];
+  /**
+   * The turn the session is running right now (prompt + streamed response).
+   * Present only while the session is actively serving a turn; absent when
+   * idle, warming, or leased without a running turn. Lets the UI show the live
+   * conversation for a busy session.
+   */
+  live?: MetaSessionLiveTurn;
 }
 
 /** Live warm-capacity snapshot for a single pool. */
@@ -113,10 +149,22 @@ interface SessionRecord {
   inputTokens: number;
   outputTokens: number;
   history: MetaSessionTurn[];
+  live: MetaSessionLiveTurn | null;
 }
 
 /** Longest per-session usage history retained (older turns are dropped). */
 const MAX_HISTORY = 25;
+
+/** Longest inline-prompt preview retained per historical turn. */
+const MAX_TURN_PROMPT_CHARS = 2000;
+
+/** Longest streamed-response preview retained per historical turn. */
+const MAX_TURN_RESPONSE_CHARS = 12000;
+
+/** Truncates `text` to `max` characters, marking any elision with an ellipsis. */
+function preview(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
 
 /** Context a caller attaches to a warm turn so its usage can be attributed. */
 export interface MetaTurnContext {
@@ -184,31 +232,53 @@ export class MetaSessionPool {
     context?: MetaTurnContext,
   ): Promise<AcpTurnResult> {
     const client = await this.acquire();
+    // A freshly leased client is always checked in, so its record exists (the
+    // same guarantee markBusy relies on). Capture the in-flight turn so the UI
+    // can show the live conversation, observing the raw streamed chunks before
+    // the caller's own onActivity runs.
+    const record = this.records.get(client)!;
+    const live: MetaSessionLiveTurn = {
+      purpose: context?.purpose ?? 'general',
+      ...(context?.label ? { label: context.label } : {}),
+      prompt: request.prompt,
+      response: '',
+      startedAt: this.now(),
+    };
+    record.live = live;
+    const observed: AcpTurnRequest = {
+      ...request,
+      onActivity: (text: string): void => {
+        live.response += text;
+        request.onActivity?.(text);
+      },
+    };
     try {
-      const result = await client.runTurn(request);
+      const result = await client.runTurn(observed);
       this.servedCount += 1;
-      const record = this.records.get(client);
-      if (record) {
-        const at = this.now();
-        const inputTokens = result.usage?.inputTokens ?? 0;
-        const outputTokens = result.usage?.outputTokens ?? 0;
-        record.served += 1;
-        record.lastActiveAt = at;
-        record.inputTokens += inputTokens;
-        record.outputTokens += outputTokens;
-        record.history.push({
-          at,
-          purpose: context?.purpose ?? 'general',
-          ...(context?.label ? { label: context.label } : {}),
-          inputTokens,
-          outputTokens,
-        });
-        if (record.history.length > MAX_HISTORY) {
-          record.history.splice(0, record.history.length - MAX_HISTORY);
-        }
+      const at = this.now();
+      const inputTokens = result.usage?.inputTokens ?? 0;
+      const outputTokens = result.usage?.outputTokens ?? 0;
+      record.served += 1;
+      record.lastActiveAt = at;
+      record.inputTokens += inputTokens;
+      record.outputTokens += outputTokens;
+      const promptPreview = preview(request.prompt, MAX_TURN_PROMPT_CHARS);
+      const responsePreview = preview(live.response, MAX_TURN_RESPONSE_CHARS);
+      record.history.push({
+        at,
+        purpose: context?.purpose ?? 'general',
+        ...(context?.label ? { label: context.label } : {}),
+        ...(promptPreview ? { prompt: promptPreview } : {}),
+        ...(responsePreview ? { response: responsePreview } : {}),
+        inputTokens,
+        outputTokens,
+      });
+      if (record.history.length > MAX_HISTORY) {
+        record.history.splice(0, record.history.length - MAX_HISTORY);
       }
       return result;
     } finally {
+      record.live = null;
       this.release(client);
     }
   }
@@ -279,6 +349,7 @@ export class MetaSessionPool {
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
         history: [...record.history],
+        ...(record.live ? { live: { ...record.live } } : {}),
       }));
     return {
       size: this.targetSize,
@@ -308,6 +379,7 @@ export class MetaSessionPool {
       inputTokens: 0,
       outputTokens: 0,
       history: [],
+      live: null,
     });
     client.onExit(() => this.handleExit(client));
     try {

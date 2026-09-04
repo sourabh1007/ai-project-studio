@@ -9347,6 +9347,62 @@ body.is-resizing {
   margin: 0;
   color: var(--text);
 }
+.metasession-live {
+  margin: 12px 0 4px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.metasession-live-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.metasession-live-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.metasession-live-work {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metasession-turn-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.metasession-turn-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.metasession-turn-text {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.1));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.metasession-turn-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
 @keyframes metasession-history-in {
   from {
     opacity: 0;

@@ -1016,6 +1016,26 @@ export interface MetaSessionTurn {
   inputTokens: number;
   /** Output tokens the turn produced. */
   outputTokens: number;
+  /** Capped preview of the inline prompt the IDE sent, when non-empty. */
+  prompt?: string;
+  /** Capped preview of the assistant text the turn streamed back, when any. */
+  response?: string;
+}
+
+/**
+ * The turn a warm session is running right now: the inline prompt the IDE sent
+ * and the assistant text streamed back so far. Present only while the session
+ * is busy serving a turn, so the UI can show the live conversation.
+ */
+export interface MetaSessionLiveTurn {
+  purpose: string;
+  label?: string;
+  /** The full inline prompt the IDE sent for this turn (IDE → AI). */
+  prompt: string;
+  /** Assistant text streamed back so far; grows as the turn runs (AI → IDE). */
+  response: string;
+  /** Epoch ms the turn began running. */
+  startedAt: number;
 }
 
 /** Live status of one warm metasession, for per-session status surfaces. */
@@ -1036,6 +1056,11 @@ export interface MetaSessionInfo {
   outputTokens: number;
   /** Most recent turns (oldest first) with where-used and per-turn tokens. */
   history: MetaSessionTurn[];
+  /**
+   * The turn this session is running right now (prompt + streamed response).
+   * Present only while busy, so the UI can show the live conversation.
+   */
+  live?: MetaSessionLiveTurn;
 }
 
 /** Live warm-capacity snapshot for one metasession pool. */

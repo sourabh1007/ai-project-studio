@@ -111,7 +111,8 @@ describe('MetaSessionPool', () => {
     await pool.start();
     const result = await pool.run({ prompt: 'hello' });
     expect(result.text).toBe('ok');
-    expect(created[0].turns).toEqual([{ prompt: 'hello' }]);
+    expect(created[0].turns).toHaveLength(1);
+    expect(created[0].turns[0]).toMatchObject({ prompt: 'hello' });
     expect(pool.idleCount).toBe(1);
   });
 
@@ -266,7 +267,13 @@ describe('MetaSessionPool', () => {
       inputTokens: 0,
       outputTokens: 0,
       history: [
-        { at: 200, purpose: 'general', inputTokens: 0, outputTokens: 0 },
+        {
+          at: 200,
+          purpose: 'general',
+          prompt: 'one',
+          inputTokens: 0,
+          outputTokens: 0,
+        },
       ],
     });
     pool.close();
@@ -373,10 +380,17 @@ describe('MetaSessionPool', () => {
         at: 1100,
         purpose: 'pr-review',
         label: 'PR review · problem statement',
+        prompt: 'a',
         inputTokens: 10,
         outputTokens: 20,
       },
-      { at: 1200, purpose: 'general', inputTokens: 5, outputTokens: 10 },
+      {
+        at: 1200,
+        purpose: 'general',
+        prompt: 'b',
+        inputTokens: 5,
+        outputTokens: 10,
+      },
     ]);
     pool.close();
   });
@@ -406,6 +420,102 @@ describe('MetaSessionPool', () => {
     const history = pool.stats().sessions[0].history;
     history.push({ at: 0, purpose: 'x', inputTokens: 9, outputTokens: 9 });
     expect(pool.stats().sessions[0].history).toHaveLength(1);
+    pool.close();
+  });
+
+  it('exposes the in-flight conversation and clears it when the turn ends', async () => {
+    let release: (result: AcpTurnResult) => void = () => undefined;
+    const forwarded: string[] = [];
+    const pool = new MetaSessionPool({
+      size: 1,
+      now: () => 42,
+      createClient: () =>
+        new FakeClient({
+          run: (request) => {
+            request.onActivity?.('Hello');
+            request.onActivity?.(' world');
+            return new Promise<AcpTurnResult>((resolve) => {
+              release = resolve;
+            });
+          },
+        }),
+    });
+    await pool.start();
+    const turn = pool.run(
+      { prompt: 'diagnose', onActivity: (text) => forwarded.push(text) },
+      { purpose: 'self-recovery', label: 'Self-recovery diagnosis' },
+    );
+    await flush();
+    const [busy] = pool.stats().sessions;
+    expect(busy.state).toBe('busy');
+    expect(busy.live).toEqual({
+      purpose: 'self-recovery',
+      label: 'Self-recovery diagnosis',
+      prompt: 'diagnose',
+      response: 'Hello world',
+      startedAt: 42,
+    });
+    // The pool observes the raw chunks but still forwards them to the caller.
+    expect(forwarded).toEqual(['Hello', ' world']);
+    release({
+      text: 'Hello world',
+      sessionId: 's',
+      stopReason: 'end_turn',
+      usage: null,
+    });
+    await turn;
+    const [idle] = pool.stats().sessions;
+    expect(idle.live).toBeUndefined();
+    expect(idle.history).toEqual([
+      {
+        at: 42,
+        purpose: 'self-recovery',
+        label: 'Self-recovery diagnosis',
+        prompt: 'diagnose',
+        response: 'Hello world',
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    ]);
+    pool.close();
+  });
+
+  it('truncates long prompt and response previews in history', async () => {
+    const bigPrompt = 'p'.repeat(2500);
+    const bigChunk = 'r'.repeat(13000);
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () =>
+        new FakeClient({
+          run: (request) => {
+            request.onActivity?.(bigChunk);
+            return Promise.resolve({
+              text: bigChunk,
+              sessionId: 's',
+              stopReason: 'end_turn',
+              usage: null,
+            });
+          },
+        }),
+    });
+    await pool.start();
+    await pool.run({ prompt: bigPrompt });
+    const [turn] = pool.stats().sessions[0].history;
+    expect(turn.prompt).toBe(`${'p'.repeat(2000)}…`);
+    expect(turn.response).toBe(`${'r'.repeat(12000)}…`);
+    pool.close();
+  });
+
+  it('omits prompt and response previews when the turn carried neither', async () => {
+    const pool = new MetaSessionPool({
+      size: 1,
+      createClient: () => new FakeClient(),
+    });
+    await pool.start();
+    await pool.run({ prompt: '' });
+    const [turn] = pool.stats().sessions[0].history;
+    expect(turn.prompt).toBeUndefined();
+    expect(turn.response).toBeUndefined();
     pool.close();
   });
 
