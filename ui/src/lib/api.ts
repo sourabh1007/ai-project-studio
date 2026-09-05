@@ -86,6 +86,8 @@ export type FetchLike = (
 export interface ApiClientOptions {
   baseUrl?: string;
   fetchImpl?: FetchLike;
+  /** Timeout (ms) applied to idempotent GET reads. Defaults to 20s. */
+  getTimeoutMs?: number;
 }
 
 export class ApiError extends Error {
@@ -120,11 +122,42 @@ export function createApiClient(options: ApiClientOptions = {}) {
     return `Request failed: ${path}`;
   }
 
+  // Guard idempotent reads with a client-side timeout so a hung request (a
+  // momentarily unresponsive backend, a dropped socket) surfaces as a
+  // recoverable error instead of leaving the UI stuck on an infinite spinner.
+  // Only GETs are bounded — mutations and AI turns (POST/PUT) can legitimately
+  // run long, so they are never aborted here.
+  const GET_TIMEOUT_MS = options.getTimeoutMs ?? 20_000;
+
   async function request<T>(
     path: string,
     init?: RequestInit,
   ): Promise<T> {
-    const response = await doFetch(`${baseUrl}${path}`, init);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const bounded = method === 'GET';
+    const controller = bounded ? new AbortController() : undefined;
+    const timer = controller
+      ? setTimeout(() => controller.abort(), GET_TIMEOUT_MS)
+      : undefined;
+    let response: Response;
+    try {
+      response = await doFetch(`${baseUrl}${path}`, {
+        ...init,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+    } catch (error) {
+      if (controller?.signal.aborted) {
+        throw new ApiError(
+          0,
+          `Request timed out: ${path}. The backend may be busy — please retry.`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
     if (!response.ok) {
       throw new ApiError(response.status, await errorMessage(response, path));
     }

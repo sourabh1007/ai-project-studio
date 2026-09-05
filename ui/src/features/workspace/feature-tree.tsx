@@ -434,7 +434,22 @@ function GroupNode({ group }: { group: TreeGroup }) {
         )}
       </div>
       {expanded && (
-        <div className="tree-group-children">
+        <div
+          className={`tree-group-children ${dropTarget ? 'is-drop-target' : ''}`}
+          onDragOver={(event) => {
+            if (dragging) {
+              event.preventDefault();
+              event.stopPropagation();
+              setDropTarget(true);
+            }
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+              setDropTarget(false);
+            }
+          }}
+          onDrop={handleHeaderDrop}
+        >
           <TreeContainer parentGroupId={group.id} />
         </div>
       )}

@@ -176,6 +176,49 @@ describe('FeatureTree', () => {
     );
   });
 
+  it('moves a node into a group when dropped on the folder body', () => {
+    const onMove = vi.fn();
+    renderTree({
+      groups: [group({ id: 'g1', name: 'Backlog' })],
+      sessions: [session({ id: 's1' }), session({ id: 's2', groupId: 'g1' })],
+      onMove,
+    });
+    const draggable = screen.getByTestId('row-s1').parentElement as HTMLElement;
+    fireEvent.dragStart(draggable);
+    const body = screen
+      .getByRole('button', { name: 'Backlog' })
+      .closest('.tree-group')!
+      .querySelector('.tree-group-children') as HTMLElement;
+    expect(body).toBeTruthy();
+    fireEvent.dragOver(body);
+    fireEvent.drop(body);
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session',
+        id: 's1',
+        targetParentGroupId: 'g1',
+      }),
+    );
+  });
+
+  it('clears the folder-body highlight when the drag leaves it', () => {
+    renderTree({
+      groups: [group({ id: 'g1', name: 'Backlog' })],
+      sessions: [session({ id: 's1' })],
+    });
+    const draggable = screen.getByTestId('row-s1').parentElement as HTMLElement;
+    fireEvent.dragStart(draggable);
+    const body = screen
+      .getByRole('button', { name: 'Backlog' })
+      .closest('.tree-group')!
+      .querySelector('.tree-group-children') as HTMLElement;
+    fireEvent.dragOver(body);
+    expect(body.classList.contains('is-drop-target')).toBe(true);
+    // Leaving to an element outside the body clears the highlight.
+    fireEvent.dragLeave(body, { relatedTarget: document.body });
+    expect(body.classList.contains('is-drop-target')).toBe(false);
+  });
+
   it('carries a drag across trees when a shared drag store wraps them', () => {
     const onMoveA = vi.fn();
     const onMoveB = vi.fn();

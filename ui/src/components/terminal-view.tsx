@@ -473,9 +473,12 @@ export function TerminalView({
       const text = await readClipboard();
       if (text) {
         paste(text);
-        return;
       }
-      paste(await readClipboardImagePath());
+      // Deliberately TEXT-only. A right-click carries no paste intent for a
+      // binary image, so silently attaching whatever bitmap happens to sit on
+      // the clipboard (as a temp-file path) would splice that path into text the
+      // user is composing. Image/file attach stays on the explicit Ctrl/Cmd+V
+      // paste path (`onPaste`), which the user invokes on purpose.
     };
 
     // Terminal clipboard shortcuts. Ctrl/Cmd+C copies when there is a
@@ -528,6 +531,14 @@ export function TerminalView({
     const onPaste = (event: ClipboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
+      // Only honour genuine user pastes. Synthetic/programmatic paste events
+      // (e.g. a menu accelerator's `webContents.paste()` firing alongside the
+      // native paste) can arrive mid-typing and would otherwise inject clipboard
+      // contents — including a stale image's temp-file path — into the line the
+      // user is actively typing.
+      if (!event.isTrusted) {
+        return;
+      }
       const data = event.clipboardData;
       const text = data?.getData('text/plain') ?? '';
       if (text) {

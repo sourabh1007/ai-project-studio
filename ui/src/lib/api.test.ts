@@ -103,7 +103,7 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getRepoInsights('r1');
     expect(calls[0][0]).toBe('/api/repos/r1/insights');
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
     await client.getRepoInsights('r1', true);
     expect(calls[1][0]).toBe('/api/repos/r1/insights?refresh=true');
   });
@@ -117,7 +117,7 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe(
       '/api/repos/r1/insights/file?path=docs%2Ftsg%2Fa%20b.md',
     );
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
   });
 
   it('reads and refreshes repository context', async () => {
@@ -128,7 +128,7 @@ describe('createApiClient', () => {
     await client.getRepositoryContext('r1');
     await client.refreshRepositoryContext('r1');
     expect(calls[0][0]).toBe('/api/repos/r1/context');
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
     expect(calls[1][0]).toBe('/api/repos/r1/context/refresh');
     expect(calls[1][1]?.method).toBe('POST');
     expect(calls[1][1]?.body).toBe(JSON.stringify({}));
@@ -283,7 +283,7 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/features/f1/summary');
     expect(calls[0][1]?.method).toBe('POST');
     expect(calls[1][0]).toBe('/api/features/f1/summary');
-    expect(calls[1][1]).toBeUndefined();
+    expect(calls[1][1]?.method).toBeUndefined();
   });
 
   it('reads the feature work summary', async () => {
@@ -293,7 +293,7 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getFeatureWorkSummary('f1');
     expect(calls[0][0]).toBe('/api/features/f1/work-summary');
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
   });
 
   it('lists providers and models', async () => {
@@ -589,7 +589,7 @@ describe('createApiClient', () => {
     await client.listImportableSessions();
     await client.importSession('f1', { provider: 'agency', externalId: 's9' });
     expect(calls[0][0]).toBe('/api/importable-sessions');
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
     expect(calls[1][0]).toBe('/api/features/f1/import-session');
     expect(calls[1][1]?.method).toBe('POST');
     expect(calls[1][1]?.body).toBe(
@@ -777,8 +777,30 @@ describe('createApiClient', () => {
     const client = createApiClient();
     const result = await client.listFeatures();
     expect(result).toEqual([{ id: 'f1' }]);
-    expect(spy).toHaveBeenCalledWith('/api/features', undefined);
+    expect(spy).toHaveBeenCalledWith('/api/features', {
+      signal: expect.any(AbortSignal),
+    });
     spy.mockRestore();
+  });
+
+  it('times out a hung GET read with a clear error', async () => {
+    const client = createApiClient({
+      getTimeoutMs: 5,
+      fetchImpl: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+        }),
+    });
+    await expect(client.listFeatures()).rejects.toThrow(/timed out/);
+  });
+
+  it('propagates a non-timeout fetch error unchanged', async () => {
+    const client = createApiClient({
+      fetchImpl: () => Promise.reject(new Error('network down')),
+    });
+    await expect(client.listFeatures()).rejects.toThrow('network down');
   });
 
   it('lists workspace repositories', async () => {
@@ -1160,7 +1182,7 @@ describe('createApiClient', () => {
     await client.listAutomations();
     await client.getAutomation('a1');
     expect(calls[0][0]).toBe('/api/automations');
-    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][1]?.method).toBeUndefined();
     expect(calls[1][0]).toBe('/api/automations/a1');
   });
 

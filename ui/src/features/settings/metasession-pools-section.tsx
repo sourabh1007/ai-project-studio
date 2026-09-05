@@ -725,9 +725,12 @@ function MetaModelPicker(): JSX.Element {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
+    setSettingsError(false);
     void api
       .getMetaSettings()
       .then((value) => {
@@ -735,7 +738,11 @@ function MetaModelPicker(): JSX.Element {
         setSettings(value);
         setDraftModel(value.model);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        // Don't swallow into a permanent spinner: surface a retryable error so
+        // a transient hiccup (slow/hung backend) can be recovered by the user.
+        if (alive) setSettingsError(true);
+      });
     // The catalog is sourced from Agency over ACP; the very first request after
     // launch spawns the CLI and can briefly return an empty list while it warms
     // up. Poll with backoff until a populated catalog arrives so the picker
@@ -768,7 +775,7 @@ function MetaModelPicker(): JSX.Element {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [api]);
+  }, [api, reloadKey]);
 
   // Always keep the current selection choosable even if the live catalog omits
   // it (custom or legacy id): fall back to a synthetic option.
@@ -813,6 +820,19 @@ function MetaModelPicker(): JSX.Element {
   }
 
   if (!settings) {
+    if (settingsError) {
+      return (
+        <div className="metamodel-picker metamodel-picker-error">
+          <ErrorText error="Could not load the metasession model settings. The backend may be busy." />
+          <Button
+            variant="secondary"
+            onClick={() => setReloadKey((n) => n + 1)}
+          >
+            Retry
+          </Button>
+        </div>
+      );
+    }
     return <Loader label="Loading model settings" />;
   }
 
