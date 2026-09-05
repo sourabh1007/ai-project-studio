@@ -11860,3 +11860,146 @@ body.is-resizing {
     grid-template-columns: 1fr;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Appearance settings — segmented controls + accent swatches for the fully
+   customizable UI (theme, accent, text size, density, radius, motion, font).
+   ───────────────────────────────────────────────────────────────────────── */
+.settings-section-title {
+  margin: 0;
+  font-size: var(--fs-section);
+  line-height: var(--lh-section);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.settings-section-sub {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-secondary);
+  line-height: var(--lh-secondary);
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+.appearance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.appearance-row-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.appearance-row-label {
+  font-size: var(--fs-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.appearance-row-hint {
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--text-muted);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--panel-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  flex: none;
+}
+
+.segmented-item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-secondary);
+  font-weight: var(--weight-medium);
+  padding: 4px var(--space-3);
+  min-height: var(--control-height-sm);
+  border-radius: calc(var(--radius-md) - 3px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented-item:hover {
+  color: var(--text);
+}
+
+.segmented-item.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.accent-swatches {
+  display: inline-flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.accent-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  cursor: pointer;
+  transition: transform var(--transition-fast), outline-color var(--transition-fast);
+}
+
+.accent-swatch:hover {
+  transform: scale(1.12);
+}
+
+.accent-swatch.is-active {
+  outline-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .appearance-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Self-healing controls — surfaced inline where a fixable environment error
+   appears (missing CLI, unconfigured model). Live status + streamed log. */
+.self-heal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  align-items: flex-start;
+  margin: var(--space-2, 8px) 0;
+}
+.self-heal-status {
+  display: flex;
+}
+.self-heal-log {
+  margin: 0;
+  max-width: 100%;
+  max-height: 132px;
+  overflow: auto;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2, inherit);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

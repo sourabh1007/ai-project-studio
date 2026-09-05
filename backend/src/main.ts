@@ -10,7 +10,7 @@ import {
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 
@@ -242,6 +242,9 @@ import { createContextRepo } from './persistence/context-repo.js';
 import { createConfigOverrideRepo } from './persistence/config-override-repo.js';
 import { createConfigOverrideService } from './config/config-override-service.js';
 import { createSettingsAssistant } from './config/settings-assistant.js';
+import { createSelfHealService } from './self-heal/self-heal-service.js';
+import { buildGhInstallPlan } from './self-heal/gh-install.js';
+import type { Healer } from './self-heal/self-heal-contract.js';
 import { describeNamespaces } from './config/config-schema-describe.js';
 import { overridesToConfig } from './config/config-override-store.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
@@ -2206,6 +2209,105 @@ function main(): void {
   app.use(express.json());
   const router = express.Router();
   const settingsAssistant = createSettingsAssistant({ ai: metaAi });
+
+  // Self-healing: environment problems the IDE can fix on the user's behalf
+  // (rather than surfacing a dead-end error). Each healer verifies the problem,
+  // attempts a fix, and re-verifies; the SSE endpoint below streams progress so
+  // the UI can show a live, premium status. Anything that is *not* an actual IDE
+  // bug — a missing CLI, an unconfigured model, a fixable config error — belongs
+  // here.
+  const ghInstallHealer: Healer = {
+    info: {
+      id: 'github-cli',
+      title: 'GitHub CLI',
+      description:
+        'The GitHub CLI (gh) is required to sign in. Install it automatically.',
+      strategy: 'install',
+    },
+    verify: () =>
+      new Promise<boolean>((resolve) => {
+        // Re-resolve each time so a freshly installed binary is picked up even
+        // though this long-lived process inherited a narrower PATH at launch.
+        execFile(
+          resolveGhExecutable(),
+          ['--version'],
+          { windowsHide: true, timeout: 10_000 },
+          (err) => resolve(!err),
+        );
+      }),
+    heal: (log) =>
+      new Promise<void>((resolve, reject) => {
+        const plan = buildGhInstallPlan(process.platform);
+        log(plan.help);
+        if (!plan.supported) {
+          reject(new Error(plan.help));
+          return;
+        }
+        const child = spawn(plan.command, plan.args, { windowsHide: true });
+        const onData = (buf: Buffer): void => {
+          for (const line of buf.toString().split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (trimmed.length > 0) {
+              log(trimmed);
+            }
+          }
+        };
+        child.stdout?.on('data', onData);
+        child.stderr?.on('data', onData);
+        child.on('error', (error) =>
+          reject(
+            error instanceof Error && /ENOENT/.test(error.message)
+              ? new Error(
+                  `Could not run "${plan.command}". Install GitHub CLI from https://cli.github.com.`,
+                )
+              : error,
+          ),
+        );
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`Install exited with code ${code ?? 'unknown'}.`));
+          }
+        });
+      }),
+  };
+
+  // Heals the "assistant unavailable — configure a model" state by auto-picking
+  // the first account-enabled model from the CLI's own catalog and persisting it
+  // as the metasession model, so every AI feature starts working immediately.
+  const assistantModelHealer: Healer = {
+    info: {
+      id: 'assistant-model',
+      title: 'AI model',
+      description:
+        'No AI model is configured. Auto-select an available model so AI features work.',
+      strategy: 'config',
+    },
+    verify: async () => {
+      const model = metaSettings.get().model;
+      return typeof model === 'string' && model.trim().length > 0;
+    },
+    heal: async (log) => {
+      log('Fetching available models from Agency…');
+      const models = (await modelCatalogService.read()) ?? [];
+      const chosen = models.find((m) => m.enabled) ?? models[0];
+      if (!chosen) {
+        throw new Error(
+          'No models are available from Agency. Make sure you are signed in.',
+        );
+      }
+      log(`Selecting model "${chosen.name}" (${chosen.id}).`);
+      const next = metaSettings.set({ model: chosen.id });
+      configOverrideService.update(META_NAMESPACE, { model: next.model });
+      log('Model configured. AI features are ready.');
+    },
+  };
+
+  const selfHealService = createSelfHealService({
+    healers: [ghInstallHealer, assistantModelHealer],
+  });
+
   mountRoutes(
     router,
     createApiRoutes({
@@ -2257,6 +2359,7 @@ function main(): void {
       configSecretPaths,
       configOverrides: configOverrideService,
       settingsAssistant,
+      selfHeal: selfHealService,
       configSchema: () => describeNamespaces(registry),
       metaPools: metaPoolsStatusFn,
       resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
@@ -2396,7 +2499,43 @@ function main(): void {
     });
   });
 
-  // Serve the packaged UI same-origin (desktop app) when a dist dir is given,
+  // Self-heal SSE: verify → fix → re-verify a target, streaming phase/log/done
+  // events so the UI shows a live status instead of a dead-end error. Mirrors
+  // the `/agency/install` stream shape.
+  app.get(`${apiConfig.basePath}/self-heal/:target/run`, (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.write(': connected\n\n');
+    let open = true;
+    const send = (data: unknown): void => {
+      if (!open) {
+        return;
+      }
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    req.on('close', () => {
+      open = false;
+      res.end();
+    });
+    selfHealService
+      .heal(String(req.params.target), (event) => send(event))
+      .catch((error) => {
+        logger.error('Self-heal failed', error);
+        send({
+          kind: 'error',
+          message: 'Self-heal failed unexpectedly. Please retry.',
+        });
+      })
+      .finally(() => {
+        if (open) {
+          res.end();
+        }
+      });
+  });
+
   // so the renderer's relative /api and SSE calls need no CORS.
   const uiDist = process.env.CW_UI_DIST;
   if (uiDist && existsSync(uiDist)) {

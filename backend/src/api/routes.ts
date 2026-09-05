@@ -87,6 +87,8 @@ import type { AutomationScheduler } from '../automation/automation-scheduler.js'
 import type { SubagentService } from '../automation/subagent-service.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
 import { createPlanUsageRoutes } from './plan-usage-controller.js';
+import { createSelfHealRoutes } from './self-heal-controller.js';
+import type { SelfHealService } from '../self-heal/self-heal-contract.js';
 import { createMetaModelsRoutes } from './meta-models-controller.js';
 import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
@@ -127,6 +129,8 @@ export interface ApiRoutesDeps {
   tree: FeatureTreeService;
   ideUsage: IdeUsageService;
   planUsage: PlanUsageService;
+  /** Self-healing service for environment problems (missing CLI, config). */
+  selfHeal: SelfHealService;
   /** Selectable AI model catalog (ids, names, pricing hints) for metasessions. */
   metaModels: ModelCatalogService;
   usageDetail: UsageDetailService;
@@ -264,6 +268,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createPlanUsageRoutes({ planUsage: deps.planUsage }),
+    ...createSelfHealRoutes({ selfHeal: deps.selfHeal }),
     ...createMetaModelsRoutes({ metaModels: deps.metaModels }),
     ...createContextRoutes({ context: deps.context }),
     ...createAutomationRoutes({

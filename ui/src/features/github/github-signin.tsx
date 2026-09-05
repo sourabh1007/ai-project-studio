@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Modal, Button } from '../../components/ui.js';
 import { Spinner } from '../../components/loading.js';
+import { SelfHealButton } from '../../components/self-heal-button.js';
+import { isGhMissingError } from '../../lib/self-heal.js';
 import type { DeviceCodeStart } from '../../lib/types.js';
 
 interface DesktopBridge {
@@ -172,6 +174,13 @@ export function GithubSignInModal({
         {phase.kind === 'error' && (
           <div className="device-signin-center device-signin-error">
             <p className="device-signin-error-msg">{phase.message}</p>
+            {isGhMissingError(phase.message) && (
+              <SelfHealButton
+                target="github-cli"
+                label="Install GitHub CLI"
+                onHealed={retry}
+              />
+            )}
             <div className="device-signin-error-actions">
               <Button onClick={retry}>Try again</Button>
               <Button variant="ghost" onClick={onClose}>
