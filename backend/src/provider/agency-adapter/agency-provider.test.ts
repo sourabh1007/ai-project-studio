@@ -89,6 +89,22 @@ describe('agency-provider', () => {
     expect(req.env.PATH).toBe('/bin');
   });
 
+  it('disables MCP servers in the passthrough for meta sessions', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+      mcpServerNames: () => ['github'],
+    });
+    provider.startSession({ ...spec, kind: 'meta' });
+    const req = requests[0];
+    expect(req.args).toContain('--disable-builtin-mcps');
+    expect(req.args).toEqual(
+      expect.arrayContaining(['--disable-mcp-server', 'github']),
+    );
+  });
+
   it('buildInteractiveCommand wraps interactive args in the agency passthrough', () => {
     const { spawner } = fakeSpawner();
     const provider = createAgencyProvider(agencyDefaults, {
@@ -143,6 +159,19 @@ describe('agency-provider', () => {
     expect(scanner?.feed('Model changed to claude-opus-4.8\n')).toEqual([
       'claude-opus-4.8',
     ]);
+  });
+
+  it('createMcpErrorScanner detects an MCP failure via the reused Copilot scanner', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+    });
+    const scanner = provider.createMcpErrorScanner?.();
+    expect(
+      scanner?.feed('Failed to connect to MCP server "Azure": nope\n'),
+    ).toEqual([{ server: 'Azure', reason: 'nope' }]);
   });
 
   it('exposes Copilot MCP support', () => {

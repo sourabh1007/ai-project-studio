@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { metaModelLabel } from '../../lib/meta-model.js';
-import type { MetaSettings, ModelInfo, ProviderInfo } from '../../lib/types.js';
+import type {
+  MetaModelOption,
+  MetaPoolsStatus,
+  MetaSettings,
+  ModelInfo,
+  ProviderInfo,
+} from '../../lib/types.js';
 
 /**
  * Status-bar control showing which provider/model the IDE uses for its
@@ -14,6 +20,8 @@ export function MetaModelStatus(): JSX.Element | null {
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [catalog, setCatalog] = useState<MetaModelOption[]>([]);
+  const [pools, setPools] = useState<MetaPoolsStatus | null>(null);
   const [draftProvider, setDraftProvider] = useState('');
   const [draftModel, setDraftModel] = useState('');
   const [saving, setSaving] = useState(false);
@@ -55,6 +63,16 @@ export function MetaModelStatus(): JSX.Element | null {
       .listProviders()
       .then((list) => setProviders(list))
       .catch(() => setProviders([]));
+    // Live model catalog (with premium-request cost) from Agency, plus the warm
+    // pool snapshot so the picker can show how many metasessions are running.
+    void api
+      .getMetaModels()
+      .then((list) => setCatalog(list))
+      .catch(() => setCatalog([]));
+    void api
+      .getMetaPools()
+      .then((status) => setPools(status))
+      .catch(() => setPools(null));
   }, [api, settings, loadModels]);
 
   useEffect(() => {
@@ -99,10 +117,28 @@ export function MetaModelStatus(): JSX.Element | null {
     return null;
   }
 
-  const modelOptions =
-    models.length > 0 || draftModel === 'auto'
+  const useCatalog =
+    catalog.length > 0 && draftProvider === settings.providerId;
+  const modelOptions: { id: string; label: string }[] = useCatalog
+    ? catalog.map((model) => ({
+        id: model.id,
+        label: `${model.name}${
+          model.usageLabel ? ` · ${model.usageLabel}` : ''
+        }${model.priceCategory ? ` · ${model.priceCategory}` : ''}${
+          model.enabled ? '' : ' · unavailable'
+        }`,
+      }))
+    : models.length > 0 || draftModel === 'auto'
       ? models
       : [{ id: draftModel, label: draftModel }];
+
+  const warmEnabled = pools?.enabled ?? false;
+  const warmLive = warmEnabled
+    ? pools!.pools.reduce((total, pool) => total + pool.live, 0)
+    : 0;
+  const warmSize = warmEnabled
+    ? pools!.pools.reduce((total, pool) => total + pool.size, 0)
+    : 0;
 
   return (
     <div className="statusbar-meta" ref={rootRef}>
@@ -156,6 +192,14 @@ export function MetaModelStatus(): JSX.Element | null {
                 ))}
             </select>
           </label>
+          <div className="statusbar-meta-info">
+            <span>Metasession instances</span>
+            <strong>
+              {warmEnabled
+                ? `${warmLive} live / ${warmSize} warm`
+                : 'Warm pool off'}
+            </strong>
+          </div>
           {settings.warmPoolEnabled && draftModel !== 'auto' && (
             <p className="statusbar-meta-note">
               A specific model runs on the cold path (warm pool uses the

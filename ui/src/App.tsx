@@ -5,9 +5,10 @@ import { useGlobalClipboard } from './hooks/use-global-clipboard.js';
 import { themeModeLabel } from './lib/theme.js';
 import { useWorkspaceStats } from './hooks/use-workspace-stats.js';
 import { useIdeUsage } from './hooks/use-ide-usage.js';
+import { usePlanUsage } from './hooks/use-plan-usage.js';
 import { useActivity } from './hooks/use-activity.js';
 import { liveSignal } from './lib/stream.js';
-import { formatAic, formatCompactNumber } from './lib/format.js';
+import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
@@ -48,6 +49,7 @@ import {
 import { ShortcutsSheet } from './components/shortcuts-sheet.js';
 import { NetworkCenter } from './features/network-center/network-center.js';
 import { MetaModelStatus } from './features/status-bar/meta-model-status.js';
+import { PlanUsageIndicator } from './components/plan-usage-indicator.js';
 import {
   matchShortcut,
   type ShortcutBinding,
@@ -222,9 +224,9 @@ export function App() {
   // SSE feed alone is incomplete after reloads, so we never derive the status
   // bar figures from it directly.
   const stats = useWorkspaceStats(liveSignal(live));
-  const totals = stats?.totals ?? null;
   const activeSessions = stats?.activeSessions ?? 0;
   const ideUsage = useIdeUsage(liveSignal(live));
+  const planUsage = usePlanUsage();
   const activity = useActivity();
 
   return (
@@ -402,20 +404,12 @@ export function App() {
         </div>
         <div className="statusbar-group">
           <MetaModelStatus />
+          <PlanUsageIndicator usage={planUsage} />
           <span
             className="statusbar-item statusbar-ide"
             title="IDE AI overhead — AIC spent by the assistant's own meta sessions (summaries, task plans). Separate from feature dev cost."
           >
             <SkillsIcon size={12} /> {formatAic(ideUsage?.totals.nanoAiu ?? 0)} IDE AI
-          </span>
-          <span className="statusbar-item" title="AIC used (github nano_aiu)">
-            ◆ {formatAic(totals?.nanoAiu ?? 0)} AIC
-          </span>
-          <span className="statusbar-item" title="Input tokens">
-            ↑ {formatCompactNumber(totals?.inputTokens ?? 0)}
-          </span>
-          <span className="statusbar-item" title="Output tokens">
-            ↓ {formatCompactNumber(totals?.outputTokens ?? 0)}
           </span>
           <span className="statusbar-item" title={`Theme: ${themeModeLabel(mode)}`}>
             {themeModeLabel(mode)}

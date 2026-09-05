@@ -12,6 +12,8 @@ import type { SkillsService } from '../skills/skills-service.js';
 import type { FeatureTasksService } from '../feature-tasks/feature-tasks-service.js';
 import type { FeatureTreeService } from '../feature-tree/feature-tree-service.js';
 import type { IdeUsageService } from '../ide-usage/ide-usage-service.js';
+import type { PlanUsageService } from '../plan-usage/plan-usage-service.js';
+import type { ModelCatalogService } from '../meta/model-catalog/model-catalog-service.js';
 import type { UsageDetailService } from '../usage-detail/usage-detail-service.js';
 import type { McpService } from '../mcp/mcp-service.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
@@ -52,6 +54,9 @@ import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createUsageDetailRoutes } from './usage-detail-controller.js';
 import { createConfigRoutes } from './config-controller.js';
+import { createSettingsAssistantRoutes } from './settings-assistant-controller.js';
+import type { SettingsAssistant } from '../config/settings-assistant.js';
+import type { FieldMeta } from '../config/config-schema-describe.js';
 import { createMetaPoolsRoutes } from './meta-pools-controller.js';
 import {
   createMetaSettingsRoutes,
@@ -81,6 +86,8 @@ import type { AutomationService } from '../automation/automation-service.js';
 import type { AutomationScheduler } from '../automation/automation-scheduler.js';
 import type { SubagentService } from '../automation/subagent-service.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
+import { createPlanUsageRoutes } from './plan-usage-controller.js';
+import { createMetaModelsRoutes } from './meta-models-controller.js';
 import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
@@ -119,6 +126,9 @@ export interface ApiRoutesDeps {
   tasks: FeatureTasksService;
   tree: FeatureTreeService;
   ideUsage: IdeUsageService;
+  planUsage: PlanUsageService;
+  /** Selectable AI model catalog (ids, names, pricing hints) for metasessions. */
+  metaModels: ModelCatalogService;
   usageDetail: UsageDetailService;
   mcp: McpService;
   configRegistry: ConfigSchemaRegistry;
@@ -130,6 +140,10 @@ export interface ApiRoutesDeps {
   configSecretPaths: readonly string[];
   /** Persisted, per-namespace config override editing. */
   configOverrides: ConfigOverrideService;
+  /** AI helper that explains settings and recommends values. */
+  settingsAssistant: SettingsAssistant;
+  /** Lazily yields per-namespace schema metadata for the settings assistant. */
+  configSchema: () => Record<string, FieldMeta>;
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
   /** Live-resizes the warm pool for a purpose (no restart), returning status. */
@@ -249,6 +263,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
+    ...createPlanUsageRoutes({ planUsage: deps.planUsage }),
+    ...createMetaModelsRoutes({ metaModels: deps.metaModels }),
     ...createContextRoutes({ context: deps.context }),
     ...createAutomationRoutes({
       automations: deps.automations,
@@ -261,6 +277,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       current: deps.currentConfig,
       secretPaths: deps.configSecretPaths,
       overrides: deps.configOverrides,
+    }),
+    ...createSettingsAssistantRoutes({
+      assistant: deps.settingsAssistant,
+      schema: deps.configSchema,
+      current: deps.currentConfig,
     }),
     ...createMetaPoolsRoutes({
       status: deps.metaPools,

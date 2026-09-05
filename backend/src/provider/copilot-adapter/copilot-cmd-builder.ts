@@ -19,6 +19,7 @@ export interface CopilotFlagOptions {
 export function buildCopilotArgs(
   spec: SessionSpec,
   config: CopilotFlagOptions,
+  disabledMcpServers: readonly string[] = [],
 ): string[] {
   const args = [
     '-p',
@@ -41,6 +42,18 @@ export function buildCopilotArgs(
     args.push('--available-tools');
   } else if (config.allowAllTools) {
     args.push('--allow-all-tools');
+  }
+  // Headless meta sessions (summaries, PR review, repo context, monitors,
+  // automations) run with no interactive TTY, so an MCP server that tries a
+  // browser/OAuth sign-in on load can never complete it — it just pops a
+  // browser (once per server, so N servers = N windows) and stalls the run.
+  // Suppress MCP entirely for these sessions: disable the built-in server and
+  // every user-configured one so the CLI never initializes an MCP connection.
+  if (spec.kind === 'meta') {
+    args.push('--disable-builtin-mcps');
+    for (const name of disabledMcpServers) {
+      args.push('--disable-mcp-server', name);
+    }
   }
   if (config.silent) {
     args.push('-s');
@@ -78,9 +91,10 @@ export function buildCopilotInteractiveArgs(
 export function buildCopilotCommand(
   spec: SessionSpec,
   config: CopilotConfig,
+  disabledMcpServers: readonly string[] = [],
 ): Command {
   return {
     command: config.executable,
-    args: buildCopilotArgs(spec, config),
+    args: buildCopilotArgs(spec, config, disabledMcpServers),
   };
 }

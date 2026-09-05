@@ -1083,6 +1083,81 @@
   color: var(--accent);
 }
 
+.statusbar-plan {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.statusbar-plan:hover {
+  background: var(--surface-2, rgba(127, 127, 127, 0.14));
+  color: var(--accent);
+}
+
+.plan-usage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 12px);
+  min-width: 340px;
+}
+
+.plan-usage-sub {
+  margin: 0;
+  color: var(--text-muted, #8b949e);
+  font-size: 13px;
+}
+
+.plan-usage-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.18));
+  overflow: hidden;
+}
+
+.plan-usage-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 240ms ease;
+}
+
+.plan-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2, 8px);
+}
+
+.plan-usage-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2, 8px);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+}
+
+.plan-usage-value {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-usage-label {
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.plan-usage-captured {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+}
+
 .statusbar-meta {
   position: relative;
   display: inline-flex;
@@ -1160,6 +1235,22 @@
   font-size: 12px;
   line-height: 16px;
   color: var(--text-muted, #9aa0a6);
+}
+
+.statusbar-meta-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #9aa0a6);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.statusbar-meta-info strong {
+  color: var(--text, #e8eaed);
+  font-weight: 600;
 }
 
 .statusbar-meta-error {
@@ -8566,6 +8657,20 @@ body.is-resizing {
   color: var(--danger);
   font-size: 0.85rem;
 }
+.agency-cli-detail {
+  margin-top: var(--space-3);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.agency-cli-detail.agency-cli-success {
+  color: var(--success);
+}
+.agency-cli-detail.agency-cli-danger {
+  color: var(--danger);
+}
+.agency-cli-detail.agency-cli-info {
+  color: var(--accent);
+}
 .update-section-notes {
   margin-top: var(--space-3);
   font-size: 0.85rem;
@@ -8715,6 +8820,97 @@ body.is-resizing {
   flex-direction: column;
   gap: 14px;
   margin-top: 12px;
+}
+.metamodel-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+.metamodel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.metamodel-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.metamodel-subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.metamodel-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.metamodel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+.metamodel-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.metamodel-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.metamodel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.metamodel-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--chip-bg, rgba(127, 127, 127, 0.16));
+  color: var(--text);
+}
+.metamodel-badge-low {
+  background: rgba(46, 160, 67, 0.16);
+  color: #2ea043;
+}
+.metamodel-badge-medium {
+  background: rgba(219, 171, 10, 0.18);
+  color: #b98900;
+}
+.metamodel-badge-high {
+  background: rgba(248, 81, 73, 0.16);
+  color: #e5534b;
+}
+.metamodel-badge-warn {
+  background: rgba(248, 81, 73, 0.16);
+  color: #e5534b;
+}
+.metamodel-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.metamodel-saved {
+  font-size: 12px;
+  color: var(--accent, #2ea043);
 }
 .metapool-enable {
   display: flex;
@@ -11582,6 +11778,67 @@ body.is-resizing {
   font-size: var(--fs-secondary);
   color: var(--text-muted);
   line-height: var(--lh-secondary);
+}
+.config-field-explain {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  transition: background 120ms ease;
+}
+.config-field-explain:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.config-field-explain:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.config-assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.config-assistant-ask {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.config-assistant-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+.config-assistant-answer {
+  white-space: pre-wrap;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.config-assistant-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
 }
 .config-field-control {
   display: flex;

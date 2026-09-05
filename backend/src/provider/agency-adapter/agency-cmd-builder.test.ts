@@ -62,4 +62,15 @@ describe('agency-cmd-builder', () => {
     expect(attachmentContent.length).toBeGreaterThan(32_768);
     expect(cmd.args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
   });
+
+  it('disables MCP servers in the copilot passthrough for meta sessions', () => {
+    const cmd = buildAgencyCommand({ ...spec, kind: 'meta' }, agencyDefaults, [
+      'github',
+    ]);
+    expect(cmd.args.slice(0, 2)).toEqual(['copilot', '--']);
+    expect(cmd.args).toContain('--disable-builtin-mcps');
+    expect(cmd.args).toEqual(
+      expect.arrayContaining(['--disable-mcp-server', 'github']),
+    );
+  });
 });

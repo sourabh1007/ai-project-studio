@@ -1,6 +1,7 @@
 import type {
   IAIProvider,
   InteractiveCommand,
+  McpErrorScanner,
   ModelChangeScanner,
   SessionSpec,
 } from '../provider-contract.js';
@@ -19,10 +20,17 @@ import { buildCopilotEnv } from './copilot-env-mapper.js';
 import { listCopilotModels } from './copilot-model-lister.js';
 import { createCopilotOutputScanner } from './copilot-output-scanner.js';
 import { createCopilotModelScanner } from './copilot-model-scanner.js';
+import { createCopilotMcpScanner } from './copilot-mcp-scanner.js';
 
 export interface CopilotAdapterDeps {
   spawner: ProcessSpawner;
   baseEnv: Record<string, string | undefined>;
+  /**
+   * Names of the user-configured MCP servers to disable for headless meta
+   * sessions, so they never trigger a browser/OAuth sign-in on load. Read live
+   * so config edits are reflected without a restart. Omitted → none disabled.
+   */
+  mcpServerNames?: () => readonly string[];
 }
 
 /** GitHub Copilot CLI provider. Spawns `copilot -p ...` and captures usage. */
@@ -36,7 +44,11 @@ export function createCopilotProvider(
       return listCopilotModels(config);
     },
     startSession(spec: SessionSpec) {
-      const { command, args } = buildCopilotCommand(spec, config);
+      const { command, args } = buildCopilotCommand(
+        spec,
+        config,
+        deps.mcpServerNames?.() ?? [],
+      );
       const env = buildCopilotEnv(spec, deps.baseEnv);
       const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
       return toRunningSession(spec.sessionId, handle);
@@ -53,6 +65,9 @@ export function createCopilotProvider(
     },
     createModelChangeScanner(): ModelChangeScanner {
       return createCopilotModelScanner();
+    },
+    createMcpErrorScanner(): McpErrorScanner {
+      return createCopilotMcpScanner();
     },
   };
 }

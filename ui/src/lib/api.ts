@@ -3,6 +3,7 @@ import type {
   ConfigUpdateResult,
   MetaPoolsStatus,
   MetaSettings,
+  MetaModelOption,
   CreateFeatureInput,
   CreateGroupInput,
   CreateSkillInput,
@@ -18,6 +19,7 @@ import type {
   FeatureWorkSummary,
   GithubStatus,
   IdeUsage,
+  PlanUsage,
   ImportableSession,
   ImportSessionInput,
   ModelInfo,
@@ -342,6 +344,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
+    getPlanUsage: () => request<PlanUsage | null>('/usage/plan'),
     generateSummary: (featureId: string) =>
       request<FeatureSummary>(
         `/features/${featureId}/summary`,
@@ -469,6 +472,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMetaSettings: () => request<MetaSettings>('/meta/settings'),
     updateMetaSettings: (patch: Partial<Pick<MetaSettings, 'providerId' | 'model'>>) =>
       request<MetaSettings>('/meta/settings', putBody(patch)),
+    getMetaModels: () => request<MetaModelOption[]>('/meta/models'),
+    askSettingsAssistant: (input: {
+      namespace: string;
+      key?: string;
+      question: string;
+    }) =>
+      request<{ answer: string }>('/config/assistant', jsonBody(input)),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>

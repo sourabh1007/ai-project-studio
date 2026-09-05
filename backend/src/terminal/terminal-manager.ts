@@ -227,6 +227,11 @@ export function createTerminalManager(
     // resolved model shown in the UI follows the CLI immediately.
     attachModelScanner(terminal, provider, session.id);
 
+    // Surface MCP server connection failures the CLI prints as an IDE-level
+    // notice, so the user gets an actionable signal instead of the error only
+    // scrolling past in the terminal.
+    attachMcpErrorScanner(terminal, provider, session.id);
+
     if (seeds.length > 0) {
       seedSequence(terminal, seeds);
     }
@@ -412,6 +417,37 @@ export function createTerminalManager(
       send: (data) => {
         for (const model of scanner.feed(data)) {
           onModelResolved(sessionId, model);
+        }
+      },
+      exit: () => {},
+    });
+  }
+
+  /**
+   * Attaches a provider-supplied scanner that watches the tool's terminal output
+   * for MCP server connection failures and raises one IDE-level `session.notice`
+   * per failing server. This lets the UI surface the failure (e.g. in the status
+   * bar) rather than the user having to spot it scrolling past in the terminal.
+   * No-op when the provider exposes no MCP-error scanner.
+   */
+  function attachMcpErrorScanner(
+    terminal: TerminalSession,
+    provider: ReturnType<ProviderRegistry['get']>,
+    sessionId: string,
+  ): void {
+    if (!provider.createMcpErrorScanner) {
+      return;
+    }
+    const scanner = provider.createMcpErrorScanner();
+    terminal.attach({
+      send: (data) => {
+        for (const error of scanner.feed(data)) {
+          const detail = error.reason ? ` — ${error.reason}` : '';
+          deps.bus.emit('session.notice', {
+            sessionId,
+            level: 'error',
+            message: `MCP server "${error.server}" failed to connect${detail}`,
+          });
         }
       },
       exit: () => {},

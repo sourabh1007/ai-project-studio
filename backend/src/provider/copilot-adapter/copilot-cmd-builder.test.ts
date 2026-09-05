@@ -77,6 +77,36 @@ describe('copilot-cmd-builder', () => {
     expect(args).not.toContain('--allow-all-tools');
   });
 
+  it('disables built-in and user MCP servers for meta sessions', () => {
+    const args = buildCopilotArgs(
+      { ...spec, kind: 'meta' },
+      copilotDefaults,
+      ['github', 'azure'],
+    );
+    expect(args).toContain('--disable-builtin-mcps');
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '--disable-mcp-server',
+        'github',
+        '--disable-mcp-server',
+        'azure',
+      ]),
+    );
+    expect(args.filter((a) => a === '--disable-mcp-server')).toHaveLength(2);
+  });
+
+  it('leaves MCP servers enabled for interactive dev sessions', () => {
+    const args = buildCopilotArgs(spec, copilotDefaults, ['github']);
+    expect(args).not.toContain('--disable-builtin-mcps');
+    expect(args).not.toContain('--disable-mcp-server');
+  });
+
+  it('disables only the built-in MCP server for meta sessions with no user servers', () => {
+    const args = buildCopilotArgs({ ...spec, kind: 'meta' }, copilotDefaults);
+    expect(args).toContain('--disable-builtin-mcps');
+    expect(args).not.toContain('--disable-mcp-server');
+  });
+
   it('buildCopilotCommand pairs executable with args', () => {
     const config = { ...copilotDefaults, executable: '/opt/copilot' };
     const cmd = buildCopilotCommand(spec, config);

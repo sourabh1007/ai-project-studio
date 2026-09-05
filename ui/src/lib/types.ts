@@ -3,6 +3,17 @@
 /** Whether the bundled Microsoft `agency` CLI is installed on this machine. */
 export interface AgencyStatus {
   installed: boolean;
+  /** Background auto-upgrade state, populated once the IDE starts a refresh. */
+  upgrade?: AgencyUpgradeState;
+}
+
+/** Lifecycle of the IDE's background "keep agency current" upgrade. */
+export type AgencyUpgradePhase = 'idle' | 'upgrading' | 'done' | 'error';
+
+/** Current auto-upgrade phase reported by the backend. */
+export interface AgencyUpgradeState {
+  phase: AgencyUpgradePhase;
+  message?: string;
 }
 
 /** Lightweight backend liveness probe payload (`GET /health`). */
@@ -837,6 +848,21 @@ export interface IdeUsage {
   byDay: DailyBreakdown[];
 }
 
+/**
+ * Signed-in Copilot plan AI-credit budget, as surfaced by the CLI `/usage`
+ * panel: how much of the monthly allowance is used, the total, what remains,
+ * and when it resets. AIC figures are whole AI credits (not nano).
+ */
+export interface PlanUsage {
+  percentUsed: number;
+  usedAic: number;
+  totalAic: number;
+  availableAic: number;
+  resetInDays: number | null;
+  sessionAic: number | null;
+  capturedAt: string;
+}
+
 export interface FeatureSummary {
   featureId: string;
   content: string;
@@ -871,6 +897,25 @@ export interface ProviderInfo {
 export interface ModelInfo {
   id: string;
   label: string;
+}
+
+/**
+ * One selectable metasession model as advertised by the Agency/Copilot CLI,
+ * with the CLI's own pricing hints so the Settings picker can show what a model
+ * costs before it is chosen.
+ */
+export interface MetaModelOption {
+  id: string;
+  name: string;
+  description: string;
+  /** Premium-request multiplier as a number (`"15x"` → `15`), else `null`. */
+  usageMultiplier: number | null;
+  /** Raw multiplier label as reported by the CLI (`"15x"`), else `null`. */
+  usageLabel: string | null;
+  /** Coarse price bucket (`low` / `medium` / `high`), when reported. */
+  priceCategory: string | null;
+  /** Whether the account may use this model. */
+  enabled: boolean;
 }
 
 /** One MCP server entry; `spec` round-trips the provider config verbatim. */

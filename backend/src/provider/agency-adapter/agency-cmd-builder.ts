@@ -13,9 +13,14 @@ import type { AgencyConfig } from './config.js';
 export function buildAgencyCommand(
   spec: SessionSpec,
   config: AgencyConfig,
+  disabledMcpServers: readonly string[] = [],
 ): Command {
   return {
     command: config.executable,
-    args: [config.subcommand, '--', ...buildCopilotArgs(spec, config)],
+    args: [
+      config.subcommand,
+      '--',
+      ...buildCopilotArgs(spec, config, disabledMcpServers),
+    ],
   };
 }

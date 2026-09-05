@@ -29,6 +29,7 @@ import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 import { SoftwareUpdateSection } from '../updates/software-update-section.js';
+import { AgencyCliSection } from './agency-cli-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
 import { WorktreesSection } from './worktrees-section.js';
@@ -138,6 +139,33 @@ function NamespaceEditor({
   );
   const [busy, setBusy] = useState<null | 'save' | 'reset'>(null);
   const [error, setError] = useState<string | null>(null);
+  const [assistOpen, setAssistOpen] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [assistError, setAssistError] = useState<string | null>(null);
+
+  async function askAssistant(q: string, key?: string) {
+    const trimmed = q.trim();
+    if (trimmed.length === 0 || asking) {
+      return;
+    }
+    setAssistOpen(true);
+    setQuestion(q);
+    setAsking(true);
+    setAnswer(null);
+    setAssistError(null);
+    try {
+      const res = await api.askSettingsAssistant({ namespace, key, question: trimmed });
+      setAnswer(res.answer);
+    } catch {
+      setAssistError(
+        'The assistant is unavailable right now. Make sure a model is configured and try again.',
+      );
+    } finally {
+      setAsking(false);
+    }
+  }
 
   useEffect(() => {
     setDraft(
@@ -196,10 +224,17 @@ function NamespaceEditor({
     <div className="config-module-card">
       <div className="config-module-head">
         <div className="config-module-title">
-          <span>{namespace}</span>
+          <span>{fieldLabel(namespace)}</span>
           {overridden && <span className="config-badge">overridden</span>}
         </div>
         <div className="config-editor-actions">
+          <Button
+            variant="ghost"
+            onClick={() => setAssistOpen((open) => !open)}
+            aria-expanded={assistOpen}
+          >
+            ✨ Ask AI
+          </Button>
           <Button onClick={save} disabled={!dirty || busy !== null}>
             {busy === 'save' ? (
               <>
@@ -224,6 +259,41 @@ function NamespaceEditor({
           </Button>
         </div>
       </div>
+      {assistOpen && (
+        <div className="config-assistant">
+          <form
+            className="config-assistant-ask"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void askAssistant(question);
+            }}
+          >
+            <input
+              className="config-assistant-input"
+              value={question}
+              placeholder={`Ask about the ${fieldLabel(namespace)} settings…`}
+              onChange={(e) => setQuestion(e.target.value)}
+              disabled={asking}
+            />
+            <Button type="submit" disabled={asking || question.trim().length === 0}>
+              {asking ? (
+                <>
+                  <Spinner size={13} label="Thinking" /> Thinking…
+                </>
+              ) : (
+                'Ask'
+              )}
+            </Button>
+          </form>
+          {asking && !answer && (
+            <div className="config-assistant-answer config-assistant-pending">
+              <Spinner size={13} label="Thinking" /> Consulting the model…
+            </div>
+          )}
+          {answer && <div className="config-assistant-answer">{answer}</div>}
+          <ErrorText error={assistError} />
+        </div>
+      )}
       <div className="config-fields">
         {visible.map((f) => (
           <div key={f.key} className="config-field-row">
@@ -231,6 +301,19 @@ function NamespaceEditor({
               <span className="config-field-name">{fieldLabel(f.key)}</span>
               <code className="config-field-key">{f.key}</code>
               <span className="config-field-desc">{fieldHelp(f)}</span>
+              <button
+                type="button"
+                className="config-field-explain"
+                disabled={asking}
+                onClick={() =>
+                  void askAssistant(
+                    `Explain the "${fieldLabel(f.key)}" setting and recommend a good value.`,
+                    f.key,
+                  )
+                }
+              >
+                Explain
+              </button>
               {overrideKeys.has(f.key) && (
                 <span className="config-field-badge">overridden</span>
               )}
@@ -411,6 +494,7 @@ export function SettingsView() {
             </dl>
           </Card>
           <SoftwareUpdateSection />
+          <AgencyCliSection />
         </div>
       )}
 

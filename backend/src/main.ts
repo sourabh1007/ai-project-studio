@@ -128,6 +128,9 @@ import {
 } from './azure-auth/azure-devops-credential-env.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
+import { createCopilotMcpSupport } from './provider/copilot-adapter/copilot-mcp-support.js';
+import { enabledMcpServerNames } from './mcp/mcp-server-names.js';
+import type { McpConfigDocument } from './mcp/mcp-contract.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
 import { createProviderResolver } from './provider/provider-resolver.js';
 
@@ -238,6 +241,8 @@ import { createContextMergeAutoTrigger } from './context-store/context-merge-aut
 import { createContextRepo } from './persistence/context-repo.js';
 import { createConfigOverrideRepo } from './persistence/config-override-repo.js';
 import { createConfigOverrideService } from './config/config-override-service.js';
+import { createSettingsAssistant } from './config/settings-assistant.js';
+import { describeNamespaces } from './config/config-schema-describe.js';
 import { overridesToConfig } from './config/config-override-store.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
 import {
@@ -325,6 +330,10 @@ import {
   type FeatureTreeConfig,
 } from './feature-tree/config.js';
 import { createIdeUsageService } from './ide-usage/ide-usage-service.js';
+import { createPlanUsageService } from './plan-usage/plan-usage-service.js';
+import { createPtyPlanUsageProbe } from './plan-usage/pty-plan-usage-probe.js';
+import { createModelCatalogService } from './meta/model-catalog/model-catalog-service.js';
+import { createAcpModelCatalogProbe } from './meta/model-catalog/acp-model-catalog-probe.js';
 import { createIdeUsageRepo } from './persistence/ide-usage-repo.js';
 import {
   IDE_USAGE_NAMESPACE,
@@ -332,6 +341,12 @@ import {
   ideUsageDefaults,
   type IdeUsageConfig,
 } from './ide-usage/config.js';
+import {
+  PLAN_USAGE_NAMESPACE,
+  planUsageConfigSchema,
+  planUsageDefaults,
+  type PlanUsageConfig,
+} from './plan-usage/config.js';
 import {
   REPOSITORY_CONTEXT_NAMESPACE,
   repositoryContextConfigSchema,
@@ -421,6 +436,7 @@ function main(): void {
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
   registry.register({ namespace: FEATURE_TREE_NAMESPACE, schema: featureTreeConfigSchema, defaults: featureTreeDefaults });
   registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
+  registry.register({ namespace: PLAN_USAGE_NAMESPACE, schema: planUsageConfigSchema, defaults: planUsageDefaults });
   registry.register({ namespace: CONTEXT_NAMESPACE, schema: contextConfigSchema, defaults: contextDefaults });
   registry.register({
     namespace: REPOSITORY_CONTEXT_NAMESPACE,
@@ -632,6 +648,25 @@ function main(): void {
     reader: createIdeUsageRepo(db, ideUsageConfig),
   });
 
+  // Signed-in plan AI-credit budget (used / total / available / reset). The
+  // only surface exposing quota is the CLI `/usage` panel, so it is scraped
+  // from a throwaway `copilot` PTY and cached (a capture costs seconds).
+  const planUsageEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') {
+      planUsageEnv[key] = value;
+    }
+  }
+  const planUsageService = createPlanUsageService({
+    probe: createPtyPlanUsageProbe({
+      spawner: createNodePtySpawner(),
+      command: copilotConfig.executable,
+      env: planUsageEnv,
+    }),
+    now: () => new Date(),
+    ttlMs: (config[PLAN_USAGE_NAMESPACE] as PlanUsageConfig).refreshMinutes * 60 * 1000,
+  });
+
   // Providers. Registration is driven by a descriptor list so adding a new
   // provider is a one-line change: append a descriptor and toggle its config
   // `enabled` flag. A provider is registered only when enabled, keeping
@@ -676,6 +711,31 @@ function main(): void {
     }
   };
   refreshAgencyPath();
+
+  // Keep the agency CLI current automatically so it never nags for an upgrade
+  // inside a working session. When agency is already installed we re-run the
+  // InstallTool bootstrap in the background (it fast-paths when already latest);
+  // the fresh version lands in a new versioned folder without disrupting running
+  // sessions, and we refresh PATH so subsequently-spawned terminals pick it up.
+  // A not-installed agency is handled by the first-run install gate instead.
+  if (agencyBootstrapper.status().installed) {
+    void agencyBootstrapper
+      .upgradeToLatest((event) => {
+        if (event.kind === 'line') {
+          logger.debug('agency upgrade', { line: event.line });
+        } else if (event.kind === 'error') {
+          logger.warn('agency upgrade failed', { message: event.message });
+        }
+      })
+      .then((status) => {
+        if (status.installed) {
+          refreshAgencyPath();
+        }
+      })
+      .catch((error) => {
+        logger.error('agency auto-upgrade crashed', error);
+      });
+  }
 
   // Force the Copilot CLI's home-screen tab bar off for every session. The CLI
   // reads ~/.copilot/settings.json at launch and has no flag/env for this, so we
@@ -1176,6 +1236,18 @@ function main(): void {
   // own session-store.db (keyed by the same --session-id we launch with), so we
   // tail that instead of the OTel file exporter (which the CLI TUI never emits).
   const cliUsageStore = createCliUsageStore({ databasePath: cliStorePath });
+  // Headless meta sessions disable MCP so servers never trigger their own
+  // interactive browser OAuth (which they can't complete anyway). We read the
+  // shared copilot mcp-config.json live so config edits apply without restart.
+  const mcpConfigPath = createCopilotMcpSupport().defaultConfigPath();
+  const readMcpServerNames = (): readonly string[] => {
+    try {
+      const raw = readFileSync(mcpConfigPath, 'utf8');
+      return enabledMcpServerNames(JSON.parse(raw) as McpConfigDocument);
+    } catch {
+      return [];
+    }
+  };
   const providers = createProviderRegistry();
   const providerDescriptors: Array<{
     namespace: string;
@@ -1188,7 +1260,11 @@ function main(): void {
       enabled: copilotConfig.enabled,
       defaultModel: copilotConfig.defaultModel,
       create: () =>
-        createCopilotProvider(copilotConfig, { spawner, baseEnv: process.env }),
+        createCopilotProvider(copilotConfig, {
+          spawner,
+          baseEnv: process.env,
+          mcpServerNames: readMcpServerNames,
+        }),
     },
     {
       namespace: AGENCY_NAMESPACE,
@@ -1199,6 +1275,7 @@ function main(): void {
           spawner,
           baseEnv: process.env,
           importStore: agencyImportStore,
+          mcpServerNames: readMcpServerNames,
         }),
     },
   ];
@@ -1531,6 +1608,26 @@ function main(): void {
     warmPoolCfg.executable === 'copilot'
       ? copilotConfig.executable
       : warmPoolCfg.executable;
+  // Selectable AI model catalog (ids, names + the CLI's own pricing hints)
+  // offered for metasessions. The only surface advertising the full model list
+  // with pricing is the CLI itself: a throwaway `copilot --acp` session returns
+  // it in its `session/new` result, so it is fetched once over ACP and cached
+  // (the fetch costs seconds; the catalog rarely changes).
+  const modelCatalogService = createModelCatalogService({
+    probe: createAcpModelCatalogProbe({
+      executable: warmExecutable,
+      // The CLI's `session/new` requires a working directory to open a session;
+      // any valid directory yields the same account-wide model catalog.
+      cwd: process.cwd(),
+      // Fail fast: the catalog handshake is lightweight (builtin MCPs are
+      // disabled), so a slow/unhealthy CLI should give up quickly rather than
+      // hold the request open.
+      initializeTimeoutMs: 60_000,
+      turnTimeoutMs: 30_000,
+    }),
+    now: () => Date.now(),
+    ttlMs: 10 * 60 * 1000,
+  });
   const warmPurposePools: PurposePool[] = [];
   // Pools mid-removal, still reported (flagged draining) so the UI animates
   // their sessions shutting down; each drops out once it has emptied.
@@ -2108,6 +2205,7 @@ function main(): void {
   const app = express();
   app.use(express.json());
   const router = express.Router();
+  const settingsAssistant = createSettingsAssistant({ ai: metaAi });
   mountRoutes(
     router,
     createApiRoutes({
@@ -2150,12 +2248,16 @@ function main(): void {
       tasks: featureTasksService,
       tree: featureTreeService,
       ideUsage: ideUsageService,
+      planUsage: planUsageService,
+      metaModels: modelCatalogService,
       usageDetail: usageDetailService,
       mcp: mcpService,
       configRegistry: registry,
       currentConfig: config,
       configSecretPaths,
       configOverrides: configOverrideService,
+      settingsAssistant,
+      configSchema: () => describeNamespaces(registry),
       metaPools: metaPoolsStatusFn,
       resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
       createMetaPool: (purpose, size) => createMetaPoolFn(purpose, size),

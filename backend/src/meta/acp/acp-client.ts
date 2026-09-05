@@ -125,13 +125,22 @@ export class AcpClient {
     );
   }
 
-  /** Runs a single prompt as a fresh session and returns its response text. */
-  async runTurn(request: AcpTurnRequest): Promise<AcpTurnResult> {
-    const created = await this.request(
+  /**
+   * Creates a fresh ACP session and returns the raw `session/new` result. The
+   * result carries not only the new session id but the CLI's advertised model
+   * catalog (`models.availableModels`), which the model-catalog probe reads.
+   */
+  async newSession(cwd?: string): Promise<Record<string, unknown> | null> {
+    return this.request(
       'session/new',
-      { cwd: request.cwd, mcpServers: [] },
+      { cwd, mcpServers: [] },
       this.config.turnTimeoutMs,
     );
+  }
+
+  /** Runs a single prompt as a fresh session and returns its response text. */
+  async runTurn(request: AcpTurnRequest): Promise<AcpTurnResult> {
+    const created = await this.newSession(request.cwd);
     const sessionId = sessionIdOf(created);
     if (!sessionId) {
       throw new Error('ACP session/new returned no session id');

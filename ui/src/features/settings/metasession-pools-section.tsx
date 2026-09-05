@@ -20,10 +20,12 @@ import { Loader, Spinner } from '../../components/loading.js';
 import { ErrorState } from '../../components/error-state.js';
 import type {
   ConfigValue,
+  MetaModelOption,
   MetaPoolStat,
   MetaSessionInfo,
   MetaSessionState,
   MetaSessionTurn,
+  MetaSettings,
 } from '../../lib/types.js';
 
 /** How often the live warm-pool status is refreshed while the page is open. */
@@ -701,6 +703,212 @@ function PoolStatus({
  * overrides; size changes also apply live on save, and live warm capacity is
  * shown per pool.
  */
+/** Human label for a model's coarse price bucket. */
+const PRICE_LABEL: Record<string, string> = {
+  low: 'Low cost',
+  medium: 'Medium cost',
+  high: 'High cost',
+};
+
+/**
+ * Picker for the AI model powering the IDE's metasessions (summaries, PR
+ * review, repo context, monitors, …). The list is the live catalog the
+ * Agency/Copilot CLI advertises, annotated with each model's premium-request
+ * multiplier and price bucket so the cost of a choice is visible before it is
+ * applied. A change takes effect for all *new* metasessions immediately.
+ */
+function MetaModelPicker(): JSX.Element {
+  const api = useApi();
+  const [settings, setSettings] = useState<MetaSettings | null>(null);
+  const [models, setModels] = useState<MetaModelOption[]>([]);
+  const [draftModel, setDraftModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void api
+      .getMetaSettings()
+      .then((value) => {
+        if (!alive) return;
+        setSettings(value);
+        setDraftModel(value.model);
+      })
+      .catch(() => undefined);
+    // The catalog is sourced from Agency over ACP; the very first request after
+    // launch spawns the CLI and can briefly return an empty list while it warms
+    // up. Poll with backoff until a populated catalog arrives so the picker
+    // fills in on its own instead of getting stuck on the fallback model.
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = (): void => {
+      void api
+        .getMetaModels()
+        .then((list) => {
+          if (!alive) return;
+          if (list.length > 0) {
+            setModels(list);
+            return;
+          }
+          if (attempt < 8) {
+            attempt += 1;
+            timer = setTimeout(load, 2000);
+          }
+        })
+        .catch(() => {
+          if (alive && attempt < 8) {
+            attempt += 1;
+            timer = setTimeout(load, 2000);
+          }
+        });
+    };
+    load();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [api]);
+
+  // Always keep the current selection choosable even if the live catalog omits
+  // it (custom or legacy id): fall back to a synthetic option.
+  const options = useMemo<MetaModelOption[]>(() => {
+    if (draftModel === '' || models.some((m) => m.id === draftModel)) {
+      return models;
+    }
+    return [
+      {
+        id: draftModel,
+        name: draftModel,
+        description: '',
+        usageMultiplier: null,
+        usageLabel: null,
+        priceCategory: null,
+        enabled: true,
+      },
+      ...models,
+    ];
+  }, [models, draftModel]);
+
+  const selected = options.find((m) => m.id === draftModel) ?? null;
+  const dirty = settings !== null && draftModel !== settings.model;
+
+  async function apply(): Promise<void> {
+    if (!settings) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await api.updateMetaSettings({
+        providerId: settings.providerId,
+        model: draftModel,
+      });
+      setSettings(next);
+      setDraftModel(next.model);
+      setSaved(true);
+    } catch {
+      setError('Could not update the AI model. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!settings) {
+    return <Loader label="Loading model settings" />;
+  }
+
+  return (
+    <div className="metamodel-picker">
+      <div className="metamodel-head">
+        <h3 className="metamodel-title">Metasession model</h3>
+        <p className="metamodel-subtitle">
+          The AI model powering the IDE's metasessions — summaries, PR review,
+          repo context, review board and monitors. Applies to new metasessions
+          immediately. Suggestions come from Agency with each model's
+          premium-request cost.
+        </p>
+      </div>
+      <div className="metamodel-row">
+        <label className="metamodel-field">
+          <span className="metapool-field-label">Model</span>
+          <select
+            className="input"
+            value={draftModel}
+            disabled={saving}
+            onChange={(e) => {
+              setDraftModel(e.target.value);
+              setSaved(false);
+            }}
+          >
+            {options.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name}
+                {model.usageLabel ? ` · ${model.usageLabel}` : ''}
+                {model.priceCategory ? ` · ${model.priceCategory}` : ''}
+                {model.enabled ? '' : ' · unavailable'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button onClick={() => void apply()} disabled={saving || !dirty}>
+          {saving ? (
+            <>
+              <Spinner size={13} label="Applying" /> Applying…
+            </>
+          ) : (
+            'Apply model'
+          )}
+        </Button>
+      </div>
+
+      {selected && (
+        <div className="metamodel-details">
+          {selected.description && selected.description !== selected.name && (
+            <p className="metamodel-desc">{selected.description}</p>
+          )}
+          <div className="metamodel-meta">
+            {selected.usageMultiplier !== null && (
+              <span className="metamodel-badge">
+                {selected.usageLabel} premium requests
+              </span>
+            )}
+            {selected.priceCategory && (
+              <span
+                className={`metamodel-badge metamodel-badge-${selected.priceCategory}`}
+              >
+                {PRICE_LABEL[selected.priceCategory] ?? selected.priceCategory}
+              </span>
+            )}
+            {selected.usageMultiplier === null &&
+              !selected.priceCategory &&
+              selected.id === 'auto' && (
+                <span className="metamodel-badge">
+                  Agency picks the best model per turn
+                </span>
+              )}
+            {!selected.enabled && (
+              <span className="metamodel-badge metamodel-badge-warn">
+                Not available on your plan
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {settings.warmPoolEnabled && draftModel !== 'auto' && (
+        <p className="metamodel-note">
+          Warm pools run the CLI default model, so a specific model routes new
+          metasessions to the (slightly slower) cold path where the choice is
+          honored.
+        </p>
+      )}
+      {error && <ErrorText error={error} />}
+      {saved && !dirty && (
+        <span className="metamodel-saved">Saved — applied to new metasessions.</span>
+      )}
+    </div>
+  );
+}
+
 export function MetasessionPoolsSection() {
   const api = useApi();
   const status = useAsync(() => api.getMetaPools(), []);
@@ -901,6 +1109,8 @@ export function MetasessionPoolsSection() {
           <InfoIcon size={14} /> What is a purpose?
         </button>
       </div>
+
+      <MetaModelPicker />
 
       {showPurposes && (
         <div className="metapool-help">

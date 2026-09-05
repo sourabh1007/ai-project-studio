@@ -62,7 +62,11 @@ function fakePtyEnv() {
   };
 }
 
-function interactiveProvider(withScanner = false, withModelScanner = false): IAIProvider {
+function interactiveProvider(
+  withScanner = false,
+  withModelScanner = false,
+  withMcpScanner = false,
+): IAIProvider {
   const provider: IAIProvider = {
     id: 'copilot',
     listModels: async () => [],
@@ -89,6 +93,21 @@ function interactiveProvider(withScanner = false, withModelScanner = false): IAI
     provider.createModelChangeScanner = () => ({
       feed: (chunk) =>
         chunk.startsWith('MODEL:') ? [chunk.slice(6).trim()] : [],
+    });
+  }
+  if (withMcpScanner) {
+    // A trivial scanner: an `MCPFAIL:` chunk names one failing MCP server (with
+    // a reason); an `MCPBARE:` chunk names one with no reason.
+    provider.createMcpErrorScanner = () => ({
+      feed: (chunk) => {
+        if (chunk.startsWith('MCPFAIL:')) {
+          return [{ server: chunk.slice(8).trim(), reason: 'boom' }];
+        }
+        if (chunk.startsWith('MCPBARE:')) {
+          return [{ server: chunk.slice(8).trim(), reason: '' }];
+        }
+        return [];
+      },
     });
   }
   return provider;
@@ -131,7 +150,11 @@ function makeManager(
   instructions = '',
   withScanner = false,
   bootstrapError?: Error,
-  modelOpts: { withModelScanner?: boolean; trackModel?: boolean } = {},
+  modelOpts: {
+    withModelScanner?: boolean;
+    trackModel?: boolean;
+    withMcpScanner?: boolean;
+  } = {},
   isTransientFailure?: (line: string) => boolean,
   extra: {
     selfRecovery?: {
@@ -148,17 +171,24 @@ function makeManager(
   const bus = createEventBus<SessionEventMap>();
   const providers = createProviderRegistry();
   providers.register(
-    interactiveProvider(withScanner, modelOpts.withModelScanner ?? false),
+    interactiveProvider(
+      withScanner,
+      modelOpts.withModelScanner ?? false,
+      modelOpts.withMcpScanner ?? false,
+    ),
   );
   const ts = fakeTranscriptStore();
   const started: Session[] = [];
   const ended: Session[] = [];
   const discarded: string[] = [];
   const fileEvents: Array<{ sessionId: string }> = [];
+  const notices: Array<{ sessionId: string; level: string; message: string }> =
+    [];
   bus.on('session.started', (s) => started.push(s));
   bus.on('session.ended', (s) => ended.push(s));
   bus.on('session.discarded', (id) => discarded.push(id));
   bus.on('session.file', (e) => fileEvents.push(e));
+  bus.on('session.notice', (n) => notices.push(n));
   const instructionCalls: string[] = [];
   const recorded: Array<{ sessionId: string; path: string; tool: string }> = [];
   const modelResolved: Array<{ sessionId: string; model: string }> = [];
@@ -208,6 +238,7 @@ function makeManager(
     ended,
     discarded,
     fileEvents,
+    notices,
     saved: ts.saved,
     instructionCalls,
     recorded,
@@ -781,6 +812,48 @@ describe('createTerminalManager', () => {
       await manager.getOrLaunch(sampleSession());
       env.emitExit(0);
       expect(modelResolved).toEqual([]);
+    });
+  });
+
+  describe('MCP error scanner', () => {
+    it('emits a session.notice per failing MCP server the CLI reports', async () => {
+      const { manager, env, notices } = makeManager('', false, undefined, {
+        withMcpScanner: true,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MCPFAIL: Azure');
+      env.emitData('some unrelated output');
+      // Terminal exit must not disturb the already-emitted notices.
+      env.emitExit(0);
+      expect(notices).toEqual([
+        {
+          sessionId: 'sess-1',
+          level: 'error',
+          message: 'MCP server "Azure" failed to connect — boom',
+        },
+      ]);
+    });
+
+    it('reports nothing when the provider exposes no MCP-error scanner', async () => {
+      const { manager, env, notices } = makeManager('', false);
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MCPFAIL: Azure');
+      expect(notices).toEqual([]);
+    });
+
+    it('omits the reason detail when the CLI gives no reason', async () => {
+      const { manager, env, notices } = makeManager('', false, undefined, {
+        withMcpScanner: true,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitData('MCPBARE: github');
+      expect(notices).toEqual([
+        {
+          sessionId: 'sess-1',
+          level: 'error',
+          message: 'MCP server "github" failed to connect',
+        },
+      ]);
     });
   });
 

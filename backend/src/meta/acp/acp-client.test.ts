@@ -63,6 +63,25 @@ describe('AcpClient', () => {
     expect(client.alive).toBe(true);
   });
 
+  it('creates a session and returns the raw result with the model catalog', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const p = client.newSession('C:\\repo');
+    await flush();
+    expect(fake.last('session/new').params).toEqual({
+      cwd: 'C:\\repo',
+      mcpServers: [],
+    });
+    fake.respond('session/new', {
+      sessionId: 's1',
+      models: { availableModels: [{ modelId: 'gpt-5.4' }] },
+    });
+    await expect(p).resolves.toEqual({
+      sessionId: 's1',
+      models: { availableModels: [{ modelId: 'gpt-5.4' }] },
+    });
+  });
+
   it('runs a turn: new session, streamed text, stop reason and usage', async () => {
     const fake = new FakeProcess();
     const client = new AcpClient(fake, config);

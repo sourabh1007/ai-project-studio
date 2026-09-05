@@ -46,6 +46,8 @@ export default defineConfig({
         'src/**/index.ts',
         // IO/native adapters: exercised via e2e, not unit tests (like main.ts).
         'src/terminal/node-pty-spawner.ts',
+        'src/plan-usage/pty-plan-usage-probe.ts',
+        'src/meta/model-catalog/acp-model-catalog-probe.ts',
         'src/terminal/terminal-ws-server.ts',
         'src/repository-context/git-repository-adapter.ts',
         'src/repository-context/filesystem-evidence-adapter.ts',

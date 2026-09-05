@@ -2,6 +2,7 @@ import type {
   IAIProvider,
   ImportableSession,
   InteractiveCommand,
+  McpErrorScanner,
   ModelChangeScanner,
   SessionSpec,
 } from '../provider-contract.js';
@@ -19,6 +20,7 @@ import { listAgencyModels } from './agency-model-lister.js';
 import { buildCopilotInteractiveArgs } from '../copilot-adapter/copilot-cmd-builder.js';
 import { createCopilotOutputScanner } from '../copilot-adapter/copilot-output-scanner.js';
 import { createCopilotModelScanner } from '../copilot-adapter/copilot-model-scanner.js';
+import { createCopilotMcpScanner } from '../copilot-adapter/copilot-mcp-scanner.js';
 import { createCopilotMcpSupport } from '../copilot-adapter/copilot-mcp-support.js';
 
 export interface AgencyAdapterDeps {
@@ -26,6 +28,12 @@ export interface AgencyAdapterDeps {
   baseEnv: Record<string, string | undefined>;
   /** Source of past CLI sessions available to import into a feature. */
   importStore: CliSessionStore;
+  /**
+   * Names of the user-configured MCP servers to disable for headless meta
+   * sessions so they never trigger a browser/OAuth sign-in on load. Read live
+   * so config edits are reflected without a restart. Omitted → none disabled.
+   */
+  mcpServerNames?: () => readonly string[];
 }
 
 /** Agency CLI provider. Wraps the Copilot CLI via `agency copilot -- ...`. */
@@ -39,7 +47,11 @@ export function createAgencyProvider(
       return listAgencyModels(config);
     },
     startSession(spec: SessionSpec) {
-      const { command, args } = buildAgencyCommand(spec, config);
+      const { command, args } = buildAgencyCommand(
+        spec,
+        config,
+        deps.mcpServerNames?.() ?? [],
+      );
       const env = buildAgencyEnv(spec, deps.baseEnv);
       const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
       return toRunningSession(spec.sessionId, handle);
@@ -64,6 +76,11 @@ export function createAgencyProvider(
       // Same Copilot CLI underneath, so the "Model changed …" line is identical;
       // reuse Copilot's model scanner.
       return createCopilotModelScanner();
+    },
+    createMcpErrorScanner(): McpErrorScanner {
+      // Same Copilot CLI underneath, so MCP connection failures are announced
+      // identically; reuse Copilot's MCP-error scanner.
+      return createCopilotMcpScanner();
     },
     listImportableSessions(): ImportableSession[] {
       return deps.importStore.listImportable();

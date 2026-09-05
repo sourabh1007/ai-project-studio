@@ -453,6 +453,30 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/meta/settings');
   });
 
+  it('fetches the metasession model catalog', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    await client.getMetaModels();
+    expect(calls[0][0]).toBe('/api/meta/models');
+  });
+
+  it('asks the settings assistant with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ answer: 'ok' }));
+    const client = createApiClient({ fetchImpl });
+    await client.askSettingsAssistant({
+      namespace: 'meta',
+      key: 'model',
+      question: 'Which model?',
+    });
+    expect(calls[0][0]).toBe('/api/config/assistant');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
+      namespace: 'meta',
+      key: 'model',
+      question: 'Which model?',
+    });
+  });
+
   it('updates the runtime meta AI settings with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ providerId: 'copilot', model: 'gpt-5', warmPoolEnabled: true }),
@@ -722,6 +746,13 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getIdeUsage();
     expect(calls[0][0]).toBe('/api/usage/ide');
+  });
+
+  it('reads the plan AI-credit budget', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ usedAic: 25000 }));
+    const client = createApiClient({ fetchImpl });
+    await client.getPlanUsage();
+    expect(calls[0][0]).toBe('/api/usage/plan');
   });
 
   it('throws ApiError on a non-ok response', async () => {

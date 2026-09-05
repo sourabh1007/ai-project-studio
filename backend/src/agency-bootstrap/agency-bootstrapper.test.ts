@@ -61,8 +61,8 @@ describe('createAgencyBootstrapper', () => {
       spawner: scriptedSpawner({ code: 0 }).spawner,
       env: {},
     });
-    expect(yes.status()).toEqual({ installed: true });
-    expect(no.status()).toEqual({ installed: false });
+    expect(yes.status()).toEqual({ installed: true, upgrade: { phase: 'idle' } });
+    expect(no.status()).toEqual({ installed: false, upgrade: { phase: 'idle' } });
   });
 
   it('short-circuits install when agency is already present', async () => {
@@ -75,7 +75,7 @@ describe('createAgencyBootstrapper', () => {
     });
     const events: AgencyInstallEvent[] = [];
     const status = await boot.install((e) => events.push(e));
-    expect(status).toEqual({ installed: true });
+    expect(status).toEqual({ installed: true, upgrade: { phase: 'idle' } });
     expect(events).toEqual([{ kind: 'done' }]);
     expect(requests).toHaveLength(0);
   });
@@ -101,7 +101,7 @@ describe('createAgencyBootstrapper', () => {
       }
       events.push(e);
     });
-    expect(status).toEqual({ installed: true });
+    expect(status).toEqual({ installed: true, upgrade: { phase: 'idle' } });
     expect(events).toEqual([
       { kind: 'line', line: 'downloading' },
       { kind: 'line', line: 'warn: slow' },
@@ -121,7 +121,7 @@ describe('createAgencyBootstrapper', () => {
     });
     const events: AgencyInstallEvent[] = [];
     const status = await boot.install((e) => events.push(e));
-    expect(status).toEqual({ installed: false });
+    expect(status).toEqual({ installed: false, upgrade: { phase: 'idle' } });
     expect(events).toEqual([
       { kind: 'error', message: 'agency install failed (exit code 1)' },
     ]);
@@ -137,7 +137,7 @@ describe('createAgencyBootstrapper', () => {
     });
     const events: AgencyInstallEvent[] = [];
     const status = await boot.install((e) => events.push(e));
-    expect(status).toEqual({ installed: false });
+    expect(status).toEqual({ installed: false, upgrade: { phase: 'idle' } });
     expect(events).toEqual([
       { kind: 'error', message: 'agency install failed (exit code 0)' },
     ]);
@@ -156,5 +156,58 @@ describe('createAgencyBootstrapper', () => {
     expect(events).toEqual([
       { kind: 'error', message: 'agency install failed (exit code null)' },
     ]);
+  });
+
+  it('upgradeToLatest runs the installer even when agency is present and tracks phase', async () => {
+    const { spawner, requests } = scriptedSpawner({
+      stdout: ['pulling latest'],
+      code: 0,
+    });
+    const boot = createAgencyBootstrapper({
+      platform: 'win32',
+      detect: () => true,
+      spawner,
+      env: { PATH: '/bin' },
+    });
+    const events: AgencyInstallEvent[] = [];
+    const status = await boot.upgradeToLatest((e) => events.push(e));
+    expect(requests).toHaveLength(1);
+    expect(status).toEqual({ installed: true, upgrade: { phase: 'done' } });
+    expect(boot.upgradeState()).toEqual({ phase: 'done' });
+    expect(events).toEqual([
+      { kind: 'line', line: 'pulling latest' },
+      { kind: 'done' },
+    ]);
+  });
+
+  it('upgradeToLatest reports an error phase when the installer fails', async () => {
+    const { spawner } = scriptedSpawner({ code: 1 });
+    const boot = createAgencyBootstrapper({
+      platform: 'linux',
+      detect: () => true,
+      spawner,
+      env: {},
+    });
+    const events: AgencyInstallEvent[] = [];
+    const status = await boot.upgradeToLatest((e) => events.push(e));
+    const message = 'agency upgrade failed (exit code 1)';
+    expect(status).toEqual({ installed: true, upgrade: { phase: 'error', message } });
+    expect(boot.upgradeState()).toEqual({ phase: 'error', message });
+    expect(events).toEqual([{ kind: 'error', message }]);
+  });
+
+  it('upgradeToLatest renders a null exit code in the error message', async () => {
+    const { spawner } = scriptedSpawner({ code: null });
+    const boot = createAgencyBootstrapper({
+      platform: 'linux',
+      detect: () => false,
+      spawner,
+      env: {},
+    });
+    const status = await boot.upgradeToLatest(() => {});
+    expect(status.upgrade).toEqual({
+      phase: 'error',
+      message: 'agency upgrade failed (exit code null)',
+    });
   });
 });

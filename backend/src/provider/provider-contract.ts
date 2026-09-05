@@ -26,6 +26,24 @@ export interface ModelChangeScanner {
   feed(chunk: string): string[];
 }
 
+/** One MCP server that failed to connect, parsed from interactive CLI output. */
+export interface McpServerError {
+  /** The MCP server name as the CLI reported it (unquoted). */
+  server: string;
+  /** A short reason string, when the CLI included one. */
+  reason: string;
+}
+
+/**
+ * Scans interactive terminal output for the CLI's "Failed to connect to MCP
+ * server …" lines so the IDE can surface an out-of-band notice instead of the
+ * failure only scrolling past in the session. Provided by the provider since
+ * the wording is CLI-specific; providers whose CLI emits no such line omit it.
+ */
+export interface McpErrorScanner {
+  feed(chunk: string): McpServerError[];
+}
+
 /** Everything needed to launch one AI session through a provider. */
 export interface SessionSpec {
   sessionId: string;
@@ -154,6 +172,14 @@ export interface IAIProvider {
    * is recorded. Providers whose CLI emits no such line omit it.
    */
   createModelChangeScanner?(): ModelChangeScanner;
+  /**
+   * Optional capability: builds a scanner that detects MCP server connection
+   * failures from the interactive terminal output (e.g. the CLI's
+   * `Failed to connect to MCP server "X"` line), so the IDE can raise an
+   * out-of-band notice rather than letting the error only scroll past in the
+   * session. Providers whose CLI emits no such line omit it.
+   */
+  createMcpErrorScanner?(): McpErrorScanner;
   /**
    * Optional capability: lists past sessions from this provider's own store
    * that can be imported into a feature. Providers without an accessible

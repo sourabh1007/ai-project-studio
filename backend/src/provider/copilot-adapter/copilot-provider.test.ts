@@ -67,6 +67,26 @@ describe('copilot-provider', () => {
     expect(req.env.PATH).toBe('/bin');
   });
 
+  it('disables MCP servers for meta sessions using the live server-name source', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner,
+      baseEnv: {},
+      mcpServerNames: () => ['github', 'azure'],
+    });
+    provider.startSession({ ...spec, kind: 'meta' });
+    const req = requests[0];
+    expect(req.args).toContain('--disable-builtin-mcps');
+    expect(req.args).toEqual(
+      expect.arrayContaining([
+        '--disable-mcp-server',
+        'github',
+        '--disable-mcp-server',
+        'azure',
+      ]),
+    );
+  });
+
   it('buildInteractiveCommand yields the interactive TUI command + OTel env', () => {
     const { spawner } = fakeSpawner();
     const provider = createCopilotProvider(copilotDefaults, {
@@ -111,5 +131,17 @@ describe('copilot-provider', () => {
     expect(scanner?.feed('Model changed from auto to claude-opus-4.8\n')).toEqual(
       ['claude-opus-4.8'],
     );
+  });
+
+  it('createMcpErrorScanner detects an MCP connection failure', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner,
+      baseEnv: {},
+    });
+    const scanner = provider.createMcpErrorScanner?.();
+    expect(
+      scanner?.feed('Failed to connect to MCP server "Azure": boom\n'),
+    ).toEqual([{ server: 'Azure', reason: 'boom' }]);
   });
 });
