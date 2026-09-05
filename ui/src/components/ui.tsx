@@ -1,6 +1,13 @@
 import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckIcon, CircleIcon, ClockIcon, CloseIcon } from './icons.js';
+import {
+  CheckIcon,
+  CloseIcon,
+  PauseIcon,
+  WarningIcon,
+} from './icons.js';
+import { Spinner } from './loading.js';
+import { classifyStatus, type StatusGlyph } from '../lib/status.js';
 
 export function Modal({
   title,
@@ -106,57 +113,108 @@ export function Button({
   onClick,
   variant = 'primary',
   disabled,
+  loading = false,
   type = 'button',
+  title,
+  ariaLabel,
 }: {
   children: ReactNode;
   onClick?: () => void;
-  variant?: 'primary' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   disabled?: boolean;
+  /** Show an inline spinner and block interaction while an action runs. */
+  loading?: boolean;
   type?: 'button' | 'submit';
+  title?: string;
+  ariaLabel?: string;
 }) {
   return (
     <button
       type={type}
-      className={`btn btn-${variant}`}
+      className={`btn btn-${variant}${loading ? ' is-loading' : ''}`}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || loading}
+      title={title}
+      aria-label={ariaLabel}
+      aria-busy={loading || undefined}
     >
-      {children}
+      {loading && <Spinner size={14} label="Working" />}
+      <span className="btn-label">{children}</span>
     </button>
   );
 }
 
-export function StatusBadge({ status }: { status: string }) {
-  const normalized = status.trim().toLowerCase();
-  const mod =
-    normalized === 'running'
-      ? 'badge-running'
-      : normalized === 'completed'
-        ? 'badge-completed'
-        : normalized === 'failed'
-          ? 'badge-failed'
-          : '';
-  const icon =
-    normalized === 'running' ? (
-      <ClockIcon />
-    ) : normalized === 'completed' ? (
-      <CheckIcon />
-    ) : normalized === 'failed' ? (
-      <CloseIcon />
-    ) : (
-      <CircleIcon />
-    );
+/** Renders the leading glyph for a status: an animated/steady dot or an icon. */
+function StatusGlyphNode({
+  glyph,
+  animated,
+}: {
+  glyph: StatusGlyph;
+  animated: boolean;
+}) {
+  if (glyph === 'check') {
+    return <CheckIcon />;
+  }
+  if (glyph === 'cross') {
+    return <CloseIcon />;
+  }
+  if (glyph === 'warn') {
+    return <WarningIcon />;
+  }
+  if (glyph === 'pause') {
+    return <PauseIcon />;
+  }
+  // spinner / dot / circle all render as a tone-coloured dot; only the running
+  // spinner pulses. This is the single scannable "state light" for the app.
   return (
     <span
-      className={`badge ${mod}`.trim()}
-      title={status}
+      className={`status-badge-dot${animated ? ' is-animated' : ''}`}
+      aria-hidden="true"
+    />
+  );
+}
+
+/**
+ * The one canonical status indicator for the whole app. Give it any status
+ * string ("running", "in_progress", "done", "failed", …) and it resolves to a
+ * fixed semantic tone + glyph via {@link classifyStatus}, so the same state
+ * always looks the same everywhere: blue+animated for running, green for
+ * success, red for failure, amber for warning, slate for pending/paused. Shows
+ * a readable label by default so users scan colour first, text second; pass
+ * `showLabel={false}` for a compact dot-only indicator in tight rows.
+ */
+export function StatusBadge({
+  status,
+  label,
+  showLabel = true,
+  className,
+}: {
+  status: string;
+  /** Override the auto-derived label text. */
+  label?: string;
+  /** Hide the text and render a compact dot/icon only. */
+  showLabel?: boolean;
+  className?: string;
+}) {
+  const { tone, glyph, animated, label: derived } = classifyStatus(status);
+  const text = label ?? derived;
+  return (
+    <span
+      className={`status-badge status-tone-${tone}${
+        animated ? ' is-animated' : ''
+      }${showLabel ? '' : ' is-compact'} ${className ?? ''}`.trim()}
       role="img"
-      aria-label={status}
+      aria-label={text}
+      title={text}
     >
-      <span className="badge-icon" aria-hidden="true">
-        {icon}
+      <span className="status-badge-glyph" aria-hidden="true">
+        <StatusGlyphNode glyph={glyph} animated={animated} />
       </span>
-      <span className="sr-only">{status}</span>
+      {showLabel ? (
+        <span className="status-badge-label">{text}</span>
+      ) : (
+        <span className="sr-only">{text}</span>
+      )}
     </span>
   );
 }

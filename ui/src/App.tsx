@@ -55,6 +55,7 @@ import {
   type ShortcutBinding,
 } from './lib/keyboard-shortcuts.js';
 import { usePersistentState } from './hooks/use-persistent-state.js';
+import { useApplyUiPreferences } from './hooks/use-ui-preferences.js';
 import { isOneOf } from './lib/persisted-state.js';
 import {
   AutomationIcon,
@@ -85,6 +86,7 @@ const SHORTCUT_BINDINGS: ShortcutBinding[] = [
 export function App() {
   const live = useUsageStream();
   const { mode, theme, cycle } = useTheme();
+  useApplyUiPreferences(theme);
   const [view, setView] = usePersistentState<View>('cw-active-view', 'workspace', {
     validate: isOneOf(VIEW_ORDER),
   });

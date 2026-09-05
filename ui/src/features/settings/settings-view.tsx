@@ -27,9 +27,11 @@ import {
 } from '../../components/icons.js';
 import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
+import { SelfHealButton } from '../../components/self-heal-button.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 import { SoftwareUpdateSection } from '../updates/software-update-section.js';
 import { AgencyCliSection } from './agency-cli-section.js';
+import { AppearanceSection } from './appearance-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
 import { WorktreesSection } from './worktrees-section.js';
@@ -292,6 +294,18 @@ function NamespaceEditor({
           )}
           {answer && <div className="config-assistant-answer">{answer}</div>}
           <ErrorText error={assistError} />
+          {assistError && (
+            <SelfHealButton
+              target="assistant-model"
+              label="Configure a model"
+              onHealed={() => {
+                setAssistError(null);
+                if (question) {
+                  void askAssistant(question);
+                }
+              }}
+            />
+          )}
         </div>
       )}
       <div className="config-fields">
@@ -339,6 +353,7 @@ function NamespaceEditor({
 
 type TabId =
   | 'general'
+  | 'appearance'
   | 'config'
   | 'metasession'
   | 'network'
@@ -352,6 +367,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
+  { id: 'appearance', label: 'Appearance' },
   { id: 'config', label: 'Configuration' },
   { id: 'metasession', label: 'Metasession' },
   { id: 'network', label: 'Network' },
@@ -497,6 +513,8 @@ export function SettingsView() {
           <AgencyCliSection />
         </div>
       )}
+
+      {tab === 'appearance' && <AppearanceSection />}
 
       {tab === 'config' && (
         <div className="settings-panel">
