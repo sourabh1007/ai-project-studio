@@ -1548,51 +1548,25 @@ body.is-resizing {
   padding: 1px 6px;
 }
 
-.repo-context-badge,
-.repo-context-state {
+.repo-context-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 6px;
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.repo-context-badge {
   appearance: none;
   cursor: pointer;
   background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 999px;
 }
 
 .repo-context-badge:hover {
-  border-color: var(--accent);
+  filter: brightness(1.12);
 }
 
-.repo-context-ready {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
-}
-
-.repo-context-pending,
-.repo-context-generating,
-.repo-context-stale {
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
-}
-
-.repo-context-failed {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-
-.repo-context-spinner {
-  width: 8px;
-  height: 8px;
-  border-width: 1px;
+.repo-context-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .session-context-blocked {
@@ -9124,29 +9098,6 @@ body.is-resizing {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-}
-.metapool-badge {
-  font-size: var(--fs-meta);
-  font-weight: 600;
-  line-height: 1.4;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.metapool-badge-ready {
-  border-color: color-mix(in srgb, var(--success, #16a34a) 45%, var(--border));
-  color: var(--success, #16a34a);
-}
-.metapool-badge-warming {
-  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
-  color: var(--warning);
-}
-.metapool-badge-shutting {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 .metapool-stats {
   display: flex;

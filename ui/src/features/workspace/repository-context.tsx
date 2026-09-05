@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApi } from '../../app/api-context.js';
-import { Button, ErrorText, Modal } from '../../components/ui.js';
+import { Button, ErrorText, Modal, StatusBadge } from '../../components/ui.js';
 import { RefreshIcon } from '../../components/icons.js';
 import type {
   Repository,
@@ -10,12 +10,21 @@ import type {
   RepositoryContextStepStatus,
 } from '../../lib/types.js';
 
-const STATUS_LABELS: Record<RepositoryContextStatus, string> = {
-  pending: 'Pending',
-  generating: 'Analyzing',
-  ready: 'Ready',
-  stale: 'Refreshing',
-  failed: 'Failed',
+/**
+ * Maps each repository-context status to the canonical StatusBadge tone plus the
+ * domain label to show. We pass an explicit tone string (not the raw status)
+ * because the app's `stale` means "refreshing" (a running state) whereas the
+ * generic classifier would read "stale" as a warning.
+ */
+const CONTEXT_STATUS: Record<
+  RepositoryContextStatus,
+  { tone: string; label: string }
+> = {
+  pending: { tone: 'pending', label: 'Pending' },
+  generating: { tone: 'generating', label: 'Analyzing' },
+  ready: { tone: 'ready', label: 'Ready' },
+  stale: { tone: 'running', label: 'Refreshing' },
+  failed: { tone: 'failed', label: 'Failed' },
 };
 
 const STEP_STATUS_LABELS: Record<RepositoryContextStepStatus, string> = {
@@ -62,19 +71,16 @@ export function RepositoryContextBadge({
   onClick: () => void;
 }) {
   const status = context?.status ?? 'pending';
-  const label = STATUS_LABELS[status];
+  const { tone, label } = CONTEXT_STATUS[status];
   return (
     <button
       type="button"
-      className={`repo-context-badge repo-context-${status}`}
+      className="repo-context-badge"
       title={`Repository context: ${label}`}
       aria-label={`View repository context, status ${label}`}
       onClick={onClick}
     >
-      {(status === 'pending' || status === 'generating' || status === 'stale') && (
-        <span className="spinner repo-context-spinner" aria-hidden="true" />
-      )}
-      <span>{label}</span>
+      <StatusBadge status={tone} label={label} />
     </button>
   );
 }
@@ -161,9 +167,10 @@ export function RepositoryContextViewer({
     <Modal title={`Repository context · ${repo.name}`} onClose={onClose}>
       <div className="repo-context-viewer">
         <div className="repo-context-heading">
-          <span className={`repo-context-state repo-context-${context.status}`}>
-            {STATUS_LABELS[context.status]}
-          </span>
+          <StatusBadge
+            status={CONTEXT_STATUS[context.status].tone}
+            label={CONTEXT_STATUS[context.status].label}
+          />
           <span aria-live="polite">
             {repositoryContextBlockReason(context) ?? 'Ready for new sessions.'}
           </span>

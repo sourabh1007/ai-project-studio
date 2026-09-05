@@ -8,6 +8,7 @@ import {
   ErrorText,
   IconBadge,
   Modal,
+  StatusBadge,
 } from '../../components/ui.js';
 import {
   ActivityIcon,
@@ -490,17 +491,10 @@ function PoolStatus({
       <div
         className={`metapool-live-head${justApplied ? ' metapool-live-applied' : ''}`}
       >
-        <span
-          className={`metapool-badge ${
-            draining
-              ? 'metapool-badge-shutting'
-              : pool.ready
-                ? 'metapool-badge-ready'
-                : 'metapool-badge-warming'
-          }`}
-        >
-          {draining ? 'Shutting down…' : pool.ready ? 'Ready' : 'Warming…'}
-        </span>
+        <StatusBadge
+          status={draining ? 'working' : pool.ready ? 'ready' : 'starting'}
+          label={draining ? 'Shutting down…' : pool.ready ? 'Ready' : 'Warming…'}
+        />
         <span className="metapool-stats">
           <span>
             <strong>{pool.idle}</strong> idle
@@ -1244,9 +1238,10 @@ export function MetasessionPoolsSection() {
                       />
                     ) : (
                       <div className="metapool-live">
-                        <span className="metapool-badge metapool-badge-warming">
-                          {saved ? 'Starting…' : 'Save to start live'}
-                        </span>
+                        <StatusBadge
+                          status={saved ? 'starting' : 'pending'}
+                          label={saved ? 'Starting…' : 'Save to start live'}
+                        />
                       </div>
                     ))}
                 </div>
