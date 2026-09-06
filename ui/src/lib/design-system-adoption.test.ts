@@ -28,6 +28,13 @@ const BANNED_STATUS_CLASSES = [
   'repo-context-spinner',
 ];
 
+/**
+ * `ui.tsx` legitimately owns the canonical `btn btn-<variant>` markup because
+ * that is exactly what the <Button> primitive renders. Every other file must
+ * use <Button> rather than hand-rolling those classes.
+ */
+const BUTTON_PRIMITIVE_OWNER = join('components', 'ui.tsx');
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -54,4 +61,20 @@ describe('StatusBadge adoption', () => {
       expect(offenders, `Use <StatusBadge> instead of "${banned}"`).toEqual([]);
     },
   );
+});
+
+describe('Button adoption', () => {
+  it('does not hand-roll the canonical btn classes outside <Button>', () => {
+    const offenders = sourceFiles(SRC).filter(
+      (file) =>
+        !file.endsWith(BUTTON_PRIMITIVE_OWNER) &&
+        /\bbtn btn-(primary|secondary|ghost|danger)\b/.test(
+          readFileSync(file, 'utf8'),
+        ),
+    );
+    expect(
+      offenders,
+      'Use the <Button> component instead of raw "btn btn-<variant>" markup',
+    ).toEqual([]);
+  });
 });

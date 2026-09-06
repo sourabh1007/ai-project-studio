@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { metaModelLabel } from '../../lib/meta-model.js';
+import { Button } from '../../components/ui.js';
 import type {
   MetaModelOption,
   MetaPoolsStatus,
@@ -208,22 +209,20 @@ export function MetaModelStatus(): JSX.Element | null {
           )}
           {error && <p className="statusbar-meta-error">{error}</p>}
           <div className="statusbar-meta-actions">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
+            <Button
+              variant="ghost"
               onClick={() => setOpen(false)}
               disabled={saving}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
+            </Button>
+            <Button
+              variant="primary"
               onClick={() => void apply()}
               disabled={saving}
             >
               {saving ? 'Applying…' : 'Apply'}
-            </button>
+            </Button>
           </div>
         </div>
       )}

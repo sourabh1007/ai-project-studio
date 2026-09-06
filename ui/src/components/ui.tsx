@@ -117,6 +117,7 @@ export function Button({
   type = 'button',
   title,
   ariaLabel,
+  className,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -127,11 +128,15 @@ export function Button({
   type?: 'button' | 'submit';
   title?: string;
   ariaLabel?: string;
+  /** Extra classes appended after the canonical `btn btn-<variant>`. */
+  className?: string;
 }) {
   return (
     <button
       type={type}
-      className={`btn btn-${variant}${loading ? ' is-loading' : ''}`}
+      className={`btn btn-${variant}${loading ? ' is-loading' : ''}${
+        className ? ` ${className}` : ''
+      }`}
       onClick={onClick}
       disabled={disabled || loading}
       title={title}
@@ -308,16 +313,12 @@ export function ConfirmDialog({
         ) : null}
         <div className="confirm-dialog-body">{message}</div>
         <div className="confirm-dialog-actions">
-          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+          <Button variant="ghost" onClick={onCancel}>
             {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
-            onClick={onConfirm}
-          >
+          </Button>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
             {confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>

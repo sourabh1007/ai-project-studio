@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppUpdates } from '../../hooks/use-app-updates.js';
+import { Button } from '../../components/ui.js';
 
 /**
  * A slim, dismissible top-of-app banner that surfaces an available/downloading/
@@ -39,24 +40,23 @@ export function UpdateBanner() {
       </div>
       <div className="update-banner-actions">
         {ui.canDownload && (
-          <button type="button" className="btn btn-primary" onClick={download}>
+          <Button variant="primary" onClick={download}>
             {ui.autoInstall ? 'Download' : 'Get update'}
-          </button>
+          </Button>
         )}
         {ui.canInstall && (
-          <button type="button" className="btn btn-primary" onClick={install}>
+          <Button variant="primary" onClick={install}>
             {ui.autoInstall ? 'Restart & install' : 'Install…'}
-          </button>
+          </Button>
         )}
         {!ui.showProgress && (
-          <button
-            type="button"
-            className="btn btn-ghost"
+          <Button
+            variant="ghost"
             onClick={() => setDismissed(true)}
-            aria-label="Dismiss update notification"
+            ariaLabel="Dismiss update notification"
           >
             Later
-          </button>
+          </Button>
         )}
       </div>
     </div>

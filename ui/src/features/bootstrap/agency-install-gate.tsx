@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { resolveApiBase } from '../../lib/api-base.js';
 import { CheckIcon, RefreshIcon } from '../../components/icons.js';
+import { Button } from '../../components/ui.js';
 
 type Phase = 'checking' | 'installing' | 'done' | 'error';
 
@@ -150,20 +151,12 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
 
         {phase === 'error' && (
           <div className="bootstrap-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => setAttempt((n) => n + 1)}
-            >
+            <Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>
               <RefreshIcon size={14} /> Retry
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setBypassed(true)}
-            >
+            </Button>
+            <Button variant="secondary" onClick={() => setBypassed(true)}>
               <CheckIcon size={14} /> Continue anyway
-            </button>
+            </Button>
           </div>
         )}
       </div>
