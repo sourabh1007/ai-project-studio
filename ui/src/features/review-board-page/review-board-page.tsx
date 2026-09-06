@@ -4,6 +4,7 @@ import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { useUsageStream } from '../../hooks/use-usage-stream.js';
 import { reviewBoardActivityLines } from '../../lib/stream.js';
+import { parseFindingDetail } from '../../lib/finding-detail.js';
 import {
   reviewBoardRunStore,
   type PerspectiveProgress,
@@ -152,49 +153,6 @@ function EvidenceSource({
 }
 
 /** Section labels an AI finding uses; parsed out for clean, structured display. */
-const DETAIL_LABELS = [
-  'Problem',
-  'Where',
-  'Impact',
-  'Risk',
-  'Why',
-  'Fix/verify',
-  'Fix',
-  'Verify',
-  'Recommendation',
-  'Evidence',
-];
-
-interface DetailSection {
-  label: string | null;
-  body: string;
-}
-
-/**
- * Split a finding's free-text detail into its labelled sections ("Problem:",
- * "Where:", "Fix/verify:", …) so we can render each as its own block instead of
- * one dense wall of text. Text before the first label becomes an unlabelled lead.
- */
-function parseFindingDetail(detail: string): DetailSection[] {
-  const text = detail.trim();
-  if (!text) return [];
-  const alt = DETAIL_LABELS.map((l) => l.replace('/', '\\/')).join('|');
-  const re = new RegExp(`(?:^|[\\s.;])(${alt}):\\s+`, 'g');
-  const sections: DetailSection[] = [];
-  let lastIndex = 0;
-  let lastLabel: string | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const chunk = text.slice(lastIndex, m.index).trim();
-    if (chunk) sections.push({ label: lastLabel, body: chunk });
-    lastLabel = m[1];
-    lastIndex = re.lastIndex;
-  }
-  const tail = text.slice(lastIndex).trim();
-  if (tail) sections.push({ label: lastLabel, body: tail });
-  return sections.length > 0 ? sections : [{ label: null, body: text }];
-}
-
 /** Renders a finding's detail as structured Problem / Where / Fix-verify blocks. */
 function FindingDetail({ detail }: { detail: string }) {
   const sections = parseFindingDetail(detail);
