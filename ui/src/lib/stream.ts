@@ -401,3 +401,13 @@ export function liveSignal(state: LiveState): number {
     Object.keys(state.sessions).length + Object.keys(state.usageByKey).length
   );
 }
+
+/**
+ * Merge a persisted session with any live status/model updates streamed since it
+ * was loaded. Returns the original object unchanged when there is no live entry,
+ * so callers can rely on referential stability for untouched rows.
+ */
+export function mergeLive(session: Session, live: LiveState): Session {
+  const liveSession = live.sessions[session.id];
+  return liveSession ? { ...session, ...liveSession } : session;
+}

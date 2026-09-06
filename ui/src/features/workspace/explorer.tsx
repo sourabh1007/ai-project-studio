@@ -9,7 +9,12 @@ import {
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { LiveState } from '../../lib/stream.js';
-import { liveSignal, resolveSessionMetrics, sessionLiveTotals } from '../../lib/stream.js';
+import {
+  liveSignal,
+  mergeLive,
+  resolveSessionMetrics,
+  sessionLiveTotals,
+} from '../../lib/stream.js';
 import type {
   Feature,
   MoveNodeInput,
@@ -70,12 +75,6 @@ import {
   RepositoryContextBadge,
   RepositoryContextViewer,
 } from './repository-context.js';
-
-/** Merges a persisted session with any live status/model updates. */
-function mergeLive(session: Session, live: LiveState): Session {
-  const liveSession = live.sessions[session.id];
-  return liveSession ? { ...session, ...liveSession } : session;
-}
 
 function SessionRow({
   session,

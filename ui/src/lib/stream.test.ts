@@ -4,6 +4,7 @@ import {
   applyStreamEvent,
   initialLiveState,
   liveSignal,
+  mergeLive,
   parseServerEvent,
   resolveSessionMetrics,
   reviewBoardActivityLines,
@@ -634,5 +635,29 @@ describe('liveSignal', () => {
       usage: usage('s1', 0),
     });
     expect(liveSignal(state)).toBe(2);
+  });
+});
+
+describe('mergeLive', () => {
+  it('overlays live status/model updates onto the persisted session', () => {
+    const persisted = session('s1');
+    const live = {
+      ...initialLiveState,
+      sessions: {
+        s1: {
+          ...persisted,
+          status: 'completed' as const,
+          resolvedModel: 'gpt-5.4',
+        },
+      },
+    };
+    const merged = mergeLive(persisted, live);
+    expect(merged.status).toBe('completed');
+    expect(merged.resolvedModel).toBe('gpt-5.4');
+  });
+
+  it('returns the original object unchanged when there is no live entry', () => {
+    const persisted = session('s1');
+    expect(mergeLive(persisted, initialLiveState)).toBe(persisted);
   });
 });
