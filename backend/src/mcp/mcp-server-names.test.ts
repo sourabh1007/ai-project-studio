@@ -27,7 +27,9 @@ describe('enabledMcpServerNames', () => {
   it('returns an empty list when mcpServers is missing or malformed', () => {
     expect(enabledMcpServerNames({})).toEqual([]);
     expect(
-      enabledMcpServerNames({ mcpServers: [] as unknown as object }),
+      enabledMcpServerNames({
+        mcpServers: [] as unknown,
+      } as unknown as Parameters<typeof enabledMcpServerNames>[0]),
     ).toEqual([]);
   });
 });

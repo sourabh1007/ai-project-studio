@@ -111,6 +111,7 @@ describe('createApiRoutes', () => {
       'get /providers/:id/models',
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
+      'get /mcp/providers/:providerId/servers/:serverName/tools',
       'put /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
       'post /mcp/providers/:providerId/servers/:serverName/restart',

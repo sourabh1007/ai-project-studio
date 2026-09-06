@@ -26,6 +26,7 @@ import type {
   MoveFeatureInput,
   MoveNodeInput,
   McpApplyResult,
+  McpServerEntry,
   McpServerInput,
   ProviderInfo,
   ProviderMcpConfig,
@@ -401,6 +402,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMcpServers: (providerId: string) =>
       request<ProviderMcpConfig>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
+      ),
+    inspectMcpServer: (providerId: string, serverName: string) =>
+      request<McpServerEntry>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/tools`,
       ),
     putMcpServer: (providerId: string, input: McpServerInput) =>
       request<ProviderMcpConfig>(

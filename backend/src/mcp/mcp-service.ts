@@ -36,8 +36,18 @@ export interface McpServiceDeps {
 export interface McpService {
   /** Providers that currently expose MCP support, in registration order. */
   listProviders(): { id: string }[];
-  /** Current MCP config (path + servers) for a provider. */
+  /**
+   * Current MCP config (path + servers) for a provider. This is deliberately
+   * cheap: it never spawns a live MCP server, so the surface loads instantly.
+   * Each entry's tools are discovered on demand via {@link inspectServer}.
+   */
   getServers(providerId: string): Promise<ProviderMcpConfig>;
+  /**
+   * Live tool discovery for a single server, run on demand. This spawns the
+   * configured MCP server just long enough to list its tools, so it is only
+   * invoked when the user actually opens a server's tools (never on list load).
+   */
+  inspectServer(providerId: string, serverName: string): Promise<McpServerEntry>;
   /** Adds or updates a single MCP server entry, returning the new config. */
   putServer(providerId: string, input: McpServerInput): Promise<ProviderMcpConfig>;
   /** Enables/disables one discovered MCP tool in provider config. */
@@ -104,34 +114,27 @@ function isEnabledServer(spec: Record<string, unknown>): boolean {
 }
 
 /** Surfaces object-valued `mcpServers` entries as a sorted server list. */
-async function serversFromDocument(
+function serversFromDocument(
   document: McpConfigDocument | null,
-  inspect: (name: string, spec: Record<string, unknown>) => Promise<McpToolInspection>,
-): Promise<McpServerEntry[]> {
+): McpServerEntry[] {
   const map = document?.mcpServers;
   if (!isPlainObject(map)) {
     return [];
   }
-  const entries = Object.entries(map)
+  return Object.entries(map)
     .filter(([, spec]) => isPlainObject(spec))
-    .map(([name, spec]) => ({ name, spec: spec as Record<string, unknown> }))
+    .map(([name, spec]) => ({
+      name,
+      spec: spec as Record<string, unknown>,
+      // Tools are discovered lazily (see McpService.inspectServer). Listing the
+      // servers must never spawn a child process, so entries start "unprobed".
+      toolDiscovery: {
+        status: 'skipped' as const,
+        message: 'Open this server to discover its tools.',
+        output: [],
+      },
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return await Promise.all(
-    entries.map(async (entry) => {
-      const inspection = isEnabledServer(entry.spec)
-        ? await inspect(entry.name, entry.spec)
-        : skippedInspection('Server is disabled in provider config');
-      return {
-        ...entry,
-        tools: toolEntries(entry.spec, inspection),
-        toolDiscovery: {
-          status: inspection.status,
-          message: inspection.message,
-          output: inspection.output,
-        },
-      };
-    }),
-  );
 }
 
 export function createMcpService(deps: McpServiceDeps): McpService {
@@ -202,7 +205,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     }
   }
 
-  async function inspectServer(
+  async function probeTools(
     name: string,
     spec: Record<string, unknown>,
   ): Promise<McpToolInspection> {
@@ -222,16 +225,45 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     }
   }
 
-  async function toConfig(
+  /** Builds a fully-annotated entry from a completed inspection. */
+  function entryFrom(
+    name: string,
+    spec: Record<string, unknown>,
+    inspection: McpToolInspection,
+  ): McpServerEntry {
+    return {
+      name,
+      spec,
+      tools: toolEntries(spec, inspection),
+      toolDiscovery: {
+        status: inspection.status,
+        message: inspection.message,
+        output: inspection.output,
+      },
+    };
+  }
+
+  /** Probes one already-resolved server spec, honoring the disabled flag. */
+  async function inspectOne(
+    name: string,
+    spec: Record<string, unknown>,
+  ): Promise<McpServerEntry> {
+    const inspection = isEnabledServer(spec)
+      ? await probeTools(name, spec)
+      : skippedInspection('Server is disabled in provider config');
+    return entryFrom(name, spec, inspection);
+  }
+
+  function toConfig(
     providerId: string,
     configPath: string,
     document: McpConfigDocument | null,
-  ): Promise<ProviderMcpConfig> {
+  ): ProviderMcpConfig {
     return {
       providerId,
       configPath,
       exists: document !== null,
-      servers: await serversFromDocument(document, inspectServer),
+      servers: serversFromDocument(document),
     };
   }
 
@@ -271,10 +303,17 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     support: McpSupport,
     configPath: string,
     document: McpConfigDocument,
-    serverName: string,
+    server: McpServerEntry,
   ): Promise<McpApplyResult> {
-    const config = await toConfig(providerId, configPath, document);
-    const server = config.servers.find((entry) => entry.name === serverName)!;
+    const base = toConfig(providerId, configPath, document);
+    const config: ProviderMcpConfig = {
+      ...base,
+      // Swap the freshly-probed entry into the otherwise-lazy list so the
+      // caller sees this server's live tools without probing every sibling.
+      servers: base.servers.map((entry) =>
+        entry.name === server.name ? server : entry,
+      ),
+    };
     const reloaded = liveReload(providerId, support);
     return {
       config,
@@ -299,7 +338,19 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       ensureEnabled();
       const support = requireSupport(providerId);
       const { configPath, document } = await readConfig(providerId, support);
-      return await toConfig(providerId, configPath, document);
+      return toConfig(providerId, configPath, document);
+    },
+
+    async inspectServer(providerId, serverNameInput) {
+      ensureEnabled();
+      const support = requireSupport(providerId);
+      const serverName = serverNameInput.trim();
+      if (!serverName) {
+        throw new ValidationError('MCP server name is required');
+      }
+      const { document } = await readConfig(providerId, support);
+      const spec = serverSpec(document, serverName);
+      return await inspectOne(serverName, spec);
     },
 
     async putServer(providerId, input) {
@@ -320,7 +371,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         mcpServers: { ...existing, [name]: input.spec },
       };
       await deps.files.write(configPath, next);
-      return await toConfig(providerId, configPath, next);
+      return toConfig(providerId, configPath, next);
     },
 
     async setToolEnabled(providerId, input) {
@@ -337,7 +388,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       const { configPath, document } = await readConfig(providerId, support);
       const spec = serverSpec(document, serverName);
       const current = document!;
-      const inspection = await inspectServer(serverName, spec);
+      const inspection = await probeTools(serverName, spec);
       if (inspection.status !== 'ok') {
         throw new ValidationError(
           inspection.message ?? 'MCP tool discovery failed',
@@ -368,7 +419,9 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         mcpServers: { ...existing, [serverName]: nextSpec },
       };
       await deps.files.write(configPath, next);
-      return await resultFor(providerId, support, configPath, next, serverName);
+      // Reuse the inspection we already ran; the enabled flags follow nextSpec.
+      const server = entryFrom(serverName, nextSpec, inspection);
+      return await resultFor(providerId, support, configPath, next, server);
     },
 
     async restartServer(providerId, serverNameInput) {
@@ -379,9 +432,10 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         throw new ValidationError('MCP server name is required');
       }
       const { configPath, document } = await readConfig(providerId, support);
-      serverSpec(document, serverName);
+      const spec = serverSpec(document, serverName);
       const current = document!;
-      return await resultFor(providerId, support, configPath, current, serverName);
+      const server = await inspectOne(serverName, spec);
+      return await resultFor(providerId, support, configPath, current, server);
     },
   };
 }

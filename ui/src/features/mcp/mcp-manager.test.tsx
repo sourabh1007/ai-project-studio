@@ -15,17 +15,26 @@ function client(overrides: Partial<ApiClient> = {}): ApiClient {
         {
           name: 'Azure',
           spec: { type: 'stdio', command: 'npx', args: ['@azure/mcp'] },
-          tools: [
-            { name: 'read', description: 'Read things', enabled: true },
-            { name: 'write', description: null, enabled: false },
-          ],
           toolDiscovery: {
-            status: 'ok',
-            message: null,
-            output: ['device code ABCD'],
+            status: 'skipped',
+            message: 'Open this server to discover its tools.',
+            output: [],
           },
         },
       ],
+    }),
+    inspectMcpServer: vi.fn().mockResolvedValue({
+      name: 'Azure',
+      spec: { type: 'stdio', command: 'npx', args: ['@azure/mcp'] },
+      tools: [
+        { name: 'read', description: 'Read things', enabled: true },
+        { name: 'write', description: null, enabled: false },
+      ],
+      toolDiscovery: {
+        status: 'ok',
+        message: null,
+        output: ['device code ABCD'],
+      },
     }),
     setMcpToolEnabled: vi.fn().mockResolvedValue({
       config: {

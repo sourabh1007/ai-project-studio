@@ -17,6 +17,12 @@ function serviceStub(overrides: Partial<McpService> = {}): McpService {
       exists: true,
       servers: [],
     })),
+    inspectServer: vi.fn(async () => ({
+      name: 'a',
+      spec: { command: 'a' },
+      tools: [{ name: 'read', description: null, enabled: true }],
+      toolDiscovery: { status: 'ok' as const, message: null, output: [] },
+    })),
     putServer: vi.fn(async () => ({
       providerId: 'agency',
       configPath: '/x/mcp-config.json',
@@ -61,6 +67,7 @@ describe('createMcpRoutes', () => {
     expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
+      'get /mcp/providers/:providerId/servers/:serverName/tools',
       'put /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
       'post /mcp/providers/:providerId/servers/:serverName/restart',
@@ -84,6 +91,19 @@ describe('createMcpRoutes', () => {
     );
     const result = await route.handler(req({ params: { providerId: 'agency' } }));
     expect(mcp.getServers).toHaveBeenCalledWith('agency');
+    expect(result.status).toBe(200);
+  });
+
+  it('inspects a single server’s tools on demand', async () => {
+    const mcp = serviceStub();
+    const route = routeFor(
+      createMcpRoutes({ mcp }),
+      'get /mcp/providers/:providerId/servers/:serverName/tools',
+    );
+    const result = await route.handler(
+      req({ params: { providerId: 'agency', serverName: 'a' } }),
+    );
+    expect(mcp.inspectServer).toHaveBeenCalledWith('agency', 'a');
     expect(result.status).toBe(200);
   });
 

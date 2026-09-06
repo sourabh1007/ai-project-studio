@@ -327,6 +327,22 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers');
   });
 
+  it('inspects a single MCP server, encoding path params', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        name: 'Azure MCP',
+        spec: {},
+        tools: [],
+        toolDiscovery: { status: 'ok', message: null, output: [] },
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.inspectMcpServer('a/b', 'Azure MCP');
+    expect(calls[0][0]).toBe(
+      '/api/mcp/providers/a%2Fb/servers/Azure%20MCP/tools',
+    );
+  });
+
   it('adds/updates an MCP server with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({

@@ -36,6 +36,17 @@ export function createMcpRoutes(deps: McpControllerDeps): Route[] {
       }),
     },
     {
+      method: 'get',
+      path: '/mcp/providers/:providerId/servers/:serverName/tools',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.mcp.inspectServer(
+          req.params.providerId,
+          req.params.serverName,
+        ),
+      }),
+    },
+    {
       method: 'put',
       path: '/mcp/providers/:providerId/servers',
       handler: async (req) => {
