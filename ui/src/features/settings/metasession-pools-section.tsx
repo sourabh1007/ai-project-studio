@@ -20,14 +20,23 @@ import {
 import { Loader, Spinner } from '../../components/loading.js';
 import { ErrorState } from '../../components/error-state.js';
 import type {
-  ConfigValue,
   MetaModelOption,
   MetaPoolStat,
   MetaSessionInfo,
   MetaSessionState,
-  MetaSessionTurn,
   MetaSettings,
 } from '../../lib/types.js';
+import {
+  formatClock,
+  formatDuration,
+  formatTokens,
+  KNOWN_PURPOSES,
+  purposeLabel,
+  readWarmPool,
+  sessionSeq,
+  turnWork,
+  type WarmPoolConfig,
+} from '../../lib/metasession-format.js';
 
 /** How often the live warm-pool status is refreshed while the page is open. */
 const POLL_MS = 4000;
@@ -38,34 +47,9 @@ const CONVERGING_POLL_MS = 1000;
 /** Milliseconds an exiting session chip lingers so its removal animates. */
 const EXIT_MS = 320;
 
-/**
- * Purposes the IDE routes metasession work to. `general` is the required
- * fallback for any request without a dedicated pool; the others are workflow
- * routing keys used across the app. Surfaced so users don't have to guess what
- * to type when adding a pool.
- */
-const KNOWN_PURPOSES: Array<{ purpose: string; label: string; hint: string }> = [
-  {
-    purpose: 'general',
-    label: 'General',
-    hint: 'Fallback for every AI turn without a dedicated pool — PR review, summaries, repo context, review board, monitors.',
-  },
-  {
-    purpose: 'self-recovery',
-    label: 'Self-recovery',
-    hint: 'Read-only diagnosis turns that analyze a stuck session and suggest a fix.',
-  },
-];
-
 interface PoolDraft {
   purpose: string;
   size: string;
-}
-
-interface WarmPoolConfig {
-  enabled: boolean;
-  pools: Array<{ purpose: string; size: number }>;
-  [key: string]: ConfigValue;
 }
 
 interface DesktopBridge {
@@ -74,17 +58,6 @@ interface DesktopBridge {
 
 function desktopBridge(): DesktopBridge | undefined {
   return (window as unknown as { desktop?: DesktopBridge }).desktop;
-}
-
-function readWarmPool(value: ConfigValue): WarmPoolConfig | null {
-  if (value === null || typeof value !== 'object') {
-    return null;
-  }
-  const wp = value as Record<string, unknown>;
-  if (typeof wp.enabled !== 'boolean' || !Array.isArray(wp.pools)) {
-    return null;
-  }
-  return wp as unknown as WarmPoolConfig;
 }
 
 const STATE_LABEL: Record<MetaSessionState, string> = {
@@ -118,54 +91,6 @@ const STATE_READINESS: Record<
     note: 'Currently handling a turn — it takes the next command once this one finishes.',
   },
 };
-
-function sessionSeq(id: string): number {
-  const n = Number.parseInt(id.replace(/^\D+/, ''), 10);
-  return Number.isNaN(n) ? 0 : n;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) {
-    return '0s';
-  }
-  const total = Math.floor(ms / 1000);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const parts: string[] = [];
-  if (h > 0) {
-    parts.push(`${h}h`);
-  }
-  if (h > 0 || m > 0) {
-    parts.push(`${m}m`);
-  }
-  parts.push(`${s}s`);
-  return parts.join(' ');
-}
-
-function formatClock(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString();
-}
-
-/** Formats a token count compactly (e.g. 1234 → "1,234", 0 → "0"). */
-function formatTokens(n: number): string {
-  return n.toLocaleString();
-}
-
-/** Human label for a routing purpose (the "where in the IDE" of a turn). */
-function purposeLabel(purpose: string): string {
-  const known = KNOWN_PURPOSES.find((p) => p.purpose === purpose);
-  return known ? known.label : purpose;
-}
-
-/**
- * What a turn was used for: the caller-supplied work label when present (e.g.
- * "Repository analysis"), otherwise the coarse routing purpose. This is what
- * turns the opaque "General" rows into a real description of the work.
- */
-function turnWork(turn: MetaSessionTurn): string {
-  return turn.label ?? purposeLabel(turn.purpose);
-}
 
 /**
  * Merges the live session list with recently-removed sessions so additions
