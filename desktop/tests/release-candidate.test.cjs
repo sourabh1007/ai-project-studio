@@ -100,19 +100,26 @@ test('release workflow gates prereleases without publishing stable updates', () 
   assert.match(workflow, /Incomplete Azure Trusted Signing configuration/);
   assert.match(workflow, /contents: read/);
   const parsed = yaml.load(workflow);
+  for (const job of [parsed.jobs.verify, parsed.jobs.build]) {
+    const setup = job.steps.find((step) => step.uses?.startsWith('actions/setup-node@'));
+    assert.equal(setup.uses, 'actions/setup-node@v6');
+    assert.equal(setup.with['node-version'], '24.20.0');
+  }
   assert.deepEqual(parsed.permissions, { contents: 'read' });
   assert.doesNotMatch(JSON.stringify(parsed.jobs.build), /contents: write|gh release|--publish always/);
   const publish = parsed.jobs['publish-prerelease'];
   assert.equal(publish.needs, 'build');
   assert.equal(publish.if, "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')");
   assert.deepEqual(publish.permissions, { contents: 'write' });
+  assert.equal(publish.steps.find((step) => step.uses?.startsWith('actions/download-artifact@')).with['merge-multiple'], false);
+  assert.equal(publish.steps.find((step) => step.uses?.startsWith('actions/download-artifact@')).uses, 'actions/download-artifact@v7');
   const script = publish.steps.find((step) => step.run).run;
   assert.match(script, /gh release create .*--verify-tag --draft --prerelease/);
   assert.match(script, /gh release edit .*--draft=false --prerelease --latest=false/);
   assert.match(script, /manifest\.sourceSha !== process\.env\.GITHUB_SHA/);
   assert.match(script, /digest\('hex'\) !== artifact\.sha256/);
   const upload = script.split('\n').find((line) => line.includes('gh release upload'));
-  assert.match(upload, /artifacts\/\*\.exe artifacts\/\*\.dmg artifacts\/candidate-\*\.json/);
+  assert.match(upload, /artifacts\/\*\/\*\.exe artifacts\/\*\/\*\.dmg artifacts\/\*\/candidate-\*\.json/);
   assert.doesNotMatch(upload, /\.yml|\.blockmap/);
   const root = path.join(__dirname, '..', '..');
   const config = yaml.load(fs.readFileSync(path.join(root, 'desktop', 'electron-builder.yml'), 'utf8'));
@@ -120,6 +127,37 @@ test('release workflow gates prereleases without publishing stable updates', () 
   const desktop = JSON.parse(fs.readFileSync(path.join(root, 'desktop', 'package.json'), 'utf8'));
   assert.match(desktop.scripts['dist:win'], /--publish never$/);
   assert.match(desktop.scripts['dist:mac'], /--publish never$/);
+});
+
+test('publication verifies both platforms independently even when diagnostic filenames collide', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-publish-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'package.json'), '{"version":"1.2.3"}');
+  for (const [platform, label] of [['win32', 'Windows'], ['darwin', 'macOS']]) {
+    const f = fixture(t, platform);
+    fs.writeFileSync(path.join(f.releaseDir, 'builder-debug.yml'), `${platform} build configuration`);
+    await writeCandidateManifest(f.options);
+    fs.cpSync(f.releaseDir, path.join(root, 'artifacts', `ai-project-studio-${label}`), { recursive: true });
+  }
+  const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8'));
+  const run = workflow.jobs['publish-prerelease'].steps.find((step) => step.run).run;
+  const verification = run.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\nNODE/)[1];
+  const verify = () => spawnSync(process.execPath, ['-e', verification], {
+    cwd: root, encoding: 'utf8', env: {
+      ...process.env, GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '123',
+      GITHUB_RUN_ATTEMPT: '2', GITHUB_REF_NAME: 'v1.2.3',
+    },
+  });
+  const valid = verify();
+  assert.equal(valid.status, 0, valid.stderr);
+  for (const [platform, label] of [['win32', 'Windows'], ['darwin', 'macOS']]) {
+    const diagnostic = path.join(root, 'artifacts', `ai-project-studio-${label}`, 'builder-debug.yml');
+    fs.writeFileSync(diagnostic, 'changed bytes');
+    const changed = verify();
+    assert.notEqual(changed.status, 0);
+    assert.match(changed.stderr, /Release artifact mismatch: builder-debug\.yml/);
+    fs.writeFileSync(diagnostic, `${platform} build configuration`);
+  }
 });
 
 test('Windows candidate build rejects partial signing without invoking the builder', {

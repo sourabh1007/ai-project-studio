@@ -17,12 +17,17 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // Split the two heaviest dependency trees into their own chunks so the
-        // main bundle isn't a single ~900 kB file; charts and the terminal are
-        // only needed on specific views and can load/cache independently.
-        manualChunks: {
-          recharts: ['recharts'],
-          xterm: ['@xterm/xterm', '@xterm/addon-fit'],
+        // Keep shared React code separate so loading the app does not also
+        // pull in the charts vendor chunk, and each chunk stays below 500 kB.
+        onlyExplicitManualChunks: true,
+        manualChunks(id) {
+          const modulePath = id.replaceAll('\\', '/');
+          if (modulePath.includes('commonjsHelpers')) return 'vendor-runtime';
+          if (/\/node_modules\/(react|react-dom|react-is|scheduler|use-sync-external-store)\//.test(modulePath)) {
+            return 'react';
+          }
+          if (/\/node_modules\/recharts\//.test(modulePath)) return 'recharts';
+          if (/\/node_modules\/@xterm\//.test(modulePath)) return 'xterm';
         },
       },
     },

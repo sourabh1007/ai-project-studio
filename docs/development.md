@@ -62,6 +62,15 @@ scripts; native/installer and supported-platform qualification remain separate.
 
 ## Native dependency installation
 
+CI and installer builds use Node.js 24.20.0. Its SQLite module no longer emits
+the experimental warning produced by older supported Node runtimes. The
+workflow uses Node-24-compatible GitHub Actions rather than forcing retired
+action runtimes or suppressing their warnings.
+
+Development tooling requires Node.js 22.12 or newer; use the pinned CI version
+for reproducible local builds. The installed backend's minimum runtime remains
+Node.js 22.5.
+
 On macOS, the backend's installation hook restores executable permission on
 `node-pty`'s native spawn helper (the 1.1.0 npm tarball ships it as `0644`).
 Runtime staging includes the hook so both workspace installs and the packaged
@@ -72,6 +81,11 @@ backend's production dependency install apply the same repair.
 Installers are built by the **Release prerelease** workflow (`.github/workflows/release.yml`) when you push a `v*` tag or dispatch it manually. Verification includes Windows, macOS, and Linux; both shipped installer platforms depend on the complete verification matrix. Manual dispatch retains internal candidates only. A tag push publishes the exact candidate installers as an explicitly unsigned, unqualified GitHub prerelease after every verification and build job succeeds. Only the publication job has repository write permission; it checks artifact hashes and provenance, uploads through a draft, and never publishes update-feed assets or marks the prerelease latest.
 
 Each artifact bundle includes `candidate-<platform>.json` with the exact source SHA, CI run/attempt, unchanged staged-lock hash, and installer/feed hashes and sizes. The recorded Node version/ABI describes the **build host**, not proof of the packaged runtime. Native runtime, signature, and release qualification are explicitly pending.
+
+The publication job keeps Windows and macOS downloads in separate directories.
+Shared filenames such as `builder-debug.yml` must not overwrite each other before
+each platform's manifest is verified. Only installers and provenance manifests
+are published; diagnostic files and update feeds remain internal artifacts.
 
 **Channel policy:** unsigned or unqualified builds may be distributed as explicitly labeled prereleases, not stable production releases. Version 0.11.0 uses this user-authorized unsigned distribution path. The candidate manifests retain their build-stage internal channel and pending qualification/signature status; publication does not qualify them. Production promotion still requires signature verification (Windows signing; macOS Developer ID signing and notarization), packaged/native and upgrade/restore evidence for every shipped platform, and results tied to these exact artifact hashes. Promote the qualified bytes without rebuilding; a changed artifact invalidates its qualification. There is no automatic stable promotion path while these gates remain open.
 

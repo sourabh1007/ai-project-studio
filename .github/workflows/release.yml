@@ -27,9 +27,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24.20.0'
           cache: 'npm'
       - name: Install dependencies
         run: npm ci
@@ -61,9 +61,9 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24.20.0'
           cache: 'npm'
 
       - name: Install dependencies
@@ -104,7 +104,7 @@ jobs:
               "-c.win.azureSignOptions.certificateProfileName=$env:AZURE_CODE_SIGNING_PROFILE"
             )
           } else {
-            Write-Warning 'Signing is not configured: producing an UNSIGNED INTERNAL candidate, not a production release.'
+            Write-Host 'Signing intentionally omitted: producing an UNSIGNED INTERNAL candidate, not a production release.'
           }
           npm run dist:win -- @signArgs
         env:
@@ -156,11 +156,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - name: Download exact candidate artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: ai-project-studio-*
           path: artifacts
-          merge-multiple: true
+          merge-multiple: false
       - name: Verify provenance and publish installers without update feeds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,7 +173,9 @@ jobs:
           const version = require('./package.json').version;
           if (process.env.GITHUB_REF_NAME !== `v${version}`) throw new Error('Release tag/version mismatch');
           for (const platform of ['win32', 'darwin']) {
-            const manifest = JSON.parse(fs.readFileSync(`artifacts/candidate-${platform}.json`, 'utf8'));
+            const label = platform === 'win32' ? 'Windows' : 'macOS';
+            const directory = `artifacts/ai-project-studio-${label}`;
+            const manifest = JSON.parse(fs.readFileSync(`${directory}/candidate-${platform}.json`, 'utf8'));
             if (manifest.sourceSha !== process.env.GITHUB_SHA || manifest.version !== version ||
                 manifest.ci.runId !== process.env.GITHUB_RUN_ID ||
                 manifest.ci.runAttempt !== process.env.GITHUB_RUN_ATTEMPT) {
@@ -181,7 +183,7 @@ jobs:
             }
             for (const artifact of manifest.artifacts) {
               if (!/^[^/\\]+$/.test(artifact.name)) throw new Error('Invalid artifact name');
-              const bytes = fs.readFileSync(`artifacts/${artifact.name}`);
+              const bytes = fs.readFileSync(`${directory}/${artifact.name}`);
               if (bytes.length !== artifact.bytes ||
                   crypto.createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) {
                 throw new Error(`Release artifact mismatch: ${artifact.name}`);
@@ -193,5 +195,5 @@ jobs:
           gh release create "$tag" --verify-tag --draft --prerelease \
             --title "$tag (unsigned prerelease)" \
             --notes-file "docs/releases/${tag#v}.md"
-          gh release upload "$tag" artifacts/*.exe artifacts/*.dmg artifacts/candidate-*.json
+          gh release upload "$tag" artifacts/*/*.exe artifacts/*/*.dmg artifacts/*/candidate-*.json
           gh release edit "$tag" --draft=false --prerelease --latest=false
