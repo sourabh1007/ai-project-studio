@@ -176,7 +176,7 @@ describe('ReviewBoardPage sign-off identity', () => {
       await screen.findByText(/sign-off is unavailable because the current board/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Mark this perspective reviewed' }),
+      await screen.findByRole('button', { name: 'Mark this perspective reviewed' }),
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Mark PR reviewed' })).toBeDisabled();
   });
@@ -196,7 +196,10 @@ describe('ReviewBoardPage sign-off identity', () => {
     );
 
     await screen.findByText('0/1 reviewed');
-    fireEvent.click(screen.getByRole('button', { name: 'Mark this perspective reviewed' }));
+    // The header renders before the effect selects and renders a perspective.
+    const perspectiveReview = await screen.findByRole('button', { name: 'Mark this perspective reviewed' });
+    await waitFor(() => expect(perspectiveReview).toBeEnabled());
+    fireEvent.click(perspectiveReview);
     await screen.findByText('1/1 reviewed');
     fireEvent.click(screen.getByRole('button', { name: 'Mark PR reviewed' }));
     await screen.findByRole('button', { name: 'Re-open PR' });
@@ -233,7 +236,9 @@ describe('ReviewBoardPage sign-off identity', () => {
     );
 
     await screen.findByText('Security');
-    expect(screen.getByRole('button', { name: 'Mark this perspective reviewed' })).toBeEnabled();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Mark this perspective reviewed' })).toBeEnabled(),
+    );
 
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
