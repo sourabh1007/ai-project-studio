@@ -27,6 +27,7 @@ export function stageRuntime(rootDir, buildDir) {
     }
     return [workspace, readFileSync(join(rootDir, workspace, 'package.json'))];
   });
+  const ptyInstallScript = readFileSync(join(rootDir, 'backend', 'scripts', 'fix-pty-permissions.cjs'));
 
   rmSync(buildDir, { recursive: true, force: true });
   const runtimeDir = join(buildDir, 'backend');
@@ -39,6 +40,8 @@ export function stageRuntime(rootDir, buildDir) {
     mkdirSync(join(runtimeDir, workspace), { recursive: true });
     writeFileSync(join(runtimeDir, workspace, 'package.json'), manifest);
   }
+  mkdirSync(join(runtimeDir, 'backend', 'scripts'), { recursive: true });
+  writeFileSync(join(runtimeDir, 'backend', 'scripts', 'fix-pty-permissions.cjs'), ptyInstallScript);
   cpSync(join(rootDir, 'backend', 'dist'), join(runtimeDir, 'dist'), { recursive: true });
   cpSync(join(rootDir, 'ui', 'dist'), join(buildDir, 'ui'), { recursive: true });
 

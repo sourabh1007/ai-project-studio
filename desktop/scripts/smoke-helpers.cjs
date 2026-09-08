@@ -94,8 +94,10 @@ function launchOwned(executable, args, fixture) {
   return child;
 }
 
-async function waitFor(probe, timeoutMs, { intervalMs = 50, signal } = {}) {
+async function waitFor(probe, timeoutMs, { intervalMs = 50, signal, diagnostics } = {}) {
   const deadline = Date.now() + timeoutMs;
+  const timeoutError = () => new Error('Timed out waiting for fixture readiness' +
+    (diagnostics ? `: ${diagnostics()}` : ''));
   do {
     signal?.throwIfAborted();
     let timer;
@@ -103,7 +105,7 @@ async function waitFor(probe, timeoutMs, { intervalMs = 50, signal } = {}) {
     const result = await Promise.race([
       Promise.resolve().then(probe),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Timed out waiting for fixture readiness')),
+        timer = setTimeout(() => reject(timeoutError()),
           Math.max(0, deadline - Date.now()));
         abort = () => reject(signal.reason);
         signal?.addEventListener('abort', abort, { once: true });
@@ -113,7 +115,7 @@ async function waitFor(probe, timeoutMs, { intervalMs = 50, signal } = {}) {
       signal?.removeEventListener('abort', abort);
     });
     if (result) return result;
-    if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture readiness');
+    if (Date.now() >= deadline) throw timeoutError();
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   } while (true);
 }

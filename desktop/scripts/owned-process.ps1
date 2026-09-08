@@ -1,5 +1,6 @@
 param([Parameter(Mandatory = $true)][string]$LaunchFile)
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('SMOKE_CONTROLLER=compiling')
 
 # Suspended creation closes the spawn/assign race: every descendant belongs to
 # this job. Controller stdin EOF (including a crash) closes the job, not a
@@ -7,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -54,19 +56,28 @@ public static class SmokeJob {
     static extern IntPtr GetStdHandle(int which);
     [DllImport("kernel32.dll")]
     static extern bool TerminateProcess(IntPtr process, uint code);
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetExitCodeProcess(IntPtr process, out uint code);
     [DllImport("kernel32.dll")]
     static extern bool CloseHandle(IntPtr handle);
 
-    public static void Run(string executable, string command, string cwd) {
+    static Win32Exception LastError(string operation) {
+        int code = Marshal.GetLastWin32Error();
+        return new Win32Exception(code, operation + " failed (Win32 " + code + "): " +
+            new Win32Exception(code).Message);
+    }
+
+    public static int Run(string executable, string command, string cwd) {
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero) throw new Win32Exception();
+        if (job == IntPtr.Zero) throw LastError("CreateJobObject");
         ProcessInfo process = new ProcessInfo();
         try {
             ExtendedLimit limits = new ExtendedLimit();
             limits.basic.flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(limits))) throw new Win32Exception();
+            if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(limits)))
+                throw LastError("SetInformationJobObject");
             Startup startup = new Startup();
             startup.size = Marshal.SizeOf(startup);
             startup.flags = 0x100; // STARTF_USESTDHANDLES
@@ -74,12 +85,28 @@ public static class SmokeJob {
             startup.stdout = GetStdHandle(-11);
             startup.stderr = GetStdHandle(-12);
             if (!CreateProcess(executable, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero,
-                true, 4, IntPtr.Zero, cwd, ref startup, out process)) throw new Win32Exception();
-            if (!AssignProcessToJobObject(job, process.process)) throw new Win32Exception();
-            if (ResumeThread(process.thread) == UInt32.MaxValue) throw new Win32Exception();
+                true, 4, IntPtr.Zero, cwd, ref startup, out process))
+                throw LastError("CreateProcess");
+            if (!AssignProcessToJobObject(job, process.process))
+                throw LastError("AssignProcessToJobObject");
+            if (ResumeThread(process.thread) == UInt32.MaxValue)
+                throw LastError("ResumeThread");
             Console.WriteLine("SMOKE_PID=" + process.pid);
             Console.Out.Flush();
-            Task.Run(() => Console.ReadLine()).Wait(90000);
+            Task<string> input = Task.Run(() => Console.ReadLine());
+            Stopwatch lifetime = Stopwatch.StartNew();
+            while (!input.IsCompleted && lifetime.ElapsedMilliseconds < 90000) {
+                uint status = WaitForSingleObject(process.process, 50);
+                if (status == UInt32.MaxValue)
+                    throw LastError("WaitForSingleObject");
+                if (status != 0) continue;
+                uint code;
+                if (!GetExitCodeProcess(process.process, out code))
+                    throw LastError("GetExitCodeProcess");
+                Console.Error.WriteLine("SMOKE_EXIT=" + code);
+                return unchecked((int)code);
+            }
+            return 0;
         } finally {
             if (process.process != IntPtr.Zero) TerminateProcess(process.process, 0);
             CloseHandle(job);
@@ -94,4 +121,5 @@ public static class SmokeJob {
 '@
 
 $launch = Get-Content -LiteralPath $LaunchFile -Raw | ConvertFrom-Json
-[SmokeJob]::Run($launch.executable, $launch.commandLine, $launch.cwd)
+[Console]::Error.WriteLine('SMOKE_CONTROLLER=launching')
+exit [SmokeJob]::Run($launch.executable, $launch.commandLine, $launch.cwd)

@@ -19,6 +19,30 @@ function fixture(t, options) {
   return result;
 }
 
+function nativeFixture(t, args, executable = process.execPath) {
+  const f = fixture(t);
+  const child = launchOwned(executable, args, f);
+  t.after(() => killTree(child));
+  let stdout = '';
+  let stderr = '';
+  let error;
+  child.stdout.on('data', (chunk) => { stdout = (stdout + chunk.toString()).slice(-16384); });
+  child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16384); });
+  child.once('error', (cause) => { error = cause; });
+  const diagnostics = () => `node=${process.version}, controller=${child.pid}, ` +
+    `exit=${child.exitCode}, signal=${child.signalCode}, error=${error?.message || 'none'}\n` +
+    `stdout: ${stdout}\nstderr: ${stderr}`;
+  return {
+    f, child, diagnostics,
+    wait: (probe, timeoutMs) => waitFor(() => {
+      if (error || child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(`Native launcher exited before readiness: ${diagnostics()}`);
+      }
+      return probe();
+    }, timeoutMs, { diagnostics }),
+  };
+}
+
 test('loopback endpoints reject remote hosts, credentials, redirects and non-websocket schemes', () => {
   assert.equal(loopbackUrl('http://127.0.0.1:1234/').port, '1234');
   assert.equal(loopbackUrl('ws://127.0.0.1:1234/a', ['ws:']).pathname, '/a');
@@ -94,6 +118,11 @@ test('polling succeeds, times out, aborts and propagates fixture failures', asyn
   assert.equal(await waitFor(() => ++count === 3 && 'ready', 500, { intervalMs: 1 }), 'ready');
   await assert.rejects(waitFor(() => false, 5, { intervalMs: 1 }), /Timed out/);
   await assert.rejects(waitFor(() => new Promise(() => {}), 5), /Timed out/);
+  for (const probe of [() => false, () => new Promise(() => {})]) {
+    await assert.rejects(waitFor(probe, 5, {
+      intervalMs: 1, diagnostics: () => 'controller still compiling; stderr tail',
+    }), /Timed out.*controller still compiling; stderr tail/);
+  }
   await assert.rejects(waitFor(() => { throw new Error('fixture exited'); }, 500), /fixture exited/);
   await assert.rejects(waitFor(() => false, 500, { signal: AbortSignal.abort() }), /abort/i);
 });
@@ -281,29 +310,42 @@ test('CDP connects to a real ephemeral loopback websocket', async (t) => {
 });
 
 test('owned native launcher forwards stderr and cleans up descendant processes on controller EOF', async (t) => {
-  const f = fixture(t);
   const argumentsToPreserve = ['space here', 'quote"here', 'trailing\\'];
-  const child = launchOwned(process.execPath,
-    [path.join(__dirname, 'fixtures', 'owned-child.cjs'), ...argumentsToPreserve], f);
-  t.after(() => killTree(child));
-  let errors = '';
-  child.stderr.on('data', (chunk) => { errors += chunk.toString(); });
-  child.stdout.resume();
-  const record = await waitFor(() => {
-    if (child.exitCode !== null) throw new Error(`Native launcher exited: ${errors}`);
+  const { f, child, wait, diagnostics } = nativeFixture(t,
+    [path.join(__dirname, 'fixtures', 'owned-child.cjs'), ...argumentsToPreserve]);
+  const record = await wait(() => {
     const file = path.join(f.root, 'owned.json');
     return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8'));
   }, 15000);
   assert.deepEqual(record.arguments, argumentsToPreserve);
-  await waitFor(() => errors.includes('synthetic stderr forwarded'), 3000);
+  await wait(() => diagnostics().includes('synthetic stderr forwarded'), 3000);
   if (process.platform === 'win32') {
     child.stdin.end();
-    await waitFor(() => child.exitCode !== null, 8000);
+    await waitFor(() => child.exitCode !== null, 8000, { diagnostics });
   } else {
     await killTree(child);
   }
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   await waitFor(() => !alive(record.parent) && !alive(record.descendant), 5000);
+});
+
+test('owned native launcher reports early executable failure and cleans up its descendants', async (t) => {
+  const { f, child, wait } = nativeFixture(t,
+    [path.join(__dirname, 'fixtures', 'owned-child.cjs'), '--exit-parent']);
+  await assert.rejects(wait(() => false, 15000),
+    /Native launcher exited before readiness:[\s\S]*exit=42[\s\S]*synthetic stderr forwarded/);
+  assert.equal(child.exitCode, 42);
+  const record = JSON.parse(fs.readFileSync(path.join(f.root, 'owned.json'), 'utf8'));
+  if (process.platform !== 'win32') await killTree(child);
+  await waitFor(() => {
+    try { process.kill(record.descendant, 0); return false; } catch { return true; }
+  }, 5000);
+});
+
+test('owned native launcher exposes process creation errors before readiness', async (t) => {
+  const { wait } = nativeFixture(t, [], `${process.execPath}.missing`);
+  await assert.rejects(wait(() => false, 15000),
+    /Native launcher exited before readiness:[\s\S]*(CreateProcess failed \(Win32 2\)|ENOENT)/);
 });
 
 test('release packaging/publication requires build and coverage for the exact triggering SHA', () => {

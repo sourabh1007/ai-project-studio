@@ -13,5 +13,10 @@ if (process.argv.includes('--leaf')) {
     parent: process.pid, descendant: child.pid, arguments: process.argv.slice(2),
   }));
   process.stderr.write('synthetic stderr forwarded\n');
-  setTimeout(() => {}, 60_000);
+  if (process.argv.includes('--exit-parent')) {
+    child.unref();
+    process.exitCode = 42;
+  } else {
+    setTimeout(() => {}, 60_000);
+  }
 }

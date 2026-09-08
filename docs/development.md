@@ -60,6 +60,13 @@ with scripts disabled can check graph consistency, but **does not qualify native
 dependencies or the packaged application**. Release installation enables lifecycle
 scripts; native/installer and supported-platform qualification remain separate.
 
+## Native dependency installation
+
+On macOS, the backend's installation hook restores executable permission on
+`node-pty`'s native spawn helper (the 1.1.0 npm tarball ships it as `0644`).
+Runtime staging includes the hook so both workspace installs and the packaged
+backend's production dependency install apply the same repair.
+
 ## Code signing
 
 Installers are built by the **Release prerelease** workflow (`.github/workflows/release.yml`) when you push a `v*` tag or dispatch it manually. Verification includes Windows, macOS, and Linux; both shipped installer platforms depend on the complete verification matrix. Manual dispatch retains internal candidates only. A tag push publishes the exact candidate installers as an explicitly unsigned, unqualified GitHub prerelease after every verification and build job succeeds. Only the publication job has repository write permission; it checks artifact hashes and provenance, uploads through a draft, and never publishes update-feed assets or marks the prerelease latest.

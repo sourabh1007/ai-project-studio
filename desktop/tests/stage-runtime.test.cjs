@@ -25,6 +25,7 @@ async function fixture(t) {
   }
   write('package-lock.json', lock);
   write(path.join('backend', 'dist', 'main.js'), 'export const ready = true;\n');
+  write(path.join('backend', 'scripts', 'fix-pty-permissions.cjs'), 'module.exports = {};\n');
   write(path.join('ui', 'dist', 'index.html'), '<html>fixture</html>');
   write(path.join('docs', 'guide.md'), 'fixture docs');
   write('README.md', 'fixture readme');
@@ -41,6 +42,10 @@ test('staging preserves the exact lock graph and all workspace manifests with ru
   for (const workspace of f.manifest.workspaces) {
     assert.deepEqual(fs.readFileSync(path.join(runtime, workspace, 'package.json')), fs.readFileSync(path.join(f.root, workspace, 'package.json')));
   }
+  assert.deepEqual(
+    fs.readFileSync(path.join(runtime, 'backend', 'scripts', 'fix-pty-permissions.cjs')),
+    fs.readFileSync(path.join(f.root, 'backend', 'scripts', 'fix-pty-permissions.cjs')),
+  );
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime, 'package.json'))), { ...f.manifest, type: 'module' });
   const run = spawnSync(process.execPath, ['--input-type=module', '-e', "import { ready } from './dist/main.js'; if (!ready) process.exit(1)"], { cwd: runtime, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
@@ -49,7 +54,7 @@ test('staging preserves the exact lock graph and all workspace manifests with ru
 });
 
 test('invalid or missing lock graph fails before removing existing staged artifacts', async (t) => {
-  for (const invalid of ['old-lock', 'missing-workspace', 'unsafe-workspace', 'no-backend', 'missing-lock']) {
+  for (const invalid of ['old-lock', 'missing-workspace', 'unsafe-workspace', 'no-backend', 'missing-lock', 'missing-install-script']) {
     await t.test(invalid, async (t) => {
       const f = await fixture(t);
       f.stage();
@@ -60,6 +65,7 @@ test('invalid or missing lock graph fails before removing existing staged artifa
       f.write('package-lock.json', f.lock);
       f.write('package.json', f.manifest);
       if (invalid === 'missing-lock') fs.rmSync(path.join(f.root, 'package-lock.json'));
+      if (invalid === 'missing-install-script') fs.rmSync(path.join(f.root, 'backend', 'scripts', 'fix-pty-permissions.cjs'));
       assert.throws(f.stage);
       assert.equal(fs.readFileSync(path.join(f.build, 'backend', 'dist', 'main.js'), 'utf8'), 'export const ready = true;\n');
     });
