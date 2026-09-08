@@ -74,6 +74,15 @@ function quoteWindowsArg(value) {
   return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"';
 }
 
+function resolvePowerShell(env = process.env, exists = fs.existsSync) {
+  const modern = path.join(env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
+  // PowerShell 7 compiles the job controller in-process instead of launching
+  // the legacy .NET Framework compiler inside the isolated fixture environment.
+  if (exists(modern)) return modern;
+  return path.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
 function launchOwned(executable, args, fixture) {
   const cwd = path.join(fixture.root, 'work');
   const env = isolatedEnv(fixture);
@@ -84,13 +93,13 @@ function launchOwned(executable, args, fixture) {
   fs.writeFileSync(launchFile, JSON.stringify({
     executable, cwd, commandLine: [executable, ...args].map(quoteWindowsArg).join(' '),
   }));
-  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const powershell = resolvePowerShell();
   const child = spawn(powershell, [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(__dirname, 'owned-process.ps1'), '-LaunchFile', launchFile,
   ], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   child.smokeJob = true;
+  child.smokeControllerHost = powershell;
   return child;
 }
 
@@ -240,5 +249,5 @@ class Cdp {
 
 module.exports = {
   sha256, hashFile, loopbackUrl, boundedInteger, createFixture, isolatedEnv,
-  waitFor, inspectPackage, killTree, Cdp, quoteWindowsArg, launchOwned,
+  waitFor, inspectPackage, killTree, Cdp, quoteWindowsArg, launchOwned, resolvePowerShell,
 };

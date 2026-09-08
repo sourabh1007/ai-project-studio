@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const {
   sha256, hashFile, loopbackUrl, boundedInteger, createFixture, isolatedEnv,
-  waitFor, inspectPackage, killTree, Cdp, launchOwned, quoteWindowsArg,
+  waitFor, inspectPackage, killTree, Cdp, launchOwned, quoteWindowsArg, resolvePowerShell,
 } = require('../scripts/smoke-helpers.cjs');
 const { configure } = require('../regression-isolation.cjs');
 
@@ -30,6 +30,7 @@ function nativeFixture(t, args, executable = process.execPath) {
   child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16384); });
   child.once('error', (cause) => { error = cause; });
   const diagnostics = () => `node=${process.version}, controller=${child.pid}, ` +
+    `host=${child.smokeControllerHost || 'native'}, ` +
     `exit=${child.exitCode}, signal=${child.signalCode}, error=${error?.message || 'none'}\n` +
     `stdout: ${stdout}\nstderr: ${stderr}`;
   return {
@@ -64,6 +65,19 @@ test('Windows command-line quoting preserves whitespace, quotes and trailing bac
   assert.equal(quoteWindowsArg('a b'), '"a b"');
   assert.equal(quoteWindowsArg('say "hi"'), '"say \\"hi\\""');
   assert.equal(quoteWindowsArg('C:\\a b\\'), '"C:\\a b\\\\"');
+});
+
+test('native controller prefers an absolute PowerShell 7 host without relying on fixture PATH', () => {
+  const env = { ProgramFiles: 'program-files', SystemRoot: 'windows', PATH: 'untrusted-shims' };
+  const modern = path.join(env.ProgramFiles, 'PowerShell', '7', 'pwsh.exe');
+  assert.equal(resolvePowerShell(env, (candidate) => {
+    assert.equal(candidate, modern);
+    return true;
+  }), modern);
+  assert.equal(resolvePowerShell(env, () => false),
+    path.join('windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+  assert.equal(resolvePowerShell({ SYSTEMROOT: 'alternate-windows' }, () => false),
+    path.join('alternate-windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
 });
 
 test('fixture env does not inherit provider credentials, PATH, config, or Node injection', (t) => {

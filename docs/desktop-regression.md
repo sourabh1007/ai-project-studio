@@ -52,6 +52,9 @@ artifact. A smoke pass exits 0; a failed or interrupted trial exits 1.
 - Windows creates the application suspended, assigns it to a kill-on-close Job
   Object, then resumes it. Controller EOF/crash closes the job via the PowerShell
   supervisor; descendants cannot escape through an early parent exit. The helper
+  prefers the installed PowerShell 7 host, whose in-process compiler avoids the
+  legacy .NET Framework compiler's startup delay in isolated CI environments.
+  Windows PowerShell remains the fallback when PowerShell 7 is absent. The helper
   uses `-NoProfile` and does not run user shell initialization. POSIX uses a
   process group for normal/interrupt cleanup; abrupt controller SIGKILL cleanup
   is not qualified there. Fixture/supervisor watchdogs bound abandoned runs.
