@@ -146,28 +146,30 @@ npm run lint                           # typecheck the backend
 
 Every push and pull request runs the **CI** workflow (build + backend/UI coverage gates), so broken code can't land on `main`.
 
-To cut a release, push a version tag — the **Release** workflow builds installers for both platforms and attaches them to a GitHub Release:
+To build an internal candidate, push a version tag or manually dispatch the **Release candidate** workflow. It builds installers only after exact-commit build/coverage gates pass on Windows, macOS, and Linux, then retains the installers and provenance manifests as CI artifacts:
 
 ```bash
 git tag v0.8.0
 git push origin v0.8.0
 ```
 
-Produces:
-- **Windows** — `.exe` (NSIS installer), **code-signed with [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/)** so it installs without the "Unknown Publisher" SmartScreen warning.
-- **macOS** — `.dmg` (currently **unsigned** — no Apple Developer Program membership).
+Produces internal candidates, **not an automatic public release or update**:
+- **Windows** — `.exe` (NSIS installer), signed with [Azure Trusted Signing](https://learn.microsoft.com/azure/trusted-signing/) when all required signing settings are configured.
+- **macOS** — `.dmg` (currently **unsigned and un-notarized**, not eligible for production promotion).
+
+Production promotion requires native runtime, installer/upgrade/restore, and signature qualification for every shipped platform, tied to the exact artifact hashes in `candidate-<platform>.json`. Promote those qualified bytes without rebuilding. A passing source gate or a stable-looking version tag alone is not release approval; see the [channel policy](docs/development.md#code-signing).
 
 > The packaged app spawns the backend with the system Node runtime, so end users need **Node.js ≥ 22.5** installed.
 
-**Windows signing** activates automatically when the Azure Trusted Signing secrets are configured on the repo (see [docs/development.md → Code signing](docs/development.md#code-signing)); if they're absent the Release workflow still succeeds and just emits an unsigned installer.
+**Windows signing:** if all settings are absent, an explicitly unsigned internal candidate is permitted. Partial signing configuration fails instead of silently falling back to unsigned output.
 
-**macOS (unsigned) — bypass Gatekeeper on first launch.** Because the `.dmg` isn't signed/notarized, macOS shows *"AI Project Studio can't be opened because Apple cannot check it for malicious software."* To run it:
+**macOS internal testing only:** unsigned candidates may be blocked by Gatekeeper. Bypassing that warning is not production qualification. If you have independently established that an internal artifact is trustworthy, first-launch options include:
 > - **Right-click** the app in Finder → **Open** → **Open** (only needed the first time), or
 > - clear the quarantine flag: `xattr -dr com.apple.quarantine "/Applications/AI Project Studio.app"`.
 
 ### Automatic updates
 
-Once installed, the app keeps itself up to date from GitHub Releases (via `electron-updater`), so users don't have to revisit this page:
+Once installed, the app checks published GitHub Releases via `electron-updater`. Internal CI candidates are not published to this feed:
 
 - It checks for updates on launch and periodically in the background, then **notifies you inside the app** — a top banner and a **Settings ▸ About ▸ Software updates** panel show the current version, the available version, and release notes.
 - **Windows:** download with one click (live progress), then **Restart & install** — no browser required. Your work is signalled to save before the relaunch.

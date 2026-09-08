@@ -23,6 +23,7 @@ if (process.env.VITEST_POOL_ID === '1' && process.env.VITEST_WORKER_ID === '1') 
     import('./error-model.test.js'),
     import('./failure-log.test.js'),
     import('./feature-color.test.js'),
+    import('./focus-ownership.test.js'),
     import('./format.test.js'),
     import('./keyboard-shortcuts.test.js'),
     import('./markdown.test.js'),

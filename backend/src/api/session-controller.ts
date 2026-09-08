@@ -83,6 +83,7 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
           ...input,
           prompt: input.prompt,
           cwd: pinnedCwd ?? input.cwd,
+          signal: req.signal,
         });
         launched.completion.catch((error) =>
           deps.logger.error('Session run failed', error),

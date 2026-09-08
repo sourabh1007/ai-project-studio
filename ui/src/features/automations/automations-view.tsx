@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import type { LiveState } from '../../lib/stream.js';
 import { useAutomations } from '../../hooks/use-automations.js';
-import type { Automation, AutomationRun, Subagent } from '../../lib/types.js';
+import type {
+  Automation,
+  AutomationRun,
+  RunAutomationInput,
+  Subagent,
+} from '../../lib/types.js';
 import {
   groupAutomations,
   sortSubagents,
@@ -18,6 +23,7 @@ import {
   canPause,
   canResume,
   canCancel,
+  canRunNow,
   needsAuth,
   progressPercent,
   etaLabel,
@@ -33,6 +39,7 @@ import {
   ErrorText,
   IconBadge,
   StatusBadge,
+  ConfirmDialog,
 } from '../../components/ui.js';
 import { SkeletonCards } from '../../components/loading.js';
 import {
@@ -48,6 +55,7 @@ import {
   StopIcon,
   ChevronIcon,
   LogsIcon,
+  WarningIcon,
 } from '../../components/icons.js';
 
 type LifecycleAction = 'pause' | 'resume' | 'cancel' | 'run' | 'delete';
@@ -60,9 +68,14 @@ export function AutomationsView({ live }: { live: LiveState }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const nowMs = Date.now();
 
-  async function act(id: string, action: LifecycleAction) {
+  async function act(
+    id: string,
+    action: LifecycleAction,
+    options?: RunAutomationInput,
+  ): Promise<string | null> {
     setBusyKey(`${action}:${id}`);
     setActionError(null);
+    let message: string | null = null;
     try {
       if (action === 'pause') {
         await api.pauseAutomation(id);
@@ -71,16 +84,18 @@ export function AutomationsView({ live }: { live: LiveState }) {
       } else if (action === 'cancel') {
         await api.cancelAutomation(id);
       } else if (action === 'run') {
-        await api.runAutomation(id);
+        await api.runAutomation(id, options);
       } else {
         await api.deleteAutomation(id);
       }
       reload();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      message = err instanceof Error ? err.message : String(err);
+      setActionError(message);
     } finally {
       setBusyKey(null);
     }
+    return message;
   }
 
   async function changeInterval(id: string, intervalMs: number) {
@@ -244,14 +259,21 @@ function AutomationCard({
   automation: Automation;
   nowMs: number;
   busyKey: string | null;
-  onAction: (id: string, action: LifecycleAction) => void;
+  onAction: (
+    id: string,
+    action: LifecycleAction,
+    options?: RunAutomationInput,
+  ) => Promise<string | null>;
   onInterval: (id: string, intervalMs: number) => void;
 }) {
   const api = useApi();
   const [logsOpen, setLogsOpen] = useState(false);
+  const [confirmingRetry, setConfirmingRetry] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationRun[] | null>(null);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
+  const logsRequestId = useRef(0);
 
   const countdown = nextRunLabel(automation, nowMs);
   const steps = automation.plannedSteps;
@@ -259,22 +281,76 @@ function AutomationCard({
   const eta = etaLabel(automation);
   const currentCall = activeStepLabel(automation);
   const editable = canCancel(automation.status);
+  const runnable = canRunNow(automation);
+  const logsVersion = useMemo(
+    () =>
+      JSON.stringify({
+        status: automation.status,
+        progress: automation.progress,
+        runCount: automation.runCount,
+        lastCheckedAt: automation.lastCheckedAt,
+        nextRunAt: automation.nextRunAt,
+        updatedAt: automation.updatedAt,
+      }),
+    [
+      automation.lastCheckedAt,
+      automation.nextRunAt,
+      automation.progress,
+      automation.runCount,
+      automation.status,
+      automation.updatedAt,
+    ],
+  );
 
-  async function toggleLogs() {
-    const next = !logsOpen;
-    setLogsOpen(next);
-    if (next && runs === null) {
-      setLogsLoading(true);
-      setLogsError(null);
-      try {
-        const detail = await api.getAutomation(automation.id);
+  const loadLogs = useCallback(async () => {
+    const requestId = logsRequestId.current + 1;
+    logsRequestId.current = requestId;
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const detail = await api.getAutomation(automation.id);
+      if (logsRequestId.current === requestId) {
         setRuns(detail.runs);
-      } catch (err) {
+      }
+    } catch (err) {
+      if (logsRequestId.current === requestId) {
         setLogsError(err instanceof Error ? err.message : String(err));
-      } finally {
+      }
+    } finally {
+      if (logsRequestId.current === requestId) {
         setLogsLoading(false);
       }
     }
+  }, [api, automation.id]);
+
+  useEffect(() => {
+    if (!logsOpen) {
+      return;
+    }
+    void loadLogs();
+  }, [loadLogs, logsOpen, logsVersion]);
+
+  function toggleLogs() {
+    setLogsOpen((current) => !current);
+  }
+
+  const retryAcknowledgement =
+    automation.uncertainty == null
+      ? undefined
+      : {
+          uncertaintyAcknowledgement: {
+            snapshotRunIds: automation.uncertainty.unresolvedRunIds,
+            targetRunIds: automation.uncertainty.unresolvedRunIds,
+          },
+        };
+
+  function requestRunNow() {
+    if (automation.uncertainty) {
+      setRetryError(null);
+      setConfirmingRetry(true);
+      return;
+    }
+    void onAction(automation.id, 'run');
   }
 
   return (
@@ -335,6 +411,13 @@ function AutomationCard({
         <p className="automation-progress">{automation.progress}</p>
       )}
 
+      {automation.uncertainty && (
+        <div className="automation-auth" role="alert">
+          <strong>Possible duplicate action</strong>
+          <span>{automation.uncertainty.summary}</span>
+        </div>
+      )}
+
       {needsAuth(automation.status) ? (
         <div className="automation-auth" role="alert">
           <strong>Sign-in required</strong>
@@ -347,7 +430,7 @@ function AutomationCard({
           </span>
         </div>
       ) : (
-        automation.failure && (
+        automation.failure && !automation.uncertainty && (
           <p className="automation-failure">{automation.failure}</p>
         )
       )}
@@ -391,7 +474,9 @@ function AutomationCard({
             type="button"
             className="ghost-button"
             disabled={busyKey === `pause:${automation.id}`}
-            onClick={() => onAction(automation.id, 'pause')}
+            onClick={() => {
+              void onAction(automation.id, 'pause');
+            }}
           >
             <PauseIcon size={14} /> Pause
           </button>
@@ -403,10 +488,22 @@ function AutomationCard({
               needsAuth(automation.status) ? 'primary-button' : 'ghost-button'
             }
             disabled={busyKey === `resume:${automation.id}`}
-            onClick={() => onAction(automation.id, 'resume')}
+            onClick={() => {
+              void onAction(automation.id, 'resume');
+            }}
           >
             <PlayIcon size={14} />{' '}
             {needsAuth(automation.status) ? 'Signed in — resume' : 'Resume'}
+          </button>
+        )}
+        {runnable && (
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={busyKey === `run:${automation.id}`}
+            onClick={requestRunNow}
+          >
+            <PlayIcon size={14} /> Run now
           </button>
         )}
         {canCancel(automation.status) && (
@@ -414,16 +511,10 @@ function AutomationCard({
             <button
               type="button"
               className="ghost-button"
-              disabled={busyKey === `run:${automation.id}`}
-              onClick={() => onAction(automation.id, 'run')}
-            >
-              <PlayIcon size={14} /> Run now
-            </button>
-            <button
-              type="button"
-              className="ghost-button"
               disabled={busyKey === `cancel:${automation.id}`}
-              onClick={() => onAction(automation.id, 'cancel')}
+              onClick={() => {
+                void onAction(automation.id, 'cancel');
+              }}
             >
               <StopIcon size={14} /> Stop
             </button>
@@ -443,7 +534,9 @@ function AutomationCard({
           title="Delete automation"
           aria-label={`Delete ${automation.name}`}
           disabled={busyKey === `delete:${automation.id}`}
-          onClick={() => onAction(automation.id, 'delete')}
+          onClick={() => {
+            void onAction(automation.id, 'delete');
+          }}
         >
           <TrashIcon size={14} />
         </button>
@@ -464,25 +557,67 @@ function AutomationCard({
                 <li
                   key={run.id}
                   className="automation-run"
-                  data-status={run.status}
+                  data-status={run.phase === 'finished' ? run.status : run.phase}
                 >
                   <span className="automation-run-status">
-                    {runStatusLabel(run.status)}
+                    {runStatusLabel(run)}
                   </span>
                   <span className="automation-run-time">
                     {new Date(run.startedAt).toLocaleString()}
                   </span>
-                  <span
-                    className="automation-run-detail"
-                    title={runSummary(run)}
-                  >
-                    {runSummary(run)}
-                  </span>
+                  <div className="automation-run-body">
+                    <span
+                      className="automation-run-detail"
+                      title={runSummary(run)}
+                    >
+                      {runSummary(run)}
+                    </span>
+                    {run.report && (
+                      <pre className="automation-run-report">{run.report}</pre>
+                    )}
+                  </div>
                 </li>
               ))}
             </ol>
           )}
         </div>
+      )}
+
+      {confirmingRetry && automation.uncertainty && (
+        <ConfirmDialog
+          title="Retry a possibly duplicated action?"
+          icon={<WarningIcon size={18} />}
+          danger={false}
+          confirmLabel="Retry anyway"
+          message={
+            <>
+              <p className="confirm-dialog-lead">
+                <strong>{automation.name}</strong> may already have completed
+                this action.
+              </p>
+              <p className="confirm-dialog-note">
+                {automation.uncertainty.summary}
+              </p>
+              <ErrorText error={retryError} />
+            </>
+          }
+          onCancel={() => {
+            setRetryError(null);
+            setConfirmingRetry(false);
+          }}
+          onConfirm={() => {
+            void onAction(automation.id, 'run', retryAcknowledgement).then(
+              (error) => {
+                if (error === null) {
+                  setRetryError(null);
+                  setConfirmingRetry(false);
+                  return;
+                }
+                setRetryError(error);
+              },
+            );
+          }}
+        />
       )}
     </div>
   );

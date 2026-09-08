@@ -14,7 +14,10 @@ export const terminalConfigSchema = z.object({
   defaultRows: z.number().int().positive(),
   /** Max bytes of terminal output retained for replay to late-joining clients. */
   scrollbackBytes: z.number().int().positive(),
-  /** Max browser input bytes buffered while launch-time bootstrap is pending. */
+  /**
+   * UTF-8 input limit advertised by protocol v2: maximum queued startup input,
+   * individual input frame, and browser-side unacknowledged input bytes.
+   */
   bootstrapInputBufferBytes: z.number().int().positive(),
   /**
    * Max bytes of the ANSI-stripped transcript retained per session for
@@ -52,16 +55,22 @@ export const terminalConfigSchema = z.object({
    */
   instructionSeedSubmitMaxWaitMs: z.number().int().nonnegative(),
   /**
-   * Whether an interactive session automatically re-submits the user's last
-   * prompt when the CLI reports a *transient* provider failure (upstream
-   * 5xx / 429 / network reset). Lets the IDE heal the same blips it already
-   * retries for its own metasessions, so a momentary upstream hiccup does not
-   * force the user to manually re-run their prompt.
+   * Whether an interactive session may automatically re-submit a
+   * provider-confirmed replay-safe request when the CLI reports a recoverable
+   * provider/session failure. Browser/PTy keystrokes never establish replay
+   * authority, so when no provider confirmation exists the session shows manual
+   * retry guidance instead of replaying guessed input.
    */
   autoRetryEnabled: z.boolean(),
-  /** Extra automatic re-submits of the last prompt per transient-failure streak. */
+  /**
+   * Extra automatic re-submits per recoverable-error streak, but only for an
+   * exact request text the provider independently confirmed as replay-safe.
+   */
   autoRetryMaxAttempts: z.number().int().nonnegative(),
-  /** Delay (ms) before an automatic re-submit, letting the upstream recover. */
+  /**
+   * Delay (ms) before an automatic re-submit of a provider-confirmed replay-safe
+   * request, letting the upstream recover first.
+   */
   autoRetryBackoffMs: z.number().int().nonnegative(),
 });
 
@@ -80,7 +89,7 @@ export const terminalDefaults: TerminalConfig = {
   instructionSeedReadyTimeoutMs: 15000,
   instructionSeedSubmitDelayMs: 500,
   instructionSeedSubmitMaxWaitMs: 10000,
-  autoRetryEnabled: true,
+  autoRetryEnabled: false,
   autoRetryMaxAttempts: 2,
   autoRetryBackoffMs: 2500,
 };

@@ -58,6 +58,7 @@ import { createSettingsAssistantRoutes } from './settings-assistant-controller.j
 import type { SettingsAssistant } from '../config/settings-assistant.js';
 import type { FieldMeta } from '../config/config-schema-describe.js';
 import { createMetaPoolsRoutes } from './meta-pools-controller.js';
+import { createMetaOperationsRoutes, type MetaOperationsControllerDeps } from './meta-operations-controller.js';
 import {
   createMetaSettingsRoutes,
   type MetaSettingsView,
@@ -92,9 +93,12 @@ import type { SelfHealService } from '../self-heal/self-heal-contract.js';
 import { createMetaModelsRoutes } from './meta-models-controller.js';
 import { createContextRoutes } from './context-controller.js';
 import type { Route } from './http-contract.js';
+import { applyRouteOwnership } from './route-ownership.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 import type { ContextService } from '../context-store/context-service.js';
 import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
+import type { FeatureTasksRepo } from '../feature-tasks/feature-tasks-repo-port.js';
+import type { FeatureGroupsRepo } from '../feature-tree/feature-groups-repo-port.js';
 
 export interface ApiRoutesDeps {
   features: FeatureService;
@@ -126,7 +130,9 @@ export interface ApiRoutesDeps {
   /** Reverses a session skill on its live terminal when it is untagged. */
   removeSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
+  taskLookup: Pick<FeatureTasksRepo, 'get'>;
   tree: FeatureTreeService;
+  groupLookup: Pick<FeatureGroupsRepo, 'get'>;
   ideUsage: IdeUsageService;
   planUsage: PlanUsageService;
   /** Self-healing service for environment problems (missing CLI, config). */
@@ -150,6 +156,7 @@ export interface ApiRoutesDeps {
   configSchema: () => Record<string, FieldMeta>;
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
+  metaOperations: MetaOperationsControllerDeps;
   /** Live-resizes the warm pool for a purpose (no restart), returning status. */
   resizeMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
   /** Live-creates a warm pool for a new purpose (no restart), returning status. */
@@ -208,7 +215,8 @@ export interface ApiRoutesDeps {
   /** Monitors & automations engine surfaced in the Automations menu. */
   automations: AutomationService;
   /** Live scheduler used to wake/abort lifecycle changes. */
-  automationScheduler?: Pick<AutomationScheduler, 'abort' | 'kick'>;
+  automationScheduler?: Pick<AutomationScheduler, 'abort' | 'kick'> &
+    Partial<Pick<AutomationScheduler, 'runNow'>>;
   /** Tracked background AI subagents. */
   subagents: SubagentService;
   /** Per-launch token accepted by Studio MCP control routes. */
@@ -218,7 +226,7 @@ export interface ApiRoutesDeps {
 
 /** Assembles the full route table from every controller. */
 export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
-  return [
+  return applyRouteOwnership([
     ...createHealthRoutes(),
     ...createFeatureRoutes({ features: deps.features, admin: deps.admin }),
     ...createSessionRoutes({
@@ -288,6 +296,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       schema: deps.configSchema,
       current: deps.currentConfig,
     }),
+    ...createMetaOperationsRoutes(deps.metaOperations),
     ...createMetaPoolsRoutes({
       status: deps.metaPools,
       resize: deps.resizeMetaPool,
@@ -319,5 +328,13 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       listAzureRepos: deps.listAzureRepos,
       prFeatures: deps.prFeatures,
     }),
-  ];
+  ], {
+    features: deps.features,
+    sessions: deps.sessions,
+    taskLookup: deps.taskLookup,
+    groupLookup: deps.groupLookup,
+    skills: deps.skills,
+    automations: deps.automations,
+    subagents: deps.subagents,
+  });
 }

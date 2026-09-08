@@ -57,6 +57,122 @@ function plainSink() {
 }
 
 describe('createTerminalSession', () => {
+  it('resumes late output when attachment falls between the two ST characters', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'late-st', pty: f.pty, inputReady: true,
+      scrollbackBytes: 4, transcriptBytes: 100, onExit: () => {},
+    });
+    f.emitData('\x1b]0;hidden');
+    f.emitData('\x1b');
+    const late = recordingSink();
+    session.attach(late.sink);
+    f.emitData('\\visible');
+    expect(late.output).toEqual(['visible']);
+  });
+
+  it.each([0, 4, 100])(
+    'preserves a split surrogate when a client attaches between its halves (cap %i)',
+    (scrollbackBytes) => {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 'late-unicode', pty: f.pty, inputReady: true,
+        scrollbackBytes, transcriptBytes: 100, onExit: () => {},
+      });
+      const live = recordingSink();
+      session.attach(live.sink);
+      f.emitData('\ud83d');
+      const late = recordingSink();
+      session.attach(late.sink);
+      f.emitData('\ude00visible');
+      expect(late.output).toEqual(['😀visible']);
+      expect(live.output).toEqual(['\ud83d', '\ude00visible']);
+    },
+  );
+
+  it.each(['\x1b', '\x1b]0;hidden'])(
+    'holds split Unicode while a late joiner is waiting inside %j',
+    (prefix) => {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 'hidden-unicode', pty: f.pty, inputReady: true,
+        scrollbackBytes: 0, transcriptBytes: 100, onExit: () => {},
+      });
+      f.emitData(prefix);
+      const late = recordingSink();
+      session.attach(late.sink);
+      f.emitData('\ud83d');
+      f.emitData('');
+      expect(late.output).toEqual([]);
+      f.emitData('\ude00' + (prefix === '\x1b' ? '' : '\x07') + 'visible');
+      expect(late.output).toEqual(['visible']);
+      f.emitData('next');
+      expect(late.output).toEqual(['visible', 'next']);
+    },
+  );
+
+  it.each(['', '\x1b]0;hidden'])(
+    'finalizes a late joiner with an incomplete character at EOF in %j',
+    (prefix) => {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 'eof-unicode', pty: f.pty, inputReady: true,
+        scrollbackBytes: 3, transcriptBytes: 100, onExit: () => {},
+      });
+      f.emitData(prefix + '\ud83d');
+      const late = recordingSink();
+      session.attach(late.sink);
+      f.emitExit(0);
+      expect(late.output).toEqual(prefix === '' ? ['\ufffd'] : []);
+      expect(late.exits).toEqual([0]);
+      const exited = recordingSink();
+      session.attach(exited.sink);
+      expect(exited.output).toEqual(late.output);
+      expect(exited.exits).toEqual([0]);
+    },
+  );
+
+  it('persists split ANSI/OSC as plain text while keeping live and replay output unchanged', () => {
+    const f = fakePty();
+    let persisted = '';
+    const session = createTerminalSession({
+      sessionId: 'split', pty: f.pty, inputReady: true,
+      scrollbackBytes: 1000, transcriptBytes: 1000,
+      onExit: () => { persisted = session.transcriptText(); },
+    });
+    const live = recordingSink();
+    session.attach(live.sink);
+    const chunks = ['\x1b[', '31mred\x1b[0', 'm \x1b]8;;https://example.test', '\x1b',
+      '\\link\x1b]8;;', '\x1b\\ ', '\ud83d', '\ude00', '\n'];
+    for (const chunk of chunks) f.emitData(chunk);
+    expect(live.output).toEqual(chunks);
+    const replay = recordingSink();
+    session.attach(replay.sink);
+    expect(replay.output).toEqual([chunks.join('')]);
+    f.emitExit(0);
+    expect(persisted).toBe('red link 😀\n');
+  });
+  it('notifies ready listeners on close, rejects writes/resizes after exit and ignores duplicate exit', () => {
+    const f = fakePty();
+    const exits: Array<number | null> = [];
+    const session = createTerminalSession({
+      sessionId: 's1', generation: 42, pty: f.pty, inputReady: true,
+      scrollbackBytes: 100, transcriptBytes: 100, onExit: (code) => exits.push(code),
+    });
+    const states: string[] = [];
+    const detach = session.onInputReadiness((state) => states.push(state));
+    expect(session.generation).toBe(42);
+    f.emitExit(1); f.emitExit(2); session.markInputReady();
+    expect(states).toEqual(['ready', 'closed']);
+    expect(exits).toEqual([1]);
+    expect(session.inputReadiness).toBe('closed');
+    expect(() => session.write('no')).toThrow('closed');
+    expect(() => session.resize(80, 24)).toThrow('closed');
+    expect(f.writes).toEqual([]); expect(f.resizes).toEqual([]);
+    detach();
+    const closed = session.onInputReadiness((state) => states.push(state));
+    closed();
+  });
   it('fans live output to attached sinks and accumulates a stripped transcript', () => {
     const f = fakePty();
     const session = createTerminalSession({
@@ -111,6 +227,105 @@ describe('createTerminalSession', () => {
     expect(a.output).toEqual(['efgh']);
   });
 
+  it('bounds retained scrollback by UTF-8 bytes without replaying broken emoji or control tails', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'utf8-raw',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 4,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    f.emitData('a\ud83d');
+    f.emitData('\ude00');
+    const emoji = recordingSink();
+    session.attach(emoji.sink);
+    expect(emoji.output).toEqual(['😀']);
+
+    const ansiPty = fakePty();
+    const ansi = createTerminalSession({
+      sessionId: 'ansi-raw',
+      pty: ansiPty.pty,
+      inputReady: true,
+      scrollbackBytes: 4,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    ansiPty.emitData('\u001b[31mred');
+    const replay = recordingSink();
+    ansi.attach(replay.sink);
+    expect(replay.output).toEqual(['red']);
+  });
+
+  it.each([
+    {
+      name: 'OSC closed by BEL',
+      initial: '\u001b]0;' + 'x'.repeat(20),
+      continuation: '😀HIDDEN\u0007VISIBLE',
+      notifyVisible: [],
+      expected: 'VISIBLE',
+    },
+    {
+      name: 'OSC closed by ST',
+      initial: '\u001b]0;' + 'x'.repeat(20),
+      continuation: 'HIDDEN\u001b\\VISIBLE',
+      notifyVisible: [],
+      expected: 'VISIBLE',
+    },
+    {
+      name: 'DCS closed by ST',
+      initial: '\u001bP' + 'x'.repeat(20),
+      continuation: 'HIDDEN\u001b\\VISIBLE',
+      notifyVisible: [],
+      expected: 'VISIBLE',
+    },
+    {
+      name: 'CSI closed by final byte',
+      initial: '\u001b[' + '1'.repeat(20),
+      continuation: 'mVISIBLE',
+      notifyVisible: ['ote'],
+      expected: 'mVISIBLE',
+    },
+  ])(
+    'gates late joiners until a lost $name context closes while existing sinks keep exact raw frames',
+    ({ initial, continuation, expected, notifyVisible }) => {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 'late-gate',
+        pty: f.pty,
+        inputReady: true,
+        scrollbackBytes: 10,
+        transcriptBytes: 1000,
+        initialCols: 120,
+        initialRows: 30,
+        onExit: () => {},
+      });
+      const live = recordingSink();
+      session.attach(live.sink);
+      f.emitData(initial);
+
+      const lateA = recordingSink();
+      const lateB = recordingSink();
+      session.attach(lateA.sink);
+      session.attach(lateB.sink);
+      expect(lateA.resizes).toEqual([[120, 30]]);
+      expect(lateB.resizes).toEqual([[120, 30]]);
+      expect(lateA.output).toEqual([]);
+      expect(lateB.output).toEqual([]);
+
+      session.notify('note');
+      expect(live.output.at(-1)).toBe('note');
+      expect(lateA.output).toEqual(notifyVisible);
+      expect(lateB.output).toEqual(notifyVisible);
+
+      f.emitData(continuation);
+      expect(live.output).toEqual([initial, 'note', continuation]);
+      expect(lateA.output).toEqual([...notifyVisible, expected]);
+      expect(lateB.output).toEqual([...notifyVisible, expected]);
+    },
+  );
+
   it('bounds the retained transcript to transcriptBytes', () => {
     const f = fakePty();
     const session = createTerminalSession({
@@ -124,6 +339,115 @@ describe('createTerminalSession', () => {
     f.emitData('abcd');
     f.emitData('efgh');
     expect(session.transcriptText()).toBe('efgh');
+  });
+
+  it('bounds the retained transcript by UTF-8 bytes without leaving lone surrogates', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'utf8-transcript',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 1000,
+      transcriptBytes: 4,
+      onExit: () => {},
+    });
+    f.emitData('a\ud83d');
+    f.emitData('\ude00');
+    expect(session.transcriptText()).toBe('😀');
+  });
+
+  it('flushes a trailing invalid surrogate only in the exited snapshot', () => {
+    const f = fakePty();
+    let persisted = '';
+    const session = createTerminalSession({
+      sessionId: 'invalid-tail',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 1000,
+      transcriptBytes: 1000,
+      onExit: () => {
+        persisted = session.transcriptText();
+      },
+    });
+    f.emitData('\ud83d');
+    expect(session.transcriptText()).toBe('');
+    f.emitExit(0);
+    expect(persisted).toBe('\ufffd');
+  });
+
+  it('drops replay instead of starting inside an unterminated OSC string', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'osc-tail',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 4,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    f.emitData('\u001b]title-without-end');
+    const before = recordingSink();
+    session.attach(before.sink);
+    expect(before.output).toEqual([]);
+    f.emitData('\u001b\\ok');
+    const after = recordingSink();
+    session.attach(after.sink);
+    expect(after.output).toEqual(['ok']);
+  });
+
+  it('does not leave late joiners blocked when the process exits during a truncated control string', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'osc-exit',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 10,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    f.emitData('\u001b]0;' + 'x'.repeat(20));
+    const late = recordingSink();
+    session.attach(late.sink);
+    expect(late.output).toEqual([]);
+    f.emitExit(0);
+    expect(late.exits).toEqual([0]);
+  });
+
+  it('activates a pending late joiner when a terminator arrives alone, then forwards later text', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'terminator-only',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 10,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    f.emitData('\u001b]0;' + 'x'.repeat(20));
+    const late = recordingSink();
+    session.attach(late.sink);
+    f.emitData('\u0007');
+    expect(late.output).toEqual([]);
+    f.emitData('visible');
+    expect(late.output).toEqual(['visible']);
+  });
+
+  it('with zero replay budget skips history but still forwards later visible output immediately', () => {
+    const f = fakePty();
+    const session = createTerminalSession({
+      sessionId: 'zero-budget',
+      pty: f.pty,
+      inputReady: true,
+      scrollbackBytes: 0,
+      transcriptBytes: 1000,
+      onExit: () => {},
+    });
+    f.emitData('history');
+    const late = recordingSink();
+    session.attach(late.sink);
+    expect(late.output).toEqual([]);
+    f.emitData('visible');
+    expect(late.output).toEqual(['visible']);
   });
 
   it('emits the capture size to a resize-capable sink before replaying, and tracks resizes', () => {

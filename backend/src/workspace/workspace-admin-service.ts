@@ -8,6 +8,10 @@ import type { UsageRepo } from '../usage/usage-repo-port.js';
 import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { SessionFilesStore } from '../session-files/session-files-contract.js';
 import type { ContextService } from '../context-store/context-service.js';
+import type { UsageCaptureRepo } from '../usage/usage-capture-contract.js';
+import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
+import type { MetaOperationRepo } from '../meta/meta-operation-contract.js';
+import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
 
 /** Closes a live interactive terminal for a session, if one is running. */
 export interface TerminalCloser {
@@ -36,12 +40,35 @@ export interface WorktreeRemover {
   removeForFeature(featureId: string): Promise<void>;
 }
 
+/** Removes owned monitor work before deleting its feature/session anchor. */
+export interface OwnedAutomationRemover {
+  deleteByFeature(featureId: string): void | Promise<void>;
+  deleteBySession(sessionId: string): void | Promise<void>;
+}
+
+export interface WorkspaceQuiescence {
+  /** Close admission, cancel producers and reject unless their completion has drained. */
+  feature(featureId: string): Promise<void>;
+  session(sessionId: string): Promise<void>;
+}
+
+/** Removes detached/external subagent artifacts bound to a feature/session. */
+export interface OwnedSubagentRemover {
+  deleteByFeature(featureId: string): void;
+  deleteBySession(sessionId: string): void;
+}
+
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
-  sessions: Pick<SessionRepo, 'get' | 'listByFeature' | 'delete' | 'deleteByFeature' | 'rename'>;
+  sessions: Pick<SessionRepo, 'get' | 'listByFeatureAll' | 'delete' | 'deleteByFeature' | 'rename'>;
+  quiescence: WorkspaceQuiescence;
   usage: Pick<UsageRepo, 'deleteBySession'>;
+  usageCaptures?: Pick<UsageCaptureRepo, 'deleteBySession'>;
+  metaUsage?: Pick<MetaUsageRepo, 'deleteByFeature' | 'deleteBySession'>;
+  metaOperations?: Pick<MetaOperationRepo, 'deleteByFeature' | 'deleteBySession'>;
   transcripts: Pick<TranscriptStore, 'delete'>;
   summaries: Pick<SummaryStore, 'delete'>;
+  sessionSummaries?: Pick<SessionSummaryStore, 'delete'>;
   sessionFiles: Pick<SessionFilesStore, 'deleteBySession'>;
   terminals: TerminalCloser;
   /** Optional: stops a session's live usage tailer before its usage is purged. */
@@ -52,6 +79,10 @@ export interface WorkspaceAdminDeps {
   worktrees?: WorktreeRemover;
   /** Optional: purges a feature's shared-context document when it is deleted. */
   sharedContext?: Pick<ContextService, 'remove'>;
+  /** Optional: cancels/removes automations owned by the deleted feature/session. */
+  ownedAutomations?: OwnedAutomationRemover;
+  /** Optional: removes detached subagent records owned by the deleted feature/session. */
+  ownedSubagents?: OwnedSubagentRemover;
 }
 
 /**
@@ -69,12 +100,21 @@ export interface WorkspaceAdmin {
 
 export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
   async function purgeSession(sessionId: string): Promise<void> {
+    await Promise.all([
+      deps.quiescence.session(sessionId),
+      deps.ownedAutomations?.deleteBySession(sessionId),
+    ]);
+    deps.ownedSubagents?.deleteBySession(sessionId);
     // Stop the live usage tailer FIRST so it cannot re-record usage after we
     // purge it (which would leave a stray row and resurrect the feature).
     deps.liveUsage?.release(sessionId);
     deps.terminals.close(sessionId);
+    deps.usageCaptures?.deleteBySession(sessionId);
+    deps.metaUsage?.deleteBySession(sessionId);
+    deps.metaOperations?.deleteBySession(sessionId);
     deps.usage.deleteBySession(sessionId);
     deps.sessionFiles.deleteBySession(sessionId);
+    deps.sessionSummaries?.delete(sessionId);
     await deps.transcripts.delete(sessionId);
   }
 
@@ -96,10 +136,17 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
 
     async deleteFeature(id) {
       deps.features.get(id);
-      for (const session of deps.sessions.listByFeature(id)) {
+      await Promise.all([
+        deps.quiescence.feature(id),
+        deps.ownedAutomations?.deleteByFeature(id),
+      ]);
+      deps.ownedSubagents?.deleteByFeature(id);
+      for (const session of deps.sessions.listByFeatureAll(id)) {
         await purgeSession(session.id);
       }
       deps.sessions.deleteByFeature(id);
+      deps.metaUsage?.deleteByFeature(id);
+      deps.metaOperations?.deleteByFeature(id);
       deps.summaries.delete(id);
       // Remove the on-disk worktree before purging the review row it is
       // resolved from; a failure here must not block feature deletion.

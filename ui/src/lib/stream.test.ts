@@ -11,6 +11,9 @@ import {
   sessionLiveTotals,
   usageKey,
   workspaceLiveTotals,
+  MAX_LIVE_CACHE_ENTRIES,
+  MAX_LIVE_CACHE_CHARACTERS,
+  type LiveState,
 } from './stream.js';
 
 function session(id: string): Session {
@@ -86,6 +89,7 @@ function prReview(status: PrReviewStepStatus): PrReview {
     repoId: 'r1',
     pull: { number: 7, title: 'Add retry', url: 'https://example.com/pr/7' },
     worktreePath: 'C:\\wt',
+    headSha: null,
     baseBranch: 'main',
     description: 'Adds retry to the client.',
     problemStatement: {
@@ -189,32 +193,28 @@ describe('parseServerEvent', () => {
     });
   });
 
-  it('parses a stdout output frame', () => {
+  it('ignores legacy stdout output frames received from older backends', () => {
     const event = parseServerEvent(
       'session.output',
       JSON.stringify({ sessionId: 's1', event: { type: 'stdout', line: 'hi' } }),
     );
-    expect(event).toEqual({ type: 'session.output', sessionId: 's1', line: 'hi' });
+    expect(event).toBeNull();
   });
 
-  it('parses a stderr output frame', () => {
+  it('ignores legacy stderr output frames received from older backends', () => {
     const event = parseServerEvent(
       'session.output',
       JSON.stringify({ sessionId: 's1', event: { type: 'stderr', line: 'oops' } }),
     );
-    expect(event).toEqual({
-      type: 'session.output',
-      sessionId: 's1',
-      line: 'oops',
-    });
+    expect(event).toBeNull();
   });
 
-  it('defaults a missing output line to empty string', () => {
+  it('does not parse unused output payloads', () => {
     const event = parseServerEvent(
       'session.output',
-      JSON.stringify({ sessionId: 's1', event: { type: 'stdout' } }),
+      'not JSON',
     );
-    expect(event).toEqual({ type: 'session.output', sessionId: 's1', line: '' });
+    expect(event).toBeNull();
   });
 
   it('ignores non-output frames like exit', () => {
@@ -253,6 +253,77 @@ describe('parseServerEvent', () => {
 });
 
 describe('applyStreamEvent', () => {
+  it('bounds live usage while keeping corrections and authoritative credited totals separate', () => {
+    let state = initialLiveState;
+    for (let turn = 0; turn < MAX_LIVE_CACHE_ENTRIES + 20; turn++) {
+      state = applyStreamEvent(state, { type: 'usage.recorded', usage: usage('s1', turn) });
+    }
+    expect(Object.keys(state.usageByKey)).toHaveLength(MAX_LIVE_CACHE_ENTRIES);
+    expect(state.liveCacheTruncated).toBe(true);
+    expect(state.usageHistoryTruncated).toBe(true);
+    expect(state.cacheCharacters?.usageByKey).toBeLessThanOrEqual(MAX_LIVE_CACHE_CHARACTERS);
+    const revision = liveSignal(state);
+    state = applyStreamEvent(state, { type: 'usage.recorded', usage: { ...usage('s1', 30), credits: 900 } });
+    expect(state.usageByKey['s1:30'].credits).toBe(900);
+    expect(liveSignal(state)).toBe(revision + 1);
+    expect(state.sessionRevision).toBe(0);
+    const live = sessionLiveTotals(state, 's1');
+    expect(live.complete).toBe(false);
+    expect(workspaceLiveTotals(state).complete).toBe(false);
+    expect(resolveSessionMetrics(undefined, live)).toBeNull();
+    const persisted = { nanoAiu: 987654321, inputTokens: 1234, outputTokens: 4567 };
+    expect(resolveSessionMetrics(persisted, live)).toEqual(persisted);
+  });
+
+  it('bounds serialized cache size, rejects oversized entries and accounts for seeded rows', () => {
+    let state: LiveState = { ...initialLiveState, sessions: { first: session('first') } };
+    const previous = state;
+    state = applyStreamEvent(state, {
+      type: 'session.updated', session: { ...session('large'), prompt: 'x'.repeat(MAX_LIVE_CACHE_CHARACTERS - 1000) },
+    });
+    state = applyStreamEvent(state, {
+      type: 'session.updated', session: { ...session('second'), prompt: 'x'.repeat(2000) },
+    });
+    expect(state.sessions.first).toBeUndefined();
+    expect(state.sessions.large).toBeUndefined();
+    expect(state.sessions.second).toBeDefined();
+    expect(previous.sessions.first).toBeDefined();
+    state = applyStreamEvent(state, {
+      type: 'session.updated', session: { ...session('second'), prompt: 'x'.repeat(MAX_LIVE_CACHE_CHARACTERS + 1) },
+    });
+    expect(state.sessions).toEqual({});
+    expect(state.cacheCharacters?.sessions).toBe(0);
+    expect(state.liveCacheTruncated).toBe(true);
+    expect(state.usageHistoryTruncated).toBe(false);
+  });
+
+  it('does not mistake reconnecting for replay and invalidates saved statistics on interruptions', () => {
+    let state = applyStreamEvent(initialLiveState, { type: 'session.started', session: session('s1') });
+    state = applyStreamEvent(state, { type: 'stream.interrupted' });
+    expect(state.streamInterrupted).toBe(true);
+    const persisted = { ...session('s1'), status: 'completed' as const };
+    expect(mergeLive(persisted, state)).toBe(persisted);
+    const revision = liveSignal(state);
+    const sessionRevision = state.sessionRevision;
+    state = applyStreamEvent(state, { type: 'stream.reconnected' });
+    expect(liveSignal(state)).toBe(revision + 1);
+    expect(state.sessionRevision).toBe(sessionRevision! + 1);
+    expect(state.streamInterrupted).toBe(true);
+    expect(resolveSessionMetrics(undefined, sessionLiveTotals(state, 's1'))).toBeNull();
+    expect(applyStreamEvent(initialLiveState, { type: 'stream.truncated' }))
+      .toMatchObject({ liveCacheTruncated: true, usageHistoryTruncated: true });
+  });
+
+  it('does not re-fetch statistics for high-frequency activity and file notifications', () => {
+    let state = applyStreamEvent(initialLiveState, { type: 'session.file', sessionId: 's1' });
+    state = applyStreamEvent(state, {
+      type: 'review.board.activity',
+      activity: { featureId: 'f1', perspectiveId: 'p1', sessionId: 's1', line: 'working' },
+    });
+    expect(liveSignal(state)).toBe(0);
+    expect(state.sessionRevision).toBe(0);
+  });
+
   it('records a started session', () => {
     const state = applyStreamEvent(initialLiveState, {
       type: 'session.started',
@@ -301,20 +372,6 @@ describe('applyStreamEvent', () => {
       message: 'boom',
     });
     expect(state).toBe(initialLiveState);
-  });
-
-  it('appends output lines per session', () => {
-    let state = applyStreamEvent(initialLiveState, {
-      type: 'session.output',
-      sessionId: 's1',
-      line: 'a',
-    });
-    state = applyStreamEvent(state, {
-      type: 'session.output',
-      sessionId: 's1',
-      line: 'b',
-    });
-    expect(state.outputBySession['s1']).toEqual(['a', 'b']);
   });
 
   it('dedupes usage by session and turn', () => {
@@ -575,7 +632,7 @@ describe('resolveSessionMetrics', () => {
     // were preferred over the authoritative rollup, so the explorer AIC drifted
     // away from the status-bar footer. Persisted must always win when present.
     const persisted = { nanoAiu: 200, inputTokens: 20, outputTokens: 40 };
-    expect(resolveSessionMetrics(persisted, liveTotals).nanoAiu).toBe(200);
+    expect(resolveSessionMetrics(persisted, liveTotals)?.nanoAiu).toBe(200);
   });
 
   it('falls back to live totals for brand-new sessions without a rollup', () => {

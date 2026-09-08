@@ -12,10 +12,10 @@ import type {
 
 /** Normalized live events consumed by the reducer. */
 export type StreamEvent =
+  | { type: 'stream.interrupted' | 'stream.reconnected' | 'stream.truncated' }
   | { type: 'session.started'; session: Session }
   | { type: 'session.ended'; session: Session }
   | { type: 'session.updated'; session: Session }
-  | { type: 'session.output'; sessionId: string; line: string }
   | { type: 'session.file'; sessionId: string }
   | {
       type: 'session.notice';
@@ -57,9 +57,14 @@ export interface ReviewBoardActivityState {
 const MAX_ACTIVITY_LINES = 60;
 
 export interface LiveState {
+  revision?: number;
+  sessionRevision?: number;
+  streamInterrupted?: boolean;
+  liveCacheTruncated?: boolean;
+  usageHistoryTruncated?: boolean;
+  cacheCharacters?: Partial<Record<LiveCollection, number>>;
   sessions: Record<string, Session>;
   usageByKey: Record<string, StoredUsage>;
-  outputBySession: Record<string, string[]>;
   repositoryContexts: Record<string, RepositoryContext>;
   prReviews: Record<string, PrReview>;
   contextStatus: Record<string, ContextStatusPhase>;
@@ -78,7 +83,6 @@ export interface LiveState {
 export const initialLiveState: LiveState = {
   sessions: {},
   usageByKey: {},
-  outputBySession: {},
   repositoryContexts: {},
   prReviews: {},
   contextStatus: {},
@@ -87,6 +91,64 @@ export const initialLiveState: LiveState = {
   reviewBoardActivity: {},
   fileChangesBySession: {},
 };
+
+type LiveCollection = 'sessions' | 'usageByKey' | 'repositoryContexts' | 'prReviews' |
+  'contextStatus' | 'automations' | 'subagents' | 'reviewBoardActivity' | 'fileChangesBySession';
+
+export const MAX_LIVE_CACHE_ENTRIES = 256;
+export const MAX_LIVE_CACHE_CHARACTERS = 256 * 1024;
+export const MAX_LIVE_EVENT_CHARACTERS = 1024 * 1024;
+const STATS_EVENTS = new Set([
+  'session.started', 'session.ended', 'session.updated', 'usage.recorded',
+  'stream.interrupted', 'stream.reconnected', 'stream.truncated',
+]);
+const SESSION_EVENTS = new Set([
+  'session.started', 'session.ended', 'session.updated',
+  'stream.interrupted', 'stream.reconnected', 'stream.truncated',
+]);
+
+function entryCharacters(key: string, value: unknown): number {
+  return key.length + JSON.stringify(value).length;
+}
+
+/** Bound each derived cache, never the authoritative persisted usage ledger. */
+function retain<K extends LiveCollection>(
+  state: LiveState, collection: K, key: string, value: LiveState[K][string] | undefined,
+): LiveState {
+  const rows = { ...state[collection] };
+  let characters: number = state.cacheCharacters?.[collection] ??
+    Object.entries(rows).reduce<number>((total, [id, item]) => total + entryCharacters(id, item), 0);
+  if (Object.hasOwn(rows, key)) {
+    characters -= entryCharacters(key, rows[key]);
+    delete rows[key];
+  }
+  let truncated = false;
+  if (value !== undefined) {
+    const size = entryCharacters(key, value);
+    if (size <= MAX_LIVE_CACHE_CHARACTERS) {
+      rows[key] = value;
+      characters += size;
+    } else {
+      truncated = true;
+    }
+  }
+  const keys = Object.keys(rows);
+  let count = keys.length;
+  for (const id of keys) {
+    if (count <= MAX_LIVE_CACHE_ENTRIES && characters <= MAX_LIVE_CACHE_CHARACTERS) break;
+    characters -= entryCharacters(id, rows[id]);
+    delete rows[id];
+    count--;
+    truncated = true;
+  }
+  return {
+    ...state,
+    [collection]: rows,
+    cacheCharacters: { ...state.cacheCharacters, [collection]: characters },
+    liveCacheTruncated: state.liveCacheTruncated === true || truncated,
+    usageHistoryTruncated: state.usageHistoryTruncated === true || (collection === 'usageByKey' && truncated),
+  };
+}
 
 /** Stable key that dedupes usage events by session + turn. */
 export function usageKey(sessionId: string, turnIndex: number): string {
@@ -108,20 +170,6 @@ export function parseServerEvent(
       return { type: 'session.ended', session: JSON.parse(data) as Session };
     case 'session.updated':
       return { type: 'session.updated', session: JSON.parse(data) as Session };
-    case 'session.output': {
-      const payload = JSON.parse(data) as {
-        sessionId: string;
-        event: { type: string; line?: string };
-      };
-      if (payload.event.type === 'stdout' || payload.event.type === 'stderr') {
-        return {
-          type: 'session.output',
-          sessionId: payload.sessionId,
-          line: payload.event.line ?? '',
-        };
-      }
-      return null;
-    }
     case 'session.file':
       return {
         type: 'session.file',
@@ -187,33 +235,30 @@ export function applyStreamEvent(
   state: LiveState,
   event: StreamEvent,
 ): LiveState {
+  const next = reduceStreamEvent(state, event);
+  return next === state ? state : {
+    ...next,
+    revision: liveSignal(state) + (STATS_EVENTS.has(event.type) ? 1 : 0),
+    sessionRevision: (state.sessionRevision ?? 0) + (SESSION_EVENTS.has(event.type) ? 1 : 0),
+  };
+}
+
+function reduceStreamEvent(state: LiveState, event: StreamEvent): LiveState {
   switch (event.type) {
+    case 'stream.interrupted':
+      return { ...state, streamInterrupted: true, usageHistoryTruncated: true };
+    case 'stream.reconnected':
+      // Reconnection is not replay: keep any missing-history warning until the view reloads.
+      return { ...state };
+    case 'stream.truncated':
+      return { ...state, liveCacheTruncated: true, usageHistoryTruncated: true };
     case 'session.started':
     case 'session.ended':
     case 'session.updated':
-      return {
-        ...state,
-        sessions: { ...state.sessions, [event.session.id]: event.session },
-      };
-    case 'session.output': {
-      const previous = state.outputBySession[event.sessionId] ?? [];
-      return {
-        ...state,
-        outputBySession: {
-          ...state.outputBySession,
-          [event.sessionId]: [...previous, event.line],
-        },
-      };
-    }
+      return retain(state, 'sessions', event.session.id, event.session);
     case 'session.file': {
       const previous = state.fileChangesBySession[event.sessionId] ?? 0;
-      return {
-        ...state,
-        fileChangesBySession: {
-          ...state.fileChangesBySession,
-          [event.sessionId]: previous + 1,
-        },
-      };
+      return retain(state, 'fileChangesBySession', event.sessionId, previous + 1);
     }
     case 'session.notice':
       // A transient IDE notice (e.g. a self-recovery failure). It drives the
@@ -222,57 +267,20 @@ export function applyStreamEvent(
       return state;
     case 'usage.recorded': {
       const key = usageKey(event.usage.sessionId, event.usage.turnIndex);
-      return {
-        ...state,
-        usageByKey: { ...state.usageByKey, [key]: event.usage },
-      };
+      return retain(state, 'usageByKey', key, event.usage);
     }
     case 'repository.context.updated':
-      return {
-        ...state,
-        repositoryContexts: {
-          ...state.repositoryContexts,
-          [event.context.repositoryId]: event.context,
-        },
-      };
+      return retain(state, 'repositoryContexts', event.context.repositoryId, event.context);
     case 'pr.review.updated':
-      return {
-        ...state,
-        prReviews: {
-          ...state.prReviews,
-          [event.review.featureId]: event.review,
-        },
-      };
+      return retain(state, 'prReviews', event.review.featureId, event.review);
     case 'context.status':
-      return {
-        ...state,
-        contextStatus: {
-          ...state.contextStatus,
-          [contextStatusKey(event.status.scope, event.status.scopeId)]:
-            event.status.phase,
-        },
-      };
+      return retain(state, 'contextStatus', contextStatusKey(event.status.scope, event.status.scopeId), event.status.phase);
     case 'automation.updated':
-      return {
-        ...state,
-        automations: {
-          ...state.automations,
-          [event.automation.id]: event.automation,
-        },
-      };
-    case 'automation.removed': {
-      const nextAutomations = { ...state.automations };
-      delete nextAutomations[event.id];
-      return { ...state, automations: nextAutomations };
-    }
+      return retain(state, 'automations', event.automation.id, event.automation);
+    case 'automation.removed':
+      return retain(state, 'automations', event.id, undefined);
     case 'subagent.updated':
-      return {
-        ...state,
-        subagents: {
-          ...state.subagents,
-          [event.subagent.id]: event.subagent,
-        },
-      };
+      return retain(state, 'subagents', event.subagent.id, event.subagent);
     case 'review.board.activity': {
       const { featureId, perspectiveId, sessionId, line } = event.activity;
       const key = reviewBoardActivityKey(featureId, perspectiveId);
@@ -283,13 +291,7 @@ export function applyStreamEvent(
         previous && previous.sessionId === sessionId
           ? [...previous.lines, line].slice(-MAX_ACTIVITY_LINES)
           : [line];
-      return {
-        ...state,
-        reviewBoardActivity: {
-          ...state.reviewBoardActivity,
-          [key]: { sessionId, lines },
-        },
-      };
+      return retain(state, 'reviewBoardActivity', key, { sessionId, lines });
     }
   }
 }
@@ -308,6 +310,7 @@ export function reviewBoardActivityLines(
 }
 
 export interface SessionLiveTotals {
+  complete?: false;
   credits: number;
   cost: number;
   inputTokens: number;
@@ -339,7 +342,7 @@ export function sessionLiveTotals(
       totals.turns += 1;
     }
   }
-  return totals;
+  return state.usageHistoryTruncated ? { ...totals, complete: false } : totals;
 }
 
 /** The usage metrics rendered for a single session row. */
@@ -360,8 +363,9 @@ export interface SessionMetrics {
  */
 export function resolveSessionMetrics(
   persisted: SessionMetrics | undefined,
-  liveTotals: SessionMetrics,
-): SessionMetrics {
+  liveTotals: SessionMetrics & { complete?: false },
+): SessionMetrics | null {
+  if (persisted === undefined && liveTotals.complete === false) return null;
   const source = persisted ?? liveTotals;
   return {
     nanoAiu: source.nanoAiu,
@@ -388,17 +392,16 @@ export function workspaceLiveTotals(state: LiveState): SessionLiveTotals {
     totals.nanoAiu += usage.nanoAiu;
     totals.turns += 1;
   }
-  return totals;
+  return state.usageHistoryTruncated ? { ...totals, complete: false } : totals;
 }
 
 /**
- * A monotonic-ish signal that changes whenever a new session or usage event is
- * observed. Consumers use it as an effect dependency to re-fetch authoritative
- * persisted stats without depending on the (incomplete) live totals directly.
+ * Changes on corrections, reconnection and eviction as well as new events so
+ * persisted totals refresh even when the bounded cache's entry count is unchanged.
  */
 export function liveSignal(state: LiveState): number {
   return (
-    Object.keys(state.sessions).length + Object.keys(state.usageByKey).length
+    state.revision ?? (Object.keys(state.sessions).length + Object.keys(state.usageByKey).length)
   );
 }
 
@@ -409,5 +412,5 @@ export function liveSignal(state: LiveState): number {
  */
 export function mergeLive(session: Session, live: LiveState): Session {
   const liveSession = live.sessions[session.id];
-  return liveSession ? { ...session, ...liveSession } : session;
+  return liveSession && !live.streamInterrupted ? { ...session, ...liveSession } : session;
 }

@@ -7,6 +7,7 @@ export interface SessionSummary {
 
 export interface SummarizeSessionRequest {
   sessionId: string;
+  signal?: AbortSignal;
 }
 
 /**

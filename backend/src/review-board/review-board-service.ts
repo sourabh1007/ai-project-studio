@@ -166,6 +166,7 @@ export function createReviewBoardService(
     const model = discoverProjectModel(discovery);
     return {
       featureId: review.featureId,
+      repoId: review.repoId,
       pull: {
         number: review.pull.number,
         title: review.pull.title,
@@ -183,6 +184,7 @@ export function createReviewBoardService(
         blastRadiusMediumThreshold: deps.config.blastRadiusMediumThreshold,
         blastRadiusHighThreshold: deps.config.blastRadiusHighThreshold,
       },
+      reviewUpdatedAt: review.timestamps.updatedAt,
       generatedAt: deps.clock.isoNow(),
     };
   }

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { SessionKind } from '../provider/provider-contract.js';
-import type { StoredUsage, UsageRepo } from '../usage/usage-repo-port.js';
+import type { StoredUsage, UsageRepo, UsageLookup } from '../usage/usage-repo-port.js';
 
 interface UsageRow {
   session_id: string;
@@ -45,7 +45,7 @@ function mapUsage(row: UsageRow): StoredUsage {
 }
 
 /** SQLite-backed implementation of the UsageRepo port. */
-export function createUsageRepo(db: DatabaseSync): UsageRepo {
+export function createUsageRepo(db: DatabaseSync): UsageRepo & UsageLookup {
   const upsert = db.prepare(
     `INSERT OR REPLACE INTO usage_events
       (session_id, feature_id, turn_index, kind, provider, requested_model,
@@ -57,11 +57,16 @@ export function createUsageRepo(db: DatabaseSync): UsageRepo {
   const selectBySession = db.prepare(
     'SELECT * FROM usage_events WHERE session_id = ? ORDER BY turn_index',
   );
+  const selectOne = db.prepare('SELECT * FROM usage_events WHERE session_id = ? AND turn_index = ?');
   const deleteBySession = db.prepare(
     'DELETE FROM usage_events WHERE session_id = ?',
   );
 
   return {
+    get(sessionId, turnIndex) {
+      const row = selectOne.get(sessionId, turnIndex) as unknown as UsageRow | undefined;
+      return row ? mapUsage(row) : null;
+    },
     saveAll(events) {
       for (const e of events) {
         upsert.run(

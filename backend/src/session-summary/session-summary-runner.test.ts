@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createSessionSummaryRunner } from './session-summary-runner.js';
 import type { SessionSummary } from './session-summary-contract.js';
 import type { SessionSummaryStore } from './session-summary-store-port.js';
@@ -100,10 +100,24 @@ function harness(options: {
     clock: createClock(() => 0),
     config: summarizerDefaults,
   });
-  return { runner, requests, saved };
+  return { runner, requests, saved, transcripts };
 }
 
 describe('session-summary-runner', () => {
+  it.each(['dev1', 'meta1'])('does not recreate a summary after cancellation while reading %s', async (stage) => {
+    const controller = new AbortController();
+    const failure = new Error('Session deletion');
+    const h = harness({ transcript: null });
+    vi.spyOn(h.transcripts, 'load').mockImplementation(async (id) => {
+      if (stage === id) controller.abort(failure);
+      return { sessionId: id, stdout: ['Late result'], stderr: [], exitCode: 0 };
+    });
+    await expect(h.runner.summarize({ sessionId: 'dev1', signal: controller.signal })).rejects.toBe(failure);
+    expect(h.saved).toEqual([]);
+    if (stage === 'dev1') expect(h.requests).toEqual([]);
+    else expect(h.requests[0].signal).toBe(controller.signal);
+  });
+
   it('spawns a silent meta session and persists the extracted summary', async () => {
     const h = harness({
       transcript: {
@@ -113,13 +127,15 @@ describe('session-summary-runner', () => {
         exitCode: 0,
       },
     });
+    const signal = new AbortController().signal;
 
-    const summary = await h.runner.summarize({ sessionId: 'dev1' });
+    const summary = await h.runner.summarize({ sessionId: 'dev1', signal });
 
     expect(h.requests[0].kind).toBe('meta');
     expect(h.requests[0].featureId).toBe('f1');
     expect(h.requests[0].prompt).toContain('Login');
     expect(h.requests[0].prompt).toContain('wire up the login form');
+    expect(h.requests[0].signal).toBe(signal);
     expect(summary).toEqual({
       sessionId: 'dev1',
       content: 'Wired the login form and validation.',

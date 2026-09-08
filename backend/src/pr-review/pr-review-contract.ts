@@ -12,16 +12,16 @@ export interface PrReviewFailure {
 /**
  * Usage attributed to the metasession that produced one analysis step. Captured
  * so the review page, feature dashboard and PR session detail can highlight the
- * exact tokens and credits each metasession spent. Zeroed until the metasession
- * has reported usage telemetry.
+ * exact tokens and credits each metasession spent, or truthfully surface when a
+ * warm run could not provide full usage telemetry.
  */
 export interface MetaUsage {
   /** The metasession that produced (or attempted) this step. */
   sessionId: string;
-  inputTokens: number;
-  outputTokens: number;
-  nanoAiu: number;
-  credits: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  nanoAiu: number | null;
+  credits: number | null;
 }
 
 /** Fields shared by every AI analysis step. */

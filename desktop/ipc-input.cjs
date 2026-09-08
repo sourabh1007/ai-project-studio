@@ -13,10 +13,12 @@
 
 /**
  * Upper bound for any single string payload we accept over IPC. Real inputs
- * (theme names, URLs, file paths, clipboard text) are far smaller; this simply
+ * (theme names, URLs, file paths) are far smaller; this simply
  * caps pathological inputs so a giant string can't be forwarded to an OS API.
  */
 const MAX_STRING_LENGTH = 32 * 1024;
+// UTF-16 budget: 4 Mi code units (8 MiB), independent of path/URL limits.
+const MAX_CLIPBOARD_LENGTH = 4 * 1024 * 1024;
 
 /** True for a non-empty string within the accepted length bound. */
 function isBoundedString(value) {
@@ -64,11 +66,13 @@ function isExternalUrl(value) {
 
 /** True when `value` is acceptable clipboard text. */
 function isClipboardText(value) {
-  return isBoundedString(value);
+  return typeof value === 'string' && value.length > 0 &&
+    value.length <= MAX_CLIPBOARD_LENGTH;
 }
 
 module.exports = {
   MAX_STRING_LENGTH,
+  MAX_CLIPBOARD_LENGTH,
   isBoundedString,
   isThemeMode,
   isRevealablePath,

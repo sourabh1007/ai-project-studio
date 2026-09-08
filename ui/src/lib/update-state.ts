@@ -137,7 +137,7 @@ export function deriveUpdateUi(state: UpdateState): UpdateUi {
     (status === 'error' && hadUpdate);
 
   const tone: UpdateTone =
-    status === 'error' ? 'danger' : status === 'downloaded' ? 'success' : 'info';
+    status === 'error' || state.error ? 'danger' : status === 'downloaded' ? 'success' : 'info';
 
   const headline = headlineFor(state);
   const detail = detailFor(state);
@@ -181,6 +181,9 @@ function headlineFor(state: UpdateState): string {
 }
 
 function detailFor(state: UpdateState): string | null {
+  if (state.error) {
+    return state.error;
+  }
   if (state.status === 'error') {
     return state.error ?? 'Something went wrong while updating.';
   }
@@ -189,8 +192,8 @@ function detailFor(state: UpdateState): string | null {
       state.bytesPerSecond,
     )}`;
   }
-  if (state.status === 'available' && !state.canAutoInstall) {
-    return 'Downloads the installer — finish the guided install to update.';
+  if ((state.status === 'available' || state.status === 'downloaded') && !state.canAutoInstall) {
+    return 'Open the release page for guided installation. The app will not install an update or quit automatically.';
   }
   return state.releaseName ?? null;
 }

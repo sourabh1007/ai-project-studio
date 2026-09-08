@@ -10,13 +10,20 @@ import { buildTerminalWsUrl } from '../lib/terminal-url.js';
 import {
   decodeServerMessage,
   encodeClientMessage,
+  type TerminalState,
 } from '../lib/terminal-protocol.js';
-import { toClipboardText, createPasteGuard } from '../lib/clipboard.js';
+import { createTerminalDelivery } from '../lib/terminal-delivery.js';
+import {
+  toClipboardText, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
+  type ClipboardAttachmentResult, type DesktopClipboardBridge,
+} from '../lib/clipboard.js';
+import { copyText, isInternalClipboardFocusTransfer } from '../hooks/clipboard-write.js';
 import {
   COLOR_QUERY_OSC_IDENTS,
   isColorQuery,
   stripTerminalColorReports,
 } from '../lib/terminal-input.js';
+import { hasOpenModalDialog } from '../lib/focus-ownership.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -70,11 +77,8 @@ function xtermTheme(mode: ThemeMode): ITheme {
 }
 
 /** The subset of the Electron preload bridge this component uses. */
-interface DesktopClipboard {
+interface DesktopClipboard extends DesktopClipboardBridge {
   openExternal?: (url: string) => void;
-  copyText?: (text: string) => void;
-  readText?: () => Promise<string>;
-  readImage?: () => Promise<string>;
 }
 
 function desktopBridge(): DesktopClipboard | undefined {
@@ -114,46 +118,10 @@ function hostIsWindows(): boolean {
 }
 
 /**
- * Writes text to the OS clipboard as robustly as possible. In the packaged
- * desktop app this routes through Electron's native clipboard (reliable), then
- * falls back to the async Clipboard API and finally a synchronous
- * `execCommand('copy')` for plain browsers — so a copy never silently no-ops.
+ * Terminal-only normalization; the shared writer reports acknowledged outcomes.
  */
-function copyToClipboard(text: string): void {
-  if (!text) {
-    return;
-  }
-  const normalized = toClipboardText(text, hostIsWindows());
-  const bridge = desktopBridge();
-  if (bridge?.copyText) {
-    bridge.copyText(normalized);
-    return;
-  }
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(normalized).catch(() => {
-      legacyCopy(normalized);
-    });
-    return;
-  }
-  legacyCopy(normalized);
-}
-
-/** Synchronous clipboard write via a transient textarea (browser fallback). */
-function legacyCopy(text: string): void {
-  try {
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.setAttribute('readonly', '');
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    area.style.pointerEvents = 'none';
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand('copy');
-    document.body.removeChild(area);
-  } catch {
-    /* nothing else we can do */
-  }
+function copyToClipboard(text: string) {
+  return copyText(toClipboardText(text, hostIsWindows()));
 }
 
 /** Reads text from the OS clipboard, preferring the native desktop bridge. */
@@ -178,19 +146,18 @@ async function readClipboard(): Promise<string> {
 
 /**
  * Reads an image or copied file from the clipboard via the native desktop
- * bridge, returning a shell-ready path (a temp PNG for a raw screenshot, or the
- * source path for a copied file). Empty when there's no image/file to paste.
+ * bridge. Failure is distinct from absence and never permits text fallback.
  */
-async function readClipboardImagePath(): Promise<string> {
+async function readClipboardAttachment(sessionId: string): Promise<ClipboardAttachmentResult> {
   const bridge = desktopBridge();
   if (bridge?.readImage) {
     try {
-      return await bridge.readImage();
+      return await bridge.readImage({ sessionId });
     } catch {
-      return '';
+      return { status: 'error', error: 'attachment-unavailable' };
     }
   }
-  return '';
+  return { status: 'error', error: 'attachment-unavailable' };
 }
 
 /**
@@ -207,9 +174,13 @@ export function TerminalView({
   onExit?: (code: number | null) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const focusTokenRef = useRef(0);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const termRef = useRef<Terminal | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<{ state: TerminalState; notice: string }>({ state: 'connecting', notice: '' });
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(currentThemeMode);
   const themeModeRef = useRef(themeMode);
   themeModeRef.current = themeMode;
@@ -240,6 +211,9 @@ export function TerminalView({
     if (!host) {
       return;
     }
+    setAttachmentError(null);
+    host.dataset.focusOwner = `terminal:${sessionId}`;
+    host.dataset.focusToken = String(focusTokenRef.current);
 
     const windowsPtyOptions = hostIsWindows()
       ? { windowsPty: { backend: 'conpty' as const } }
@@ -290,10 +264,32 @@ export function TerminalView({
     for (const ident of COLOR_QUERY_OSC_IDENTS) {
       term.parser.registerOscHandler(ident, (payload) => isColorQuery(payload));
     }
+    const focusTerminal = (respectExternalFocus: boolean) => {
+      if (hasOpenModalDialog()) {
+        return;
+      }
+      const active = document.activeElement;
+      if (
+        respectExternalFocus &&
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        active !== host &&
+        !host.contains(active)
+      ) {
+        return;
+      }
+      try {
+        term.focus();
+      } catch {
+        /* terminal may be disposed during teardown; ignore */
+      }
+    };
+
     // Focus immediately on open so keyboard copy (Ctrl/Cmd+C on a selection)
-    // works right away on a fresh session, rather than only after the WebSocket
-    // connects and calls focus() in ws.onopen.
-    term.focus();
+    // works right away on a fresh session, but never steal it from an existing
+    // dialog or an explicit user target outside the terminal host.
+    focusTerminal(true);
 
     // Render with the GPU (WebGL) instead of xterm's default DOM renderer.
     // The DOM renderer positions each row as a separate element and, when the
@@ -317,13 +313,119 @@ export function TerminalView({
     }
 
     const repaintViewport = () => {
+      if (replayAwaitingTerminalSettle) {
+        pendingFitNeedsRepaint = true;
+        return;
+      }
       webgl?.clearTextureAtlas();
       termRef.current?.refresh(0, term.rows - 1);
     };
 
-    const safeFit = () => {
-      if (host.clientWidth === 0 || host.clientHeight === 0) {
+    // The FitAddon can only size the terminal once xterm has measured a
+    // character cell (which happens asynchronously after `open`). Firing a
+    // single fit synchronously leaves the terminal at its default 24 rows, so
+    // retry across a few frames/delays until the pane is filled.
+    const rafIds: number[] = [];
+    const timeoutIds = new Set<number>();
+    const scheduleTimeout = (callback: () => void, delay: number) => {
+      const id = window.setTimeout(() => {
+        timeoutIds.delete(id);
+        callback();
+      }, delay);
+      timeoutIds.add(id);
+      return id;
+    };
+    const cancelTrackedTimeout = (id: number | undefined) => {
+      if (id === undefined) {
         return;
+      }
+      if (timeoutIds.delete(id)) {
+        window.clearTimeout(id);
+      }
+    };
+
+    const base = resolveApiBase(
+      typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
+      import.meta.env.VITE_API_BASE,
+    );
+    let ws: WebSocket;
+    let disposed = false;
+    let reconnects = 0;
+    let reconnectTimer: number | undefined;
+    const delivery = createTerminalDelivery({
+      send: (message) => {
+        if (ws.readyState !== WebSocket.OPEN) throw new Error('Socket is not open');
+        ws.send(encodeClientMessage(message));
+      },
+      status: (state, notice) => setConnectionStatus({ state, notice }),
+    });
+    setConnectionStatus({ state: 'connecting', notice: '' });
+
+    const sendResize = () => {
+      delivery.resize(term.cols, term.rows);
+    };
+
+    let replayBarrierId = 0;
+    let replayPendingWrites = 0;
+    let replayBarrierSealed = false;
+    let replayAwaitingTerminalSettle = false;
+    let replayNeedsRepaint = false;
+    const cancelReplayBarrier = () => {
+      replayBarrierId += 1;
+      replayPendingWrites = 0;
+      replayBarrierSealed = false;
+      replayAwaitingTerminalSettle = false;
+      replayNeedsRepaint = false;
+    };
+    const settleReplayBarrier = () => {
+      if (!replayAwaitingTerminalSettle || !replayBarrierSealed) {
+        return;
+      }
+      if (replayPendingWrites > 0) {
+        return;
+      }
+      const repaint = replayNeedsRepaint;
+      cancelReplayBarrier();
+      requestFit({ repaint });
+    };
+    const beginReplayBarrier = () => {
+      replayBarrierId += 1;
+      replayPendingWrites = 0;
+      replayBarrierSealed = false;
+      replayAwaitingTerminalSettle = true;
+      replayNeedsRepaint = true;
+    };
+    const sealReplayBarrier = () => {
+      if (!replayAwaitingTerminalSettle) {
+        return;
+      }
+      replayBarrierSealed = true;
+      settleReplayBarrier();
+    };
+    const trackReplayWrite = () => {
+      if (!replayAwaitingTerminalSettle || replayBarrierSealed) {
+        return null;
+      }
+      const barrierId = replayBarrierId;
+      replayPendingWrites += 1;
+      return () => {
+        if (disposed || barrierId !== replayBarrierId) {
+          return;
+        }
+        replayPendingWrites = Math.max(0, replayPendingWrites - 1);
+        settleReplayBarrier();
+      };
+    };
+
+    let pendingFit = false;
+    let pendingFitNeedsRepaint = false;
+    let dragActive = false;
+    const performFit = () => {
+      if (replayAwaitingTerminalSettle || dragActive) {
+        return false;
+      }
+      if (host.clientWidth === 0 || host.clientHeight === 0) {
+        return false;
       }
       // Never refit while the user has an active selection. FitAddon.fit() calls
       // term.resize(), and xterm clears the visual selection on any real resize.
@@ -333,58 +435,34 @@ export function TerminalView({
       // then starts working once fits settle. Deferring the fit keeps the
       // selection intact so copying works immediately, even on a new session.
       if (term.hasSelection()) {
-        return;
+        return false;
       }
       try {
         fit.fit();
+        return true;
       } catch {
         /* xterm throws if measured before layout; ignore and retry */
+        return false;
       }
     };
-
-    // The FitAddon can only size the terminal once xterm has measured a
-    // character cell (which happens asynchronously after `open`). Firing a
-    // single fit synchronously leaves the terminal at its default 24 rows, so
-    // retry across a few frames/delays until the pane is filled.
-    const rafIds: number[] = [];
-    const timeoutIds: number[] = [];
-
-    const base = resolveApiBase(
-      typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
-      import.meta.env.VITE_API_BASE,
-    );
-    const ws = new WebSocket(
-      buildTerminalWsUrl(base, sessionId, window.location),
-    );
-
-    let lastSentCols = 0;
-    let lastSentRows = 0;
-
-    const sendResize = () => {
-      // Only notify the PTY when the grid dimensions actually change. The fresh
-      // session fit-retry burst calls applyFit five times in the first 600ms;
-      // without this guard each one re-sends the same cols/rows, flooding the
-      // CLI TUI with redundant SIGWINCH redraws that can garble input being
-      // pasted at that moment. Deduping keeps at most one resize per real size.
-      if (
-        ws.readyState === WebSocket.OPEN &&
-        (term.cols !== lastSentCols || term.rows !== lastSentRows)
-      ) {
-        lastSentCols = term.cols;
-        lastSentRows = term.rows;
-        ws.send(
-          encodeClientMessage({
-            type: 'resize',
-            cols: term.cols,
-            rows: term.rows,
-          }),
-        );
+    const flushPendingFit = () => {
+      if (!pendingFit) {
+        return;
       }
-    };
-
-    const applyFit = () => {
-      safeFit();
+      if (!performFit()) {
+        return;
+      }
+      pendingFit = false;
       sendResize();
+      if (pendingFitNeedsRepaint) {
+        pendingFitNeedsRepaint = false;
+        repaintViewport();
+      }
+    };
+    const requestFit = ({ repaint = false }: { repaint?: boolean } = {}) => {
+      pendingFit = true;
+      pendingFitNeedsRepaint ||= repaint;
+      flushPendingFit();
     };
 
     // Coalesce bursts of resize events (e.g. the sidebar collapse/expand
@@ -395,22 +473,18 @@ export function TerminalView({
     // fit+resize once the width stops changing, then redraws.
     let settleTimer: number | undefined;
     const applyFitSettled = () => {
-      if (settleTimer !== undefined) {
-        window.clearTimeout(settleTimer);
-      }
-      settleTimer = window.setTimeout(() => {
+      cancelTrackedTimeout(settleTimer);
+      settleTimer = scheduleTimeout(() => {
         settleTimer = undefined;
-        applyFit();
         // Clear cached glyphs and repaint so any stale cells from the old width
         // cannot survive into the newly wrapped viewport.
-        repaintViewport();
+        requestFit({ repaint: true });
       }, 120);
-      timeoutIds.push(settleTimer);
     };
 
-    rafIds.push(requestAnimationFrame(applyFit));
+    rafIds.push(requestAnimationFrame(() => requestFit()));
     for (const delay of [0, 60, 160, 320, 600]) {
-      timeoutIds.push(window.setTimeout(applyFit, delay));
+      scheduleTimeout(() => requestFit(), delay);
     }
 
     const dataSub = term.onData((data) => {
@@ -419,13 +493,11 @@ export function TerminalView({
       // input line, mixing garbage like `4;0;rgb:2e2e/3434/3636` into what the
       // user is typing. Keystrokes and CSI cursor/DA replies are unaffected.
       const outbound = stripTerminalColorReports(data);
-      if (outbound && ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeClientMessage({ type: 'input', data: outbound }));
-      }
+      delivery.offer(outbound);
     });
 
     const writeClipboard = (text: string) => {
-      copyToClipboard(text);
+      return copyToClipboard(text);
     };
 
     // Copy-on-select, done right. The hosted CLI enables any-event mouse
@@ -443,6 +515,8 @@ export function TerminalView({
       if (selection) {
         lastSelection = selection;
         selectedDuringDrag = true;
+      } else if (!dragActive) {
+        flushPendingFit();
       }
     });
 
@@ -456,22 +530,48 @@ export function TerminalView({
       repaintViewport();
     });
 
-    // Collapse duplicate pastes delivered as one user action (see
-    // createPasteGuard). 40ms is far below deliberate double-paste speed, so a
-    // real repeat is never suppressed, but a doubled single paste is.
-    const pasteGuard = createPasteGuard(40);
+    const pasteGuard = createPasteGuard();
+    let clipboardMounted = true;
+    let inputGeneration = 0;
+    let terminalGeneration = 0;
+    const invalidateClipboardRead = () => { inputGeneration++; };
+    const syncFocusToken = () => {
+      host.dataset.focusOwner = `terminal:${sessionId}`;
+      host.dataset.focusToken = String(focusTokenRef.current);
+    };
+    const invalidateFocusToken = () => {
+      focusTokenRef.current += 1;
+      syncFocusToken();
+    };
+    const onClipboardFocusOut = (event: FocusEvent) => {
+      if (!isInternalClipboardFocusTransfer(event)) invalidateClipboardRead();
+    };
+    const onWindowBlur = () => {
+      invalidateClipboardRead();
+      dragActive = false;
+      selectedDuringDrag = false;
+      lastSelection = '';
+    };
+    host.addEventListener('focusout', onClipboardFocusOut);
+    window.addEventListener('blur', onWindowBlur);
+    const captureInput = () => {
+      const generation = inputGeneration;
+      const target = document.activeElement;
+      return () => clipboardMounted && generation === inputGeneration &&
+        !!target && host.contains(target) && target === document.activeElement;
+    };
     const paste = (text: string) => {
-      if (text && pasteGuard.shouldPaste(text, Date.now())) {
-        term.paste(text);
-      }
+      if (text) term.paste(text);
     };
 
     // Bridge-based paste for the right-click path only (a context-menu paste
-    // fires no native `paste` event, so xterm won't handle it): text first, then
-    // an image/file fallback. The keyboard path does NOT use this — see onPaste.
+    // fires no native `paste` event, so xterm won't handle it). This path is
+    // text-only; the keyboard path does NOT use it — see onPaste.
     const pasteFromClipboard = async () => {
+      const ownsInput = captureInput();
+      if (!ownsInput()) return;
       const text = await readClipboard();
-      if (text) {
+      if (ownsInput() && text) {
         paste(text);
       }
       // Deliberately TEXT-only. A right-click carries no paste intent for a
@@ -496,6 +596,7 @@ export function TerminalView({
 
       if (key === 'c') {
         if (term.hasSelection()) {
+          e.preventDefault();
           writeClipboard(term.getSelection());
           return false;
         }
@@ -531,14 +632,13 @@ export function TerminalView({
     const onPaste = (event: ClipboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
-      // Only honour genuine user pastes. Synthetic/programmatic paste events
-      // (e.g. a menu accelerator's `webContents.paste()` firing alongside the
-      // native paste) can arrive mid-typing and would otherwise inject clipboard
-      // contents — including a stale image's temp-file path — into the line the
-      // user is actively typing.
-      if (!event.isTrusted) {
+      // JS-dispatched events are not native clipboard evidence. Browser/menu
+      // editing events may be trusted; the menu must not create a second path.
+      if (!event.isTrusted || !pasteGuard.shouldPaste(event)) {
         return;
       }
+      const ownsInput = captureInput();
+      if (!ownsInput()) return;
       const data = event.clipboardData;
       const text = data?.getData('text/plain') ?? '';
       if (text) {
@@ -550,18 +650,48 @@ export function TerminalView({
         (data.files.length > 0 ||
           Array.from(data.items).some((it) => it.kind === 'file'));
       if (hasImageOrFile) {
-        void readClipboardImagePath().then(paste);
+        setAttachmentError(null);
+        void readClipboardAttachment(sessionId).then((result) => {
+          if (!ownsInput()) return;
+          if (!result || result.status === 'error' || result.status === 'none') {
+            setAttachmentError(attachmentFailureMessage(result?.status === 'error' ? result.error : 'attachment-unavailable'));
+            return;
+          }
+          let text: string;
+          try {
+            if (result.source === 'clipboard-image' && result.sessionId !== sessionId) throw new Error('Session changed');
+            text = attachmentPasteText(result, hostIsWindows());
+          } catch {
+            setAttachmentError(attachmentFailureMessage('invalid-response'));
+            return;
+          }
+          try {
+            paste(text);
+          } catch {
+            setAttachmentError('Attachment delivery is unconfirmed. Check the terminal before retrying; input was not replayed.');
+          }
+        });
       }
     };
     host.addEventListener('paste', onPaste, { capture: true });
+    const onCopy = (event: ClipboardEvent) => {
+      if (!term.hasSelection()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void writeClipboard(term.getSelection());
+    };
+    host.addEventListener('copy', onCopy, { capture: true });
 
     // Right-click acts as copy-when-selected / paste-otherwise, the familiar
     // Windows-terminal convention, so text can be copied without a shortcut.
     const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
       if (term.hasSelection()) {
-        writeClipboard(term.getSelection());
-        term.clearSelection();
+        const selection = term.getSelection();
+        const ownsInput = captureInput();
+        void writeClipboard(selection).then((result) => {
+          if (result.ok && ownsInput() && term.getSelection() === selection) term.clearSelection();
+        });
       } else {
         void pasteFromClipboard();
       }
@@ -573,13 +703,10 @@ export function TerminalView({
     // terminal swallows keystrokes and can look hung, so aggressively refocus:
     // any pointer press inside the host, and whenever the window regains focus.
     const refocus = () => {
-      try {
-        term.focus();
-      } catch {
-        /* terminal may be disposed during teardown; ignore */
-      }
+      flushPendingFit();
+      focusTerminal(true);
     };
-    let dragActive = false;
+    let refocusTimer: number | undefined;
     const onHostMouseDown = () => {
       // Start of a fresh interaction: reset the copy-on-select capture so a
       // plain click (no drag) never copies and never clobbers the clipboard.
@@ -587,7 +714,11 @@ export function TerminalView({
       lastSelection = '';
       dragActive = true;
       // Defer so xterm's own selection/focus handling runs first.
-      timeoutIds.push(window.setTimeout(refocus, 0));
+      cancelTrackedTimeout(refocusTimer);
+      refocusTimer = scheduleTimeout(() => {
+        refocusTimer = undefined;
+        focusTerminal(false);
+      }, 0);
     };
     host.addEventListener('mousedown', onHostMouseDown);
     // Copy-on-select fires exactly once, at the END of a drag that actually
@@ -605,53 +736,112 @@ export function TerminalView({
       if (selectedDuringDrag && lastSelection) {
         copyToClipboard(lastSelection);
       }
+      flushPendingFit();
     };
     window.addEventListener('mouseup', onDocumentMouseUp);
     window.addEventListener('focus', refocus);
 
-    ws.onopen = () => {
-      safeFit();
-      sendResize();
-      term.focus();
-    };
-    ws.onmessage = (event) => {
-      const message = decodeServerMessage(String(event.data));
-      if (!message) {
-        return;
-      }
-      if (message.type === 'output') {
-        term.write(message.data);
-      } else if (message.type === 'resize') {
-        // Capture-size handshake sent right before the scrollback replay. Size
-        // the grid to the width the retained output was rendered at so the
-        // replayed full-screen TUI redraw lands aligned (not wrapped/garbled at
-        // this pane's default width). The scrollback 'output' frame is the very
-        // next message, so it is written at this width. Then, once that
-        // synchronous replay has flushed, fit back to the real pane: on Windows
-        // conpty (reflow disabled) the already-written history keeps its capture
-        // wrapping while the CLI redraws its current screen at the pane size.
-        if (message.cols > 0 && message.rows > 0) {
-          try {
-            term.resize(message.cols, message.rows);
-          } catch {
-            /* xterm may reject before layout; the fit burst still recovers */
+    const connect = () => {
+      ws = new WebSocket(buildTerminalWsUrl(base, sessionId, window.location));
+      ws.onopen = () => {
+        requestFit();
+      };
+      ws.onmessage = (event) => {
+        const message = decodeServerMessage(String(event.data));
+        if (!message) {
+          invalidateClipboardRead();
+          invalidateFocusToken();
+          cancelReplayBarrier();
+          delivery.disconnect(false);
+          ws.close(4400, 'Incompatible terminal protocol');
+          return;
+        }
+        if (message.type === 'state') {
+          if (
+            (terminalGeneration !== 0 && terminalGeneration !== message.generation) ||
+            message.state === 'reconnecting' ||
+            message.state === 'failed'
+          ) {
+            invalidateClipboardRead();
+            invalidateFocusToken();
+            cancelReplayBarrier();
+          }
+          if (message.state === 'closed') {
+            invalidateClipboardRead();
+            invalidateFocusToken();
+          }
+          terminalGeneration = message.generation;
+          syncFocusToken();
+        }
+        delivery.receive(message);
+        if (message.type === 'state' && message.state === 'closed') {
+          sealReplayBarrier();
+        }
+        if (message.type === 'state' && message.state === 'ready') {
+          reconnects = 0;
+          if (replayAwaitingTerminalSettle) {
+            sealReplayBarrier();
+          } else {
+            requestFit();
           }
         }
-        timeoutIds.push(
-          window.setTimeout(() => {
-            applyFit();
-            repaintViewport();
-          }, 0),
-        );
-      } else if (message.type === 'exit') {
-        term.write(
-          `\r\n\x1b[90m[session ended${
+        if (message.type === 'output') {
+          const onWritten = trackReplayWrite();
+          if (onWritten) {
+            term.write(message.data, onWritten);
+          } else {
+            term.write(message.data);
+          }
+        } else if (message.type === 'resize') {
+          // Replay uses the capture grid, then the existing fit path restores
+          // the pane dimensions after the retained output has been written.
+          beginReplayBarrier();
+          if (message.cols > 0 && message.rows > 0) {
+            try {
+              term.resize(message.cols, message.rows);
+            } catch {
+              /* xterm may reject before layout; the fit burst still recovers */
+            }
+          }
+        } else if (message.type === 'exit') {
+          invalidateClipboardRead();
+          invalidateFocusToken();
+          const footer = `\r\n\x1b[90m[session ended${
             message.code === null ? '' : ` · exit ${message.code}`
-          }]\x1b[0m\r\n`,
-        );
-        onExitRef.current?.(message.code);
-      }
+          }]\x1b[0m\r\n`;
+          // xterm processes writes FIFO: this finite fence also covers any
+          // replay or live output already queued before the exit footer.
+          beginReplayBarrier();
+          const onWritten = trackReplayWrite();
+          if (onWritten) {
+            term.write(footer, onWritten);
+            sealReplayBarrier();
+          } else {
+            term.write(footer);
+          }
+          onExitRef.current?.(message.code);
+        }
+      };
+      ws.onerror = () => {
+        invalidateClipboardRead();
+        invalidateFocusToken();
+        cancelReplayBarrier();
+        setConnectionStatus((previous) => ({
+          ...previous,
+          notice: 'Terminal connection failed; waiting for reconnect.',
+        }));
+      };
+      ws.onclose = (event) => {
+        if (disposed) return;
+        invalidateClipboardRead();
+        invalidateFocusToken();
+        cancelReplayBarrier();
+        const retry = event.code < 4400 && reconnects++ < 3;
+        delivery.disconnect(retry);
+        if (retry) reconnectTimer = window.setTimeout(connect, 1000);
+      };
     };
+    connect();
 
     const observer =
       typeof ResizeObserver !== 'undefined'
@@ -661,31 +851,56 @@ export function TerminalView({
     window.addEventListener('resize', applyFitSettled);
 
     return () => {
+      clipboardMounted = false;
+      disposed = true;
+      window.clearTimeout(reconnectTimer);
+      invalidateClipboardRead();
+      invalidateFocusToken();
+      cancelReplayBarrier();
+      cancelTrackedTimeout(refocusTimer);
+      cancelTrackedTimeout(settleTimer);
+      host.removeEventListener('focusout', onClipboardFocusOut);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('resize', applyFitSettled);
       window.removeEventListener('focus', refocus);
       window.removeEventListener('mouseup', onDocumentMouseUp);
       host.removeEventListener('mousedown', onHostMouseDown);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('paste', onPaste, { capture: true });
+      host.removeEventListener('copy', onCopy, { capture: true });
       observer?.disconnect();
       for (const id of rafIds) {
         cancelAnimationFrame(id);
       }
       for (const id of timeoutIds) {
-        clearTimeout(id);
+        window.clearTimeout(id);
       }
+      timeoutIds.clear();
       dataSub.dispose();
       selectionSub.dispose();
       scrollSub.dispose();
       ws.onopen = null;
       ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
       ws.close();
       webgl?.dispose();
       webLinks.dispose();
       term.dispose();
       termRef.current = null;
+      delete host.dataset.focusOwner;
+      delete host.dataset.focusToken;
     };
-  }, [sessionId]);
+  }, [sessionId, connectionAttempt]);
 
-  return <div className="terminal-host" ref={hostRef} />;
+  return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>
+      Terminal: {connectionStatus.state}
+      {connectionStatus.notice && <span> — {connectionStatus.notice}</span>}
+      {(connectionStatus.state === 'failed' || connectionStatus.state === 'closed') &&
+        <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect (input is not replayed)</button>}
+    </div>
+    {attachmentError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{attachmentError}</div>}
+    <div className="terminal-host" style={{ flex: 1, minHeight: 0 }} ref={hostRef} />
+  </div>;
 }

@@ -32,7 +32,7 @@ export interface ContextMerger {
    * Returns the updated document, or `null` when the merge produced nothing
    * usable (leaving the prior document untouched).
    */
-  merge(input: { sessionId: string }): Promise<ContextDocument | null>;
+  merge(input: { sessionId: string; signal?: AbortSignal }): Promise<ContextDocument | null>;
 }
 
 function render(template: string, values: Record<string, string>): string {
@@ -53,7 +53,7 @@ export function createContextMergeRunner(
   deps: ContextMergeRunnerDeps,
 ): ContextMerger {
   return {
-    async merge({ sessionId }) {
+    async merge({ sessionId, signal }) {
       const session = deps.sessions.get(sessionId);
       if (!session) {
         throw new NotFoundError(`Unknown session: ${sessionId}`);
@@ -64,6 +64,7 @@ export function createContextMergeRunner(
 
       const feature = deps.features.get(featureId);
       const transcript = await deps.transcripts.load(session.id);
+      signal?.throwIfAborted();
 
       const rawOutput = (transcript?.stdout.join('\n').trim() ?? '').slice(
         0,
@@ -88,10 +89,12 @@ export function createContextMergeRunner(
         model: deps.summarizerConfig.model,
         prompt,
         kind: 'meta',
+        signal,
       });
       const ended = await launched.completion;
 
       const metaTranscript = await deps.transcripts.load(ended.id);
+      signal?.throwIfAborted();
       const curated = extractSummaryText(metaTranscript, {
         ...deps.summarizerConfig,
         maxSummaryChars: deps.config.maxDocChars,
@@ -102,6 +105,7 @@ export function createContextMergeRunner(
       }
 
       emit('saving');
+      signal?.throwIfAborted();
       const saved = deps.service.setContent({
         scope: 'feature',
         scopeId: featureId,

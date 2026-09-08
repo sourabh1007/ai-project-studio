@@ -63,7 +63,44 @@ For a feature attached to a repository, the new-session `+` button is disabled u
 
 When a development session launches, the UI does not assemble context itself. The backend supplies a fresh bootstrap containing repository context, feature details, prior completed development-session summaries, and effective skills. Repository-analysis runs are hidden from Explorer/session SSE, while their usage appears in the existing **IDE AI** accounting view.
 
+## Workspace continuity, focus, and analytics
+
+Workspace tab order and the active tab survive top-level navigation and restart;
+deleted entities are pruned. Settings retain dirty namespace drafts across
+navigation and unrelated saves, with explicit conflict/discard handling.
+Schema controls have stable scoped labels, descriptions, and error associations.
+
+Dialogs retain intentional initial focus and trap keyboard navigation. Focus is
+restored only to a still-valid owner; replacing or disconnecting a terminal
+invalidates its captured focus token even when its DOM textarea is unchanged.
+Terminal autofocus does not override an open dialog or another explicit target.
+Disabled fieldsets and hidden/inert ancestors are excluded from focus targets.
+App and OS reduced-motion preferences suppress decorative motion.
+
+Terminal pane fitting is deferred while selection, dragging, or replay rendering
+owns the viewport. Clearing selection or releasing a drag applies the latest
+pending size without requiring another resize event; window blur releases a
+lost drag. Replay completion uses actual xterm write callbacks, not a guessed
+delay. The exit footer provides a finite rendering fence for both live exits
+and replayed closed sessions, while input remains governed by backend readiness.
+Deferred interaction timers retain only active handles.
+
+Feature analytics load a **manual snapshot**, showing the last successful load
+time and a **Refresh usage** action. A failed refresh retains the same feature's
+previous snapshot with an error; switching features cannot display the old
+feature's data or accept its stale response. This dashboard does not open an
+additional usage stream or rescan live history on each render. Live session
+meters and other SSE-backed surfaces remain separate.
+
 ## PR review UX
+
+Engineering Review sign-off is bound to the authoritative board's repository,
+PR, reviewed commit and evidence revision. Navigation/focus return revalidates
+that identity without starting another AI review. A failed refresh temporarily
+blocks certification but preserves decisions; retrying the same identity restores
+them. A changed identity archives prior approvals and clears current sign-off;
+a missing identity blocks certification without discarding decisions. Legacy
+identity-free approvals cannot certify new code.
 
 A feature created from a pull request renders a **PR review panel** (`feature-dashboard/pr-review-panel.tsx`) inside its dashboard. On mount it fetches `GET /features/:id/pr-review`; a `404` means the feature is not a PR review and the panel renders nothing. While generation is in flight it shows an animated "Analyzing pull request…" banner (reusing the repository-context spinner/dots). When ready it shows the **PR Summary** and **Core Analysis** sections; on failure it shows the failure detail and a **Retry** control. The panel consumes `pr.review.updated` from the shared SSE stream and prefers live state over the initial fetch, so lifecycle transitions appear without polling. **Refresh** calls `POST /features/:id/pr-review/refresh` to regenerate the review; the previous summary is retained for viewing if a later attempt fails.
 
@@ -72,6 +109,26 @@ Opening a PR review as its own editor tab renders the full **PR review page** (`
 ## MCP server management UX
 
 The **MCP Servers** view (`features/mcp/mcp-manager.tsx`) manages Model Context Protocol servers per provider. It lists the MCP-capable providers, and for the selected provider shows each configured server as a card with its spec summary and tool-discovery status. From here you can **add** and **edit** servers (`mcp-server-form.tsx`), **restart** a server, and **enable/disable individual tools** surfaced by a live discovery probe. Tool toggles and restarts take effect for already-open sessions without restarting the shell. Authentication, when required, is handled as part of the restart/discovery flow.
+
+Configuration listing does not probe servers; discovery starts only when Tools
+opens. Lists and dialogs belong to the selected provider, and switching providers
+closes old dialogs and rejects stale completions. Failed loads offer retry rather
+than an empty-state claim. Save errors remain inside the editor with its draft;
+failed tool probes disable stale tool controls until discovery succeeds.
+
+## First-run installation
+
+The Agency setup gate always offers **Continue without waiting**, including
+during status checks and installation. A status check is bounded to 15 seconds;
+failure or an incomplete response does not mean Agency is missing and does not
+start installation. After 30 seconds without installer output, the gate reports
+stalled progress while continuing to listen for completion.
+
+Deferral closes the progress stream, not the installer process. If the stream
+disconnects, the gate reports an unknown outcome and **Check again** rechecks
+installation status without starting another possibly concurrent installer.
+Agency-dependent features may remain unavailable. Recent output is limited to
+200 lines, with oversized lines explicitly marked as truncated.
 
 ## Automations UX
 

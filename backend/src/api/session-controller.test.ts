@@ -118,8 +118,9 @@ function harness(
 describe('session-controller', () => {
   it('starts a session with the original prompt and returns 202', async () => {
     const h = harness(Promise.resolve(session));
+    const signal = new AbortController().signal;
     const result = await pick(h.routes, 'post', '/features/:featureId/sessions')(
-      req({ params: { featureId: 'f1' }, body: { prompt: 'hello', model: 'gpt-5.4-mini' } }),
+      req({ params: { featureId: 'f1' }, body: { prompt: 'hello', model: 'gpt-5.4-mini' }, signal }),
     );
     expect(result.status).toBe(202);
     expect(result.body).toBe(session);
@@ -127,6 +128,7 @@ describe('session-controller', () => {
       featureId: 'f1',
       prompt: 'hello',
       model: 'gpt-5.4-mini',
+      signal,
     });
   });
 

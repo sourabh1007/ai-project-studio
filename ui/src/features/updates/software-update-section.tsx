@@ -68,7 +68,7 @@ export function SoftwareUpdateSection() {
         </div>
       )}
 
-      {state.status === 'error' && ui.detail && (
+      {state.error && ui.detail && (
         <p className="update-section-error" role="alert">
           {ui.detail}
         </p>
@@ -90,7 +90,7 @@ export function SoftwareUpdateSection() {
           )}
           {ui.canInstall && (
             <Button onClick={install}>
-              {ui.autoInstall ? 'Restart & install' : 'Install…'}
+              {ui.autoInstall ? 'Restart & install' : 'Open release page'}
             </Button>
           )}
         </div>

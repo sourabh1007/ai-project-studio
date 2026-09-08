@@ -1,4 +1,4 @@
-name: Release
+name: Release prerelease
 
 on:
   push:
@@ -7,14 +7,43 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Required release SHA verification (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout exact release SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and typecheck
+        run: npm run build
+      - name: Desktop harness regression tests
+        run: npm run test:desktop:harness
+      - name: Backend coverage gate
+        run: npm run test:coverage --workspace backend
+      - name: UI coverage gate
+        run: npm run test:coverage --workspace ui
+
   build:
+    needs: verify
     name: Build ${{ matrix.label }} installer
     runs-on: ${{ matrix.os }}
     strategy:
@@ -28,6 +57,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -46,7 +77,7 @@ jobs:
 
       - name: Install backend production dependencies
         working-directory: desktop/build/backend
-        run: npm install --omit=dev --no-audit --no-fund
+        run: npm ci --omit=dev --workspace backend --include-workspace-root=false --no-audit --no-fund
 
       - name: Build Windows installer (Azure Trusted Signing)
         if: runner.os == 'Windows'
@@ -54,7 +85,18 @@ jobs:
         shell: pwsh
         run: |
           $signArgs = @()
-          if ($env:AZURE_CODE_SIGNING_ENDPOINT) {
+          $signingKeys = @(
+            'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
+            'AZURE_CODE_SIGNING_ENDPOINT', 'AZURE_CODE_SIGNING_ACCOUNT',
+            'AZURE_CODE_SIGNING_PROFILE'
+          )
+          $configured = @($signingKeys | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          })
+          if ($configured.Count -gt 0 -and $configured.Count -ne $signingKeys.Count) {
+            throw 'Incomplete Azure Trusted Signing configuration; refusing an unsigned fallback.'
+          }
+          if ($configured.Count -eq $signingKeys.Count) {
             Write-Host 'Azure Trusted Signing configured — producing a signed installer.'
             $signArgs = @(
               "-c.win.azureSignOptions.endpoint=$env:AZURE_CODE_SIGNING_ENDPOINT",
@@ -62,13 +104,13 @@ jobs:
               "-c.win.azureSignOptions.certificateProfileName=$env:AZURE_CODE_SIGNING_PROFILE"
             )
           } else {
-            Write-Warning 'AZURE_CODE_SIGNING_* secrets are not set — building an UNSIGNED Windows installer.'
+            Write-Warning 'Signing is not configured: producing an UNSIGNED INTERNAL candidate, not a production release.'
           }
           npm run dist:win -- @signArgs
         env:
           # Microsoft Entra ID service-principal credentials for Azure Trusted
-          # Signing (azure.identity EnvironmentCredential). Absent secrets fall
-          # back to an unsigned build above rather than failing the release.
+          # Signing (azure.identity EnvironmentCredential). All absent permits
+          # an unsigned internal candidate; partial configuration fails closed.
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -86,7 +128,10 @@ jobs:
           # auto-discovery so the build doesn't fail hunting for an identity.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Upload build artifacts
+      - name: Record internal candidate provenance
+        run: node desktop/scripts/release-candidate.cjs
+
+      - name: Upload internal candidate artifacts
         uses: actions/upload-artifact@v6
         with:
           name: ai-project-studio-${{ matrix.label }}
@@ -95,15 +140,58 @@ jobs:
             desktop/release/*.dmg
             desktop/release/*.blockmap
             desktop/release/*.yml
+            desktop/release/candidate-*.json
           if-no-files-found: error
 
-      - name: Attach installers to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+  publish-prerelease:
+    name: Publish explicitly unqualified prerelease
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v5
         with:
-          files: |
-            desktop/release/*.exe
-            desktop/release/*.dmg
-            desktop/release/*.blockmap
-            desktop/release/*.yml
-          fail_on_unmatched_files: false
+          ref: ${{ github.sha }}
+      - name: Download exact candidate artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: ai-project-studio-*
+          path: artifacts
+          merge-multiple: true
+      - name: Verify provenance and publish installers without update feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const version = require('./package.json').version;
+          if (process.env.GITHUB_REF_NAME !== `v${version}`) throw new Error('Release tag/version mismatch');
+          for (const platform of ['win32', 'darwin']) {
+            const manifest = JSON.parse(fs.readFileSync(`artifacts/candidate-${platform}.json`, 'utf8'));
+            if (manifest.sourceSha !== process.env.GITHUB_SHA || manifest.version !== version ||
+                manifest.ci.runId !== process.env.GITHUB_RUN_ID ||
+                manifest.ci.runAttempt !== process.env.GITHUB_RUN_ATTEMPT) {
+              throw new Error('Release provenance mismatch');
+            }
+            for (const artifact of manifest.artifacts) {
+              if (!/^[^/\\]+$/.test(artifact.name)) throw new Error('Invalid artifact name');
+              const bytes = fs.readFileSync(`artifacts/${artifact.name}`);
+              if (bytes.length !== artifact.bytes ||
+                  crypto.createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) {
+                throw new Error(`Release artifact mismatch: ${artifact.name}`);
+              }
+            }
+          }
+          NODE
+          tag="$GITHUB_REF_NAME"
+          gh release create "$tag" --verify-tag --draft --prerelease \
+            --title "$tag (unsigned prerelease)" \
+            --notes-file "docs/releases/${tag#v}.md"
+          gh release upload "$tag" artifacts/*.exe artifacts/*.dmg artifacts/candidate-*.json
+          gh release edit "$tag" --draft=false --prerelease --latest=false

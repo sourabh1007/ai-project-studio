@@ -1,5 +1,12 @@
 import type { PtyProcess } from './pty-contract.js';
-import { stripAnsi } from './ansi.js';
+import { createAnsiParser, createAnsiStripper, type AnsiParser } from './ansi.js';
+import {
+  createAnsiSafeUtf8TailBuffer,
+  createUtf8TailBuffer,
+  isHighSurrogate,
+  nextUtf8Unit,
+  type TerminalReplayBuffer,
+} from './terminal-local-buffer.js';
 
 /** A connected client that receives terminal output and the final exit code. */
 export interface TerminalOutputSink {
@@ -17,6 +24,7 @@ export interface TerminalOutputSink {
 
 export interface TerminalSessionDeps {
   sessionId: string;
+  generation?: number;
   pty: PtyProcess;
   /** Whether browser input may be forwarded immediately. */
   inputReady: boolean;
@@ -42,6 +50,7 @@ export interface TerminalSessionDeps {
 
 export interface TerminalSession {
   readonly sessionId: string;
+  readonly generation: number;
   /** Writes raw bytes to the terminal; transports enforce input readiness. */
   write(data: string): void;
   /**
@@ -49,7 +58,7 @@ export interface TerminalSession {
    * input waits for this state to become `ready`.
    */
   readonly inputReadiness: 'pending' | 'ready' | 'closed';
-  /** Observes the transition out of `pending`; settled states fire immediately. */
+  /** Observes readiness including ready → closed; current settled state fires immediately. */
   onInputReadiness(
     listener: (state: 'ready' | 'closed') => void,
   ): () => void;
@@ -87,10 +96,16 @@ export function createTerminalSession(
 ): TerminalSession {
   const { sessionId, pty, scrollbackBytes, transcriptBytes } = deps;
   const sinks = new Set<TerminalOutputSink>();
+  const pendingSinks = new Map<TerminalOutputSink, {
+    parser: AnsiParser;
+    highSurrogate: string | null;
+  }>();
   let cols = deps.initialCols ?? 0;
   let rows = deps.initialRows ?? 0;
-  let scrollback = '';
-  let transcript = '';
+  const scrollback: TerminalReplayBuffer =
+    createAnsiSafeUtf8TailBuffer(scrollbackBytes);
+  const transcript = createUtf8TailBuffer(transcriptBytes);
+  const stripTranscriptAnsi = createAnsiStripper();
   let exited = false;
   let exitCode: number | null = null;
   let inputReadiness: 'pending' | 'ready' | 'closed' = deps.inputReady
@@ -101,56 +116,95 @@ export function createTerminalSession(
   >();
 
   const settleInputReadiness = (state: 'ready' | 'closed'): void => {
-    if (inputReadiness !== 'pending') {
+    if (inputReadiness === state || inputReadiness === 'closed') {
       return;
     }
     inputReadiness = state;
     for (const listener of readinessListeners) {
       listener(state);
     }
-    readinessListeners.clear();
+    if (state === 'closed') readinessListeners.clear();
+  };
+
+  const sendToNewlyReadySinks = (data: string): void => {
+    if (pendingSinks.size === 0 || data.length === 0) {
+      return;
+    }
+    for (const [sink, pending] of pendingSinks) {
+      const { parser } = pending;
+      const input = (pending.highSurrogate ?? '') + data;
+      pending.highSurrogate = null;
+      let index = 0;
+      while (index < input.length && !parser.atTextBoundary()) {
+        if (isHighSurrogate(input.charCodeAt(index)) && index + 1 === input.length) {
+          pending.highSurrogate = input[index];
+          break;
+        }
+        const unit = nextUtf8Unit(input, index);
+        parser.write(unit);
+        index += unit.length;
+      }
+      if (!parser.atTextBoundary()) {
+        continue;
+      }
+      pendingSinks.delete(sink);
+      sinks.add(sink);
+      if (index < input.length) {
+        sink.send(input.slice(index));
+      }
+    }
   };
 
   pty.onData((data) => {
-    scrollback += data;
-    if (scrollback.length > scrollbackBytes) {
-      scrollback = scrollback.slice(scrollback.length - scrollbackBytes);
-    }
-    transcript += stripAnsi(data);
-    if (transcript.length > transcriptBytes) {
-      transcript = transcript.slice(transcript.length - transcriptBytes);
-    }
+    scrollback.append(data);
+    transcript.append(stripTranscriptAnsi(data));
     for (const sink of sinks) {
       sink.send(data);
     }
+    sendToNewlyReadySinks(data);
   });
 
   pty.onExit((code) => {
+    if (exited) return;
     exited = true;
     exitCode = code;
+    scrollback.finalize();
+    transcript.finalize();
     settleInputReadiness('closed');
     for (const sink of sinks) {
       sink.exit(code);
     }
+    for (const [sink, pending] of pendingSinks) {
+      if (pending.highSurrogate !== null && pending.parser.atTextBoundary()) {
+        sink.send('\ufffd');
+      }
+      sink.exit(code);
+    }
+    pendingSinks.clear();
     deps.onExit(code);
   });
 
   return {
     sessionId,
-    write: (data) => pty.write(data),
+    generation: deps.generation ?? 1,
+    write: (data) => {
+      if (inputReadiness === 'closed') throw new Error('Terminal is closed');
+      pty.write(data);
+    },
     get inputReadiness() {
       return inputReadiness;
     },
     onInputReadiness(listener) {
       if (inputReadiness !== 'pending') {
         listener(inputReadiness);
-        return () => {};
       }
+      if (inputReadiness === 'closed') return () => {};
       readinessListeners.add(listener);
       return () => readinessListeners.delete(listener);
     },
     markInputReady: () => settleInputReadiness('ready'),
     resize: (nextCols, nextRows) => {
+      if (inputReadiness === 'closed') throw new Error('Terminal is closed');
       cols = nextCols;
       rows = nextRows;
       pty.resize(nextCols, nextRows);
@@ -159,26 +213,39 @@ export function createTerminalSession(
       // Tell the client the capture size before replaying, so it can match its
       // grid width to the scrollback and avoid garbled/overlapping redraws.
       sink.resize?.(cols, rows);
-      if (scrollback.length > 0) {
-        sink.send(scrollback);
+      const retained = scrollback.text();
+      if (retained.length > 0) {
+        sink.send(retained);
       }
       if (exited) {
         sink.exit(exitCode);
+        return () => {};
       }
-      sinks.add(sink);
+      const lateJoinState = scrollback.lateJoinState();
+      const highSurrogate = scrollback.pendingHighSurrogate();
+      if (lateJoinState || highSurrogate !== null) {
+        pendingSinks.set(sink, {
+          parser: createAnsiParser(lateJoinState ?? undefined),
+          highSurrogate,
+        });
+      } else {
+        sinks.add(sink);
+      }
       return () => {
         sinks.delete(sink);
+        pendingSinks.delete(sink);
       };
     },
-    kill: () => pty.kill(),
+    kill: () => {
+      settleInputReadiness('closed');
+      pty.kill();
+    },
     notify(text) {
-      scrollback += text;
-      if (scrollback.length > scrollbackBytes) {
-        scrollback = scrollback.slice(scrollback.length - scrollbackBytes);
-      }
+      scrollback.append(text);
       for (const sink of sinks) {
         sink.send(text);
       }
+      sendToNewlyReadySinks(text);
     },
     get exited() {
       return exited;
@@ -186,6 +253,6 @@ export function createTerminalSession(
     get exitCode() {
       return exitCode;
     },
-    transcriptText: () => transcript,
+    transcriptText: () => transcript.text(),
   };
 }

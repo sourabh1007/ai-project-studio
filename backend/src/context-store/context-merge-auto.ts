@@ -10,7 +10,7 @@ export interface ContextMergeAutoDeps {
 
 export interface ContextMergeAutoTrigger {
   /** Handler for the `session.ended` event. */
-  onSessionEnded(session: Session): void;
+  onSessionEnded(session: Session, signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -24,14 +24,14 @@ export function createContextMergeAutoTrigger(
   deps: ContextMergeAutoDeps,
 ): ContextMergeAutoTrigger {
   return {
-    onSessionEnded(session) {
+    async onSessionEnded(session, signal) {
       if (!deps.config.autoMergeEnabled) {
         return;
       }
       if (session.kind !== 'dev' || session.scope === 'internal') {
         return;
       }
-      void deps.merger.merge({ sessionId: session.id }).catch((error) => {
+      await deps.merger.merge({ sessionId: session.id, signal }).catch((error) => {
         deps.logger.error('Auto context merge failed', error);
       });
     },

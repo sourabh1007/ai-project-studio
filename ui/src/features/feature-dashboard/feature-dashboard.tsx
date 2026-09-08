@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -13,9 +13,9 @@ import {
   YAxis,
 } from 'recharts';
 import { useApi } from '../../app/api-context.js';
-import { useAsync } from '../../hooks/use-async.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { sessionDisplayName, sessionWorkTitle } from '../../lib/session-names.js';
+import { useAsync } from '../../hooks/use-async.js';
 import {
   buildUsageTree,
   type FeatureUsageTreeNode,
@@ -28,7 +28,7 @@ import type {
   FeatureUsage,
   Session,
 } from '../../lib/types.js';
-import { EmptyState, ErrorText } from '../../components/ui.js';
+import { Button, EmptyState, ErrorText } from '../../components/ui.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { Loader } from '../../components/loading.js';
 import {
@@ -57,9 +57,82 @@ const AIC_COLOR = '#818cf8';
 const TIME_COLOR = '#34d399';
 
 const numberFmt = new Intl.NumberFormat('en-US');
+const snapshotFmt = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
 
 function color(i: number): string {
   return PALETTE[i % PALETTE.length];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatSnapshotTime(value: string): string {
+  return snapshotFmt.format(new Date(value));
+}
+
+function useFeatureUsageSnapshot(featureId: string) {
+  const api = useApi();
+  const visitRef = useRef(0);
+  const requestRef = useRef(0);
+  const [data, setData] = useState<FeatureUsage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [loadedFeatureId, setLoadedFeatureId] = useState<string | null>(null);
+  const [errorFeatureId, setErrorFeatureId] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (preserveData: boolean) => {
+      const visit = visitRef.current;
+      const request = ++requestRef.current;
+      setLoading(true);
+      setError(null);
+      setErrorFeatureId(null);
+      if (!preserveData) {
+        setData(null);
+        setLastLoadedAt(null);
+        setLoadedFeatureId(null);
+      }
+      try {
+        const result = await api.getFeatureUsage(featureId);
+        if (visit !== visitRef.current || request !== requestRef.current) {
+          return;
+        }
+        setData(result);
+        setLastLoadedAt(new Date().toISOString());
+        setLoadedFeatureId(featureId);
+      } catch (error: unknown) {
+        if (visit !== visitRef.current || request !== requestRef.current) {
+          return;
+        }
+        setError(errorMessage(error));
+        setErrorFeatureId(featureId);
+      } finally {
+        if (visit === visitRef.current && request === requestRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [api, featureId],
+  );
+
+  useEffect(() => {
+    visitRef.current += 1;
+    requestRef.current = 0;
+    void load(false);
+  }, [featureId, load]);
+
+  return {
+    data: loadedFeatureId === featureId ? data : null,
+    loading,
+    error: errorFeatureId === featureId ? error : null,
+    lastLoadedAt: loadedFeatureId === featureId ? lastLoadedAt : null,
+    reload: () => void load(true),
+  };
 }
 
 function ChartTooltip({
@@ -498,23 +571,47 @@ export function FeatureDashboard({
   featureDescription?: string;
   contextPhase?: ContextStatusPhase;
 }) {
-  const api = useApi();
-  const { data, loading, error } = useAsync<FeatureUsage>(
-    () => api.getFeatureUsage(featureId),
-    [featureId],
+  const { data, loading, error, lastLoadedAt, reload } = useFeatureUsageSnapshot(
+    featureId,
   );
 
   const description = featureDescription?.trim();
+  const showInitialLoading = loading && !data;
+  const showInitialError = !!error && !data;
+  const showEmpty = !!data && data.totals.sessions === 0;
+  const showCharts = !!data && data.totals.sessions > 0;
 
   return (
     <div className="dashboard">
       <header className="dash-header">
         <h2 className="dash-title">{featureName}</h2>
         <p className="dash-description">{description || 'No description'}</p>
+        <p className="muted">
+          This usage view is a manual snapshot. Refresh to fetch the latest totals
+          for this feature.
+        </p>
+        {lastLoadedAt && (
+          <p className="muted">
+            <time dateTime={lastLoadedAt}>
+              Snapshot captured {formatSnapshotTime(lastLoadedAt)}
+            </time>
+          </p>
+        )}
       </header>
 
-      <ErrorText error={error} />
-      {loading && <Loader label="Loading analytics" />}
+      {error && !showInitialError && (
+        <p className="muted" role="status">
+          Showing the last loaded usage snapshot for this feature. Refresh failed:{' '}
+          {error}
+        </p>
+      )}
+      <ErrorText error={showInitialError ? error : null} />
+      {showInitialLoading && <Loader label="Loading analytics" />}
+      <div style={{ marginBottom: 12 }}>
+        <Button variant="secondary" onClick={reload} loading={loading && !!data}>
+          Refresh usage
+        </Button>
+      </div>
 
       <section className="dash-skills">
         <SkillTagger
@@ -524,13 +621,26 @@ export function FeatureDashboard({
         />
       </section>
 
-      {data && data.totals.sessions === 0 && (
+      {showInitialError && (
         <div className="dash-empty">
-          <EmptyState message="No usage recorded for this feature yet. Run a session to see analytics." />
+          <EmptyState
+            title="Feature usage is unavailable"
+            description="We couldn't load this feature's usage snapshot. Retry to fetch the latest totals."
+            action={{ label: 'Retry', onClick: reload }}
+          />
         </div>
       )}
 
-      {data && data.totals.sessions > 0 && (
+      {showEmpty && (
+        <div className="dash-empty">
+          <EmptyState
+            message="No usage recorded for this feature yet. Run a session to see analytics."
+            action={{ label: 'Refresh usage', onClick: reload }}
+          />
+        </div>
+      )}
+
+      {showCharts && (
         <Charts data={data} featureId={featureId} featureName={featureName} />
       )}
 

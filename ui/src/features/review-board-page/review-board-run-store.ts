@@ -33,9 +33,14 @@ import {
   RetryCancelledError,
 } from '../../lib/review-board-progress.js';
 import {
+  beginSignoffIdentityRefresh,
+  canCertifySignoff,
   clearPerspectivesReviewed,
   emptySignoff,
   parseSignoff,
+  recordSignoffIdentityFailure,
+  resolveSignoffIdentity,
+  syncSignoffIdentity,
   withPerspectiveReviewed,
   withPrReviewCleared,
   withPrReviewed,
@@ -155,6 +160,9 @@ interface FeatureRecord {
   state: ReviewBoardRunState;
   runToken: number;
   controller: AbortController | null;
+  loadToken: number;
+  loadPromise: Promise<void> | null;
+  loadMode: 'refresh' | 'force' | null;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -172,7 +180,7 @@ function isAbort(error: unknown): boolean {
   );
 }
 
-class ReviewBoardRunStore {
+export class ReviewBoardRunStore {
   private readonly records = new Map<string, FeatureRecord>();
   private readonly listeners = new Map<string, Set<() => void>>();
 
@@ -187,6 +195,9 @@ class ReviewBoardRunStore {
         },
         runToken: 0,
         controller: null,
+        loadToken: 0,
+        loadPromise: null,
+        loadMode: null,
       };
       this.records.set(featureId, rec);
     }
@@ -239,6 +250,9 @@ class ReviewBoardRunStore {
     perspectiveId: string,
     reviewed: boolean,
   ): void {
+    if (reviewed && !canCertifySignoff(this.record(featureId).state.signoff)) {
+      return;
+    }
     this.updateSignoff(featureId, (prev) =>
       withPerspectiveReviewed(
         prev,
@@ -250,6 +264,9 @@ class ReviewBoardRunStore {
 
   /** Mark the whole PR reviewed; the pure guard ignores it unless all are. */
   markPrReviewed(featureId: string, perspectiveIds: readonly string[]): void {
+    if (!canCertifySignoff(this.record(featureId).state.signoff)) {
+      return;
+    }
     this.updateSignoff(featureId, (prev) =>
       withPrReviewed(prev, perspectiveIds, new Date().toISOString()),
     );
@@ -349,28 +366,68 @@ class ReviewBoardRunStore {
     force = false,
   ): Promise<void> {
     const rec = this.record(featureId);
-    if (!force && (rec.state.loading || rec.state.running || rec.state.board)) {
-      return;
+    if (!force && rec.state.running) {
+      return rec.loadPromise ?? Promise.resolve();
     }
+    if (rec.loadPromise && (!force || rec.loadMode === 'force')) {
+      return rec.loadPromise;
+    }
+    const token = rec.loadToken + 1;
+    rec.loadToken = token;
+    rec.loadMode = force ? 'force' : 'refresh';
     this.update(featureId, (prev) => ({
       ...prev,
       loading: true,
       loadError: null,
+      signoff: beginSignoffIdentityRefresh(prev.signoff),
     }));
-    try {
-      const board = await api.getReviewBoard(featureId);
-      this.update(featureId, (prev) => ({
-        ...prev,
-        board,
-        loading: false,
-      }));
-    } catch (error) {
-      this.update(featureId, (prev) => ({
-        ...prev,
-        loading: false,
-        loadError: messageOf(error, 'Failed to load the review board.'),
-      }));
-    }
+    rec.loadPromise = (async () => {
+      try {
+        const board = await api.getReviewBoard(featureId);
+        if (this.record(featureId).loadToken !== token) {
+          return;
+        }
+        this.update(featureId, (prev) => {
+          const signoff = syncSignoffIdentity(
+            prev.signoff,
+            resolveSignoffIdentity(board),
+            new Date().toISOString(),
+          );
+          this.saveSignoff(featureId, signoff);
+          return {
+            ...prev,
+            board,
+            loading: false,
+            loadError: null,
+            signoff,
+          };
+        });
+      } catch (error) {
+        if (this.record(featureId).loadToken !== token) {
+          return;
+        }
+        this.update(featureId, (prev) => {
+          const signoff = recordSignoffIdentityFailure(
+            prev.signoff,
+            messageOf(error, 'Failed to refresh the review board.'),
+          );
+          this.saveSignoff(featureId, signoff);
+          return {
+            ...prev,
+            loading: false,
+            loadError: messageOf(error, 'Failed to load the review board.'),
+            signoff,
+          };
+        });
+      } finally {
+        const current = this.record(featureId);
+        if (current.loadToken === token) {
+          current.loadPromise = null;
+          current.loadMode = null;
+        }
+      }
+    })();
+    return rec.loadPromise;
   }
 
   /** Abort any in-flight run and reload the clean board from scratch. */
@@ -844,4 +901,9 @@ class ReviewBoardRunStore {
 }
 
 /** The app-wide singleton — one live run per feature, shared across mounts. */
-export const reviewBoardRunStore = new ReviewBoardRunStore();
+export function createReviewBoardRunStore(): ReviewBoardRunStore {
+  return new ReviewBoardRunStore();
+}
+
+/** The app-wide singleton — one live run per feature, shared across mounts. */
+export const reviewBoardRunStore = createReviewBoardRunStore();

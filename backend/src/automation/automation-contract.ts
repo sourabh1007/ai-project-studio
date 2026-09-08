@@ -164,7 +164,28 @@ export interface Subagent {
 export interface AutomationRun {
   id: string;
   automationId: string;
+  source: 'scheduled' | 'manual';
+  /**
+   * Durable lifecycle phase for this occurrence. `finished` means the final
+   * outcome is reflected by {@link status}; every other value is the explicit
+   * unsettled/interrupted state the scheduler persists across restarts.
+   */
+  phase:
+    | 'queued'
+    | 'checking'
+    | 'acting'
+    | 'finished'
+    | 'cancelled'
+    | 'interrupted'
+    | 'uncertain';
+  /** Scheduled due timestamp reserved for this run, when it came from a tick. */
+  scheduledForAt: string | null;
+  /** Check-provided occurrence key captured for edge-triggering and logs. */
+  occurrenceKey: string | null;
+  /** Stable durable identity used to deduplicate queued/running work. */
+  dedupeKey: string | null;
   startedAt: string;
+  dispatchedAt: string | null;
   endedAt: string | null;
   /** Whether the condition matched and the action ran on this tick. */
   triggered: boolean;
@@ -173,6 +194,30 @@ export interface AutomationRun {
   detail: string | null;
   /** Metasession id when the action produced one (usage attribution). */
   sessionId: string | null;
+  /** Durable report body when the action generated one. */
+  report?: string | null;
+  /**
+   * For explicit manual retries of uncertain work, the specific unresolved run
+   * ids the user acknowledged retrying.
+   */
+  acknowledgedRunIds?: string[] | null;
+  /**
+   * The full unresolved uncertainty snapshot the user saw when authorizing a
+   * manual retry, so stale confirmations cannot bless newly-seen ambiguity.
+   */
+  acknowledgedSnapshotRunIds?: string[] | null;
+  /** Run id that durably reconciled this uncertain attempt, when known. */
+  resolvedByRunId?: string | null;
+}
+
+export interface AutomationUncertainty {
+  summary: string;
+  unresolvedRunIds: string[];
+}
+
+export interface UncertaintyAcknowledgement {
+  snapshotRunIds: string[];
+  targetRunIds: string[];
 }
 
 /** A persisted monitor/automation. */
@@ -203,6 +248,8 @@ export interface Automation {
   nextRunAt: string | null;
   /** Failure detail when `status === 'failed'`. */
   failure: string | null;
+  /** Active warning for prior action attempts that may already have executed. */
+  uncertainty?: AutomationUncertainty | null;
 }
 
 /** Persistence port for {@link Automation} records. */
@@ -213,7 +260,13 @@ export interface AutomationRepo {
   save(automation: Automation): void;
   delete(id: string): void;
   appendRun(run: AutomationRun): void;
+  getRun(id: string): AutomationRun | null;
+  saveRun(run: AutomationRun): void;
+  findOpenRun(automationId: string): AutomationRun | null;
+  listOpenRuns(): AutomationRun[];
   listRuns(automationId: string): AutomationRun[];
+  listPendingUncertainRuns(automationId: string): AutomationRun[];
+  transact<T>(work: () => T): T;
 }
 
 /** Persistence port for {@link Subagent} records. */
@@ -223,6 +276,9 @@ export interface SubagentRepo {
   list(): Subagent[];
   save(subagent: Subagent): void;
   listByAutomation(automationId: string): Subagent[];
+  deleteByOriginFeature(featureId: string): void;
+  deleteByOriginSession(sessionId: string): void;
+  deleteByAutomation(automationId: string): void;
 }
 
 /** Context handed to a check/action runner for one execution. */
@@ -244,6 +300,13 @@ export interface ActionResult {
   sessionId: string | null;
   subagentId: string | null;
   report: string | null;
+  /**
+   * Optional in-flight work that still belongs to this action after the initial
+   * trigger returns (for example a spawned subagent). The scheduler keeps the
+   * action abortable until this settles, but callers do not need to await it to
+   * receive the initial dispatch result.
+   */
+  completion?: Promise<void>;
 }
 
 /** Runs an {@link ActionSpec}. */

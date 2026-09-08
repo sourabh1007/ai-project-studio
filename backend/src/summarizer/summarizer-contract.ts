@@ -23,6 +23,7 @@ export interface FeatureSummary {
 
 export interface SummarizeRequest {
   featureId: string;
+  signal?: AbortSignal;
 }
 
 /** Produces and persists an AI summary of a feature's sessions. */

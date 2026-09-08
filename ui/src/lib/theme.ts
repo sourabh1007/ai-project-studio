@@ -55,3 +55,60 @@ export function nextThemeMode(mode: ThemeMode): ThemeMode {
 export function themeModeLabel(mode: ThemeMode): string {
   return mode === 'system' ? 'System' : mode === 'dark' ? 'Dark' : 'Light';
 }
+
+function expandHexDigit(value: string): string {
+  return value + value;
+}
+
+function parseHexChannel(value: string): number {
+  return Number.parseInt(value, 16);
+}
+
+function parseHexColor(color: string): { r: number; g: number; b: number } {
+  const normalized = color.trim().toLowerCase();
+  if (/^#[0-9a-f]{3}$/.test(normalized)) {
+    return {
+      r: parseHexChannel(expandHexDigit(normalized.slice(1, 2))),
+      g: parseHexChannel(expandHexDigit(normalized.slice(2, 3))),
+      b: parseHexChannel(expandHexDigit(normalized.slice(3, 4))),
+    };
+  }
+  if (/^#[0-9a-f]{6}$/.test(normalized)) {
+    return {
+      r: parseHexChannel(normalized.slice(1, 3)),
+      g: parseHexChannel(normalized.slice(3, 5)),
+      b: parseHexChannel(normalized.slice(5, 7)),
+    };
+  }
+  throw new Error(`Unsupported hex color: ${color}`);
+}
+
+function linearizeSrgb(channel: number): number {
+  const normalized = channel / 255;
+  return normalized <= 0.04045
+    ? normalized / 12.92
+    : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+/** WCAG relative luminance for a hex sRGB colour. */
+export function relativeLuminance(color: string): number {
+  const { r, g, b } = parseHexColor(color);
+  return (
+    0.2126 * linearizeSrgb(r) +
+    0.7152 * linearizeSrgb(g) +
+    0.0722 * linearizeSrgb(b)
+  );
+}
+
+/** WCAG 2.x contrast ratio between two hex sRGB colours. */
+export function contrastRatio(foreground: string, background: string): number {
+  const lighter = Math.max(
+    relativeLuminance(foreground),
+    relativeLuminance(background),
+  );
+  const darker = Math.min(
+    relativeLuminance(foreground),
+    relativeLuminance(background),
+  );
+  return (lighter + 0.05) / (darker + 0.05);
+}

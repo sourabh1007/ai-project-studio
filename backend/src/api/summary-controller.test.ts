@@ -43,13 +43,14 @@ function harness(stored: FeatureSummary | null) {
 }
 
 describe('summary-controller', () => {
-  it('generates a summary', async () => {
+  it('generates a summary with the request signal', async () => {
     const h = harness(null);
+    const signal = new AbortController().signal;
     const result = await pick(h.routes, 'post', '/features/:featureId/summary')(
-      req({ params: { featureId: 'f1' } }),
+      req({ params: { featureId: 'f1' }, signal }),
     );
     expect(result).toEqual({ status: 200, body: summary });
-    expect(h.requests).toEqual([{ featureId: 'f1' }]);
+    expect(h.requests).toEqual([{ featureId: 'f1', signal }]);
   });
 
   it('reads an existing summary', async () => {

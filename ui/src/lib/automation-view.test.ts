@@ -15,6 +15,7 @@ import {
   canPause,
   canResume,
   canCancel,
+  canRunNow,
   needsAuth,
   progressPercent,
   formatDuration,
@@ -257,6 +258,34 @@ describe('lifecycle guards', () => {
     expect(canCancel('paused')).toBe(true);
     expect(canCancel('completed')).toBe(false);
   });
+  it('canRunNow for active work and uncertain short failures only', () => {
+    expect(canRunNow(automation({ status: 'active' }))).toBe(true);
+    expect(
+      canRunNow(
+        automation({
+          mode: 'short',
+          status: 'failed',
+          uncertainty: {
+            summary: 'Possible duplicate',
+            unresolvedRunIds: ['r1'],
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(canRunNow(automation({ status: 'failed' }))).toBe(false);
+    expect(
+      canRunNow(
+        automation({
+          mode: 'long',
+          status: 'failed',
+          uncertainty: {
+            summary: 'Possible duplicate',
+            unresolvedRunIds: ['r1'],
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
   it('needsAuth only for the needs-auth status', () => {
     expect(needsAuth('needs-auth')).toBe(true);
     expect(needsAuth('active')).toBe(false);
@@ -347,7 +376,13 @@ describe('run log helpers', () => {
     return {
       id: 'r1',
       automationId: 'a1',
+      source: 'scheduled',
+      phase: 'finished',
+      scheduledForAt: null,
+      occurrenceKey: null,
+      dedupeKey: 'scheduled:a1:r1',
       startedAt: '2024-01-01T00:00:00.000Z',
+      dispatchedAt: '2024-01-01T00:00:00.000Z',
       endedAt: '2024-01-01T00:00:01.000Z',
       triggered: false,
       status: 'ok',
@@ -357,14 +392,48 @@ describe('run log helpers', () => {
     };
   }
   it('labels each run status', () => {
-    expect(runStatusLabel('ok')).toBe('Succeeded');
-    expect(runStatusLabel('failed')).toBe('Failed');
-    expect(runStatusLabel('skipped')).toBe('Skipped');
+    expect(runStatusLabel(run({ status: 'ok' }))).toBe('Succeeded');
+    expect(runStatusLabel(run({ status: 'failed' }))).toBe('Failed');
+    expect(runStatusLabel(run({ status: 'skipped' }))).toBe('Skipped');
+    expect(runStatusLabel(run({ phase: 'queued' }))).toBe('Queued');
+    expect(runStatusLabel(run({ phase: 'checking' }))).toBe('Checking');
+    expect(runStatusLabel(run({ phase: 'acting' }))).toBe('Running action');
+    expect(runStatusLabel(run({ phase: 'cancelled' }))).toBe('Cancelled');
+    expect(runStatusLabel(run({ phase: 'interrupted' }))).toBe('Interrupted');
+    expect(runStatusLabel(run({ phase: 'uncertain' }))).toBe('Uncertain');
   });
   it('summarizes triggered and checked runs with and without detail', () => {
+    expect(runSummary(run({ report: 'Full durable report', detail: null }))).toBe('Report generated');
     expect(runSummary(run({ triggered: true, detail: 'went green' }))).toBe(
       'Triggered · went green',
     );
     expect(runSummary(run({ triggered: false, detail: null }))).toBe('Checked');
+    expect(runSummary(run({ phase: 'queued', detail: 'Queued to check' }))).toBe(
+      'Queued to check',
+    );
+    expect(runSummary(run({ phase: 'queued', detail: null }))).toBe('Queued');
+    expect(runSummary(run({ phase: 'checking', detail: null }))).toBe(
+      'Checking now',
+    );
+    expect(runSummary(run({ phase: 'acting', detail: null }))).toBe(
+      'Running action',
+    );
+    expect(
+      runSummary(
+        run({
+          phase: 'uncertain',
+          detail: 'Previous backend stopped before this run completed',
+        }),
+      ),
+    ).toBe('Previous backend stopped before this run completed');
+    expect(runSummary(run({ phase: 'uncertain', detail: null }))).toBe(
+      'Outcome uncertain',
+    );
+    expect(runSummary(run({ phase: 'cancelled', detail: null }))).toBe(
+      'Cancelled',
+    );
+    expect(runSummary(run({ phase: 'interrupted', detail: null }))).toBe(
+      'Interrupted',
+    );
   });
 });

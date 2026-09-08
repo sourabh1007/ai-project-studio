@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { type Command, filterCommands } from '../lib/command-palette.js';
+import { attachDialogFocusOwnership } from '../lib/focus-ownership.js';
 import { SearchIcon } from './icons.js';
 
 /** A palette command paired with the action to run when it is chosen. */
@@ -25,6 +26,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const results = useMemo(
     () => filterCommands(commands, query),
@@ -36,11 +38,21 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
     if (open) {
       setQuery('');
       setActive(0);
-      // Focus after paint so the element exists and is focusable.
-      const id = window.requestAnimationFrame(() => inputRef.current?.focus());
-      return () => window.cancelAnimationFrame(id);
     }
     return undefined;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const panel = panelRef.current;
+    if (!panel) {
+      return undefined;
+    }
+    return attachDialogFocusOwnership(panel, {
+      initialFocus: inputRef.current,
+    });
   }, [open]);
 
   // Keep the active index within the current result bounds as filtering changes.
@@ -98,6 +110,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
       }}
     >
       <div
+        ref={panelRef}
         className="cmdk-panel"
         role="dialog"
         aria-modal="true"

@@ -60,10 +60,10 @@ function fakeFeatures(ids: string[]): FeatureService {
 function build(options: { seed?: FeatureTask[]; generated?: FeatureTask[] } = {}) {
   const repo = inMemoryRepo(options.seed);
   let counter = 0;
-  const runnerCalls: string[] = [];
+  const runnerCalls: Array<{ featureId: string; signal?: AbortSignal }> = [];
   const runner: TaskPlanRunner = {
-    generate: async (featureId) => {
-      runnerCalls.push(featureId);
+    generate: async (featureId, signal) => {
+      runnerCalls.push({ featureId, signal });
       return options.generated ?? [];
     },
   };
@@ -105,9 +105,10 @@ describe('feature-tasks-service', () => {
   it('delegates generation to the task-plan runner', async () => {
     const generated = [task({ id: 'g1', title: 'Generated' })];
     const { service, runnerCalls } = build({ generated });
-    const result = await service.generate('f1');
+    const signal = new AbortController().signal;
+    const result = await service.generate('f1', signal);
     expect(result).toEqual(generated);
-    expect(runnerCalls).toEqual(['f1']);
+    expect(runnerCalls).toEqual([{ featureId: 'f1', signal }]);
   });
 
   it('adds a manual task at the next position', () => {

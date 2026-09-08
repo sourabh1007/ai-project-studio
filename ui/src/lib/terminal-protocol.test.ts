@@ -1,56 +1,30 @@
 import { describe, it, expect } from 'vitest';
-import {
-  decodeServerMessage,
-  encodeClientMessage,
-} from './terminal-protocol.js';
+import { decodeServerMessage, encodeClientMessage } from './terminal-protocol.js';
 
-describe('encodeClientMessage', () => {
-  it('serializes input and resize frames', () => {
-    expect(encodeClientMessage({ type: 'input', data: 'ls\n' })).toBe(
-      '{"type":"input","data":"ls\\n"}',
-    );
-    expect(
-      encodeClientMessage({ type: 'resize', cols: 80, rows: 24 }),
-    ).toBe('{"type":"resize","cols":80,"rows":24}');
+describe('terminal protocol v2', () => {
+  it('encodes input and resize with generation ownership', () => {
+    for (const frame of [
+      { type: 'input', data: 'ls\r', generation: 1, seq: 1 } as const,
+      { type: 'resize', cols: 80, rows: 24, generation: 1 } as const,
+    ]) expect(JSON.parse(encodeClientMessage(frame))).toEqual(frame);
   });
-});
-
-describe('decodeServerMessage', () => {
-  it('parses ready, output and exit frames', () => {
-    expect(decodeServerMessage('{"type":"ready","sessionId":"s1"}')).toEqual({
-      type: 'ready',
-      sessionId: 's1',
-    });
-    expect(decodeServerMessage('{"type":"output","data":"hi"}')).toEqual({
-      type: 'output',
-      data: 'hi',
-    });
-    expect(
-      decodeServerMessage('{"type":"resize","cols":120,"rows":30}'),
-    ).toEqual({ type: 'resize', cols: 120, rows: 30 });
-    expect(decodeServerMessage('{"type":"exit","code":0}')).toEqual({
-      type: 'exit',
-      code: 0,
-    });
-    expect(decodeServerMessage('{"type":"exit","code":null}')).toEqual({
-      type: 'exit',
-      code: null,
-    });
+  const state = { type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 16 };
+  const ack = { type: 'ack', generation: 1, seq: 1, outcome: 'written', reason: '' };
+  it('decodes all server messages', () => {
+    for (const frame of [
+      state, ack, { type: 'output', data: 'hi' }, { type: 'resize', cols: 80, rows: 24 },
+      { type: 'exit', code: 0 }, { type: 'exit', code: null },
+    ]) expect(decodeServerMessage(JSON.stringify(frame))).toEqual(frame);
   });
-
-  it('rejects invalid JSON and non-objects', () => {
-    expect(decodeServerMessage('nope')).toBeNull();
-    expect(decodeServerMessage('7')).toBeNull();
-  });
-
-  it('rejects frames with wrong field types', () => {
-    expect(decodeServerMessage('{"type":"ready","sessionId":1}')).toBeNull();
-    expect(decodeServerMessage('{"type":"output","data":1}')).toBeNull();
-    expect(decodeServerMessage('{"type":"resize","cols":"x","rows":1}')).toBeNull();
-    expect(decodeServerMessage('{"type":"exit","code":"x"}')).toBeNull();
-  });
-
-  it('rejects unknown types', () => {
-    expect(decodeServerMessage('{"type":"other"}')).toBeNull();
+  it('rejects malformed and unsupported messages', () => {
+    for (const raw of ['not json', '42', 'null']) expect(decodeServerMessage(raw)).toBeNull();
+    for (const frame of [
+      { ...state, generation: undefined }, { ...state, generation: -1 },
+      { ...state, version: 1 }, { ...state, state: 'unknown' },
+      { ...state, inputLimit: 1.5 }, { ...state, inputLimit: 0 },
+      { ...ack, seq: 1.5 }, { ...ack, seq: 0 }, { ...ack, outcome: 'unknown' }, { ...ack, reason: 0 },
+      { type: 'output', data: 1 }, { type: 'resize', cols: 'x', rows: 1 },
+      { type: 'resize', cols: 1, rows: 'x' }, { type: 'exit', code: 'x' }, { type: 'other' },
+    ]) expect(decodeServerMessage(JSON.stringify(frame))).toBeNull();
   });
 });

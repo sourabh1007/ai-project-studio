@@ -46,3 +46,4 @@ Thumbs.db
 # Electron packaging output
 desktop/build/
 desktop/release/
+desktop/test-results/

@@ -5,6 +5,7 @@ import type {
   CheckSpec,
   ConditionSpec,
   PlannedStep,
+  UncertaintyAcknowledgement,
 } from './automation-contract.js';
 import type { CreateAutomationInput } from './automation-service.js';
 import type { RegisterSubagentInput } from './subagent-service.js';
@@ -258,6 +259,39 @@ export function assertCreateAutomationInput(
     intervalMs: optionalInterval(input.intervalMs),
     maxRuns: optionalMaxRuns(input.maxRuns),
     plannedSteps: optionalPlannedSteps(input.plannedSteps),
+  };
+}
+
+function assertStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`${label} must be an array`);
+  }
+  return value.map((entry, index) => asString(entry, `${label}[${index}]`));
+}
+
+export function assertRunNowBody(body: unknown): {
+  acknowledgement: UncertaintyAcknowledgement | null;
+} {
+  const input = body === undefined ? {} : asObject(body, 'body');
+  const raw = input.uncertaintyAcknowledgement;
+  if (raw === undefined || raw === null) {
+    return { acknowledgement: null };
+  }
+  const acknowledgement = asObject(
+    raw,
+    'uncertaintyAcknowledgement',
+  );
+  return {
+    acknowledgement: {
+      snapshotRunIds: assertStringArray(
+        acknowledgement.snapshotRunIds,
+        'uncertaintyAcknowledgement.snapshotRunIds',
+      ),
+      targetRunIds: assertStringArray(
+        acknowledgement.targetRunIds,
+        'uncertaintyAcknowledgement.targetRunIds',
+      ),
+    },
   };
 }
 

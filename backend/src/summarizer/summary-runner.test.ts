@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createSummaryRunner } from './summary-runner.js';
 import { summarizerDefaults } from './config.js';
 import { createClock } from '../kernel/clock.js';
@@ -88,10 +88,27 @@ function harness(transcript: Transcript | null) {
     clock: createClock(() => 0),
     config: summarizerDefaults,
   });
-  return { runner, requests, attached, savedSummaries };
+  return { runner, requests, attached, savedSummaries, transcripts };
 }
 
 describe('summary-runner', () => {
+  it('does not persist a summary after cancellation while reading meta output', async () => {
+    const controller = new AbortController();
+    const failure = new Error('Feature deletion');
+    const h = harness(null);
+    vi.spyOn(h.transcripts, 'load').mockImplementation(async (id) => {
+      if (id === 'meta1') {
+        controller.abort(failure);
+      }
+      return { sessionId: id, stdout: ['Late result'], stderr: [], exitCode: 0 };
+    });
+
+    await expect(h.runner.summarize({ featureId: 'f1', signal: controller.signal })).rejects.toBe(failure);
+    expect(h.requests[0].signal).toBe(controller.signal);
+    expect(h.savedSummaries).toEqual([]);
+    expect(h.attached).toEqual([]);
+  });
+
   it('runs a meta session and persists the extracted summary', async () => {
     const h = harness({
       sessionId: 'meta1',
@@ -99,11 +116,13 @@ describe('summary-runner', () => {
       stderr: [],
       exitCode: 0,
     });
-    const summary = await h.runner.summarize({ featureId: 'f1' });
+    const signal = new AbortController().signal;
+    const summary = await h.runner.summarize({ featureId: 'f1', signal });
 
     expect(h.requests[0].kind).toBe('meta');
     expect(h.requests[0].providerId).toBe(summarizerDefaults.providerId);
     expect(h.requests[0].prompt).toContain('Login');
+    expect(h.requests[0].signal).toBe(signal);
     expect(summary.content).toBe('All login work done.');
     expect(summary.createdAt).toBe('1970-01-01T00:00:00.000Z');
     expect(h.savedSummaries).toEqual([summary]);

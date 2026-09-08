@@ -1,7 +1,10 @@
 import {
+  encodeNotification,
   encodeRequest,
   parseMessage,
+  sessionIdFromUpdate,
   sessionIdOf,
+  stateFromUpdate,
   stopReasonOf,
   textFromUpdate,
 } from './acp-protocol.js';
@@ -18,6 +21,8 @@ export interface AcpProcess {
   onLine(handler: (line: string) => void): void;
   /** Registers a handler invoked once when the process exits. */
   onExit(handler: (code: number | null) => void): void;
+  /** Most recent bounded/sanitized stderr diagnostic, when available. */
+  diagnostic?(): string | null;
   /** Terminates the process. */
   kill(): void;
 }
@@ -27,6 +32,8 @@ export interface AcpClientConfig {
   initializeTimeoutMs: number;
   /** Timeout (ms) for a single `session/new` or `session/prompt` request. */
   turnTimeoutMs: number;
+  /** Grace period (ms) to wait for cancellation before killing the process. */
+  cancelGraceMs?: number;
 }
 
 /** Token accounting reported by a completed turn, when present. */
@@ -40,6 +47,14 @@ export interface AcpTurnRequest {
   prompt: string;
   /** Working directory for the session. */
   cwd?: string;
+  /** Internal absolute deadline (epoch ms) carried across ACP stages. */
+  deadlineAt?: number;
+  /** Pool callback fired once the turn really begins running. */
+  onStart?: () => void;
+  /** Overall turn timeout budget used to build deadline-based errors. */
+  timeoutMs?: number;
+  /** Optional cancellation signal observed by the warm-pool wrapper. */
+  signal?: AbortSignal;
   /** Invoked with each streamed assistant text chunk as the turn runs. */
   onActivity?: (text: string) => void;
 }
@@ -51,15 +66,52 @@ export interface AcpTurnResult {
   usage: AcpUsage | null;
 }
 
+export class AcpRequestError extends Error {
+  readonly method: string;
+  readonly allowFallbackToCold: boolean;
+
+  constructor(
+    message: string,
+    options: { method: string; allowFallbackToCold: boolean; cause?: unknown },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = 'AcpRequestError';
+    this.method = options.method;
+    this.allowFallbackToCold = options.allowFallbackToCold;
+  }
+}
+
 interface Pending {
+  method: string;
+  allowFallbackToCold: boolean;
   resolve: (result: Record<string, unknown> | null) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
 interface ActiveTurn {
+  generation: number;
+  sessionId: string;
+  requestId: number | null;
   text: string;
+  acceptingActivity: boolean;
   onActivity?: (text: string) => void;
+}
+
+interface Disposal {
+  generation: number;
+  sessionId: string;
+  requestId: number | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const DEFAULT_CANCEL_GRACE_MS = 1_000;
+
+function remainingTimeout(deadlineAt: number | undefined, fallbackMs: number): number {
+  if (deadlineAt === undefined) {
+    return fallbackMs;
+  }
+  return Math.max(1, deadlineAt - Date.now());
 }
 
 function usageOf(result: Record<string, unknown> | null): AcpUsage | null {
@@ -88,9 +140,12 @@ function usageOf(result: Record<string, unknown> | null): AcpUsage | null {
  */
 export class AcpClient {
   private nextId = 1;
+  private turnGeneration = 0;
   private readonly pending = new Map<number, Pending>();
   private active: ActiveTurn | null = null;
+  private disposal: Disposal | null = null;
   private dead: Error | null = null;
+  private reusableState = true;
   private exitHandlers: (() => void)[] = [];
 
   constructor(
@@ -98,12 +153,17 @@ export class AcpClient {
     private readonly config: AcpClientConfig,
   ) {
     this.process.onLine((line) => this.handleLine(line));
-    this.process.onExit(() => this.handleExit());
+    this.process.onExit((code) => this.handleExit(code));
   }
 
   /** True until the underlying process has exited. */
   get alive(): boolean {
     return this.dead === null;
+  }
+
+  /** True while the client may safely be leased for another warm turn. */
+  get reusable(): boolean {
+    return this.reusableState && this.disposal === null && this.dead === null;
   }
 
   /** Registers a callback fired when the process exits (for pool replenish). */
@@ -122,6 +182,7 @@ export class AcpClient {
         },
       },
       this.config.initializeTimeoutMs,
+      { allowFallbackToCold: true, onTimeout: () => this.dispose() },
     );
   }
 
@@ -135,17 +196,35 @@ export class AcpClient {
       'session/new',
       { cwd, mcpServers: [] },
       this.config.turnTimeoutMs,
+      { allowFallbackToCold: true, onTimeout: () => this.dispose() },
     );
   }
 
   /** Runs a single prompt as a fresh session and returns its response text. */
   async runTurn(request: AcpTurnRequest): Promise<AcpTurnResult> {
-    const created = await this.newSession(request.cwd);
+    const created = await this.request(
+      'session/new',
+      { cwd: request.cwd, mcpServers: [] },
+      remainingTimeout(request.deadlineAt, this.config.turnTimeoutMs),
+      { allowFallbackToCold: true, onTimeout: () => this.dispose() },
+    );
     const sessionId = sessionIdOf(created);
     if (!sessionId) {
-      throw new Error('ACP session/new returned no session id');
+      this.dispose();
+      throw new AcpRequestError('ACP session/new returned no session id', {
+        method: 'session/new',
+        allowFallbackToCold: true,
+      });
     }
-    this.active = { text: '', onActivity: request.onActivity };
+    const turn: ActiveTurn = {
+      generation: ++this.turnGeneration,
+      sessionId,
+      requestId: null,
+      text: '',
+      acceptingActivity: true,
+      onActivity: request.onActivity,
+    };
+    this.active = turn;
     try {
       const result = await this.request(
         'session/prompt',
@@ -153,21 +232,45 @@ export class AcpClient {
           sessionId,
           prompt: [{ type: 'text', text: request.prompt }],
         },
-        this.config.turnTimeoutMs,
+        remainingTimeout(request.deadlineAt, this.config.turnTimeoutMs),
+        {
+          allowFallbackToCold: false,
+          onDispatch: (id) => {
+            turn.requestId = id;
+          },
+          onTimeout: () => this.disposeTurn(turn),
+        },
       );
       return {
-        text: this.active.text,
+        text: turn.text,
         sessionId,
         stopReason: stopReasonOf(result),
         usage: usageOf(result),
       };
     } finally {
-      this.active = null;
+      if (this.active?.generation === turn.generation) {
+        this.active = null;
+      }
     }
   }
 
   /** Kills the process; pending requests reject via the exit handler. */
   kill(): void {
+    this.reusableState = false;
+    this.process.kill();
+  }
+
+  /** Cancels/kills the process so it cannot be reused for another warm turn. */
+  dispose(): void {
+    this.reusableState = false;
+    if (this.dead || this.disposal) {
+      return;
+    }
+    const active = this.active;
+    if (active) {
+      this.disposeTurn(active);
+      return;
+    }
     this.process.kill();
   }
 
@@ -175,21 +278,57 @@ export class AcpClient {
     method: string,
     params: unknown,
     timeoutMs: number,
+    options: {
+      allowFallbackToCold: boolean;
+      onDispatch?: (id: number) => void;
+      onTimeout?: () => void;
+    },
   ): Promise<Record<string, unknown> | null> {
     if (this.dead) {
       return Promise.reject(this.dead);
+    }
+    if (!this.reusableState || this.disposal) {
+      return Promise.reject(new Error('ACP client is not reusable'));
     }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`ACP ${method} timed out after ${timeoutMs}ms`));
+        options.onTimeout?.();
+        reject(
+          this.requestError(
+            `ACP ${method} timed out after ${timeoutMs}ms${this.diagnosticSuffix()}`,
+            method,
+            options.allowFallbackToCold,
+          ),
+        );
       }, timeoutMs);
       if (typeof timer.unref === 'function') {
         timer.unref();
       }
-      this.pending.set(id, { resolve, reject, timer });
-      this.process.write(encodeRequest(id, method, params));
+      this.pending.set(id, {
+        method,
+        allowFallbackToCold: options.allowFallbackToCold,
+        resolve,
+        reject,
+        timer,
+      });
+      options.onDispatch?.(id);
+      try {
+        this.process.write(encodeRequest(id, method, params));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        this.dispose();
+        reject(
+          this.requestError(
+            `ACP ${method} could not be written${this.diagnosticSuffix()}`,
+            method,
+            options.allowFallbackToCold,
+            error,
+          ),
+        );
+      }
     });
   }
 
@@ -199,42 +338,152 @@ export class AcpClient {
       return;
     }
     if (message.kind === 'notification') {
-      if (message.method === 'session/update' && this.active) {
-        const text = textFromUpdate(message.params);
-        if (text !== null) {
-          this.active.text += text;
-          this.active.onActivity?.(text);
+      if (message.method === 'session/update') {
+        const sessionId = sessionIdFromUpdate(message.params);
+        if (
+          this.active &&
+          sessionId === this.active.sessionId &&
+          this.active.acceptingActivity &&
+          !(
+            this.disposal &&
+            this.disposal.generation === this.active.generation &&
+            this.disposal.sessionId === sessionId
+          )
+        ) {
+          const text = textFromUpdate(message.params);
+          if (text !== null) {
+            this.active.text += text;
+            this.active.onActivity?.(text);
+          }
+        }
+        const state = stateFromUpdate(message.params);
+        if (
+          this.disposal &&
+          sessionId === this.disposal.sessionId &&
+          state &&
+          (state.stopReason === 'cancelled' || state.state === 'idle')
+        ) {
+          this.finishDisposal();
         }
       }
       return;
     }
     const pending = this.pending.get(message.id);
     if (!pending) {
+      if (this.disposal && this.disposal.requestId === message.id) {
+        this.finishDisposal();
+      }
       return;
     }
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     if (message.error) {
+      if (pending.method === 'session/prompt') {
+        const active = this.active;
+        if (active && active.requestId === message.id) {
+          this.disposeTurn(active);
+        } else {
+          this.dispose();
+        }
+      } else {
+        this.dispose();
+      }
       pending.reject(
-        new Error(`ACP error ${message.error.code}: ${message.error.message}`),
+        this.requestError(
+          `ACP error ${message.error.code}: ${message.error.message}${this.diagnosticSuffix()}`,
+          pending.method,
+          pending.allowFallbackToCold,
+        ),
       );
       return;
     }
     pending.resolve(message.result);
+    if (this.disposal && this.disposal.requestId === message.id) {
+      this.finishDisposal();
+    }
   }
 
-  private handleExit(): void {
+  private handleExit(code: number | null): void {
     if (this.dead) {
       return;
     }
-    this.dead = new Error('ACP process exited');
+    this.reusableState = false;
+    if (this.disposal?.timer) {
+      clearTimeout(this.disposal.timer);
+    }
+    this.disposal = null;
+    const message = `ACP process exited${
+      code === null ? '' : ` (exit code ${code})`
+    }${this.diagnosticSuffix()}`;
+    this.dead = new Error(message);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(this.dead);
+      pending.reject(
+        this.requestError(message, pending.method, pending.allowFallbackToCold),
+      );
     }
     this.pending.clear();
     for (const handler of this.exitHandlers) {
       handler();
+    }
+  }
+
+  private requestError(
+    message: string,
+    method: string,
+    allowFallbackToCold: boolean,
+    cause?: unknown,
+  ): AcpRequestError {
+    return new AcpRequestError(message, { method, allowFallbackToCold, cause });
+  }
+
+  private diagnosticSuffix(): string {
+    const diagnostic = this.process.diagnostic?.();
+    return diagnostic ? `: ${diagnostic}` : '';
+  }
+
+  private disposeTurn(turn: ActiveTurn): void {
+    this.reusableState = false;
+    turn.acceptingActivity = false;
+    if (this.dead || this.disposal) {
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    this.disposal = {
+      generation: turn.generation,
+      sessionId: turn.sessionId,
+      requestId: turn.requestId,
+      timer,
+    };
+    try {
+      this.process.write(
+        encodeNotification('session/cancel', { sessionId: turn.sessionId }),
+      );
+    } catch {
+      this.finishDisposal();
+      return;
+    }
+    timer = setTimeout(() => {
+      this.finishDisposal();
+    }, this.config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this.disposal.timer = timer;
+  }
+
+  private finishDisposal(): void {
+    if (!this.disposal) {
+      return;
+    }
+    if (this.disposal.timer) {
+      clearTimeout(this.disposal.timer);
+    }
+    this.disposal = null;
+    try {
+      this.process.kill();
+    } catch {
+      // Best effort: keep the client quarantined until an actual exit arrives.
     }
   }
 }

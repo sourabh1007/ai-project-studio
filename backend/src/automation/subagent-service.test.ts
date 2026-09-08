@@ -27,6 +27,27 @@ function fakeRepo(): SubagentRepo {
     listByAutomation(id) {
       return [...store.values()].filter((s) => s.automationId === id);
     },
+    deleteByAutomation(automationId) {
+      for (const [id, subagent] of store.entries()) {
+        if (subagent.automationId === automationId) {
+          store.delete(id);
+        }
+      }
+    },
+    deleteByOriginFeature(featureId) {
+      for (const [id, subagent] of store.entries()) {
+        if (subagent.origin.featureId === featureId) {
+          store.delete(id);
+        }
+      }
+    },
+    deleteByOriginSession(sessionId) {
+      for (const [id, subagent] of store.entries()) {
+        if (subagent.origin.sessionId === sessionId) {
+          store.delete(id);
+        }
+      }
+    },
   };
 }
 
@@ -56,14 +77,20 @@ describe('subagent-service', () => {
       ids: counterIds(),
       bus,
       ai,
+      timeoutMs: 9_999,
     });
   }
 
   it('spawns a subagent, runs the AI task, and marks it done', async () => {
     let seenFeature = '';
+    const controller = new AbortController();
     const service = make({
       run: async (input) => {
         seenFeature = input.featureId;
+        expect(input.automationId).toBe('a1');
+        expect(input.timeoutMs).toBe(9_999);
+        expect(input.scope).toBe('internal');
+        expect(input.signal).toBe(controller.signal);
         return { text: '  result text  ', sessionId: 'm1' };
       },
     });
@@ -73,6 +100,7 @@ describe('subagent-service', () => {
       prompt: 'go',
       origin: { sessionId: 's1', featureId: 'f1' },
       automationId: 'a1',
+      signal: controller.signal,
     });
     expect(subagent.status).toBe('running');
     await completion;
@@ -154,6 +182,56 @@ describe('subagent-service', () => {
     expect(service.get(subagent.id).result).toBe('Subagent failed');
   });
 
+  it('persists failure and retains the full result when the done update fails', async () => {
+    const save = repo.save;
+    const failure = new Error('done update rejected');
+    repo.save = (subagent) => {
+      if (subagent.status === 'done') throw failure;
+      save(subagent);
+    };
+    const text = 'full result '.repeat(200);
+    const service = make({ run: async () => ({ text, sessionId: 'm1' }) });
+    const { subagent, completion } = service.spawn({
+      task: 'x', prompt: 'y',
+      origin: { featureId: 'f1', sessionId: 's1' }, automationId: 'a1',
+    });
+    await expect(completion).rejects.toBe(failure);
+    expect(service.get(subagent.id)).toMatchObject({
+      status: 'failed', sessionId: 'm1', result: `${failure.message}\n\n${text}`,
+    });
+    expect(events.map((event) => event.status)).toEqual(['running', 'failed']);
+  });
+
+  it('retains both errors when persisting a failed run also fails', async () => {
+    const failure = new Error('AI failed');
+    const persistenceError = new Error('storage unavailable');
+    repo.save = () => { throw persistenceError; };
+    const service = make({ run: async () => { throw failure; } });
+    const { completion } = service.spawn({
+      task: 'x', prompt: 'y',
+      origin: { featureId: 'f1', sessionId: 's1' }, automationId: 'a1',
+    });
+    await expect(completion).rejects.toMatchObject({
+      errors: [failure, persistenceError],
+    });
+  });
+
+  it('retains the completion-save error when the compensating update also fails', async () => {
+    const completionError = new Error('done rejected');
+    const failureError = new Error('failed rejected');
+    repo.save = (subagent) => {
+      throw subagent.status === 'done' ? completionError : failureError;
+    };
+    const service = make({ run: async () => ({ text: 'result', sessionId: 'm1' }) });
+    const { completion } = service.spawn({
+      task: 'x', prompt: 'y',
+      origin: { featureId: 'f1', sessionId: 's1' }, automationId: 'a1',
+    });
+    await expect(completion).rejects.toMatchObject({
+      errors: [completionError, failureError],
+    });
+  });
+
   it('registers, reads, lists, and updates a subagent', async () => {
     const service = make({ run: async () => ({ text: '', sessionId: 'm' }) });
 
@@ -176,5 +254,51 @@ describe('subagent-service', () => {
   it('throws when reading a missing subagent', () => {
     const service = make({ run: async () => ({ text: '', sessionId: 'm' }) });
     expect(() => service.get('nope')).toThrow(/not found/);
+  });
+
+  it('suppresses late completion updates after the subagent record is deleted', async () => {
+    let resolveRun!: (value: { text: string; sessionId: string }) => void;
+    const service = make({
+      run: () =>
+        new Promise<{ text: string; sessionId: string }>((resolve) => {
+          resolveRun = resolve;
+        }),
+    });
+    const { subagent, completion } = service.spawn({
+      task: 'x',
+      prompt: 'y',
+      origin: { sessionId: 's1', featureId: 'f1' },
+      automationId: 'a1',
+    });
+
+    repo.deleteByAutomation('a1');
+    resolveRun({ text: 'done', sessionId: 'm4' });
+    await completion;
+
+    expect(service.list()).toEqual([]);
+    expect(events).toEqual([subagent]);
+  });
+
+  it('suppresses late failure updates after the subagent record is deleted', async () => {
+    let rejectRun!: (reason?: unknown) => void;
+    const service = make({
+      run: () =>
+        new Promise((_, reject) => {
+          rejectRun = reject;
+        }),
+    });
+    const { subagent, completion } = service.spawn({
+      task: 'x',
+      prompt: 'y',
+      origin: { sessionId: 's1', featureId: 'f1' },
+      automationId: 'a1',
+    });
+
+    repo.deleteByAutomation('a1');
+    rejectRun(new Error('boom'));
+    await completion;
+
+    expect(service.list()).toEqual([]);
+    expect(events).toEqual([subagent]);
   });
 });

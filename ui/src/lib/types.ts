@@ -169,10 +169,10 @@ export interface PrReviewFailure {
  */
 export interface MetaUsage {
   sessionId: string;
-  inputTokens: number;
-  outputTokens: number;
-  nanoAiu: number;
-  credits: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  nanoAiu: number | null;
+  credits: number | null;
 }
 
 /** Fields shared by every AI analysis step. */
@@ -352,6 +352,8 @@ export interface PrReview {
   repoId: string;
   pull: PrReviewPull;
   worktreePath: string;
+  /** Commit SHA currently checked out for review; null until the server knows it. */
+  headSha: string | null;
   baseBranch: string | null;
   /** The raw PR description as fetched, before AI distillation; null when none. */
   description: string | null;
@@ -463,6 +465,7 @@ export type ReviewRecommendation =
 /** The complete Project Review Board for one change. */
 export interface ReviewBoard {
   featureId: string;
+  repoId: string;
   pull: PrReviewPull;
   worktreePath: string;
   baseBranch: string | null;
@@ -471,6 +474,8 @@ export interface ReviewBoard {
   perspectives: ReviewPerspective[];
   recommendation: ReviewRecommendation;
   summary: ReviewBoardSummary;
+  /** Source PR review revision the board was derived from. */
+  reviewUpdatedAt: string;
   generatedAt: string;
 }
 
@@ -1110,6 +1115,7 @@ export interface MetaSessionInfo {
 
 /** Live warm-capacity snapshot for one metasession pool. */
 export interface MetaPoolStat {
+  waitingForCapacity?: boolean;
   purpose: string;
   size: number;
   /** Telemetry-suggested warm size from observed peak concurrency. */
@@ -1132,6 +1138,15 @@ export interface MetaPoolStat {
 
 /** Aggregate warm metasession pool status for the Settings page. */
 export interface MetaPoolsStatus {
+  processAdmission?: {
+    processes: number;
+    warmProcesses: number;
+    queued: number;
+    closed: boolean;
+    maxProcesses: number;
+    maxWarmProcesses: number;
+    maxQueued: number;
+  };
   enabled: boolean;
   /** Model powering warm sessions, when known (shared across every pool). */
   model?: string;
@@ -1272,12 +1287,31 @@ export interface AutomationPlannedStep {
 export interface AutomationRun {
   id: string;
   automationId: string;
+  source: 'scheduled' | 'manual';
+  phase:
+    | 'queued'
+    | 'checking'
+    | 'acting'
+    | 'finished'
+    | 'cancelled'
+    | 'interrupted'
+    | 'uncertain';
+  scheduledForAt: string | null;
+  occurrenceKey: string | null;
+  dedupeKey: string | null;
   startedAt: string;
+  dispatchedAt: string | null;
   endedAt: string | null;
   triggered: boolean;
   status: 'ok' | 'failed' | 'skipped';
   detail: string | null;
   sessionId: string | null;
+  report?: string | null;
+}
+
+export interface AutomationUncertainty {
+  summary: string;
+  unresolvedRunIds: string[];
 }
 
 export interface Automation {
@@ -1300,6 +1334,7 @@ export interface Automation {
   lastCheckedAt: string | null;
   nextRunAt: string | null;
   failure: string | null;
+  uncertainty?: AutomationUncertainty | null;
 }
 
 export interface Subagent {
@@ -1330,4 +1365,11 @@ export interface CreateAutomationInput {
   intervalMs?: number;
   maxRuns?: number | null;
   origin?: AutomationOrigin;
+}
+
+export interface RunAutomationInput {
+  uncertaintyAcknowledgement?: {
+    snapshotRunIds: string[];
+    targetRunIds: string[];
+  } | null;
 }

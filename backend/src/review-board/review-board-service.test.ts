@@ -106,8 +106,10 @@ describe('createReviewBoardService.get', () => {
     const service = createReviewBoardService(baseDeps());
     const board = service.get('f9');
     expect(board.featureId).toBe('f9');
+    expect(board.repoId).toBe('r1');
     expect(board.pull.number).toBe(42);
     expect(board.model.projectType).toBe('Backend service');
+    expect(board.reviewUpdatedAt).toBe('');
     expect(board.generatedAt).toBe('2026-02-02T00:00:00.000Z');
     // Starts clean: no findings and every perspective Not-started until analyzed.
     expect(board.summary).toEqual({

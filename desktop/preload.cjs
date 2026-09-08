@@ -38,18 +38,35 @@ contextBridge.exposeInMainWorld('desktop', {
     }
   },
   copyText(text) {
-    if (typeof text === 'string') {
-      ipcRenderer.send('clipboard:write', text);
-    }
+    return ipcRenderer.invoke('clipboard:write', text);
+  },
+  clearClipboard() {
+    return ipcRenderer.invoke('clipboard:clear');
+  },
+  // No handler exists in ordinary launches; only the isolated regression shell.
+  runClipboardSmoke() {
+    return ipcRenderer.invoke('clipboard:smoke');
   },
   readText() {
     return ipcRenderer.invoke('clipboard:read');
   },
-  readImage() {
-    return ipcRenderer.invoke('clipboard:readImage');
+  /**
+   * @param {{ sessionId: string }} request
+   * @returns {Promise<import('../ui/src/lib/clipboard.js').ClipboardAttachmentResult>}
+   */
+  readImage(request) {
+    return ipcRenderer.invoke('clipboard:readImage', request);
+  },
+  attachments: {
+    list() {
+      return ipcRenderer.invoke('attachments:list');
+    },
+    remove(request) {
+      return ipcRenderer.invoke('attachments:remove', request);
+    },
   },
   relaunch() {
-    ipcRenderer.send('app:relaunch');
+    return ipcRenderer.invoke('app:relaunch');
   },
   getVersion() {
     return ipcRenderer.invoke('app:getVersion');

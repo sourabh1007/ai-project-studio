@@ -41,6 +41,7 @@ function deps(overrides: {
     ci: overrides.ci ?? {
       latestRun: async () => null,
     },
+    timeoutMs: 12_345,
   };
 }
 
@@ -124,12 +125,18 @@ describe('createCheckRunner', () => {
   });
 
   it('runs an ai check yielding an affirmative verdict', async () => {
+    const controller = new AbortController();
     const runner = createCheckRunner(
       deps({
         ai: {
           run: async (input) => {
+            expect(input.automationId).toBe('a1');
             expect(input.featureId).toBe('f1');
             expect(input.prompt).toContain('yes');
+            expect(input.noTools).toBe(true);
+            expect(input.timeoutMs).toBe(12_345);
+            expect(input.scope).toBe('internal');
+            expect(input.signal).toBe(controller.signal);
             return { text: 'YES the build passed', sessionId: 'm9' };
           },
         },
@@ -137,7 +144,7 @@ describe('createCheckRunner', () => {
     );
     const result = await runner.run(
       { type: 'ai', prompt: 'did it pass?', cwd: '/w' },
-      ctx,
+      { ...ctx, signal: controller.signal },
     );
     expect(result.code).toBe(1);
     expect(result.status).toBe('yes');

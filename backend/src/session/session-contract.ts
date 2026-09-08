@@ -49,6 +49,7 @@ export interface Session {
 /** Request to start a new session under a feature. */
 export interface StartSessionRequest {
   featureId: string;
+  operationId?: string;
   providerId?: string;
   model?: string;
   prompt: string;
@@ -59,4 +60,9 @@ export interface StartSessionRequest {
   cwd?: string;
   /** Restrict the run to zero tools (pure prompt→text completion). */
   noTools?: boolean;
+  /**
+   * Aborts provider launch or kills the started run when the caller no longer
+   * wants the session (for example a cancelled metasession action).
+   */
+  signal?: AbortSignal;
 }

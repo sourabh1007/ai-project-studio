@@ -3,6 +3,7 @@ import {
   applyStreamEvent,
   initialLiveState,
   parseServerEvent,
+  MAX_LIVE_EVENT_CHARACTERS,
   type LiveState,
   type StreamEvent,
 } from '../lib/stream.js';
@@ -11,7 +12,6 @@ import { failActivity } from '../lib/activity.js';
 
 const STREAM_EVENT_NAMES = [
   'session.started',
-  'session.output',
   'session.ended',
   'session.updated',
   'session.file',
@@ -31,7 +31,8 @@ function reducer(state: LiveState, event: StreamEvent): LiveState {
 
 /**
  * Subscribes to the backend SSE usage stream and maintains a reduced live
- * state (sessions, per-session output lines, deduped usage). The base path is
+ * state (sessions and deduped usage). Terminal output uses its own WebSocket.
+ * The base path is
  * config-driven via VITE_API_BASE and defaults to the Vite-proxied /api.
  */
 export function useUsageStream(): LiveState {
@@ -42,9 +43,17 @@ export function useUsageStream(): LiveState {
       typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
       import.meta.env.VITE_API_BASE,
     );
-    const source = new EventSource(`${base}/stream`);
+    const source = new EventSource(`${base}/stream?output=0`);
+    const interrupted = () => dispatch({ type: 'stream.interrupted' });
+    const reconnected = () => dispatch({ type: 'stream.reconnected' });
+    source.addEventListener('error', interrupted);
+    source.addEventListener('open', reconnected);
     const handlers = STREAM_EVENT_NAMES.map((name) => {
       const handler = (raw: MessageEvent<string>) => {
+        if (raw.data.length > MAX_LIVE_EVENT_CHARACTERS) {
+          dispatch({ type: 'stream.truncated' });
+          return;
+        }
         const parsed = parseServerEvent(name, raw.data);
         if (!parsed) {
           return;
@@ -64,6 +73,8 @@ export function useUsageStream(): LiveState {
       return { name, handler };
     });
     return () => {
+      source.removeEventListener('error', interrupted);
+      source.removeEventListener('open', reconnected);
       for (const { name, handler } of handlers) {
         source.removeEventListener(name, handler as EventListener);
       }

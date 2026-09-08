@@ -37,12 +37,22 @@ interface AutomationRow {
 interface RunRow {
   id: string;
   automation_id: string;
+  source: string;
+  phase: string;
+  scheduled_for_at: string | null;
+  occurrence_key: string | null;
+  dedupe_key: string | null;
   started_at: string;
+  dispatched_at: string | null;
   ended_at: string | null;
   triggered: number | bigint;
   status: string;
   detail: string | null;
   session_id: string | null;
+  report: string | null;
+  acknowledged_run_ids: string | null;
+  acknowledged_snapshot_run_ids: string | null;
+  resolved_by_run_id: string | null;
 }
 
 function mapAutomation(row: AutomationRow): Automation {
@@ -76,12 +86,28 @@ function mapRun(row: RunRow): AutomationRun {
   return {
     id: row.id,
     automationId: row.automation_id,
+    source: row.source as AutomationRun['source'],
+    phase: row.phase as AutomationRun['phase'],
+    scheduledForAt: row.scheduled_for_at,
+    occurrenceKey: row.occurrence_key,
+    dedupeKey: row.dedupe_key,
     startedAt: row.started_at,
+    dispatchedAt: row.dispatched_at,
     endedAt: row.ended_at,
     triggered: Number(row.triggered) === 1,
     status: row.status as AutomationRun['status'],
     detail: row.detail,
     sessionId: row.session_id,
+    report: row.report,
+    acknowledgedRunIds:
+      row.acknowledged_run_ids === null
+        ? null
+        : (JSON.parse(row.acknowledged_run_ids) as string[]),
+    acknowledgedSnapshotRunIds:
+      row.acknowledged_snapshot_run_ids === null
+        ? null
+        : (JSON.parse(row.acknowledged_snapshot_run_ids) as string[]),
+    resolvedByRunId: row.resolved_by_run_id,
   };
 }
 
@@ -115,11 +141,57 @@ export function createAutomationRepo(db: DatabaseSync): AutomationRepo {
   );
   const insertRun = db.prepare(
     `INSERT INTO automation_runs (
-      id, automation_id, started_at, ended_at, triggered, status, detail, session_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, automation_id, source, phase, scheduled_for_at, occurrence_key,
+      dedupe_key, started_at, dispatched_at, ended_at, triggered, status,
+      detail, session_id, report, acknowledged_run_ids, acknowledged_snapshot_run_ids,
+      resolved_by_run_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const updateRun = db.prepare(
+    `UPDATE automation_runs SET
+      automation_id = ?, source = ?, phase = ?, scheduled_for_at = ?,
+      occurrence_key = ?, dedupe_key = ?, started_at = ?, dispatched_at = ?,
+      ended_at = ?, triggered = ?, status = ?, detail = ?, session_id = ?, report = ?,
+      acknowledged_run_ids = ?, acknowledged_snapshot_run_ids = ?,
+      resolved_by_run_id = ?
+     WHERE id = ?`,
+  );
+  const selectRun = db.prepare('SELECT * FROM automation_runs WHERE id = ?');
+  const selectOpenRun = db.prepare(
+    `SELECT * FROM automation_runs
+     WHERE automation_id = ?
+       AND phase IN ('queued', 'checking', 'acting')
+     ORDER BY started_at DESC, id DESC
+     LIMIT 1`,
+  );
+  const selectOpenRuns = db.prepare(
+    `SELECT * FROM automation_runs
+     WHERE phase IN ('queued', 'checking', 'acting')
+     ORDER BY started_at, id`,
   );
   const selectRuns = db.prepare(
     'SELECT * FROM automation_runs WHERE automation_id = ? ORDER BY started_at DESC, id',
+  );
+  const selectPendingUncertainRuns = db.prepare(
+    `SELECT * FROM automation_runs run
+     WHERE run.automation_id = ?
+       AND run.phase = 'uncertain'
+       AND run.triggered = 1
+       AND run.resolved_by_run_id IS NULL
+       AND (
+         run.occurrence_key IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM automation_runs resolved
+           WHERE resolved.automation_id = run.automation_id
+             AND resolved.phase = 'finished'
+             AND resolved.triggered = 1
+             AND resolved.status = 'ok'
+             AND resolved.occurrence_key = run.occurrence_key
+             AND resolved.id != run.id
+             AND resolved.started_at >= run.started_at
+         )
+       )
+     ORDER BY run.started_at DESC, run.id DESC`,
   );
 
   const writeColumns = (automation: Automation): unknown[] => [
@@ -143,6 +215,57 @@ export function createAutomationRepo(db: DatabaseSync): AutomationRepo {
     automation.nextRunAt,
     automation.failure,
   ];
+  const writeRunColumns = (run: AutomationRun): unknown[] => [
+    run.automationId,
+    run.source,
+    run.phase,
+    run.scheduledForAt,
+    run.occurrenceKey,
+    run.dedupeKey,
+    run.startedAt,
+    run.dispatchedAt,
+    run.endedAt,
+    run.triggered ? 1 : 0,
+    run.status,
+    run.detail,
+    run.sessionId,
+    run.report ?? null,
+    run.acknowledgedRunIds === null || run.acknowledgedRunIds === undefined
+      ? null
+      : JSON.stringify(run.acknowledgedRunIds),
+    run.acknowledgedSnapshotRunIds === null ||
+    run.acknowledgedSnapshotRunIds === undefined
+      ? null
+      : JSON.stringify(run.acknowledgedSnapshotRunIds),
+    run.resolvedByRunId ?? null,
+  ];
+  let transactionDepth = 0;
+  let transactionSequence = 0;
+
+  const beginTransaction = (name: string | null): void => {
+    if (name === null) {
+      db.exec('BEGIN IMMEDIATE');
+      return;
+    }
+    db.exec(`SAVEPOINT ${name}`);
+  };
+
+  const commitTransaction = (name: string | null): void => {
+    if (name === null) {
+      db.exec('COMMIT');
+      return;
+    }
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+  };
+
+  const rollbackTransaction = (name: string | null): void => {
+    if (name === null) {
+      db.exec('ROLLBACK');
+      return;
+    }
+    db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+  };
 
   return {
     create(automation) {
@@ -163,19 +286,47 @@ export function createAutomationRepo(db: DatabaseSync): AutomationRepo {
       deleteRow.run(id);
     },
     appendRun(run) {
-      insertRun.run(
-        run.id,
-        run.automationId,
-        run.startedAt,
-        run.endedAt,
-        run.triggered ? 1 : 0,
-        run.status,
-        run.detail,
-        run.sessionId,
-      );
+      insertRun.run(run.id, ...(writeRunColumns(run) as never[]));
+    },
+    getRun(id) {
+      const row = selectRun.get(id) as RunRow | undefined;
+      return row ? mapRun(row) : null;
+    },
+    saveRun(run) {
+      updateRun.run(...(writeRunColumns(run) as never[]), run.id);
+    },
+    findOpenRun(automationId) {
+      const row = selectOpenRun.get(automationId) as RunRow | undefined;
+      return row ? mapRun(row) : null;
+    },
+    listOpenRuns() {
+      return (selectOpenRuns.all() as unknown as RunRow[]).map(mapRun);
     },
     listRuns(automationId) {
       return (selectRuns.all(automationId) as unknown as RunRow[]).map(mapRun);
+    },
+    listPendingUncertainRuns(automationId) {
+      return (selectPendingUncertainRuns.all(automationId) as unknown as RunRow[]).map(
+        mapRun,
+      );
+    },
+    transact(work) {
+      const savepoint =
+        transactionDepth === 0
+          ? null
+          : `automation_repo_${++transactionSequence}`;
+      beginTransaction(savepoint);
+      transactionDepth += 1;
+      try {
+        const result = work();
+        transactionDepth -= 1;
+        commitTransaction(savepoint);
+        return result;
+      } catch (error) {
+        transactionDepth = Math.max(0, transactionDepth - 1);
+        rollbackTransaction(savepoint);
+        throw error;
+      }
     },
   };
 }

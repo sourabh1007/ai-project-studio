@@ -572,7 +572,7 @@ describe('createMcpService.setToolEnabled', () => {
       enabled: false,
     });
     const sibling = result.config.servers.find((s) => s.name === 'other');
-    expect(sibling?.toolDiscovery.status).toBe('skipped');
+    expect(sibling?.toolDiscovery?.status).toBe('skipped');
     expect(sibling?.tools).toBeUndefined();
     expect(result.server.name).toBe('s');
   });

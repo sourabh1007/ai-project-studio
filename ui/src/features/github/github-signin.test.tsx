@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { DeviceCodeStart, DevicePollResult } from '../../lib/types.js';
+import type { ClipboardResult } from '../../lib/clipboard.js';
 import { GithubSignInModal } from './github-signin.js';
 
 const startCode: DeviceCodeStart = {
@@ -43,10 +44,27 @@ describe('GithubSignInModal', () => {
     // window.open is called to launch the verification page.
     vi.spyOn(window, 'open').mockReturnValue(null);
   });
-  afterEach(() => {
-    vi.runOnlyPendingTimers();
+  afterEach(async () => {
+    delete (window as unknown as { desktop?: unknown }).desktop;
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('reports copied only after acknowledged native success, not pending or rejected writes', async () => {
+    let finish!: (result: ClipboardResult) => void;
+    const copyText = vi.fn(() => new Promise<ClipboardResult>((resolve) => { finish = resolve; }));
+    (window as unknown as { desktop: unknown }).desktop = { copyText };
+    renderModal(makeClient({}));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    act(() => { screen.getByText('ABCD-1234').click(); });
+    expect(copyText).toHaveBeenCalledWith('ABCD-1234');
+    expect(screen.queryByText('Copied to clipboard')).toBeNull();
+    await act(async () => { finish({ ok: false, error: 'native-write-failed', writeState: 'unknown' }); });
+    expect(screen.queryByText('Copied to clipboard')).toBeNull();
+    act(() => { screen.getByText('ABCD-1234').click(); });
+    await act(async () => { finish({ ok: true }); });
+    expect(screen.getByText('Copied to clipboard')).toBeTruthy();
   });
 
   it('shows the device code and opens the verification page', async () => {

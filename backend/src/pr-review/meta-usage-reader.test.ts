@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createMetaUsageReader } from './meta-usage-reader.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
+import type { PersistedMetaUsage } from '../meta/meta-usage-contract.js';
 
 function storedUsage(overrides: Partial<StoredUsage>): StoredUsage {
   return {
@@ -26,6 +27,28 @@ function storedUsage(overrides: Partial<StoredUsage>): StoredUsage {
   };
 }
 
+function warmUsage(
+  overrides: Partial<PersistedMetaUsage> = {},
+): PersistedMetaUsage {
+  return {
+    sessionId: 'warm-1',
+    featureId: 'f1',
+    providerId: 'copilot',
+    requestedModel: 'auto',
+    resolvedModel: null,
+    transport: 'warm-acp',
+    providerSessionId: 'provider-1',
+    purpose: 'review',
+    label: 'PR review',
+    inputTokens: 12,
+    outputTokens: 5,
+    nanoAiu: null,
+    credits: null,
+    capturedAt: '2024-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('createMetaUsageReader', () => {
   it('returns null when the session has no usage events', () => {
     const reader = createMetaUsageReader({ usage: { listBySession: () => [] } });
@@ -45,6 +68,36 @@ describe('createMetaUsageReader', () => {
       outputTokens: 12,
       nanoAiu: 150,
       credits: 3,
+    });
+  });
+
+  it('falls back to a persisted warm record when no cold usage rows exist', () => {
+    const reader = createMetaUsageReader({
+      usage: { listBySession: () => [] },
+      warmUsage: { get: (sessionId) => (sessionId === 'warm-1' ? warmUsage() : null), save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
+    });
+
+    expect(reader.usageForSession('warm-1')).toEqual({
+      sessionId: 'warm-1',
+      inputTokens: 12,
+      outputTokens: 5,
+      nanoAiu: null,
+      credits: null,
+    });
+  });
+
+  it('surfaces unavailable warm usage truthfully instead of inventing zeros', () => {
+    const reader = createMetaUsageReader({
+      usage: { listBySession: () => [] },
+      warmUsage: { get: () => warmUsage({ inputTokens: null, outputTokens: null }), save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
+    });
+
+    expect(reader.usageForSession('warm-1')).toEqual({
+      sessionId: 'warm-1',
+      inputTokens: null,
+      outputTokens: null,
+      nanoAiu: null,
+      credits: null,
     });
   });
 });

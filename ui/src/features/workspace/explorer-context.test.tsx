@@ -1,9 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import { initialLiveState, type LiveState } from '../../lib/stream.js';
-import type { Feature, Repository, RepositoryContext } from '../../lib/types.js';
+import type { Feature, FeatureUsage, Repository, RepositoryContext, Session } from '../../lib/types.js';
+import { formatAic } from '../../lib/format.js';
 import { Explorer } from './explorer.js';
 
 const repo: Repository = {
@@ -69,6 +70,47 @@ const callbacks = {
 };
 
 describe('Explorer repository context gating', () => {
+  it('shows unknown live-only usage until the complete persisted rollup arrives', async () => {
+    const session: Session = {
+      id: 's1', featureId: feature.id, name: 'Quota session', provider: 'copilot',
+      requestedModel: 'auto', resolvedModel: null, status: 'completed', kind: 'dev',
+      prompt: '', usageFilePath: '', createdAt: feature.createdAt, startedAt: null,
+      endedAt: null, exitCode: 0, groupId: null,
+    };
+    let resolveUsage!: (value: FeatureUsage) => void;
+    const savedUsage = new Promise<FeatureUsage>((resolve) => { resolveUsage = resolve; });
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn().mockResolvedValue([session]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      listSessionSkills: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockReturnValue(savedUsage),
+    };
+    render(
+      <ApiProvider value={client}>
+        <Explorer live={{ ...initialLiveState, usageHistoryTruncated: true }}
+          activeSessionId={null} names={{}} {...callbacks} />
+      </ApiProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    expect(await screen.findByText('Usage pending')).toBeInTheDocument();
+    const totals = {
+      sessions: 1, inputTokens: 123, outputTokens: 456, reasoningOutputTokens: 0,
+      cost: 1, credits: 987, nanoAiu: 987000000000,
+    };
+    await act(async () => resolveUsage({
+      totals, groups: [], byModel: [], byProvider: [], byDay: [], timing: { totalActiveMs: 0 },
+      bySession: [{
+        ...totals, sessionId: session.id, groupId: null, origin: 'user',
+        provider: session.provider, kind: session.kind, status: session.status,
+        startedAt: null, endedAt: null, activeMs: 0,
+      }],
+    }));
+    await waitFor(() => expect(screen.queryByText('Usage pending')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Usage breakdown for Quota session' }))
+      .toHaveTextContent(formatAic(totals.nanoAiu));
+  });
+
   it('keeps new sessions enabled while context is still analyzing', async () => {
     const client = api(context('pending', '2025-01-01T00:00:01Z'));
     render(

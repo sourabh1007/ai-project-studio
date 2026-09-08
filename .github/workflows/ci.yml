@@ -37,5 +37,8 @@ jobs:
       - name: Backend tests (100% coverage gate)
         run: npm run test:coverage --workspace backend
 
+      - name: Desktop harness regression tests
+        run: npm run test:desktop:harness
+
       - name: UI tests (coverage gate)
         run: npm run test:coverage --workspace ui

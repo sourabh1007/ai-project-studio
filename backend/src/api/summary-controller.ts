@@ -17,6 +17,7 @@ export function createSummaryRoutes(deps: SummaryControllerDeps): Route[] {
         status: 200,
         body: await deps.summarizer.summarize({
           featureId: req.params.featureId,
+          signal: req.signal,
         }),
       }),
     },

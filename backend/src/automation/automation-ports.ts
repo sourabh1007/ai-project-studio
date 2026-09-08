@@ -28,13 +28,24 @@ export interface HttpProbe {
 /** Runs a headless AI turn, returning the text and the backing session id. */
 export interface AiInvoker {
   run(input: {
+    automationId?: string | null;
+    originSessionId?: string | null;
     featureId: string;
+    providerId?: string;
+    model?: string;
     prompt: string;
+    attachments?: readonly string[];
     cwd?: string;
+    noTools?: boolean;
+    timeoutMs?: number;
+    scope?: 'feature' | 'internal';
+    purpose?: string;
     /** Human-readable description of the work, for warm-session usage history. */
     label?: string;
     signal?: AbortSignal;
-  }): Promise<{ text: string; sessionId: string }>;
+    onStart?: (sessionId: string) => void;
+    onActivity?: (line: string) => void;
+  }): Promise<{ text: string; sessionId: string; operationId?: string }>;
 }
 
 /** A single CI run's normalized state. */

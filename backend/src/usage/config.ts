@@ -9,10 +9,14 @@ export const usageConfigSchema = z.object({
    * Drives the live credit/token/model meter for interactive terminal sessions.
    */
   livePollIntervalMs: z.number().int().positive(),
+  capturePageSize: z.number().int().positive().max(1000),
+  finalDrainPages: z.number().int().positive().max(100),
 });
 
 export type UsageConfig = z.infer<typeof usageConfigSchema>;
 
 export const usageDefaults: UsageConfig = {
   livePollIntervalMs: 1500,
+  capturePageSize: 128,
+  finalDrainPages: 8,
 };

@@ -13,9 +13,11 @@ import { ChangeGraph } from '../pr-review-page/change-graph.js';
 import { usePrComments, CommentableDiff } from '../pr-review-page/pr-comments.js';
 import {
   allPerspectivesReviewed,
+  canCertifySignoff,
   isPerspectiveReviewed,
   perspectiveBadgeLabel,
   reviewedCount,
+  signoffNoticeText,
 } from '../../lib/review-signoff.js';
 import {
   changeGraphDiffFiles,
@@ -489,6 +491,21 @@ export function ReviewBoardPage({
     void reviewBoardRunStore.load(featureId, runApi);
   }, [featureId, runApi]);
 
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      void reviewBoardRunStore.load(featureId, runApi);
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [featureId, runApi]);
+
   // The change graph drives the Architecture & Code Flow perspective's code-flow
   // diagram (the same graph the PR "code review" renders). It lives on the PR
   // review, so fetch it here and refresh whenever the board is (re)generated —
@@ -634,6 +651,8 @@ export function ReviewBoardPage({
 
   const perspectiveIds = board?.perspectives.map((p) => p.id) ?? [];
   const reviewedN = reviewedCount(signoff, perspectiveIds);
+  const canSignoff = canCertifySignoff(signoff);
+  const signoffNotice = signoffNoticeText(signoff);
 
   // Roll-up counts that reflect the reviewer's live resolve/ignore decisions —
   // resolved or ignored findings drop out of the open/blocking/warning/suggestion
@@ -727,6 +746,11 @@ export function ReviewBoardPage({
               </span>
             ) : null}
           </p>
+          {signoffNotice && (
+            <p className="rb-subtitle" role="alert">
+              {signoffNotice}
+            </p>
+          )}
         </div>
         <div className="rb-header-side">
           <span
@@ -762,9 +786,11 @@ export function ReviewBoardPage({
               type="button"
               className="rb-act rb-act-icon rb-act-primary"
               onClick={() => markPrReviewed(perspectiveIds)}
-              disabled={!allReviewed}
+              disabled={!allReviewed || !canSignoff}
               title={
-                allReviewed
+                !canSignoff
+                  ? 'Review sign-off is unavailable until the reviewed commit identity is known'
+                  : allReviewed
                   ? 'Mark the whole PR reviewed'
                   : 'Review every perspective first'
               }
@@ -804,6 +830,12 @@ export function ReviewBoardPage({
           </button>
         </div>
       </header>
+
+      {error && board && (
+        <div className="rb-analyze-error" role="alert">
+          <ErrorText error={error} />
+        </div>
+      )}
 
       {failedCount > 0 && !analyzing && (
         <div className="rb-analyze-error" role="alert">
@@ -1066,9 +1098,14 @@ export function ReviewBoardPage({
                   onClick={() =>
                     setPerspectiveReviewed(selected.id, !selectedReviewed)
                   }
-                  disabled={selectedAnalyzing}
+                  disabled={
+                    selectedAnalyzing ||
+                    (!canSignoff && !selectedReviewed)
+                  }
                   title={
-                    selectedReviewed
+                    !canSignoff && !selectedReviewed
+                      ? 'Review sign-off is unavailable until the reviewed commit identity is known'
+                      : selectedReviewed
                       ? 'You reviewed this perspective — click to undo'
                       : 'Mark this perspective reviewed'
                   }

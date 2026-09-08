@@ -19,7 +19,7 @@ export interface TaskPlanRunnerDeps {
 
 /** Generates and persists a feature's task checklist from an AI plan. */
 export interface TaskPlanRunner {
-  generate(featureId: string): Promise<FeatureTask[]>;
+  generate(featureId: string, signal?: AbortSignal): Promise<FeatureTask[]>;
 }
 
 /**
@@ -30,7 +30,8 @@ export interface TaskPlanRunner {
  */
 export function createTaskPlanRunner(deps: TaskPlanRunnerDeps): TaskPlanRunner {
   return {
-    async generate(featureId) {
+    async generate(featureId, signal) {
+      signal?.throwIfAborted();
       // Throws NotFoundError when the feature does not exist.
       const feature = deps.features.get(featureId);
       const prompt = buildTaskPlanPrompt(feature, deps.config);
@@ -38,8 +39,11 @@ export function createTaskPlanRunner(deps: TaskPlanRunnerDeps): TaskPlanRunner {
         featureId,
         prompt,
         label: 'Task plan',
+        signal,
       });
+      signal?.throwIfAborted();
       const drafts = parseTaskPlan(response, deps.config);
+      signal?.throwIfAborted();
 
       deps.repo.deleteByFeature(featureId);
       const createdAt = deps.clock.isoNow();

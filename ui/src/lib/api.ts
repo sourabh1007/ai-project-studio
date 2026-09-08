@@ -75,8 +75,12 @@ import type {
   AutomationDetail,
   Subagent,
   CreateAutomationInput,
+  RunAutomationInput,
   HealthStatus,
 } from './types.js';
+import type {
+  MetaOperation, MetaOperationPage, MetaOperationsQuery,
+} from '../features/meta-operations/meta-operation-types.js';
 
 /** Injectable fetch so the client is unit-testable without a real network. */
 export type FetchLike = (
@@ -186,6 +190,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
   }
 
   return {
+    listMetaOperations: (query: MetaOperationsQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value != null) params.set(key, String(value));
+      }
+      const suffix = params.toString();
+      return request<MetaOperationPage>(`/meta/operations${suffix ? `?${suffix}` : ''}`);
+    },
+    getMetaOperation: (operationId: string) =>
+      request<MetaOperation>(`/meta/operations/${encodeURIComponent(operationId)}`),
     checkHealth: () => request<HealthStatus>('/health'),
     listRepos: () => request<Repository[]>('/repos'),
     addRepo: (input: AddRepositoryInput) =>
@@ -556,8 +570,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Automation>(`/automations/${id}/resume`, jsonBody({})),
     cancelAutomation: (id: string) =>
       request<Automation>(`/automations/${id}/cancel`, jsonBody({})),
-    runAutomation: (id: string) =>
-      request<Automation>(`/automations/${id}/run`, jsonBody({})),
+    runAutomation: (id: string, input?: RunAutomationInput) =>
+      request<Automation>(`/automations/${id}/run`, jsonBody(input ?? {})),
     updateAutomationInterval: (id: string, intervalMs: number) =>
       request<Automation>(
         `/automations/${id}/interval`,

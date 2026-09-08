@@ -11,12 +11,14 @@ import {
   assertProgressBody,
   assertRegisterSubagentBody,
   assertResultBody,
+  assertRunNowBody,
 } from '../automation/automation-input.js';
 
 export interface AutomationControllerDeps {
   automations: AutomationService;
   subagents: SubagentService;
-  scheduler?: Pick<AutomationScheduler, 'abort' | 'kick'>;
+  scheduler?: Pick<AutomationScheduler, 'abort' | 'kick'> &
+    Partial<Pick<AutomationScheduler, 'runNow'>>;
   controlToken?: string;
 }
 
@@ -153,10 +155,15 @@ export function createAutomationRoutes(
     {
       method: 'post',
       path: '/automations/:id/run',
-      handler: (req) => {
-        const body = deps.automations.runNow(req.params.id);
-        deps.scheduler?.kick(req.params.id);
-        return { status: 200, body };
+      handler: async (req) => {
+        const body = assertRunNowBody(req.body);
+        if (deps.scheduler?.runNow) {
+          return {
+            status: 200,
+            body: await deps.scheduler.runNow(req.params.id, body),
+          };
+        }
+        return { status: 200, body: deps.automations.runNow(req.params.id) };
       },
     },
     {
@@ -167,7 +174,7 @@ export function createAutomationRoutes(
           req.params.id,
           assertIntervalBody(req.body),
         );
-        deps.scheduler?.kick(req.params.id);
+        void deps.scheduler?.kick(req.params.id).catch(() => undefined);
         return { status: 200, body };
       },
     },
@@ -210,9 +217,9 @@ export function createAutomationRoutes(
     {
       method: 'delete',
       path: '/automations/:id',
-      handler: (req) => {
-        deps.automations.remove(req.params.id);
+      handler: async (req) => {
         deps.scheduler?.abort(req.params.id);
+        await deps.automations.remove(req.params.id);
         return { status: 200, body: { id: req.params.id } };
       },
     },

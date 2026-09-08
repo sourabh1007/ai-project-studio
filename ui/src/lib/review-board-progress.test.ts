@@ -84,6 +84,7 @@ describe('recommendationFor', () => {
 describe('mergeAnalyzedPerspective', () => {
   const board: ReviewBoard = {
     featureId: 'f',
+    repoId: 'r1',
     pull: { number: 1, title: 't', url: 'u' },
     worktreePath: 'w',
     baseBranch: 'main',
@@ -107,6 +108,7 @@ describe('mergeAnalyzedPerspective', () => {
     perspectives: [perspective('a', []), perspective('b', [])],
     recommendation: 'needs-review',
     summary: { open: 0, blocking: 0, warnings: 0, suggestions: 0 },
+    reviewUpdatedAt: 't0',
     generatedAt: 't',
   };
 

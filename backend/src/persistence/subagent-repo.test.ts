@@ -79,4 +79,39 @@ describe('subagent-repo', () => {
     expect(repo.listByAutomation('none')).toEqual([]);
     db.close();
   });
+
+  it('deletes subagents scoped to an owning feature or session without touching others', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSubagentRepo(db);
+
+    repo.create(subagent({ id: 'feature-owned', origin: { sessionId: null, featureId: 'f1' } }));
+    repo.create(subagent({ id: 'session-owned', origin: { sessionId: 's1', featureId: null } }));
+    repo.create(subagent({ id: 'other', origin: { sessionId: 's2', featureId: 'f2' } }));
+
+    repo.deleteByOriginFeature('f1');
+    repo.deleteByOriginSession('s1');
+
+    expect(repo.get('feature-owned')).toBeNull();
+    expect(repo.get('session-owned')).toBeNull();
+    expect(repo.get('other')).toEqual(
+      subagent({ id: 'other', origin: { sessionId: 's2', featureId: 'f2' } }),
+    );
+    db.close();
+  });
+
+  it('deletes subagents by automation id without touching detached work', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSubagentRepo(db);
+
+    repo.create(subagent({ id: 'g1', automationId: 'a1' }));
+    repo.create(subagent({ id: 'g2', automationId: 'a2' }));
+    repo.create(subagent({ id: 'g3', automationId: null }));
+
+    repo.deleteByAutomation('a1');
+
+    expect(repo.get('g1')).toBeNull();
+    expect(repo.get('g2')).toEqual(subagent({ id: 'g2', automationId: 'a2' }));
+    expect(repo.get('g3')).toEqual(subagent({ id: 'g3', automationId: null }));
+    db.close();
+  });
 });

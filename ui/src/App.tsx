@@ -57,6 +57,7 @@ import {
 import { usePersistentState } from './hooks/use-persistent-state.js';
 import { useApplyUiPreferences } from './hooks/use-ui-preferences.js';
 import { isOneOf } from './lib/persisted-state.js';
+import { hasOpenModalDialog } from './lib/focus-ownership.js';
 import {
   AutomationIcon,
   FilesIcon,
@@ -98,7 +99,7 @@ export function App() {
   // App-wide clipboard hardening so Ctrl/Cmd+C on any selected UI text reaches
   // the OS clipboard (the app's non-secure localhost origin disables the web
   // Clipboard API). See use-global-clipboard.
-  useGlobalClipboard();
+  const clipboardError = useGlobalClipboard();
 
   const cycleView = (delta: number) => {
     setView((current) => {
@@ -116,9 +117,14 @@ export function App() {
   // Keeps all app-level chords in one place instead of scattered listeners.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (hasOpenModalDialog()) {
+        return;
+      }
       const binding = matchShortcut(event, SHORTCUT_BINDINGS);
       if (!binding) return;
       event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
       switch (binding.id) {
         case 'palette':
           setPaletteOpen((prev) => !prev);
@@ -142,8 +148,8 @@ export function App() {
           break;
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
 
   const commands = useMemo<PaletteCommand[]>(() => {
@@ -233,6 +239,7 @@ export function App() {
 
   return (
     <div className="ide-shell">
+      {clipboardError && <div className="clipboard-alert" role="alert">{clipboardError}</div>}
       <CommandPalette
         open={paletteOpen}
         commands={commands}
@@ -268,6 +275,8 @@ export function App() {
               }`.trim()}
               title="Explorer"
               aria-label="Explorer"
+              aria-current={view === 'workspace' ? 'page' : undefined}
+              aria-expanded={view === 'workspace' && sidebarOpen}
               onClick={() => {
                 if (view === 'workspace') {
                   setSidebarOpen((v) => !v);
@@ -284,6 +293,7 @@ export function App() {
               className={`activity-item ${view === 'skills' ? 'is-active' : ''}`.trim()}
               title="Skills"
               aria-label="Skills"
+              aria-current={view === 'skills' ? 'page' : undefined}
               onClick={() => setView('skills')}
             >
               <SkillsIcon size={22} />
@@ -293,6 +303,7 @@ export function App() {
               className={`activity-item ${view === 'mcp' ? 'is-active' : ''}`.trim()}
               title="MCP Servers"
               aria-label="MCP Servers"
+              aria-current={view === 'mcp' ? 'page' : undefined}
               onClick={() => setView('mcp')}
             >
               <McpIcon size={22} />
@@ -304,6 +315,7 @@ export function App() {
               }`.trim()}
               title="Monitors"
               aria-label="Monitors"
+              aria-current={view === 'automations' ? 'page' : undefined}
               onClick={() => setView('automations')}
             >
               <AutomationIcon size={22} />
@@ -313,6 +325,7 @@ export function App() {
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
               title="Settings"
               aria-label="Settings"
+              aria-current={view === 'settings' ? 'page' : undefined}
               onClick={() => setView('settings')}
             >
               <SettingsIcon size={22} />
@@ -333,7 +346,7 @@ export function App() {
 
         <div className="ide-content">
           <TopLoadingBar />
-          <ConnectionBanner />
+          <ConnectionBanner liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>

@@ -3,147 +3,197 @@ import { stripAnsi } from './ansi.js';
 /** Max bytes of pending (un-newlined) output retained while scanning lines. */
 const OUTPUT_SCAN_CAP = 16384;
 
+/** Cancels one scheduled retry callback. */
+type CancelTimer = () => void;
+
 export interface SessionAutoRetryDeps {
   /**
-   * True when a completed output line signals a *transient*, retryable provider
-   * failure (an upstream 5xx / 429 / network reset) rather than a genuine
-   * problem with the request. Reuses the metasession classifier so interactive
-   * sessions heal from the same blips the IDE already retries elsewhere.
+   * True when a completed output line signals a recoverable provider/session
+   * failure (for example an upstream 5xx / 429 / network reset, or another
+   * provider-specific error the caller has chosen to treat as retryable).
    */
   isTransient: (line: string) => boolean;
-  /** Extra automatic re-submits of the last prompt per failure streak. */
+  /** Extra automatic re-submits of one confirmed safe request per failure streak. */
   maxAttempts: number;
-  /** Delay before a re-submit, giving the flaky upstream a moment to recover. */
+  /** Delay before an automatic re-submit, giving the upstream a moment to recover. */
   backoffMs: number;
   /**
-   * Re-submits a prompt into the live terminal exactly as a user would (writes
-   * the text, then a submit keystroke once the paste settles). Must NOT feed
-   * back into {@link SessionAutoRetry.observeInput}, or the resend would be
-   * mistaken for a fresh prompt and reset the attempt budget.
+   * Re-submits a provider-confirmed replay-safe request into the live terminal.
+   * Must NOT feed back into {@link SessionAutoRetry.observeInput}, or the resend
+   * would be mistaken for fresh user activity and invalidate the authority.
    */
   resubmit: (prompt: string) => void;
-  /** Optional user-visible notice shown when an automatic retry fires. */
+  /** Optional user-visible notice shown for automatic retry/manual retry guidance. */
   notify?: (text: string) => void;
   /**
-   * Invoked once per failure streak when the automatic re-submit budget is
-   * spent but the session is still failing on a recoverable error. Lets a
-   * higher tier (metasession analysis, a CLI restart) take over. Fires at most
-   * once until a fresh user prompt resets the streak, so escalation never
-   * loops. Carries the prompt that could not be recovered and the failing line.
+   * Invoked once per failure streak when a provider-confirmed replay-safe
+   * request is still failing after the automatic re-submit budget is spent.
+   * Carries an `isCurrent` guard so any async follow-up (analysis/restart) can
+   * abort silently once new user input, disposal, or a newer request supersedes
+   * the authority that triggered this escalation.
    */
-  onExhausted?: (info: { prompt: string; line: string }) => void;
-  /** Injected timer so tests stay deterministic; defaults to setTimeout. */
-  setTimer?: (fn: () => void, ms: number) => void;
+  onExhausted?: (info: {
+    prompt: string;
+    line: string;
+    isCurrent: () => boolean;
+  }) => void;
+  /**
+   * Injected scheduler so tests stay deterministic; defaults to setTimeout and
+   * returns a cancellation callback that must prevent future execution.
+   */
+  scheduleTimer?: (fn: () => void, ms: number) => CancelTimer;
 }
 
 export interface SessionAutoRetry {
-  /** Feeds raw browser keystrokes so the last submitted prompt is tracked. */
+  /**
+   * Feeds raw browser keystrokes. Browser input NEVER establishes replay
+   * authority; once any authority exists, later user input cancels it.
+   */
   observeInput(data: string): void;
-  /** Feeds raw terminal output so transient failures trigger a re-submit. */
+  /** Feeds raw terminal output so transient failures trigger retry/manual guidance. */
   observeOutput(data: string): void;
+  /**
+   * Records one exact request text as safe to replay, but only because an
+   * authoritative provider-side path confirmed it. Raw PTY keystrokes must
+   * never call this.
+   */
+  confirmReplaySafeRequest(exactText: string): void;
+  /** Cancels pending retry/escalation work and makes future callbacks inert. */
+  dispose(): void;
 }
 
-type EscapeState = 'none' | 'esc' | 'csi';
+const MANUAL_RETRY_UNCONFIRMED_NOTICE =
+  '\r\n[auto-retry] recoverable session error detected. Automatic replay is unavailable unless the provider confirms an exact replay-safe request, so review the CLI state and retry manually if needed.\r\n';
+
+const MANUAL_RETRY_EXHAUSTED_NOTICE =
+  '\r\n[auto-retry] recoverable session error detected again after the automatic retry budget was spent. Review the CLI state and retry manually if needed.\r\n';
+
+interface ReplayAuthority {
+  prompt: string;
+  version: number;
+}
 
 /**
- * Auto-heals an interactive AI CLI session from transient provider failures by
- * re-submitting the user's last prompt. It reconstructs that prompt from the
- * keystroke stream (handling backspace and arrow-key/escape sequences), scans
- * completed output lines for a transient-failure signal, and — bounded by a
- * per-streak attempt budget — resends the prompt after a short backoff. A fresh
- * user prompt resets the budget; a resend never does (it bypasses input
- * observation), so a genuinely broken request cannot loop forever.
+ * Bounded recovery helper for interactive sessions. It never tries to
+ * reconstruct a request from raw terminal keystrokes; browser input only
+ * invalidates pending automatic recovery. Automatic replay is allowed solely
+ * for an exact request text the provider independently confirmed as
+ * replay-safe.
  */
 export function createSessionAutoRetry(
   deps: SessionAutoRetryDeps,
 ): SessionAutoRetry {
-  const setTimer =
-    deps.setTimer ?? ((fn, ms) => void setTimeout(fn, ms));
+  const scheduleTimer =
+    deps.scheduleTimer ??
+    ((fn, ms) => {
+      const handle = setTimeout(fn, ms);
+      return () => clearTimeout(handle);
+    });
 
-  let inputLine = '';
-  let escape: EscapeState = 'none';
-  let lastPrompt: string | null = null;
+  let replayAuthority: ReplayAuthority | null = null;
+  let authorityVersion = 0;
   let attempts = 0;
-  // Guards a single failure streak: cleared while a retry is pending so a burst
-  // of failure lines can't schedule multiple resends, re-armed on each resend.
-  let armed = false;
-  // Ensures the exhaustion escalation fires at most once per streak, however
-  // many failure lines the CLI prints after the budget is spent.
   let exhaustedFired = false;
+  let manualNoticeFired = false;
+  let cancelPendingRetry: CancelTimer | null = null;
   let outputBuffer = '';
+  let disposed = false;
 
-  const submitInputLine = (): void => {
-    const prompt = inputLine.trim();
-    inputLine = '';
-    if (prompt.length === 0) {
+  const clearPendingRetry = (): void => {
+    cancelPendingRetry?.();
+    cancelPendingRetry = null;
+  };
+
+  const resetFlags = (): void => {
+    attempts = 0;
+    exhaustedFired = false;
+    manualNoticeFired = false;
+  };
+
+  const invalidateReplayAuthority = (): void => {
+    authorityVersion += 1;
+    replayAuthority = null;
+    clearPendingRetry();
+    resetFlags();
+  };
+
+  const isCurrentAuthority = (version: number): boolean =>
+    !disposed && replayAuthority?.version === version;
+
+  const notifyManualRetry = (text: string): void => {
+    if (manualNoticeFired) {
       return;
     }
-    lastPrompt = prompt;
-    attempts = 0;
-    armed = true;
-    exhaustedFired = false;
+    manualNoticeFired = true;
+    deps.notify?.(text);
+  };
+
+  const confirmReplaySafeRequest = (exactText: string): void => {
+    if (disposed) {
+      return;
+    }
+    authorityVersion += 1;
+    clearPendingRetry();
+    resetFlags();
+    replayAuthority =
+      exactText.length === 0
+        ? null
+        : { prompt: exactText, version: authorityVersion };
   };
 
   const observeInput = (data: string): void => {
-    for (let i = 0; i < data.length; i += 1) {
-      const ch = data[i];
-      const code = data.charCodeAt(i);
-      if (escape === 'esc') {
-        escape = ch === '[' || ch === 'O' ? 'csi' : 'none';
-        continue;
-      }
-      if (escape === 'csi') {
-        if (code >= 0x40 && code <= 0x7e) {
-          escape = 'none';
-        }
-        continue;
-      }
-      if (code === 0x1b) {
-        escape = 'esc';
-        continue;
-      }
-      if (ch === '\r' || ch === '\n') {
-        submitInputLine();
-        continue;
-      }
-      if (code === 0x7f || code === 0x08) {
-        inputLine = inputLine.slice(0, -1);
-        continue;
-      }
-      if (code < 0x20) {
-        continue;
-      }
-      inputLine += ch;
+    if (disposed || data.length === 0) {
+      return;
     }
+    invalidateReplayAuthority();
   };
 
   const maybeRetry = (line: string): void => {
-    if (!armed || lastPrompt === null || !deps.isTransient(line)) {
+    if (disposed || !deps.isTransient(line)) {
+      return;
+    }
+    const authority = replayAuthority;
+    if (!authority) {
+      notifyManualRetry(MANUAL_RETRY_UNCONFIRMED_NOTICE);
+      return;
+    }
+    if (cancelPendingRetry) {
       return;
     }
     if (attempts >= deps.maxAttempts) {
-      // Non-destructive re-submits are spent: hand off once to the escalation
-      // tier (metasession analysis / CLI restart) rather than looping forever.
-      if (!exhaustedFired) {
-        exhaustedFired = true;
-        deps.onExhausted?.({ prompt: lastPrompt, line });
+      if (exhaustedFired) {
+        return;
+      }
+      exhaustedFired = true;
+      if (deps.onExhausted) {
+        deps.onExhausted({
+          prompt: authority.prompt,
+          line,
+          isCurrent: () => isCurrentAuthority(authority.version),
+        });
+      } else {
+        notifyManualRetry(MANUAL_RETRY_EXHAUSTED_NOTICE);
       }
       return;
     }
-    armed = false;
     attempts += 1;
     const attempt = attempts;
     deps.notify?.(
-      `\r\n[auto-retry] transient provider error — retrying (attempt ${attempt}/${deps.maxAttempts})…\r\n`,
+      `\r\n[auto-retry] recoverable session error — retrying (attempt ${attempt}/${deps.maxAttempts})…\r\n`,
     );
-    const prompt = lastPrompt;
-    setTimer(() => {
-      armed = true;
-      deps.resubmit(prompt);
+    cancelPendingRetry = scheduleTimer(() => {
+      cancelPendingRetry = null;
+      if (!isCurrentAuthority(authority.version)) {
+        return;
+      }
+      deps.resubmit(authority.prompt);
     }, deps.backoffMs);
   };
 
   const observeOutput = (data: string): void => {
+    if (disposed) {
+      return;
+    }
     outputBuffer += data;
     let newline = outputBuffer.indexOf('\n');
     while (newline >= 0) {
@@ -160,5 +210,19 @@ export function createSessionAutoRetry(
     }
   };
 
-  return { observeInput, observeOutput };
+  const dispose = (): void => {
+    if (disposed) {
+      return;
+    }
+    invalidateReplayAuthority();
+    disposed = true;
+    outputBuffer = '';
+  };
+
+  return {
+    observeInput,
+    observeOutput,
+    confirmReplaySafeRequest,
+    dispose,
+  };
 }

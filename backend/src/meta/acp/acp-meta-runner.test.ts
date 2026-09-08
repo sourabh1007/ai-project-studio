@@ -6,25 +6,44 @@ function fakePool(
   behaviour: (request: {
     prompt: string;
     cwd?: string;
+    deadlineAt?: number;
+    timeoutMs?: number;
     onActivity?: (text: string) => void;
+    onStart?: () => void;
+    signal?: AbortSignal;
   }) => AcpTurnResult,
 ): {
   pool: AcpTurnPool;
-  calls: { prompt: string; cwd?: string; purpose?: string; label?: string }[];
+  calls: {
+    prompt: string;
+    cwd?: string;
+    deadlineAt?: number;
+    timeoutMs?: number;
+    purpose?: string;
+    label?: string;
+    signal?: AbortSignal;
+  }[];
 } {
   const calls: {
     prompt: string;
     cwd?: string;
+    deadlineAt?: number;
+    timeoutMs?: number;
     purpose?: string;
     label?: string;
+    signal?: AbortSignal;
   }[] = [];
   const pool: AcpTurnPool = {
     run(request, context) {
+      request.onStart?.();
       calls.push({
         prompt: request.prompt,
         cwd: request.cwd,
+        deadlineAt: request.deadlineAt,
+        timeoutMs: request.timeoutMs,
         purpose: context?.purpose,
         label: context?.label,
+        signal: request.signal,
       });
       return Promise.resolve(behaviour(request));
     },
@@ -39,20 +58,70 @@ const result = (text: string): AcpTurnResult => ({
   usage: null,
 });
 
+function deps(
+  pool: AcpTurnPool,
+  overrides: Partial<Parameters<typeof createAcpMetaRunner>[0]> = {},
+): Parameters<typeof createAcpMetaRunner>[0] {
+  return {
+    pool,
+    newSessionId: () => 'sess-1',
+    providerId: 'copilot',
+    defaultModel: () => 'auto',
+    ...overrides,
+  };
+}
+
 describe('createAcpMetaRunner', () => {
   it('runs a turn inline and reports the minted session id via onStart', async () => {
     const { pool, calls } = fakePool(() => result('answer'));
-    const runner = createAcpMetaRunner({ pool, newSessionId: () => 'sess-1' });
+    const runner = createAcpMetaRunner(deps(pool));
     const started: string[] = [];
+    const controller = new AbortController();
     const out = await runner.runDetailed({
       featureId: 'f',
       prompt: 'the full prompt',
       cwd: 'C:\\repo',
+      timeoutMs: 12_345,
       onStart: (id) => started.push(id),
+      signal: controller.signal,
     });
-    expect(out).toEqual({ text: 'answer', sessionId: 'sess-1' });
+    expect(out).toEqual({
+      text: 'answer',
+      sessionId: 'sess-1',
+      transport: 'warm-acp',
+      providerId: 'copilot',
+      requestedModel: 'auto',
+      resolvedModel: null,
+      providerSessionId: 'acp-internal',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        nanoAiu: null,
+        credits: null,
+      },
+    });
     expect(started).toEqual(['sess-1']);
-    expect(calls).toEqual([{ prompt: 'the full prompt', cwd: 'C:\\repo' }]);
+    expect(calls).toEqual([
+      {
+        prompt: 'the full prompt',
+        cwd: 'C:\\repo',
+        deadlineAt: undefined,
+        timeoutMs: 12_345,
+        signal: controller.signal,
+      },
+    ]);
+  });
+
+  it('forwards an existing absolute deadline unchanged', async () => {
+    const { pool, calls } = fakePool(() => result('answer'));
+    const runner = createAcpMetaRunner(deps(pool));
+    await runner.runDetailed({
+      featureId: 'f',
+      prompt: 'the full prompt',
+      deadlineAt: 456,
+      timeoutMs: 12_345,
+    });
+    expect(calls[0]?.deadlineAt).toBe(456);
   });
 
   it('buffers streamed chunks into whole activity lines and flushes the remainder', async () => {
@@ -64,7 +133,7 @@ describe('createAcpMetaRunner', () => {
       request.onActivity?.('tail');
       return result('done');
     });
-    const runner = createAcpMetaRunner({ pool, newSessionId: () => 's' });
+    const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
     await runner.runDetailed({
       featureId: 'f',
       prompt: 'p',
@@ -80,7 +149,7 @@ describe('createAcpMetaRunner', () => {
       request.onActivity?.('only line\n');
       return result('done');
     });
-    const runner = createAcpMetaRunner({ pool, newSessionId: () => 's' });
+    const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
     await runner.runDetailed({
       featureId: 'f',
       prompt: 'p',
@@ -95,18 +164,16 @@ describe('createAcpMetaRunner', () => {
       expect(request.onActivity).toBeUndefined();
       return result('quiet');
     });
-    const runner = createAcpMetaRunner({ pool, newSessionId: () => 's' });
+    const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
     const out = await runner.runDetailed({ featureId: 'f', prompt: 'p' });
     expect(out.text).toBe('quiet');
   });
 
   it("attributes the turn to the request's purpose for the usage history", async () => {
     const { pool, calls } = fakePool(() => result('ok'));
-    const runner = createAcpMetaRunner({
-      pool,
-      newSessionId: () => 's',
-      purpose: 'general',
-    });
+    const runner = createAcpMetaRunner(
+      deps(pool, { newSessionId: () => 's', purpose: 'general' }),
+    );
     await runner.runDetailed({
       featureId: 'f',
       prompt: 'p',
@@ -119,11 +186,9 @@ describe('createAcpMetaRunner', () => {
 
   it("falls back to the pool's purpose when the request has none", async () => {
     const { pool, calls } = fakePool(() => result('ok'));
-    const runner = createAcpMetaRunner({
-      pool,
-      newSessionId: () => 's',
-      purpose: 'general',
-    });
+    const runner = createAcpMetaRunner(
+      deps(pool, { newSessionId: () => 's', purpose: 'general' }),
+    );
     await runner.runDetailed({ featureId: 'f', prompt: 'p' });
     expect(calls[0].purpose).toBe('general');
   });
@@ -135,7 +200,7 @@ describe('createAcpMetaRunner', () => {
       request.onActivity?.(`${long}\n`);
       return result('done');
     });
-    const runner = createAcpMetaRunner({ pool, newSessionId: () => 's' });
+    const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
     await runner.runDetailed({
       featureId: 'f',
       prompt: 'p',
@@ -143,5 +208,26 @@ describe('createAcpMetaRunner', () => {
     });
     expect(activity[0].length).toBeLessThan(long.length);
     expect(activity[0].endsWith('…')).toBe(true);
+  });
+
+  it('preserves warm token usage when the provider reports it', async () => {
+    const { pool } = fakePool(() => ({
+      text: 'done',
+      sessionId: 'provider-session',
+      stopReason: 'end_turn',
+      usage: { inputTokens: 11, outputTokens: 7 },
+    }));
+    const runner = createAcpMetaRunner(deps(pool));
+
+    await expect(
+      runner.runDetailed({ featureId: 'f', prompt: 'p' }),
+    ).resolves.toMatchObject({
+      usage: {
+        inputTokens: 11,
+        outputTokens: 7,
+        nanoAiu: null,
+        credits: null,
+      },
+    });
   });
 });

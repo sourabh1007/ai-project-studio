@@ -17,9 +17,13 @@ export interface AcpTurnPool {
     request: {
       prompt: string;
       cwd?: string;
+      deadlineAt?: number;
+      timeoutMs?: number;
       onActivity?: (text: string) => void;
+      onStart?: () => void;
+      signal?: AbortSignal;
     },
-    context?: { purpose?: string; label?: string },
+    context?: { purpose?: string; label?: string; operationId?: string },
   ): Promise<AcpTurnResult>;
 }
 
@@ -27,8 +31,8 @@ export interface AcpMetaRunnerDeps {
   pool: AcpTurnPool;
   /**
    * Mints the session id reported to callers for a warm turn. The ACP path does
-   * not write the OTel usage file keyed by session id, so this id is used only
-   * for the review's `metaSessionId` bookkeeping (usage reads back as null).
+   * not write the normal per-session usage file keyed by session id, so this id
+   * is a durable bookkeeping handle the app persists alongside the warm result.
    */
   newSessionId: () => string;
   /**
@@ -37,6 +41,8 @@ export interface AcpMetaRunnerDeps {
    * request that carries its own {@link MetaRequest.purpose} overrides it.
    */
   purpose?: string;
+  providerId: string;
+  defaultModel: () => string;
 }
 
 /**
@@ -56,7 +62,6 @@ export function createAcpMetaRunner(
   return {
     async runDetailed(request: MetaRequest): Promise<MetaRunResult> {
       const sessionId = deps.newSessionId();
-      request.onStart?.(sessionId);
 
       let buffer = '';
       const emit = request.onActivity;
@@ -79,9 +84,13 @@ export function createAcpMetaRunner(
         {
           prompt: request.prompt,
           cwd: request.cwd,
+          deadlineAt: request.deadlineAt,
+          timeoutMs: request.timeoutMs,
           onActivity,
+          onStart: () => request.onStart?.(sessionId),
+          signal: request.signal,
         },
-        { purpose: request.purpose ?? deps.purpose, label: request.label },
+        { purpose: request.purpose ?? deps.purpose, label: request.label, operationId: request.operationId },
       );
 
       if (emit) {
@@ -90,8 +99,29 @@ export function createAcpMetaRunner(
           emit(`💬 ${trailing}`);
         }
       }
-
-      return { text: result.text, sessionId };
+      const usage = result.usage
+        ? {
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            nanoAiu: null,
+            credits: null,
+          }
+        : {
+            inputTokens: null,
+            outputTokens: null,
+            nanoAiu: null,
+            credits: null,
+          };
+      return {
+        text: result.text,
+        sessionId,
+        transport: 'warm-acp',
+        providerId: deps.providerId,
+        requestedModel: request.model ?? deps.defaultModel(),
+        resolvedModel: null,
+        providerSessionId: result.sessionId,
+        usage,
+      };
     },
   };
 }

@@ -1,22 +1,70 @@
 import { useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import type { Feature, RemotePullRequest, Repository } from '../../lib/types.js';
+import type {
+  Feature,
+  RemotePullRequest,
+  RepoProvider,
+  Repository,
+} from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader, Spinner } from '../../components/loading.js';
 
 /**
  * Extracts a pull-request number from a pasted value — either a bare number or
- * a provider URL (GitHub `/pull/42`, Azure `/pullrequest/42`). The last integer
- * in the string is the PR id in every provider URL shape we support.
+ * a provider URL (GitHub `/pull/42`, Azure `/pullrequest/42`). Query strings
+ * and fragments are ignored, so comment anchors or numeric search params never
+ * override the provider-native PR id.
  */
-export function parsePullNumber(input: string): number | null {
-  const matches = input.match(/\d+/g);
-  if (!matches) {
+export function parsePullNumber(
+  input: string,
+  provider: RepoProvider,
+): number | null {
+  const trimmed = input.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const number = Number(trimmed);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
     return null;
   }
-  const n = Number(matches[matches.length - 1]);
-  return Number.isInteger(n) && n > 0 ? n : null;
+
+  const segments = url.pathname.split('/').filter(Boolean);
+  const number =
+    provider === 'github'
+      ? parseGithubPullNumber(segments)
+      : parseAzurePullNumber(segments);
+  return number !== null && Number.isSafeInteger(number) && number > 0
+    ? number
+    : null;
+}
+
+function parseGithubPullNumber(segments: readonly string[]): number | null {
+  const pullIndex = segments.findIndex((segment) => segment === 'pull');
+  if (pullIndex < 0 || pullIndex + 1 >= segments.length) {
+    return null;
+  }
+  return parsePositiveInteger(segments[pullIndex + 1]);
+}
+
+function parseAzurePullNumber(segments: readonly string[]): number | null {
+  const pullIndex = segments.findIndex((segment) => segment === 'pullrequest');
+  if (pullIndex < 0 || pullIndex + 1 >= segments.length) {
+    return null;
+  }
+  return parsePositiveInteger(segments[pullIndex + 1]);
+}
+
+function parsePositiveInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
 /**
@@ -96,7 +144,7 @@ export function PrReviewPicker({
   }
 
   function reviewManual() {
-    const number = parsePullNumber(manual);
+    const number = parsePullNumber(manual, repo.provider);
     if (!number) {
       setError('Enter a valid pull request number or URL.');
       return;

@@ -9,8 +9,11 @@ import type { MetaSettings } from './meta-settings.js';
 import { extractResponseText } from './meta-response-extractor.js';
 import { describeMetaActivity } from './meta-activity.js';
 import type { Transcript } from '../session/transcript-capture.js';
+import type { MetaOperationPhysicalRegistration } from './meta-operation-contract.js';
+import { registerUnstartedMetaAttempt } from './meta-operation-physical-ownership.js';
 
 const MAX_PROVIDER_FAILURE_CHARS = 500;
+const DEFAULT_TERMINATION_GRACE_MS = 1_000;
 
 function safeFailureText(value: string): string {
   const normalized = value
@@ -72,6 +75,7 @@ function providerFailure(transcript: Transcript | null, exitCode: number | null)
 }
 
 export interface MetaRunnerDeps {
+  physicalOwnership?: MetaOperationPhysicalRegistration;
   launcher: SessionLauncher;
   transcripts: TranscriptStore;
   config: MetaConfig;
@@ -84,6 +88,46 @@ export interface MetaRunnerDeps {
   settings?: Pick<MetaSettings, 'get'>;
 }
 
+export type MetaStopKind = 'aborted' | 'timed_out';
+export type MetaTerminationState = 'not-started' | 'confirmed' | 'unconfirmed';
+
+export class MetaAbortError extends Error {
+  readonly kind: MetaStopKind;
+  readonly termination: MetaTerminationState;
+
+  constructor(options: {
+    kind: MetaStopKind;
+    timeoutMs?: number;
+    termination: MetaTerminationState;
+    cause?: unknown;
+  }) {
+    super(metaAbortMessage(options.kind, options.timeoutMs, options.termination), {
+      cause: options.cause,
+    });
+    this.name = 'MetaAbortError';
+    this.kind = options.kind;
+    this.termination = options.termination;
+  }
+}
+
+function metaAbortMessage(
+  kind: MetaStopKind,
+  timeoutMs: number | undefined,
+  termination: MetaTerminationState,
+): string {
+  const base =
+    kind === 'timed_out'
+      ? `Provider timed out after ${timeoutMs}ms`
+      : 'Meta request cancelled';
+  if (termination === 'not-started') {
+    return `${base} before it started`;
+  }
+  if (termination === 'unconfirmed') {
+    return `${base}; termination was requested but not confirmed`;
+  }
+  return base;
+}
+
 /** A single headless AI request: a prompt run against a feature's context. */
 export interface MetaRequest {
   /**
@@ -91,6 +135,15 @@ export interface MetaRequest {
    * repository analysis may use a stable repository-derived id.
    */
   featureId: string;
+  /** Stable ownership anchors for durable operation attribution and deletion. */
+  automationId?: string;
+  originSessionId?: string;
+  /** Stamped by the recording boundary; identifies immutable physical attempts. */
+  operationId?: string;
+  /** Optional provider override for this one metasession. */
+  providerId?: string;
+  /** Optional model override for this one metasession. */
+  model?: string;
   prompt: string;
   /** Absolute paths attached to the provider's initial prompt. */
   attachments?: readonly string[];
@@ -109,6 +162,12 @@ export interface MetaRequest {
    * turn so a stall surfaces as a failed step quickly instead of spinning.
    */
   timeoutMs?: number;
+  /**
+   * Internal absolute deadline (epoch ms) for this request. Callers should set
+   * {@link timeoutMs}; wrappers stamp this once so retries or warm/cold routing
+   * do not restart the timeout budget part-way through a run.
+   */
+  deadlineAt?: number;
   /**
    * Internal scope keeps infrastructure runs out of feature session views
    * while their `meta` usage remains part of IDE AI accounting.
@@ -141,6 +200,8 @@ export interface MetaRequest {
    * caller surface what the metasession is actually doing in real time.
    */
   onActivity?: (line: string) => void;
+  /** Aborts launch/execution when the caller no longer wants the result. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -160,58 +221,139 @@ export interface MetaRunner {
   runDetailed(request: MetaRequest): Promise<MetaRunResult>;
 }
 
-/** The text a metasession produced together with its session id. */
+export type MetaResultTransport = 'session' | 'warm-acp';
+
+export interface MetaUsageSnapshot {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  nanoAiu: number | null;
+  credits: number | null;
+}
+
+/** The text a metasession produced together with its durable attribution. */
 export interface MetaRunResult {
   text: string;
   sessionId: string;
+  operationId?: string;
+  transport?: MetaResultTransport;
+  providerId?: string;
+  requestedModel?: string;
+  resolvedModel?: string | null;
+  providerSessionId?: string | null;
+  usage?: MetaUsageSnapshot | null;
 }
 
 export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
   const runDetailed = async (request: MetaRequest): Promise<MetaRunResult> => {
-    const resolved = deps.settings?.get() ?? {
+    const defaults = deps.settings?.get() ?? {
       providerId: deps.config.providerId,
       model: deps.config.model,
     };
-    const launched = await deps.launcher.start({
-      featureId: request.featureId,
-      providerId: resolved.providerId,
-      model: resolved.model,
-      prompt: request.prompt,
-      attachments: request.attachments,
-      kind: 'meta',
-      cwd: request.cwd,
-      scope: request.scope,
-      noTools: request.noTools,
-    });
-    const sessionId = launched.session.id;
-    request.onStart?.(sessionId);
-    if (request.onActivity) {
-      const emit = request.onActivity;
-      launched.running.onEvent((event) => {
-        if (event.type === 'stdout' || event.type === 'stderr') {
-          const line = describeMetaActivity(event.line);
-          if (line !== null) {
-            emit(line);
-          }
-        }
+    const providerId = request.providerId ?? defaults.providerId;
+    const model = request.model ?? defaults.model;
+    const timeoutMs = request.timeoutMs ?? deps.config.timeoutMs;
+    const deadlineAt = request.deadlineAt ?? Date.now() + timeoutMs;
+    if (request.signal?.aborted) {
+      registerUnstartedMetaAttempt(deps.physicalOwnership, request.operationId);
+      throw new MetaAbortError({
+        kind: 'aborted',
+        termination: 'not-started',
       });
     }
-    const ended = await awaitWithTimeout(
-      launched,
-      request.timeoutMs ?? deps.config.timeoutMs,
-    );
-    const transcript = await deps.transcripts.load(ended.session.id);
-    if (
-      !ended.completedTurn &&
-      (ended.session.status === 'failed' ||
-        (ended.session.exitCode !== null && ended.session.exitCode !== 0))
-    ) {
-      throw providerFailure(transcript, ended.session.exitCode);
+    const controller = new AbortController();
+    let timedOut = false;
+    const forwardAbort = () => controller.abort();
+    request.signal?.addEventListener('abort', forwardAbort, { once: true });
+    const remainingLaunchMs = Math.max(0, deadlineAt - Date.now());
+    if (remainingLaunchMs === 0) {
+      request.signal?.removeEventListener('abort', forwardAbort);
+      registerUnstartedMetaAttempt(deps.physicalOwnership, request.operationId);
+      throw new MetaAbortError({
+        kind: 'timed_out',
+        timeoutMs,
+        termination: 'not-started',
+      });
     }
-    return {
-      text: extractResponseText(transcript, deps.config.responseTextKeys),
-      sessionId,
-    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, remainingLaunchMs);
+    timer.unref?.();
+
+    try {
+      let launched: LaunchedSession;
+      try {
+        launched = await deps.launcher.start({
+          featureId: request.featureId,
+          operationId: request.operationId,
+          providerId,
+          model,
+          prompt: request.prompt,
+          attachments: request.attachments,
+          kind: 'meta',
+          cwd: request.cwd,
+          scope: request.scope,
+          noTools: request.noTools,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new MetaAbortError({
+            kind: timedOut ? 'timed_out' : 'aborted',
+            timeoutMs,
+            termination: 'not-started',
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      const sessionId = launched.session.id;
+      request.onStart?.(sessionId);
+      let publishActivity = true;
+      if (request.onActivity) {
+        const emit = request.onActivity;
+        launched.running.onEvent((event) => {
+          if (
+            publishActivity &&
+            (event.type === 'stdout' || event.type === 'stderr')
+          ) {
+            const line = describeMetaActivity(event.line);
+            if (line !== null) {
+              emit(line);
+            }
+          }
+        });
+      }
+      const ended = await awaitWithTimeout(launched, {
+        timeoutMs,
+        signal: controller.signal,
+        onStopPublishing: () => {
+          publishActivity = false;
+        },
+        timedOut: () => timedOut,
+      });
+      const transcript = await deps.transcripts.load(ended.session.id);
+      if (
+        !ended.completedTurn &&
+        (ended.session.status === 'failed' ||
+          (ended.session.exitCode !== null && ended.session.exitCode !== 0))
+      ) {
+        throw providerFailure(transcript, ended.session.exitCode);
+      }
+      return {
+        text: extractResponseText(transcript, deps.config.responseTextKeys),
+        sessionId,
+        transport: 'session',
+        providerId,
+        requestedModel: model,
+        resolvedModel: ended.session.resolvedModel,
+        providerSessionId: null,
+        usage: null,
+      };
+    } finally {
+      clearTimeout(timer);
+      request.signal?.removeEventListener('abort', forwardAbort);
+    }
   };
   return {
     async run(request) {
@@ -245,20 +387,47 @@ interface MetaCompletion {
  */
 function awaitWithTimeout(
   launched: LaunchedSession,
-  timeoutMs: number,
+  options: {
+    timeoutMs: number;
+    signal: AbortSignal;
+    onStopPublishing: () => void;
+    timedOut: () => boolean;
+  },
 ): Promise<MetaCompletion> {
   return new Promise<MetaCompletion>((resolve, reject) => {
     let completedTurn = false;
-    const timer = setTimeout(() => {
+    let settled = false;
+    let stopRequested = false;
+    let stopKind: MetaStopKind = 'aborted';
+    const stop = (): void => {
+      stopRequested = true;
+      stopKind = options.timedOut() ? 'timed_out' : 'aborted';
+      options.onStopPublishing();
       try {
         launched.running.kill();
       } catch {
         // Best effort: the process may already be gone.
       }
-      reject(new Error(`Provider timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    // Never let the guard timer keep the process alive on its own.
-    timer.unref();
+      const grace = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(
+          new MetaAbortError({
+            kind: stopKind,
+            timeoutMs: options.timeoutMs,
+            termination: 'unconfirmed',
+          }),
+        );
+      }, DEFAULT_TERMINATION_GRACE_MS);
+      grace.unref?.();
+    };
+    if (options.signal.aborted) {
+      stop();
+    } else {
+      options.signal.addEventListener('abort', stop, { once: true });
+    }
     launched.running.onEvent((event) => {
       if (
         !completedTurn &&
@@ -275,11 +444,40 @@ function awaitWithTimeout(
     });
     launched.completion.then(
       (session) => {
-        clearTimeout(timer);
+        if (settled) {
+          return;
+        }
+        settled = true;
+        options.signal.removeEventListener('abort', stop);
+        if (stopRequested) {
+          reject(
+            new MetaAbortError({
+              kind: stopKind,
+              timeoutMs: options.timeoutMs,
+              termination: 'confirmed',
+            }),
+          );
+          return;
+        }
         resolve({ session, completedTurn });
       },
       (error: unknown) => {
-        clearTimeout(timer);
+        if (settled) {
+          return;
+        }
+        settled = true;
+        options.signal.removeEventListener('abort', stop);
+        if (stopRequested) {
+          reject(
+            new MetaAbortError({
+              kind: stopKind,
+              timeoutMs: options.timeoutMs,
+              termination: 'confirmed',
+              cause: error,
+            }),
+          );
+          return;
+        }
         reject(error);
       },
     );

@@ -21,18 +21,25 @@ files:
   - preload.cjs
   - update-manager.cjs
   - ipc-input.cjs
+  - clipboard.cjs
+  - backend-control.cjs
+  - owned-attachments.cjs
+  - regression-isolation.cjs
+  - regression-backend.cjs
+  - regression-clipboard.cjs
   - package.json
   - build-resources/icon.png
 
 # Update feed. electron-updater reads release metadata (latest.yml /
 # latest-mac.yml) from GitHub Releases. Declaring the provider here makes
 # electron-builder emit those metadata files during `dist:*` (even with
-# `--publish never`), which the Release workflow then uploads to the release.
+# `--publish never`). The candidate workflow retains them as internal artifacts;
+# only exact-artifact qualification permits later production promotion.
 publish:
   - provider: github
     owner: sourabh1007
     repo: ai-project-studio
-    releaseType: release
+    releaseType: draft
 
 extraResources:
   - from: build/backend
@@ -65,8 +72,7 @@ mac:
   category: public.app-category.developer-tools
   artifactName: AI-Project-Studio-${version}-mac-${arch}.${ext}
 
-# macOS artifacts are unsigned (no Apple Developer Program membership yet), so
-# skip signing-identity auto-discovery to keep CI green. Users bypass Gatekeeper
-# on first launch — see the "Releases" section of README.md.
+# macOS candidates are unsigned and cannot be promoted to production until
+# signing, notarization, and exact-artifact verification are configured.
 dmg:
   sign: false

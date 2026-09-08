@@ -8,7 +8,7 @@ export interface SessionSummaryAutoDeps {
 
 export interface SessionSummaryAutoTrigger {
   /** Handler for the `session.ended` event. */
-  onSessionEnded(session: Session): void;
+  onSessionEnded(session: Session, signal?: AbortSignal): Promise<void>;
 }
 
 /**
@@ -22,14 +22,14 @@ export function createSessionSummaryAutoTrigger(
   deps: SessionSummaryAutoDeps,
 ): SessionSummaryAutoTrigger {
   return {
-    onSessionEnded(session) {
+    async onSessionEnded(session, signal) {
       if (session.kind !== 'dev') {
         return;
       }
       if (deps.summarizer.get(session.id) !== null) {
         return;
       }
-      void deps.summarizer.summarize({ sessionId: session.id }).catch((error) => {
+      await deps.summarizer.summarize({ sessionId: session.id, signal }).catch((error) => {
         deps.logger.error('Auto session summary failed', error);
       });
     },

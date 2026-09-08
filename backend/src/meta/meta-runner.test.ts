@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createMetaRunner } from './meta-runner.js';
 import { metaDefaults } from './config.js';
 import type {
@@ -39,22 +39,49 @@ function harness(
     timeoutMs?: number;
     events?: SessionEvent[];
     settings?: { get: () => { providerId: string; model: string } };
+    beforeLaunch?: (request: StartSessionRequest) => Promise<void>;
   } = {},
 ) {
+  let handler: ((event: SessionEvent) => void) | null = null;
+  let resolveCompletion: ((session: Session) => void) | null = null;
+  let rejectCompletion: ((error: Error) => void) | null = null;
   const requests: StartSessionRequest[] = [];
   const launcher: SessionLauncher = {
     start: async (request) => {
       requests.push(request);
+      if (options.beforeLaunch) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => reject(new Error('Session launch cancelled'));
+          request.signal?.addEventListener('abort', onAbort, { once: true });
+          options.beforeLaunch!(request).then(
+            () => {
+              request.signal?.removeEventListener('abort', onAbort);
+              resolve();
+            },
+            (error) => {
+              request.signal?.removeEventListener('abort', onAbort);
+              reject(error);
+            },
+          );
+        });
+      }
+      if (request.signal?.aborted) {
+        throw new Error('Session launch cancelled');
+      }
       const running = {
         kill: options.kill ?? (() => undefined),
-        onEvent: (handler: (event: SessionEvent) => void) => {
+        onEvent: (eventHandler: (event: SessionEvent) => void) => {
+          handler = eventHandler;
           for (const event of options.events ?? []) {
-            handler(event);
+            eventHandler(event);
           }
         },
       } as unknown as RunningSession;
       const completion = options.hangs
-        ? new Promise<Session>(() => {})
+        ? new Promise<Session>((resolve, reject) => {
+            resolveCompletion = resolve;
+            rejectCompletion = reject;
+          })
         : options.completionError
           ? Promise.reject(options.completionError)
           : Promise.resolve({ ...metaSession, ...options.ended });
@@ -82,10 +109,21 @@ function harness(
     config: { ...metaDefaults, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}) },
     settings: options.settings,
   });
-  return { runner, requests };
+  return {
+    runner,
+    requests,
+    emit: (event: SessionEvent) => handler?.(event),
+    finish: () => resolveCompletion?.({ ...metaSession, ...options.ended }),
+    failCompletion: (error: Error) => rejectCompletion?.(error),
+  };
 }
 
 describe('meta-runner', () => {
+  it('forwards the immutable app operation ID to cold native ownership', async () => {
+    const h = harness({ sessionId: 'meta1', stdout: ['{"response":"answer"}'], stderr: [], exitCode: 0 });
+    await h.runner.runDetailed({ operationId: 'app-operation', featureId: 'f', prompt: 'go' });
+    expect(h.requests[0].operationId).toBe('app-operation');
+  });
   it('launches a meta session and returns the extracted response', async () => {
     const h = harness({
       sessionId: 'meta1',
@@ -125,6 +163,30 @@ describe('meta-runner', () => {
     });
   });
 
+  it('lets a request pin its own provider/model over the runtime settings', async () => {
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'the answer' })],
+        stderr: [],
+        exitCode: 0,
+      },
+      { settings: { get: () => ({ providerId: 'agency', model: 'auto' }) } },
+    );
+
+    await h.runner.run({
+      featureId: 'f1',
+      providerId: 'copilot',
+      model: 'gpt-5',
+      prompt: 'do it',
+    });
+
+    expect(h.requests[0]).toMatchObject({
+      providerId: 'copilot',
+      model: 'gpt-5',
+    });
+  });
+
   it('forwards repository cwd, internal scope, and attachments to the shared launcher', async () => {
     const h = harness({
       sessionId: 'meta1',
@@ -157,6 +219,64 @@ describe('meta-runner', () => {
   it('returns an empty string when the meta session captured nothing', async () => {
     const h = harness(null);
     expect(await h.runner.run({ featureId: 'f1', prompt: 'do it' })).toBe('');
+  });
+
+  it('does not launch when the request signal is already aborted', async () => {
+    const h = harness(null);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      h.runner.run({ featureId: 'f1', prompt: 'do it', signal: controller.signal }),
+    ).rejects.toMatchObject({
+      name: 'MetaAbortError',
+      message: 'Meta request cancelled before it started',
+    });
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it('fails immediately when the request deadline has already expired', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const h = harness(null);
+      const controller = new AbortController();
+      await expect(
+        h.runner.runDetailed({
+          featureId: 'f1',
+          prompt: 'do it',
+          timeoutMs: 50,
+          deadlineAt: Date.now(),
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: 'MetaAbortError',
+        kind: 'timed_out',
+        termination: 'not-started',
+      });
+      expect(h.requests).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rethrows launcher failures that were not caused by cancellation', async () => {
+    const launcher: SessionLauncher = {
+      start: async () => {
+        throw new Error('launch boom');
+      },
+    };
+    const runner = createMetaRunner({
+      launcher,
+      transcripts: {
+        save: async () => undefined,
+        load: async () => null,
+        delete: async () => undefined,
+      },
+      config: metaDefaults,
+    });
+    await expect(
+      runner.runDetailed({ featureId: 'f1', prompt: 'do it' }),
+    ).rejects.toThrow('launch boom');
   });
 
   it('propagates session and transcript failures', async () => {
@@ -313,6 +433,230 @@ describe('meta-runner', () => {
     await expect(
       h.runner.run({ featureId: 'f1', prompt: 'do it', timeoutMs: 5 }),
     ).rejects.toThrow('Provider timed out after 5ms');
+    expect(killed).toBe(1);
+  });
+
+  it('spends the timeout budget across launch and execution, not just execution', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseLaunch: () => void = () => undefined;
+      const h = harness(null, {
+        hangs: true,
+        timeoutMs: 100,
+        beforeLaunch: async () =>
+          new Promise<void>((resolve) => {
+            releaseLaunch = resolve;
+          }),
+      });
+      const run = h.runner.run({
+        featureId: 'f1',
+        prompt: 'do it',
+        timeoutMs: 50,
+      });
+      run.catch(() => undefined);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(run).rejects.toThrow('Provider timed out after 50ms before it started');
+      releaseLaunch();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces an aborted launch distinctly from a timed-out launch', async () => {
+    let releaseLaunch: () => void = () => undefined;
+    const controller = new AbortController();
+    const h = harness(null, {
+      beforeLaunch: async () =>
+        new Promise<void>((resolve) => {
+          releaseLaunch = resolve;
+        }),
+    });
+    const run = h.runner.runDetailed({
+      featureId: 'f1',
+      prompt: 'do it',
+      signal: controller.signal,
+    });
+    run.catch(() => undefined);
+    await Promise.resolve();
+    controller.abort();
+    releaseLaunch();
+    await expect(run).rejects.toMatchObject({
+      name: 'MetaAbortError',
+      kind: 'aborted',
+      termination: 'not-started',
+    });
+  });
+
+  it('stops forwarding late activity once the request is cancelled', async () => {
+    vi.useFakeTimers();
+    try {
+      let killed = 0;
+      const h = harness(
+        {
+          sessionId: 'meta1',
+          stdout: [JSON.stringify({ response: 'the answer' })],
+          stderr: [],
+          exitCode: 1,
+        },
+        {
+          hangs: true,
+          kill: () => {
+            killed += 1;
+          },
+        },
+      );
+      const controller = new AbortController();
+      const activity: string[] = [];
+      const run = h.runner.runDetailed({
+        featureId: 'f1',
+        prompt: 'do it',
+        signal: controller.signal,
+        onActivity: (line) => activity.push(line),
+      });
+      run.catch(() => undefined);
+      controller.abort();
+      h.emit({ type: 'stdout', line: JSON.stringify({ type: 'assistant.message', data: { content: 'late' } }) });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(run).rejects.toThrow(
+        'Meta request cancelled; termination was requested but not confirmed',
+      );
+      expect(activity).toEqual([]);
+      expect(killed).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the first cancellation request when the internal launch signal fires twice', async () => {
+    let killed = 0;
+    const h = harness(null, {
+      hangs: true,
+      kill: () => {
+        killed += 1;
+      },
+    });
+    const run = h.runner.runDetailed({ featureId: 'f1', prompt: 'do it' });
+    run.catch(() => undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    const signal = h.requests[0]?.signal as AbortSignal & EventTarget;
+    signal.dispatchEvent(new Event('abort'));
+    signal.dispatchEvent(new Event('abort'));
+    expect(killed).toBe(1);
+    h.failCompletion(new Error('provider killed'));
+    await expect(run).rejects.toMatchObject({
+      name: 'MetaAbortError',
+      kind: 'aborted',
+      termination: 'confirmed',
+    });
+  });
+
+  it('ignores a late successful completion after cancellation already timed out waiting for exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(null, {
+        hangs: true,
+        kill: () => undefined,
+      });
+      const controller = new AbortController();
+      const run = h.runner.runDetailed({
+        featureId: 'f1',
+        prompt: 'do it',
+        signal: controller.signal,
+      });
+      run.catch(() => undefined);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(run).rejects.toMatchObject({
+        name: 'MetaAbortError',
+        kind: 'aborted',
+        termination: 'unconfirmed',
+      });
+      h.finish();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a late failed completion after cancellation already timed out waiting for exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(null, {
+        hangs: true,
+        kill: () => undefined,
+      });
+      const controller = new AbortController();
+      const run = h.runner.runDetailed({
+        featureId: 'f1',
+        prompt: 'do it',
+        signal: controller.signal,
+      });
+      run.catch(() => undefined);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(run).rejects.toMatchObject({
+        name: 'MetaAbortError',
+        kind: 'aborted',
+        termination: 'unconfirmed',
+      });
+      h.failCompletion(new Error('late failure'));
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a confirmed cancellation when the provider later rejects after kill', async () => {
+    const h = harness(null, {
+      hangs: true,
+      kill: () => undefined,
+    });
+    const controller = new AbortController();
+    const run = h.runner.runDetailed({
+      featureId: 'f1',
+      prompt: 'do it',
+      signal: controller.signal,
+    });
+    run.catch(() => undefined);
+    controller.abort();
+    h.failCompletion(new Error('provider failed during shutdown'));
+    await expect(run).rejects.toMatchObject({
+      name: 'MetaAbortError',
+      kind: 'aborted',
+      termination: 'confirmed',
+    });
+  });
+
+  it('reports confirmed cancellation once the killed provider exits', async () => {
+    let killed = 0;
+    const h = harness(
+      {
+        sessionId: 'meta1',
+        stdout: [JSON.stringify({ response: 'the answer' })],
+        stderr: [],
+        exitCode: 1,
+      },
+      {
+        hangs: true,
+        kill: () => {
+          killed += 1;
+          h.finish();
+        },
+      },
+    );
+    const controller = new AbortController();
+    const run = h.runner.run({
+      featureId: 'f1',
+      prompt: 'do it',
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(run).rejects.toMatchObject({
+      name: 'MetaAbortError',
+      termination: 'confirmed',
+      message: 'Meta request cancelled',
+    });
     expect(killed).toBe(1);
   });
 

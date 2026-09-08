@@ -20,6 +20,7 @@ export interface ActionRunnerDeps {
   ai: AiInvoker;
   shell: ShellExecutor;
   subagents: SubagentService;
+  timeoutMs: number;
 }
 
 /**
@@ -35,9 +36,13 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
     ctx: RunContext,
   ): Promise<{ text: string; sessionId: string }> =>
     deps.ai.run({
+      automationId: ctx.automationId,
+      originSessionId: ctx.origin.sessionId,
       featureId: attributionFeatureId(ctx),
       prompt,
       cwd,
+      timeoutMs: deps.timeoutMs,
+      scope: 'internal',
       label: 'Automation action',
       signal: ctx.signal,
     });
@@ -64,18 +69,25 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
           };
         }
         case 'subagent': {
-          const { subagent } = deps.subagents.spawn({
+          const { subagent, completion } = deps.subagents.spawn({
             task: spec.task,
             prompt: spec.prompt,
             origin: ctx.origin,
             automationId: ctx.automationId,
             cwd: spec.cwd,
+            signal: ctx.signal,
           });
           return {
             detail: `Subagent started: ${spec.task}`,
             sessionId: null,
             subagentId: subagent.id,
             report: null,
+            completion: completion.then(() => {
+              const final = deps.subagents.get(subagent.id);
+              if (final.status !== 'done') {
+                throw new Error(final.result ?? 'Subagent failed');
+              }
+            }),
           };
         }
         case 'command': {

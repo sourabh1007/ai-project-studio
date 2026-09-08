@@ -34,6 +34,7 @@ export interface BoardThresholds {
 /** Inputs to board assembly beyond the discovered model. */
 export interface BuildBoardInput {
   featureId: string;
+  repoId: string;
   pull: ReviewBoardPull;
   worktreePath: string;
   baseBranch: string | null;
@@ -42,6 +43,7 @@ export interface BuildBoardInput {
   changedFiles: number;
   model: ProjectModel;
   thresholds: BoardThresholds;
+  reviewUpdatedAt: string;
   generatedAt: string;
 }
 
@@ -237,6 +239,7 @@ export function assembleBoard(
 
   return {
     featureId: input.featureId,
+    repoId: input.repoId,
     pull: input.pull,
     worktreePath: input.worktreePath,
     baseBranch: input.baseBranch,
@@ -245,6 +248,7 @@ export function assembleBoard(
     perspectives,
     recommendation: recommend(summary),
     summary,
+    reviewUpdatedAt: input.reviewUpdatedAt,
     generatedAt: input.generatedAt,
   };
 }
@@ -281,6 +285,7 @@ export function buildEmptyBoard(input: BuildBoardInput): ReviewBoard {
   };
   return {
     featureId: input.featureId,
+    repoId: input.repoId,
     pull: input.pull,
     worktreePath: input.worktreePath,
     baseBranch: input.baseBranch,
@@ -289,6 +294,7 @@ export function buildEmptyBoard(input: BuildBoardInput): ReviewBoard {
     perspectives,
     recommendation: recommend(summary),
     summary,
+    reviewUpdatedAt: input.reviewUpdatedAt,
     generatedAt: input.generatedAt,
   };
 }

@@ -18,7 +18,7 @@ export interface FeatureTasksServiceDeps {
 
 export interface FeatureTasksService {
   listForFeature(featureId: string): FeatureTask[];
-  generate(featureId: string): Promise<FeatureTask[]>;
+  generate(featureId: string, signal?: AbortSignal): Promise<FeatureTask[]>;
   addTask(input: AddTaskInput): FeatureTask;
   toggle(taskId: string): FeatureTask;
   removeTask(taskId: string): void;
@@ -55,8 +55,8 @@ export function createFeatureTasksService(
       deps.features.get(featureId);
       return deps.repo.listByFeature(featureId);
     },
-    generate(featureId) {
-      return deps.runner.generate(featureId);
+    generate(featureId, signal) {
+      return deps.runner.generate(featureId, signal);
     },
     addTask(input) {
       deps.features.get(input.featureId);

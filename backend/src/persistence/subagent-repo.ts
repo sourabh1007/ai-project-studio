@@ -58,6 +58,15 @@ export function createSubagentRepo(db: DatabaseSync): SubagentRepo {
   const selectByAutomation = db.prepare(
     'SELECT * FROM subagents WHERE automation_id = ? ORDER BY created_at, id',
   );
+  const deleteByAutomation = db.prepare(
+    'DELETE FROM subagents WHERE automation_id = ?',
+  );
+  const deleteByFeature = db.prepare(
+    'DELETE FROM subagents WHERE origin_feature_id = ?',
+  );
+  const deleteBySession = db.prepare(
+    'DELETE FROM subagents WHERE origin_session_id = ?',
+  );
 
   const writeColumns = (subagent: Subagent): unknown[] => [
     subagent.automationId,
@@ -90,6 +99,15 @@ export function createSubagentRepo(db: DatabaseSync): SubagentRepo {
       return (
         selectByAutomation.all(automationId) as unknown as SubagentRow[]
       ).map(mapSubagent);
+    },
+    deleteByAutomation(automationId) {
+      deleteByAutomation.run(automationId);
+    },
+    deleteByOriginFeature(featureId) {
+      deleteByFeature.run(featureId);
+    },
+    deleteByOriginSession(sessionId) {
+      deleteBySession.run(sessionId);
     },
   };
 }

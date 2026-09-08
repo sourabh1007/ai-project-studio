@@ -53,6 +53,7 @@ const perspective: ReviewPerspective = {
 
 const board: ReviewBoard = {
   featureId: 'f1',
+  repoId: 'r1',
   pull: { number: 42, title: 'Add caching', url: 'u', headSha: null },
   worktreePath: 'w',
   baseBranch: 'main',
@@ -61,6 +62,7 @@ const board: ReviewBoard = {
   perspectives: [perspective],
   recommendation: 'needs-review',
   summary: { open: 1, blocking: 1, warnings: 0, suggestions: 0 },
+  reviewUpdatedAt: 't0',
   generatedAt: 't',
 };
 

@@ -32,13 +32,44 @@ npm install    # installs all workspaces
   ```
 - **Run backend coverage from inside `backend/`.** `node:sqlite` needs a vitest shim configured there; running `--coverage` from the repo root fails to load sqlite.
 - UI coverage targets `ui/src/lib` — keep logic there testable.
+- Packaged-shell regression foundation: `npm run test:desktop:harness` and
+  `npm run test:desktop:smoke` — see [isolation, manifests and scope limits](desktop-regression.md).
+  The smoke refuses old packages lacking its synthetic-backend isolation seam;
+  it is not permission to launch a development app against a live profile.
+
+## Frozen packaged runtime
+
+After building, `npm run stage --workspace desktop` copies the compiled backend,
+UI and documentation into `desktop/build`. The backend staging directory also
+retains the committed root lockfile byte-for-byte and each workspace manifest,
+so dependency installation uses the same resolution graph as repository CI:
+
+```powershell
+Set-Location desktop\build\backend
+npm ci --omit=dev --workspace backend --include-workspace-root=false --no-audit --no-fund
+```
+
+Do not substitute `npm install` or regenerate a standalone backend lockfile
+during packaging. Update dependencies and the committed workspace lockfile in
+the source tree first. The staged root manifest adds `type: module` so the
+existing `dist/main.js` entrypoint keeps its ESM semantics; runtime dependency
+versions still come exclusively from the committed lock graph.
+
+The desktop harness checks staging and ESM execution. An offline installation
+with scripts disabled can check graph consistency, but **does not qualify native
+dependencies or the packaged application**. Release installation enables lifecycle
+scripts; native/installer and supported-platform qualification remain separate.
 
 ## Code signing
 
-Installers are built by the **Release** workflow (`.github/workflows/release.yml`) when you push a `v*` tag.
+Installers are built by the **Release prerelease** workflow (`.github/workflows/release.yml`) when you push a `v*` tag or dispatch it manually. Verification includes Windows, macOS, and Linux; both shipped installer platforms depend on the complete verification matrix. Manual dispatch retains internal candidates only. A tag push publishes the exact candidate installers as an explicitly unsigned, unqualified GitHub prerelease after every verification and build job succeeds. Only the publication job has repository write permission; it checks artifact hashes and provenance, uploads through a draft, and never publishes update-feed assets or marks the prerelease latest.
+
+Each artifact bundle includes `candidate-<platform>.json` with the exact source SHA, CI run/attempt, unchanged staged-lock hash, and installer/feed hashes and sizes. The recorded Node version/ABI describes the **build host**, not proof of the packaged runtime. Native runtime, signature, and release qualification are explicitly pending.
+
+**Channel policy:** unsigned or unqualified builds may be distributed as explicitly labeled prereleases, not stable production releases. Version 0.11.0 uses this user-authorized unsigned distribution path. The candidate manifests retain their build-stage internal channel and pending qualification/signature status; publication does not qualify them. Production promotion still requires signature verification (Windows signing; macOS Developer ID signing and notarization), packaged/native and upgrade/restore evidence for every shipped platform, and results tied to these exact artifact hashes. Promote the qualified bytes without rebuilding; a changed artifact invalidates its qualification. There is no automatic stable promotion path while these gates remain open.
 
 ### Windows — Azure Trusted Signing
-Signed automatically **when the repo has the signing secrets configured**; otherwise the workflow still succeeds and emits an unsigned installer (with a warning). electron-builder's native `win.azureSignOptions` support installs the `TrustedSigning` PowerShell module on the runner and signs every packaged executable — no certificate files or hardware tokens required.
+Signed automatically **when all signing settings are configured**. If every setting is absent, the workflow may emit an explicitly unsigned internal candidate; partial configuration fails rather than silently falling back to unsigned output. A configured signing build is not itself signature-verification evidence. electron-builder's native `win.azureSignOptions` support installs the `TrustedSigning` PowerShell module on the runner and signs packaged executables — no certificate files or hardware tokens required.
 
 One-time setup:
 1. In Azure, create a **Trusted Signing account** + a **certificate profile**, and complete identity validation.
@@ -59,7 +90,7 @@ The first three authenticate via `azure.identity` `EnvironmentCredential`; the l
 > SmartScreen reputation for Trusted Signing certs builds over time/downloads; a brand-new certificate profile may still warn on the first few installs even though the publisher is now shown as verified.
 
 ### macOS — unsigned (for now)
-There is **no Apple Developer Program membership**, so the `.dmg` ships unsigned and un-notarized (`dmg.sign: false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`). Gatekeeper will block first launch; the user workaround is documented in the README "Releases" section. To make the error go away for good, join the Apple Developer Program ($99/yr), obtain a **Developer ID Application** certificate, and add signing + notarization (`@electron/notarize`) to the macOS build.
+The current `.dmg` candidate is unsigned and un-notarized (`dmg.sign: false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`) and is **not eligible for production promotion**. Gatekeeper may block first launch. Production requires Apple Developer Program enrollment, a **Developer ID Application** certificate, signing/notarization configuration, and verification of the resulting artifact; bypassing Gatekeeper is not qualification.
 
 ## Auto-update
 The desktop app self-updates from **GitHub Releases** using [`electron-updater`](https://www.electron.build/auto-update). The main-process wrapper is `desktop/update-manager.cjs`; the renderer talks to it through the `window.desktop.updates` preload bridge and the `ui/src/hooks/use-app-updates.ts` hook (all update-view logic lives in the fully-tested `ui/src/lib/update-state.ts` reducer).
@@ -72,7 +103,7 @@ The desktop app self-updates from **GitHub Releases** using [`electron-updater`]
 
 **Requirements for updates to resolve**
 - `electron-builder.yml` has a `publish` github provider (`owner: sourabh1007`, `repo: ai-project-studio`) so `latest.yml` / `latest-mac.yml` update-feed metadata is generated.
-- The Release workflow uploads `desktop/release/*.yml` (feed metadata) and `*.blockmap` alongside the installers — `electron-updater` needs the `.yml` to find the newest release.
+- The candidate workflow retains `desktop/release/*.yml` (feed metadata) and `*.blockmap` alongside installers as internal artifacts. Only a qualified promotion may publish those exact files to GitHub Releases; `electron-updater` needs the `.yml` to find the newest release.
 - Every backend failure path is wrapped so a broken/absent feed, offline state, or older release degrades to a quiet no-op and never breaks the app.
 
 **Local testing:** set `CW_UPDATE_SIM=1` to exercise the update path against the real GitHub feed in a dev (unpackaged) build; `desktop/dev-app-update.yml` supplies the dev feed config.

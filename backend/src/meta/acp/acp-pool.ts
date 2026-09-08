@@ -1,4 +1,14 @@
 import type { AcpTurnRequest, AcpTurnResult } from './acp-client.js';
+import { MetaAbortError } from '../meta-runner.js';
+import type { MetaOperationPhysicalProof, MetaOperationPhysicalRegistration } from '../meta-operation-contract.js';
+import { ProcessAdmissionError, type ProcessAdmission, type ProcessPermit, type QueuePermit } from '../../kernel/process-admission.js';
+
+export class MetaPoolCloseError extends AggregateError {
+  constructor(errors: unknown[]) {
+    super(errors, 'ACP process termination requests failed');
+    this.name = 'MetaPoolCloseError';
+  }
+}
 
 /**
  * The subset of {@link AcpClient} the pool depends on. Keeping it as a port lets
@@ -11,19 +21,27 @@ export interface PooledClient {
   runTurn(request: AcpTurnRequest): Promise<AcpTurnResult>;
   /** Registers a callback fired when the underlying process exits. */
   onExit(handler: () => void): void;
-  /** Terminates the process. */
-  kill(): void;
+  /** Cancels/kills the process so it can no longer be reused. */
+  dispose(): void;
   /** True until the underlying process has exited. */
   readonly alive: boolean;
+  /** True while the client may safely be leased for another warm turn. */
+  readonly reusable: boolean;
 }
 
 export interface MetaSessionPoolConfig {
+  physicalOwnership?: MetaOperationPhysicalRegistration;
+  processAdmission?: ProcessAdmission;
   /** Number of warm sessions to keep ready. */
   size: number;
   /** Creates a fresh, un-initialized client (spawns a real ACP process). */
   createClient: () => PooledClient;
   /** Clock for session timestamps; defaults to `Date.now`. */
   now?: () => number;
+  /** Delay before retrying a failed replenish attempt. */
+  replenishDelayMs?: number;
+  /** How long to wait for a disposed client to confirm exit before giving up. */
+  terminationGraceMs?: number;
 }
 
 /** Lifecycle state of a single warm session. */
@@ -113,6 +131,8 @@ export interface MetaSessionInfo {
 
 /** Live warm-capacity snapshot for a single pool. */
 export interface MetaSessionPoolStats {
+  /** Target remains saved, but shared admission currently prevents filling it. */
+  waitingForCapacity?: boolean;
   /** Target number of warm sessions. */
   size: number;
   /** Sessions currently booted (idle + busy). */
@@ -134,15 +154,26 @@ export interface MetaSessionPoolStats {
 }
 
 interface Waiter {
-  resolve: (client: PooledClient) => void;
+  resolve: (lease: PooledClientLease) => void;
   reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+export interface PooledClientLease {
+  readonly client: PooledClient;
+  readonly id: number;
 }
 
 interface SessionRecord {
+  processPermit?: ProcessPermit;
   /** Creation order, used for stable sorting. */
   seq: number;
   id: string;
   state: MetaSessionState;
+  active: boolean;
+  disposeOnRelease: boolean;
+  leaseId: number | null;
   served: number;
   startedAt: number;
   lastActiveAt: number | null;
@@ -160,6 +191,8 @@ const MAX_TURN_PROMPT_CHARS = 2000;
 
 /** Longest streamed-response preview retained per historical turn. */
 const MAX_TURN_RESPONSE_CHARS = 12000;
+const DEFAULT_REPLENISH_DELAY_MS = 1_000;
+const DEFAULT_TERMINATION_GRACE_MS = 1_000;
 
 /** Truncates `text` to `max` characters, marking any elision with an ellipsis. */
 function preview(text: string, max: number): string {
@@ -168,6 +201,7 @@ function preview(text: string, max: number): string {
 
 /** Context a caller attaches to a warm turn so its usage can be attributed. */
 export interface MetaTurnContext {
+  operationId?: string;
   /** Routing purpose the turn is serving (its "where in the IDE"). */
   purpose?: string;
   /** Human-readable description of the concrete work the turn performs. */
@@ -185,45 +219,93 @@ export class MetaSessionPool {
   private readonly idle: PooledClient[] = [];
   private readonly waiters: Waiter[] = [];
   private readonly records = new Map<PooledClient, SessionRecord>();
-  private liveCount = 0;
+  private readonly physicalExits = new Map<PooledClient, Set<() => void>>();
+  private readonly closeWaiters = new Set<(closed: boolean) => void>();
   private servedCount = 0;
   private seq = 0;
+  private leaseSeq = 0;
   private closed = false;
+  private spawning = false;
+  private replenishTimer: ReturnType<typeof setTimeout> | null = null;
   private targetSize: number;
   private readonly now: () => number;
+  private readonly replenishDelayMs: number;
+  private readonly terminationGraceMs: number;
+  private detachAdmission?: () => void;
 
   constructor(private readonly config: MetaSessionPoolConfig) {
     this.now = config.now ?? (() => Date.now());
     this.targetSize = Math.max(0, Math.floor(config.size));
+    this.replenishDelayMs = Math.max(
+      0,
+      Math.floor(config.replenishDelayMs ?? DEFAULT_REPLENISH_DELAY_MS),
+    );
+    this.terminationGraceMs = Math.max(
+      1,
+      Math.floor(config.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS),
+    );
+    this.detachAdmission = config.processAdmission?.onCapacityChange(() => this.ensureTargetSize());
   }
 
-  /** Warms the pool to its configured size. Resolves once all sessions boot. */
+  /** Warms available capacity; shared admission may leave part of the target unfilled. */
   async start(): Promise<void> {
-    const spawns: Promise<void>[] = [];
-    for (let i = 0; i < this.targetSize; i += 1) {
-      spawns.push(this.spawn());
+    while (!this.closed && this.capacityCount() < this.targetSize) {
+      if (!await this.spawn({ throwOnFailure: true, continueAfterSuccess: false })) break;
     }
-    await Promise.all(spawns);
   }
 
   /** Leases a warm session, waiting for one to free up if all are busy. */
-  acquire(): Promise<PooledClient> {
+  acquire(signal?: AbortSignal): Promise<PooledClientLease> {
     if (this.closed) {
       return Promise.reject(new Error('MetaSessionPool is closed'));
     }
+    if (signal?.aborted) {
+      return Promise.reject(
+        new MetaAbortError({
+          kind: 'aborted',
+          termination: 'not-started',
+        }),
+      );
+    }
     const ready = this.idle.shift();
     if (ready) {
-      this.markBusy(ready);
-      return Promise.resolve(ready);
+      return Promise.resolve(this.markBusy(ready));
     }
     return new Promise((resolve, reject) => {
-      this.waiters.push({ resolve, reject });
+      let queue: QueuePermit | undefined;
+      const waiter: Waiter = {
+        resolve: (lease) => { queue?.release(); resolve(lease); },
+        reject: (error) => { queue?.release(); reject(error); },
+        signal,
+      };
+      queue = this.config.processAdmission?.reserveQueue(() => {
+        const index = this.waiters.indexOf(waiter);
+        if (index !== -1) this.waiters.splice(index, 1);
+        if (signal && waiter.onAbort) signal.removeEventListener('abort', waiter.onAbort);
+        waiter.reject(new ProcessAdmissionError('closed'));
+      });
+      if (signal) {
+        waiter.onAbort = () => {
+          const index = this.waiters.indexOf(waiter);
+          if (index !== -1) {
+            this.waiters.splice(index, 1);
+          }
+          waiter.reject(
+            new MetaAbortError({
+              kind: 'aborted',
+              termination: 'not-started',
+            }),
+          );
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.waiters.push(waiter);
     });
   }
 
   /** Returns a leased session to the pool (or discards it if it has died). */
-  release(client: PooledClient): void {
-    this.checkIn(client);
+  release(lease: PooledClientLease): void {
+    this.checkIn(lease);
   }
 
   /** Convenience: leases a session, runs one turn, and releases it. */
@@ -231,7 +313,118 @@ export class MetaSessionPool {
     request: AcpTurnRequest,
     context?: MetaTurnContext,
   ): Promise<AcpTurnResult> {
-    const client = await this.acquire();
+    const physical = this.config.physicalOwnership;
+    if (!context?.operationId || !physical) return this.runAttempt(request, context);
+    const controller = new AbortController();
+    let lease: PooledClientLease | null = null;
+    let dispatched = false;
+    let proof: Exclude<MetaOperationPhysicalProof, 'unconfirmed'> | null = null;
+    let resolve!: (value: Exclude<MetaOperationPhysicalProof, 'unconfirmed'>) => void;
+    const settled = new Promise<Exclude<MetaOperationPhysicalProof, 'unconfirmed'>>((done) => { resolve = done; });
+    const finish = (value: Exclude<MetaOperationPhysicalProof, 'unconfirmed'>) => {
+      if (proof !== null) return;
+      proof = value;
+      if (lease) {
+        const listeners = this.physicalExits.get(lease.client);
+        listeners?.delete(onExit);
+        if (listeners?.size === 0) this.physicalExits.delete(lease.client);
+      }
+      resolve(value);
+    };
+    const onExit = () => finish('exited');
+    physical.register(context.operationId, {
+      ownerId: physical.newOwnerId(), settled,
+      quiesce: async () => {
+        if (proof !== null) return proof;
+        controller.abort();
+        if (lease && dispatched) {
+          const record = this.records.get(lease.client);
+          if (record && (!record.active || record.leaseId === lease.id)) this.deactivate(lease.client, true);
+        }
+        return proof ?? 'unconfirmed';
+      },
+    });
+    const abort = () => controller.abort();
+    if (request.signal?.aborted) abort();
+    else request.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      return await this.runAttempt({ ...request, signal: controller.signal }, context, {
+        acquired: (value) => {
+          lease = value;
+          const listeners = this.physicalExits.get(value.client) ?? new Set<() => void>();
+          listeners.add(onExit);
+          this.physicalExits.set(value.client, listeners);
+        },
+        dispatched: () => { dispatched = true; },
+        released: (responded) => {
+          if (!dispatched) finish('not-started');
+          else if (responded) finish('released');
+        },
+      });
+    } finally {
+      request.signal?.removeEventListener('abort', abort);
+      if (!dispatched) finish('not-started');
+    }
+  }
+
+  private async runAttempt(
+    request: AcpTurnRequest,
+    context?: MetaTurnContext,
+    physical?: {
+      acquired(lease: PooledClientLease): void;
+      dispatched(): void;
+      released(responded: boolean): void;
+    },
+  ): Promise<AcpTurnResult> {
+    const deadlineAt =
+      request.deadlineAt ??
+      (request.timeoutMs === undefined
+        ? undefined
+        : this.now() + request.timeoutMs);
+    const controller = deadlineAt === undefined ? null : new AbortController();
+    const forwardAbort = () => controller?.abort();
+    request.signal?.addEventListener('abort', forwardAbort, { once: true });
+    const acquireTimer =
+      controller && deadlineAt !== undefined
+        ? setTimeout(() => controller.abort(), Math.max(0, deadlineAt - this.now()))
+        : null;
+    acquireTimer?.unref?.();
+    let lease: PooledClientLease;
+    try {
+      lease = await this.acquire(controller?.signal ?? request.signal);
+    } catch (error) {
+      if (deadlineAt !== undefined && this.now() >= deadlineAt) {
+        throw new MetaAbortError({
+          kind: 'timed_out',
+          timeoutMs: request.timeoutMs,
+          termination: 'not-started',
+          cause: error,
+        });
+      }
+      throw error;
+    } finally {
+      request.signal?.removeEventListener('abort', forwardAbort);
+      if (acquireTimer) {
+        clearTimeout(acquireTimer);
+      }
+    }
+    physical?.acquired(lease);
+    const client = lease.client;
+    if (request.signal?.aborted) {
+      this.release(lease);
+      throw new MetaAbortError({
+        kind: 'aborted',
+        termination: 'not-started',
+      });
+    }
+    if (deadlineAt !== undefined && this.now() >= deadlineAt) {
+      this.release(lease);
+      throw new MetaAbortError({
+        kind: 'timed_out',
+        timeoutMs: request.timeoutMs,
+        termination: 'not-started',
+      });
+    }
     // A freshly leased client is always checked in, so its record exists (the
     // same guarantee markBusy relies on). Capture the in-flight turn so the UI
     // can show the live conversation, observing the raw streamed chunks before
@@ -252,8 +445,19 @@ export class MetaSessionPool {
         request.onActivity?.(text);
       },
     };
+    let responded = false;
+    let dispatched = false;
     try {
-      const result = await client.runTurn(observed);
+      request.onStart?.();
+      if (request.signal?.aborted) throw new MetaAbortError({ kind: 'aborted', termination: 'not-started' });
+      physical?.dispatched();
+      dispatched = true;
+      const turn = client.runTurn({
+        ...observed,
+        deadlineAt,
+      });
+      const result = await this.awaitTurn(turn, client, request, deadlineAt);
+      responded = true;
       this.servedCount += 1;
       const at = this.now();
       const inputTokens = result.usage?.inputTokens ?? 0;
@@ -279,7 +483,12 @@ export class MetaSessionPool {
       return result;
     } finally {
       record.live = null;
-      this.release(client);
+      if (physical && dispatched && !responded) {
+        this.deactivate(client, true);
+        this.ensureTargetSize();
+      }
+      this.release(lease);
+      physical?.released(responded);
     }
   }
 
@@ -295,8 +504,14 @@ export class MetaSessionPool {
       return;
     }
     this.targetSize = Math.max(0, Math.floor(size));
-    while (this.liveCount < this.targetSize) {
-      void this.spawn().catch(() => undefined);
+    this.ensureTargetSize();
+    const failures: unknown[] = [];
+    const retire = (client: PooledClient, disposeNow: boolean): void => {
+      try { this.deactivate(client, disposeNow); } catch (error) { failures.push(error); }
+    };
+    for (const [client, record] of [...this.records]) {
+      // Retry requested termination, but let deliberately draining busy turns finish.
+      if (!record.active && !record.disposeOnRelease && client.alive) retire(client, true);
     }
     // Retire the highest-numbered idle sessions first so the survivors keep
     // their stable low ids (matching the UI's "surplus" highlight). Idle
@@ -307,23 +522,77 @@ export class MetaSessionPool {
       (left, right) => seqOf(right) - seqOf(left),
     );
     for (const client of idleBySeqDesc) {
-      if (this.liveCount <= this.targetSize) {
+      if (this.activeCount() <= this.targetSize) {
         break;
       }
-      this.retire(client);
+      retire(client, true);
     }
+    for (const client of this.activeWarmingClientsBySeqDesc()) {
+      if (this.activeCount() <= this.targetSize) {
+        break;
+      }
+      retire(client, true);
+    }
+    for (const client of this.activeBusyClientsBySeqDesc()) {
+      if (this.activeCount() <= this.targetSize) {
+        break;
+      }
+      retire(client, false);
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Some warm metasessions could not be retired; retry resizing');
   }
 
-  /** Kills every session and rejects any pending waiters. */
+  /** Attempts every termination and rejects waiters before reporting aggregated failures. */
   close(): void {
     this.closed = true;
-    for (const client of this.idle.splice(0)) {
-      this.records.delete(client);
-      client.kill();
+    this.detachAdmission?.();
+    this.detachAdmission = undefined;
+    this.targetSize = 0;
+    this.clearReplenishTimer();
+    this.idle.splice(0);
+    const failures: unknown[] = [];
+    for (const client of [...this.records.keys()]) {
+      try { this.deactivate(client, true); } catch (error) { failures.push(error); }
     }
     for (const waiter of this.waiters.splice(0)) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
       waiter.reject(new Error('MetaSessionPool is closed'));
     }
+    this.notifyClosedIfNeeded();
+    if (failures.length > 0) throw new MetaPoolCloseError(failures);
+  }
+
+  /**
+   * Closes the pool and waits until every underlying ACP process has either
+   * exited or the timeout expires.
+   */
+  closeAndWait(timeoutMs = this.terminationGraceMs): Promise<boolean> {
+    try {
+      this.close();
+    } catch (error) {
+      if (!(error instanceof MetaPoolCloseError)) throw error;
+      // A failed kill request is not exit proof; keep waiting on the retained records.
+    }
+    if (this.records.size === 0) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const done = (closed: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        this.closeWaiters.delete(done);
+        resolve(closed);
+      };
+      const timer = setTimeout(() => done(false), timeoutMs);
+      timer.unref?.();
+      this.closeWaiters.add(done);
+    });
   }
 
   /** Number of sessions currently idle (for tests/diagnostics). */
@@ -353,50 +622,97 @@ export class MetaSessionPool {
       }));
     return {
       size: this.targetSize,
-      live: this.liveCount,
+      live: this.records.size,
       idle: this.idle.length,
-      busy: this.liveCount - this.idle.length,
+      busy: [...this.records.values()].filter((record) => record.state === 'busy')
+        .length,
       ready: this.ready,
       served: this.servedCount,
       sessions,
+      ...(this.config.processAdmission ? {
+        waitingForCapacity: this.capacityCount() < this.targetSize && !this.config.processAdmission.canAcquireWarm(),
+      } : {}),
     };
   }
 
-  private async spawn(): Promise<void> {
-    if (this.closed) {
-      return;
+  private async spawn(options: {
+    throwOnFailure: boolean;
+    continueAfterSuccess: boolean;
+  }): Promise<boolean> {
+    if (this.closed || this.spawning || this.capacityCount() >= this.targetSize) {
+      return false;
     }
-    this.liveCount += 1;
+    const processPermit = this.config.processAdmission?.tryAcquireWarm();
+    if (this.config.processAdmission && !processPermit) return false;
+    this.clearReplenishTimer();
+    this.spawning = true;
+    let client: PooledClient | null = null;
+    let error: unknown;
     this.seq += 1;
-    const client = this.config.createClient();
-    this.records.set(client, {
-      seq: this.seq,
-      id: `s${this.seq}`,
-      state: 'warming',
-      served: 0,
-      startedAt: this.now(),
-      lastActiveAt: null,
-      inputTokens: 0,
-      outputTokens: 0,
-      history: [],
-      live: null,
-    });
-    client.onExit(() => this.handleExit(client));
     try {
-      await client.initialize();
-    } catch (error) {
-      this.liveCount -= 1;
-      this.records.delete(client);
-      throw error;
+      client = this.config.createClient();
+      this.records.set(client, {
+        processPermit: processPermit ?? undefined,
+        seq: this.seq,
+        id: `s${this.seq}`,
+        state: 'warming',
+        active: true,
+        disposeOnRelease: false,
+        leaseId: null,
+        served: 0,
+        startedAt: this.now(),
+        lastActiveAt: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        history: [],
+        live: null,
+      });
+      client.onExit(() => this.handleExit(client!));
+      processPermit?.onRetire(() => this.deactivate(client!, false));
+      if (!client.alive) this.handleExit(client);
+      if (client.alive && this.records.get(client)?.active) await client.initialize();
+    } catch (cause) {
+      error = cause;
+      if (client) {
+        this.deactivate(client, true);
+      } else {
+        processPermit?.release();
+      }
+    } finally {
+      this.spawning = false;
     }
-    this.checkIn(client);
+    if (error !== undefined) {
+      this.ensureTargetSize(this.replenishDelayMs);
+      if (options.throwOnFailure) {
+        throw error;
+      }
+      return true;
+    }
+    const warmed = client as PooledClient;
+    const record = this.records.get(warmed);
+    if (!record) {
+      this.ensureTargetSize(this.replenishDelayMs || DEFAULT_REPLENISH_DELAY_MS);
+      return false;
+    }
+    if (this.closed || !record.active || !warmed.alive || !warmed.reusable) {
+      this.deactivate(warmed, true);
+      this.ensureTargetSize(this.replenishDelayMs || DEFAULT_REPLENISH_DELAY_MS);
+      return false;
+    }
+    this.settle(warmed, record);
+    if (options.continueAfterSuccess) {
+      this.ensureTargetSize();
+    }
+    return true;
   }
 
-  private markBusy(client: PooledClient): void {
+  private markBusy(client: PooledClient): PooledClientLease {
     // Only ever called for a live, checked-in client, so its record exists.
     const record = this.records.get(client)!;
     record.state = 'busy';
     record.lastActiveAt = this.now();
+    record.leaseId = this.newLeaseId();
+    return { client, id: record.leaseId };
   }
 
   private markIdle(client: PooledClient): void {
@@ -404,55 +720,265 @@ export class MetaSessionPool {
     record.state = 'idle';
   }
 
-  private checkIn(client: PooledClient): void {
-    if (this.closed || !client.alive) {
+  private checkIn(lease: PooledClientLease): void {
+    const { client } = lease;
+    const record = this.records.get(client);
+    if (!record) {
+      return;
+    }
+    if (record.leaseId !== lease.id) {
+      return;
+    }
+    record.leaseId = null;
+    this.settle(client, record);
+  }
+
+  private settle(client: PooledClient, record: SessionRecord): void {
+    if (this.closed || !record.active || !client.alive || !client.reusable) {
+      this.deactivate(client, true);
+      this.ensureTargetSize();
       return;
     }
     const waiter = this.waiters.shift();
     if (waiter) {
-      this.markBusy(client);
-      waiter.resolve(client);
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
+      waiter.resolve(this.markBusy(client));
       return;
     }
     // A session that came free while the pool is over its (just-lowered) target
     // is retired now rather than kept warm, completing a live shrink.
-    if (this.liveCount > this.targetSize) {
-      this.retire(client);
+    if (this.activeCount() > this.targetSize || record.disposeOnRelease) {
+      this.deactivate(client, true);
+      this.ensureTargetSize();
       return;
     }
     this.markIdle(client);
-    this.idle.push(client);
+    if (!this.idle.includes(client)) {
+      this.idle.push(client);
+    }
   }
 
   /**
-   * Removes a session from the pool and kills its process, doing the liveCount
-   * / record bookkeeping up front so the later {@link handleExit} callback is a
-   * no-op (its record is already gone) and never double-counts or respawns.
+   * Removes a session from the reusable pool and disposes it. Bookkeeping stays
+   * live until the process actually exits so status surfaces remain truthful.
    */
-  private retire(client: PooledClient): void {
-    this.records.delete(client);
-    this.liveCount -= 1;
+  private deactivate(client: PooledClient, disposeNow: boolean): void {
+    const record = this.records.get(client);
+    if (!record) {
+      return;
+    }
+    if (!record.active) {
+      // A prior kill request is not exit proof; quarantined live clients remain retryable.
+      if (disposeNow && client.alive) {
+        record.disposeOnRelease = false;
+        record.leaseId = null;
+        client.dispose();
+      }
+      return;
+    }
+    record.active = false;
+    record.disposeOnRelease = !disposeNow && record.state === 'busy';
+    if (!record.disposeOnRelease) {
+      record.leaseId = null;
+    }
     const index = this.idle.indexOf(client);
     if (index !== -1) {
       this.idle.splice(index, 1);
     }
-    client.kill();
+    if (disposeNow || record.state !== 'busy') {
+      record.disposeOnRelease = false;
+      client.dispose();
+    }
   }
 
   private handleExit(client: PooledClient): void {
-    // Ignore exits for sessions already retired via resize/close, so their
-    // bookkeeping (done up front) is not applied twice.
-    if (!this.records.has(client)) {
+    for (const done of this.physicalExits.get(client) ?? []) done();
+    const record = this.records.get(client);
+    if (!record) {
       return;
     }
-    this.liveCount -= 1;
+    const wasActive = record.active;
     this.records.delete(client);
+    record.processPermit?.release();
     const index = this.idle.indexOf(client);
     if (index !== -1) {
       this.idle.splice(index, 1);
     }
-    if (!this.closed && this.liveCount < this.targetSize) {
-      void this.spawn().catch(() => undefined);
+    if (wasActive && !(this.spawning && record.state === 'warming')) {
+      this.ensureTargetSize();
     }
+    this.notifyClosedIfNeeded();
+  }
+
+  private activeCount(): number {
+    return [...this.records.values()].filter((record) => record.active).length;
+  }
+
+  private capacityCount(): number {
+    return this.activeCount() + (this.spawning ? 1 : 0);
+  }
+
+  private ensureTargetSize(delayMs = 0): void {
+    if (this.closed || this.spawning || this.capacityCount() >= this.targetSize) {
+      return;
+    }
+    if (delayMs <= 0) {
+      this.clearReplenishTimer();
+      void this.spawn({
+        throwOnFailure: false,
+        continueAfterSuccess: true,
+      }).catch(() => undefined);
+      return;
+    }
+    if (this.replenishTimer) {
+      return;
+    }
+    this.replenishTimer = setTimeout(() => {
+      this.replenishTimer = null;
+      this.ensureTargetSize();
+    }, delayMs);
+    this.replenishTimer.unref?.();
+  }
+
+  private activeBusyClientsBySeqDesc(): PooledClient[] {
+    return [...this.records.entries()]
+      .filter(([, record]) => record.active && record.state === 'busy')
+      .sort((left, right) => right[1].seq - left[1].seq)
+      .map(([client]) => client);
+  }
+
+  private activeWarmingClientsBySeqDesc(): PooledClient[] {
+    return [...this.records.entries()]
+      .filter(([, record]) => record.active && record.state === 'warming')
+      .sort((left, right) => right[1].seq - left[1].seq)
+      .map(([client]) => client);
+  }
+
+  private newLeaseId(): number {
+    this.leaseSeq += 1;
+    return this.leaseSeq;
+  }
+
+  private notifyClosedIfNeeded(): void {
+    if (this.records.size !== 0) {
+      return;
+    }
+    for (const waiter of this.closeWaiters) {
+      waiter(true);
+    }
+    this.closeWaiters.clear();
+  }
+
+  private clearReplenishTimer(): void {
+    if (this.replenishTimer) {
+      clearTimeout(this.replenishTimer);
+      this.replenishTimer = null;
+    }
+  }
+
+  private awaitTurn(
+    turn: Promise<AcpTurnResult>,
+    client: PooledClient,
+    request: AcpTurnRequest,
+    deadlineAt: number | undefined,
+  ): Promise<AcpTurnResult> {
+    if (!request.signal && deadlineAt === undefined) {
+      return turn;
+    }
+    return new Promise<AcpTurnResult>((resolve, reject) => {
+      let settled = false;
+      let stopRequested = false;
+      let stopKind: 'aborted' | 'timed_out' = 'aborted';
+      let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        request.signal?.removeEventListener('abort', onAbort);
+        if (deadlineTimer) {
+          clearTimeout(deadlineTimer);
+        }
+      };
+      const finishAbort = () => {
+        this.deactivate(client, true);
+        this.ensureTargetSize();
+        this.waitForExit(client).then((confirmed) => {
+          settled = true;
+          cleanup();
+          reject(
+            new MetaAbortError({
+              kind: stopKind,
+              timeoutMs: request.timeoutMs,
+              termination: confirmed ? 'confirmed' : 'unconfirmed',
+            }),
+          );
+        });
+      };
+      const onAbort = () => {
+        stopRequested = true;
+        stopKind = 'aborted';
+        void finishAbort();
+      };
+      if (request.signal?.aborted) {
+        onAbort();
+      } else {
+        request.signal?.addEventListener('abort', onAbort, { once: true });
+      }
+      if (deadlineAt !== undefined) {
+        const delay = Math.max(0, deadlineAt - this.now());
+        deadlineTimer = setTimeout(() => {
+          if (settled || stopRequested) {
+            return;
+          }
+          stopRequested = true;
+          stopKind = 'timed_out';
+          void finishAbort();
+        }, delay);
+        deadlineTimer.unref?.();
+      }
+      turn.then(
+        (result) => {
+          if (settled || stopRequested) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve(result);
+        },
+        (error) => {
+          if (settled || stopRequested) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          reject(error);
+        },
+      );
+      turn.catch(() => undefined);
+    });
+  }
+
+  private waitForExit(client: PooledClient): Promise<boolean> {
+    if (!client.alive) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(false);
+      }, this.terminationGraceMs);
+      timer.unref?.();
+      client.onExit(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
 }

@@ -10,6 +10,7 @@ const review: PrReview = {
   repoId: 'r1',
   pull: { number: 7, title: 'Add approval', url: 'https://example.test/pr/7' },
   worktreePath: 'C:\\work\\pr-7',
+  headSha: 'abc1234def5678',
   baseBranch: 'main',
   description: 'desc',
   problemStatement: {
@@ -40,10 +41,10 @@ const review: PrReview = {
   },
 };
 
-function renderPage(client: Partial<ApiClient>) {
+function renderPage(client: Partial<ApiClient>, liveReview: PrReview = review) {
   return render(
     <ApiProvider value={client as ApiClient}>
-      <PrReviewPage featureId="f1" liveReview={review} />
+      <PrReviewPage featureId="f1" liveReview={liveReview} />
     </ApiProvider>,
   );
 }
@@ -101,5 +102,76 @@ describe('PrReviewPage approval', () => {
 
     expect(await screen.findByText('approval failed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve' })).not.toBeDisabled();
+  });
+
+  it('shows warm metasession token usage even when cost is unavailable', async () => {
+    const client: Partial<ApiClient> = {
+      getPrReview: vi.fn().mockResolvedValue({
+        ...review,
+        problemStatement: {
+          ...review.problemStatement,
+          usage: {
+            sessionId: 'warm-1',
+            inputTokens: 1200,
+            outputTokens: 30,
+            nanoAiu: null,
+            credits: null,
+          },
+        },
+      }),
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      approvePrReview: vi.fn(),
+    };
+    renderPage(client, {
+      ...review,
+      problemStatement: {
+        ...review.problemStatement,
+        usage: {
+          sessionId: 'warm-1',
+          inputTokens: 1200,
+          outputTokens: 30,
+          nanoAiu: null,
+          credits: null,
+        },
+      },
+    });
+
+    expect(await screen.findByText((text) => text.includes('cost unavailable'))).toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes('1.2K in') && text.includes('30 out'))).toBeInTheDocument();
+  });
+
+  it('shows when warm metasession usage is entirely unavailable', async () => {
+    const client: Partial<ApiClient> = {
+      getPrReview: vi.fn().mockResolvedValue({
+        ...review,
+        problemStatement: {
+          ...review.problemStatement,
+          usage: {
+            sessionId: 'warm-1',
+            inputTokens: null,
+            outputTokens: null,
+            nanoAiu: null,
+            credits: null,
+          },
+        },
+      }),
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      approvePrReview: vi.fn(),
+    };
+    renderPage(client, {
+      ...review,
+      problemStatement: {
+        ...review.problemStatement,
+        usage: {
+          sessionId: 'warm-1',
+          inputTokens: null,
+          outputTokens: null,
+          nanoAiu: null,
+          credits: null,
+        },
+      },
+    });
+
+    expect(await screen.findByText((text) => text.includes('Usage unavailable'))).toBeInTheDocument();
   });
 });

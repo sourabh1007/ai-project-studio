@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { copyText } from '../../hooks/clipboard-write.js';
 import { Button, Card } from '../../components/ui.js';
 import { useConnectionStatus } from '../../hooks/use-connection-status.js';
 import {
@@ -14,7 +15,7 @@ import type { ConnectionState } from '../../lib/connection-status.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DiagnosticsBridge {
-  relaunch(): void;
+  relaunch(): Promise<boolean>;
 }
 
 interface DiagnosticsSectionProps {
@@ -79,6 +80,16 @@ export function DiagnosticsSection({
     listFailures(),
   );
   const [copied, setCopied] = useState(false);
+  const [restartFailed, setRestartFailed] = useState(false);
+
+  const restart = async () => {
+    setRestartFailed(false);
+    try {
+      setRestartFailed(await bridge?.relaunch() !== true);
+    } catch {
+      setRestartFailed(true);
+    }
+  };
 
   const refresh = () => {
     setFailures(listFailures().slice());
@@ -103,17 +114,12 @@ export function DiagnosticsSection({
 
   const copyDiagnostics = () => {
     const text = formatDiagnostics(buildReport());
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(
-        () => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 2000);
-        },
-        () => {
-          /* clipboard may be unavailable; ignore */
-        },
-      );
-    }
+    setCopied(false);
+    void copyText(text).then((result) => {
+      if (!result.ok) return;
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (
@@ -132,13 +138,14 @@ export function DiagnosticsSection({
             {copied ? 'Copied' : 'Copy diagnostics'}
           </Button>
           {bridge && (
-            <Button variant="ghost" onClick={() => bridge.relaunch()}>
+            <Button variant="ghost" onClick={restart}>
               Restart app
             </Button>
           )}
         </div>
       </div>
 
+      {restartFailed && <p role="alert">Restart not confirmed. Wait for active work to finish, then try again.</p>}
       <dl className="kv">
         <div style={{ display: 'contents' }}>
           <dt>Connection</dt>

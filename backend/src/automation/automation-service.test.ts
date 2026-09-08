@@ -7,10 +7,12 @@ import {
   type AutomationService,
   type CreateAutomationInput,
 } from './automation-service.js';
+import { pendingUncertainRuns } from './automation-uncertainty.js';
 import type {
   Automation,
   AutomationRepo,
   AutomationRun,
+  SubagentRepo,
 } from './automation-contract.js';
 
 function fakeRepo(): AutomationRepo & { store: Map<string, Automation> } {
@@ -32,12 +34,51 @@ function fakeRepo(): AutomationRepo & { store: Map<string, Automation> } {
     },
     delete(id) {
       store.delete(id);
+      for (let index = runs.length - 1; index >= 0; index -= 1) {
+        if (runs[index]?.automationId === id) {
+          runs.splice(index, 1);
+        }
+      }
     },
     appendRun(r) {
       runs.push(r);
     },
+    getRun(id) {
+      return runs.find((r) => r.id === id) ?? null;
+    },
+    saveRun(run) {
+      const index = runs.findIndex((r) => r.id === run.id);
+      if (index >= 0) {
+        runs[index] = run;
+      }
+    },
+    findOpenRun(automationId) {
+      return (
+        runs.find(
+          (run) =>
+            run.automationId === automationId &&
+            (run.phase === 'queued' ||
+              run.phase === 'checking' ||
+              run.phase === 'acting'),
+        ) ?? null
+      );
+    },
+    listOpenRuns() {
+      return runs.filter(
+        (run) =>
+          run.phase === 'queued' ||
+          run.phase === 'checking' ||
+          run.phase === 'acting',
+      );
+    },
     listRuns(id) {
       return runs.filter((r) => r.automationId === id);
+    },
+    listPendingUncertainRuns(id) {
+      return pendingUncertainRuns(runs.filter((r) => r.automationId === id));
+    },
+    transact(work) {
+      return work();
     },
   };
 }
@@ -64,6 +105,10 @@ describe('automation-service', () => {
   let time: number;
   let updated: Automation[];
   let removed: { id: string }[];
+  let subagents: Pick<SubagentRepo, 'deleteByAutomation'>;
+  let deletedSubagentAutomations: string[];
+  let ownedArtifacts: { deleteByAutomation(automationId: string): void };
+  let deletedArtifactAutomations: string[];
 
   beforeEach(() => {
     repo = fakeRepo();
@@ -71,10 +116,24 @@ describe('automation-service', () => {
     time = Date.UTC(2026, 0, 1, 0, 0, 0);
     updated = [];
     removed = [];
+    deletedSubagentAutomations = [];
+    deletedArtifactAutomations = [];
+    subagents = {
+      deleteByAutomation: (automationId) => {
+        deletedSubagentAutomations.push(automationId);
+      },
+    };
+    ownedArtifacts = {
+      deleteByAutomation: (automationId) => {
+        deletedArtifactAutomations.push(automationId);
+      },
+    };
     bus.on('automation.updated', (a) => updated.push(a));
     bus.on('automation.removed', (e) => removed.push(e));
     service = createAutomationService({
       repo,
+      subagents,
+      ownedArtifacts,
       clock: createClock(() => time),
       ids: counterIds(),
       bus,
@@ -150,7 +209,13 @@ describe('automation-service', () => {
     repo.appendRun({
       id: 'r1',
       automationId: a.id,
+      source: 'scheduled',
+      phase: 'finished',
+      scheduledForAt: null,
+      occurrenceKey: null,
+      dedupeKey: 'scheduled:a1',
       startedAt: '2026-01-01T00:00:01.000Z',
+      dispatchedAt: '2026-01-01T00:00:01.000Z',
       endedAt: null,
       triggered: false,
       status: 'ok',
@@ -223,12 +288,62 @@ describe('automation-service', () => {
     expect(() => service.runNow(a.id)).toThrow(/already finished/);
   });
 
-  it('removes an automation and emits removed', () => {
+  it('removes an automation and emits removed', async () => {
     const a = service.create(baseInput);
-    service.remove(a.id);
+    await service.remove(a.id);
     expect(repo.get(a.id)).toBeNull();
+    expect(deletedArtifactAutomations).toEqual([a.id]);
+    expect(deletedSubagentAutomations).toEqual([a.id]);
     expect(removed).toEqual([{ id: a.id }]);
-    expect(() => service.remove(a.id)).toThrow(/not found/);
+    await expect(service.remove(a.id)).rejects.toThrow(/not found/);
+  });
+
+  it('retains the monitor and its artifacts until quiescence and asynchronous cleanup finish', async () => {
+    let finishQuiescence!: () => void;
+    let finishCleanup!: () => void;
+    const ordered: string[] = [];
+    const guarded = createAutomationService({
+      repo, bus, clock: createClock(() => time), ids: counterIds(),
+      config: { defaultIntervalMs: 60_000, minIntervalMs: 10_000, maxActiveAutomations: 3 },
+      quiesce: () => new Promise<void>((resolve) => {
+        ordered.push('quiesce');
+        finishQuiescence = resolve;
+      }),
+      ownedArtifacts: {
+        deleteByAutomation: () => new Promise<void>((resolve) => {
+          ordered.push('cleanup');
+          finishCleanup = resolve;
+        }),
+      },
+    });
+    const a = guarded.create(baseInput);
+    const deleting = guarded.remove(a.id);
+    expect(ordered).toEqual(['quiesce']);
+    expect(repo.get(a.id)).not.toBeNull();
+    finishQuiescence();
+    await Promise.resolve();
+    expect(ordered).toEqual(['quiesce', 'cleanup']);
+    expect(repo.get(a.id)).not.toBeNull();
+    finishCleanup();
+    await deleting;
+    expect(repo.get(a.id)).toBeNull();
+  });
+
+  it('does not purge a monitor or emit removal after unconfirmed quiescence', async () => {
+    const failure = new Error('owned process did not exit');
+    const guarded = createAutomationService({
+      repo, bus, clock: createClock(() => time), ids: counterIds(),
+      config: { defaultIntervalMs: 60_000, minIntervalMs: 10_000, maxActiveAutomations: 3 },
+      quiesce: async () => { throw failure; },
+      ownedArtifacts,
+      subagents,
+    });
+    const a = guarded.create(baseInput);
+    await expect(guarded.remove(a.id)).rejects.toBe(failure);
+    expect(repo.get(a.id)).not.toBeNull();
+    expect(deletedArtifactAutomations).toEqual([]);
+    expect(deletedSubagentAutomations).toEqual([]);
+    expect(removed).toEqual([]);
   });
 
   it('updates progress and planned steps', () => {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { McpServerEntry } from '../../lib/types.js';
-import { Button, ErrorText } from '../../components/ui.js';
+import { Button } from '../../components/ui.js';
 
 /** Pretty-prints a spec object for the editor, defaulting to a helpful stub. */
 function initialSpecText(entry?: McpServerEntry): string {
@@ -89,7 +89,11 @@ export function McpServerForm({
           file.
         </p>
       </div>
-      <ErrorText error={error} />
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
       <div className="row modal-actions">
         <Button variant="ghost" onClick={onCancel}>
           Cancel

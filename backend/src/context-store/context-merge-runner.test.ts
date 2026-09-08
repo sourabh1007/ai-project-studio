@@ -52,6 +52,7 @@ function harness(options: {
   session?: Session | null;
   existing?: string;
   withStatus?: boolean;
+  onStatus?: (phase: string) => void;
 }) {
   const requests: StartSessionRequest[] = [];
   const statuses: string[] = [];
@@ -105,13 +106,41 @@ function harness(options: {
     summarizerConfig: summarizerDefaults,
     config: contextDefaults,
     onStatus: options.withStatus
-      ? (status) => statuses.push(status.phase)
+      ? (status) => { statuses.push(status.phase); options.onStatus?.(status.phase); }
       : undefined,
   });
-  return { runner, requests, set, statuses };
+  return { runner, requests, set, statuses, transcripts };
 }
 
 describe('context-merge-runner', () => {
+  it.each(['dev1', 'meta1', 'saving'])('does not save after cancellation at %s', async (stage) => {
+    const controller = new AbortController();
+    const failure = new Error('Feature deletion');
+    const transcript = { sessionId: 'meta1', stdout: ['Saved knowledge'], stderr: [], exitCode: 0 };
+    const h = harness({
+      transcript, withStatus: true,
+      onStatus: (phase) => { if (stage === phase) controller.abort(failure); },
+    });
+    vi.spyOn(h.transcripts, 'load').mockImplementation(async (id) => {
+      if (stage === id) controller.abort(failure);
+      return transcript;
+    });
+    await expect(h.runner.merge({ sessionId: 'dev1', signal: controller.signal })).rejects.toBe(failure);
+    expect(h.set).not.toHaveBeenCalled();
+    if (stage === 'dev1') expect(h.requests).toEqual([]);
+    else expect(h.requests[0].signal).toBe(controller.signal);
+    expect(h.statuses).not.toContain('sharing');
+  });
+
+  it('persists normally with an uncancelled owned signal', async () => {
+    const h = harness({
+      transcript: { sessionId: 'meta1', stdout: ['Saved knowledge'], stderr: [], exitCode: 0 },
+    });
+    const signal = new AbortController().signal;
+    await expect(h.runner.merge({ sessionId: 'dev1', signal })).resolves.toMatchObject({ content: 'Saved knowledge' });
+    expect(h.requests[0].signal).toBe(signal);
+  });
+
   it('launches a meta session and persists the curated feature document', async () => {
     const h = harness({
       transcript: {

@@ -1,11 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyCopyCut,
   fieldSelectionText,
   toClipboardText,
   createPasteGuard,
+  attachmentFailureMessage,
+  writeClipboardText,
+  type ClipboardResult,
   type ClipboardKeyEvent,
 } from './clipboard.js';
+
+it('routes attachment quota failures to the mounted manual manager without implying automatic cleanup', () => {
+  const message = attachmentFailureMessage('quota');
+  expect(message).toContain('No attachment was pasted');
+  expect(message).toContain('Settings → Diagnostics → Retained clipboard images');
+  expect(message).toContain('Manual deletion may break active, past, or resumed prompts');
+  expect(message).toContain('Automatic cleanup is not available');
+});
 
 function evt(over: Partial<ClipboardKeyEvent>): ClipboardKeyEvent {
   return {
@@ -126,29 +137,84 @@ describe('toClipboardText', () => {
 });
 
 describe('createPasteGuard', () => {
-  it('accepts the first paste and rejects an identical one inside the window', () => {
-    const guard = createPasteGuard(50);
-    expect(guard.shouldPaste('hi', 1000)).toBe(true);
-    expect(guard.shouldPaste('hi', 1010)).toBe(false);
+  it('owns each event once and accepts separate identical user actions immediately', () => {
+    const guard = createPasteGuard();
+    const first = { text: 'same', time: 0 };
+    expect(guard.shouldPaste(first)).toBe(true);
+    expect(guard.shouldPaste(first)).toBe(false);
+    expect(guard.shouldPaste({ text: 'same', time: 0 })).toBe(true);
   });
+});
 
-  it('anchors the window to the first paste, not the rejected duplicates', () => {
-    const guard = createPasteGuard(50);
-    expect(guard.shouldPaste('hi', 1000)).toBe(true);
-    expect(guard.shouldPaste('hi', 1040)).toBe(false);
-    // 1080 is >50ms after the accepted paste at 1000, so it is a fresh paste.
-    expect(guard.shouldPaste('hi', 1080)).toBe(true);
+describe('acknowledged clipboard writes', () => {
+  const ok: ClipboardResult = { ok: true };
+  const unavailable: ClipboardResult = { ok: false, error: 'unavailable', writeState: 'not-written' };
+  const legacy = vi.fn(() => ok);
+  const canFallback = () => true;
+  it('awaits native completion, with no browser or legacy write', async () => {
+    let finish!: (result: ClipboardResult) => void;
+    const browser = vi.fn();
+    const pending = writeClipboardText('😀\r\nx', {
+      native: () => new Promise((resolve) => { finish = resolve; }),
+      browser, legacy, canFallback,
+    });
+    expect(browser).not.toHaveBeenCalled();
+    finish(ok);
+    expect(await pending).toEqual(ok);
+    expect(browser).not.toHaveBeenCalled();
   });
-
-  it('accepts an identical paste once the window has elapsed', () => {
-    const guard = createPasteGuard(50);
-    expect(guard.shouldPaste('hi', 1000)).toBe(true);
-    expect(guard.shouldPaste('hi', 1100)).toBe(true);
+  it('rejects empty copy without interpreting it as clear', async () => {
+    const native = vi.fn();
+    expect(await writeClipboardText('', { native, legacy, canFallback }))
+      .toEqual({ ok: false, error: 'empty-text', writeState: 'not-written' });
+    expect(native).not.toHaveBeenCalled();
   });
-
-  it('accepts different text immediately', () => {
-    const guard = createPasteGuard(50);
-    expect(guard.shouldPaste('hi', 1000)).toBe(true);
-    expect(guard.shouldPaste('bye', 1005)).toBe(true);
+  it.each(['unknown', 'written', 'not-written'] as const)('does not retry a %s policy/native failure', async (writeState) => {
+    const browser = vi.fn();
+    const result: ClipboardResult = { ok: false, error: 'too-large', writeState };
+    expect(await writeClipboardText('x', {
+      native: async () => result, browser, legacy, canFallback,
+    })).toEqual(result);
+    expect(browser).not.toHaveBeenCalled();
+  });
+  it('does not retry rejected IPC or malformed/old void acknowledgements', async () => {
+    for (const native of [
+      async () => { throw new Error('lost acknowledgement'); },
+      async () => undefined as unknown as ClipboardResult,
+      async () => ({ ok: 'yes' }) as unknown as ClipboardResult,
+    ]) {
+      const browser = vi.fn();
+      expect(await writeClipboardText('x', { native, browser, legacy, canFallback }))
+        .toMatchObject({ ok: false, writeState: 'unknown' });
+      expect(browser).not.toHaveBeenCalled();
+    }
+  });
+  it('falls back only on definite unavailability and checks target ownership', async () => {
+    const browser = vi.fn(async () => ok);
+    expect(await writeClipboardText('x', {
+      native: async () => unavailable, browser, legacy, canFallback,
+    })).toEqual(ok);
+    expect(browser).toHaveBeenCalledTimes(1);
+    expect(await writeClipboardText('x', {
+      native: async () => unavailable, browser, legacy, canFallback: () => false,
+    })).toMatchObject({ error: 'target-changed' });
+    expect(browser).toHaveBeenCalledTimes(1);
+  });
+  it('supports browser-only, legacy and exhausted fallback outcomes', async () => {
+    expect(await writeClipboardText('x', {
+      browser: async () => ok, legacy, canFallback,
+    })).toEqual(ok);
+    expect(await writeClipboardText('x', { legacy, canFallback })).toEqual(ok);
+    expect(await writeClipboardText('x', {
+      browser: async () => unavailable, legacy: () => unavailable, canFallback,
+    })).toEqual(unavailable);
+  });
+  it('normalizes Windows newline expansion without damaging Unicode at old limits', () => {
+    for (const length of [32768, 32769, 65536, 1024 * 1024]) {
+      const text = '😀\n' + 'x'.repeat(length - 3);
+      const normalized = toClipboardText(text, true);
+      expect(normalized.length).toBe(length + 1);
+      expect(normalized).toBe('😀\r\n' + 'x'.repeat(length - 3));
+    }
   });
 });

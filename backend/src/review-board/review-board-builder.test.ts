@@ -58,6 +58,7 @@ function node(over: Partial<DiscoveryNode> & { path: string }): DiscoveryNode {
 function build(over: Partial<BuildBoardInput>) {
   return buildReviewBoard({
     featureId: 'f1',
+    repoId: 'r1',
     pull: { number: 1, title: 't', url: 'u', headSha: null },
     worktreePath: 'w',
     baseBranch: 'main',
@@ -66,6 +67,7 @@ function build(over: Partial<BuildBoardInput>) {
     changedFiles: 0,
     model: model(),
     thresholds,
+    reviewUpdatedAt: '2026-01-01T00:00:00.000Z',
     generatedAt: '2026-01-01T00:00:00.000Z',
     ...over,
   });
@@ -74,6 +76,7 @@ function build(over: Partial<BuildBoardInput>) {
 describe('buildEmptyBoard', () => {
   const emptyInput: BuildBoardInput = {
     featureId: 'f1',
+    repoId: 'r1',
     pull: { number: 7, title: 't', url: 'u', headSha: null },
     worktreePath: 'w',
     baseBranch: 'main',
@@ -82,6 +85,7 @@ describe('buildEmptyBoard', () => {
     changedFiles: 5,
     model: model({ changedComponents: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }),
     thresholds,
+    reviewUpdatedAt: '2026-01-01T00:00:00.000Z',
     generatedAt: '2026-01-01T00:00:00.000Z',
   };
 
@@ -105,7 +109,9 @@ describe('buildEmptyBoard', () => {
   it('preserves the pull, model and generatedAt metadata', () => {
     const board = buildEmptyBoard(emptyInput);
     expect(board.pull.number).toBe(7);
+    expect(board.repoId).toBe('r1');
     expect(board.model.projectType).toBe('Backend service');
+    expect(board.reviewUpdatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(board.generatedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });

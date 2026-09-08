@@ -29,7 +29,9 @@ export const metaConfigSchema = z.object({
    * Requests are routed to the pool whose `purpose` matches; anything without a
    * matching pool uses the `general` pool. Each pool keeps `size` sessions warm.
    * The cold `metaRunner` remains the automatic fallback while a pool is still
-   * warming or if a warm turn fails.
+   * warming or when a warm turn fails before any prompt was dispatched. Once a
+   * warm prompt may already have executed, its failure is surfaced instead of
+   * retried cold.
    */
   warmPool: z.object({
     /** Whether the warm pools are used (cold path remains the fallback). */

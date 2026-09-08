@@ -12,7 +12,9 @@ import type {
   CheckSpec,
   ConditionSpec,
   PlannedStep,
+  SubagentRepo,
 } from './automation-contract.js';
+import { decorateAutomationWithUncertainty } from './automation-uncertainty.js';
 
 /** Events emitted by the automation subsystem, forwarded to the SSE stream. */
 export type AutomationEventMap = {
@@ -34,6 +36,11 @@ export interface CreateAutomationInput {
 
 export interface AutomationServiceDeps {
   repo: AutomationRepo;
+  subagents?: Pick<SubagentRepo, 'deleteByAutomation'>;
+  ownedArtifacts?: {
+    deleteByAutomation(automationId: string): void | Promise<void>;
+  };
+  quiesce?: (automationId: string) => Promise<void>;
   clock: Clock;
   ids: IdGenerator;
   bus: EventBus<AutomationEventMap>;
@@ -55,7 +62,7 @@ export interface AutomationService {
   resume(id: string): Automation;
   cancel(id: string): Automation;
   runNow(id: string): Automation;
-  remove(id: string): void;
+  remove(id: string): Promise<void>;
   updateProgress(id: string, progress: string): Automation;
   setPlannedSteps(id: string, steps: PlannedStep[]): Automation;
   /**
@@ -75,14 +82,21 @@ const TERMINAL: ReadonlySet<Automation['status']> = new Set([
 export function createAutomationService(
   deps: AutomationServiceDeps,
 ): AutomationService {
+  const decorate = (automation: Automation): Automation =>
+    decorateAutomationWithUncertainty(
+      automation,
+      deps.repo.listPendingUncertainRuns(automation.id),
+    );
+
   const publish = (automation: Automation): Automation => {
     const stamped: Automation = {
       ...automation,
       updatedAt: deps.clock.isoNow(),
     };
     deps.repo.save(stamped);
-    deps.bus.emit('automation.updated', stamped);
-    return stamped;
+    const decorated = decorate(stamped);
+    deps.bus.emit('automation.updated', decorated);
+    return decorated;
   };
 
   const require = (id: string): Automation => {
@@ -90,7 +104,7 @@ export function createAutomationService(
     if (!automation) {
       throw new NotFoundError(`Automation not found: ${id}`);
     }
-    return automation;
+    return decorate(automation);
   };
 
   const activeCount = (): number =>
@@ -139,7 +153,7 @@ export function createAutomationService(
     },
     get: require,
     list() {
-      return deps.repo.list();
+      return deps.repo.list().map(decorate);
     },
     listRuns(id) {
       require(id);
@@ -188,8 +202,11 @@ export function createAutomationService(
         nextRunAt: deps.clock.isoNow(),
       });
     },
-    remove(id) {
+    async remove(id) {
       require(id);
+      await deps.quiesce?.(id);
+      await deps.ownedArtifacts?.deleteByAutomation(id);
+      deps.subagents?.deleteByAutomation(id);
       deps.repo.delete(id);
       deps.bus.emit('automation.removed', { id });
     },

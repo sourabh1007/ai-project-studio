@@ -146,6 +146,7 @@ export interface ReviewBoardPull {
  */
 export interface ReviewBoard {
   featureId: string;
+  repoId: string;
   pull: ReviewBoardPull;
   worktreePath: string;
   baseBranch: string | null;
@@ -154,6 +155,8 @@ export interface ReviewBoard {
   perspectives: ReviewPerspective[];
   recommendation: ReviewRecommendation;
   summary: ReviewBoardSummary;
+  /** Source PR review revision the board was derived from. */
+  reviewUpdatedAt: string;
   /** When this board snapshot was assembled. */
   generatedAt: string;
 }

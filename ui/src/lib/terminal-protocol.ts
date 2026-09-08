@@ -5,11 +5,14 @@
  */
 
 export type ClientMessage =
-  | { type: 'input'; data: string }
-  | { type: 'resize'; cols: number; rows: number };
+  | { type: 'input'; data: string; generation: number; seq: number }
+  | { type: 'resize'; cols: number; rows: number; generation: number };
+
+export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
-  | { type: 'ready'; sessionId: string }
+  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number }
+  | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'exit'; code: number | null };
@@ -33,10 +36,17 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
   if (!isRecord(parsed)) {
     return null;
   }
-  if (parsed.type === 'ready') {
-    return typeof parsed.sessionId === 'string'
-      ? { type: 'ready', sessionId: parsed.sessionId }
-      : null;
+  if (parsed.type === 'state' || parsed.type === 'ack') {
+    if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;
+    if (parsed.type === 'state') {
+      return parsed.version === 2 &&
+        ['connecting', 'bootstrapping', 'ready', 'reconnecting', 'closed', 'failed'].includes(parsed.state as string) &&
+        Number.isSafeInteger(parsed.inputLimit) && (parsed.inputLimit as number) > 0
+        ? parsed as ServerMessage : null;
+    }
+    return Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0 &&
+      ['written', 'rejected', 'uncertain'].includes(parsed.outcome as string) && typeof parsed.reason === 'string'
+      ? parsed as ServerMessage : null;
   }
   if (parsed.type === 'output') {
     return typeof parsed.data === 'string'

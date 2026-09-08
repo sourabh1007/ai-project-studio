@@ -50,6 +50,11 @@ export function encodeRequest(
   return `${JSON.stringify(request)}\n`;
 }
 
+/** Encodes a JSON-RPC notification as a single newline-terminated line. */
+export function encodeNotification(method: string, params: unknown): string {
+  return `${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`;
+}
+
 /**
  * Parses one incoming line into a typed message, or null when the line is not a
  * JSON-RPC message we care about (blank lines, plain diagnostics, or JSON that
@@ -101,6 +106,13 @@ function parseError(
   return { code, message };
 }
 
+function updateOf(
+  params: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const nested = asRecord(params?.update);
+  return nested ?? params;
+}
+
 /**
  * Extracts the assistant text carried by a `session/update` notification's
  * `agent_message_chunk` payload, or null for any other update kind. Chunks
@@ -110,7 +122,7 @@ function parseError(
 export function textFromUpdate(
   params: Record<string, unknown> | null,
 ): string | null {
-  const update = asRecord(params?.update);
+  const update = updateOf(params);
   if (!update || update.sessionUpdate !== 'agent_message_chunk') {
     return null;
   }
@@ -127,6 +139,34 @@ export function stopReasonOf(
 ): string | null {
   const reason = result?.stopReason;
   return typeof reason === 'string' ? reason : null;
+}
+
+/** Pulls the notification's session id out of a `session/update` payload. */
+export function sessionIdFromUpdate(
+  params: Record<string, unknown> | null,
+): string | null {
+  const sessionId = params?.sessionId;
+  return typeof sessionId === 'string' && sessionId.length > 0
+    ? sessionId
+    : null;
+}
+
+/** Reads a `state_update` notification's state and stop reason defensively. */
+export function stateFromUpdate(
+  params: Record<string, unknown> | null,
+): { state: string; stopReason: string | null } | null {
+  const update = updateOf(params);
+  if (!update || update.sessionUpdate !== 'state_update') {
+    return null;
+  }
+  const state = update.state;
+  if (typeof state !== 'string' || state.length === 0) {
+    return null;
+  }
+  return {
+    state,
+    stopReason: typeof update.stopReason === 'string' ? update.stopReason : null,
+  };
 }
 
 /** Pulls the new session id out of a `session/new` result. */

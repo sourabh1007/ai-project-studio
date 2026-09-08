@@ -7,6 +7,11 @@ export interface StoredUsage extends UsageEvent {
   kind: SessionKind;
 }
 
+/** Indexed sink lookup for bounded reconciliation of durable capture payloads. */
+export interface UsageLookup {
+  get(sessionId: string, turnIndex: number): StoredUsage | null;
+}
+
 /** Persistence port for usage events. Implemented by the persistence module. */
 export interface UsageRepo {
   /** Insert or update usage events, keyed by (sessionId, turnIndex). */

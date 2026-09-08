@@ -241,6 +241,17 @@ export function canCancel(status: AutomationStatus): boolean {
   return isActiveStatus(status);
 }
 
+/** Whether the UI should offer an explicit "Run now" retry. */
+export function canRunNow(automation: Automation): boolean {
+  return (
+    canCancel(automation.status) ||
+    (automation.mode === 'short' &&
+      automation.status === 'failed' &&
+      automation.uncertainty !== null &&
+      automation.uncertainty !== undefined)
+  );
+}
+
 /**
  * Completion percentage (0–100) for a capped monitor, from triggers fired vs.
  * the cap. Returns null for uncapped monitors (no meaningful denominator).
@@ -329,19 +340,55 @@ export function snapIntervalMs(intervalMs: number): number {
 }
 
 /** A human label for one detailed-log run outcome. */
-export function runStatusLabel(status: AutomationRun['status']): string {
-  switch (status) {
-    case 'ok':
-      return 'Succeeded';
-    case 'failed':
-      return 'Failed';
-    case 'skipped':
-      return 'Skipped';
+export function runStatusLabel(run: AutomationRun): string {
+  switch (run.phase) {
+    case 'queued':
+      return 'Queued';
+    case 'checking':
+      return 'Checking';
+    case 'acting':
+      return 'Running action';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'interrupted':
+      return 'Interrupted';
+    case 'uncertain':
+      return 'Uncertain';
+    case 'finished':
+      switch (run.status) {
+        case 'ok':
+          return 'Succeeded';
+        case 'failed':
+          return 'Failed';
+        case 'skipped':
+          return 'Skipped';
+      }
   }
 }
 
 /** A one-line summary of a single run for the detailed-log timeline. */
 export function runSummary(run: AutomationRun): string {
+  if (run.phase === 'queued') {
+    return run.detail ?? 'Queued';
+  }
+  if (run.phase === 'checking') {
+    return run.detail ?? 'Checking now';
+  }
+  if (run.phase === 'acting') {
+    return run.detail ?? 'Running action';
+  }
+  if (run.phase === 'cancelled') {
+    return run.detail ?? 'Cancelled';
+  }
+  if (run.phase === 'interrupted') {
+    return run.detail ?? 'Interrupted';
+  }
+  if (run.phase === 'uncertain') {
+    return run.detail ?? 'Outcome uncertain';
+  }
+  if (run.report) {
+    return run.detail ?? 'Report generated';
+  }
   const outcome = run.triggered ? 'Triggered' : 'Checked';
   return run.detail ? `${outcome} · ${run.detail}` : outcome;
 }

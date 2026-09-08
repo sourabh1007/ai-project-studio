@@ -40,6 +40,7 @@ function harness() {
   const recorder = createUsageRecorder({
     calculator,
     repo: {
+      get: (sessionId, turnIndex) => [...saved.flat()].reverse().find((event) => event.sessionId === sessionId && event.turnIndex === turnIndex) ?? null,
       saveAll: (e) => saved.push(e),
       listBySession: () => [],
       deleteBySession: () => undefined,
@@ -68,5 +69,17 @@ describe('usage-recorder', () => {
     expect(stored.map((s) => s.credits)).toEqual([0.33, 1]);
     expect(stored.every((s) => s.kind === 'meta')).toBe(true);
     expect(h.emitted).toHaveLength(2);
+  });
+
+  it('reconciles actual sink presence and all credited fields without duplicate notifications', () => {
+    const h = harness();
+    const event = usage();
+    expect(h.recorder.reconcile(event, 'dev')).toMatchObject({ credits: 0.33 });
+    expect(h.recorder.reconcile(event, 'dev')).toBeNull();
+    expect(h.emitted).toHaveLength(1);
+    h.saved[0][0].credits = 999;
+    expect(h.recorder.reconcile(event, 'dev')).toMatchObject({ credits: 0.33 });
+    expect(h.recorder.reconcile(event, 'meta')).toMatchObject({ kind: 'meta' });
+    expect(h.recorder.reconcile({ ...event, cost: 4 }, 'meta')).toMatchObject({ credits: 4 });
   });
 });

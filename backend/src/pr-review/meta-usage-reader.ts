@@ -1,8 +1,10 @@
+import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
 import type { UsageRepo } from '../usage/usage-repo-port.js';
-import type { MetaUsage, MetaUsageReader } from './pr-review-contract.js';
+import type { MetaUsageReader } from './pr-review-contract.js';
 
 export interface MetaUsageReaderDeps {
   usage: Pick<UsageRepo, 'listBySession'>;
+  warmUsage?: MetaUsageRepo;
 }
 
 /**
@@ -16,22 +18,35 @@ export function createMetaUsageReader(deps: MetaUsageReaderDeps): MetaUsageReade
     usageForSession(sessionId) {
       const events = deps.usage.listBySession(sessionId);
       if (events.length === 0) {
-        return null;
+        const warm = deps.warmUsage?.get(sessionId);
+        if (!warm) {
+          return null;
+        }
+        return {
+          sessionId,
+          inputTokens: warm.inputTokens,
+          outputTokens: warm.outputTokens,
+          nanoAiu: warm.nanoAiu,
+          credits: warm.credits,
+        };
       }
-      const usage: MetaUsage = {
-        sessionId,
-        inputTokens: 0,
-        outputTokens: 0,
-        nanoAiu: 0,
-        credits: 0,
-      };
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let nanoAiu = 0;
+      let credits = 0;
       for (const event of events) {
-        usage.inputTokens += event.inputTokens;
-        usage.outputTokens += event.outputTokens;
-        usage.nanoAiu += event.nanoAiu;
-        usage.credits += event.credits;
+        inputTokens += event.inputTokens;
+        outputTokens += event.outputTokens;
+        nanoAiu += event.nanoAiu;
+        credits += event.credits;
       }
-      return usage;
+      return {
+        sessionId,
+        inputTokens,
+        outputTokens,
+        nanoAiu,
+        credits,
+      };
     },
   };
 }

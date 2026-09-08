@@ -9,6 +9,13 @@ describe('usage config', () => {
   });
 
   it('rejects a non-positive poll interval', () => {
-    expect(() => usageConfigSchema.parse({ livePollIntervalMs: 0 })).toThrow();
+    expect(() => usageConfigSchema.parse({ ...usageDefaults, livePollIntervalMs: 0 })).toThrow();
+  });
+
+  it.each([
+    { capturePageSize: 0 }, { capturePageSize: 1001 }, { capturePageSize: 1.5 },
+    { finalDrainPages: 0 }, { finalDrainPages: 101 }, { finalDrainPages: 1.5 },
+  ])('rejects unbounded or invalid capture work limits %j', (override) => {
+    expect(() => usageConfigSchema.parse({ ...usageDefaults, ...override })).toThrow();
   });
 });

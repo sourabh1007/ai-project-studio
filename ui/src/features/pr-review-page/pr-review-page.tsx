@@ -122,13 +122,26 @@ function MetaUsageLine({ usage }: { usage: MetaUsage | null }) {
   if (!usage) {
     return null;
   }
+  if (usage.inputTokens === null || usage.outputTokens === null) {
+    return (
+      <p className="pr-step-usage" title={`Metasession ${usage.sessionId}`}>
+        <span className="pr-meta-marker">metasession</span>
+        <span>Usage unavailable</span>
+      </p>
+    );
+  }
   return (
     <p className="pr-step-usage" title={`Metasession ${usage.sessionId}`}>
       <span className="pr-meta-marker">metasession</span>
       <span>
         {formatTokens(usage.inputTokens)} in · {formatTokens(usage.outputTokens)} out
       </span>
-      <span>· {usage.credits.toFixed(2)} credits</span>
+      <span>
+        ·{' '}
+        {usage.credits === null
+          ? 'cost unavailable'
+          : `${usage.credits.toFixed(2)} credits`}
+      </span>
     </p>
   );
 }

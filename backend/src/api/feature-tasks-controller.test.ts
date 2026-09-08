@@ -33,7 +33,7 @@ function harness() {
   };
   const tasks = {
     listForFeature: (id: string) => (record('listForFeature', id), [task]),
-    generate: async (id: string) => (record('generate', id), [task]),
+    generate: async (id: string, signal?: AbortSignal) => (record('generate', id, signal), [task]),
     addTask: (input: unknown) => (record('addTask', input), task),
     toggle: (id: string) => (record('toggle', id), task),
     removeTask: (id: string) => record('removeTask', id),
@@ -51,13 +51,14 @@ describe('feature-tasks-controller', () => {
     expect(calls.listForFeature).toEqual(['f1']);
   });
 
-  it('generates a plan for a feature', async () => {
+  it('generates a plan for a feature with the request signal', async () => {
     const { routes, calls } = harness();
+    const signal = new AbortController().signal;
     const res = await pick(routes, 'post', '/features/:featureId/tasks/generate')(
-      req({ params: { featureId: 'f1' } }),
+      req({ params: { featureId: 'f1' }, signal }),
     );
     expect(res).toEqual({ status: 201, body: [task] });
-    expect(calls.generate).toEqual(['f1']);
+    expect(calls.generate).toEqual(['f1', signal]);
   });
 
   it('adds a manual task', () => {

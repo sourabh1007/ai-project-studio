@@ -17,6 +17,7 @@ export function createSessionSummaryRoutes(
         status: 200,
         body: await deps.sessionSummaries.summarize({
           sessionId: req.params.sessionId,
+          signal: req.signal,
         }),
       }),
     },

@@ -53,7 +53,7 @@ interface PoolDraft {
 }
 
 interface DesktopBridge {
-  relaunch(): void;
+  relaunch(): Promise<boolean>;
 }
 
 function desktopBridge(): DesktopBridge | undefined {
@@ -434,6 +434,15 @@ function PoolStatus({
             <strong>{pool.served}</strong> served
           </span>
         </span>
+        {!draining && !hasPending && pool.waitingForCapacity && (
+          <p className="metapool-pending" role="status" aria-live="polite">
+            Waiting for shared process capacity — <strong>{readyCount}</strong> of{' '}
+            <strong>{pool.size}</strong> ready, <strong>{warmingCount}</strong> warming.
+            The saved target has not reverted. Reduce another warm pool or adjust
+            the processAdmission limits and restart.
+          </p>
+        )}
+
         {!draining && hasPending && (
           <span
             className={`metapool-target metapool-target-${
@@ -968,6 +977,7 @@ export function MetasessionPoolsSection() {
 
   async function save() {
     setError(null);
+    setSaved(false);
     const result = validate();
     if (typeof result === 'string') {
       setError(result);
@@ -986,7 +996,7 @@ export function MetasessionPoolsSection() {
       const systemRunning = status.data?.enabled === true;
       if (enabled && systemRunning) {
         const running = new Set(
-          (status.data?.pools ?? []).map((p) => p.purpose),
+          (status.data?.pools ?? []).filter((p) => !p.draining).map((p) => p.purpose),
         );
         const desired = new Set(result.map((p) => p.purpose));
         const ops: Array<Promise<unknown>> = [];
@@ -995,16 +1005,20 @@ export function MetasessionPoolsSection() {
             (running.has(pool.purpose)
               ? api.resizeMetaPool(pool.purpose, pool.size)
               : api.createMetaPool(pool.purpose, pool.size)
-            ).catch(() => undefined),
+            ),
           );
         }
         for (const purpose of running) {
           if (!desired.has(purpose)) {
-            ops.push(api.removeMetaPool(purpose).catch(() => undefined));
+            ops.push(api.removeMetaPool(purpose));
           }
         }
-        await Promise.all(ops);
+        const applied = await Promise.allSettled(ops);
         status.reload();
+        if (applied.some((operation) => operation.status === 'rejected')) {
+          setError('Configuration saved, but some live pool changes failed. Your requested sizes are retained. Click Save changes to retry.');
+          return;
+        }
       }
       // A restart is only needed to turn the whole warm-pool system on or off;
       // pool add/remove/resize already applied live above.
@@ -1019,6 +1033,15 @@ export function MetasessionPoolsSection() {
   }
 
   const bridge = desktopBridge();
+  const restart = async () => {
+    try {
+      if (await bridge?.relaunch() !== true) {
+        throw new Error('Restart was not confirmed');
+      }
+    } catch {
+      setError('Restart not confirmed. Wait for active work to finish, then try again.');
+    }
+  };
   const loading = config.loading && !config.data;
   const suggestablePurposes = KNOWN_PURPOSES.filter(
     (p) => !usedPurposes.has(p.purpose),
@@ -1091,6 +1114,16 @@ export function MetasessionPoolsSection() {
 
       {config.data && !savedWarmPool && (
         <EmptyState message="Warm pool configuration is unavailable." />
+      )}
+
+      {status.data?.processAdmission && (
+        <p className="metapool-pending" role="status">
+          Headless process budget: {status.data.processAdmission.processes}/{status.data.processAdmission.maxProcesses} processes,
+          {' '}{status.data.processAdmission.warmProcesses}/{status.data.processAdmission.maxWarmProcesses} warm;
+          {' '}queue {status.data.processAdmission.queued}/{status.data.processAdmission.maxQueued}.
+          {' '}Interactive terminals and child processes are not included.
+          {status.data.processAdmission.closed && ' Process admission is closed.'}
+        </p>
       )}
 
       {savedWarmPool && (
@@ -1245,7 +1278,7 @@ export function MetasessionPoolsSection() {
                     {bridge && (
                       <Button
                         variant="ghost"
-                        onClick={() => bridge.relaunch()}
+                        onClick={restart}
                       >
                         Restart now
                       </Button>

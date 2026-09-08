@@ -1,10 +1,9 @@
-import type {
-  MetaRequest,
-  MetaRunResult,
-  MetaRunner,
-} from './meta-runner.js';
+import { MetaAbortError, type MetaRequest, type MetaRunResult, type MetaRunner } from './meta-runner.js';
+import { AcpRequestError } from './acp/acp-client.js';
 import type { MetaSessionPoolStats } from './acp/acp-pool.js';
 import type { PoolDemand, PoolDemandPort } from './pool-demand.js';
+import type { MetaOperationPhysicalRegistration } from './meta-operation-contract.js';
+import { registerUnstartedMetaAttempt } from './meta-operation-physical-ownership.js';
 
 /**
  * One warm pool bound to a routing purpose. The pooled runner leases turns from
@@ -23,10 +22,13 @@ export interface PurposePool {
 }
 
 export interface PooledMetaRunnerDeps {
+  physicalOwnership?: MetaOperationPhysicalRegistration;
   /** The warm pools, one per purpose. Must include a `general` pool. */
   pools: readonly PurposePool[];
-  /** Cold runner used while pools warm up or when a warm turn fails. */
+  /** Cold runner used while pools warm up or when a warm turn fails pre-dispatch. */
   fallback: MetaRunner;
+  /** Default request timeout budget when the caller did not set one. */
+  defaultTimeoutMs: number;
   /** Logs a warm-turn failure before falling back (optional). */
   onFallback?: (purpose: string, error: unknown) => void;
   /**
@@ -36,6 +38,8 @@ export interface PooledMetaRunnerDeps {
    * needs a specific model must take the cold path where the model is applied.
    */
   bypass?: () => boolean;
+  /** True when the warm ACP path can honor this request's exact constraints. */
+  supportsWarm?: (request: MetaRequest) => boolean;
   /**
    * Optional demand telemetry. Every routed turn (warm or spilled to cold) is
    * counted per purpose so the Settings page can suggest a warm size from
@@ -55,11 +59,17 @@ export const GENERAL_PURPOSE = 'general';
  * Parallelism is bounded by each pool's size: a warm turn is only taken when the
  * pool reports a session ready to lease ({@link PurposePool.ready}), so at most
  * `size` turns run warm-concurrently per purpose. When a pool is still warming,
- * saturated (every warm session busy), or a warm turn throws, the request spills
- * to the cold runner instead of blocking on a queue — callers never fail or
- * stall just because the pool isn't ready; they only get faster when it is.
+ * saturated (every warm session busy), or a warm turn fails *before dispatch*,
+ * the request spills to the cold runner instead of blocking on a queue —
+ * callers never fail or stall just because the pool isn't ready. Once a warm
+ * turn was actually dispatched, however, its failure is surfaced rather than
+ * retried cold, preventing duplicate provider work.
  */
 export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
+  function canFallback(error: unknown): boolean {
+    return error instanceof AcpRequestError && error.allowFallbackToCold;
+  }
+
   // Resolve routing from the *current* pool set on every request so pools added
   // or removed live (without a restart) take effect immediately — main.ts holds
   // the same `deps.pools` array reference and mutates it as the user edits the
@@ -77,8 +87,21 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
   }
 
   async function runDetailed(request: MetaRequest): Promise<MetaRunResult> {
+    if (request.signal?.aborted) {
+      registerUnstartedMetaAttempt(deps.physicalOwnership, request.operationId);
+      throw new MetaAbortError({
+        kind: 'aborted',
+        termination: 'not-started',
+      });
+    }
+    const timeoutMs = request.timeoutMs ?? deps.defaultTimeoutMs;
+    const bounded: MetaRequest = {
+      ...request,
+      timeoutMs,
+      deadlineAt: request.deadlineAt ?? Date.now() + timeoutMs,
+    };
     if (deps.bypass?.()) {
-      return deps.fallback.runDetailed(request);
+      return deps.fallback.runDetailed(bounded);
     }
     const pool = select(request.purpose);
     const purpose = pool?.purpose ?? request.purpose ?? GENERAL_PURPOSE;
@@ -87,14 +110,17 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
       // `ready()` is idle>0 and is claimed synchronously by the warm turn before
       // any await, so a ready pool never queues: overflow past `size` concurrent
       // turns falls through to the cold path below.
-      if (pool && pool.ready()) {
+      if ((deps.supportsWarm?.(bounded) ?? true) && pool && pool.ready()) {
         try {
-          return await pool.runDetailed(request);
+          return await pool.runDetailed(bounded);
         } catch (error) {
+          if (!canFallback(error)) {
+            throw error;
+          }
           deps.onFallback?.(pool.purpose, error);
         }
       }
-      return await deps.fallback.runDetailed(request);
+      return await deps.fallback.runDetailed(bounded);
     } finally {
       deps.demand?.end(purpose);
     }
@@ -110,6 +136,16 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
 
 /** Aggregate warm-pool status for the settings surface. */
 export interface MetaPoolsStatus {
+  /** Shared native headless reservations; interactive PTYs and descendants are excluded. */
+  processAdmission?: {
+    processes: number;
+    warmProcesses: number;
+    queued: number;
+    closed: boolean;
+    maxProcesses: number;
+    maxWarmProcesses: number;
+    maxQueued: number;
+  };
   enabled: boolean;
   /**
    * Model powering warm sessions, when known. All warm sessions in every pool

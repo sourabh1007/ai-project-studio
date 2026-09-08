@@ -16,12 +16,17 @@ import express from 'express';
 
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
+import { createProcessAdmission } from './kernel/process-admission.js';
+import {
+  PROCESS_ADMISSION_NAMESPACE, processAdmissionConfigSchema, processAdmissionDefaults,
+  type ProcessAdmissionConfig,
+} from './kernel/process-admission-config.js';
 import { createLogger, type LogLevel } from './kernel/logger.js';
 import {
   LOGGING_NAMESPACE,
   loggingConfigSchema,
   loggingDefaults,
-  dailyLogFileName,
+  createDailyLogPathStrategy,
   type LoggingConfig,
 } from './logging/config.js';
 import {
@@ -145,6 +150,7 @@ import { isTransientProviderFailure } from './pr-review/transient-failure.js';
 
 import { createUsageRecorder } from './usage/usage-recorder.js';
 import { createCliUsageTailer } from './usage/cli-usage-tailer.js';
+import { createSessionModelResolver } from './usage/session-model-resolver.js';
 
 import { createBuiltinCreditStrategies } from './credit/credit-strategies.js';
 import { createCreditCalculator } from './credit/credit-calculator.js';
@@ -210,6 +216,7 @@ import {
 import { isRecoverableSessionError } from './self-recovery/recoverable-error.js';
 import { createSessionRepo } from './persistence/session-repo.js';
 import { createUsageRepo } from './persistence/usage-repo.js';
+import { createUsageCaptureRepo } from './persistence/usage-capture-repo.js';
 import { createTranscriptRepo } from './persistence/transcript-repo.js';
 import { createSummaryRepo } from './persistence/summary-repo.js';
 import { createSessionSummaryRepo } from './persistence/session-summary-repo.js';
@@ -250,7 +257,6 @@ import { overridesToConfig } from './config/config-override-store.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
 import {
   createCliUsageStore,
-  toUsageEvent,
 } from './provider/cli-store/cli-usage-store.js';
 import { createSessionImportService } from './session-import/session-import-service.js';
 import {
@@ -269,7 +275,23 @@ import {
   type SkillsConfig,
 } from './skills/config.js';
 import { createMetaRunner } from './meta/meta-runner.js';
+import { createRecordingMetaRunner } from './meta/recording-meta-runner.js';
+import { createOwnedMetaRunner } from './meta/owned-meta-runner.js';
 import { createMetaSettings } from './meta/meta-settings.js';
+import {
+  createConfiguredWarmRoutePolicy,
+  resolveWarmProviderIdentity,
+} from './meta/warm-route-policy.js';
+import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
+import { createMetaOperationRepo } from './persistence/meta-operation-repo.js';
+import { createMetaOperationOwnership } from './meta/meta-operation-ownership.js';
+import { createMetaOperationPhysicalOwnership } from './meta/meta-operation-physical-ownership.js';
+import { drainMetaPool } from './meta/pool-drain.js';
+import { createMetaOperationRecovery } from './meta/meta-operation-recovery.js';
+import {
+  META_OPERATIONS_NAMESPACE, metaOperationsConfigSchema, metaOperationsDefaults,
+  type MetaOperationsConfig,
+} from './meta/meta-operations-config.js';
 import { MetaSessionPool } from './meta/acp/acp-pool.js';
 import { PoolDemand, PoolDemandTracker } from './meta/pool-demand.js';
 import { AcpClient } from './meta/acp/acp-client.js';
@@ -310,6 +332,7 @@ import { createSubagentRepo } from './persistence/subagent-repo.js';
 import { createAutomationService } from './automation/automation-service.js';
 import type { AutomationEventMap } from './automation/automation-service.js';
 import { createSubagentService } from './automation/subagent-service.js';
+import { createSubagentReconciler } from './automation/subagent-reconciler.js';
 import type { SubagentEventMap } from './automation/subagent-service.js';
 import { createCheckRunner } from './automation/check-runner.js';
 import { createActionRunner } from './automation/action-runner.js';
@@ -317,7 +340,19 @@ import { createAutomationScheduler } from './automation/automation-scheduler.js'
 import { createShellExecutor } from './automation/shell-executor-adapter.js';
 import { createHttpProbe } from './automation/http-probe-adapter.js';
 import { createCiPipelineProbe } from './automation/ci-pipeline-probe-adapter.js';
-import type { AiInvoker } from './automation/automation-ports.js';
+import { createAutomationAiInvoker } from './automation/meta-ai-invoker.js';
+import { createShutdownCoordinator } from './lifecycle/shutdown-coordinator.js';
+import { acknowledgeDesktopShutdown, isDesktopShutdownRequest } from './lifecycle/shutdown-acknowledgement.js';
+import { requireQuiescence } from './lifecycle/quiescence.js';
+import { createMetaOperationShutdown } from './lifecycle/meta-operation-shutdown.js';
+import { createApplicationWork } from './lifecycle/application-work.js';
+import {
+  LIFECYCLE_NAMESPACE,
+  lifecycleConfigSchema,
+  lifecycleDefaults,
+  type LifecycleConfig,
+} from './lifecycle/config.js';
+import { createStoppedCaptureRecovery } from './lifecycle/stopped-capture-recovery.js';
 import {
   FEATURE_TASKS_NAMESPACE,
   featureTasksConfigSchema,
@@ -337,6 +372,7 @@ import { createPlanUsageService } from './plan-usage/plan-usage-service.js';
 import { createPtyPlanUsageProbe } from './plan-usage/pty-plan-usage-probe.js';
 import { createModelCatalogService } from './meta/model-catalog/model-catalog-service.js';
 import { createAcpModelCatalogProbe } from './meta/model-catalog/acp-model-catalog-probe.js';
+import { createAbortTracker } from './kernel/abort-tracker.js';
 import { createIdeUsageRepo } from './persistence/ide-usage-repo.js';
 import {
   IDE_USAGE_NAMESPACE,
@@ -406,8 +442,11 @@ import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
 import { createPrReviewRepo } from './persistence/pr-review-repo.js';
 
 import { createApiRoutes } from './api/routes.js';
+import { ownApplicationRoutes } from './api/route-ownership.js';
 import { mountRoutes } from './api/express-adapter.js';
 import { subscribeStream, type StreamEventMap } from './api/usage-stream.js';
+import { createBoundedSse } from './api/bounded-sse.js';
+import { SSE_NAMESPACE, sseConfigSchema, sseDefaults, type SseConfig } from './api/sse-config.js';
 import type { ConfigObject } from './config/config-contract.js';
 import type { Session } from './session/session-contract.js';
 import type { IAIProvider } from './provider/provider-contract.js';
@@ -430,6 +469,12 @@ function main(): void {
   registry.register({ namespace: LOGGING_NAMESPACE, schema: loggingConfigSchema, defaults: loggingDefaults });
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
+  registry.register({ namespace: SSE_NAMESPACE, schema: sseConfigSchema, defaults: sseDefaults });
+  registry.register({
+    namespace: PROCESS_ADMISSION_NAMESPACE,
+    schema: processAdmissionConfigSchema,
+    defaults: processAdmissionDefaults,
+  });
   registry.register({ namespace: TERMINAL_NAMESPACE, schema: terminalConfigSchema, defaults: terminalDefaults });
   registry.register({ namespace: COPILOT_HISTORY_NAMESPACE, schema: copilotHistoryConfigSchema, defaults: copilotHistoryDefaults });
   registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
@@ -476,11 +521,21 @@ function main(): void {
     schema: selfRecoveryConfigSchema,
     defaults: selfRecoveryDefaults,
   });
+  registry.register({
+    namespace: LIFECYCLE_NAMESPACE,
+    schema: lifecycleConfigSchema,
+    defaults: lifecycleDefaults,
+  });
+  registry.register({
+    namespace: META_OPERATIONS_NAMESPACE,
+    schema: metaOperationsConfigSchema,
+    defaults: metaOperationsDefaults,
+  });
 
   // Phase 1 (bootstrap): resolve just enough config from defaults + environment
-  // to locate on-disk storage and configure logging. Persisted overrides live
+  // to locate on-disk storage and configure console logging. Persisted overrides live
   // inside the workspace database, which we cannot open until we know its path,
-  // so persistence and logging are intentionally env/default-only here.
+  // so file logging waits until the effective retention policy is available.
   const bootConfig: ConfigObject = buildConfig({
     registry,
     sources: [envSource(process.env, ENV_PREFIX)],
@@ -491,10 +546,6 @@ function main(): void {
 
   const logLevel =
     (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? loggingConfig.level;
-  const logFilePath = pathJoin(
-    loggingConfig.directory,
-    dailyLogFileName(loggingConfig.filePrefix, new Date()),
-  );
   const consoleSink = (record: {
     level: Exclude<LogLevel, 'none'>;
     message: string;
@@ -506,12 +557,7 @@ function main(): void {
       record.data ?? '',
     );
   };
-  const logger = createLogger(
-    logLevel,
-    loggingConfig.toFile
-      ? combineSinks(consoleSink, createFileLogSink({ filePath: logFilePath }))
-      : consoleSink,
-  );
+  let logger = createLogger(logLevel, consoleSink);
   const clock = createClock();
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
@@ -571,6 +617,23 @@ function main(): void {
     sources: [overridesSource, envSource(process.env, ENV_PREFIX)],
     secretLookup: (name) => process.env[name],
   });
+  const effectiveLogging = config[LOGGING_NAMESPACE] as LoggingConfig;
+  const logPaths = createDailyLogPathStrategy(
+    effectiveLogging.directory,
+    effectiveLogging.filePrefix,
+  );
+  logger = createLogger(
+    (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? effectiveLogging.level,
+    effectiveLogging.toFile
+      ? combineSinks(consoleSink, createFileLogSink({
+        filePath: logPaths.resolve(new Date(), 0),
+        pathStrategy: logPaths,
+        maxFileBytes: effectiveLogging.maxFileBytes,
+        retainedFileCount: effectiveLogging.retainedFileCount,
+        maxRecordBytes: effectiveLogging.maxRecordBytes,
+      }))
+      : consoleSink,
+  );
   const configOverrideService = createConfigOverrideService({
     store: configOverrideRepo,
     registry,
@@ -598,6 +661,8 @@ function main(): void {
   const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
   const contextConfig = config[CONTEXT_NAMESPACE] as ContextConfig;
   const apiConfig = config[API_NAMESPACE] as ApiConfig;
+  const processAdmission = createProcessAdmission(config[PROCESS_ADMISSION_NAMESPACE] as ProcessAdmissionConfig);
+  const sse = createBoundedSse({ config: config[SSE_NAMESPACE] as SseConfig, logger });
   const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
   const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
   const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
@@ -618,6 +683,9 @@ function main(): void {
   const selfRecoveryConfig = config[
     SELF_RECOVERY_NAMESPACE
   ] as SelfRecoveryConfig;
+  const lifecycleConfig = config[LIFECYCLE_NAMESPACE] as LifecycleConfig;
+  const metaOperationsConfig = config[META_OPERATIONS_NAMESPACE] as MetaOperationsConfig;
+  const applicationWork = createApplicationWork();
 
   const featureRepo = createFeatureRepo(db);
   const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
@@ -633,6 +701,17 @@ function main(): void {
     });
   }
   const usageRepo = createUsageRepo(db);
+  const usageCaptureRepo = createUsageCaptureRepo(db);
+  const metaUsageRepo = createMetaUsageRepo(db);
+  const metaOperationRepo = createMetaOperationRepo(db);
+  const metaPhysicalOwnership = createMetaOperationPhysicalOwnership({ newOwnerId: () => ids.next() });
+  const metaOperationOwnership = createMetaOperationOwnership({ physical: metaPhysicalOwnership });
+  const metaOperationRecovery = createMetaOperationRecovery({ operations: metaOperationRepo, clock });
+  let recoveryCursor: string | null = null;
+  do {
+    const page = metaOperationRecovery.recoverPage(recoveryCursor, metaOperationsConfig.recoveryPageSize);
+    recoveryCursor = page.nextCursor;
+  } while (recoveryCursor !== null);
   const transcriptRepo = createTranscriptRepo(db);
   const summaryRepo = createSummaryRepo(db);
   const sessionSummaryRepo = createSessionSummaryRepo(db);
@@ -1318,6 +1397,8 @@ function main(): void {
   ensureDir(`${sessionConfig.usageDir}/.keep`);
   const factory = createSessionFactory({ ids, clock, config: sessionConfig });
   const launcher = createSessionLauncher({
+    physicalOwnership: metaPhysicalOwnership,
+    processAdmission,
     resolver,
     factory,
     transcriptStore: transcriptRepo,
@@ -1336,14 +1417,11 @@ function main(): void {
   // one (from a usage row or a CLI model-change announcement), persisting and
   // broadcasting only on a real change so the UI's per-session model label
   // stays in lockstep with the CLI.
-  const resolveSessionModel = (sessionId: string, resolvedModel: string) => {
-    const stored = sessionRepo.get(sessionId);
-    if (stored && stored.resolvedModel !== resolvedModel) {
-      const updated = { ...stored, resolvedModel };
-      sessionRepo.save(updated);
-      bus.emit('session.updated', updated);
-    }
-  };
+  const sessionModelResolver = createSessionModelResolver({
+    sessions: sessionRepo,
+    usage: usageRepo,
+    publish: (updated) => bus.emit('session.updated', updated),
+  });
 
   let terminalManager: ReturnType<typeof createTerminalManager> | null = null;
   // Self-recovery metasession analyzer, assigned once the meta runner is built
@@ -1356,6 +1434,7 @@ function main(): void {
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
   // reusing the same usage-capture pipeline via session.started/ended events.
   terminalManager = createTerminalManager({
+    logger,
     spawner: createNodePtySpawner(),
     providers,
     bus: bus as unknown as Parameters<typeof createTerminalManager>[0]['bus'],
@@ -1374,7 +1453,8 @@ function main(): void {
     // Mirror mid-session model switches the CLI prints (e.g. "Model changed …
     // to <model>") onto the session's resolved model, so the UI updates as soon
     // as the user changes model in the CLI, not just on the next usage row.
-    onModelResolved: resolveSessionModel,
+    onModelResolved: (sessionId, resolvedModel) =>
+      sessionModelResolver.observeAuthoritative(sessionId, resolvedModel),
     home: homedir(),
     // Auto-heal interactive sessions. With self-recovery on, a broadened
     // classifier also treats corrupted-conversation errors (e.g. a 400 the CLI
@@ -1383,9 +1463,10 @@ function main(): void {
     isTransientFailure: selfRecoveryConfig.enabled
       ? isRecoverableSessionError
       : isTransientProviderFailure,
-    // Escalation ladder once the non-destructive re-submits are spent: analyze
-    // via a metasession, then restart the CLI in a fresh conversation replaying
-    // the prompt, then report to the status bar if even that could not recover.
+    // Escalation ladder once a confirmed replay-safe request has spent its
+    // non-destructive re-submits: analyze via a metasession, then restart the
+    // CLI in a fresh conversation replaying that same request, then report to
+    // the status bar if even that could not recover it.
     selfRecovery: {
       enabled: selfRecoveryConfig.enabled,
       useMetaAnalysis: selfRecoveryConfig.useMetaAnalysis,
@@ -1407,19 +1488,40 @@ function main(): void {
   const makeUsageTailer = (session: Session) =>
     createCliUsageTailer({
       intervalMs: usageConfig.livePollIntervalMs,
-      read: () =>
-        cliUsageStore.listBySession(session.id).map((row) =>
-          toUsageEvent(row, {
+      sessionId: session.id,
+      sourceId: cliUsageStore.sourceId,
+      read: (cursor, limit) =>
+        cliUsageStore.readUsagePage(
+          session.id,
+          {
             featureId: session.featureId,
             provider: session.provider,
             requestedModel: session.requestedModel,
-          }),
+          },
+          cursor,
+          limit,
         ),
-      onUsage: (event) => {
-        resolveSessionModel(event.sessionId, event.resolvedModel);
-        usageRecorder.record(event, session.kind);
+      recorder: {
+        reconcile: (event, kind) => {
+          const stored = usageRecorder.reconcile(event, kind);
+          sessionModelResolver.observeUsage(stored ?? event);
+          return stored;
+        },
       },
+      captures: usageCaptureRepo,
+      kind: session.kind,
+      pageSize: usageConfig.capturePageSize,
+      finalDrainPages: usageConfig.finalDrainPages,
     });
+  const stoppedCaptureRecovery = createStoppedCaptureRecovery({
+    captures: usageCaptureRepo,
+    sessions: sessionRepo,
+    makeTailer: makeUsageTailer,
+    hasLiveTailer: (sessionId) => tailers.has(sessionId),
+    pageSize: lifecycleConfig.stoppedCaptureRecoveryPageSize,
+    intervalMs: lifecycleConfig.stoppedCaptureRecoveryIntervalMs,
+    logger,
+  });
   bus.on('session.started', (session: Session) => {
     sessionRepo.save(session);
     const tailer = makeUsageTailer(session);
@@ -1431,18 +1533,24 @@ function main(): void {
     }
   });
   bus.on('session.ended', (session: Session) => {
+    if (!sessionRepo.get(session.id)) {
+      logger.warn('Ignoring completion for a removed session', { sessionId: session.id });
+      releaseTailer(session.id);
+      return;
+    }
     sessionRepo.save(session);
     const tailer = tailers.get(session.id);
     if (!tailer) {
+      stoppedCaptureRecovery.finalize();
       return;
     }
-    tailers.delete(session.id);
     try {
-      tailer.drain();
+      tailer.finalize();
     } catch (error) {
       logger.error('Final usage flush failed', error);
     } finally {
-      tailer.stop();
+      releaseTailer(session.id);
+      stoppedCaptureRecovery.finalize();
     }
   });
   bus.on('session.discarded', (sessionId: string) => {
@@ -1460,6 +1568,8 @@ function main(): void {
     tailers.delete(sessionId);
     tailer.stop();
   }
+
+  stoppedCaptureRecovery.start();
 
   // Feature + summarizer.
   const featureService = createFeatureService({
@@ -1504,7 +1614,11 @@ function main(): void {
     logger,
   });
   bus.on('session.ended', (session: Session) => {
-    contextMergeAuto.onSessionEnded(session);
+    const scope = { featureId: session.featureId, sessionId: session.id };
+    if (applicationWork.accepts(scope) && sessionRepo.get(session.id)) {
+      void applicationWork.own((signal) => contextMergeAuto.onSessionEnded(session, signal), scope)
+        .catch((error) => logger.error('Auto context merge admission failed', error));
+    }
   });
   // Per-turn usage drill-down: exposes every credit/token event at the
   // session, feature, and repository scopes for the UI breakdown modal.
@@ -1561,7 +1675,11 @@ function main(): void {
     logger,
   });
   bus.on('session.ended', (session: Session) => {
-    sessionSummaryAuto.onSessionEnded(session);
+    const scope = { featureId: session.featureId, sessionId: session.id };
+    if (applicationWork.accepts(scope) && sessionRepo.get(session.id)) {
+      void applicationWork.own((signal) => sessionSummaryAuto.onSessionEnded(session, signal), scope)
+        .catch((error) => logger.error('Auto session summary admission failed', error));
+    }
   });
 
   const sessionImportService = createSessionImportService({
@@ -1592,9 +1710,11 @@ function main(): void {
     providerId: metaConfig.providerId,
     model: metaConfig.model,
   });
+  const shutdownOwner = createAbortTracker();
   // Shared headless-AI primitive reused by every AI feature (summaries,
   // task plans, …) so they drive the CLI the same config-driven way.
-  const metaRunner = createMetaRunner({
+  const coldMetaRunner = createMetaRunner({
+    physicalOwnership: metaPhysicalOwnership,
     launcher,
     transcripts: transcriptRepo,
     config: metaConfig,
@@ -1605,12 +1725,18 @@ function main(): void {
   // meta AI turn (summaries, repo context, PR review, review board, monitors, …)
   // leases a warm session instead of cold-spawning a CLI (MCP proxies + auth)
   // per request. The cold `metaRunner` stays the automatic fallback while a pool
-  // is warming or if a warm turn fails, so enabling the pools only adds speed.
+  // is warming or before a warm prompt is actually dispatched, so enabling the
+  // pools only adds speed without duplicating uncertain in-flight work.
   const warmPoolCfg = metaConfig.warmPool;
   const warmExecutable =
     warmPoolCfg.executable === 'copilot'
       ? copilotConfig.executable
       : warmPoolCfg.executable;
+  const warmProviderIdentity = resolveWarmProviderIdentity({
+    warmExecutable,
+    copilotExecutable: copilotConfig.executable,
+    agencyExecutable: agencyConfig.executable,
+  });
   // Selectable AI model catalog (ids, names + the CLI's own pricing hints)
   // offered for metasessions. The only surface advertising the full model list
   // with pricing is the CLI itself: a throwaway `copilot --acp` session returns
@@ -1648,6 +1774,7 @@ function main(): void {
   // Live pools by purpose, so the Settings page can resize one without a
   // restart. Empty until warm pools are enabled/built below.
   const warmPoolsByPurpose = new Map<string, MetaSessionPool>();
+  const allWarmPools = new Set<MetaSessionPool>();
   let resizeMetaPoolFn: (purpose: string, size: number) => ReturnType<
     typeof metaPoolsStatus
   > = () => {
@@ -1663,13 +1790,21 @@ function main(): void {
   > = () => {
     throw new NotFoundError('Warm metasession pools are disabled');
   };
-  let metaAi: typeof metaRunner = metaRunner;
+  let rawMetaAi: typeof coldMetaRunner = coldMetaRunner;
   let warmInlinePrompts = false;
   if (warmPoolCfg.enabled) {
+    const supportsWarm = createConfiguredWarmRoutePolicy({
+      settings: metaSettings,
+      metaConfig,
+      copilotConfig,
+      agencyConfig,
+    });
     // Builds, registers and starts a warm pool for one purpose. Shared by the
     // startup loop and live pool creation so both spawn sessions identically.
     const buildWarmPool = (purpose: string, size: number): void => {
       const pool = new MetaSessionPool({
+        physicalOwnership: metaPhysicalOwnership,
+        processAdmission,
         size,
         createClient: () =>
           new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
@@ -1677,6 +1812,7 @@ function main(): void {
             turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
           }),
       });
+      allWarmPools.add(pool);
       warmPoolsByPurpose.set(purpose, pool);
       pool.start().catch((error: unknown) => {
         logger.error(
@@ -1688,6 +1824,8 @@ function main(): void {
         pool,
         newSessionId: () => `acp-${randomUUID()}`,
         purpose,
+        providerId: warmProviderIdentity ?? COPILOT_NAMESPACE,
+        defaultModel: () => metaSettings.get().model,
       });
       warmPurposePools.push({
         purpose,
@@ -1699,20 +1837,13 @@ function main(): void {
     for (const poolCfg of warmPoolCfg.pools) {
       buildWarmPool(poolCfg.purpose, poolCfg.size);
     }
-    metaAi = createPooledMetaRunner({
+    rawMetaAi = createPooledMetaRunner({
+      physicalOwnership: metaPhysicalOwnership,
       pools: warmPurposePools,
-      fallback: metaRunner,
+      fallback: coldMetaRunner,
+      defaultTimeoutMs: metaConfig.timeoutMs,
       demand: warmDemand,
-      // Warm ACP sessions are pinned to the CLI's default model, so once the
-      // user picks a provider/model different from the originally-configured
-      // one, route new turns to the cold path where that choice is honored.
-      bypass: () => {
-        const live = metaSettings.get();
-        return (
-          live.providerId !== metaConfig.providerId ||
-          live.model !== metaConfig.model
-        );
-      },
+      supportsWarm,
       onFallback: (purpose, error) =>
         logger.warn(`Warm turn on pool '${purpose}' failed; using cold path`, {
           error: error instanceof Error ? error.message : String(error),
@@ -1758,10 +1889,8 @@ function main(): void {
       if (index !== -1) {
         warmPurposePools.splice(index, 1);
       }
-      // Drain gracefully instead of killing everything outright: retire one
-      // session at a time (busy ones finish their turn first) so the Settings
-      // page can animate each metasession shutting down. Keep reporting the
-      // pool (flagged draining) until it is empty, then close and drop it.
+      // Stop prefill immediately; busy turns finish naturally. Keep the pool
+      // visible and retry failed retirements until native exit is confirmed.
       const draining = { purpose, stats: () => pool.stats() };
       drainingPurposePools.push(draining);
       const dropDraining = (): void => {
@@ -1770,21 +1899,32 @@ function main(): void {
           drainingPurposePools.splice(di, 1);
         }
       };
-      pool.resize(Math.max(0, pool.stats().live - 1));
-      const timer = setInterval(() => {
-        const live = pool.stats().live;
-        if (live <= 0) {
-          clearInterval(timer);
-          pool.close();
-          dropDraining();
-          return;
-        }
-        pool.resize(live - 1);
-      }, 700);
-      timer.unref?.();
+      drainMetaPool({
+        pool, onDrained: dropDraining,
+        onError: (error) => logger.warn('Warm metasession pool is still draining', {
+          purpose, error: error instanceof Error ? error.message : String(error),
+        }),
+      });
       return metaPoolsStatusFn();
     };
   }
+  const metaAi = createOwnedMetaRunner(
+    createRecordingMetaRunner({
+      base: rawMetaAi,
+      operations: metaOperationRepo,
+      ownership: metaOperationOwnership,
+      newOperationId: () => ids.next(),
+      resolveIdentity: (request) => {
+        const defaults = metaSettings.get();
+        return {
+          providerId: request.providerId ?? defaults.providerId,
+          requestedModel: request.model ?? defaults.model,
+        };
+      },
+      clock,
+    }),
+    shutdownOwner,
+  );
   // Wire the self-recovery analyzer now that the meta runner is final. Runs a
   // read-only diagnosis turn; a thrown error (meta cannot spin up) propagates to
   // the coordinator, which then reports that automatic analysis was unavailable.
@@ -1944,7 +2084,10 @@ function main(): void {
     changeGraphFs: nodeChangeGraphFs,
     ai: metaAi,
     inlinePrompts: warmInlinePrompts,
-    metaUsage: createMetaUsageReader({ usage: usageRepo }),
+    metaUsage: createMetaUsageReader({
+      usage: usageRepo,
+      warmUsage: metaUsageRepo,
+    }),
     temporaryPrompts: createTemporaryPromptFileFactory(),
     clock,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -2088,14 +2231,52 @@ function main(): void {
     features: featureService,
     sessions: sessionRepo,
     usage: usageRepo,
+    usageCaptures: usageCaptureRepo,
+    metaUsage: metaUsageRepo,
+    metaOperations: metaOperationRepo,
+    quiescence: {
+      feature: (id) => requireQuiescence([
+        () => applicationWork.quiesceFeature(id, 5_000),
+        () => launcher.quiesceFeature(id, 5_000),
+        () => terminalManager!.quiesceFeature(id, 5_000),
+        () => metaOperationOwnership.quiesceFeature(id, 5_000),
+      ]),
+      session: (id) => requireQuiescence([
+        () => applicationWork.quiesceSession(id, 5_000),
+        () => launcher.quiesceSession(id, 5_000),
+        () => terminalManager!.quiesceSession(id, 5_000),
+        () => metaOperationOwnership.quiesceSession(id, 5_000),
+      ]),
+    },
     transcripts: transcriptRepo,
     summaries: summaryRepo,
+    sessionSummaries: sessionSummaryRepo,
     sessionFiles: sessionFilesRepo,
     terminals: terminalManager!,
     liveUsage: { release: releaseTailer },
     prReviews: prReviewService,
     worktrees: worktreeService,
     sharedContext: contextService,
+    ownedAutomations: {
+      deleteByFeature: async (featureId) => {
+        await Promise.all(automationService.list()
+          .filter((automation) => automation.origin.featureId === featureId)
+          .map((automation) => automationService.remove(automation.id)));
+      },
+      deleteBySession: async (sessionId) => {
+        await Promise.all(automationService.list()
+          .filter((automation) => automation.origin.sessionId === sessionId)
+          .map((automation) => automationService.remove(automation.id)));
+      },
+    },
+    ownedSubagents: {
+      deleteByFeature: (featureId) => {
+        subagentRepo.deleteByOriginFeature(featureId);
+      },
+      deleteBySession: (sessionId) => {
+        subagentRepo.deleteByOriginSession(sessionId);
+      },
+    },
   });
   const sessionBootstrap = createSessionBootstrap({
     features: featureService,
@@ -2106,7 +2287,7 @@ function main(): void {
     sharedContext: contextService,
     config: repositoryContextConfig,
   });
-  void repositoryContextCoordinator.synchronizeSaved().catch((error) => {
+  void applicationWork.own(() => repositoryContextCoordinator.synchronizeSaved()).catch((error) => {
     logger.error('Repository context startup check failed', error);
   });
   const featureTasksRepo = createFeatureTasksRepo(db);
@@ -2125,8 +2306,9 @@ function main(): void {
     clock,
     config: featureTasksConfig,
   });
+  const featureGroupsRepo = createFeatureGroupsRepo(db);
   const featureTreeService = createFeatureTreeService({
-    groups: createFeatureGroupsRepo(db),
+    groups: featureGroupsRepo,
     sessions: sessionRepo,
     features: featureService,
     ids,
@@ -2138,47 +2320,138 @@ function main(): void {
   // interval and fires an action (metasession/subagent/report/command) when a
   // condition matches. Checks/actions run through the shared meta-runner so
   // their AI usage folds into the existing cost accounting.
-  const automationAi: AiInvoker = {
-    run: (input) =>
-      metaAi.runDetailed({
-        featureId: input.featureId,
-        prompt: input.prompt,
-        cwd: input.cwd,
-        scope: 'internal',
-        label: input.label,
-      }),
+  const automationSessionIds = new Map<string, Set<string>>();
+  const recordAutomationSession = (automationId: string, sessionId: string): void => {
+    const known = automationSessionIds.get(automationId) ?? new Set<string>();
+    known.add(sessionId);
+    automationSessionIds.set(automationId, known);
+  };
+  const listAutomationSessions = (automationId: string): string[] => {
+    const known = automationSessionIds.get(automationId);
+    if (!known) {
+      return [];
+    }
+    return [...known];
+  };
+  const rawAutomationAi = createAutomationAiInvoker(metaAi);
+  const automationAi = {
+    run(input: Parameters<typeof rawAutomationAi.run>[0]) {
+      if (!input.automationId) {
+        return rawAutomationAi.run(input);
+      }
+      return rawAutomationAi.run({
+        ...input,
+        onStart: (sessionId) => {
+          recordAutomationSession(input.automationId!, sessionId);
+          input.onStart?.(sessionId);
+        },
+      });
+    },
+  };
+  const automationRepo = createAutomationRepo(db);
+  const subagentRepo = createSubagentRepo(db);
+  const purgeOwnedAutomationSession = async (sessionId: string): Promise<void> => {
+    await requireQuiescence([
+      () => launcher.quiesceSession(sessionId, 5_000),
+      () => terminalManager!.quiesceSession(sessionId, 5_000),
+      () => metaOperationOwnership.quiesceSession(sessionId, 5_000),
+    ]);
+    releaseTailer(sessionId);
+    usageCaptureRepo.deleteBySession(sessionId);
+    metaUsageRepo.deleteBySession(sessionId);
+    metaOperationRepo.deleteBySession(sessionId);
+    usageRepo.deleteBySession(sessionId);
+    sessionFilesRepo.deleteBySession(sessionId);
+    sessionSummaryRepo.delete(sessionId);
+    await transcriptRepo.delete(sessionId);
+    sessionRepo.delete(sessionId);
+  };
+  const purgeOwnedAutomationArtifacts = async (automationId: string): Promise<void> => {
+    const ownedSessionIds = new Set<string>();
+    for (const sessionId of listAutomationSessions(automationId)) {
+      ownedSessionIds.add(sessionId);
+    }
+    for (const run of automationRepo.listRuns(automationId)) {
+      if (run.sessionId) {
+        ownedSessionIds.add(run.sessionId);
+      }
+    }
+    for (const subagent of subagentRepo.listByAutomation(automationId)) {
+      if (subagent.sessionId) {
+        ownedSessionIds.add(subagent.sessionId);
+      }
+    }
+    for (const session of sessionRepo.listByFeatureAll(`automation:${automationId}`)) {
+      ownedSessionIds.add(session.id);
+    }
+    let cursor: string | null = null;
+    do {
+      const page = metaOperationRepo.listPage(
+        { automationId }, cursor, metaOperationsConfig.maxPageSize,
+      );
+      for (const operation of page.items) {
+        if (operation.sessionId) ownedSessionIds.add(operation.sessionId);
+        for (const sessionId of operation.sessionIds) ownedSessionIds.add(sessionId);
+      }
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    for (const sessionId of ownedSessionIds) {
+      await purgeOwnedAutomationSession(sessionId);
+    }
+    metaOperationRepo.deleteByAutomation(automationId);
+    automationSessionIds.delete(automationId);
   };
   const automationService = createAutomationService({
-    repo: createAutomationRepo(db),
+    repo: automationRepo,
+    subagents: subagentRepo,
+    ownedArtifacts: { deleteByAutomation: purgeOwnedAutomationArtifacts },
+    quiesce: (id) => requireQuiescence([
+      () => automationScheduler.quiesce(id, 5_000),
+      () => metaOperationOwnership.quiesceAutomation(id, 5_000),
+    ]),
     clock,
     ids,
     bus: bus as unknown as EventBus<AutomationEventMap>,
     config: automationConfig,
   });
+  const reconciledSubagents = createSubagentReconciler({
+    repo: subagentRepo,
+    clock,
+    bus: bus as unknown as EventBus<SubagentEventMap>,
+  }).reconcileOrphans();
+  if (reconciledSubagents > 0) {
+    logger.info('Reconciled orphaned subagents from previous run', {
+      count: reconciledSubagents,
+    });
+  }
   const subagentService = createSubagentService({
-    repo: createSubagentRepo(db),
+    repo: subagentRepo,
     clock,
     ids,
     bus: bus as unknown as EventBus<SubagentEventMap>,
     ai: automationAi,
+    timeoutMs: automationConfig.runTimeoutMs,
   });
   const automationScheduler = createAutomationScheduler({
-    service: automationService,
-    repo: createAutomationRepo(db),
+    repo: automationRepo,
     checks: createCheckRunner({
       shell: createShellExecutor(automationConfig.runTimeoutMs),
       http: createHttpProbe(automationConfig.runTimeoutMs),
       ai: automationAi,
       ci: createCiPipelineProbe(ghRun),
+      timeoutMs: automationConfig.runTimeoutMs,
     }),
     actions: createActionRunner({
       ai: automationAi,
       shell: createShellExecutor(automationConfig.runTimeoutMs),
       subagents: subagentService,
+      timeoutMs: automationConfig.runTimeoutMs,
     }),
     clock,
     ids,
+    bus: bus as unknown as EventBus<AutomationEventMap>,
     config: automationConfig,
+    onError: (error) => logger.error('Automation scheduler run failed', error),
   });
   automationScheduler.resume();
   automationScheduler.start();
@@ -2310,7 +2583,7 @@ function main(): void {
 
   mountRoutes(
     router,
-    createApiRoutes({
+    ownApplicationRoutes(createApiRoutes({
       features: featureService,
       admin: workspaceAdmin,
       launcher,
@@ -2348,7 +2621,9 @@ function main(): void {
         }
       },
       tasks: featureTasksService,
+      taskLookup: featureTasksRepo,
       tree: featureTreeService,
+      groupLookup: featureGroupsRepo,
       ideUsage: ideUsageService,
       planUsage: planUsageService,
       metaModels: modelCatalogService,
@@ -2361,7 +2636,11 @@ function main(): void {
       settingsAssistant,
       selfHeal: selfHealService,
       configSchema: () => describeNamespaces(registry),
-      metaPools: metaPoolsStatusFn,
+      metaPools: () => ({
+        ...metaPoolsStatusFn(),
+        processAdmission: { ...processAdmission.stats(), ...processAdmission.limits() },
+      }),
+      metaOperations: { operations: metaOperationRepo, config: metaOperationsConfig },
       resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
       createMetaPool: (purpose, size) => createMetaPoolFn(purpose, size),
       removeMetaPool: (purpose) => removeMetaPoolFn(purpose),
@@ -2420,108 +2699,104 @@ function main(): void {
       subagents: subagentService,
       controlToken: studioControlToken,
       logger,
-    }),
+    }), applicationWork),
   );
   app.use(apiConfig.basePath, router);
 
-  app.get(`${apiConfig.basePath}/stream`, (req, res) => {
+  const openSse = (res: express.Response, onClose: () => void) => {
+    const stream = sse.open(res, onClose);
+    if (!stream) {
+      res.setHeader('Retry-After', '5');
+      res.status(503).json({ error: { kind: 'unavailable', message: 'Live stream connection limit reached' } });
+      return null;
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    res.write(': connected\n\n');
-    const off = subscribeStream(bus, {
-      send: (event, data) => {
-        res.write(`event: ${event}\n`);
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      },
-    });
-    const heartbeat = setInterval(() => {
-      res.write(': ping\n\n');
-    }, apiConfig.sseHeartbeatMs);
-    req.on('close', () => {
+    res.flushHeaders();
+    return stream;
+  };
+
+  app.get(`${apiConfig.basePath}/stream`, (req, res) => {
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let off: (() => void) | undefined;
+    const stream = openSse(res, () => {
       clearInterval(heartbeat);
-      off();
-      res.end();
+      off?.();
     });
+    if (!stream) return;
+    off = subscribeStream(bus, stream, { includeSessionOutput: req.query.output !== '0' });
+    heartbeat = setInterval(() => stream.comment('ping'), apiConfig.sseHeartbeatMs);
+    stream.comment('connected');
   });
 
   // First-run agency install, streamed as SSE so the UI can show live progress.
   // A shared in-flight promise dedupes concurrent connections (e.g. UI reconnect)
   // onto a single install run.
   let agencyInstall: Promise<void> | null = null;
-  app.get(`${apiConfig.basePath}/agency/install`, (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    res.write(': connected\n\n');
+  const installSubscribers = new Map<express.Response, NonNullable<ReturnType<typeof openSse>>>();
+  app.get(`${apiConfig.basePath}/agency/install`, (_req, res) => {
+    if (!applicationWork.accepting) {
+      res.status(409).json({ error: { kind: 'conflict', message: 'Application shutdown is in progress' } });
+      return;
+    }
+    const stream = openSse(res, () => { installSubscribers.delete(res); });
+    if (!stream) return;
+    installSubscribers.set(res, stream);
+    stream.comment('connected');
     const send = (data: unknown): void => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      for (const subscriber of installSubscribers.values()) subscriber.send(null, data);
     };
     if (!agencyInstall) {
-      agencyInstall = agencyBootstrapper
+      agencyInstall = applicationWork.own(() => agencyBootstrapper
         .install((event) => send(event))
         .then((status) => {
           if (status.installed) {
             refreshAgencyPath();
           }
-        })
+        }))
         .catch((error) => {
           // Surface the failure to the subscriber and log it, instead of
           // leaving an unhandled rejection.
           logger.error('Agency install failed', error);
-          try {
-            send({ kind: 'error', line: 'Installation failed. Please retry.' });
-          } catch {
-            /* subscriber already disconnected — nothing to notify */
-          }
+          send({ kind: 'error', line: 'Installation failed. Please retry.' });
         })
         .finally(() => {
           // Always clear the in-flight marker so a failed install can be
           // retried; otherwise every later connection would wedge forever on
           // the "already in progress" branch.
           agencyInstall = null;
+          for (const subscriber of installSubscribers.values()) subscriber.end();
         });
     } else {
       // Already installing from another connection; report current status so a
       // late subscriber is not left hanging on a stream with no terminal event.
-      send(
+      stream.send(null,
         agencyBootstrapper.status().installed
           ? { kind: 'done' }
           : { kind: 'line', line: 'Installation already in progress…' },
       );
     }
-    req.on('close', () => {
-      res.end();
-    });
   });
 
   // Self-heal SSE: verify → fix → re-verify a target, streaming phase/log/done
   // events so the UI shows a live status instead of a dead-end error. Mirrors
   // the `/agency/install` stream shape.
   app.get(`${apiConfig.basePath}/self-heal/:target/run`, (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    res.write(': connected\n\n');
-    let open = true;
+    if (!applicationWork.accepting) {
+      res.status(409).json({ error: { kind: 'conflict', message: 'Application shutdown is in progress' } });
+      return;
+    }
+    const stream = openSse(res, () => {});
+    if (!stream) return;
+    stream.comment('connected');
     const send = (data: unknown): void => {
-      if (!open) {
-        return;
-      }
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      stream.send(null, data);
     };
-    req.on('close', () => {
-      open = false;
-      res.end();
-    });
-    selfHealService
-      .heal(String(req.params.target), (event) => send(event))
+    applicationWork.own(() => selfHealService
+      .heal(String(req.params.target), (event) => send(event)))
       .catch((error) => {
         logger.error('Self-heal failed', error);
         send({
@@ -2529,11 +2804,7 @@ function main(): void {
           message: 'Self-heal failed unexpectedly. Please retry.',
         });
       })
-      .finally(() => {
-        if (open) {
-          res.end();
-        }
-      });
+      .finally(() => stream.end());
   });
 
   // so the renderer's relative /api and SSE calls need no CORS.
@@ -2595,8 +2866,9 @@ function main(): void {
     }
   });
 
+  let terminalWs: ReturnType<typeof attachTerminalWs> | undefined;
   if (terminalConfig.enabled) {
-    attachTerminalWs({
+    terminalWs = attachTerminalWs({
       server,
       manager: terminalManager!,
       config: terminalConfig,
@@ -2611,28 +2883,82 @@ function main(): void {
   // Graceful shutdown: stop usage tailers, tear down live PTYs, stop accepting
   // connections and close the database so SQLite is not left mid-write when the
   // desktop shell kills the backend process.
-  let shuttingDown = false;
-  const shutdown = (signal: string): void => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    logger.info(`Received ${signal}, shutting down…`);
-    for (const tailer of tailers.values()) {
-      tailer.stop();
-    }
-    credentialWarmer.stop();
-    terminalManager!.shutdown();
-    server.close();
-    try {
-      db.close();
-    } catch {
-      /* already closed */
-    }
-    process.exit(0);
+  const shutdownTailers: Iterable<{ stop(): void; finalize?(): unknown }> = {
+    *[Symbol.iterator]() {
+      yield stoppedCaptureRecovery;
+      yield* tailers.values();
+    },
   };
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  const shutdownNonce = process.env.CW_DESKTOP_SHUTDOWN_NONCE;
+  const sendShutdownMessage = process.send?.bind(process);
+  const metaOperationShutdown = createMetaOperationShutdown({
+    ownership: metaOperationOwnership,
+    timeoutMs: 5_000,
+    reportError: (error) => logger.error('Meta operation shutdown failed', error),
+  });
+  const coordinatedShutdown = createShutdownCoordinator({
+    admission: processAdmission,
+    requests: applicationWork,
+    scheduler: automationScheduler,
+    headless: launcher,
+    owner: {
+      abort: () => {
+        shutdownOwner.abort();
+        metaOperationShutdown.abort();
+      },
+      waitForIdle: (timeoutMs) => shutdownOwner.waitForIdle(timeoutMs),
+    },
+    pools: allWarmPools,
+    tailers: shutdownTailers,
+    credentialWarmer,
+    terminalManager: terminalManager!,
+    server: {
+      close: () => new Promise<void>((resolve, reject) => {
+        sse.close();
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+        for (const socket of terminalWs?.clients ?? []) socket.terminate();
+        terminalWs?.close();
+        server.closeAllConnections();
+      }),
+    },
+    db,
+    settleOwnership: () => metaOperationShutdown.settleAfterPhysicalDrain(),
+    acknowledge: () => acknowledgeDesktopShutdown(
+      shutdownNonce,
+      sendShutdownMessage
+        ? (message, callback) => { sendShutdownMessage(message, callback); }
+        : undefined,
+    ),
+    exit: (code) => process.exit(code),
+    timeoutMs: 5_000,
+    reportError: (message, error) => logger.error(message, error),
+  });
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info(`Received ${signal}, shutting down…`);
+    if (!await coordinatedShutdown(signal)) {
+      logger.error('Shutdown was not confirmed; the backend remains owned and must not be replaced.');
+    }
+  };
+  app.post(`${apiConfig.basePath}/shutdown`, (_req, res) => {
+    res.status(202).json({ status: 'shutting-down' });
+    setImmediate(() => {
+      void shutdown('api:shutdown');
+    });
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+  process.on('message', (message: unknown) => {
+    if (isDesktopShutdownRequest(message, shutdownNonce)) {
+      void shutdown('desktop:shutdown');
+    }
+  });
 }
 
 main();

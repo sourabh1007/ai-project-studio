@@ -10,6 +10,7 @@ import {
   encodeServerMessage,
 } from './terminal-protocol.js';
 import { isAllowedTerminalOrigin } from './terminal-origin.js';
+import { createTerminalConnection } from './terminal-connection.js';
 
 export interface TerminalWsDeps {
   server: Server;
@@ -39,7 +40,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     path: deps.config.wsPath,
   });
 
-  wss.on('connection', async (socket: WebSocket, req) => {
+  wss.on('connection', (socket: WebSocket, req) => {
     // Reject cross-site browser connections: WebSockets bypass same-origin
     // policy, so a malicious page could otherwise attach to a live session and
     // inject keystrokes into the CLI. Only our own localhost origin is allowed.
@@ -57,82 +58,31 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
       return;
     }
 
-    let terminal;
-    try {
-      const cwd = deps.resolveCwd?.(session) ?? deps.cwd;
-      terminal = await deps.manager.getOrLaunch(session, { cwd });
-    } catch (error) {
-      deps.logger.error('Terminal launch failed', error);
-      socket.close(4500, 'Launch failed');
-      return;
-    }
-
-    socket.send(encodeServerMessage({ type: 'ready', sessionId }));
-    const detach = terminal.attach({
-      send: (data) =>
-        socket.send(encodeServerMessage({ type: 'output', data })),
-      resize: (cols, rows) =>
-        socket.send(encodeServerMessage({ type: 'resize', cols, rows })),
-      exit: (code) => socket.send(encodeServerMessage({ type: 'exit', code })),
-    });
-    const bufferedInput: string[] = [];
-    let bufferedInputBytes = 0;
-    let connected = true;
-
-    const writeInput = (data: string): boolean => {
-      try {
-        terminal.write(data);
-        return true;
-      } catch (error) {
-        deps.logger.error('Terminal input forwarding failed', error);
-        return false;
-      }
-    };
-
-    const flushInput = (state: 'ready' | 'closed'): void => {
-      if (state === 'ready' && connected) {
-        for (const data of bufferedInput) {
-          if (!writeInput(data)) {
-            break;
-          }
+    const connection = createTerminalConnection({
+      launch: async () => {
+        try {
+          return await deps.manager.getOrLaunch(session, {
+            cwd: deps.resolveCwd?.(session) ?? deps.cwd,
+          });
+        } catch (error) {
+          deps.logger.error('Terminal launch failed', error);
+          throw error;
         }
-      }
-      bufferedInput.length = 0;
-      bufferedInputBytes = 0;
-    };
-    const detachReadiness = terminal.onInputReadiness(flushInput);
-
+      },
+      subscribe: (listener) => deps.manager.onTerminal(sessionId, listener),
+      observeInput: (data) => deps.manager.observeInput(sessionId, data),
+      inputLimit: deps.config.bootstrapInputBufferBytes,
+      send: (message) => {
+        if (socket.readyState === socket.OPEN) socket.send(encodeServerMessage(message));
+      },
+    });
     socket.on('message', (raw: { toString(): string }) => {
       const message = decodeClientMessage(raw.toString());
-      if (!message) {
-        return;
-      }
-      if (message.type === 'input') {
-        if (terminal.inputReadiness === 'ready') {
-          writeInput(message.data);
-          deps.manager.observeInput(sessionId, message.data);
-        } else if (terminal.inputReadiness === 'pending') {
-          const bytes = Buffer.byteLength(message.data);
-          if (
-            bytes <=
-            deps.config.bootstrapInputBufferBytes - bufferedInputBytes
-          ) {
-            bufferedInput.push(message.data);
-            bufferedInputBytes += bytes;
-          }
-        }
-      } else {
-        terminal.resize(message.cols, message.rows);
-      }
+      if (message) connection.receive(message);
+      else socket.close(4400, 'Invalid terminal protocol');
     });
-
-    socket.on('close', () => {
-      connected = false;
-      bufferedInput.length = 0;
-      bufferedInputBytes = 0;
-      detachReadiness();
-      detach();
-    });
+    socket.on('close', () => connection.close());
+    void connection.start();
   });
 
   return wss;

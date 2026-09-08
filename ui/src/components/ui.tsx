@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CheckIcon,
@@ -8,6 +8,11 @@ import {
 } from './icons.js';
 import { Spinner } from './loading.js';
 import { classifyStatus, type StatusGlyph } from '../lib/status.js';
+import {
+  attachDialogFocusOwnership,
+  captureFocusTarget,
+  type FocusTargetSnapshot,
+} from '../lib/focus-ownership.js';
 
 export function Modal({
   title,
@@ -18,27 +23,45 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<FocusTargetSnapshot | null>(null);
+  const restoreFocusCapturedRef = useRef(false);
+  const titleId = useId();
+  if (!restoreFocusCapturedRef.current) {
+    restoreFocusRef.current = captureFocusTarget();
+    restoreFocusCapturedRef.current = true;
+  }
+
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        onClose();
-      }
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return undefined;
     }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    return attachDialogFocusOwnership(dialog, {
+      restoreFocus: restoreFocusRef.current,
+    });
+  }, []);
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="modal glass"
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }
+        }}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-header">
-          <h2 className="modal-title">{title}</h2>
+          <h2 className="modal-title" id={titleId}>{title}</h2>
           <button
             type="button"
             className="tree-action"
@@ -273,7 +296,7 @@ export function ErrorText({ error }: { error: string | null }) {
   if (!error) {
     return null;
   }
-  return <p className="error-text">{error}</p>;
+  return <p className="error-text" role="alert">{error}</p>;
 }
 
 /**

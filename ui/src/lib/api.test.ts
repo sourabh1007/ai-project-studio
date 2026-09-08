@@ -1222,7 +1222,12 @@ describe('createApiClient', () => {
     await client.pauseAutomation('a1');
     await client.resumeAutomation('a1');
     await client.cancelAutomation('a1');
-    await client.runAutomation('a1');
+    await client.runAutomation('a1', {
+      uncertaintyAcknowledgement: {
+        snapshotRunIds: ['r1', 'r2'],
+        targetRunIds: ['r1'],
+      },
+    });
     await client.updateAutomationInterval('a1', 300_000);
     await client.deleteAutomation('a1');
     expect(calls.map((c) => `${c[1]?.method ?? 'GET'} ${c[0]}`)).toEqual([
@@ -1233,6 +1238,24 @@ describe('createApiClient', () => {
       'POST /api/automations/a1/interval',
       'DELETE /api/automations/a1',
     ]);
+    expect(calls[3][1]?.body).toBe(
+      JSON.stringify({
+        uncertaintyAcknowledgement: {
+          snapshotRunIds: ['r1', 'r2'],
+          targetRunIds: ['r1'],
+        },
+      }),
+    );
     expect(calls[4][1]?.body).toBe(JSON.stringify({ intervalMs: 300_000 }));
+  });
+
+  it('posts an empty body for a default run-now request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'a1' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.runAutomation('a1');
+
+    expect(calls[0][0]).toBe('/api/automations/a1/run');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({}));
   });
 });

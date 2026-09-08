@@ -4,9 +4,9 @@
  * Auto-update manager for the AI Project Studio desktop shell.
  *
  * Design goals (see docs/development.md ▸ "Auto-update"):
- *  - Windows (signed NSIS): full `electron-updater` flow — detect, notify,
- *    user-consented download with live progress (differential/blockmap), then
- *    one-click install via `quitAndInstall`.
+ *  - Windows (signed NSIS): `electron-updater` detects releases, but installation
+ *    is guided because its public API cannot await installer-launch success
+ *    before scheduling quit.
  *  - macOS (currently unsigned, DMG-only): `electron-updater`'s mac path needs a
  *    signed `zip` artifact, so instead we do a lightweight GitHub Releases check
  *    (detect + release notes) and a *guided* install (open the release page).
@@ -42,6 +42,8 @@ let deps = null;
 let electronUpdater = null;
 let started = false;
 let intervalTimer = null;
+let downloaded = false;
+let installing = null;
 
 // The single source of truth for the update state, echoed to the renderer on
 // every change and returned by `getState()` for late-subscribing views.
@@ -59,7 +61,10 @@ function baseState() {
     releaseNotes: null,
     releaseName: null,
     error: null,
-    canAutoInstall: process.platform === 'win32',
+    // electron-updater's public quitAndInstall API cannot confirm asynchronous
+    // NSIS launch before it schedules app.quit. Use guided installation until
+    // a supported, awaited launch receipt is available.
+    canAutoInstall: false,
     platform: process.platform,
     releasePageUrl: RELEASES_PAGE,
   };
@@ -114,7 +119,8 @@ function log(message) {
 /**
  * Initializes the manager. Safe to call once from `bootstrap()` after the
  * window exists. `deps.getWindow` returns the current BrowserWindow (or null);
- * `deps.stopBackend` gracefully stops the spawned backend before relaunch.
+ * Installation is guided: opening the release page never quits this process
+ * or launches an installer behind the backend ownership gate.
  */
 function init(options) {
   deps = options || {};
@@ -142,9 +148,10 @@ function initWindows() {
   try {
     electronUpdater = require('electron-updater');
     const au = electronUpdater.autoUpdater;
-    // User consents to downloads; a deferred update still applies on next quit.
+    // Neither the implicit quit hook nor quitAndInstall provides an awaited
+    // NSIS launch receipt. Do not start an installer from either path.
     au.autoDownload = false;
-    au.autoInstallOnAppQuit = true;
+    au.autoInstallOnAppQuit = false;
     au.logger = { info: log, warn: log, error: log, debug: () => {} };
     // In dev-sim mode, force the update check to run despite !isPackaged.
     if (!app.isPackaged) {
@@ -173,15 +180,23 @@ function initWindows() {
         bytesPerSecond: p?.bytesPerSecond ?? 0,
       }),
     );
-    au.on('update-downloaded', (info) =>
+    au.on('update-downloaded', (info) => {
+      downloaded = true;
       setState({
         status: Status.DOWNLOADED,
         percent: 100,
         availableVersion: info?.version ?? state?.availableVersion ?? null,
         releaseNotes: normalizeNotes(info?.releaseNotes) ?? state?.releaseNotes ?? null,
-      }),
-    );
-    au.on('error', (err) => reportError(err));
+      });
+    });
+    au.on('error', (err) => {
+      if (installing) {
+        setState({ status: downloaded ? Status.DOWNLOADED : Status.ERROR,
+          error: 'Update installation failed. Keep the app open and retry installation.' });
+      } else {
+        reportError(err);
+      }
+    });
   } catch (err) {
     log(`failed to init electron-updater: ${err}`);
     electronUpdater = null;
@@ -333,20 +348,13 @@ function parseVersion(v) {
   return { nums: nums.slice(0, 3), pre: pre || '' };
 }
 
-/** Starts the user-consented download (Windows). No-op elsewhere. */
+/** Opens the release page for a user-managed download on supported platforms. */
 async function downloadUpdate() {
   if (!active()) {
     return getState();
   }
   try {
-    if (isWindows() && electronUpdater) {
-      setState({ status: Status.DOWNLOADING, percent: 0, error: null });
-      await electronUpdater.autoUpdater.downloadUpdate();
-    } else {
-      // macOS guided path: open the release page so the user grabs the signed
-      // DMG. (In-app auto-install requires Apple code signing — not available.)
-      await shell.openExternal(state?.releasePageUrl || RELEASES_PAGE);
-    }
+    await shell.openExternal(state?.releasePageUrl || RELEASES_PAGE);
   } catch (err) {
     reportError(err);
   }
@@ -354,34 +362,36 @@ async function downloadUpdate() {
 }
 
 /**
- * Installs a downloaded update. Signals the renderer to persist work, stops the
- * backend cleanly, then relaunches into the installer. On macOS this opens the
- * downloaded/release artifact for a guided install instead.
+ * Opens the release page for guided installation. A true result acknowledges
+ * only the page-opening request, never installation or permission to quit.
+ * Downloaded artifacts remain untouched and retry does not start an installer.
  */
 function installNow() {
   if (!active()) {
-    return;
+    return Promise.resolve(false);
   }
-  try {
-    send('update:before-quit', { at: Date.now() });
-    if (isWindows() && electronUpdater) {
-      // Give the renderer a beat to flush, then quit into the installer.
-      setTimeout(() => {
-        try {
-          if (deps && typeof deps.stopBackend === 'function') {
-            deps.stopBackend();
-          }
-          electronUpdater.autoUpdater.quitAndInstall(false, true);
-        } catch (err) {
-          reportError(err);
-        }
-      }, 250);
-    } else {
-      void shell.openExternal(state?.releasePageUrl || RELEASES_PAGE);
+  if (installing) {
+    return installing;
+  }
+  installing = (async () => {
+    try {
+      await shell.openExternal(state?.releasePageUrl || RELEASES_PAGE);
+      setState({ error: null });
+      return true;
+    } catch {
+      const message = 'Could not open the release page. No installer was started and the app will remain open. Retry opening the release page.';
+      log(message);
+      setState({ status: downloaded ? Status.DOWNLOADED : Status.ERROR, error: message });
+      return false;
     }
-  } catch (err) {
-    reportError(err);
-  }
+  })();
+  const attempt = installing;
+  void attempt.then(() => { if (installing === attempt) installing = null; });
+  return attempt;
+}
+
+function hasPendingInstall() {
+  return false;
 }
 
 function getState() {
@@ -401,6 +411,7 @@ module.exports = {
   checkForUpdates,
   downloadUpdate,
   installNow,
+  hasPendingInstall,
   getState,
   dispose,
   // Exported for potential reuse/testing.

@@ -1,6 +1,6 @@
 {
   "name": "ai-project-studio",
-  "version": "0.10.3",
+  "version": "0.11.0",
   "private": true,
   "description": "Project-centric management and observability layer over the GitHub Copilot and Agency CLIs.",
   "workspaces": [
@@ -16,6 +16,8 @@
     "desktop": "npm run build && npm run start --workspace desktop",
     "desktop:dev": "cross-env CW_DESKTOP_DEV=1 npm run dev --workspace desktop",
     "test": "npm run test --workspace backend",
+    "test:desktop:harness": "node --test desktop/tests/*.test.cjs",
+    "test:desktop:smoke": "node desktop/scripts/smoke.cjs",
     "test:coverage": "npm run test:coverage --workspace backend",
     "lint": "npm run lint --workspace backend"
   },

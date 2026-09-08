@@ -7,6 +7,7 @@ import {
   assertProgressBody,
   assertRegisterSubagentBody,
   assertResultBody,
+  assertRunNowBody,
 } from './automation-input.js';
 
 const base = {
@@ -127,6 +128,37 @@ describe('assertCreateAutomationInput', () => {
       expect(() =>
         assertRegisterSubagentBody({ task: 't', origin: { sessionId: 1 } }, 'a1'),
       ).toThrow(/origin.sessionId/);
+    });
+
+    it('accepts an empty or acknowledged run-now body', () => {
+      expect(assertRunNowBody(undefined)).toEqual({ acknowledgement: null });
+      expect(
+        assertRunNowBody({
+          uncertaintyAcknowledgement: {
+            snapshotRunIds: ['r1', 'r2'],
+            targetRunIds: ['r2'],
+          },
+        }),
+      ).toEqual({
+        acknowledgement: {
+          snapshotRunIds: ['r1', 'r2'],
+          targetRunIds: ['r2'],
+        },
+      });
+    });
+
+    it('rejects malformed run-now acknowledgements', () => {
+      expect(() =>
+        assertRunNowBody({ uncertaintyAcknowledgement: [] }),
+      ).toThrow(/uncertaintyAcknowledgement/);
+      expect(() =>
+        assertRunNowBody({
+          uncertaintyAcknowledgement: {
+            snapshotRunIds: ['r1'],
+            targetRunIds: [1],
+          },
+        }),
+      ).toThrow(/uncertaintyAcknowledgement\.targetRunIds\[0\]/);
     });
   });
 

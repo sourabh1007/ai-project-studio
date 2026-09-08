@@ -16,6 +16,7 @@ export interface CheckRunnerDeps {
   http: HttpProbe;
   ai: AiInvoker;
   ci: CiPipelineProbe;
+  timeoutMs: number;
 }
 
 /** Usage-attribution partition for an AI check/action of an automation. */
@@ -71,9 +72,14 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
     ctx: RunContext,
   ): Promise<CheckResult> => {
     const { text } = await deps.ai.run({
+      automationId: ctx.automationId,
+      originSessionId: ctx.origin.sessionId,
       featureId: attributionFeatureId(ctx),
       prompt: `${prompt}\n\nAnswer strictly with "yes" or "no" on the first line.`,
       cwd,
+      noTools: true,
+      timeoutMs: deps.timeoutMs,
+      scope: 'internal',
       label: 'Automation check',
       signal: ctx.signal,
     });

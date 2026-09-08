@@ -46,7 +46,7 @@ export function UpdateBanner() {
         )}
         {ui.canInstall && (
           <Button variant="primary" onClick={install}>
-            {ui.autoInstall ? 'Restart & install' : 'Install…'}
+            {ui.autoInstall ? 'Restart & install' : 'Open release page'}
           </Button>
         )}
         {!ui.showProgress && (

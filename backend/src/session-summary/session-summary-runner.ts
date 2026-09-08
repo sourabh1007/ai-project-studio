@@ -35,13 +35,14 @@ export function createSessionSummaryRunner(
   deps: SessionSummaryRunnerDeps,
 ): SessionSummarizer {
   return {
-    async summarize({ sessionId }) {
+    async summarize({ sessionId, signal }) {
       const session = deps.sessions.get(sessionId);
       if (!session) {
         throw new NotFoundError(`Unknown session: ${sessionId}`);
       }
       const feature = deps.features.get(session.featureId);
       const transcript = await deps.transcripts.load(session.id);
+      signal?.throwIfAborted();
       const collected: FeatureTranscripts = {
         feature,
         sessions: [{ session, transcript }],
@@ -54,13 +55,16 @@ export function createSessionSummaryRunner(
         model: deps.config.model,
         prompt,
         kind: 'meta',
+        signal,
       });
       const ended = await launched.completion;
 
       const metaTranscript = await deps.transcripts.load(ended.id);
+      signal?.throwIfAborted();
       const extracted = extractSummaryText(metaTranscript, deps.config);
       const content =
         extracted.length > 0 ? extracted : deps.config.emptySummaryPlaceholder;
+      signal?.throwIfAborted();
 
       const summary: SessionSummary = {
         sessionId,

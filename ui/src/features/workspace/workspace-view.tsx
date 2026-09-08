@@ -12,6 +12,15 @@ import { AiMagicIcon } from '../../components/icons.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
+import {
+  closeWorkspaceTab,
+  emptyWorkspaceTabsState,
+  isWorkspaceTabsState,
+  openWorkspaceTab,
+  reconcileWorkspaceTabsState,
+  removeFeatureWorkspaceTabs,
+  type WorkspaceTab,
+} from './workspace-tabs.js';
 
 // Heavy, view-specific bundles (xterm for terminals, recharts for the feature
 // and repo dashboards, the change-graph stack for PR review) are code-split so
@@ -39,12 +48,6 @@ const RepoDashboard = lazy(() =>
   })),
 );
 
-type Tab =
-  | { kind: 'session'; id: string; label: string; session: Session }
-  | { kind: 'feature'; id: string; label: string; feature: Feature }
-  | { kind: 'review-board'; id: string; label: string; feature: Feature }
-  | { kind: 'repo'; id: string; label: string; repo: Repository };
-
 function featureTabId(featureId: string): string {
   return `feature:${featureId}`;
 }
@@ -58,7 +61,7 @@ function repoTabId(repoId: string): string {
 }
 
 /** The feature id a tab belongs to, for color-coding session and feature tabs. */
-function tabFeatureId(tab: Tab): string {
+function tabFeatureId(tab: WorkspaceTab): string {
   return tab.kind === 'session'
     ? tab.session.featureId
     : tab.kind === 'repo'
@@ -88,8 +91,11 @@ export function WorkspaceView({
   const [names, setNames] = useState<Record<string, string>>(() =>
     nameStore.all(),
   );
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [tabState, setTabState] = usePersistentState(
+    'cw-workspace-tabs',
+    emptyWorkspaceTabsState(),
+    { validate: isWorkspaceTabsState },
+  );
   const [explorerWidth, setExplorerWidth] = usePersistentState(
     'cw-explorer-width',
     260,
@@ -99,9 +105,88 @@ export function WorkspaceView({
     },
   );
 
-  function openTab(tab: Tab) {
-    setTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
-    setActiveId(tab.id);
+  const tabs = tabState.tabs;
+  const activeId = tabState.activeId;
+
+  useEffect(() => {
+    const featureTabs = tabs.filter(
+      (tab) => tab.kind === 'feature' || tab.kind === 'review-board',
+    );
+    const sessionFeatureIds = [
+      ...new Set(
+        tabs
+          .filter((tab): tab is Extract<WorkspaceTab, { kind: 'session' }> =>
+            tab.kind === 'session')
+          .map((tab) => tab.session.featureId),
+      ),
+    ];
+    const hasRepoTabs = tabs.some((tab) => tab.kind === 'repo');
+    if (
+      featureTabs.length === 0 &&
+      sessionFeatureIds.length === 0 &&
+      !hasRepoTabs
+    ) {
+      return;
+    }
+
+    let active = true;
+    void (async () => {
+      const [features, repos, sessionsByFeature] = await Promise.all([
+        featureTabs.length > 0 || sessionFeatureIds.length > 0
+          ? api
+              .listFeatures()
+              .then((loaded) => new Map(loaded.map((feature) => [feature.id, feature])))
+              .catch(() => null)
+          : Promise.resolve(null),
+        hasRepoTabs
+          ? api
+              .listRepos()
+              .then((loaded) => new Map(loaded.map((repo) => [repo.id, repo])))
+              .catch(() => null)
+          : Promise.resolve(null),
+        sessionFeatureIds.length > 0
+          ? Promise.all(
+              sessionFeatureIds.map(async (featureId) => {
+                try {
+                  const loaded = await api.listSessions(featureId, {
+                    includeInternal: true,
+                  });
+                  return [
+                    featureId,
+                    new Map(loaded.map((session) => [session.id, session])),
+                  ] as const;
+                } catch {
+                  return [featureId, null] as const;
+                }
+              }),
+            ).then((entries) => new Map(entries))
+          : Promise.resolve(new Map<string, Map<string, Session> | null>()),
+      ]);
+      if (!active) {
+        return;
+      }
+      setTabState((prev) =>
+        reconcileWorkspaceTabsState(prev, { features, repos, sessionsByFeature }),
+      );
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    api,
+    setTabState,
+    tabs
+      .map((tab) =>
+        tab.kind === 'session'
+          ? `${tab.kind}:${tab.id}:${tab.session.featureId}`
+          : `${tab.kind}:${tab.id}`,
+      )
+      .join('|'),
+  ]);
+
+  function openTab(tab: WorkspaceTab) {
+    setTabState((prev) => openWorkspaceTab(prev, tab));
   }
 
   function openSession(session: Session, label: string) {
@@ -141,64 +226,47 @@ export function WorkspaceView({
     // the backend as the source of truth (survives reloads and other devices).
     nameStore.set(sessionId, trimmed);
     setNames(nameStore.all());
-    setTabs((prev) =>
-      prev.map((tab) =>
+    setTabState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
         tab.kind === 'session' && tab.session.id === sessionId
           ? { ...tab, label: trimmed || tab.label }
           : tab,
       ),
-    );
+    }));
     return api
       .renameSession(sessionId, trimmed || null)
       .then((updated) => {
-        setTabs((prev) =>
-          prev.map((tab) =>
+        setTabState((prev) => ({
+          ...prev,
+          tabs: prev.tabs.map((tab) =>
             tab.kind === 'session' && tab.session.id === sessionId
               ? { ...tab, session: updated, label: updated.name ?? tab.label }
               : tab,
           ),
-        );
+        }));
       });
   }
 
   function closeTab(id: string) {
-    setTabs((prev) => prev.filter((t) => t.id !== id));
-    setActiveId((current) => {
-      if (current !== id) {
-        return current;
-      }
-      const remaining = tabs.filter((t) => t.id !== id);
-      return remaining[remaining.length - 1]?.id ?? null;
-    });
+    setTabState((prev) => closeWorkspaceTab(prev, id));
   }
 
   async function renameFeature(feature: Feature, name: string) {
     const updated = await api.renameFeature(feature.id, name);
-    setTabs((prev) =>
-      prev.map((tab) =>
+    setTabState((prev) => ({
+      ...prev,
+      tabs: prev.tabs.map((tab) =>
         tab.kind === 'feature' && tab.feature.id === updated.id
           ? { ...tab, label: updated.name, feature: updated }
           : tab,
       ),
-    );
+    }));
   }
 
   async function deleteFeature(feature: Feature) {
     await api.deleteFeature(feature.id);
-    setTabs((prev) => {
-      const next = prev.filter(
-        (tab) =>
-          !(tab.kind === 'feature' && tab.feature.id === feature.id) &&
-          !(tab.kind === 'review-board' && tab.feature.id === feature.id) &&
-          !(tab.kind === 'session' && tab.session.featureId === feature.id),
-      );
-      setActiveId((current) =>
-        prev.some((t) => t.id === current) && !next.some((t) => t.id === current)
-          ? (next[next.length - 1]?.id ?? null)
-          : current,
-      );
-      return next;
-    });
+    setTabState((prev) => removeFeatureWorkspaceTabs(prev, feature.id));
   }
 
   async function deleteSession(session: Session) {
@@ -295,7 +363,9 @@ export function WorkspaceView({
                   className="tab-label"
                   role="tab"
                   aria-selected={tab.id === activeId}
-                  onClick={() => setActiveId(tab.id)}
+                  onClick={() =>
+                    setTabState((prev) => ({ ...prev, activeId: tab.id }))
+                  }
                 >
                   <span
                     className={`tab-dot tab-dot-${tab.kind}`}

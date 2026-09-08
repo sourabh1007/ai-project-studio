@@ -82,4 +82,28 @@ describe('subscribeStream', () => {
 
     expect(events).toEqual(['usage.recorded']);
   });
+
+  it('can omit output without dropping lifecycle, notices, file or usage events', () => {
+    const bus = createEventBus<StreamEventMap>();
+    const events: string[] = [];
+    const off = subscribeStream(bus, { send: (event) => events.push(event) }, {
+      includeSessionOutput: false,
+    });
+    bus.emit('session.output', {
+      sessionId: 's1', scope: 'feature', event: { type: 'stdout', line: 'output' },
+    });
+    bus.emit('session.started', { id: 's1' } as never);
+    bus.emit('session.ended', { id: 's1' } as never);
+    bus.emit('session.file', { sessionId: 's1' });
+    bus.emit('session.notice', {
+      sessionId: 's1', level: 'error', message: 'retry manually',
+    });
+    bus.emit('usage.recorded', { sessionId: 's1' } as never);
+    expect(events).toEqual([
+      'session.started', 'session.ended', 'session.file', 'session.notice', 'usage.recorded',
+    ]);
+    off();
+    bus.emit('session.file', { sessionId: 's1' });
+    expect(events).toHaveLength(5);
+  });
 });

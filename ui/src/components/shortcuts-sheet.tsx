@@ -1,8 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   formatChord,
   type ShortcutBinding,
 } from '../lib/keyboard-shortcuts.js';
+import { attachDialogFocusOwnership } from '../lib/focus-ownership.js';
 
 interface ShortcutsSheetProps {
   open: boolean;
@@ -16,6 +18,19 @@ interface ShortcutsSheetProps {
  * outside. Purely presentational — the bindings come from the shared registry.
  */
 export function ShortcutsSheet({ open, bindings, onClose }: ShortcutsSheetProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const panel = panelRef.current;
+    if (!panel) {
+      return undefined;
+    }
+    return attachDialogFocusOwnership(panel);
+  }, [open]);
+
   if (!open) {
     return null;
   }
@@ -30,6 +45,7 @@ export function ShortcutsSheet({ open, bindings, onClose }: ShortcutsSheetProps)
       }}
     >
       <div
+        ref={panelRef}
         className="shortcuts-panel"
         role="dialog"
         aria-modal="true"
@@ -41,7 +57,6 @@ export function ShortcutsSheet({ open, bindings, onClose }: ShortcutsSheetProps)
             onClose();
           }
         }}
-        ref={(node) => node?.focus()}
       >
         <div className="shortcuts-header">Keyboard shortcuts</div>
         <ul className="shortcuts-list">

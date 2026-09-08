@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import type {
   ConfigUpdateResult,
   ConfigValue,
@@ -34,13 +35,25 @@ import { AgencyCliSection } from './agency-cli-section.js';
 import { AppearanceSection } from './appearance-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
+import { RetainedImagesSection, type AttachmentsBridge } from './retained-images-section.js';
 import { WorktreesSection } from './worktrees-section.js';
 import { MetasessionPoolsSection } from './metasession-pools-section.js';
+import { MetaOperationsSection } from '../meta-operations/meta-operations-section.js';
+import {
+  applyConfigUpdateToDraftStore,
+  createNamespaceDraftState,
+  discardNamespaceDraftConflicts,
+  isSettingsDraftStore,
+  reconcileSettingsDraftStore,
+  updateNamespaceDraftValue,
+  type NamespaceDraftState,
+} from './settings-drafts.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DesktopBridge {
+  attachments?: AttachmentsBridge;
   revealFile(path: string): void;
-  relaunch(): void;
+  relaunch(): Promise<boolean>;
   getVersion?(): Promise<string>;
   openDocs?(): void;
 }
@@ -49,24 +62,70 @@ function desktopBridge(): DesktopBridge | undefined {
   return (window as unknown as { desktop?: DesktopBridge }).desktop;
 }
 
+function fallbackDraftState(
+  values: Record<string, ConfigValue>,
+  fieldsMeta: Record<string, FieldMeta> | undefined,
+): NamespaceDraftState {
+  return createNamespaceDraftState(buildFields(values, fieldsMeta));
+}
+
+function fieldPathLabel(path: string): string {
+  return path
+    .split('.')
+    .filter(Boolean)
+    .map((segment) => fieldLabel(segment))
+    .join(' ');
+}
+
+function sanitizeIdPart(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'field';
+}
+
+function describeByIds(
+  ...ids: Array<string | null | undefined>
+): string | undefined {
+  const value = ids.filter(Boolean).join(' ');
+  return value || undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Renders the editor control for one setting inside a namespace. */
 function FieldControl({
   field,
   draft,
   disabled,
+  id,
+  labelledBy,
+  describedBy,
+  invalid,
   onChange,
 }: {
   field: SettingField;
   draft: string | boolean;
   disabled: boolean;
+  id: string;
+  labelledBy: string;
+  describedBy?: string;
+  invalid?: boolean;
   onChange: (next: string | boolean) => void;
 }) {
   if (field.control === 'boolean') {
     return (
       <input
+        id={id}
         type="checkbox"
         checked={draft as boolean}
         disabled={disabled}
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.checked)}
       />
     );
@@ -75,9 +134,13 @@ function FieldControl({
     const options = field.meta?.options ?? [];
     return (
       <select
+        id={id}
         className="input"
         value={draft as string}
         disabled={disabled}
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
       >
         {options.map((option) => (
@@ -91,16 +154,21 @@ function FieldControl({
   if (field.control === 'json' || field.control === 'multiline') {
     return (
       <textarea
+        id={id}
         className={field.control === 'json' ? 'input config-json' : 'input'}
         rows={field.control === 'json' ? 5 : 4}
         value={draft as string}
         disabled={disabled}
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     );
   }
   return (
     <input
+      id={id}
       className="input"
       type={field.control === 'number' ? 'number' : 'text'}
       value={draft as string}
@@ -108,8 +176,86 @@ function FieldControl({
       max={field.meta?.max}
       step={field.control === 'number' && field.meta?.int ? 1 : undefined}
       disabled={disabled}
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+}
+
+function ConfigFieldRow({
+  namespace,
+  field,
+  draft,
+  disabled,
+  asking,
+  overridden,
+  validationError,
+  onChange,
+  onExplain,
+}: {
+  namespace: string;
+  field: SettingField;
+  draft: string | boolean;
+  disabled: boolean;
+  asking: boolean;
+  overridden: boolean;
+  validationError: string | null;
+  onChange: (next: string | boolean) => void;
+  onExplain: () => void;
+}) {
+  const instanceId = useId().replace(/:/g, '');
+  const fieldBaseId = `${instanceId}-${sanitizeIdPart(namespace)}-${sanitizeIdPart(field.key)}`;
+  const labelId = `${fieldBaseId}-label`;
+  const descriptionId = `${fieldBaseId}-description`;
+  const errorId = `${fieldBaseId}-error`;
+  const controlId = `${fieldBaseId}-control`;
+  const label = fieldPathLabel(field.key);
+
+  return (
+    <div className="config-field-row">
+      <div className="config-field-label">
+        <label className="config-field-name" htmlFor={controlId} id={labelId}>
+          {label}
+        </label>
+        <code className="config-field-key">{field.key}</code>
+        <span className="config-field-desc" id={descriptionId}>
+          {fieldHelp(field)}
+        </span>
+        <button
+          type="button"
+          className="config-field-explain"
+          disabled={asking}
+          onClick={onExplain}
+        >
+          Explain
+        </button>
+        {overridden && (
+          <span className="config-field-badge">overridden</span>
+        )}
+      </div>
+      <div className="config-field-control">
+        <FieldControl
+          id={controlId}
+          labelledBy={labelId}
+          describedBy={describeByIds(
+            descriptionId,
+            validationError ? errorId : null,
+          )}
+          invalid={!!validationError}
+          field={field}
+          draft={draft}
+          disabled={disabled}
+          onChange={onChange}
+        />
+        {validationError && (
+          <p className="error-text" id={errorId}>
+            {validationError}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -121,6 +267,9 @@ function NamespaceEditor({
   overrideKeys,
   overridden,
   query,
+  draftState,
+  onDraftChange,
+  onDiscardConflicts,
   onSaved,
 }: {
   namespace: string;
@@ -129,15 +278,15 @@ function NamespaceEditor({
   overrideKeys: Set<string>;
   overridden: boolean;
   query: string;
+  draftState: NamespaceDraftState;
+  onDraftChange: (key: string, next: string | boolean) => void;
+  onDiscardConflicts: (keys?: readonly string[]) => void;
   onSaved: (result: ConfigUpdateResult) => void;
 }) {
   const api = useApi();
   const fields = useMemo<SettingField[]>(
     () => buildFields(values, fieldsMeta),
     [values, fieldsMeta],
-  );
-  const [draft, setDraft] = useState<Record<string, string | boolean>>(() =>
-    Object.fromEntries(fields.map((f) => [f.key, seedValue(f.value, f.control)])),
   );
   const [busy, setBusy] = useState<null | 'save' | 'reset'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +295,23 @@ function NamespaceEditor({
   const [answer, setAnswer] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [assistError, setAssistError] = useState<string | null>(null);
+  const draftValue = (field: SettingField) =>
+    draftState.values[field.key] ?? seedValue(field.value, field.control);
+  const validationErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+    for (const field of fields) {
+      const draft = draftValue(field);
+      if (sameValue(draft, field.value, field.control, field.meta)) {
+        continue;
+      }
+      try {
+        parseInput(draft, field.control, field.meta);
+      } catch (err) {
+        errors[field.key] = errorMessage(err);
+      }
+    }
+    return errors;
+  }, [fields, draftState.values]);
 
   async function askAssistant(q: string, key?: string) {
     const trimmed = q.trim();
@@ -169,38 +335,40 @@ function NamespaceEditor({
     }
   }
 
-  useEffect(() => {
-    setDraft(
-      Object.fromEntries(
-        fields.map((f) => [f.key, seedValue(f.value, f.control)]),
-      ),
-    );
-    setError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values, fieldsMeta]);
-
   const changed = fields.filter(
-    (f) => !sameValue(draft[f.key], f.value, f.control, f.meta),
+    (f) => !sameValue(draftValue(f), f.value, f.control, f.meta),
   );
   const dirty = changed.length > 0;
   const visible = fields.filter((f) => matchesQuery(namespace, f.key, query));
+  const firstValidationError = changed
+    .map((field) => validationErrors[field.key])
+    .find(Boolean);
+
+  function handleDraftChange(key: string, next: string | boolean) {
+    setError(null);
+    onDraftChange(key, next);
+  }
 
   async function save() {
     setError(null);
+    if (firstValidationError) {
+      setError('Fix the highlighted setting values before saving.');
+      return;
+    }
     const patch: Record<string, unknown> = {};
     try {
       for (const f of changed) {
-        patch[f.key] = parseInput(draft[f.key], f.control, f.meta);
+        patch[f.key] = parseInput(draftValue(f), f.control, f.meta);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
       return;
     }
     setBusy('save');
     try {
       onSaved(await api.updateConfig(namespace, patch));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -212,7 +380,7 @@ function NamespaceEditor({
     try {
       onSaved(await api.resetConfig(namespace));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -310,41 +478,41 @@ function NamespaceEditor({
       )}
       <div className="config-fields">
         {visible.map((f) => (
-          <div key={f.key} className="config-field-row">
-            <div className="config-field-label">
-              <span className="config-field-name">{fieldLabel(f.key)}</span>
-              <code className="config-field-key">{f.key}</code>
-              <span className="config-field-desc">{fieldHelp(f)}</span>
-              <button
-                type="button"
-                className="config-field-explain"
-                disabled={asking}
-                onClick={() =>
-                  void askAssistant(
-                    `Explain the "${fieldLabel(f.key)}" setting and recommend a good value.`,
-                    f.key,
-                  )
-                }
-              >
-                Explain
-              </button>
-              {overrideKeys.has(f.key) && (
-                <span className="config-field-badge">overridden</span>
-              )}
-            </div>
-            <div className="config-field-control">
-              <FieldControl
-                field={f}
-                draft={draft[f.key]}
-                disabled={busy !== null}
-                onChange={(next) =>
-                  setDraft((d) => ({ ...d, [f.key]: next }))
-                }
-              />
-            </div>
-          </div>
+          <ConfigFieldRow
+            key={f.key}
+            namespace={namespace}
+            field={f}
+            draft={draftValue(f)}
+            disabled={busy !== null}
+            asking={asking}
+            overridden={overrideKeys.has(f.key)}
+            validationError={validationErrors[f.key] ?? null}
+            onExplain={() =>
+              void askAssistant(
+                `Explain the "${fieldPathLabel(f.key)}" setting and recommend a good value.`,
+                f.key,
+              )
+            }
+            onChange={(next) => handleDraftChange(f.key, next)}
+          />
         ))}
       </div>
+      {draftState.conflicts.length > 0 && (
+        <div className="config-dirty" role="alert">
+          <span>
+            Server updates conflict with your unsaved{' '}
+            {draftState.conflicts.length === 1 ? 'change' : 'changes'} in{' '}
+            {draftState.conflicts.map((key) => fieldPathLabel(key)).join(', ')}.
+          </span>{' '}
+          <Button
+            variant="ghost"
+            onClick={() => onDiscardConflicts()}
+            disabled={busy !== null}
+          >
+            Discard conflicting changes
+          </Button>
+        </div>
+      )}
       <ErrorText error={error} />
       {dirty && <span className="config-dirty">Unsaved changes</span>}
     </div>
@@ -381,13 +549,26 @@ export function SettingsView() {
     () => api.getConfig(),
     [],
   );
+  const [drafts, setDrafts] = usePersistentState('cw-settings-drafts', {}, {
+    validate: isSettingsDraftStore,
+  });
   const [tab, setTab] = useState<TabId>('general');
   const [query, setQuery] = useState('');
   const [subTab, setSubTab] = useState<string | null>(null);
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    setDrafts((prev) =>
+      reconcileSettingsDraftStore(prev, data.current, data.schema),
+    );
+  }, [data, setDrafts]);
 
   useEffect(() => {
     let active = true;
@@ -430,12 +611,21 @@ export function SettingsView() {
     if (result.requiresRestart) {
       setRestartPending(true);
     }
+    setDrafts((prev) => applyConfigUpdateToDraftStore(prev, result, data?.schema));
     reload();
   }
 
-  function restart() {
+  async function restart() {
     setRestarting(true);
-    bridge?.relaunch();
+    setRestartError(null);
+    try {
+      if (await bridge?.relaunch() !== true) {
+        throw new Error('Restart was not confirmed');
+      }
+    } catch {
+      setRestarting(false);
+      setRestartError('Restart not confirmed. Wait for active work to finish, then try again. Your saved settings will apply after a successful restart.');
+    }
   }
 
   return (
@@ -448,6 +638,7 @@ export function SettingsView() {
               Configuration changes are saved and apply the next time the app
               starts.
             </p>
+            {restartError && <p role="alert">{restartError}</p>}
           </div>
           {bridge ? (
             <Button onClick={restart} disabled={restarting}>
@@ -578,6 +769,49 @@ export function SettingsView() {
                       overrideKeys={overrideKeys}
                       overridden={overrideKeys.size > 0}
                       query={query.trim().toLowerCase()}
+                      draftState={
+                        drafts[namespace] ??
+                        fallbackDraftState(
+                          data.current[namespace] ?? {},
+                          data.schema?.[namespace]?.fields,
+                        )
+                      }
+                      onDraftChange={(key, next) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [namespace]: updateNamespaceDraftValue(
+                            prev[namespace] ??
+                              fallbackDraftState(
+                                data.current[namespace] ?? {},
+                                data.schema?.[namespace]?.fields,
+                              ),
+                            key,
+                            next,
+                          ),
+                        }))
+                      }
+                      onDiscardConflicts={(keys) =>
+                        setDrafts((prev) => {
+                          const fields = buildFields(
+                            data.current[namespace] ?? {},
+                            data.schema?.[namespace]?.fields,
+                          );
+                          const current =
+                            prev[namespace] ??
+                            fallbackDraftState(
+                              data.current[namespace] ?? {},
+                              data.schema?.[namespace]?.fields,
+                            );
+                          return {
+                            ...prev,
+                            [namespace]: discardNamespaceDraftConflicts(
+                              current,
+                              fields,
+                              keys,
+                            ),
+                          };
+                        })
+                      }
                       onSaved={onSaved}
                     />
                   );
@@ -591,6 +825,7 @@ export function SettingsView() {
       {tab === 'metasession' && (
         <div className="settings-panel">
           <MetasessionPoolsSection />
+          <MetaOperationsSection />
         </div>
       )}
 
@@ -667,6 +902,7 @@ export function SettingsView() {
             logDirectory={logDirectory ?? null}
             bridge={bridge}
           />
+          <RetainedImagesSection bridge={bridge?.attachments} />
           <WorktreesSection />
           <Card>
             <div className="page-header">

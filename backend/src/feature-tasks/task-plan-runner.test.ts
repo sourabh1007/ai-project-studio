@@ -94,11 +94,13 @@ describe('task-plan-runner', () => {
       { title: 'Second' },
     ]);
     const { runner, repo, requests } = build({ response });
+    const signal = new AbortController().signal;
 
-    const tasks = await runner.generate('f1');
+    const tasks = await runner.generate('f1', signal);
 
     expect(requests[0].featureId).toBe('f1');
     expect(requests[0].prompt).toContain('Login');
+    expect(requests[0].signal).toBe(signal);
     expect(tasks).toEqual([
       {
         id: 't1',
@@ -149,6 +151,17 @@ describe('task-plan-runner', () => {
     const { runner, repo } = build({ response: 'the model refused' });
     const tasks = await runner.generate('f1');
     expect(tasks).toEqual([]);
+    expect(repo.listByFeature('f1')).toEqual([]);
+  });
+
+  it('does not persist tasks after cancellation while reading the meta response', async () => {
+    const response = JSON.stringify([{ title: 'Late task' }]);
+    const { runner, repo, requests } = build({ response });
+    const controller = new AbortController();
+    controller.abort(new Error('Feature deletion'));
+
+    await expect(runner.generate('f1', controller.signal)).rejects.toBe(controller.signal.reason);
+    expect(requests).toEqual([]);
     expect(repo.listByFeature('f1')).toEqual([]);
   });
 

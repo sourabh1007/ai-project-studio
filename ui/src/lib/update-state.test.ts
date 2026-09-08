@@ -118,6 +118,16 @@ describe('mergeUpdateState', () => {
 });
 
 describe('deriveUpdateUi', () => {
+  it('keeps a downloaded update retryable while clearly surfacing an installation failure', () => {
+    const ui = deriveUpdateUi(state({
+      status: 'downloaded', canAutoInstall: true, availableVersion: '1.0.0',
+      error: 'Update not installed. Retry after active work finishes.',
+    }));
+    expect(ui.canInstall).toBe(true);
+    expect(ui.busy).toBe(false);
+    expect(ui.tone).toBe('danger');
+    expect(ui.detail).toContain('Update not installed');
+  });
   it('hides the banner when idle', () => {
     const ui = deriveUpdateUi(initialUpdateState());
     expect(ui.showBanner).toBe(false);
@@ -158,7 +168,7 @@ describe('deriveUpdateUi', () => {
     );
     expect(ui.canInstall).toBe(true);
     expect(ui.autoInstall).toBe(false);
-    expect(ui.detail).toBe('Downloads the installer — finish the guided install to update.');
+    expect(ui.detail).toBe('Open the release page for guided installation. The app will not install an update or quit automatically.');
   });
 
   it('shows progress while downloading with byte detail', () => {

@@ -5,11 +5,14 @@
  */
 
 export type ClientMessage =
-  | { type: 'input'; data: string }
-  | { type: 'resize'; cols: number; rows: number };
+  | { type: 'input'; data: string; generation: number; seq: number }
+  | { type: 'resize'; cols: number; rows: number; generation: number };
+
+export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
-  | { type: 'ready'; sessionId: string }
+  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number }
+  | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'exit'; code: number | null };
@@ -37,14 +40,16 @@ export function decodeClientMessage(raw: string): ClientMessage | null {
   if (!isRecord(parsed)) {
     return null;
   }
+  if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;
   if (parsed.type === 'input') {
-    return typeof parsed.data === 'string'
-      ? { type: 'input', data: parsed.data }
+    return typeof parsed.data === 'string' && Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0
+      ? { type: 'input', data: parsed.data, generation: parsed.generation as number, seq: parsed.seq as number }
       : null;
   }
   if (parsed.type === 'resize') {
-    return typeof parsed.cols === 'number' && typeof parsed.rows === 'number'
-      ? { type: 'resize', cols: parsed.cols, rows: parsed.rows }
+    return Number.isSafeInteger(parsed.cols) && (parsed.cols as number) > 0 &&
+      Number.isSafeInteger(parsed.rows) && (parsed.rows as number) > 0
+      ? { type: 'resize', cols: parsed.cols as number, rows: parsed.rows as number, generation: parsed.generation as number }
       : null;
   }
   return null;

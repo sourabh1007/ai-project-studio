@@ -2,7 +2,7 @@
 export interface UsageEvent {
   sessionId: string;
   featureId: string;
-  /** Zero-based index of this inference call within the session's usage file. */
+  /** Stable application-assigned inference identity; never reindexed after pruning. */
   turnIndex: number;
   provider: string;
   requestedModel: string;

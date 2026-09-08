@@ -21,6 +21,7 @@ export interface SpawnSubagentInput {
   origin: AutomationOrigin;
   automationId: string | null;
   cwd?: string;
+  signal?: AbortSignal;
 }
 
 export interface RegisterSubagentInput {
@@ -41,6 +42,7 @@ export interface SubagentServiceDeps {
   ids: IdGenerator;
   bus: EventBus<SubagentEventMap>;
   ai: AiInvoker;
+  timeoutMs: number;
 }
 
 export interface SubagentService {
@@ -78,6 +80,8 @@ export function createSubagentService(
     return subagent;
   };
 
+  const maybe = (id: string): Subagent | null => deps.repo.get(id);
+
   return {
     spawn(input) {
       const now = deps.clock.isoNow();
@@ -96,8 +100,35 @@ export function createSubagentService(
       deps.repo.create(subagent);
       deps.bus.emit('subagent.updated', subagent);
 
+      const failRun = (
+        error: unknown,
+        result?: Awaited<ReturnType<AiInvoker['run']>>,
+      ): void => {
+        try {
+          const current = maybe(subagent.id);
+          if (!current) {
+            return;
+          }
+          publish({
+            ...current,
+            status: 'failed',
+            sessionId: result?.sessionId ?? current.sessionId,
+            result: result
+              ? `${errorMessage(error)}\n\n${result.text}`
+              : errorMessage(error),
+          });
+        } catch (persistenceError) {
+          throw new AggregateError(
+            [error, persistenceError],
+            'Subagent failure could not be persisted or published',
+          );
+        }
+      };
+
       const completion = deps.ai
         .run({
+          automationId: input.automationId,
+          originSessionId: input.origin.sessionId,
           featureId:
             input.origin.featureId ??
             attributionFeatureId({
@@ -106,24 +137,30 @@ export function createSubagentService(
             }),
           prompt: input.prompt,
           cwd: input.cwd,
+          timeoutMs: deps.timeoutMs,
+          scope: 'internal',
           label: 'Subagent task',
+          signal: input.signal,
         })
         .then(
           (result) => {
-            publish({
-              ...require(subagent.id),
-              status: 'done',
-              result: result.text.trim(),
-              sessionId: result.sessionId,
-            });
+            const current = maybe(subagent.id);
+            if (!current) {
+              return;
+            }
+            try {
+              publish({
+                ...current,
+                status: 'done',
+                result: result.text.trim(),
+                sessionId: result.sessionId,
+              });
+            } catch (error) {
+              failRun(error, result);
+              throw error;
+            }
           },
-          (error: unknown) => {
-            publish({
-              ...require(subagent.id),
-              status: 'failed',
-              result: errorMessage(error),
-            });
-          },
+          (error: unknown) => failRun(error),
         );
 
       return { subagent, completion };

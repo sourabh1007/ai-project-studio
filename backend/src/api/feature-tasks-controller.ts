@@ -34,7 +34,7 @@ export function createFeatureTasksRoutes(
       path: '/features/:featureId/tasks/generate',
       handler: async (req) => ({
         status: 201,
-        body: await deps.tasks.generate(req.params.featureId),
+        body: await deps.tasks.generate(req.params.featureId, req.signal),
       }),
     },
     {

@@ -25,6 +25,11 @@ export interface SseSink {
   send(event: string, data: unknown): void;
 }
 
+export interface StreamOptions {
+  /** Terminal clients already receive output through their dedicated WebSocket. */
+  includeSessionOutput?: boolean;
+}
+
 const STREAM_EVENTS: StreamEventName[] = [
   'session.started',
   'session.output',
@@ -43,15 +48,19 @@ const STREAM_EVENTS: StreamEventName[] = [
 ];
 
 /**
- * Forwards every workspace stream event onto an {@link SseSink}. Returns an
+ * Forwards selected workspace stream events onto an {@link SseSink}. Returns an
  * unsubscribe function that detaches all handlers. Kept transport-agnostic so
  * it is fully unit-testable without an HTTP response.
  */
 export function subscribeStream(
   bus: EventBus<StreamEventMap>,
   sink: SseSink,
+  options: StreamOptions = {},
 ): () => void {
-  const offs = STREAM_EVENTS.map((event) =>
+  const events = options.includeSessionOutput === false
+    ? STREAM_EVENTS.filter((event) => event !== 'session.output')
+    : STREAM_EVENTS;
+  const offs = events.map((event) =>
     bus.on(event, (payload) => {
       if (
         event.startsWith('session.') &&

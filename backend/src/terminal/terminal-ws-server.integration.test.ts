@@ -1,428 +1,274 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, type Server } from 'node:http';
-import { AddressInfo } from 'node:net';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import { attachTerminalWs } from './terminal-ws-server.js';
+import { createTerminalManager } from './terminal-manager.js';
 import { terminalDefaults } from './config.js';
-import type { ClientMessage, ServerMessage } from './terminal-protocol.js';
-import type { TerminalManager } from './terminal-manager.js';
-import type { TerminalSession, TerminalOutputSink } from './terminal-session.js';
+import type { ServerMessage } from './terminal-protocol.js';
 import type { Session } from '../session/session-contract.js';
+import { createEventBus } from '../kernel/event-bus.js';
+import { createClock } from '../kernel/clock.js';
+import { createProviderRegistry } from '../provider/provider-registry.js';
+import type { SessionEventMap } from '../session/session-launcher.js';
+import type { PtyProcess } from './pty-contract.js';
 
-/**
- * Integration coverage for the terminal WebSocket bridge — the transport layer
- * that connects the browser xterm terminal to the PTY. It is excluded from unit
- * coverage as an IO adapter, but is exactly where "the terminal won't open"
- * shows up, so this drives a real ws client through the real server and asserts
- * the full handshake, output replay, input/resize forwarding, exit and the
- * unknown-session / launch-failure error paths.
- */
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
 
-const silentLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-};
-
-function sampleSession(id: string): Session {
-  return {
-    id,
-    featureId: 'feat-1',
-    name: null,
-    provider: 'agency',
-    requestedModel: 'auto',
-    resolvedModel: null,
-    status: 'created',
-    kind: 'dev',
-    prompt: '',
-    usageFilePath: `/tmp/${id}.jsonl`,
-    createdAt: '2020-01-01T00:00:00.000Z',
-    startedAt: null,
-    endedAt: null,
-    exitCode: null,
-  };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
 
-/** A controllable fake terminal that records input and lets the test push output. */
-function fakeTerminal(sessionId: string, scrollback: string) {
-  const writes: string[] = [];
-  const resizes: Array<[number, number]> = [];
-  let sink: TerminalOutputSink | undefined;
-  let detached = false;
-  let inputReadiness: TerminalSession['inputReadiness'] = 'ready';
-  const readinessListeners = new Set<
-    (state: 'ready' | 'closed') => void
-  >();
-  const terminal: TerminalSession = {
-    sessionId,
-    write: (data) => writes.push(data),
-    get inputReadiness() {
-      return inputReadiness;
-    },
-    onInputReadiness: (listener) => {
-      if (inputReadiness !== 'pending') {
-        listener(inputReadiness);
-        return () => {};
-      }
-      readinessListeners.add(listener);
-      return () => readinessListeners.delete(listener);
-    },
-    markInputReady: () => {
-      if (inputReadiness !== 'pending') {
-        return;
-      }
-      inputReadiness = 'ready';
-      for (const listener of readinessListeners) {
-        listener('ready');
-      }
-      readinessListeners.clear();
-    },
-    resize: (cols, rows) => resizes.push([cols, rows]),
-    attach: (s) => {
-      sink = s;
-      if (scrollback.length > 0) {
-        s.send(scrollback);
-      }
-      return () => {
-        detached = true;
-        sink = undefined;
-      };
-    },
-    kill: () => {},
-    notify: (data) => sink?.send(data),
-    exited: false,
-    exitCode: null,
-    transcriptText: () => '',
-  };
-  return {
-    terminal,
-    writes,
-    resizes,
-    pushOutput: (data: string) => sink?.send(data),
-    pushExit: (code: number | null) => sink?.exit(code),
-    isDetached: () => detached,
-    holdInput: () => {
-      inputReadiness = 'pending';
-    },
-    releaseInput: () => terminal.markInputReady(),
-    closeInput: () => {
-      if (inputReadiness !== 'pending') {
-        return;
-      }
-      inputReadiness = 'closed';
-      for (const listener of readinessListeners) {
-        listener('closed');
-      }
-      readinessListeners.clear();
-    },
-  };
-}
-
-const servers: Server[] = [];
-
-async function startServer(
-  manager: TerminalManager,
-  getSession: (id: string) => Session | null,
-): Promise<string> {
-  const server = createServer();
-  servers.push(server);
-  attachTerminalWs({
-    server,
-    manager,
-    config: terminalDefaults,
-    getSession,
-    logger: silentLogger,
+async function fixture(compose = async () => '', recovery = false) {
+  const processes: Array<{
+    writes: string[]; resizes: number[][]; killed: boolean;
+    output(data: string): void; exit(code: number): void;
+  }> = [];
+  const providers = createProviderRegistry();
+  providers.register({
+    id: 'fixture', listModels: async () => [], startSession: () => { throw new Error('unused'); },
+    buildInteractiveCommand: () => ({ command: 'fixture', args: [], env: {} }),
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  const { port } = server.address() as AddressInfo;
-  return `ws://127.0.0.1:${port}${terminalDefaults.wsPath}`;
+  const bus = createEventBus<SessionEventMap>();
+  const manager = createTerminalManager({
+    logger: { error: () => {} },
+    spawner: {
+      spawn: () => {
+        let output!: (data: string) => void;
+        let exit!: (code: number | null) => void;
+        const process = {
+          writes: [] as string[], resizes: [] as number[][], killed: false,
+          output: (data: string) => output(data), exit: (code: number) => exit(code),
+        };
+        processes.push(process);
+        const pty: PtyProcess = {
+          write: (data) => process.writes.push(data),
+          resize: (cols, rows) => process.resizes.push([cols, rows]),
+          onData: (fn) => { output = fn; }, onExit: (fn) => { exit = fn; },
+          kill: () => { process.killed = true; exit(1); },
+        };
+        return pty;
+      },
+    },
+    providers, bus, clock: createClock(() => 0),
+    config: { ...terminalDefaults, autoRetryEnabled: false, instructionSeedSubmitDelayMs: 1, instructionSeedSubmitMaxWaitMs: 20 },
+    transcriptStore: { save: async () => {}, load: async () => null, delete: async () => {} },
+    bootstrap: { composeForSession: compose }, sessionFiles: { record: () => {} }, home: 'fixture',
+    isTransientFailure: (line) => line.includes('TRANSIENT'),
+    selfRecovery: { enabled: recovery, useMetaAnalysis: false, report: () => {} },
+  });
+  const session: Session = {
+    id: 's1', featureId: 'f1', name: null, provider: 'fixture', requestedModel: 'auto', resolvedModel: null,
+    status: 'created', kind: 'dev', prompt: '', usageFilePath: 'fixture.jsonl',
+    createdAt: '', startedAt: null, endedAt: null, exitCode: null,
+  };
+  const server = createServer();
+  const wss = attachTerminalWs({
+    server, manager, config: terminalDefaults,
+    getSession: (id) => id === session.id ? session : null,
+    resolveCwd: () => 'fixture', logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  cleanups.push(async () => {
+    for (const client of wss.clients) client.terminate();
+    manager.shutdown();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}${terminalDefaults.wsPath}`;
+  function connect(id = 's1', origin?: string) {
+    const ws = new WebSocket(`${url}?sessionId=${id}`, origin ? { origin } : {});
+    const frames: ServerMessage[] = [];
+    const closed = new Promise<number>((resolve) => ws.once('close', resolve));
+    ws.on('message', (data) => frames.push(JSON.parse(data.toString())));
+    let seq = 0;
+    return {
+      ws, frames, closed,
+      input: (data: string, generation = 1) => ws.send(JSON.stringify({ type: 'input', data, generation, seq: ++seq })),
+      resize: (cols: number, rows: number, generation = 1) => ws.send(JSON.stringify({ type: 'resize', cols, rows, generation })),
+      ready: async (generation = 1) => {
+        await expect.poll(() => frames.some((frame) => frame.type === 'state' && frame.state === 'ready' && frame.generation === generation)).toBe(true);
+      },
+    };
+  }
+  return { manager, session, processes, connect, bus };
 }
 
-/**
- * Buffers every server frame the moment the socket exists so none are lost to
- * the gap between connection and the first read. Returns frames in order.
- */
-function makeReader(ws: WebSocket) {
-  const queue: ServerMessage[] = [];
-  const waiters: Array<(m: ServerMessage) => void> = [];
-  ws.on('message', (raw: Buffer) => {
-    const msg = JSON.parse(raw.toString()) as ServerMessage;
-    const waiter = waiters.shift();
-    if (waiter) {
-      waiter(msg);
-    } else {
-      queue.push(msg);
+describe('terminal WebSocket lifecycle (real WS, controlled PTY port)', () => {
+  it('rejects unknown sessions and cross-origin sockets', async () => {
+    const f = await fixture();
+    expect(await f.connect('missing').closed).toBe(4404);
+    expect(await f.connect('s1', 'https://evil.example').closed).toBe(4403);
+    expect(f.processes).toHaveLength(0);
+  });
+  it('surfaces failed launch and invalid protocol rather than silently accepting input', async () => {
+    const f = await fixture(async () => { throw new Error('compose failed'); });
+    const c = f.connect();
+    await expect.poll(() => c.frames.some((m) => m.type === 'state' && m.state === 'failed')).toBe(true);
+    c.ws.send('invalid');
+    expect(await c.closed).toBe(4400);
+  });
+  it('delayed launch preserves FIRST then SECOND once, latest initial resize, and output replay', async () => {
+    const gate = deferred<string>();
+    const f = await fixture(() => gate.promise);
+    const c = f.connect();
+    await new Promise<void>((resolve) => c.ws.once('open', resolve));
+    c.input('FIRST', 0);
+    c.input('SECOND', 0);
+    c.resize(80, 24, 0);
+    c.resize(132, 43, 0);
+    // Ping/pong is a transport barrier: all prior frames reached the registered handler.
+    const barrier = new Promise<void>((resolve) => c.ws.once('pong', () => resolve()));
+    c.ws.ping(); await barrier;
+    gate.resolve('');
+    await c.ready();
+    expect(f.processes).toHaveLength(1);
+    expect(f.processes[0].writes).toEqual(['FIRST', 'SECOND']);
+    expect(f.processes[0].resizes).toEqual([[132, 43]]);
+    expect(c.frames.filter((m) => m.type === 'ack').map((m) => m.outcome)).toEqual(['written', 'written']);
+    f.processes[0].output('SCROLLBACK');
+    const second = f.connect();
+    await second.ready();
+    expect(second.frames).toContainEqual({ type: 'output', data: 'SCROLLBACK' });
+    f.processes[0].output('LIVE');
+    await expect.poll(() => c.frames).toContainEqual({ type: 'output', data: 'LIVE' });
+    await expect.poll(() => second.frames).toContainEqual({ type: 'output', data: 'LIVE' });
+    c.input('NEXT');
+    await expect.poll(() => f.processes[0].writes).toEqual(['FIRST', 'SECOND', 'NEXT']);
+  });
+  it('deduplicates parallel launches and cancels pending delete/shutdown without resurrection', async () => {
+    for (const action of ['none', 'close', 'shutdown'] as const) {
+      const gate = deferred<string>();
+      const f = await fixture(() => gate.promise);
+      const a = f.manager.getOrLaunch(f.session);
+      const b = f.manager.getOrLaunch(f.session);
+      const outcome = Promise.allSettled([a, b]);
+      if (action === 'close') f.manager.close('s1');
+      if (action === 'shutdown') f.manager.shutdown();
+      gate.resolve('');
+      const results = await outcome;
+      if (action === 'none') {
+        expect(results[0]).toEqual(results[1]);
+        expect(f.processes).toHaveLength(1);
+      } else {
+        expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+        expect(f.processes).toHaveLength(0);
+        expect(f.manager.get('s1')).toBeUndefined();
+      }
     }
   });
-  return {
-    next(): Promise<ServerMessage> {
-      const buffered = queue.shift();
-      if (buffered) {
-        return Promise.resolve(buffered);
-      }
-      return new Promise((resolve) => waiters.push(resolve));
-    },
-  };
-}
-
-function encodeClient(message: ClientMessage): string {
-  return JSON.stringify(message);
-}
-
-function waitClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
-  return new Promise((resolve) => {
-    ws.once('close', (code, reason) =>
-      resolve({ code, reason: reason.toString() }),
-    );
+  it('preserves normal bootstrap context before submitting queued user input', async () => {
+    const f = await fixture(async () => 'BOOTSTRAP');
+    const c = f.connect();
+    await expect.poll(() => c.frames.some((m) => m.type === 'state' && m.state === 'bootstrapping')).toBe(true);
+    c.input('USER\r');
+    const barrier = new Promise<void>((resolve) => c.ws.once('pong', () => resolve()));
+    c.ws.ping(); await barrier;
+    expect(f.processes[0].writes).toEqual([]);
+    f.processes[0].output('? help');
+    await c.ready();
+    expect(f.processes[0].writes).toEqual(['BOOTSTRAP', '\r', 'USER\r']);
+    expect(c.frames.filter((m) => m.type === 'ack').map((m) => m.outcome)).toEqual(['written']);
   });
-}
-
-afterEach(async () => {
-  while (servers.length > 0) {
-    const server = servers.pop();
-    await new Promise<void>((resolve) => server?.close(() => resolve()));
-  }
-});
-
-describe('attachTerminalWs (integration)', () => {
-  it('closes with 4404 when the session is unknown', async () => {
-    const manager: TerminalManager = {
-      getOrLaunch: async () => {
-        throw new Error('should not launch');
-      },
-      get: () => undefined,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, () => null);
-    const ws = new WebSocket(`${url}?sessionId=missing`);
-    const { code } = await waitClose(ws);
-    expect(code).toBe(4404);
+  it('does not attach a sink when the socket disconnects during launch', async () => {
+    const gate = deferred<string>();
+    const f = await fixture(() => gate.promise);
+    const subscribe = f.manager.onTerminal.bind(f.manager);
+    const unsubscribed = vi.fn();
+    vi.spyOn(f.manager, 'onTerminal').mockImplementation((id, listener) => {
+      const detach = subscribe(id, listener);
+      return () => { detach(); unsubscribed(); };
+    });
+    const c = f.connect();
+    await new Promise<void>((resolve) => c.ws.once('open', resolve));
+    c.input('discarded', 0);
+    c.ws.close(); await c.closed;
+    await expect.poll(() => unsubscribed).toHaveBeenCalledOnce();
+    gate.resolve('');
+    await expect.poll(() => f.manager.get('s1')).toBeDefined();
+    f.manager.get('s1')!.notify('no socket should receive this');
+    expect(f.processes[0].writes).toEqual([]);
+    expect(unsubscribed).toHaveBeenCalledOnce();
   });
-
-  it('closes with 4500 when launching the terminal throws', async () => {
-    const manager: TerminalManager = {
-      getOrLaunch: async () => {
-        throw new Error('spawn failed');
-      },
-      get: () => undefined,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const { code } = await waitClose(ws);
-    expect(code).toBe(4500);
+  it('rebinds the current real socket on automatic recovery and rejects the old epoch', async () => {
+    const f = await fixture(async () => '', true);
+    const c = f.connect(); await c.ready();
+    c.input('PROMPT\r');
+    await expect.poll(() => f.processes[0].writes).toEqual(['PROMPT\r']);
+    f.manager.confirmReplaySafeRequest('s1', 'PROMPT');
+    const old = f.processes[0];
+    old.output('TRANSIENT\n');
+    await expect.poll(() => f.processes).toHaveLength(2);
+    f.processes[1].output('? help');
+    await c.ready(2);
+    expect(f.processes[1].writes).toEqual(['PROMPT', '\r']);
+    expect(old.killed).toBe(true);
+    old.exit(9);
+    expect(f.manager.get('s1')?.generation).toBe(2);
+    f.processes[1].output('REPLACEMENT');
+    await expect.poll(() => c.frames).toContainEqual({ type: 'output', data: 'REPLACEMENT' });
+    c.input('STALE', 1);
+    c.resize(1, 1, 1);
+    c.input('CURRENT', 2);
+    c.resize(100, 30, 2);
+    await expect.poll(() => f.processes[1].writes).toEqual(['PROMPT', '\r', 'CURRENT']);
+    await expect.poll(() => f.processes[1].resizes).toEqual([[100, 30]]);
+    expect(c.frames.some((m) => m.type === 'ack' && m.outcome === 'rejected')).toBe(true);
+    f.processes[1].exit(0);
+    await expect.poll(() => c.frames).toContainEqual({ type: 'exit', code: 0 });
   });
-
-  it('sends ready, replays scrollback and streams live output', async () => {
-    const fake = fakeTerminal('sess-1', 'SCROLLBACK');
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-
-    const ready = await rx.next();
-    expect(ready).toEqual({ type: 'ready', sessionId: 'sess-1' });
-
-    const replay = await rx.next();
-    expect(replay).toEqual({ type: 'output', data: 'SCROLLBACK' });
-
-    fake.pushOutput('LIVE');
-    expect(await rx.next()).toEqual({ type: 'output', data: 'LIVE' });
-
-    ws.close();
+  it('rejects the entire queued input and subsequent Enter after overflow', async () => {
+    const gate = deferred<string>();
+    const f = await fixture(() => gate.promise);
+    const c = f.connect();
+    await new Promise<void>((resolve) => c.ws.once('open', resolve));
+    c.input('PREFIX', 0);
+    c.input('x'.repeat(terminalDefaults.bootstrapInputBufferBytes + 1), 0);
+    c.input('\r', 0);
+    await expect.poll(() => c.frames.filter((m) => m.type === 'ack')).toHaveLength(3);
+    gate.resolve('');
+    await expect.poll(() => f.processes).toHaveLength(1);
+    expect(f.processes[0].writes).toEqual([]);
+    expect(c.frames.filter((m) => m.type === 'ack').every((m) => m.outcome === 'rejected')).toBe(true);
+    expect(c.frames.some((m) => m.type === 'state' && m.state === 'failed')).toBe(true);
   });
-
-  it('forwards client input and resize to the terminal', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next(); // ready
-
-    ws.send(encodeClient({ type: 'input', data: 'ls\r' }));
-    ws.send(encodeClient({ type: 'resize', cols: 132, rows: 43 }));
-
-    await expect
-      .poll(() => fake.writes.length > 0 && fake.resizes.length > 0)
-      .toBe(true);
-    expect(fake.writes).toContain('ls\r');
-    expect(fake.resizes).toContainEqual([132, 43]);
-
-    ws.close();
+  it('cancels recovery from real socket input while the replacement is bootstrapping', async () => {
+    const gate = deferred<string>();
+    let calls = 0;
+    const f = await fixture(() => ++calls === 1 ? Promise.resolve('') : gate.promise, true);
+    const c = f.connect(); await c.ready();
+    f.manager.confirmReplaySafeRequest('s1', 'PROMPT');
+    f.processes[0].output('TRANSIENT\n');
+    await expect.poll(() => calls).toBe(2);
+    c.input('\x03');
+    await expect.poll(() => c.frames.some((m) => m.type === 'ack' && m.outcome === 'rejected')).toBe(true);
+    gate.resolve('');
+    await expect.poll(() => c.frames.some((m) => m.type === 'state' && m.state === 'failed')).toBe(true);
+    expect(f.processes).toHaveLength(1);
+    expect(f.manager.get('s1')).toBeUndefined();
   });
-
-  it('buffers early input and releases it in order after bootstrap completes', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    fake.holdInput();
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next();
-
-    ws.send(encodeClient({ type: 'input', data: 'first' }));
-    ws.send(encodeClient({ type: 'input', data: 'second' }));
-    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
-    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
-    expect(fake.writes).toEqual([]);
-
-    fake.terminal.write('BOOTSTRAP');
-    fake.terminal.write('\r');
-    fake.releaseInput();
-    expect(fake.writes).toEqual(['BOOTSTRAP', '\r', 'first', 'second']);
-    ws.send(encodeClient({ type: 'input', data: 'third' }));
-    await expect
-      .poll(() => fake.writes)
-      .toEqual(['BOOTSTRAP', '\r', 'first', 'second', 'third']);
-    ws.close();
-  });
-
-  it('bounds pending input without delaying later input that fits', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    fake.holdInput();
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next();
-
-    ws.send(
-      encodeClient({
-        type: 'input',
-        data: 'x'.repeat(terminalDefaults.bootstrapInputBufferBytes + 1),
-      }),
-    );
-    ws.send(encodeClient({ type: 'input', data: 'kept' }));
-    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
-    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
-    fake.releaseInput();
-    expect(fake.writes).toEqual(['kept']);
-    ws.close();
-  });
-
-  it('discards buffered input when the terminal exits before bootstrap', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    fake.holdInput();
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next();
-    ws.send(encodeClient({ type: 'input', data: 'discard me' }));
-    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
-    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
-
-    fake.closeInput();
-    expect(fake.writes).toEqual([]);
-    ws.close();
-  });
-
-  it('discards buffered input when the socket disconnects', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    fake.holdInput();
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next();
-    ws.send(encodeClient({ type: 'input', data: 'discard me' }));
-    ws.send(encodeClient({ type: 'resize', cols: 80, rows: 24 }));
-    await expect.poll(() => fake.resizes).toContainEqual([80, 24]);
-    ws.close();
-    await expect.poll(() => fake.isDetached()).toBe(true);
-
-    fake.releaseInput();
-    expect(fake.writes).toEqual([]);
-  });
-
-  it('forwards the process exit code to the client', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next(); // ready
-
-    fake.pushExit(0);
-    expect(await rx.next()).toEqual({ type: 'exit', code: 0 });
-
-    ws.close();
-  });
-
-  it('detaches the client sink when the socket closes', async () => {
-    const fake = fakeTerminal('sess-1', '');
-    const manager: TerminalManager = {
-      getOrLaunch: async () => fake.terminal,
-      get: () => fake.terminal,
-      close: () => {},
-      injectInstructions: () => false,
-      observeInput: () => {},
-      shutdown: () => {},
-    };
-    const url = await startServer(manager, (id) => sampleSession(id));
-    const ws = new WebSocket(`${url}?sessionId=sess-1`);
-    const rx = makeReader(ws);
-    await rx.next(); // ready
-    ws.close();
-
-    await expect.poll(() => fake.isDetached()).toBe(true);
+  it('cannot resurrect a pending recovery after delete or shutdown and reports failure on the existing socket', async () => {
+    for (const action of ['close', 'shutdown'] as const) {
+      const gate = deferred<string>();
+      let calls = 0;
+      const f = await fixture(() => ++calls === 1 ? Promise.resolve('') : gate.promise, true);
+      const c = f.connect(); await c.ready();
+      c.input('PROMPT\r');
+      await expect.poll(() => f.processes[0].writes).toEqual(['PROMPT\r']);
+      f.manager.confirmReplaySafeRequest('s1', 'PROMPT');
+      f.processes[0].output('TRANSIENT\n');
+      await expect.poll(() => calls).toBe(2);
+      if (action === 'close') f.manager.close('s1');
+      else f.manager.shutdown();
+      gate.resolve('');
+      await expect.poll(() => c.frames.some((m) => m.type === 'state' && m.state === 'failed')).toBe(true);
+      expect(f.processes).toHaveLength(1);
+      expect(f.processes[0].killed).toBe(true);
+      expect(f.manager.get('s1')).toBeUndefined();
+    }
   });
 });
-

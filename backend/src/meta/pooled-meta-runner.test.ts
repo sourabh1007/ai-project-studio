@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { AcpRequestError } from './acp/acp-client.js';
 import type { MetaRequest, MetaRunResult, MetaRunner } from './meta-runner.js';
 import type { MetaSessionPoolStats } from './acp/acp-pool.js';
 import {
@@ -25,7 +26,7 @@ function pool(
   options: {
     ready?: boolean;
     result?: MetaRunResult;
-    error?: Error;
+    error?: unknown;
   } = {},
 ): PurposePool & { calls: MetaRequest[] } {
   const calls: MetaRequest[] = [];
@@ -36,7 +37,7 @@ function pool(
     stats: () => stats({ ready: options.ready ?? true }),
     runDetailed: async (request) => {
       calls.push(request);
-      if (options.error) {
+      if (options.error !== undefined) {
         throw options.error;
       }
       return options.result ?? { text: `warm:${purpose}`, sessionId: 'warm' };
@@ -69,6 +70,7 @@ describe('createPooledMetaRunner', () => {
     const cold = coldRunner();
     const runner = createPooledMetaRunner({
       pools: [general],
+      defaultTimeoutMs: 100,
       fallback: cold,
       bypass: () => true,
     });
@@ -78,11 +80,49 @@ describe('createPooledMetaRunner', () => {
     expect(general.calls).toHaveLength(0);
   });
 
+  it('stamps a single deadline before bypassing to the cold path', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const cold = coldRunner();
+      const runner = createPooledMetaRunner({
+        pools: [pool('general')],
+        defaultTimeoutMs: 100,
+        fallback: cold,
+        bypass: () => true,
+      });
+      await runner.runDetailed(req({ timeoutMs: 25 }));
+      expect(cold.calls[0]?.deadlineAt).toBe(Date.now() + 25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stamps a single default deadline even when the request omits timeoutMs', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const cold = coldRunner();
+      const runner = createPooledMetaRunner({
+        pools: [pool('general')],
+        defaultTimeoutMs: 75,
+        fallback: cold,
+        bypass: () => true,
+      });
+      await runner.runDetailed(req());
+      expect(cold.calls[0]?.timeoutMs).toBe(75);
+      expect(cold.calls[0]?.deadlineAt).toBe(Date.now() + 75);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses the warm pool when bypass() is false', async () => {
     const general = pool('general');
     const cold = coldRunner();
     const runner = createPooledMetaRunner({
       pools: [general],
+      defaultTimeoutMs: 100,
       fallback: cold,
       bypass: () => false,
     });
@@ -96,6 +136,7 @@ describe('createPooledMetaRunner', () => {
     const general = pool('general');
     const runner = createPooledMetaRunner({
       pools: [general, review],
+      defaultTimeoutMs: 100,
       fallback: coldRunner(),
     });
     const result = await runner.runDetailed(req({ purpose: 'review' }));
@@ -108,6 +149,7 @@ describe('createPooledMetaRunner', () => {
     const general = pool('general');
     const runner = createPooledMetaRunner({
       pools: [general],
+      defaultTimeoutMs: 100,
       fallback: coldRunner(),
     });
     const result = await runner.runDetailed(req({ purpose: 'unknown' }));
@@ -119,6 +161,7 @@ describe('createPooledMetaRunner', () => {
     const general = pool('general');
     const runner = createPooledMetaRunner({
       pools: [general],
+      defaultTimeoutMs: 100,
       fallback: coldRunner(),
     });
     const out = await runner.run(req());
@@ -130,6 +173,7 @@ describe('createPooledMetaRunner', () => {
     const pools: Array<ReturnType<typeof pool>> = [general];
     const runner = createPooledMetaRunner({
       pools,
+      defaultTimeoutMs: 100,
       fallback: coldRunner(),
     });
     // Before the pool exists, the purpose falls back to general.
@@ -148,20 +192,69 @@ describe('createPooledMetaRunner', () => {
   it('uses the cold runner while the pool is warming', async () => {
     const general = pool('general', { ready: false });
     const cold = coldRunner('cold-text');
-    const runner = createPooledMetaRunner({ pools: [general], fallback: cold });
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
     const out = await runner.run(req());
     expect(out).toBe('cold-text');
     expect(general.calls).toHaveLength(0);
     expect(cold.calls).toHaveLength(1);
   });
 
-  it('falls back to cold and reports when a warm turn throws', async () => {
-    const boom = new Error('acp died');
+  it('does not start warm or cold execution when the request is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const general = pool('general');
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
+    await expect(
+      runner.run({
+        featureId: 'f1',
+        prompt: 'hi',
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('Meta request cancelled before it started');
+    expect(general.calls).toHaveLength(0);
+    expect(cold.calls).toHaveLength(0);
+  });
+
+  it('routes incompatible warm requests to cold before execution', async () => {
+    const general = pool('general');
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+      supportsWarm: (request) => !request.noTools && (request.attachments?.length ?? 0) === 0,
+    });
+    const out = await runner.run({
+      featureId: 'f1',
+      prompt: 'hi',
+      noTools: true,
+      attachments: ['C:\\repo\\prompt.md'],
+    });
+    expect(out).toBe('cold-text');
+    expect(general.calls).toHaveLength(0);
+    expect(cold.calls).toHaveLength(1);
+  });
+
+  it('falls back to cold only for an explicit definite pre-dispatch ACP error', async () => {
+    const boom = new AcpRequestError('session/new failed', {
+      method: 'session/new',
+      allowFallbackToCold: true,
+    });
     const general = pool('general', { error: boom });
     const cold = coldRunner('cold-text');
     const onFallback = vi.fn();
     const runner = createPooledMetaRunner({
       pools: [general],
+      defaultTimeoutMs: 100,
       fallback: cold,
       onFallback,
     });
@@ -171,10 +264,85 @@ describe('createPooledMetaRunner', () => {
     expect(cold.calls).toHaveLength(1);
   });
 
+  it('preserves the original absolute deadline when warm pre-dispatch fallback occurs', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const boom = new AcpRequestError('session/new failed', {
+        method: 'session/new',
+        allowFallbackToCold: true,
+      });
+      const general = pool('general', {
+        error: boom,
+      });
+      const cold = coldRunner('cold-text');
+      const runner = createPooledMetaRunner({
+        pools: [general],
+        defaultTimeoutMs: 100,
+        fallback: cold,
+      });
+      const deadlineAt = Date.now() + 50;
+      await runner.run(req({ deadlineAt, timeoutMs: 100 }));
+      expect(general.calls[0]?.deadlineAt).toBe(deadlineAt);
+      expect(cold.calls[0]?.deadlineAt).toBe(deadlineAt);
+      expect(cold.calls[0]?.timeoutMs).toBe(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fall back to cold when the warm failure reports an ambiguous dispatched turn', async () => {
+    const boom = new AcpRequestError('prompt timed out', {
+      method: 'session/prompt',
+      allowFallbackToCold: false,
+    });
+    const general = pool('general', { error: boom });
+    const cold = coldRunner('cold-text');
+    const onFallback = vi.fn();
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+      onFallback,
+    });
+    await expect(runner.run(req())).rejects.toThrow('prompt timed out');
+    expect(onFallback).not.toHaveBeenCalled();
+    expect(cold.calls).toHaveLength(0);
+  });
+
+  it('does not fall back to cold on an unknown Error from warm execution', async () => {
+    const boom = new Error('unknown warm failure');
+    const general = pool('general', { error: boom });
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
+    await expect(runner.run(req())).rejects.toThrow('unknown warm failure');
+    expect(cold.calls).toHaveLength(0);
+  });
+
+  it('does not fall back to cold on a non-Error warm failure value', async () => {
+    const general = pool('general');
+    general.runDetailed = async () => {
+      throw 'string failure';
+    };
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pools: [general],
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
+    await expect(runner.run(req())).rejects.toBe('string failure');
+    expect(cold.calls).toHaveLength(0);
+  });
+
   it('falls back to cold when there is no general pool at all', async () => {
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
       pools: [pool('review', { ready: true })],
+      defaultTimeoutMs: 100,
       fallback: cold,
     });
     const out = await runner.run(req({ purpose: 'other' }));
@@ -191,6 +359,7 @@ describe('createPooledMetaRunner', () => {
     };
     const runner = createPooledMetaRunner({
       pools: [pool('general'), pool('review')],
+      defaultTimeoutMs: 100,
       fallback: coldRunner(),
       demand,
     });
@@ -208,6 +377,7 @@ describe('createPooledMetaRunner', () => {
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
       pools: [pool('review', { ready: true })],
+      defaultTimeoutMs: 100,
       fallback: cold,
       demand,
     });
@@ -217,18 +387,49 @@ describe('createPooledMetaRunner', () => {
     expect(events).toEqual(['begin:nope', 'end:nope']);
   });
 
-  it('ends demand even when a warm turn throws and spills to cold', async () => {    const events: string[] = [];
+  it('ends demand even when a warm turn throws and spills to cold', async () => {
+    const events: string[] = [];
     const demand = {
       begin: (purpose: string) => events.push(`begin:${purpose}`),
       end: (purpose: string) => events.push(`end:${purpose}`),
       suggestion: () => 1,
     };
     const runner = createPooledMetaRunner({
-      pools: [pool('general', { error: new Error('boom') })],
+      pools: [
+        pool('general', {
+          error: new AcpRequestError('session/new failed', {
+            method: 'session/new',
+            allowFallbackToCold: true,
+          }),
+        }),
+      ],
+      defaultTimeoutMs: 100,
       fallback: coldRunner('cold-text'),
       demand,
     });
     await runner.run(req());
+    expect(events).toEqual(['begin:general', 'end:general']);
+  });
+
+  it('ends demand even when an ambiguous warm failure is rethrown', async () => {
+    const events: string[] = [];
+    const demand = {
+      begin: (purpose: string) => events.push(`begin:${purpose}`),
+      end: (purpose: string) => events.push(`end:${purpose}`),
+      suggestion: () => 1,
+    };
+    const runner = createPooledMetaRunner({
+      pools: [pool('general', {
+        error: new AcpRequestError('timed out', {
+          method: 'session/prompt',
+          allowFallbackToCold: false,
+        }),
+      })],
+      defaultTimeoutMs: 100,
+      fallback: coldRunner('cold-text'),
+      demand,
+    });
+    await expect(runner.run(req())).rejects.toThrow('timed out');
     expect(events).toEqual(['begin:general', 'end:general']);
   });
 
@@ -241,6 +442,7 @@ describe('createPooledMetaRunner', () => {
     };
     const runner = createPooledMetaRunner({
       pools: [pool('review', { ready: true })],
+      defaultTimeoutMs: 100,
       fallback: coldRunner('cold-text'),
       demand,
     });

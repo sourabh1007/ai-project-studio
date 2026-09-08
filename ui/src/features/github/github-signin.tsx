@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { copyText } from '../../hooks/clipboard-write.js';
 import { useApi } from '../../app/api-context.js';
 import { Modal, Button } from '../../components/ui.js';
 import { Spinner } from '../../components/loading.js';
@@ -63,8 +64,10 @@ export function GithubSignInModal({
   }, []);
 
   const copyCode = useCallback((code: string) => {
-    void navigator.clipboard?.writeText(code).then(
-      () => {
+    setCopied(false);
+    void copyText(code).then(
+      (result) => {
+        if (!result.ok) return;
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       },

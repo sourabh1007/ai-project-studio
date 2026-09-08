@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
-import { applySchema, DATABASE_GROUPS } from './schema.js';
+import { applySchema, type ApplySchemaOptions, DATABASE_GROUPS } from './schema.js';
 
 export interface DatabaseOptions {
   databasePath: string;
@@ -26,10 +26,18 @@ function attachGroups(db: DatabaseSync, databasePath: string): void {
 }
 
 /** Opens (or creates) the SQLite database and ensures the schema exists. */
-export function createDatabase(options: DatabaseOptions): DatabaseSync {
+export function createDatabase(
+  options: DatabaseOptions,
+  schemaOptions?: ApplySchemaOptions,
+): DatabaseSync {
   const db = new DatabaseSync(options.databasePath);
-  db.exec('PRAGMA foreign_keys = ON;');
-  attachGroups(db, options.databasePath);
-  applySchema(db);
-  return db;
+  try {
+    db.exec('PRAGMA foreign_keys = ON;');
+    attachGroups(db, options.databasePath);
+    applySchema(db, schemaOptions);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }

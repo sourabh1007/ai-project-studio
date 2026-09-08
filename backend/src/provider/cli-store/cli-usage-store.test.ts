@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import {
   createCliUsageStore,
@@ -13,7 +13,8 @@ let dir: string;
 let dbPath: string;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), 'cw-usage-'));
+  dir = join(process.cwd(), `.usage-store-fixture-${randomUUID()}`);
+  mkdirSync(dir);
   dbPath = join(dir, 'session-store.db');
   const db = new DatabaseSync(dbPath);
   db.exec(`
@@ -75,17 +76,10 @@ describe('createCliUsageStore', () => {
     ]);
   });
 
-  it('coerces NULL/non-numeric fields to 0 and keeps NULL model', () => {
+  it('does not invent zero-cost usage from NULL/non-numeric fields', () => {
     const store = createCliUsageStore({ databasePath: dbPath });
-    const [row] = store.listBySession('s2');
-    expect(row).toMatchObject({
-      model: null,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningTokens: 0,
-      totalNanoAiu: 0,
-      requestMultiplier: 0,
-    });
+    expect(() => store.listBySession('s2')).toThrow('source-values-not-ready');
+    expect(store.readUsagePage('s2', ctx, null, 5)).toMatchObject({ status: 'ready', rows: [], issue: { status: 'retrying', reason: 'source-values-not-ready' } });
   });
 
   it('returns empty for a session with no rows', () => {
@@ -93,21 +87,24 @@ describe('createCliUsageStore', () => {
     expect(store.listBySession('nope')).toEqual([]);
   });
 
-  it('returns empty when the file is missing', () => {
+  it('reports missing sources explicitly', () => {
     const store = createCliUsageStore({ databasePath: join(dir, 'missing.db') });
-    expect(store.listBySession('s1')).toEqual([]);
+    expect(() => store.listBySession('s1')).toThrow('source-missing');
+    expect(store.readUsagePage('s1', ctx, null, 5)).toMatchObject({ status: 'retrying', reason: 'source-missing' });
   });
 
-  it('degrades to empty when the file is not a valid database', () => {
+  it('reports invalid databases as a retryable read failure', () => {
     const badPath = join(dir, 'corrupt.db');
     writeFileSync(badPath, 'not a sqlite database');
     const store = createCliUsageStore({ databasePath: badPath });
-    expect(store.listBySession('s1')).toEqual([]);
+    expect(() => store.listBySession('s1')).toThrow();
+    expect(store.readUsagePage('s1', ctx, null, 5)).toMatchObject({ status: 'retrying', reason: 'source-read-failed' });
   });
 
-  it('degrades to empty when the store cannot be opened', () => {
+  it('reports databases which cannot be opened', () => {
     const store = createCliUsageStore({ databasePath: dir });
-    expect(store.listBySession('s1')).toEqual([]);
+    expect(() => store.listBySession('s1')).toThrow();
+    expect(store.readUsagePage('s1', ctx, null, 5)).toMatchObject({ status: 'retrying', reason: 'source-read-failed' });
   });
 });
 
@@ -116,7 +113,8 @@ describe('createCliUsageStore with sub-agent rows', () => {
   let subDbPath: string;
 
   beforeAll(() => {
-    subDir = mkdtempSync(join(tmpdir(), 'cw-usage-sub-'));
+    subDir = join(process.cwd(), `.usage-store-fixture-${randomUUID()}`);
+    mkdirSync(subDir);
     subDbPath = join(subDir, 'session-store.db');
     const db = new DatabaseSync(subDbPath);
     db.exec(`
@@ -148,6 +146,87 @@ describe('createCliUsageStore with sub-agent rows', () => {
     const rows = store.listBySession('s1');
     expect(rows.map((r) => r.totalNanoAiu)).toEqual([3000000000, 5000000000]);
     expect(rows.map((r) => r.turnIndex)).toEqual([0, 1]);
+    const page = store.readUsagePage('s1', ctx, null, 1);
+    expect(page).toMatchObject({ status: 'ready', nextCursor: '1', final: false });
+    const next = store.readUsagePage('s1', ctx, '1', 1);
+    expect(next).toMatchObject({ status: 'ready', nextCursor: null, rows: [{ sourceKey: '[3,"2025-01-01T00:00:03Z"]' }] });
+  });
+});
+
+const ctx = { featureId: 'f1', provider: 'agency', requestedModel: 'auto' };
+
+describe('incremental source reads', () => {
+  it('distinguishes a real exclusive lock from an empty source and succeeds after release', () => {
+    const writer = new DatabaseSync(dbPath);
+    const store = createCliUsageStore({ databasePath: dbPath });
+    try {
+      writer.exec('BEGIN EXCLUSIVE');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'retrying', reason: 'source-locked' });
+      writer.exec('ROLLBACK');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', rows: [{ event: { cost: 3 } }] });
+    } finally { writer.close(); }
+  });
+
+  it.each([new Error('encoding'), undefined])('does not disguise an unexpected row conversion failure as a partial successful page (%s)', (error) => {
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementationOnce(() => { throw error; });
+    let result;
+    try { result = createCliUsageStore({ databasePath: dbPath }).readUsagePage('s1', ctx, null, 1); }
+    finally { stringify.mockRestore(); }
+    expect(result).toMatchObject({ status: 'retrying', reason: 'source-read-failed' });
+  });
+
+  it('bounds mapped rows, retains provider identities rather than turn_index and never claims EOF finality', () => {
+    const before = readFileSync(dbPath);
+    const store = createCliUsageStore({ databasePath: dbPath });
+    expect(store.sourceId).toBe(dbPath);
+    expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({
+      status: 'ready', nextCursor: '10', final: false,
+      rows: [{ sourceKey: '[10,"2025-01-01T00:00:01Z"]', event: { cost: 3 } }],
+    });
+    expect(store.readUsagePage('s1', ctx, '10', 1)).toMatchObject({
+      status: 'ready', nextCursor: null, final: false,
+      rows: [{ sourceKey: '[11,"2025-01-01T00:00:02Z"]', event: { cost: 5 } }],
+    });
+    expect(store.readUsagePage('s1', ctx, '11', 1)).toMatchObject({ status: 'ready', rows: [], final: false });
+    expect(readFileSync(dbPath)).toEqual(before);
+  });
+
+  it.each([[null, 0], [null, 1001], [null, 1.5], ['no', 1], ['9007199254740992', 1]] as const)(
+    'rejects invalid cursor/limit %s/%s', (cursor, limit) => {
+      expect(createCliUsageStore({ databasePath: dbPath }).readUsagePage('s1', ctx, cursor, limit))
+        .toMatchObject({ status: 'unsupported', reason: 'invalid-capture-cursor' });
+    },
+  );
+
+  it('distinguishes not-ready, unsupported schemas, and invalid identities', () => {
+    const path = join(dir, 'schema.db');
+    const db = new DatabaseSync(path);
+    const store = createCliUsageStore({ databasePath: path });
+    try {
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'retrying', reason: 'source-not-ready' });
+      db.exec('CREATE TABLE assistant_usage_events (id TEXT PRIMARY KEY)');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'unsupported', reason: 'source-schema-unsupported' });
+      db.exec('DROP TABLE assistant_usage_events; CREATE TABLE assistant_usage_events (id INTEGER PRIMARY KEY)');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'unsupported', reason: 'source-schema-unsupported' });
+      db.exec(`DROP TABLE assistant_usage_events;
+        CREATE TABLE assistant_usage_events (id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
+          input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
+          total_nano_aiu INTEGER, request_multiplier REAL, created_at TEXT);
+        INSERT INTO assistant_usage_events VALUES (1,'s1',NULL,1,1,0,0,1,NULL)`);
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', issue: { status: 'unsupported', reason: 'source-identity-unsupported' } });
+      db.exec("UPDATE assistant_usage_events SET created_at=''");
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', issue: { status: 'unsupported', reason: 'source-identity-unsupported' } });
+      db.exec("UPDATE assistant_usage_events SET created_at='t', total_nano_aiu='NaN'");
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', issue: { status: 'retrying', reason: 'source-values-not-ready' } });
+      db.exec('UPDATE assistant_usage_events SET total_nano_aiu=-1');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', issue: { status: 'retrying', reason: 'source-values-not-ready' } });
+      db.exec('UPDATE assistant_usage_events SET total_nano_aiu=0');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', rows: [{ event: { cost: 0, resolvedModel: 'auto' } }] });
+      db.exec('UPDATE assistant_usage_events SET total_nano_aiu=4000000000, request_multiplier=NULL');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', rows: [{ event: { cost: 4 } }] });
+      db.exec('ALTER TABLE assistant_usage_events DROP COLUMN request_multiplier');
+      expect(store.readUsagePage('s1', ctx, null, 1)).toMatchObject({ status: 'ready', rows: [{ event: { cost: 4 } }] });
+    } finally { db.close(); }
   });
 });
 

@@ -42,13 +42,14 @@ const GET = 'get';
 const PATH = '/features/:featureId/sessions/:sessionId/summary';
 
 describe('session-summary-controller', () => {
-  it('generates a summary on POST for the requested session', async () => {
+  it('generates a summary on POST for the requested session with the request signal', async () => {
     const { routes, calls } = harness();
+    const signal = new AbortController().signal;
     const result = await pick(routes, POST, PATH)(
-      req({ params: { featureId: 'f1', sessionId: 's1' } }),
+      req({ params: { featureId: 'f1', sessionId: 's1' }, signal }),
     );
     expect(result).toEqual({ status: 200, body: summary });
-    expect(calls).toEqual([{ sessionId: 's1' }]);
+    expect(calls).toEqual([{ sessionId: 's1', signal }]);
   });
 
   it('returns a stored summary on GET', async () => {

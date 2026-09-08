@@ -17,7 +17,7 @@ interface UpdatesBridge {
   getState(): Promise<UpdateSnapshot>;
   check(): Promise<UpdateSnapshot | void>;
   download(): Promise<UpdateSnapshot | void>;
-  install(): Promise<void>;
+  install(): Promise<boolean>;
   onEvent(cb: (type: string, payload?: UpdateSnapshot) => void): () => void;
 }
 
@@ -89,8 +89,14 @@ export function useAppUpdates(): UseAppUpdates {
   }, [bridge, apply]);
 
   const install = useCallback(() => {
-    bridge?.install().catch(() => {});
-  }, [bridge]);
+    const failed = () => apply({
+      status: stateRef.current.status === 'downloaded' ? 'downloaded' : 'error',
+      error: stateRef.current.canAutoInstall
+        ? 'Update not installed. Wait for active work to finish, then retry installation or quit again.'
+        : 'Could not open the release page. No installer was started. Retry opening the release page.',
+    });
+    bridge?.install().then((installed) => { if (installed !== true) failed(); }).catch(failed);
+  }, [bridge, apply]);
 
   const ui = useMemo(() => deriveUpdateUi(state), [state]);
 

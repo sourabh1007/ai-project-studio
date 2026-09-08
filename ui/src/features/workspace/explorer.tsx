@@ -240,15 +240,21 @@ function SessionRow({
           aria-label={`Usage breakdown for ${name}`}
           onClick={() => setViewingUsage(true)}
         >
-          <span className="metric metric-credits">
-            <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
-          </span>
-          <span className="metric">
-            <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
-          </span>
-          <span className="metric">
-            <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
-          </span>
+          {totals ? (
+            <>
+              <span className="metric metric-credits">
+                <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
+              </span>
+              <span className="metric">
+                <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
+              </span>
+              <span className="metric">
+                <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
+              </span>
+            </>
+          ) : (
+            <span className="metric" title="Waiting for authoritative saved usage; live history is incomplete">Usage pending</span>
+          )}
           <span className="metric">
             <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
           </span>
@@ -384,7 +390,7 @@ function FeatureNode({
   const [subcategoryName, setSubcategoryName] = useState('');
   const sessions = useAsync(
     () => (expanded ? api.listSessions(feature.id) : Promise.resolve([])),
-    [feature.id, expanded, treeRevision],
+    [feature.id, expanded, treeRevision, live.sessionRevision],
   );
   const groups = useAsync(
     () => (expanded ? api.listGroups(feature.id) : Promise.resolve([])),
@@ -1665,4 +1671,3 @@ export function Explorer({
     </div>
   );
 }
-

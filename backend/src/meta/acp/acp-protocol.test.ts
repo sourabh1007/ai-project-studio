@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   encodeRequest,
+  encodeNotification,
   parseMessage,
   textFromUpdate,
   stopReasonOf,
   sessionIdOf,
+  sessionIdFromUpdate,
+  stateFromUpdate,
 } from './acp-protocol.js';
 
 describe('acp-protocol', () => {
@@ -16,6 +19,16 @@ describe('acp-protocol', () => {
       id: 7,
       method: 'session/new',
       params: { cwd: 'C:\\repo' },
+    });
+  });
+
+  it('encodes a newline-terminated JSON-RPC notification', () => {
+    const line = encodeNotification('session/cancel', { sessionId: 's1' });
+    expect(line.endsWith('\n')).toBe(true);
+    expect(JSON.parse(line)).toEqual({
+      jsonrpc: '2.0',
+      method: 'session/cancel',
+      params: { sessionId: 's1' },
     });
   });
 
@@ -95,10 +108,16 @@ describe('acp-protocol', () => {
       }),
     ).toBeNull();
     expect(textFromUpdate({ update: 'nope' })).toBeNull();
+    expect(
+      textFromUpdate({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'flat' },
+      }),
+    ).toBe('flat');
     expect(textFromUpdate(null)).toBeNull();
   });
 
-  it('reads stop reason and session id defensively', () => {
+  it('reads stop reason, state, and session id defensively', () => {
     expect(stopReasonOf({ stopReason: 'end_turn' })).toBe('end_turn');
     expect(stopReasonOf({ stopReason: 5 })).toBeNull();
     expect(stopReasonOf(null)).toBeNull();
@@ -107,5 +126,26 @@ describe('acp-protocol', () => {
     expect(sessionIdOf({ sessionId: '' })).toBeNull();
     expect(sessionIdOf({ sessionId: 9 })).toBeNull();
     expect(sessionIdOf(null)).toBeNull();
+
+    expect(sessionIdFromUpdate({ sessionId: 'sess-1' })).toBe('sess-1');
+    expect(sessionIdFromUpdate({ sessionId: '' })).toBeNull();
+    expect(sessionIdFromUpdate({ sessionId: 1 })).toBeNull();
+    expect(sessionIdFromUpdate(null)).toBeNull();
+
+    expect(
+      stateFromUpdate({
+        sessionId: 'sess-1',
+        update: { sessionUpdate: 'state_update', state: 'idle', stopReason: 'cancelled' },
+      }),
+    ).toEqual({ state: 'idle', stopReason: 'cancelled' });
+    expect(
+      stateFromUpdate({
+        sessionUpdate: 'state_update',
+        state: 'running',
+      }),
+    ).toEqual({ state: 'running', stopReason: null });
+    expect(stateFromUpdate({ update: { sessionUpdate: 'usage_update' } })).toBeNull();
+    expect(stateFromUpdate({ update: { sessionUpdate: 'state_update', state: 9 } })).toBeNull();
+    expect(stateFromUpdate(null)).toBeNull();
   });
 });

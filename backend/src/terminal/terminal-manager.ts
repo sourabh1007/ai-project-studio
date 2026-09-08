@@ -5,7 +5,7 @@ import type { SessionSpec } from '../provider/provider-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { SessionEventMap } from '../session/session-launcher.js';
 import type { TranscriptStore } from '../session/transcript-store-port.js';
-import type { PtySpawner } from './pty-contract.js';
+import type { PtyProcess, PtySpawner } from './pty-contract.js';
 import type { TerminalConfig } from './config.js';
 import type { SessionFilesStore } from '../session-files/session-files-contract.js';
 import {
@@ -22,11 +22,14 @@ import {
 } from '../self-recovery/self-recovery-coordinator.js';
 import { stripAnsi } from './ansi.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
+import { createWorkTracker } from '../kernel/work-tracker.js';
+import type { Logger } from '../kernel/logger.js';
 
 /** Max bytes of recent (ANSI-stripped) output scanned for the ready prompt. */
 const READY_SCAN_BYTES = 8192;
 
 export interface TerminalManagerDeps {
+  logger: Pick<Logger, 'error'>;
   spawner: PtySpawner;
   providers: ProviderRegistry;
   bus: EventBus<SessionEventMap>;
@@ -45,19 +48,21 @@ export interface TerminalManagerDeps {
   /** User home directory, for a scanner to expand `~`-relative tool paths. */
   home: string;
   /**
-   * Classifies a completed CLI output line as a *transient*, retryable provider
-   * failure (upstream 5xx / 429 / network reset). When provided and
-   * `config.autoRetryEnabled`, interactive sessions auto-resubmit the user's
-   * last prompt on such a failure. Omitted to disable interactive auto-retry.
+   * Classifies a completed CLI output line as a recoverable session/provider
+   * failure (for example an upstream 5xx / 429 / network reset). When provided
+   * and retry handling is enabled, interactive sessions can automatically
+   * replay only provider-confirmed replay-safe requests; raw PTY keystrokes are
+   * never used as replay authority. Omitted to disable terminal retry handling.
    */
   isTransientFailure?: (line: string) => boolean;
   /**
    * Enables the self-recovery escalation ladder for interactive dev sessions:
-   * once the non-destructive re-submits (see {@link isTransientFailure}) are
-   * exhausted on a recoverable error, optionally analyze it via a metasession,
-   * then kill and relaunch the CLI in a fresh conversation replaying the user's
-   * last prompt, and finally report to the status bar if even that fails.
-   * Omitted to disable escalation (only the plain re-submit auto-retry runs).
+   * once the non-destructive re-submits of a provider-confirmed replay-safe
+   * request (see {@link isTransientFailure}) are exhausted on a recoverable
+   * error, optionally analyze it via a metasession, then kill and relaunch the
+   * CLI in a fresh conversation replaying that same confirmed request, and
+   * finally report to the status bar if even that fails. Omitted to disable
+   * escalation (only plain in-session retry/manual guidance runs).
    */
   selfRecovery?: {
     enabled: boolean;
@@ -74,9 +79,10 @@ export interface LaunchOptions {
   rows?: number;
   cwd?: string;
   /**
-   * A prompt to replay once the freshly-launched CLI is ready, seeded after any
-   * bootstrap context. Set only by the self-recovery restart path, so a relaunch
-   * re-drives the user's last prompt in a clean conversation.
+   * A provider-confirmed replay-safe request to replay once the freshly
+   * launched CLI is ready, seeded after any bootstrap context. Set only by the
+   * self-recovery restart path, so a relaunch re-drives that exact confirmed
+   * request in a clean conversation.
    */
   replaySeed?: string;
 }
@@ -92,6 +98,11 @@ export interface TerminalManager {
     options?: LaunchOptions,
   ): Promise<TerminalSession>;
   get(sessionId: string): TerminalSession | undefined;
+  /** Follows replacements; null means reconnecting, or failed when flagged. */
+  onTerminal(
+    sessionId: string,
+    listener: (terminal: TerminalSession | null, failed?: boolean) => void,
+  ): () => void;
   /**
    * Seeds an instruction block into a session's already-running terminal, as
    * though it were typed and submitted. Used to apply a skill tagged to a live
@@ -101,48 +112,83 @@ export interface TerminalManager {
    */
   injectInstructions(sessionId: string, instructions: string): boolean;
   /**
-   * Feeds user keystrokes for a live session into its auto-retry controller so
-   * the last submitted prompt is tracked. Only browser input should be fed
-   * here — programmatic writes (skill seeding, an auto-retry resend) must not,
-   * or a resend would be mistaken for a fresh prompt. No-op when the session
-   * has no controller (auto-retry disabled or a non-interactive session).
+   * Feeds user keystrokes for a live session into its retry controller so any
+   * pending automatic replay derived from an older confirmed request is
+   * invalidated. Browser input NEVER establishes replay authority; only an
+   * authoritative provider-side confirmation may do that. Programmatic writes
+   * (skill seeding, an automatic resend) must not call this.
    */
   observeInput(sessionId: string, data: string): void;
-  close(sessionId: string): void;
   /**
-   * Kills every live terminal without emitting `session.ended` /
-   * `session.discarded`. Used for process shutdown, where the goal is to tear
-   * down child PTYs promptly rather than record lifecycle transitions.
+   * Records an exact request text as safe to replay for a live session, but
+   * only because some authoritative provider-side path independently confirmed
+   * it. Raw browser/PTy input must never call this.
    */
+  confirmReplaySafeRequest(sessionId: string, exactText: string): void;
+  close(sessionId: string): void;
+  /** Closes admission and requests termination; waitForIdle confirms settlement. */
   shutdown(): void;
+}
+
+export interface ManagedTerminalManager extends TerminalManager {
+  waitForIdle(timeoutMs: number): Promise<boolean>;
+  quiesceSession(sessionId: string, timeoutMs: number): Promise<boolean>;
+  quiesceFeature(featureId: string, timeoutMs: number): Promise<boolean>;
 }
 
 export function createTerminalManager(
   deps: TerminalManagerDeps,
-): TerminalManager {
+): ManagedTerminalManager {
+  const work = createWorkTracker<string>();
+  const completions = new Map<string, Promise<void>>();
+  const features = new Map<string, string>();
+  const blockedFeatures = new Set<string>();
   const sessions = new Map<string, TerminalSession>();
+  const pending = new Map<string, Promise<TerminalSession>>();
+  const tombstones = new Set<string>();
+  // Retain attempt identity after exit, so delayed recovery can distinguish a
+  // naturally-ended source from a newer launch (even one that also ended).
+  const generations = new Map<string, number>();
+  // Tracks whether an async recovery attempt still belongs to the latest
+  // provider-confirmed request for a session. Browser input/new confirmations
+  // bump it so delayed analysis cannot restart obsolete work.
+  const replayEpochs = new Map<string, number>();
+  const listeners = new Map<string, Set<(terminal: TerminalSession | null, failed?: boolean) => void>>();
+  let stopped = false;
+  let generation = 0;
+  const currentReplayEpoch = (id: string) => replayEpochs.get(id) ?? 0;
+  const bumpReplayEpoch = (id: string) => {
+    replayEpochs.set(id, currentReplayEpoch(id) + 1);
+  };
+  const publish = (id: string, terminal: TerminalSession | null, failed?: boolean) => {
+    for (const listener of listeners.get(id) ?? []) listener(terminal, failed);
+  };
+  const assertLaunchable = (id: string) => {
+    if (stopped || tombstones.has(id) || blockedFeatures.has(features.get(id)!)) {
+      throw new Error('Terminal launch cancelled');
+    }
+  };
   // Per-session interactive auto-retry controllers, keyed by session id. Only
   // present for interactive dev sessions when auto-retry is enabled; removed on
   // exit alongside the terminal.
   const retries = new Map<string, SessionAutoRetry>();
-  // Last launch options per live session, so the self-recovery restart path can
-  // relaunch a session with the same viewport/cwd it was originally opened in.
-  const launchOptions = new Map<string, LaunchOptions>();
   // Sessions whose terminals are being killed as part of deletion. Their exit
   // must not be recorded as `session.ended` (which would re-persist the row we
   // are deleting); it is reported as `session.discarded` instead.
   const discarded = new Set<string>();
 
-  async function launch(
+  function composeBootstrap(session: Session): Promise<string> | string {
+    return session.kind === 'dev' && session.scope !== 'internal'
+      ? deps.bootstrap.composeForSession(session)
+      : '';
+  }
+
+  function spawnTerminal(
     session: Session,
     options: LaunchOptions,
-  ): Promise<TerminalSession> {
-    // Compose first so repository-context readiness is enforced before any
-    // lifecycle event is emitted or provider process is spawned.
-    const bootstrap =
-      session.kind === 'dev' && session.scope !== 'internal'
-        ? await deps.bootstrap.composeForSession(session)
-        : '';
+    bootstrap: string,
+  ): TerminalSession {
+    assertLaunchable(session.id);
     const provider = deps.providers.get(session.provider);
     const spec: SessionSpec = {
       sessionId: session.id,
@@ -161,17 +207,36 @@ export function createTerminalManager(
       endedAt: null,
       exitCode: null,
     };
-    deps.bus.emit('session.started', started);
-
     const command = provider.buildInteractiveCommand(spec);
-    const pty = deps.spawner.spawn({
-      command: command.command,
-      args: command.args,
-      env: command.env,
-      cwd: options.cwd,
-      cols: options.cols ?? deps.config.defaultCols,
-      rows: options.rows ?? deps.config.defaultRows,
-    });
+    assertLaunchable(session.id);
+    const launchedGeneration = ++generation;
+    generations.set(session.id, launchedGeneration);
+    let pty: PtyProcess;
+    try {
+      deps.bus.emit('session.started', started);
+      assertLaunchable(session.id);
+      pty = deps.spawner.spawn({
+        command: command.command,
+        args: command.args,
+        env: command.env,
+        cwd: options.cwd,
+        cols: options.cols ?? deps.config.defaultCols,
+        rows: options.rows ?? deps.config.defaultRows,
+      });
+    } catch (error) {
+      try {
+        deps.bus.emit('session.ended', {
+          ...started,
+          status: stopped || tombstones.has(session.id) || blockedFeatures.has(session.featureId)
+            ? 'cancelled' : 'failed',
+          endedAt: deps.clock.isoNow(),
+          exitCode: null,
+        });
+      } catch (publicationError) {
+        throw new AggregateError([error, publicationError], 'Terminal startup failure could not be finalized');
+      }
+      throw error;
+    }
 
     // Blocks to seed once the CLI is ready, in order: repository/feature/skill
     // bootstrap first, then any replay prompt from a self-recovery restart.
@@ -180,8 +245,57 @@ export function createTerminalManager(
     );
 
     let terminal!: TerminalSession;
+    type ExitOutcome = {
+      code: number | null;
+      discarded: boolean;
+      cancelled: boolean;
+      endedAt: string;
+    };
+    let finishExit!: (outcome: ExitOutcome) => void;
+    const exit = new Promise<ExitOutcome>((resolve) => {
+      finishExit = resolve;
+    });
+    const persistExit = async () => {
+      const outcome = await exit;
+      if (outcome.discarded) return;
+      const ended: Session = {
+        ...started,
+        status: outcome.cancelled ? 'cancelled' : outcome.code === 0 ? 'completed' : 'failed',
+        endedAt: outcome.endedAt,
+        exitCode: outcome.code,
+      };
+      try {
+        await deps.transcriptStore.save({
+          sessionId: session.id,
+          stdout: [terminal.transcriptText()],
+          stderr: [],
+          exitCode: outcome.code,
+        });
+      } catch (error) {
+        deps.bus.emit('session.notice', {
+          sessionId: session.id,
+          level: 'error',
+          message: 'The terminal exited, but its transcript could not be saved.',
+        });
+        deps.bus.emit('session.ended', { ...ended, status: 'failed' });
+        throw error;
+      }
+      deps.bus.emit('session.ended', ended);
+    };
+    const completion = work.own(session.id, async () => {
+      try {
+        await persistExit();
+      } catch (error) {
+        deps.logger.error('Terminal completion failed', { sessionId: session.id, error });
+        throw error;
+      } finally {
+        if (completions.get(session.id) === completion) completions.delete(session.id);
+      }
+    });
+    completions.set(session.id, completion);
     terminal = createTerminalSession({
       sessionId: session.id,
+      generation: launchedGeneration,
       pty,
       inputReady: seeds.length === 0,
       scrollbackBytes: deps.config.scrollbackBytes,
@@ -189,34 +303,23 @@ export function createTerminalManager(
       initialCols: options.cols ?? deps.config.defaultCols,
       initialRows: options.rows ?? deps.config.defaultRows,
       onExit: (code) => {
+        // Replacement waits for this completion; TerminalSession already deduplicates native exits.
         sessions.delete(session.id);
+        retries.get(session.id)?.dispose();
         retries.delete(session.id);
-        launchOptions.delete(session.id);
-        if (discarded.has(session.id)) {
+        const wasDiscarded = discarded.delete(session.id);
+        finishExit({
+          code, discarded: wasDiscarded, cancelled: stopped, endedAt: deps.clock.isoNow(),
+        });
+        if (wasDiscarded) {
           // Deleted out from under us: drop the terminal without persisting an
           // ended snapshot, but let listeners release the usage tailer.
-          discarded.delete(session.id);
           deps.bus.emit('session.discarded', session.id);
-          return;
         }
-        const ended: Session = {
-          ...started,
-          status: code === 0 ? 'completed' : 'failed',
-          endedAt: deps.clock.isoNow(),
-          exitCode: code,
-        };
-        void deps.transcriptStore.save({
-          sessionId: session.id,
-          stdout: [terminal.transcriptText()],
-          stderr: [],
-          exitCode: code,
-        });
-        deps.bus.emit('session.ended', ended);
       },
     });
 
     sessions.set(session.id, terminal);
-    launchOptions.set(session.id, options);
 
     // Track files this session creates/edits by parsing the tool's own output.
     // Each PTY is one session, so attribution is unambiguous — unlike watching
@@ -233,24 +336,47 @@ export function createTerminalManager(
     attachMcpErrorScanner(terminal, provider, session.id);
 
     if (seeds.length > 0) {
-      seedSequence(terminal, seeds);
+      seedSequence(terminal, seeds, options.replaySeed ? currentReplayEpoch(session.id) : null);
     }
 
-    attachAutoRetry(terminal, session);
+    attachAutoRetry(terminal, session, { ...options });
+    publish(session.id, terminal);
 
     return terminal;
   }
 
+  async function launch(
+    session: Session,
+    options: LaunchOptions,
+  ): Promise<TerminalSession> {
+    const finishing = completions.get(session.id);
+    if (finishing) await finishing;
+    assertLaunchable(session.id);
+    // Compose first so repository-context readiness is enforced before any
+    // lifecycle event is emitted or provider process is spawned.
+    const bootstrapOrPromise = composeBootstrap(session);
+    const bootstrap =
+      typeof bootstrapOrPromise === 'string'
+        ? bootstrapOrPromise
+        : await bootstrapOrPromise;
+    return spawnTerminal(session, options, bootstrap);
+  }
+
   /**
-   * Attaches an auto-retry controller that re-submits the user's last prompt
-   * when the interactive CLI reports a transient provider failure. Only wired
-   * for interactive dev sessions (a human types prompts there) when a
-   * transient classifier is provided and auto-retry is enabled. The controller
-   * observes output via a sink, resends via {@link seedNow} (a programmatic
-   * write that bypasses input observation, so a resend cannot reset the attempt
-   * budget), and surfaces a notice through {@link TerminalSession.notify}.
+   * Attaches a bounded retry controller for recoverable interactive-session
+   * errors. It observes output via a sink, but it NEVER reconstructs replay
+   * text from raw keystrokes; browser input only invalidates stale work.
+   * Automatic replay happens solely for provider-confirmed replay-safe
+   * requests, resent via {@link seedNow} (a programmatic write that bypasses
+   * input observation, so a resend cannot invalidate itself). When no
+   * confirmation exists, the controller surfaces manual retry guidance instead
+   * of pretending the request was healed.
    */
-  function attachAutoRetry(terminal: TerminalSession, session: Session): void {
+  function attachAutoRetry(
+    terminal: TerminalSession,
+    session: Session,
+    options: LaunchOptions,
+  ): void {
     const isTransient = deps.isTransientFailure;
     const selfRecovery = deps.selfRecovery;
     const autoRetry = deps.config.autoRetryEnabled;
@@ -266,37 +392,46 @@ export function createTerminalManager(
     const controller = createSessionAutoRetry({
       isTransient,
       // With auto-retry off but self-recovery on, skip the non-destructive
-      // re-submits and escalate straight to analysis + restart.
+      // in-session re-submits and escalate straight to analysis + restart.
       maxAttempts: autoRetry ? deps.config.autoRetryMaxAttempts : 0,
       backoffMs: deps.config.autoRetryBackoffMs,
-      resubmit: (prompt) => seedNow(terminal, prompt),
+      resubmit: (prompt) => seedNow(terminal, prompt, undefined, currentReplayEpoch(session.id)),
       notify: (text) => terminal.notify(text),
       onExhausted:
         escalate && selfRecovery
           ? ({ prompt, line }) => {
-              void escalateRecovery(
+              const epoch = currentReplayEpoch(session.id);
+              const isCurrentRequest = () =>
+                !stopped &&
+                !tombstones.has(session.id) &&
+                currentReplayEpoch(session.id) === epoch;
+              void work.own(session.id, () => escalateRecovery(
                 terminal,
                 session,
                 selfRecovery,
                 prompt,
                 line,
-              );
+                isCurrentRequest,
+                options,
+              )).catch((error: unknown) => {
+                deps.logger.error('Terminal recovery failed', { sessionId: session.id, error });
+              });
             }
           : undefined,
     });
     retries.set(session.id, controller);
     terminal.attach({
       send: (data) => controller.observeOutput(data),
-      exit: () => {},
+      exit: () => controller.dispose(),
     });
   }
 
   /**
-   * Runs the self-recovery escalation ladder once a session's non-destructive
-   * re-submits are spent: optional metasession analysis, then a last-resort CLI
-   * restart replaying the prompt, then a status-bar report if nothing recovered
-   * it. Bound to the failing terminal/session so notices land where the user is
-   * looking.
+   * Runs the self-recovery escalation ladder once a session's confirmed
+   * replay-safe request has spent its in-session re-submit budget: optional
+   * metasession analysis, then a last-resort CLI restart replaying that same
+   * confirmed request, then a status-bar report if nothing recovered it. Bound
+   * to the failing terminal/session so notices land where the user is looking.
    */
   async function escalateRecovery(
     terminal: TerminalSession,
@@ -304,13 +439,40 @@ export function createTerminalManager(
     selfRecovery: NonNullable<TerminalManagerDeps['selfRecovery']>,
     prompt: string,
     line: string,
+    isCurrent: () => boolean,
+    options: LaunchOptions,
   ): Promise<void> {
+    const analyze = selfRecovery.analyze;
     const coordinatorDeps: SelfRecoveryCoordinatorDeps = {
       useMetaAnalysis: selfRecovery.useMetaAnalysis,
-      analyze: selfRecovery.analyze,
-      restart: () => restartSession(session, prompt),
-      notify: (text) => terminal.notify(text),
-      report: (message) => selfRecovery.report(session.id, message),
+      analyze: analyze
+        ? async (errorText) => {
+            const diagnosis = await analyze(errorText);
+            return isCurrent() ? diagnosis : null;
+          }
+        : undefined,
+      restart: async () => {
+        if (!isCurrent()) {
+          return true;
+        }
+        return restartSession(
+          terminal,
+          session,
+          prompt,
+          options,
+          isCurrent,
+        );
+      },
+      notify: (text) => {
+        if (isCurrent()) {
+          terminal.notify(text);
+        }
+      },
+      report: (message) => {
+        if (isCurrent()) {
+          selfRecovery.report(session.id, message);
+        }
+      },
     };
     await createSelfRecoveryCoordinator(coordinatorDeps).escalate(line);
   }
@@ -318,36 +480,73 @@ export function createTerminalManager(
   /**
    * Last-resort recovery: kills the session's current PTY (suppressing the
    * spurious `failed` snapshot a deliberate teardown would record) and relaunches
-   * the CLI in a fresh conversation, replaying the user's last prompt after any
-   * bootstrap context. Resolves true when the relaunch was carried out, false if
-   * it threw (so the caller can report the failure to the status bar).
+   * the CLI in a fresh conversation, replaying the exact confirmed request
+   * after any bootstrap context. Resolves true when the relaunch was carried
+   * out, false if it threw (so the caller can report the failure to the status
+   * bar).
    */
   async function restartSession(
+    source: TerminalSession,
     session: Session,
     prompt: string,
+    options: LaunchOptions,
+    isCurrentRequest: () => boolean,
   ): Promise<boolean> {
+    const sourceOwnsSession = () =>
+      generations.get(session.id) === source.generation;
     try {
-      const options = launchOptions.get(session.id) ?? {};
-      const existing = sessions.get(session.id);
-      if (existing && !existing.exited) {
-        // Treat the kill as a discard so its exit does not persist a `failed`
-        // snapshot; the fresh launch below re-emits `session.started`.
+      assertLaunchable(session.id);
+      retries.get(session.id)?.dispose();
+      retries.delete(session.id);
+      publish(session.id, null);
+      if (!source.exited) {
+        // The fresh launch re-emits session.started, not a failed teardown.
         discarded.add(session.id);
-        const exited = awaitExit(existing);
-        existing.kill();
+        const exited = awaitExit(source);
+        source.kill();
         await exited;
       }
-      await launch(session, { ...options, replaySeed: prompt });
+      const finishing = completions.get(session.id);
+      if (finishing) await finishing;
+      if (!isCurrentRequest() || !sourceOwnsSession()) {
+        if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
+        return false;
+      }
+      const bootstrap = await deps.bootstrap.composeForSession(session);
+      if (!isCurrentRequest() || !sourceOwnsSession()) {
+        if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
+        return false;
+      }
+      let resolve!: (terminal: TerminalSession) => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<TerminalSession>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      pending.set(session.id, promise);
+      try {
+        try {
+          resolve(
+            spawnTerminal(session, { ...options, replaySeed: prompt }, bootstrap),
+          );
+        } catch (error) {
+          reject(error);
+        }
+        await promise;
+      } finally {
+        pending.delete(session.id);
+      }
       return true;
     } catch {
+      if (isCurrentRequest()) {
+        publish(session.id, null, true);
+      }
       return false;
     }
   }
 
-  /** Resolves once the terminal's PTY has exited (immediately if already gone). */
+  /** Called synchronously while the PTY is live, before requesting its kill. */
   function awaitExit(terminal: TerminalSession): Promise<void> {
-    // An already-exited terminal fires the exit sink synchronously on attach, so
-    // this resolves immediately in that case without a special-cased guard.
     return new Promise((resolve) => {
       const detach = terminal.attach({
         send: () => {},
@@ -468,7 +667,12 @@ export function createTerminalManager(
     terminal: TerminalSession,
     instructions: string,
     onComplete: () => void = () => {},
+    epoch: number | null = null,
   ): void {
+    if (epoch !== null && currentReplayEpoch(terminal.sessionId) !== epoch) {
+      onComplete();
+      return;
+    }
     try {
       terminal.write(instructions);
     } catch {
@@ -484,7 +688,7 @@ export function createTerminalManager(
       clearTimeout(capTimer);
       detach();
       // Suppress the submit if the terminal exited while waiting for quiet.
-      if (!terminal.exited) {
+      if (!terminal.exited && (epoch === null || currentReplayEpoch(terminal.sessionId) === epoch)) {
         try {
           terminal.write(deps.config.instructionSeedSuffix);
         } catch {
@@ -531,6 +735,7 @@ export function createTerminalManager(
     terminal: TerminalSession,
     instructions: string,
     onComplete: () => void,
+    epoch: number | null,
   ): void {
     const readyPattern = new RegExp(deps.config.instructionSeedReadyPattern);
     let observed = '';
@@ -542,7 +747,7 @@ export function createTerminalManager(
       submitted = true;
       clearTimeout(readyTimer);
       detach();
-      seedNow(terminal, instructions, onComplete);
+      seedNow(terminal, instructions, onComplete, epoch);
     };
 
     detach = terminal.attach({
@@ -579,55 +784,137 @@ export function createTerminalManager(
   function seedSequence(
     terminal: TerminalSession,
     blocks: readonly string[],
+    epoch: number | null,
   ): void {
     const seedRest = (index: number): void => {
-      if (index >= blocks.length) {
+      if (index >= blocks.length || (epoch !== null && currentReplayEpoch(terminal.sessionId) !== epoch)) {
         terminal.markInputReady();
         return;
       }
-      seedNow(terminal, blocks[index], () => seedRest(index + 1));
+      seedNow(terminal, blocks[index], () => seedRest(index + 1), epoch);
     };
-    seedInstructionsWhenReady(terminal, blocks[0], () => seedRest(1));
+    seedInstructionsWhenReady(terminal, blocks[0], () => seedRest(1), epoch);
   }
 
+  async function getOrLaunch(
+    session: Session,
+    options: LaunchOptions = {},
+  ): Promise<TerminalSession> {
+    features.set(session.id, session.featureId);
+    assertLaunchable(session.id);
+    const launching = pending.get(session.id);
+    if (launching) return launching;
+    const existing = sessions.get(session.id);
+    if (existing && !existing.exited) {
+      return existing;
+    }
+    bumpReplayEpoch(session.id);
+    let resolve!: (terminal: TerminalSession) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<TerminalSession>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    // Reserve before launch: internal sessions can emit lifecycle events synchronously.
+    pending.set(session.id, promise);
+    void work.own(session.id, () => launch(session, options)).then(resolve, reject);
+    try {
+      return await promise;
+    } finally {
+      pending.delete(session.id);
+    }
+  }
+
+  const attempt = (errors: unknown[], action: () => void) => {
+    try {
+      action();
+    } catch (error) {
+      errors.push(error);
+    }
+  };
+  const throwTerminationErrors = (errors: unknown[]) => {
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Some terminal termination requests failed');
+    }
+  };
+  const requestTermination = (terminal: TerminalSession, errors: unknown[]) => {
+    bumpReplayEpoch(terminal.sessionId);
+    attempt(errors, () => retries.get(terminal.sessionId)?.dispose());
+    retries.delete(terminal.sessionId);
+    attempt(errors, () => terminal.kill());
+  };
+  const close = (sessionId: string) => {
+    tombstones.add(sessionId);
+    bumpReplayEpoch(sessionId);
+    const errors: unknown[] = [];
+    attempt(errors, () => publish(sessionId, null, true));
+    const terminal = sessions.get(sessionId);
+    if (terminal) {
+      discarded.add(sessionId);
+      requestTermination(terminal, errors);
+    }
+    throwTerminationErrors(errors);
+  };
+
   return {
-    async getOrLaunch(session, options = {}) {
-      const existing = sessions.get(session.id);
-      if (existing && !existing.exited) {
-        return existing;
-      }
-      return await launch(session, options);
-    },
+    getOrLaunch,
     get: (sessionId) => sessions.get(sessionId),
+    onTerminal(sessionId, listener) {
+      let set = listeners.get(sessionId);
+      if (!set) {
+        set = new Set();
+        listeners.set(sessionId, set);
+      }
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(sessionId);
+      };
+    },
     injectInstructions(sessionId, instructions) {
-      // A terminal is only in the map while live (its exit handler removes it),
-      // so a found terminal is always writable.
+      // kill closes input immediately, while native exit may arrive later.
       const terminal = sessions.get(sessionId);
-      if (!terminal || instructions.length === 0) {
+      if (!terminal || terminal.inputReadiness === 'closed' || instructions.length === 0) {
         return false;
       }
-      seedNow(terminal, instructions);
+      bumpReplayEpoch(sessionId);
+      retries.get(sessionId)?.confirmReplaySafeRequest('');
+      seedNow(terminal, instructions, undefined, currentReplayEpoch(sessionId));
       return true;
     },
     observeInput(sessionId, data) {
+      if (data.length > 0) {
+        bumpReplayEpoch(sessionId);
+      }
       retries.get(sessionId)?.observeInput(data);
     },
-    close(sessionId) {
-      // A terminal is only in the map while live: its exit handler removes it.
-      // So a found terminal is always killable, and killing it during deletion
-      // is reported as `session.discarded` (never `session.ended`).
-      const terminal = sessions.get(sessionId);
-      if (!terminal) {
-        return;
+    confirmReplaySafeRequest(sessionId, exactText) {
+      bumpReplayEpoch(sessionId);
+      retries.get(sessionId)?.confirmReplaySafeRequest(exactText);
+    },
+    close,
+    waitForIdle: (timeoutMs) => work.waitForIdle(timeoutMs),
+    async quiesceSession(sessionId, timeoutMs) {
+      close(sessionId);
+      return work.waitForIdle(timeoutMs, (id) => id === sessionId);
+    },
+    async quiesceFeature(featureId, timeoutMs) {
+      blockedFeatures.add(featureId);
+      const errors: unknown[] = [];
+      for (const [id, feature] of features) {
+        if (feature === featureId) attempt(errors, () => close(id));
       }
-      discarded.add(sessionId);
-      terminal.kill();
+      throwTerminationErrors(errors);
+      return work.waitForIdle(timeoutMs, (id) => features.get(id) === featureId);
     },
     shutdown() {
-      for (const terminal of sessions.values()) {
-        discarded.add(terminal.sessionId);
-        terminal.kill();
+      stopped = true;
+      const errors: unknown[] = [];
+      for (const sessionId of listeners.keys()) {
+        attempt(errors, () => publish(sessionId, null, true));
       }
+      for (const terminal of [...sessions.values()]) requestTermination(terminal, errors);
+      throwTerminationErrors(errors);
     },
   };
 }

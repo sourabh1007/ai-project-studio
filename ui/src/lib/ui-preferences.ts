@@ -81,8 +81,8 @@ const ACCENTS: Record<
   indigo: { light: '#4f46e5', dark: '#818cf8', onLight: '#ffffff', onDark: '#0b1020' },
   blue: { light: '#2563eb', dark: '#60a5fa', onLight: '#ffffff', onDark: '#08111f' },
   violet: { light: '#7c3aed', dark: '#a78bfa', onLight: '#ffffff', onDark: '#140a24' },
-  teal: { light: '#0d9488', dark: '#2dd4bf', onLight: '#ffffff', onDark: '#04201d' },
-  emerald: { light: '#059669', dark: '#34d399', onLight: '#ffffff', onDark: '#04231a' },
+  teal: { light: '#0f766e', dark: '#2dd4bf', onLight: '#ffffff', onDark: '#04201d' },
+  emerald: { light: '#047857', dark: '#34d399', onLight: '#ffffff', onDark: '#04231a' },
   rose: { light: '#e11d48', dark: '#fb7185', onLight: '#ffffff', onDark: '#2a0912' },
   amber: { light: '#b45309', dark: '#fbbf24', onLight: '#ffffff', onDark: '#241704' },
 };

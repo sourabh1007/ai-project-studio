@@ -30,7 +30,9 @@ export interface SummaryRunnerDeps {
 export function createSummaryRunner(deps: SummaryRunnerDeps): FeatureSummarizer {
   return {
     async summarize(request) {
+      request.signal?.throwIfAborted();
       const collected = await deps.collector.collect(request.featureId);
+      request.signal?.throwIfAborted();
       const prompt = buildSummaryPrompt(collected, deps.config);
 
       const launched = await deps.launcher.start({
@@ -39,13 +41,16 @@ export function createSummaryRunner(deps: SummaryRunnerDeps): FeatureSummarizer 
         model: deps.config.model,
         prompt,
         kind: 'meta',
+        signal: request.signal,
       });
       const ended = await launched.completion;
 
       const transcript = await deps.transcripts.load(ended.id);
+      request.signal?.throwIfAborted();
       const extracted = extractSummaryText(transcript, deps.config);
       const content =
         extracted.length > 0 ? extracted : deps.config.emptySummaryPlaceholder;
+      request.signal?.throwIfAborted();
 
       const summary: FeatureSummary = {
         featureId: request.featureId,
