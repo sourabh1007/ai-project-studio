@@ -23,6 +23,8 @@ files:
   - ipc-input.cjs
   - clipboard.cjs
   - backend-control.cjs
+  - startup-splash.cjs
+  - startup/**/*
   - owned-attachments.cjs
   - regression-isolation.cjs
   - regression-backend.cjs

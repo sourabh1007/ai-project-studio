@@ -1,0 +1,73 @@
+:root { color-scheme: dark; font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; color: #edf3ff; background: #0b1020; --muted: #a0aecb; --line: #27364f; --accent: #8bbaff; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; user-select: none; }
+.splash { position: relative; height: 100vh; padding: 24px 38px 22px; overflow: hidden; border: 1px solid #809ada30; background: linear-gradient(130deg, #0b1020, #111b31 62%, #10243a); }
+.splash::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, #93baff80, #86dfdb90, transparent); box-shadow: 0 0 18px #8dbfff40; }
+.frame-corners { position: absolute; inset: 13px; pointer-events: none; opacity: .45; background:
+  linear-gradient(var(--accent), var(--accent)) left top / 22px 1px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) left top / 1px 22px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) right top / 22px 1px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) right top / 1px 22px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) left bottom / 22px 1px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) left bottom / 1px 22px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) right bottom / 22px 1px no-repeat,
+  linear-gradient(var(--accent), var(--accent)) right bottom / 1px 22px no-repeat; }
+.light-sweep { position: absolute; top: -20%; left: -220px; height: 140%; width: 180px; pointer-events: none; background: linear-gradient(90deg, transparent, #91caff0a, #b3e8ff10, transparent); animation: spectral-scan 12s ease-in-out infinite; }
+header, footer, .identity, .loading { position: relative; z-index: 1; }
+header { display: flex; align-items: center; justify-content: flex-end; -webkit-app-region: drag; }
+button { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 24px; line-height: 22px; cursor: pointer; -webkit-app-region: no-drag; }
+button:hover { color: #fff; background: #ffffff12; border-color: #ffffff20; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.identity { display: flex; align-items: center; gap: 42px; margin: 28px 0 30px; }
+.emblem { position: relative; width: 206px; height: 206px; display: grid; place-items: center; flex-shrink: 0; }
+.app-icon { position: relative; z-index: 2; border-radius: 32px; box-shadow: 0 16px 50px #0005, 0 0 42px #4789ff20; animation: breathe 4s ease-in-out infinite; }
+.orbit { position: absolute; inset: 1px; border: 1px solid #7dbeff25; border-radius: 50%; }
+.orbit-one { border-top-color: #a5d8ff; border-right-color: #8da7ff65; box-shadow: inset 0 0 20px #7ab5ff0a, 0 0 24px #7ab5ff0a; animation: orbit 7s linear infinite; }
+.orbit-one::after { content: ""; position: absolute; top: 27px; right: 27px; width: 5px; height: 5px; border-radius: 50%; background: #c2deff; box-shadow: 0 0 7px #9ccbff, 0 0 18px #9ccbff70; }
+.orbit-two { inset: -10px; border-style: dashed; border-color: #71d7f02a; animation: orbit 26s linear infinite reverse; }
+.spark { position: absolute; width: 7px; height: 7px; right: 5px; top: 69px; border-radius: 50%; background: #a5f3ed; box-shadow: 0 0 18px #86efef; }
+.eyebrow { margin: 0 0 11px; color: #8fb4ed; font-size: 10px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; }
+.eyebrow::before { content: ""; display: inline-block; width: 16px; height: 2px; margin-right: 8px; vertical-align: middle; background: linear-gradient(90deg, #80baff, #8bdcd1); box-shadow: 0 0 8px #8bc4ff40; }
+h1 { margin: 0; font-size: 46px; line-height: 1.03; letter-spacing: -.045em; font-weight: 650; }
+h1 span { color: #a9caff; text-shadow: 0 0 35px #78adff20; }
+.tagline { margin: 15px 0 0; color: var(--muted); font-size: 12px; }
+.loading { padding-top: 2px; }
+.status-row { display: flex; align-items: center; gap: 16px; justify-content: space-between; min-height: 52px; }
+h2 { margin: 0 0 7px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+#status-detail { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; max-height: 48px; overflow: auto; user-select: text; overflow-wrap: anywhere; }
+.activity { display: flex; gap: 4px; align-items: center; padding: 0 5px; }
+.activity i { width: 3px; height: 17px; border-radius: 2px; background: #8bbaff; box-shadow: 0 0 8px #8bbaff30; animation: equalize 1s ease-in-out infinite alternate; }
+.activity i:nth-child(2) { animation-delay: -.65s; }
+.activity i:nth-child(3) { animation-delay: -.3s; }
+.steps { display: flex; list-style: none; padding: 0; margin: 19px 0 13px; justify-content: space-between; gap: 12px; }
+.steps li { display: flex; align-items: center; gap: 7px; color: #8290aa; font-size: 11px; }
+.step-dot { width: 6px; height: 6px; border-radius: 50%; background: #586783; }
+[data-state="active"] { color: #deedff !important; }
+[data-state="active"] .step-dot { background: #9bc9ff; box-shadow: 0 0 0 4px #8bbaff18, 0 0 12px #78adff70; }
+[data-state="complete"] .step-dot { background: #7bdbc1; }
+.loading-track { height: 2px; background: var(--line); overflow: hidden; border-radius: 2px; box-shadow: 0 0 12px #78adff18; }
+.loading-track div { height: 100%; width: 38%; background: linear-gradient(90deg, transparent, #89b7ff, #91e0d7, transparent); animation: sweep 2s ease-in-out infinite; }
+footer { display: flex; justify-content: space-between; margin-top: 21px; color: #8290aa; font-size: 10px; letter-spacing: .03em; }
+.ambient { position: absolute; border-radius: 50%; filter: blur(60px); opacity: .2; pointer-events: none; animation: drift 12s ease-in-out infinite alternate; }
+.ambient-one { width: 330px; height: 330px; background: #476be8; left: -150px; top: -120px; }
+.ambient-two { width: 200px; height: 200px; background: #28a9a6; right: -70px; bottom: -100px; animation-delay: -6s; }
+.grid { position: absolute; inset: 0; background-image: linear-gradient(#97c4ff0a 1px, transparent 1px), linear-gradient(90deg, #97c4ff0a 1px, transparent 1px), radial-gradient(#aacaff30 .7px, transparent .7px); background-size: 44px 44px, 44px 44px, 22px 22px; mask-image: linear-gradient(120deg, transparent 20%, #0009); pointer-events: none; }
+body[data-failed="true"] .loading-track div { width: 100%; background: #f69c9c; animation: none; }
+body[data-failed="true"] h2 { color: #ffb2b2; }
+body[data-failed="true"] .activity { visibility: hidden; }
+body[data-failed="true"] .orbit, body[data-failed="true"] .app-icon, body[data-failed="true"] .ambient, body[data-failed="true"] .light-sweep { animation-play-state: paused; }
+body[data-theme="light"] { color-scheme: light; color: #162a49; --muted: #526581; --line: #c8d7ed; }
+body[data-theme="light"] .splash { background: linear-gradient(130deg, #eef2fb, #e6edfa 62%, #deedf4); }
+body[data-theme="light"] h1 span { color: #3765a4; text-shadow: none; }
+body[data-theme="light"] .grid { background-image: linear-gradient(#416da412 1px, transparent 1px), linear-gradient(90deg, #416da412 1px, transparent 1px), radial-gradient(#416da430 .7px, transparent .7px); }
+body[data-theme="light"] .light-sweep { background: linear-gradient(90deg, transparent, #79a8ed10, #ffffff50, transparent); }
+body[data-theme="light"] .eyebrow { color: #426893; }
+body[data-theme="light"] [data-state="active"] { color: #1c4778 !important; }
+body[data-theme="light"][data-failed="true"] h2 { color: #a52836; }
+@keyframes orbit { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { transform: translateY(-3px); box-shadow: 0 20px 55px #0005, 0 0 45px #4789ff35; } }
+@keyframes equalize { to { transform: scaleY(.35); opacity: .5; } }
+@keyframes sweep { from { transform: translateX(-110%); } to { transform: translateX(365%); } }
+@keyframes drift { to { transform: translate(30px, -20px); opacity: .3; } }
+@keyframes spectral-scan { 0%, 15% { transform: translateX(0) skewX(-18deg); opacity: 0; } 35%, 65% { opacity: 1; } 85%, 100% { transform: translateX(1200px) skewX(-18deg); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .loading-track div { width: 100%; opacity: .6; } }

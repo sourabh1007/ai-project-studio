@@ -5,6 +5,21 @@ The UI is a React + Vite SPA in `ui/`. It talks to the backend over HTTP (REST),
 > This is the **technical** UI reference (what components are mounted where). For
 > user-facing how-tos of each view, see the [feature guides](features/README.md).
 
+## Desktop startup
+
+The Electron shell shows a branded startup window before starting local services.
+It uses the 1024px app icon, animated loading indicators, persisted light/dark
+appearance, and reduced-motion preferences. The displayed milestones follow
+actual startup: desktop settings, local backend readiness, and interface loading;
+there is no simulated percentage or artificial delay.
+
+The main window stays hidden until its page loads successfully and paints.
+Startup errors remain visible with an explanation and a close control. Closing
+the startup window uses the same cooperative backend shutdown as the main app.
+Development launches connect to the existing server rather than spawning a second
+backend. Assets and the isolated preload live in `desktop/startup/`; lifecycle
+coordination is in `desktop/startup-splash.cjs` and `desktop/main.cjs`.
+
 ## What's actually mounted
 
 `ui/src/App.tsx` renders five top-level views (selected from the activity bar):

@@ -21,6 +21,9 @@ const {
 // manager (and any future feature) can push messages to the renderer.
 let mainWindow = null;
 let lastWindowUrl = null;
+let startupSplash = null;
+let startupCancelled = false;
+let desktopInitialized = false;
 
 const ROOT = app.isPackaged
   ? process.resourcesPath
@@ -421,7 +424,7 @@ function installApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function createWindow(loadUrl) {
+function createWindow(loadUrl, splash = null) {
   lastWindowUrl = loadUrl;
   installApplicationMenu();
   const launchTheme = readPersistedTheme();
@@ -433,6 +436,7 @@ function createWindow(loadUrl) {
     minHeight: 640,
     backgroundColor: THEME_BG[launchTheme],
     title: 'AI Project Studio',
+    show: !splash,
     ...(icon ? { icon } : {}),
     webPreferences: {
       contextIsolation: true,
@@ -441,6 +445,31 @@ function createWindow(loadUrl) {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
+  let painted = false;
+  let loaded = false;
+  let revealed = false;
+  const startupTimer = splash ? setTimeout(() => {
+    splash.fail(new Error('The interface is taking too long to load. You can close the app and try again.'));
+  }, STARTUP_TIMEOUT_MS) : null;
+  const reveal = () => {
+    if (!splash || revealed || !painted || !loaded || startupCancelled || win.isDestroyed()) return;
+    revealed = true;
+    clearTimeout(startupTimer);
+    splash.complete(win);
+    if (startupSplash === splash) startupSplash = null;
+  };
+  if (splash) {
+    win.once('ready-to-show', () => { painted = true; reveal(); });
+    win.webContents.on('render-process-gone', (_event, details) => {
+      if (!revealed) splash.fail(new Error(`The interface stopped while loading (${details.reason}). Please close the app and try again.`));
+    });
+  }
+  const load = () => {
+    if (splash && startupCancelled) return;
+    void win.loadURL(loadUrl).then(() => { loaded = true; reveal(); }).catch((error) => {
+      safeWrite(process.stderr, `[desktop] Interface load failed: ${error}\n`);
+    });
+  };
 
   // Open external links in the system browser, keep app links in-window.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -485,6 +514,10 @@ function createWindow(loadUrl) {
         process.stderr,
         `[desktop] Giving up loading ${loadUrl} after ${loadRetries} retries: ${errorCode} ${errorDescription}\n`,
       );
+      if (splash && !revealed) {
+        clearTimeout(startupTimer);
+        splash.fail(new Error(`Unable to load the interface: ${errorDescription} (${errorCode}). Please close the app and try again.`));
+      }
       return;
     }
     loadRetries += 1;
@@ -494,15 +527,15 @@ function createWindow(loadUrl) {
     );
     setTimeout(() => {
       if (!win.isDestroyed()) {
-        void win.loadURL(loadUrl);
+        load();
       }
     }, 300);
   });
 
-  void win.loadURL(loadUrl);
+  load();
   mainWindow = win;
   win.on('close', (event) => {
-    if (BrowserWindow.getAllWindows().length > 1 || isBackendShutdownConfirmed()) {
+    if (BrowserWindow.getAllWindows().filter((candidate) => candidate !== startupSplash?.window).length > 1 || isBackendShutdownConfirmed()) {
       return;
     }
     event.preventDefault();
@@ -516,6 +549,7 @@ function createWindow(loadUrl) {
     }
   });
   win.on('closed', () => {
+    if (startupTimer) clearTimeout(startupTimer);
     if (mainWindow === win) {
       mainWindow = null;
     }
@@ -557,7 +591,7 @@ function applyContentSecurityPolicy() {
   });
 }
 
-async function bootstrap() {
+function initializeDesktop() {
   // Group windows under our own taskbar identity (and pick up the packaged icon)
   // on Windows instead of the generic electron.exe entry.
   if (process.platform === 'win32') {
@@ -707,28 +741,59 @@ async function bootstrap() {
   });
 
   applyContentSecurityPolicy();
+}
+
+async function bootstrap() {
+  startupCancelled = false;
+  const splash = require('./startup-splash.cjs').createStartupSplash({
+    BrowserWindow, ipcMain, icon: appIcon(), theme: readPersistedTheme(), version: app.getVersion(),
+    canClose: () => startupCancelled && isBackendShutdownConfirmed(),
+    onClose: () => app.quit(),
+  });
+  startupSplash = splash;
+  await splash.ready;
+  if (startupCancelled) return;
+  if (!desktopInitialized) {
+    initializeDesktop();
+    desktopInitialized = true;
+  }
 
   let loadUrl;
   if (IS_DEV) {
+    splash.update('development');
     loadUrl = DEV_URL;
   } else {
+    splash.update('starting');
     if (!fs.existsSync(BACKEND_ENTRY)) {
       throw new Error(
         `Backend build not found at ${BACKEND_ENTRY}. Run "npm run build" first.`,
       );
     }
     const port = await getFreePort();
+    if (startupCancelled) return;
     startBackend(port);
+    splash.update('connecting');
     await waitForBackend(port);
     loadUrl = `http://${HOST}:${port}/`;
   }
+  if (startupCancelled) return;
+  splash.update('interface');
   setAppOrigin(loadUrl);
-  createWindow(loadUrl);
+  createWindow(loadUrl, splash);
 
   // Updates use a guided release-page flow; no installer is launched on quit.
   updateManager.init({
     getWindow: () => mainWindow,
   });
+}
+
+function reportStartupFailure(error) {
+  if (startupCancelled) return;
+  safeWrite(process.stderr, `[desktop] Startup failed: ${error}\n`);
+  if (!startupSplash?.fail(error)) {
+    dialog.showErrorBox('AI Project Studio could not start', String(error?.message ?? error));
+    app.quit();
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -746,17 +811,14 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(bootstrap).catch((error) => {
-    safeWrite(process.stderr, `[desktop] Startup failed: ${error}\n`);
-    app.quit();
-  });
+  app.whenReady().then(bootstrap).catch(reportStartupFailure);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       if (lastWindowUrl && !isBackendShutdownConfirmed()) {
         createWindow(lastWindowUrl);
       } else {
-        void bootstrap().catch(() => reportShutdownFailure('start a replacement backend'));
+        void bootstrap().catch(reportStartupFailure);
       }
     }
   });
@@ -770,6 +832,8 @@ if (!gotLock) {
   });
 
   app.on('before-quit', (event) => {
+    startupCancelled = true;
+    if (startupSplash && !startupSplash.isDestroyed()) startupSplash.update('closing');
     if (isBackendShutdownConfirmed() && shutdownAction?.confirmed && shutdownAction.generation === backendGeneration) {
       shutdownAction = null;
       return;

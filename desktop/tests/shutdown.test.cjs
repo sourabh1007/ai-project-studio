@@ -37,7 +37,7 @@ function childProcess() {
   return child;
 }
 
-function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater } = {}) {
+function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise } = {}) {
   const app = new EventEmitter();
   const notifications = [];
   const messages = [];
@@ -51,6 +51,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   let spawned;
   let appQuitting = false;
   const windows = [];
+  const timers = [];
   const pages = [];
   const shell = { openExternal: async (url) => {
     if (pageError) throw new Error('private page error');
@@ -58,16 +59,19 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   } };
   class FakeWindow extends EventEmitter {
     static getAllWindows() { return windows.filter((win) => !win.destroyed); }
-    constructor() {
+    constructor(options) {
       super();
       this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {} });
       this.focuses = 0;
+      this.options = options;
+      this.shows = 0;
       windows.push(this);
     }
     isDestroyed() { return !!this.destroyed; }
     isMinimized() { return false; }
     focus() { this.focuses++; }
-    loadURL() { return Promise.resolve(); }
+    loadURL() { return loadPromise || Promise.resolve(); }
+    show() { this.shows++; }
     close() {
       const event = { prevented: false, preventDefault() { this.prevented = true; } };
       this.emit('close', event);
@@ -130,6 +134,12 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   };
   const context = {
     process: processFake, URL, __dirname: path.join(__dirname, '..'),
+    setTimeout: (callback, delay) => {
+      const timer = { callback, delay, cleared: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => { if (timer) timer.cleared = true; },
     require: (name) => {
       if (name === 'electron') return electron;
       if (name === './regression-isolation.cjs') return { configure: () => null };
@@ -162,6 +172,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     globalThis.owner = {
       startBackend, stopBackend, runAfterBackendStop, createWindow,
       get backend() { return backend; },
+      setSplash(splash) { startupSplash = splash; },
       replace(child) { ownBackend(child, child.nonce); },
     };
   `, context);
@@ -177,11 +188,56 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     runAfterBackendStop: context.owner.runAfterBackendStop,
   });
   return {
-    app, owner: context.owner, updater, au, ipc, notifications, messages, exitWaitBudgets, windows, pages, shell,
+    app, owner: context.owner, updater, au, ipc, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
     spawn() { context.owner.startBackend(1234); return spawned; },
     counts: () => ({ relaunches, exits, quits, installs, requests }),
   };
 }
+
+test('startup handoff waits for successful loading and a painted main window', async () => {
+  let resolveLoad;
+  const f = fixture({ loadPromise: new Promise((resolve) => { resolveLoad = resolve; }) });
+  let handoffs = 0;
+  const splash = { complete(win) { handoffs++; win.show(); }, fail() { assert.fail('unexpected startup failure'); } };
+  const win = f.owner.createWindow('http://fixture', splash);
+  assert.equal(win.options.show, false);
+  win.emit('ready-to-show');
+  assert.equal(handoffs, 0);
+  resolveLoad();
+  await tick();
+  assert.equal(handoffs, 1);
+  assert.equal(win.shows, 1);
+  assert.equal(f.timers[0].cleared, true);
+});
+
+test('an interface load failure cannot reveal a blank window and timeout stays visible', async () => {
+  const f = fixture({ loadPromise: Promise.reject(new Error('network unavailable')) });
+  const failures = [];
+  const splash = { complete() { assert.fail('failed page must stay hidden'); }, fail(error) { failures.push(error.message); } };
+  const win = f.owner.createWindow('http://fixture', splash);
+  win.emit('ready-to-show');
+  await tick();
+  assert.equal(win.shows, 0);
+  f.timers[0].callback();
+  assert.match(failures[0], /taking too long/);
+  win.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  assert.match(failures[1], /crashed/);
+});
+
+test('a splash is not another app window that can bypass backend shutdown', async () => {
+  const f = fixture({ waitMs: 100 });
+  const child = f.spawn();
+  const splashWindow = f.owner.createWindow('file://startup');
+  const splash = { window: splashWindow, update() {}, isDestroyed: () => false };
+  f.owner.setSplash(splash);
+  const win = f.owner.createWindow('http://fixture');
+  assert.equal(win.close().prevented, true);
+  await tick();
+  assert.equal(f.counts().quits, 0);
+  child.finish();
+  await tick();
+  assert.equal(f.owner.backend, null);
+});
 
 test('production relaunch waits for delayed exit, reports confirmation, and rejects untrusted IPC', async () => {
   const f = fixture({ waitMs: 100 });
