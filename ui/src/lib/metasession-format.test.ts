@@ -6,6 +6,7 @@ import {
   formatTokens,
   purposeLabel,
   readWarmPool,
+  savedWarmPool,
   sessionSeq,
   turnWork,
 } from './metasession-format.js';
@@ -42,6 +43,46 @@ describe('readWarmPool', () => {
       enabled: true,
       pools: [{ purpose: 'general', size: 2 }],
     });
+  });
+});
+
+describe('savedWarmPool', () => {
+  const running = {
+    enabled: true,
+    executable: 'copilot',
+    pools: [{ purpose: 'general', size: 5 }],
+  } as unknown as ConfigValue;
+
+  it('shows the stored size rather than the one the backend booted with', () => {
+    // The regression: the running config never moves when an override is
+    // saved, so reading it alone made every saved edit look reverted.
+    const saved = savedWarmPool(running, {
+      enabled: true,
+      pools: [{ purpose: 'general', size: 9 }],
+    } as unknown as ConfigValue);
+    expect(saved?.pools).toEqual([{ purpose: 'general', size: 9 }]);
+    // Untouched keys still track the running config.
+    expect(saved?.executable).toBe('copilot');
+  });
+
+  it('falls back to the running config when nothing is stored', () => {
+    expect(savedWarmPool(running, null)?.pools).toEqual([
+      { purpose: 'general', size: 5 },
+    ]);
+  });
+
+  it('replaces the pool list wholesale so a removed pool stays removed', () => {
+    const saved = savedWarmPool(running, {
+      enabled: false,
+      pools: [{ purpose: 'review', size: 1 }],
+    } as unknown as ConfigValue);
+    expect(saved?.enabled).toBe(false);
+    expect(saved?.pools).toEqual([{ purpose: 'review', size: 1 }]);
+  });
+
+  it('is null when neither source is usable', () => {
+    expect(savedWarmPool(null, null)).toBeNull();
+    expect(savedWarmPool('nope' as ConfigValue, 'nope' as ConfigValue)).toBeNull();
   });
 });
 

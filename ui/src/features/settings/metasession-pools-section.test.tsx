@@ -47,6 +47,39 @@ it.each(['resize', 'create', 'remove'] as const)('reports a failed live %s witho
   expect(screen.queryByText(/some live pool changes failed/)).toBeNull();
 });
 
+it('keeps a saved pool size after the config reloads', async () => {
+  // The running config is a boot snapshot that never moves, so reading it
+  // alone made a saved size snap back to the old value on reload while the
+  // live pool had already been resized to the new one.
+  const running = { meta: { warmPool: { enabled: true, pools: [{ purpose: 'general', size: 2 }] } } };
+  const getConfig = vi.fn()
+    .mockResolvedValueOnce({ current: running, overrides: { meta: {} } })
+    .mockResolvedValue({
+      current: running,
+      overrides: { meta: { warmPool: { enabled: true, pools: [{ purpose: 'general', size: 7 }] } } },
+    });
+  const api: Partial<ApiClient> = {
+    getConfig,
+    getMetaPools: vi.fn().mockResolvedValue({
+      enabled: true,
+      pools: [{
+        purpose: 'general', size: 2, suggestedSize: 2, live: 2, idle: 2, busy: 0,
+        ready: true, served: 0, sessions: [],
+      }],
+    }),
+    getMetaSettings: vi.fn().mockResolvedValue({ model: 'fixture' }),
+    getMetaModels: vi.fn().mockResolvedValue([{ id: 'fixture', name: 'Fixture' }]),
+    updateConfig: vi.fn().mockResolvedValue({}),
+    resizeMetaPool: vi.fn().mockResolvedValue({}),
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection /></ApiProvider>);
+  fireEvent.change(await screen.findByDisplayValue('2'), { target: { value: '7' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => expect(getConfig).toHaveBeenCalledTimes(2));
+  expect(await screen.findByDisplayValue('7')).toBeInTheDocument();
+  expect(screen.queryByDisplayValue('2')).toBeNull();
+});
+
 it.each([false, true])('shows capacity-blocked targets and actual headless budgets (closed=%s)', async (closed) => {
   const api: Partial<ApiClient> = {
     getConfig: vi.fn().mockResolvedValue({

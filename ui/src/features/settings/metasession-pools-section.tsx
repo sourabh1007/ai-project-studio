@@ -32,7 +32,7 @@ import {
   formatTokens,
   KNOWN_PURPOSES,
   purposeLabel,
-  readWarmPool,
+  savedWarmPool as readSavedWarmPool,
   sessionSeq,
   turnWork,
   type WarmPoolConfig,
@@ -868,7 +868,14 @@ export function MetasessionPoolsSection() {
 
   const savedWarmPool = useMemo<WarmPoolConfig | null>(() => {
     const meta = config.data?.current.meta;
-    return meta ? readWarmPool(meta.warmPool) : null;
+    if (!meta) return null;
+    // What is stored wins over what the backend booted with; otherwise a saved
+    // edit appears to revert as soon as the form reloads.
+    return readSavedWarmPool(
+      meta.warmPool,
+      // Optional: a backend predating this field must not blank the page.
+      config.data?.overrides?.meta?.warmPool ?? null,
+    );
   }, [config.data]);
 
   const [enabled, setEnabled] = useState(false);

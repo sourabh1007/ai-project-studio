@@ -48,6 +48,31 @@ export function readWarmPool(value: ConfigValue): WarmPoolConfig | null {
   return wp as unknown as WarmPoolConfig;
 }
 
+/**
+ * The warm-pool settings as last *saved*, which is what an editor must show.
+ *
+ * `current` is the config the backend booted with and it does not move when an
+ * override is persisted, so reading it alone made every saved edit appear to
+ * revert the moment the form reloaded — even though the value had been stored
+ * and the live pools had already been resized to match.
+ *
+ * The stored override wins key by key, exactly as the backend merges it on the
+ * next launch, so the form shows what is saved rather than what happened to be
+ * loaded at boot.
+ */
+export function savedWarmPool(
+  current: ConfigValue,
+  override: ConfigValue,
+): WarmPoolConfig | null {
+  const running = current === null || typeof current !== 'object'
+    ? {}
+    : (current as Record<string, unknown>);
+  const stored = override === null || typeof override !== 'object'
+    ? {}
+    : (override as Record<string, unknown>);
+  return readWarmPool({ ...running, ...stored } as ConfigValue);
+}
+
 /** The trailing numeric sequence of a session id (`meta-12` → 12); 0 if none. */
 export function sessionSeq(id: string): number {
   const n = Number.parseInt(id.replace(/^\D+/, ''), 10);
