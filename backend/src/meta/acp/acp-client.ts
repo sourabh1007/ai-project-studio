@@ -107,6 +107,11 @@ interface Disposal {
 
 const DEFAULT_CANCEL_GRACE_MS = 1_000;
 
+/** Bounds on retained non-protocol stdout: enough to diagnose, never a leak. */
+const MAX_UNPARSED_LINES = 5;
+const MAX_UNPARSED_LINE_CHARACTERS = 200;
+const MAX_UNPARSED_CHARACTERS = 1_000;
+
 function remainingTimeout(deadlineAt: number | undefined, fallbackMs: number): number {
   if (deadlineAt === undefined) {
     return fallbackMs;
@@ -147,6 +152,11 @@ export class AcpClient {
   private dead: Error | null = null;
   private reusableState = true;
   private exitHandlers: (() => void)[] = [];
+  /** True once any valid ACP message has been read from this process. */
+  private spokeProtocol = false;
+  /** Bounded tail of stdout lines that were not ACP messages. */
+  private unparsed: string[] = [];
+  private unparsedCharacters = 0;
 
   constructor(
     private readonly process: AcpProcess,
@@ -335,8 +345,12 @@ export class AcpClient {
   private handleLine(line: string): void {
     const message = parseMessage(line);
     if (!message) {
+      this.recordUnparsedLine(line);
       return;
     }
+    this.spokeProtocol = true;
+    this.unparsed = [];
+    this.unparsedCharacters = 0;
     if (message.kind === 'notification') {
       if (message.method === 'session/update') {
         const sessionId = sessionIdFromUpdate(message.params);
@@ -438,8 +452,60 @@ export class AcpClient {
   }
 
   private diagnosticSuffix(): string {
+    const parts: string[] = [];
     const diagnostic = this.process.diagnostic?.();
-    return diagnostic ? `: ${diagnostic}` : '';
+    if (diagnostic) parts.push(diagnostic);
+    // Non-protocol stdout is the only evidence available when a CLI answers an
+    // auth prompt, prints an upgrade banner or crashes instead of speaking ACP.
+    // Without it the turn just reports a timeout and the real cause is lost.
+    if (this.unparsed.length > 0) {
+      parts.push(`unexpected output: ${this.unparsed.join(' / ')}`);
+    }
+    return parts.length > 0 ? `: ${parts.join('; ')}` : '';
+  }
+
+  /**
+   * Keeps a bounded tail of stdout that was not an ACP message, and fails the
+   * process fast when it has never spoken ACP at all. A binary that is not an
+   * ACP agent (wrong version, an interactive prompt, an error banner) would
+   * otherwise hang every request for its full timeout and report nothing
+   * actionable. Once a single valid message is seen the process is known to
+   * speak the protocol, so later chatter is only ever retained as diagnostics.
+   */
+  private recordUnparsedLine(line: string): void {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || this.dead) {
+      return;
+    }
+    const clipped = trimmed.slice(0, MAX_UNPARSED_LINE_CHARACTERS);
+    this.unparsed.push(clipped);
+    this.unparsedCharacters += clipped.length;
+    while (
+      this.unparsed.length > MAX_UNPARSED_LINES ||
+      this.unparsedCharacters > MAX_UNPARSED_CHARACTERS
+    ) {
+      this.unparsedCharacters -= this.unparsed.shift()!.length;
+    }
+    if (
+      !this.spokeProtocol &&
+      this.pending.size > 0 &&
+      this.unparsed.length >= MAX_UNPARSED_LINES
+    ) {
+      this.failProtocol();
+    }
+  }
+
+  /** Fails every in-flight request because the process is not an ACP agent. */
+  private failProtocol(): void {
+    const message = `ACP process did not speak the protocol${this.diagnosticSuffix()}`;
+    this.reusableState = false;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      // Cold fallback is allowed: the prompt itself is fine, this process is not.
+      pending.reject(this.requestError(message, pending.method, true));
+    }
+    this.pending.clear();
+    this.dispose();
   }
 
   private disposeTurn(turn: ActiveTurn): void {

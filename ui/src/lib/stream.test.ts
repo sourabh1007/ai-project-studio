@@ -297,18 +297,50 @@ describe('applyStreamEvent', () => {
     expect(state.usageHistoryTruncated).toBe(false);
   });
 
+  it('resynchronizes authoritatively after an interruption instead of staying degraded forever', () => {
+    let state = applyStreamEvent(initialLiveState, { type: 'session.started', session: session('s1') });
+    state = applyStreamEvent(state, { type: 'usage.recorded', usage: usage('s1', 0) });
+    state = applyStreamEvent(state, { type: 'stream.interrupted' });
+    expect(state.streamInterrupted).toBe(true);
+    // While interrupted, stale live data must not overwrite persisted state.
+    const persisted = { ...session('s1'), status: 'completed' as const };
+    expect(mergeLive(persisted, state)).toBe(persisted);
+    expect(resolveSessionMetrics(undefined, sessionLiveTotals(state, 's1'))).toBeNull();
+
+    const revision = liveSignal(state);
+    const sessionRevision = state.sessionRevision;
+    state = applyStreamEvent(state, { type: 'stream.reconnected' });
+    // The bump is what drives consumers to refetch authoritative persisted state.
+    expect(liveSignal(state)).toBe(revision + 1);
+    expect(state.sessionRevision).toBe(sessionRevision! + 1);
+    // The stale overlay is dropped and the view is no longer degraded, which
+    // leaves it exactly where a fresh load starts rather than frozen.
+    expect(state.streamInterrupted).toBeUndefined();
+    expect(state.usageHistoryTruncated).toBeUndefined();
+    expect(state.liveCacheTruncated).toBeUndefined();
+    expect(state.sessions).toEqual({});
+    expect(state.usageByKey).toEqual({});
+    expect(sessionLiveTotals(state, 's1').complete).toBeUndefined();
+
+    // Live updates apply again once the stream is healthy.
+    state = applyStreamEvent(state, { type: 'session.updated', session: persisted });
+    expect(mergeLive(session('s1'), state)).toMatchObject({ status: 'completed' });
+  });
+
+  it('leaves a healthy stream untouched when opening without a preceding interruption', () => {
+    const state = applyStreamEvent(initialLiveState, { type: 'session.started', session: session('s1') });
+    // The first EventSource `open` must not discard live data or force a refetch.
+    const reconnected = applyStreamEvent(state, { type: 'stream.reconnected' });
+    expect(reconnected).toBe(state);
+    expect(reconnected.sessions.s1).toBeDefined();
+  });
+
   it('does not mistake reconnecting for replay and invalidates saved statistics on interruptions', () => {
     let state = applyStreamEvent(initialLiveState, { type: 'session.started', session: session('s1') });
     state = applyStreamEvent(state, { type: 'stream.interrupted' });
     expect(state.streamInterrupted).toBe(true);
     const persisted = { ...session('s1'), status: 'completed' as const };
     expect(mergeLive(persisted, state)).toBe(persisted);
-    const revision = liveSignal(state);
-    const sessionRevision = state.sessionRevision;
-    state = applyStreamEvent(state, { type: 'stream.reconnected' });
-    expect(liveSignal(state)).toBe(revision + 1);
-    expect(state.sessionRevision).toBe(sessionRevision! + 1);
-    expect(state.streamInterrupted).toBe(true);
     expect(resolveSessionMetrics(undefined, sessionLiveTotals(state, 's1'))).toBeNull();
     expect(applyStreamEvent(initialLiveState, { type: 'stream.truncated' }))
       .toMatchObject({ liveCacheTruncated: true, usageHistoryTruncated: true });

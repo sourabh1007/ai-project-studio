@@ -71,7 +71,10 @@ describe('useUsageStream', () => {
     const revision = liveSignal(result.current);
     act(() => source.emit('open', ''));
     expect(liveSignal(result.current)).toBe(revision + 1);
-    expect(result.current.streamInterrupted).toBe(true);
+    // Reconnecting resynchronizes: the stale overlay is dropped and the view
+    // stops reporting itself as degraded, rather than needing a page reload.
+    expect(result.current.streamInterrupted).toBeUndefined();
+    expect(result.current.usageHistoryTruncated).toBeUndefined();
     act(() => source.emit('usage.recorded', 'x'.repeat(MAX_LIVE_EVENT_CHARACTERS + 1)));
     expect(result.current.liveCacheTruncated).toBe(true);
     expect(result.current.usageByKey).toEqual({});

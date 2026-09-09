@@ -247,9 +247,18 @@ function reduceStreamEvent(state: LiveState, event: StreamEvent): LiveState {
   switch (event.type) {
     case 'stream.interrupted':
       return { ...state, streamInterrupted: true, usageHistoryTruncated: true };
-    case 'stream.reconnected':
-      // Reconnection is not replay: keep any missing-history warning until the view reloads.
-      return { ...state };
+    case 'stream.reconnected': {
+      // Reconnection is not replay: events sent during the gap are gone, so the
+      // derived live caches are stale in ways no incremental update can repair.
+      // Leaving the degraded flag set forever was equally wrong — it froze live
+      // session updates and reported usage as incomplete until a full page
+      // reload. Discard the stale overlay instead; the revision bump below
+      // drives every consumer to refetch authoritative persisted state, which
+      // puts the view exactly where a fresh load starts. Only then is clearing
+      // the degraded flags honest.
+      if (state.streamInterrupted !== true) return state;
+      return { ...initialLiveState };
+    }
     case 'stream.truncated':
       return { ...state, liveCacheTruncated: true, usageHistoryTruncated: true };
     case 'session.started':

@@ -255,6 +255,97 @@ describe('AcpClient', () => {
     await expect(p).resolves.toBeUndefined();
   });
 
+  it('fails fast when the process never speaks the protocol, reporting what it said instead', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const p = client.initialize();
+    await flush();
+    // A CLI that prints a banner or an auth prompt instead of ACP would
+    // otherwise hang for the full timeout and report nothing actionable.
+    for (const line of [
+      'Welcome to Copilot CLI',
+      'You are not signed in.',
+      '  ', // blank noise must not count toward the failure threshold
+      'Run `gh auth login` to continue.',
+      'Press any key...',
+      'Error: not authenticated',
+    ]) {
+      fake.emitRaw(line);
+    }
+    const error = await p.catch((e: unknown) => e as AcpRequestError);
+    expect(error).toBeInstanceOf(AcpRequestError);
+    expect(error.message).toContain('did not speak the protocol');
+    expect(error.message).toContain('not authenticated');
+    // The prompt is fine, this process is not — a cold retry is allowed.
+    expect(error.allowFallbackToCold).toBe(true);
+    expect(client.reusable).toBe(false);
+    expect(fake.killed).toBe(1);
+  });
+
+  it('bounds retained non-protocol output and never truncates mid-report', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const p = client.initialize();
+    await flush();
+    for (let i = 0; i < 20; i++) fake.emitRaw(`noise-${i} ${'x'.repeat(500)}`);
+    const error = await p.catch((e: unknown) => e as AcpRequestError);
+    // It fails at the threshold, so the retained tail is the earliest output —
+    // the banner or error that explains the failure — and nothing after it.
+    expect(error.message).toContain('noise-0');
+    expect(error.message).not.toContain('noise-5');
+    // Each line is clipped and the whole report stays bounded.
+    expect(error.message.length).toBeLessThan(1400);
+  });
+
+  it('treats output after a valid message as diagnostics rather than a protocol failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeProcess();
+      const client = new AcpClient(fake, {
+        initializeTimeoutMs: 50,
+        turnTimeoutMs: 50,
+        cancelGraceMs: 10,
+      });
+      const handshake = client.initialize();
+      fake.respond('initialize', {});
+      await handshake;
+      const turn = client.newSession('C:\\repo');
+      // The process has proven it speaks ACP, so chatter must not fail it early.
+      for (let i = 0; i < 20; i++) fake.emitRaw(`warning: retrying upstream ${i}`);
+      expect(client.reusable).toBe(true);
+      const settled = turn.catch((e: unknown) => e as AcpRequestError);
+      await vi.advanceTimersByTimeAsync(60);
+      const error = await settled;
+      // ...but it is still reported, so the timeout is explainable.
+      expect(error.message).toContain('timed out after 50ms');
+      expect(error.message).toContain('warning: retrying upstream 19');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('combines stderr diagnostics with unexpected stdout', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeProcess();
+      fake.diagnosticText = 'stderr: ENOENT';
+      const client = new AcpClient(fake, {
+        initializeTimeoutMs: 50,
+        turnTimeoutMs: 50,
+        cancelGraceMs: 10,
+      });
+      const p = client.initialize();
+      fake.emitRaw('plain stdout line');
+      const settled = p.catch((e: unknown) => e as AcpRequestError);
+      await vi.advanceTimersByTimeAsync(60);
+      const error = await settled;
+      expect(error.message).toContain('stderr: ENOENT');
+      expect(error.message).toContain('unexpected output: plain stdout line');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects when a request cannot be written to the process', async () => {
     const fake = new FakeProcess();
     fake.throwOnMethod = 'initialize';
