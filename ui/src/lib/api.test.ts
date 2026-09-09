@@ -853,8 +853,25 @@ describe('createApiClient', () => {
     await expect(client.listFeatures()).rejects.toThrow(/timed out/);
   });
 
-  it('propagates a non-timeout fetch error unchanged', async () => {
+  it('times out a GET whose body never arrives', async () => {
     const client = createApiClient({
+      getTimeoutMs: 5,
+      fetchImpl: (_url, init) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () =>
+                reject(new DOMException('aborted', 'AbortError')),
+              );
+            }),
+        } as unknown as Response),
+    });
+    await expect(client.listFeatures()).rejects.toThrow(/timed out/);
+  });
+
+  it('propagates a non-timeout fetch error unchanged', async () => {    const client = createApiClient({
       fetchImpl: () => Promise.reject(new Error('network down')),
     });
     await expect(client.listFeatures()).rejects.toThrow('network down');

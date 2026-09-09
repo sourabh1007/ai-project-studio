@@ -149,47 +149,57 @@ export function createApiClient(options: ApiClientOptions = {}) {
     const timer = controller
       ? setTimeout(() => controller.abort(), GET_TIMEOUT_MS)
       : undefined;
-    let response: Response;
+    const timedOut = () =>
+      new ApiError(
+        0,
+        `Request timed out: ${path}. The backend may be busy — please retry.`,
+      );
     try {
-      response = await doFetch(`${baseUrl}${path}`, {
-        ...init,
-        ...(controller ? { signal: controller.signal } : {}),
-      });
-    } catch (error) {
-      if (controller?.signal.aborted) {
+      let response: Response;
+      try {
+        response = await doFetch(`${baseUrl}${path}`, {
+          ...init,
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+      } catch (error) {
+        if (controller?.signal.aborted) {
+          throw timedOut();
+        }
+        throw error;
+      }
+      if (!response.ok) {
+        throw new ApiError(response.status, await errorMessage(response, path));
+      }
+      // The body is read inside the timeout as well. Clearing the timer once
+      // the headers arrived left a backend that died mid-response able to hang
+      // this read forever, which is what stranded views on their skeletons
+      // with no error and no way to retry.
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch (error) {
+        if (controller?.signal.aborted) {
+          throw timedOut();
+        }
+        // A 200 that is not JSON is almost always something other than our
+        // backend answering (a proxy page, a partly started shell).
         throw new ApiError(
           0,
-          `Request timed out: ${path}. The backend may be busy — please retry.`,
+          `Request failed: ${path} did not return JSON. The backend may be starting up — please retry.`,
         );
       }
-      throw error;
+      if (validate) {
+        const problem = validate(body);
+        if (problem) {
+          throw new ApiError(0, problem);
+        }
+      }
+      return body as T;
     } finally {
       if (timer) {
         clearTimeout(timer);
       }
     }
-    if (!response.ok) {
-      throw new ApiError(response.status, await errorMessage(response, path));
-    }
-    if (!validate) {
-      return (await response.json()) as T;
-    }
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      // A 200 that is not JSON is almost always something other than our
-      // backend answering (a proxy page, a partly started shell).
-      throw new ApiError(
-        0,
-        `Request failed: ${path} did not return JSON. The backend may be starting up — please retry.`,
-      );
-    }
-    const problem = validate(body);
-    if (problem) {
-      throw new ApiError(0, problem);
-    }
-    return body as T;
   }
 
   function jsonBody(body: unknown): RequestInit {

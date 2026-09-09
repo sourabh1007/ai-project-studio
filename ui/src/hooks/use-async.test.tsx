@@ -33,4 +33,14 @@ describe('useAsync', () => {
     expect(result.current.data).toBe('fresh');
     expect(result.current.loading).toBe(false);
   });
+
+  it('reports a loader that throws synchronously instead of staying loading', async () => {
+    const loader = vi.fn(() => {
+      throw new Error('bridge unavailable');
+    });
+    const { result } = renderHook(() => useAsync(loader, []));
+    await act(async () => {});
+    expect(result.current.loading).toBe(false);
+    expect(result.current.error).toBe('bridge unavailable');
+  });
 });

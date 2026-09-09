@@ -38,7 +38,15 @@ export function useAsync<T>(
     setLoading(true);
     setError(null);
     setCause(null);
-    loader()
+    // A loader that throws synchronously must not escape the effect: that
+    // would strand the view on its skeleton with no error and no way to retry.
+    let started: Promise<T>;
+    try {
+      started = loader();
+    } catch (err: unknown) {
+      started = Promise.reject(err);
+    }
+    started
       .then((result) => {
         if (active) {
           setData(result);
