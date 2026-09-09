@@ -164,6 +164,11 @@ export interface ApiRoutesDeps {
   createMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
   /** Live-removes the warm pool for a purpose (no restart), returning status. */
   removeMetaPool: (purpose: string) => MetaPoolsStatus;
+  /**
+   * Live shared headless process budget, stamped onto every pool response by
+   * the controller so no route can answer with a partial status.
+   */
+  metaPoolsProcessAdmission?: () => MetaPoolsStatus['processAdmission'];
   /** Current runtime meta AI provider/model for the status bar. */
   metaSettings: () => MetaSettingsView;
   /** Applies a runtime meta AI provider/model change (no restart). */
@@ -304,6 +309,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       resize: deps.resizeMetaPool,
       create: deps.createMetaPool,
       remove: deps.removeMetaPool,
+      processAdmission: deps.metaPoolsProcessAdmission,
     }),
     ...createMetaSettingsRoutes({
       get: deps.metaSettings,

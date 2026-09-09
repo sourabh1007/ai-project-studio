@@ -2636,11 +2636,12 @@ function main(): void {
       settingsAssistant,
       selfHeal: selfHealService,
       configSchema: () => describeNamespaces(registry),
-      metaPools: () => ({
-        ...metaPoolsStatusFn(),
-        processAdmission: { ...processAdmission.stats(), ...processAdmission.limits() },
-      }),
+      metaPools: metaPoolsStatusFn,
       metaOperations: { operations: metaOperationRepo, config: metaOperationsConfig },
+      metaPoolsProcessAdmission: () => ({
+        ...processAdmission.stats(),
+        ...processAdmission.limits(),
+      }),
       resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
       createMetaPool: (purpose, size) => createMetaPoolFn(purpose, size),
       removeMetaPool: (purpose) => removeMetaPoolFn(purpose),

@@ -24,6 +24,14 @@ export interface MetaPoolsControllerDeps {
    * pool serves the purpose.
    */
   remove: (purpose: string) => MetaPoolsStatus;
+  /**
+   * Live shared headless process budget. Stamped onto *every* response here
+   * rather than by each caller: the mutations previously returned a status
+   * without it, so the settings page lost the capacity readout after any pool
+   * edit even though all four routes are declared to return the same refreshed
+   * status. Optional so a deployment without an admission gate still serves.
+   */
+  processAdmission?: () => MetaPoolsStatus['processAdmission'];
 }
 
 function assertResize(body: unknown): { purpose: string; size: number } {
@@ -75,18 +83,27 @@ function assertPurpose(body: unknown): { purpose: string } {
  * animates in instead of forcing a restart.
  */
 export function createMetaPoolsRoutes(deps: MetaPoolsControllerDeps): Route[] {
+  // One place decides what a pool status response looks like, so a route can
+  // never again answer with a partially-populated status.
+  const respond = (status: MetaPoolsStatus) => {
+    const admission = deps.processAdmission?.();
+    return {
+      status: 200,
+      body: admission ? { ...status, processAdmission: admission } : status,
+    };
+  };
   return [
     {
       method: 'get',
       path: '/meta/pools',
-      handler: () => ({ status: 200, body: deps.status() }),
+      handler: () => respond(deps.status()),
     },
     {
       method: 'post',
       path: '/meta/pools/resize',
       handler: (req) => {
         const { purpose, size } = assertResize(req.body);
-        return { status: 200, body: deps.resize(purpose, size) };
+        return respond(deps.resize(purpose, size));
       },
     },
     {
@@ -94,7 +111,7 @@ export function createMetaPoolsRoutes(deps: MetaPoolsControllerDeps): Route[] {
       path: '/meta/pools/create',
       handler: (req) => {
         const { purpose, size } = assertResize(req.body);
-        return { status: 200, body: deps.create(purpose, size) };
+        return respond(deps.create(purpose, size));
       },
     },
     {
@@ -102,7 +119,7 @@ export function createMetaPoolsRoutes(deps: MetaPoolsControllerDeps): Route[] {
       path: '/meta/pools/remove',
       handler: (req) => {
         const { purpose } = assertPurpose(req.body);
-        return { status: 200, body: deps.remove(purpose) };
+        return respond(deps.remove(purpose));
       },
     },
   ];
