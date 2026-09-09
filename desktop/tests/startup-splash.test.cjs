@@ -125,6 +125,7 @@ function bootstrapFixture({ dev = false, exists = true, port = Promise.resolve(4
     update: (phase) => calls.push(phase),
   };
   const context = {
+    AbortController,
     BrowserWindow: {}, ipcMain: {}, appIcon: () => null, readPersistedTheme: () => 'dark',
     app: { getVersion: () => '0.11.0', quit() {} },
     startupCancelled: false, startupSplash: null, desktopInitialized: false,

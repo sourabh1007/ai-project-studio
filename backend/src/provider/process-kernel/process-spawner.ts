@@ -36,6 +36,7 @@ export interface RawChildProcess {
   stdout: RawStream | null;
   stderr: RawStream | null;
   on(event: 'close', cb: (code: number | null) => void): void;
+  on(event: 'error', cb: (error: Error) => void): void;
   kill(): void;
 }
 
@@ -93,7 +94,12 @@ export function createProcessSpawner(
       pump(child.stderr, stderrAssembler, stderrCbs);
 
       const done = new Promise<number | null>((resolve) => {
-        child.on('close', (code) => {
+        let settled = false;
+        const settle = (code: number | null): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           const flushTrailing = (
             assembler: LineAssembler,
             cbs: ((line: string) => void)[],
@@ -112,7 +118,17 @@ export function createProcessSpawner(
             cb(code);
           }
           resolve(code);
-        });
+        };
+        child.on('close', settle);
+        // A spawn failure (e.g. a missing CLI executable) emits 'error'
+        // instead of/without 'close'. Node treats an unhandled 'error' event
+        // on an EventEmitter as fatal and crashes the whole process, so this
+        // must always be observed here — otherwise a single missing CLI
+        // (agency, copilot, ...) takes down the entire backend. Route it
+        // through the same settle path as a null exit code, matching how
+        // callers already interpret "process never produced a real exit
+        // code" (e.g. agency-bootstrapper's install-failure message).
+        child.on('error', () => settle(null));
       });
 
       return {

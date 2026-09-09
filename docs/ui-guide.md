@@ -16,6 +16,18 @@ there is no simulated percentage or artificial delay.
 The main window stays hidden until its page loads successfully and paints.
 Startup errors remain visible with an explanation and a close control. Closing
 the startup window uses the same cooperative backend shutdown as the main app.
+Missing Node.js or an early backend exit is reported immediately rather than
+waiting for the readiness timeout. Startup failures write a bounded
+`desktop-startup.log` in the desktop user-data directory; the error shows its
+location. Each failed launch replaces that diagnostic file.
+
+If no backend process could be started, the desktop closes normally. If the
+backend has already exited without confirming cleanup, **Close app** is available
+in a warning dialog. This closes only the desktop; it does not claim cleanup
+succeeded, restart the backend, or launch an installer. **Keep open** preserves
+the error screen without an ongoing closing animation. A still-running backend
+continues to require cooperative cleanup.
+
 Development launches connect to the existing server rather than spawning a second
 backend. Assets and the isolated preload live in `desktop/startup/`; lifecycle
 coordination is in `desktop/startup-splash.cjs` and `desktop/main.cjs`.

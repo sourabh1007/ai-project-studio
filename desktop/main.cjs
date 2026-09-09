@@ -23,6 +23,7 @@ let mainWindow = null;
 let lastWindowUrl = null;
 let startupSplash = null;
 let startupCancelled = false;
+let startupAbort = new AbortController();
 let desktopInitialized = false;
 
 const ROOT = app.isPackaged
@@ -87,6 +88,8 @@ let stoppingBackend = null;
 let backendGeneration = 0;
 let shutdownAction = null;
 let backendOwner = null;
+let exitOnlyOwner = null;
+let exitOnlyPrompt = null;
 
 // On Windows, when the app shuts down the stdout/stderr pipe can close before
 // the backend's exit/log handlers run; a raw write then throws EPIPE, which
@@ -119,30 +122,65 @@ function getFreePort() {
 
 /** Resolves once the backend answers on /api/providers, or rejects on timeout. */
 function waitForBackend(port) {
-  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-  const url = `http://${HOST}:${port}/api/providers`;
+  const owner = backendOwner;
+  const signal = startupAbort.signal;
+  const basePath = (backendControl?.basePath || '/api').replace(/^\/?/, '/').replace(/\/$/, '');
+  const url = `http://${HOST}:${port}${basePath}/providers`;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let request;
+    let retryTimer;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(retryTimer);
+      owner.child.removeListener('exit', stopped);
+      owner.child.removeListener('error', stopped);
+      signal.removeEventListener('abort', cancelled);
+      request?.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    const stopped = () => finish(backendStartupError(owner));
+    const cancelled = () => finish(new Error('Startup cancelled'));
+    const timeout = setTimeout(() => finish(new Error('Backend did not start in time')), STARTUP_TIMEOUT_MS);
+    const retry = () => {
+      if (!settled && !retryTimer) retryTimer = setTimeout(attempt, 300);
+    };
     const attempt = () => {
+      retryTimer = null;
+      if (settled) return;
       const req = http.get(url, (res) => {
         res.resume();
-        if (res.statusCode && res.statusCode < 500) {
-          resolve();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          finish();
         } else {
           retry();
         }
       });
+      request = req;
       req.on('error', retry);
       req.setTimeout(2000, () => req.destroy());
     };
-    const retry = () => {
-      if (Date.now() > deadline) {
-        reject(new Error('Backend did not start in time'));
-        return;
-      }
-      setTimeout(attempt, 300);
-    };
+    owner.child.on('exit', stopped);
+    owner.child.on('error', stopped);
+    signal.addEventListener('abort', cancelled, { once: true });
+    if (signal.aborted) return cancelled();
+    if (owner.spawnError || owner.outcome) return stopped();
     attempt();
   });
+}
+
+function backendStartupError(owner) {
+  if (owner.spawnError) {
+    const hint = owner.spawnError.code === 'ENOENT'
+      ? 'Node.js was not found. Install Node.js 24 LTS and reopen the app, or configure CW_NODE_BIN.'
+      : `Unable to start Node.js (${owner.spawnError.code || 'process error'}). Check the executable and its permissions.`;
+    return new Error(hint);
+  }
+  const reason = owner.outcome?.signal || `exit code ${owner.outcome?.code}`;
+  return new Error(`The backend stopped before it was ready (${reason}).${owner.stderrTail ? `\n${owner.stderrTail.slice(-1000)}` : ''}`);
 }
 
 /** Spawns the backend as a Node process. Electron's bundled Node lacks the
@@ -175,14 +213,49 @@ function startBackend(port) {
 }
 
 function isBackendShutdownConfirmed() {
-  return backendOwner === null || (backendOwner.acknowledged &&
+  return backendOwner === null || backendOwner.spawnFailed || (backendOwner.acknowledged &&
     backendOwner.outcome?.code === 0 && backendOwner.outcome.signal == null);
+}
+
+function canQuitDesktop() {
+  return isBackendShutdownConfirmed() ||
+    (exitOnlyOwner === backendOwner && !backend && backendOwner?.outcome != null);
+}
+
+function confirmQuitAfterBackendExit() {
+  if (exitOnlyPrompt) return exitOnlyPrompt;
+  const owner = backendOwner;
+  const message = 'The backend has already stopped. Its cleanup could not be confirmed, so background work may still be running. You can close the desktop without restarting the backend or launching an installer.';
+  startupSplash?.fail?.(new Error(message));
+  exitOnlyPrompt = (async () => {
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning', title: 'Backend has stopped',
+        message: 'Close AI Project Studio?',
+        detail: message, buttons: ['Keep open', 'Close app'],
+        defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (response !== 1 || backendOwner !== owner || backend || !owner.outcome) return false;
+      // This permits only the desktop to exit, not backend replacement or a
+      // claim that the crashed process completed cooperative cleanup.
+      exitOnlyOwner = owner;
+      app.quit();
+      return true;
+    } catch (error) {
+      safeWrite(process.stderr, `[desktop] Could not confirm closing: ${error}\n`);
+      reportShutdownFailure('quit');
+      return false;
+    } finally {
+      exitOnlyPrompt = null;
+    }
+  })();
+  return exitOnlyPrompt;
 }
 
 function ownBackend(child, nonce) {
   backend = child;
   backendGeneration += 1;
-  const owner = { child, nonce, acknowledged: false, outcome: null };
+  const owner = { child, nonce, acknowledged: false, outcome: null, spawnFailed: false, spawnError: null, stderrTail: '' };
   backendOwner = owner;
   child.on('message', (message) => {
     if (message?.type === 'shutdown-complete' && message.nonce === nonce) {
@@ -190,10 +263,21 @@ function ownBackend(child, nonce) {
     }
   });
   child.stdout.on('data', (chunk) => safeWrite(process.stdout, `[backend] ${chunk}`));
-  child.stderr.on('data', (chunk) => safeWrite(process.stderr, `[backend] ${chunk}`));
-  child.on('error', (error) =>
-    safeWrite(process.stderr, `[backend] spawn error: ${error}\n`),
-  );
+  child.stderr.on('data', (chunk) => {
+    owner.stderrTail = (owner.stderrTail + chunk.toString()).slice(-16384);
+    safeWrite(process.stderr, `[backend] ${chunk}`);
+  });
+  child.on('error', (error) => {
+    owner.spawnError = error;
+    if (child.pid == null) {
+      owner.spawnFailed = true;
+      if (backend === child) {
+        backend = null;
+        backendControl = null;
+      }
+    }
+    safeWrite(process.stderr, `[backend] process error: ${error}\n`);
+  });
   child.on('exit', (code, signal) => {
     owner.outcome = { code, signal };
     safeWrite(process.stdout, `[backend] exited with code ${code}\n`);
@@ -246,6 +330,7 @@ function reportShutdownFailure(action) {
     ? `Cannot ${action}: the backend exited without confirmed cooperative cleanup. No replacement or installer was started. Keep this window open and check diagnostics before recovering the backend.`
     : `Cannot ${action}: backend shutdown was not confirmed. The app has not quit or started a replacement. Wait for active work to finish, then try again.`;
   safeWrite(process.stderr, `[desktop] ${message}\n`);
+  startupSplash?.fail?.(new Error(message));
   dialog.showErrorBox('Shutdown not confirmed', message);
 }
 
@@ -264,6 +349,10 @@ function runAfterBackendStop(action, proceed, terminal = true) {
     try {
       if (await stopBackend() !== true || !isBackendShutdownConfirmed() ||
           backend || backendGeneration !== generation) {
+        if (action === 'quit' && !backend && backendOwner?.outcome &&
+            backendGeneration === generation) {
+          return await confirmQuitAfterBackendExit();
+        }
         reportShutdownFailure(action);
         return false;
       }
@@ -535,14 +624,14 @@ function createWindow(loadUrl, splash = null) {
   load();
   mainWindow = win;
   win.on('close', (event) => {
-    if (BrowserWindow.getAllWindows().filter((candidate) => candidate !== startupSplash?.window).length > 1 || isBackendShutdownConfirmed()) {
+    if (BrowserWindow.getAllWindows().filter((candidate) => candidate !== startupSplash?.window).length > 1 || canQuitDesktop()) {
       return;
     }
     event.preventDefault();
     if (shutdownAction) {
       return;
     }
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && !(backendOwner?.outcome && !backend)) {
       void runAfterBackendStop('close window', () => win.close(), false);
     } else {
       app.quit();
@@ -745,9 +834,10 @@ function initializeDesktop() {
 
 async function bootstrap() {
   startupCancelled = false;
+  startupAbort = new AbortController();
   const splash = require('./startup-splash.cjs').createStartupSplash({
     BrowserWindow, ipcMain, icon: appIcon(), theme: readPersistedTheme(), version: app.getVersion(),
-    canClose: () => startupCancelled && isBackendShutdownConfirmed(),
+    canClose: () => startupCancelled && canQuitDesktop(),
     onClose: () => app.quit(),
   });
   startupSplash = splash;
@@ -790,8 +880,18 @@ async function bootstrap() {
 function reportStartupFailure(error) {
   if (startupCancelled) return;
   safeWrite(process.stderr, `[desktop] Startup failed: ${error}\n`);
-  if (!startupSplash?.fail(error)) {
-    dialog.showErrorBox('AI Project Studio could not start', String(error?.message ?? error));
+  const logPath = path.join(app.getPath('userData'), 'desktop-startup.log');
+  let detail = String(error?.message ?? error).slice(0, 1400);
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.writeFileSync(logPath, `${new Date().toISOString()}\n${String(error?.stack ?? error).slice(-4096)}\n${backendOwner?.stderrTail || ''}\n`, 'utf8');
+    detail += `\nDiagnostics: ${logPath}`;
+  } catch (logError) {
+    safeWrite(process.stderr, `[desktop] Could not write startup diagnostics: ${logError}\n`);
+    detail += '\nStartup diagnostics could not be saved.';
+  }
+  if (!startupSplash?.fail(new Error(detail))) {
+    dialog.showErrorBox('AI Project Studio could not start', detail);
     app.quit();
   }
 }
@@ -833,6 +933,12 @@ if (!gotLock) {
 
   app.on('before-quit', (event) => {
     startupCancelled = true;
+    startupAbort.abort();
+    if (exitOnlyOwner === backendOwner && !backend && backendOwner?.outcome != null) return;
+    if (exitOnlyPrompt) {
+      event.preventDefault();
+      return;
+    }
     if (startupSplash && !startupSplash.isDestroyed()) startupSplash.update('closing');
     if (isBackendShutdownConfirmed() && shutdownAction?.confirmed && shutdownAction.generation === backendGeneration) {
       shutdownAction = null;
@@ -843,6 +949,10 @@ if (!gotLock) {
     }
     event.preventDefault();
     if (shutdownAction) {
+      return;
+    }
+    if (!backend && backendOwner?.outcome) {
+      void confirmQuitAfterBackendExit();
       return;
     }
     void runAfterBackendStop('quit', () => app.quit());

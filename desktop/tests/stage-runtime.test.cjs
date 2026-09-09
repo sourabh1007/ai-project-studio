@@ -78,3 +78,47 @@ test('release installs only the backend production workspace using the frozen lo
   assert.match(workflow, /working-directory: desktop\/build\/backend\s+run: npm ci --omit=dev --workspace backend --include-workspace-root=false/);
   assert.doesNotMatch(workflow, /npm install --omit=dev/);
 });
+
+// Regression for the published v0.11.0 defect: electron-builder's extraResources
+// copy filter unconditionally drops a directory literally named "node_modules"
+// sitting at the *root* of a `from` path (app-builder-lib's createFilter treats
+// it as an app-level node_modules it manages separately, not a payload to ship
+// verbatim). `npm ci --workspace backend --include-workspace-root=false` hoists
+// the backend's production dependencies to build/backend/node_modules, so an
+// extraResources entry with `from: build/backend` silently shipped a backend
+// with zero dependencies — it started, then crashed with ERR_MODULE_NOT_FOUND
+// for every real import (express, zod, ws, ...). Prove the fix using
+// electron-builder's actual filter, not a re-implementation of its logic.
+test('the packaged extraResources mapping does not drop the backend production node_modules', async (t) => {
+  const f = await fixture(t);
+  f.stage();
+  // Simulate what `npm ci --workspace backend --include-workspace-root=false`
+  // does from desktop/build/backend: it hoists production dependencies to a
+  // node_modules directory at that same root, alongside the staged manifests
+  // and dist/ output stageRuntime() already wrote there.
+  f.write(path.join('staged', 'backend', 'node_modules', 'express', 'package.json'), '{"name":"express"}');
+
+  const { createFilter } = require(path.join(__dirname, '..', '..', 'node_modules', 'app-builder-lib', 'out', 'util', 'filter.js'));
+  const { Minimatch } = require(path.join(__dirname, '..', '..', 'node_modules', 'minimatch'));
+  const allPattern = [new Minimatch('**/*', { dot: true })];
+  const survives = (src, file) => createFilter(src, allPattern, null)(file, { isDirectory: () => fs.statSync(file).isDirectory() });
+  const nodeModulesDir = path.join(f.build, 'backend', 'node_modules');
+
+  // electron-builder's copier calls the filter on each directory as it walks
+  // the tree; a directory rejected here is never descended into, regardless
+  // of whether the files inside it would individually match. Sanity check:
+  // the pre-fix mapping (`from: build/backend, to: backend`) reproduces the
+  // published defect — node_modules sits directly under the `from` root,
+  // which electron-builder's filter always drops.
+  assert.equal(survives(path.join(f.build, 'backend'), nodeModulesDir), false,
+    'the pre-fix from:build/backend mapping must reproduce the dropped-dependency defect');
+
+  // The fixed mapping (`from: build, to: .`) copies node_modules nested one
+  // level deeper (backend/node_modules relative to `from`), which the filter
+  // does not match.
+  assert.equal(survives(f.build, nodeModulesDir), true,
+    'the fixed from:build mapping must ship backend/node_modules');
+
+  const builder = require('js-yaml').load(fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'), 'utf8'));
+  assert.deepEqual(builder.extraResources, [{ from: 'build', to: '.' }]);
+});

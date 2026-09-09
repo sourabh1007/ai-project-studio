@@ -21,18 +21,26 @@ class FakeChild implements RawChildProcess {
   stderr: FakeStream | null;
   killed = false;
   private closeCb?: (code: number | null) => void;
+  private errorCb?: (error: Error) => void;
   constructor(withStreams = true) {
     this.stdout = withStreams ? new FakeStream() : null;
     this.stderr = withStreams ? new FakeStream() : null;
   }
-  on(_event: 'close', cb: (code: number | null) => void): void {
-    this.closeCb = cb;
+  on(event: 'close' | 'error', cb: (arg: never) => void): void {
+    if (event === 'close') {
+      this.closeCb = cb as (code: number | null) => void;
+    } else {
+      this.errorCb = cb as (error: Error) => void;
+    }
   }
   kill(): void {
     this.killed = true;
   }
   close(code: number | null): void {
     this.closeCb?.(code);
+  }
+  error(err: Error): void {
+    this.errorCb?.(err);
   }
 }
 
@@ -94,5 +102,63 @@ describe('process-spawner', () => {
     const code = await handle.done;
     expect(code).toBe(0);
     expect(lines).toEqual(['l1', 'l2']);
+  });
+
+  it('settles done with a null exit code for a real missing executable instead of crashing the process', async () => {
+    const spawner = createProcessSpawner(clock);
+    const handle = spawner.spawn({
+      command: 'this-cli-definitely-does-not-exist-anywhere',
+      args: [],
+      env: process.env as Record<string, string>,
+    });
+    await expect(handle.done).resolves.toBeNull();
+  });
+
+  it('settles done with a null exit code on a spawn error instead of crashing', async () => {
+    const child = new FakeChild();
+    const spawner = createProcessSpawner(clock, () => child);
+    const handle = spawner.spawn({ command: 'missing-cli', args: [], env: {} });
+
+    const exits: (number | null)[] = [];
+    handle.onExit((c) => exits.push(c));
+
+    child.error(Object.assign(new Error('spawn missing-cli ENOENT'), { code: 'ENOENT' }));
+
+    const code = await handle.done;
+    expect(code).toBeNull();
+    expect(exits).toEqual([null]);
+    expect(handle.snapshot().phase).toBe('exited');
+  });
+
+  it('ignores a close event that arrives after a spawn error already settled done', async () => {
+    const child = new FakeChild();
+    const spawner = createProcessSpawner(clock, () => child);
+    const handle = spawner.spawn({ command: 'missing-cli', args: [], env: {} });
+
+    const exits: (number | null)[] = [];
+    handle.onExit((c) => exits.push(c));
+
+    child.error(new Error('spawn missing-cli ENOENT'));
+    child.close(1);
+
+    const code = await handle.done;
+    expect(code).toBeNull();
+    expect(exits).toEqual([null]);
+  });
+
+  it('ignores a duplicate/late error event that arrives after close already settled done', async () => {
+    const child = new FakeChild();
+    const spawner = createProcessSpawner(clock, () => child);
+    const handle = spawner.spawn({ command: 'x', args: [], env: {} });
+
+    const exits: (number | null)[] = [];
+    handle.onExit((c) => exits.push(c));
+
+    child.close(0);
+    child.error(new Error('late error after exit'));
+
+    const code = await handle.done;
+    expect(code).toBe(0);
+    expect(exits).toEqual([0]);
   });
 });

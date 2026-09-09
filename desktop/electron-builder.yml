@@ -43,13 +43,19 @@ publish:
     repo: ai-project-studio
     releaseType: draft
 
+# A single from:build/to:. mapping, not one entry per subfolder. electron-builder's
+# copy filter unconditionally drops a directory literally named "node_modules"
+# sitting at the root of an extraResources `from` path (it assumes that's an
+# app-level node_modules it manages separately) — see
+# app-builder-lib/src/util/filter.ts createFilter(). Staging installs the
+# backend's production dependencies at build/backend/node_modules, so mapping
+# `from: build/backend` directly would silently ship a backend with no
+# dependencies (see docs/releases/0.11.1.md). Copying the parent `build`
+# directory instead makes that path `backend/node_modules` relative to `from`,
+# which the filter does not match.
 extraResources:
-  - from: build/backend
-    to: backend
-  - from: build/ui
-    to: ui
-  - from: build/docs
-    to: docs
+  - from: build
+    to: .
 
 # Windows installers are code-signed in CI with Azure Trusted Signing so users
 # don't hit the "Unknown Publisher" SmartScreen error on install. The signing

@@ -16,6 +16,7 @@ function childProcess() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.exitCode = null;
+  child.pid = 4242;
   child.signalCode = null;
   child.killed = false;
   child.connected = true;
@@ -37,7 +38,7 @@ function childProcess() {
   return child;
 }
 
-function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise } = {}) {
+function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise, closeResponse = 0, env = {} } = {}) {
   const app = new EventEmitter();
   const notifications = [];
   const messages = [];
@@ -53,6 +54,9 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   const windows = [];
   const timers = [];
   const pages = [];
+  const closePrompts = [];
+  const startupRequests = [];
+  const startupLogs = [];
   const shell = { openExternal: async (url) => {
     if (pageError) throw new Error('private page error');
     pages.push(url);
@@ -106,7 +110,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     },
   });
   const processFake = Object.assign(new EventEmitter(), {
-    env: {}, platform: 'win32', resourcesPath: 'fixture-resources',
+    env, platform: 'win32', resourcesPath: 'fixture-resources',
     stdout: Object.assign(new EventEmitter(), { write() {} }),
     stderr: Object.assign(new EventEmitter(), { write() {} }),
   });
@@ -126,14 +130,20 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   vm.runInNewContext(source('update-manager.cjs'), updaterContext);
   const updater = updaterContext.module.exports;
   const electron = {
-    app, dialog: { showErrorBox: (title, message) => notifications.push({ title, message }) },
+    app, dialog: {
+      showErrorBox: (title, message) => notifications.push({ title, message }),
+      showMessageBox: async (options) => {
+        closePrompts.push(options);
+        return { response: await closeResponse };
+      },
+    },
     BrowserWindow: FakeWindow, shell,
     Menu: { setApplicationMenu() {}, buildFromTemplate: (template) => template },
     nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
     ipcMain: { handle: (name, handler) => { ipc[name] = handler; }, on: () => {} },
   };
   const context = {
-    process: processFake, URL, __dirname: path.join(__dirname, '..'),
+    process: processFake, URL, AbortController, __dirname: path.join(__dirname, '..'),
     setTimeout: (callback, delay) => {
       const timer = { callback, delay, cleared: false };
       timers.push(timer);
@@ -145,7 +155,22 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
       if (name === './regression-isolation.cjs') return { configure: () => null };
       if (name === './update-manager.cjs') return updater;
       if (name === './ipc-input.cjs') return {};
-      if (name === 'node:fs') return { readFileSync: () => { throw Error('fixture has no theme'); } };
+      if (name === 'node:fs') return {
+        readFileSync: () => { throw Error('fixture has no theme'); },
+        mkdirSync() {},
+        writeFileSync: (file, text) => startupLogs.push({ file, text }),
+      };
+      if (name === 'node:http') return {
+        get(url, respond) {
+          const req = Object.assign(new EventEmitter(), {
+            url, respond, destroyed: false,
+            setTimeout(_ms, callback) { this.timeout = callback; },
+            destroy() { this.destroyed = true; },
+          });
+          startupRequests.push(req);
+          return req;
+        },
+      };
       if (name === 'node:child_process') return { spawn: (_bin, _args, options) => {
         assert.deepEqual(Array.from(options.stdio), ['ignore', 'pipe', 'pipe', 'ipc']);
         spawned = childProcess();
@@ -170,7 +195,8 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   vm.createContext(context);
   vm.runInContext(source('main.cjs') + `
     globalThis.owner = {
-      startBackend, stopBackend, runAfterBackendStop, createWindow,
+      startBackend, stopBackend, runAfterBackendStop, createWindow, waitForBackend,
+      reportStartupFailure, isBackendShutdownConfirmed,
       get backend() { return backend; },
       setSplash(splash) { startupSplash = splash; },
       replace(child) { ownBackend(child, child.nonce); },
@@ -189,10 +215,160 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   });
   return {
     app, owner: context.owner, updater, au, ipc, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
+    closePrompts, startupRequests, startupLogs,
     spawn() { context.owner.startBackend(1234); return spawned; },
     counts: () => ({ relaunches, exits, quits, installs, requests }),
   };
 }
+
+test('a failed spawn reports a missing Node runtime immediately and can quit without cleanup acknowledgement', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /Node.js was not found.*Node.js 24 LTS/);
+  delete child.pid;
+  child.emit('error', Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }));
+  await rejected;
+  assert.equal(f.startupRequests[0].destroyed, true);
+  assert.equal(f.owner.backend, null);
+  assert.equal(f.owner.isBackendShutdownConfirmed(), true);
+  assert.equal(f.app.quit().prevented, false);
+  assert.equal(f.counts().quits, 1);
+  assert.equal(f.closePrompts.length, 0);
+});
+
+test('early backend exit reports captured stderr instead of waiting for the readiness timeout', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /exit code 1[\s\S]*Cannot find module/);
+  child.stderr.emit('data', Buffer.from('Error: Cannot find module required-package'));
+  child.finish(1, null, false);
+  await rejected;
+  assert.equal(f.startupRequests[0].destroyed, true);
+  assert.equal(child.listenerCount('exit'), 1);
+  assert.equal(child.listenerCount('error'), 1);
+  assert.equal(f.timers[0].cleared, true);
+});
+
+test('an already exited backend is detected before making any readiness request', async () => {
+  const f = fixture();
+  f.spawn().finish(1, null, false);
+  await assert.rejects(f.owner.waitForBackend(1234), /exit code 1/);
+  assert.equal(f.startupRequests.length, 0);
+});
+
+test('readiness uses the configured API path, rejects HTTP errors, and clears all timers on success', async () => {
+  const f = fixture({ env: { CW__api__basePath: 'custom/api/' } });
+  const child = f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  assert.equal(f.startupRequests[0].url, 'http://127.0.0.1:1234/custom/api/providers');
+  f.startupRequests[0].respond({ statusCode: 404, resume() {} });
+  f.timers[1].callback();
+  f.startupRequests[1].respond({ statusCode: 200, resume() {} });
+  await ready;
+  assert.equal(f.timers[0].cleared, true);
+  assert.equal(child.listenerCount('exit'), 1);
+  assert.equal(child.listenerCount('error'), 1);
+});
+
+test('readiness cancellation stops requests and retries without releasing a running child', async () => {
+  const f = fixture({ stopError: true });
+  const child = f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /Startup cancelled/);
+  f.startupRequests[0].emit('error', new Error('ECONNREFUSED'));
+  f.app.quit();
+  await rejected;
+  assert.equal(f.owner.backend, child);
+  assert.equal(f.startupRequests[0].destroyed, true);
+  assert.ok(f.timers.every((timer) => timer.cleared));
+  await tick();
+});
+
+test('readiness has a bounded overall timeout even if a request never responds', async () => {
+  const f = fixture();
+  f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /Backend did not start in time/);
+  f.timers[0].callback();
+  await rejected;
+  assert.equal(f.startupRequests[0].destroyed, true);
+});
+
+test('startup diagnostics persist bounded error output and link the file from the splash', () => {
+  const f = fixture();
+  const child = f.spawn();
+  child.stderr.emit('data', Buffer.from('x'.repeat(20000) + '\nActual startup error'));
+  let shown;
+  f.owner.setSplash({ fail(error) { shown = error.message; return true; } });
+  f.owner.reportStartupFailure(new Error('Backend failed'));
+  assert.equal(f.startupLogs.length, 1);
+  assert.match(f.startupLogs[0].file, /desktop-startup\.log$/);
+  assert.match(f.startupLogs[0].text, /Actual startup error/);
+  assert.ok(f.startupLogs[0].text.length < 21000);
+  assert.match(shown, /Diagnostics:.*desktop-startup\.log/);
+});
+
+test('a dead unacknowledged backend can close the desktop with explicit consent but cannot authorize replacement', async () => {
+  const f = fixture({ closeResponse: 1 });
+  f.spawn().finish(1, null, false);
+  const win = f.owner.createWindow('http://fixture');
+  assert.equal(f.app.quit().prevented, true);
+  await tick();
+  assert.equal(f.closePrompts.length, 1);
+  assert.match(f.closePrompts[0].detail, /cleanup could not be confirmed/);
+  assert.equal(f.counts().quits, 1);
+  assert.equal(win.isDestroyed(), true);
+  assert.equal(f.owner.isBackendShutdownConfirmed(), false);
+  assert.equal(await f.ipc['app:relaunch']({ trusted: true }), false);
+  assert.throws(() => f.spawn(), /still owned/);
+  assert.equal(f.counts().relaunches, 0);
+});
+
+test('declining dead-backend close keeps the window open and stops misleading closing animation', async () => {
+  const f = fixture();
+  const failures = [];
+  let animated;
+  f.owner.setSplash({
+    update() { animated = true; }, isDestroyed: () => false,
+    fail(error) { animated = false; failures.push(error.message); },
+  });
+  f.spawn().finish(1, null, false);
+  f.app.quit();
+  f.app.quit();
+  await tick();
+  assert.equal(f.closePrompts.length, 1);
+  assert.equal(f.counts().quits, 0);
+  assert.match(failures.at(-1), /backend has already stopped/);
+  assert.equal(f.notifications.length, 0);
+  assert.equal(animated, false);
+});
+
+test('close consent for a dead backend never authorizes a different generation', async () => {
+  let respond;
+  const f = fixture({ closeResponse: new Promise((resolve) => { respond = resolve; }) });
+  f.spawn().finish(1, null, false);
+  f.app.quit();
+  const replacement = childProcess();
+  f.owner.replace(replacement);
+  respond(1);
+  await tick();
+  assert.equal(f.counts().quits, 0);
+  assert.equal(f.owner.backend, replacement);
+});
+
+test('a backend crash during cooperative quit offers the same exit-only recovery', async () => {
+  const f = fixture({ waitMs: 100, closeResponse: 1 });
+  const child = f.spawn();
+  f.app.quit();
+  await tick();
+  child.finish(1, null, false);
+  await tick();
+  assert.equal(f.closePrompts.length, 1);
+  assert.equal(f.counts().quits, 1);
+  assert.equal(f.owner.isBackendShutdownConfirmed(), false);
+});
 
 test('startup handoff waits for successful loading and a painted main window', async () => {
   let resolveLoad;
