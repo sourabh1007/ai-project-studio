@@ -46,11 +46,27 @@ describe('deriveConnectionStatus', () => {
       expect(status.detail).toContain('cloud actions are paused');
     }
   });
+
+  it('reports a stopped backend ahead of every other signal', () => {
+    // A backend the shell gave up on is terminal, so it must not be masked by
+    // a network blip that suggests the app will recover on its own.
+    for (const browserOnline of [true, false]) {
+      for (const lastProbe of ['ok', 'error', 'unknown'] as const) {
+        const status = deriveConnectionStatus({
+          browserOnline, lastProbe, backendUnavailable: true,
+        });
+        expect(status.state).toBe('backend-unavailable');
+        expect(status.healthy).toBe(false);
+        expect(status.title).toBe('Studio service stopped');
+        expect(status.detail).toContain('could not be restarted');
+      }
+    }
+  });
 });
 
 describe('connectionChanged', () => {
   it('is true only when the state differs', () => {
-    const states: ConnectionState[] = ['online', 'backend-down', 'offline'];
+    const states: ConnectionState[] = ['online', 'backend-down', 'offline', 'backend-unavailable'];
     for (const a of states) {
       for (const b of states) {
         expect(connectionChanged(a, b)).toBe(a !== b);

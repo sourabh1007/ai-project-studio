@@ -27,6 +27,7 @@ interface DiagnosticsSectionProps {
 const HEALTH_LABEL: Record<ConnectionState, string> = {
   online: 'ok',
   'backend-down': 'unreachable',
+  'backend-unavailable': 'stopped',
   offline: 'unknown',
 };
 

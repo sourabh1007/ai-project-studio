@@ -6,7 +6,7 @@
  */
 
 /** Distinguishable connectivity states, ordered from healthy to worst. */
-export type ConnectionState = 'online' | 'backend-down' | 'offline';
+export type ConnectionState = 'online' | 'backend-down' | 'offline' | 'backend-unavailable';
 
 /** Result of a single `/health` poll attempt. */
 export type ProbeOutcome = 'ok' | 'error' | 'unknown';
@@ -16,6 +16,12 @@ export interface ConnectionInputs {
   browserOnline: boolean;
   /** Outcome of the most recent backend health probe. */
   lastProbe: ProbeOutcome;
+  /**
+   * The desktop shell reported that the backend stopped and could not be
+   * restarted. Unlike a failed probe this is terminal: nothing will recover on
+   * its own, so the user has to restart.
+   */
+  backendUnavailable?: boolean;
 }
 
 export interface ConnectionStatus {
@@ -41,14 +47,21 @@ const COPY: Record<ConnectionState, { title: string; detail: string }> = {
     detail:
       'The local Studio service is not responding. Recent data stays visible; actions are paused while it recovers.',
   },
+  'backend-unavailable': {
+    title: 'Studio service stopped',
+    detail:
+      'The local Studio service stopped and could not be restarted, so nothing will load until the app is restarted.',
+  },
 };
 
 /**
  * Combine the browser-online flag with the latest probe outcome into a single
- * connection status. Precedence: a hard browser-offline signal wins (no point
- * blaming the backend when the machine has no network); otherwise a failed
- * probe means the local service is down. An `unknown` probe (not yet run) is
- * treated as healthy so the banner never flashes on first paint.
+ * connection status. Precedence: a shell-reported permanent backend loss wins,
+ * because it is terminal and no amount of network explains it away. Otherwise a
+ * hard browser-offline signal wins (no point blaming the backend when the
+ * machine has no network), and then a failed probe means the local service is
+ * down. An `unknown` probe (not yet run) is treated as healthy so the banner
+ * never flashes on first paint.
  */
 export function deriveConnectionStatus(
   inputs: ConnectionInputs,
@@ -64,6 +77,9 @@ export function deriveConnectionStatus(
 }
 
 function resolveState(inputs: ConnectionInputs): ConnectionState {
+  if (inputs.backendUnavailable) {
+    return 'backend-unavailable';
+  }
   if (!inputs.browserOnline) {
     return 'offline';
   }

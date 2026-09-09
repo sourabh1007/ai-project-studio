@@ -1074,6 +1074,25 @@
   white-space: nowrap;
 }
 
+/* A stopped backend is terminal, so its recovery control must not be the part
+   that gets squeezed out when the detail text is long. */
+.connection-banner-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 3px 10px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.connection-banner-action:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
 @keyframes connection-banner-pulse {
   0%,
   100% {

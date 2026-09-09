@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../app/api-context.js';
+import { desktopBridge } from '../lib/desktop-bridge.js';
 import {
   deriveConnectionStatus,
   type ConnectionStatus,
@@ -23,7 +24,14 @@ export function useConnectionStatus(): ConnectionStatus {
   const api = useApi();
   const [browserOnline, setBrowserOnline] = useState(readBrowserOnline);
   const [lastProbe, setLastProbe] = useState<ProbeOutcome>('unknown');
+  const [backendUnavailable, setBackendUnavailable] = useState(false);
   const cancelled = useRef(false);
+
+  // The shell knows something polling cannot: that the backend is gone for
+  // good. Without this the banner would keep implying recovery is under way.
+  useEffect(() => desktopBridge()?.onBackendUnavailable?.(
+    () => setBackendUnavailable(true),
+  ), []);
 
   useEffect(() => {
     const onOnline = () => setBrowserOnline(true);
@@ -59,5 +67,5 @@ export function useConnectionStatus(): ConnectionStatus {
     };
   }, [api]);
 
-  return deriveConnectionStatus({ browserOnline, lastProbe });
+  return deriveConnectionStatus({ browserOnline, lastProbe, backendUnavailable });
 }
