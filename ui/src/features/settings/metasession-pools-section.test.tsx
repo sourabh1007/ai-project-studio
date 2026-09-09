@@ -70,9 +70,36 @@ it.each([false, true])('shows capacity-blocked targets and actual headless budge
   expect(await screen.findByText(/Waiting for shared process capacity/))
     .toHaveTextContent('1 of 6 ready, 0 warming');
   expect(screen.getByDisplayValue('6')).toBeInTheDocument();
+  expect(screen.getAllByRole('listitem')).toHaveLength(6);
+  expect(screen.getAllByLabelText(/Waiting for shared process capacity/)).toHaveLength(5);
   expect(screen.getByText(/Headless process budget:/)).toHaveTextContent('8/8 processes, 4/4 warm; queue 2/32');
   expect(screen.queryByText(/Metasessions decreasing/)).toBeNull();
   expect(screen.getByText(/Headless process budget:/).textContent?.includes('Process admission is closed')).toBe(closed);
+});
+
+it('surfaces a failed live pool request and recovers without misreporting that a saved pool needs saving', async () => {
+  const pool = {
+    purpose: 'general', size: 1, suggestedSize: 1, live: 1, idle: 1, busy: 0,
+    ready: true, served: 0, sessions: [{ id: 's1', state: 'idle' as const, served: 0,
+      startedAt: 0, lastActiveAt: null, inputTokens: 0, outputTokens: 0, history: [] }],
+  };
+  const getMetaPools = vi.fn()
+    .mockRejectedValueOnce(new Error('Request timed out: /meta/pools'))
+    .mockResolvedValue({ enabled: true, pools: [pool] });
+  const api: Partial<ApiClient> = {
+    getConfig: vi.fn().mockResolvedValue({
+      current: { meta: { warmPool: { enabled: true, pools: [{ purpose: 'general', size: 1 }] } } },
+    }),
+    getMetaPools,
+    getMetaSettings: vi.fn().mockResolvedValue({ model: 'fixture' }),
+    getMetaModels: vi.fn().mockResolvedValue([{ id: 'fixture', name: 'Fixture' }]),
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection /></ApiProvider>);
+  expect(await screen.findByText('Live status unavailable')).toBeInTheDocument();
+  expect(screen.queryByText('Save to start live')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(await screen.findByText('Ready')).toBeInTheDocument();
+  expect(getMetaPools).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, 'reject'] as const)('reports a failed pool-settings restart (%s) without claiming it applied', async (failure) => {

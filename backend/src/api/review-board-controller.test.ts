@@ -54,9 +54,10 @@ describe('createReviewBoardRoutes', () => {
       'post',
       '/features/:featureId/review-board/analyze',
     );
-    const res = await handler(req({ params: { featureId: 'abc' } }));
+    const controller = new AbortController();
+    const res = await handler(req({ params: { featureId: 'abc' }, signal: controller.signal }));
     expect(res.status).toBe(200);
-    expect(analyze).toHaveBeenCalledWith('abc');
+    expect(analyze).toHaveBeenCalledWith('abc', controller.signal);
     expect((res.body as ReviewBoard).featureId).toBe('abc');
   });
 
@@ -78,11 +79,12 @@ describe('createReviewBoardRoutes', () => {
       'post',
       '/features/:featureId/review-board/perspectives/:perspectiveId/analyze',
     );
+    const controller = new AbortController();
     const res = await handler(
-      req({ params: { featureId: 'abc', perspectiveId: 'security' } }),
+      req({ params: { featureId: 'abc', perspectiveId: 'security' }, signal: controller.signal }),
     );
     expect(res.status).toBe(200);
-    expect(analyzePerspective).toHaveBeenCalledWith('abc', 'security');
+    expect(analyzePerspective).toHaveBeenCalledWith('abc', 'security', controller.signal);
     expect((res.body as { skipped: boolean }).skipped).toBe(true);
   });
 
@@ -94,9 +96,11 @@ describe('createReviewBoardRoutes', () => {
       'post',
       '/features/:featureId/review-board/chat',
     );
+    const controller = new AbortController();
     const res = await handler(
       req({
         params: { featureId: 'abc' },
+        signal: controller.signal,
         body: {
           perspectiveId: 'security',
           messages: [{ role: 'user', content: 'why?' }],
@@ -109,6 +113,7 @@ describe('createReviewBoardRoutes', () => {
       'security',
       [{ role: 'user', content: 'why?' }],
       null,
+      controller.signal,
     );
     expect((res.body as { answer: string }).answer).toBe('because');
   });
@@ -138,9 +143,11 @@ describe('createReviewBoardRoutes', () => {
         },
       ],
     };
+    const controller = new AbortController();
     await handler(
       req({
         params: { featureId: 'abc' },
+        signal: controller.signal,
         body: {
           perspectiveId: 'performance',
           messages: [{ role: 'user', content: 'where?' }],
@@ -153,6 +160,7 @@ describe('createReviewBoardRoutes', () => {
       'performance',
       [{ role: 'user', content: 'where?' }],
       context,
+      controller.signal,
     );
   });
 
@@ -207,6 +215,7 @@ describe('createReviewBoardRoutes', () => {
       null,
       [{ role: 'user', content: 'hi' }],
       null,
+      undefined,
     );
   });
 
@@ -232,6 +241,7 @@ describe('createReviewBoardRoutes', () => {
       null,
       expect.any(Array),
       null,
+      undefined,
     );
   });
 

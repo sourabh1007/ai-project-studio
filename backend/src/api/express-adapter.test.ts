@@ -1,30 +1,34 @@
 import { describe, it, expect } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { Request, Response, Router } from 'express';
 import { toExpressHandler, mountRoutes } from './express-adapter.js';
 import { NotFoundError } from '../kernel/error-types.js';
 import type { HttpHandler, Route } from './http-contract.js';
 
 function fakeRes() {
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     statusCode: 0,
     payload: undefined as unknown,
+    writableEnded: false,
+    destroyed: false,
     status(code: number) {
       this.statusCode = code;
       return this;
     },
     json(body: unknown) {
       this.payload = body;
+      this.writableEnded = true;
     },
-  };
+  });
   return res;
 }
 
 function fakeReq(): Request {
-  return {
+  return Object.assign(new EventEmitter(), {
     params: { id: 'f1' },
     query: { q: 'x' },
     body: { name: 'Login' },
-  } as unknown as Request;
+  }) as unknown as Request;
 }
 
 describe('toExpressHandler', () => {
@@ -46,6 +50,57 @@ describe('toExpressHandler', () => {
     expect(res.payload).toEqual({
       error: { kind: 'not_found', message: 'missing' },
     });
+  });
+
+  it.each(['aborted', 'close'] as const)(
+    'aborts owned work and does not write after the transport emits %s',
+    async (event) => {
+      let release!: () => void;
+      let signal!: AbortSignal;
+      const handler: HttpHandler = (request) => {
+        signal = request.signal!;
+        return new Promise((resolve) => {
+          release = () => resolve({ status: 200, body: 'late' });
+        });
+      };
+      const req = fakeReq();
+      const res = fakeRes();
+      const pending = toExpressHandler(handler)(req, res as unknown as Response);
+      if (event === 'aborted') {
+        (req as unknown as EventEmitter).emit('aborted');
+      } else {
+        res.emit('close');
+      }
+      expect(signal.aborted).toBe(true);
+      release();
+      await pending;
+      expect(res.statusCode).toBe(0);
+      expect(res.payload).toBeUndefined();
+    },
+  );
+
+  it('suppresses a handler error raised after the client disconnected', async () => {
+    let fail!: (error: Error) => void;
+    const handler: HttpHandler = () => new Promise((_resolve, reject) => {
+      fail = reject;
+    });
+    const req = fakeReq();
+    const res = fakeRes();
+    const pending = toExpressHandler(handler)(req, res as unknown as Response);
+    res.emit('close');
+    fail(new NotFoundError('missing'));
+    await pending;
+    expect(res.statusCode).toBe(0);
+    expect(res.payload).toBeUndefined();
+  });
+
+  it('still responds when the transport closes after the reply was written', async () => {
+    const handler: HttpHandler = () => ({ status: 200, body: 'ok' });
+    const res = fakeRes();
+    await toExpressHandler(handler)(fakeReq(), res as unknown as Response);
+    res.emit('close');
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toBe('ok');
   });
 });
 

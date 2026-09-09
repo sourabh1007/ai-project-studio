@@ -94,7 +94,7 @@ export function createReviewBoardRoutes(
       path: '/features/:featureId/review-board/analyze',
       handler: async (req) => ({
         status: 200,
-        body: await deps.reviewBoard.analyze(req.params.featureId),
+        body: await deps.reviewBoard.analyze(req.params.featureId, req.signal),
       }),
     },
     {
@@ -105,6 +105,7 @@ export function createReviewBoardRoutes(
         body: await deps.reviewBoard.analyzePerspective(
           req.params.featureId,
           req.params.perspectiveId,
+          req.signal,
         ),
       }),
     },
@@ -120,6 +121,7 @@ export function createReviewBoardRoutes(
             perspectiveId,
             messages,
             context,
+            req.signal,
           ),
         };
       },

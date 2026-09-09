@@ -146,7 +146,11 @@ function categoryForStatus(status: number): AppErrorCategory {
 function categoryForNonHttp(shape: ErrorShape): AppErrorCategory {
   const name = shape.name ?? '';
   const message = (shape.message ?? '').toLowerCase();
-  if (name === 'AbortError' || message.includes('timeout')) {
+  if (
+    name === 'AbortError' ||
+    message.includes('timeout') ||
+    message.includes('timed out')
+  ) {
     return 'timeout';
   }
   // A rejected fetch surfaces as a TypeError ("Failed to fetch" / "NetworkError").

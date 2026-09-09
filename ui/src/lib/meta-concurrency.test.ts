@@ -19,7 +19,7 @@ function pool(overrides: Partial<MetaPoolStat> & { purpose: string }): MetaPoolS
 function status(overrides: Partial<MetaPoolsStatus> = {}): MetaPoolsStatus {
   return {
     enabled: true,
-    pools: [pool({ purpose: GENERAL_PURPOSE, size: 5 })],
+    pools: [pool({ purpose: GENERAL_PURPOSE, size: 5, live: 5, idle: 5 })],
     ...overrides,
   };
 }
@@ -34,15 +34,15 @@ describe('metaConcurrency', () => {
     expect(metaConcurrency(status({ enabled: false }))).toBe(1);
   });
 
-  it('uses the general pool size for an unspecified purpose', () => {
+  it('uses the general pool idle capacity for an unspecified purpose', () => {
     expect(metaConcurrency(status())).toBe(5);
   });
 
-  it('uses the matching purpose pool size when present', () => {
+  it('uses the matching purpose pool idle capacity when present', () => {
     const s = status({
       pools: [
         pool({ purpose: GENERAL_PURPOSE, size: 5 }),
-        pool({ purpose: 'review', size: 3 }),
+        pool({ purpose: 'review', size: 5, live: 3, idle: 3 }),
       ],
     });
     expect(metaConcurrency(s, 'review')).toBe(3);
@@ -50,7 +50,7 @@ describe('metaConcurrency', () => {
 
   it('falls back to the general pool when the purpose has no pool', () => {
     const s = status({
-      pools: [pool({ purpose: GENERAL_PURPOSE, size: 4 })],
+      pools: [pool({ purpose: GENERAL_PURPOSE, size: 4, live: 4, idle: 4 })],
     });
     expect(metaConcurrency(s, 'review')).toBe(4);
   });
@@ -63,5 +63,20 @@ describe('metaConcurrency', () => {
   it('never returns less than 1 even for a zero-sized pool', () => {
     const s = status({ pools: [pool({ purpose: GENERAL_PURPOSE, size: 0 })] });
     expect(metaConcurrency(s)).toBe(1);
+  });
+
+  it('does not cold-spawn configured capacity that is still warming or blocked', () => {
+    const s = status({
+      pools: [pool({
+        purpose: GENERAL_PURPOSE,
+        size: 7,
+        live: 4,
+        idle: 2,
+        busy: 1,
+        sessions: [],
+        waitingForCapacity: true,
+      })],
+    });
+    expect(metaConcurrency(s)).toBe(2);
   });
 });

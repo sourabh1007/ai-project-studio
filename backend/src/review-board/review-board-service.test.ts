@@ -187,12 +187,14 @@ describe('createReviewBoardService.analyze', () => {
     const service = createReviewBoardService(
       baseDeps({ ai, temporaryPrompts, inlinePrompts: true }),
     );
-    await service.analyze('f9');
+    const controller = new AbortController();
+    await service.analyze('f9', controller.signal);
     expect(temporaryPrompts.created).toHaveLength(0);
     const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as MetaRequest;
     expect(request.attachments).toBeUndefined();
     expect(request.prompt).toContain('review findings');
+    expect(request.signal).toBe(controller.signal);
   });
 
   it('carries a small prompt inline on the cold path (under coldInlineMaxChars)', async () => {

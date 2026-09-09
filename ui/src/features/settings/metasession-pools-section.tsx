@@ -390,8 +390,15 @@ function PoolStatus({
   const pendingDelta = target - pool.size;
   const hasPending = pendingDelta !== 0;
   const liveCount = rendered.filter((r) => !r.exiting).length;
-  const ghostCount =
-    hasPending && pendingDelta > 0 ? Math.max(0, target - liveCount) : 0;
+  const ghostCount = Math.max(
+    0,
+    (hasPending && pendingDelta > 0 ? target : pool.size) - liveCount,
+  );
+  const ghostLabel = hasPending
+    ? 'Will warm on save'
+    : pool.waitingForCapacity
+      ? 'Waiting for shared process capacity'
+      : 'Warming';
   // Live convergence (a *saved* change the pool is still applying), as opposed
   // to `hasPending` (an *unsaved* edit). The pool's own target is `pool.size`;
   // it keeps moving toward it while sessions are still warming (growing) or a
@@ -532,10 +539,13 @@ function PoolStatus({
               key={`ghost-${i}`}
               className="metasession-chip metasession-chip-ghost"
               role="listitem"
-              title="Will warm on save"
+              title={ghostLabel}
+              aria-label={`Metasession slot ${liveCount + i + 1}: ${ghostLabel}`}
             >
               <span className="metasession-chip-dot metasession-dot-ghost" />
-              <span className="metasession-chip-id">+1</span>
+              <span className="metasession-chip-id">
+                {hasPending ? '+1' : `s${liveCount + i + 1}`}
+              </span>
             </span>
           ))}
         </div>
@@ -1111,6 +1121,12 @@ export function MetasessionPoolsSection() {
           onRetry={config.reload}
         />
       )}
+      {status.error && (
+        <ErrorState
+          error={status.cause ?? status.error}
+          onRetry={status.reload}
+        />
+      )}
 
       {config.data && !savedWarmPool && (
         <EmptyState message="Warm pool configuration is unavailable." />
@@ -1194,6 +1210,10 @@ export function MetasessionPoolsSection() {
                           setPool(index, { size: String(size) })
                         }
                       />
+                    ) : status.error ? (
+                      <div className="metapool-live">
+                        <StatusBadge status="error" label="Live status unavailable" />
+                      </div>
                     ) : (
                       <div className="metapool-live">
                         <StatusBadge

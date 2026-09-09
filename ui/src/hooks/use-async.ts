@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -19,11 +19,22 @@ export function useAsync<T>(
   const [error, setError] = useState<string | null>(null);
   const [cause, setCause] = useState<unknown>(null);
   const [nonce, setNonce] = useState(0);
+  const running = useRef(false);
+  const queued = useRef(false);
+  const generation = useRef(0);
 
-  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const reload = useCallback(() => {
+    if (running.current) {
+      queued.current = true;
+      return;
+    }
+    setNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let active = true;
+    const run = ++generation.current;
+    running.current = true;
     setLoading(true);
     setError(null);
     setCause(null);
@@ -40,8 +51,13 @@ export function useAsync<T>(
         }
       })
       .finally(() => {
-        if (active) {
-          setLoading(false);
+        if (generation.current !== run) return;
+        running.current = false;
+        if (!active) return;
+        setLoading(false);
+        if (queued.current) {
+          queued.current = false;
+          setNonce((n) => n + 1);
         }
       });
     return () => {

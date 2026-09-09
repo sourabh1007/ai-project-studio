@@ -38,13 +38,17 @@ export function useConnectionStatus(): ConnectionStatus {
 
   useEffect(() => {
     cancelled.current = false;
+    let inFlight = false;
     const probe = async () => {
-      if (!readBrowserOnline()) return;
+      if (!readBrowserOnline() || inFlight) return;
+      inFlight = true;
       try {
         await api.checkHealth();
         if (!cancelled.current) setLastProbe('ok');
       } catch {
         if (!cancelled.current) setLastProbe('error');
+      } finally {
+        inFlight = false;
       }
     };
     void probe();

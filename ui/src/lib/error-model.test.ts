@@ -79,6 +79,8 @@ describe('classifyError — non-HTTP errors', () => {
 
   it('classifies a message containing timeout as timeout', () => {
     expect(classifyError(new Error('Request timeout')).category).toBe('timeout');
+    expect(classifyError(new Error('Request timed out: /meta/pools')).category)
+      .toBe('timeout');
   });
 
   it('classifies an unrecognized error as unknown', () => {

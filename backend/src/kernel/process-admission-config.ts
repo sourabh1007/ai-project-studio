@@ -9,5 +9,8 @@ export const processAdmissionConfigSchema = z.object({
 export type ProcessAdmissionConfig = z.infer<typeof processAdmissionConfigSchema>;
 /** Shared ACP + SessionLauncher headless budget; interactive PTYs are a separate owner. */
 export const processAdmissionDefaults: ProcessAdmissionConfig = {
-  maxProcesses: 8, maxWarmProcesses: 4, maxQueued: 32,
+  // Keep the warm ceiling aligned with meta.warmPool.maxSuggestedSize. The
+  // previous 4-process ceiling was lower than the default 5-session pool, so a
+  // clean install could never reach its own saved target.
+  maxProcesses: 16, maxWarmProcesses: 12, maxQueued: 32,
 };

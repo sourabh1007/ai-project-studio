@@ -324,7 +324,7 @@ export interface ReviewBoardService {
    * evidence-backed, per-perspective findings merged on top of the
    * deterministic ones. Throws when no PR review exists.
    */
-  analyze(featureId: string): Promise<ReviewBoard>;
+  analyze(featureId: string, signal?: AbortSignal): Promise<ReviewBoard>;
   /**
    * Run the AI reviewer over a *single* perspective and return its rolled-up
    * result. Lets the UI analyse perspectives independently and show live,
@@ -334,6 +334,7 @@ export interface ReviewBoardService {
   analyzePerspective(
     featureId: string,
     perspectiveId: string,
+    signal?: AbortSignal,
   ): Promise<PerspectiveAnalysis>;
   /**
    * Ask the context-aware review agent a question. `perspectiveId` scopes the
@@ -347,5 +348,6 @@ export interface ReviewBoardService {
     perspectiveId: string | null,
     messages: ReviewBoardChatMessage[],
     context?: ReviewBoardChatContext | null,
+    signal?: AbortSignal,
   ): Promise<ReviewBoardChatReply>;
 }

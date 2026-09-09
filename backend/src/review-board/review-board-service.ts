@@ -194,6 +194,7 @@ export function createReviewBoardService(
     review: PrReview,
     prompt: string,
     hooks?: PromptHooks,
+    signal?: AbortSignal,
   ): Promise<string> {
     const deliverInline =
       deps.inlinePrompts || prompt.length <= deps.config.coldInlineMaxChars;
@@ -206,6 +207,7 @@ export function createReviewBoardService(
         noTools: true,
         label: 'Review board',
         timeoutMs: deps.config.stepTimeoutMs,
+        signal,
         onStart: hooks?.onStart,
         onActivity: hooks?.onActivity,
       });
@@ -225,6 +227,7 @@ export function createReviewBoardService(
         noTools: true,
         label: 'Review board',
         timeoutMs: deps.config.stepTimeoutMs,
+        signal,
         onStart: hooks?.onStart,
         onActivity: hooks?.onActivity,
       });
@@ -239,6 +242,7 @@ export function createReviewBoardService(
     review: PrReview,
     prompt: string,
     hooks?: PromptHooks,
+    signal?: AbortSignal,
   ): Promise<string> {
     for (
       let retry = 0;
@@ -246,13 +250,13 @@ export function createReviewBoardService(
       retry += 1
     ) {
       try {
-        return await runPromptAttempt(review, prompt, hooks);
+        return await runPromptAttempt(review, prompt, hooks, signal);
       } catch (error) {
         if (!isTransientProviderFailure(errorMessage(error))) throw error;
         await deps.sleep(deps.config.transientRetryBackoffMs);
       }
     }
-    return runPromptAttempt(review, prompt, hooks);
+    return runPromptAttempt(review, prompt, hooks, signal);
   }
 
   return {
@@ -260,7 +264,7 @@ export function createReviewBoardService(
       return buildEmptyBoard(toBuildInput(deps.reviews.get(featureId)));
     },
 
-    async analyze(featureId: string): Promise<ReviewBoard> {
+    async analyze(featureId: string, signal?: AbortSignal): Promise<ReviewBoard> {
       const review = deps.reviews.get(featureId);
       const input = toBuildInput(review);
       const deterministic = buildDeterministicFindings(input);
@@ -271,7 +275,7 @@ export function createReviewBoardService(
         changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
       });
-      const text = await runPrompt(review, prompt);
+      const text = await runPrompt(review, prompt, undefined, signal);
       const aiFindings = capPerspectiveFindings(
         parseAiFindings(
           text,
@@ -288,6 +292,7 @@ export function createReviewBoardService(
     async analyzePerspective(
       featureId: string,
       perspectiveId: string,
+      signal?: AbortSignal,
     ): Promise<PerspectiveAnalysis> {
       const review = deps.reviews.get(featureId);
       const input = toBuildInput(review);
@@ -342,7 +347,7 @@ export function createReviewBoardService(
           emit('Reviewer session started — reading the change evidence…');
         },
         onActivity: (line) => emit(line),
-      });
+      }, signal);
       const parsed = parsePerspectiveAnalysis(text, perspectiveId);
       const aiFindings = capPerspectiveFindings(
         parsed.findings,
@@ -404,6 +409,7 @@ export function createReviewBoardService(
       perspectiveId: string | null,
       messages: ReviewBoardChatMessage[],
       context?: ReviewBoardChatContext | null,
+      signal?: AbortSignal,
     ): Promise<ReviewBoardChatReply> {
       const review = deps.reviews.get(featureId);
       const input = toBuildInput(review);
@@ -430,7 +436,7 @@ export function createReviewBoardService(
         messages,
         config: { maxContextChars: deps.config.maxContextChars },
       });
-      const text = await runPrompt(review, prompt);
+      const text = await runPrompt(review, prompt, undefined, signal);
       return parseChatReply(text, perspective?.id ?? null);
     },
   };
