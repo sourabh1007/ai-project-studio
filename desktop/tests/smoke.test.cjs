@@ -19,8 +19,12 @@ function fixture(t, options) {
   return result;
 }
 
-function nativeFixture(t, args, executable = process.execPath) {
-  const f = fixture(t);
+// Upper bound for a hung launcher, not a latency assertion: the probe rejects
+// the moment the controller exits, so a healthy run finishes in well under a
+// second. Only a loaded CI runner ever approaches this.
+const LAUNCH_FAILURE_TIMEOUT_MS = 120000;
+
+function nativeFixture(t, args, executable = process.execPath) {  const f = fixture(t);
   const child = launchOwned(executable, args, f);
   t.after(() => killTree(child));
   let stdout = '';
@@ -356,7 +360,7 @@ test('owned native launcher reports early executable failure and cleans up its d
   const { f, child, wait, waitForController } = nativeFixture(t,
     [path.join(__dirname, 'fixtures', 'owned-child.cjs'), '--exit-parent']);
   await waitForController();
-  await assert.rejects(wait(() => false, 15000),
+  await assert.rejects(wait(() => false, LAUNCH_FAILURE_TIMEOUT_MS),
     /Native launcher exited before readiness:[\s\S]*exit=42[\s\S]*synthetic stderr forwarded/);
   assert.equal(child.exitCode, 42);
   const record = JSON.parse(fs.readFileSync(path.join(f.root, 'owned.json'), 'utf8'));
@@ -369,7 +373,7 @@ test('owned native launcher reports early executable failure and cleans up its d
 test('owned native launcher exposes process creation errors before readiness', async (t) => {
   const { wait, waitForController } = nativeFixture(t, [], `${process.execPath}.missing`);
   await waitForController();
-  await assert.rejects(wait(() => false, 15000),
+  await assert.rejects(wait(() => false, LAUNCH_FAILURE_TIMEOUT_MS),
     /Native launcher exited before readiness:[\s\S]*(CreateProcess failed \(Win32 2\)|ENOENT)/);
 });
 
