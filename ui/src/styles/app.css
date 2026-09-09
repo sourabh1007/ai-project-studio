@@ -12075,6 +12075,87 @@ body.is-resizing {
   outline-color: var(--accent);
 }
 
+/* Full colour picker — the presets stay as one-click shortcuts, with a custom
+   swatch and a hex field for any other colour. */
+.accent-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.accent-swatch-custom {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    conic-gradient(
+      from 0deg,
+      #ef4444,
+      #f59e0b,
+      #eab308,
+      #22c55e,
+      #06b6d4,
+      #3b82f6,
+      #8b5cf6,
+      #ec4899,
+      #ef4444
+    );
+}
+
+.accent-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.accent-hex {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, transparent);
+  transition: border-color var(--transition-fast);
+}
+
+.accent-hex:focus-within {
+  border-color: var(--accent);
+}
+
+.accent-hex-prefix {
+  font-size: var(--fs-meta);
+  color: var(--text-secondary, currentColor);
+}
+
+.accent-hex-input {
+  width: 7ch;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta);
+  text-transform: lowercase;
+  outline: none;
+}
+
+.accent-adjusted-note {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--text-secondary, currentColor);
+}
+
 @media (max-width: 720px) {
   .appearance-row {
     flex-direction: column;

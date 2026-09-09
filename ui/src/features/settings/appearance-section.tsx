@@ -10,7 +10,11 @@ import {
   RADII,
   TEXT_SIZES,
   accentColor,
+  accentSwatch,
+  accentWasAdjusted,
+  isAccentKey,
   optionLabel,
+  parseAccentValue,
   type AccentKey,
 } from '../../lib/ui-preferences.js';
 
@@ -101,24 +105,71 @@ export function AppearanceSection() {
               Used for highlights, primary actions and running states
             </span>
           </div>
-          <div className="accent-swatches" role="radiogroup" aria-label="Accent color">
-            {ACCENT_KEYS.map((accent: AccentKey) => (
-              <button
-                key={accent}
-                type="button"
-                role="radio"
-                aria-checked={prefs.accent === accent}
-                aria-label={optionLabel(accent)}
-                title={optionLabel(accent)}
-                className={`accent-swatch${
-                  prefs.accent === accent ? ' is-active' : ''
+          <div className="accent-picker">
+            <div className="accent-swatches" role="radiogroup" aria-label="Accent color">
+              {ACCENT_KEYS.map((accent: AccentKey) => (
+                <button
+                  key={accent}
+                  type="button"
+                  role="radio"
+                  aria-checked={prefs.accent === accent}
+                  aria-label={optionLabel(accent)}
+                  title={optionLabel(accent)}
+                  className={`accent-swatch${
+                    prefs.accent === accent ? ' is-active' : ''
+                  }`}
+                  style={{ background: accentColor(accent, theme) }}
+                  onClick={() => setPrefs({ accent })}
+                />
+              ))}
+              <label
+                className={`accent-swatch accent-swatch-custom${
+                  isAccentKey(prefs.accent) ? '' : ' is-active'
                 }`}
-                style={{ background: accentColor(accent, theme) }}
-                onClick={() => setPrefs({ accent })}
+                title="Custom color"
+                style={
+                  isAccentKey(prefs.accent)
+                    ? undefined
+                    : { background: accentSwatch(prefs.accent, theme) }
+                }
+              >
+                <span className="sr-only">Custom accent color</span>
+                <input
+                  type="color"
+                  className="accent-color-input"
+                  aria-label="Custom accent color"
+                  value={accentSwatch(prefs.accent, theme)}
+                  onChange={(event) => setPrefs({ accent: event.target.value })}
+                />
+              </label>
+            </div>
+            <div className="accent-hex">
+              <span className="accent-hex-prefix" aria-hidden="true">
+                #
+              </span>
+              <input
+                type="text"
+                className="accent-hex-input"
+                aria-label="Accent color hex value"
+                spellCheck={false}
+                maxLength={6}
+                value={accentSwatch(prefs.accent, theme).slice(1)}
+                onChange={(event) => {
+                  const parsed = parseAccentValue(`#${event.target.value}`);
+                  if (parsed) {
+                    setPrefs({ accent: parsed });
+                  }
+                }}
               />
-            ))}
+            </div>
           </div>
         </div>
+        {accentWasAdjusted(prefs.accent, theme) && (
+          <p className="accent-adjusted-note" role="status">
+            Lightened for contrast in the {theme} theme so text stays readable —
+            your hue is preserved.
+          </p>
+        )}
 
         <Segmented
           label="Text size"

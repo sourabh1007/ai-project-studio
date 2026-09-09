@@ -15,15 +15,23 @@
 
 import type { ResolvedTheme } from './theme.js';
 import { isOneOf } from './persisted-state.js';
+import {
+  parseAccentValue,
+  resolveAccent,
+  type AccentValue,
+} from './accent.js';
 
-export type AccentKey =
-  | 'indigo'
-  | 'blue'
-  | 'violet'
-  | 'teal'
-  | 'emerald'
-  | 'rose'
-  | 'amber';
+export {
+  ACCENT_KEYS,
+  accentSwatch,
+  accentWasAdjusted,
+  isAccentKey,
+  parseAccentValue,
+  resolveAccent,
+  type AccentKey,
+  type AccentValue,
+} from './accent.js';
+
 export type TextSize = 'small' | 'default' | 'large' | 'x-large';
 export type Density = 'compact' | 'cozy' | 'comfortable';
 export type Radius = 'sharp' | 'soft' | 'round';
@@ -31,7 +39,7 @@ export type Motion = 'full' | 'reduced' | 'off';
 export type FontChoice = 'system' | 'rounded' | 'reading' | 'mono-ui';
 
 export interface UiPreferences {
-  accent: AccentKey;
+  accent: AccentValue;
   textSize: TextSize;
   density: Density;
   radius: Radius;
@@ -48,15 +56,6 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   font: 'system',
 };
 
-export const ACCENT_KEYS: readonly AccentKey[] = [
-  'indigo',
-  'blue',
-  'violet',
-  'teal',
-  'emerald',
-  'rose',
-  'amber',
-];
 export const TEXT_SIZES: readonly TextSize[] = [
   'small',
   'default',
@@ -72,20 +71,6 @@ export const FONTS: readonly FontChoice[] = [
   'reading',
   'mono-ui',
 ];
-
-/** Per-accent light/dark hue + the text colour that reads on top of it. */
-const ACCENTS: Record<
-  AccentKey,
-  { light: string; dark: string; onLight: string; onDark: string }
-> = {
-  indigo: { light: '#4f46e5', dark: '#818cf8', onLight: '#ffffff', onDark: '#0b1020' },
-  blue: { light: '#2563eb', dark: '#60a5fa', onLight: '#ffffff', onDark: '#08111f' },
-  violet: { light: '#7c3aed', dark: '#a78bfa', onLight: '#ffffff', onDark: '#140a24' },
-  teal: { light: '#0f766e', dark: '#2dd4bf', onLight: '#ffffff', onDark: '#04201d' },
-  emerald: { light: '#047857', dark: '#34d399', onLight: '#ffffff', onDark: '#04231a' },
-  rose: { light: '#e11d48', dark: '#fb7185', onLight: '#ffffff', onDark: '#2a0912' },
-  amber: { light: '#b45309', dark: '#fbbf24', onLight: '#ffffff', onDark: '#241704' },
-};
 
 /** Base type ramp (px). Multiplied by the text-size factor. */
 const BASE_TYPE = {
@@ -192,7 +177,8 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
     fallback: T,
   ): T => (isOneOf(allowed)(v) ? v : fallback);
   return {
-    accent: pick(raw.accent, ACCENT_KEYS, DEFAULT_UI_PREFERENCES.accent),
+    accent:
+      parseAccentValue(raw.accent) ?? DEFAULT_UI_PREFERENCES.accent,
     textSize: pick(raw.textSize, TEXT_SIZES, DEFAULT_UI_PREFERENCES.textSize),
     density: pick(raw.density, DENSITIES, DEFAULT_UI_PREFERENCES.density),
     radius: pick(raw.radius, RADII, DEFAULT_UI_PREFERENCES.radius),
@@ -201,9 +187,9 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
   };
 }
 
-/** The accent swatch (for previews/pickers) for a given key and theme. */
-export function accentColor(accent: AccentKey, theme: ResolvedTheme): string {
-  return ACCENTS[accent][theme];
+/** The accent swatch (for previews/pickers) for a given value and theme. */
+export function accentColor(accent: AccentValue, theme: ResolvedTheme): string {
+  return resolveAccent(accent, theme).color;
 }
 
 /**
@@ -218,9 +204,9 @@ export function deriveCssVariables(
   const vars: Record<string, string> = {};
 
   // Accent + readable contrast colour.
-  const accent = ACCENTS[prefs.accent];
-  vars['--accent'] = theme === 'dark' ? accent.dark : accent.light;
-  vars['--accent-contrast'] = theme === 'dark' ? accent.onDark : accent.onLight;
+  const accent = resolveAccent(prefs.accent, theme);
+  vars['--accent'] = accent.color;
+  vars['--accent-contrast'] = accent.contrast;
 
   // Type ramp.
   const tf = TEXT_FACTOR[prefs.textSize];
