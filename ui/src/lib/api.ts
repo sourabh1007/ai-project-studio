@@ -81,6 +81,10 @@ import type {
 import type {
   MetaOperation, MetaOperationPage, MetaOperationsQuery,
 } from '../features/meta-operations/meta-operation-types.js';
+import {
+  validateMetaOperationPage,
+  validateMetaPoolsStatus,
+} from './response-contract.js';
 
 /** Injectable fetch so the client is unit-testable without a real network. */
 export type FetchLike = (
@@ -137,6 +141,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
   async function request<T>(
     path: string,
     init?: RequestInit,
+    validate?: (body: unknown) => string | null,
   ): Promise<T> {
     const method = (init?.method ?? 'GET').toUpperCase();
     const bounded = method === 'GET';
@@ -166,7 +171,25 @@ export function createApiClient(options: ApiClientOptions = {}) {
     if (!response.ok) {
       throw new ApiError(response.status, await errorMessage(response, path));
     }
-    return (await response.json()) as T;
+    if (!validate) {
+      return (await response.json()) as T;
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      // A 200 that is not JSON is almost always something other than our
+      // backend answering (a proxy page, a partly started shell).
+      throw new ApiError(
+        0,
+        `Request failed: ${path} did not return JSON. The backend may be starting up — please retry.`,
+      );
+    }
+    const problem = validate(body);
+    if (problem) {
+      throw new ApiError(0, problem);
+    }
+    return body as T;
   }
 
   function jsonBody(body: unknown): RequestInit {
@@ -196,7 +219,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
         if (value != null) params.set(key, String(value));
       }
       const suffix = params.toString();
-      return request<MetaOperationPage>(`/meta/operations${suffix ? `?${suffix}` : ''}`);
+      return request<MetaOperationPage>(
+        `/meta/operations${suffix ? `?${suffix}` : ''}`,
+        undefined,
+        validateMetaOperationPage,
+      );
     },
     getMetaOperation: (operationId: string) =>
       request<MetaOperation>(`/meta/operations/${encodeURIComponent(operationId)}`),
@@ -508,19 +535,26 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/config/${encodeURIComponent(namespace)}`,
         del(),
       ),
-    getMetaPools: () => request<MetaPoolsStatus>('/meta/pools'),
+    getMetaPools: () =>
+      request<MetaPoolsStatus>('/meta/pools', undefined, validateMetaPoolsStatus),
     resizeMetaPool: (purpose: string, size: number) =>
       request<MetaPoolsStatus>(
         '/meta/pools/resize',
         jsonBody({ purpose, size }),
+        validateMetaPoolsStatus,
       ),
     createMetaPool: (purpose: string, size: number) =>
       request<MetaPoolsStatus>(
         '/meta/pools/create',
         jsonBody({ purpose, size }),
+        validateMetaPoolsStatus,
       ),
     removeMetaPool: (purpose: string) =>
-      request<MetaPoolsStatus>('/meta/pools/remove', jsonBody({ purpose })),
+      request<MetaPoolsStatus>(
+        '/meta/pools/remove',
+        jsonBody({ purpose }),
+        validateMetaPoolsStatus,
+      ),
     getMetaSettings: () => request<MetaSettings>('/meta/settings'),
     updateMetaSettings: (patch: Partial<Pick<MetaSettings, 'providerId' | 'model'>>) =>
       request<MetaSettings>('/meta/settings', putBody(patch)),

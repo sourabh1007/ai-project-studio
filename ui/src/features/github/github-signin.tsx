@@ -6,13 +6,10 @@ import { Spinner } from '../../components/loading.js';
 import { SelfHealButton } from '../../components/self-heal-button.js';
 import { isGhMissingError } from '../../lib/self-heal.js';
 import type { DeviceCodeStart } from '../../lib/types.js';
-
-interface DesktopBridge {
-  openExternal(url: string): void;
-}
+import { desktopBridge } from '../../lib/desktop-bridge.js';
 
 function openExternal(url: string) {
-  const bridge = (window as unknown as { desktop?: DesktopBridge }).desktop;
+  const bridge = desktopBridge();
   if (bridge?.openExternal) {
     bridge.openExternal(url);
   } else {

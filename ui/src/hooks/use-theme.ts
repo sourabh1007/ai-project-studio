@@ -7,19 +7,12 @@ import {
   type ResolvedTheme,
   type ThemeMode,
 } from '../lib/theme.js';
+import { desktopBridge } from '../lib/desktop-bridge.js';
 
 export type { ThemeMode, ResolvedTheme } from '../lib/theme.js';
 
 const STORAGE_KEY = 'cw-theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
-
-interface DesktopBridge {
-  setTheme(mode: ResolvedTheme): void;
-}
-
-function desktopBridge(): DesktopBridge | undefined {
-  return (window as unknown as { desktop?: DesktopBridge }).desktop;
-}
 
 function initialMode(): ThemeMode {
   return parseThemeMode(window.localStorage.getItem(STORAGE_KEY));
@@ -60,7 +53,7 @@ export function useTheme(): {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     window.localStorage.setItem(STORAGE_KEY, mode);
-    desktopBridge()?.setTheme(theme);
+    desktopBridge()?.setTheme?.(theme);
   }, [mode, theme]);
 
   const cycle = useCallback(

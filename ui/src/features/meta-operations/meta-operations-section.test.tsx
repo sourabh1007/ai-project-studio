@@ -133,7 +133,7 @@ describe('saved AI operation result viewer', () => {
 
 describe('meta operation client routes', () => {
   it('uses default empty query, encodes filters/cursor/ID, and omits null and undefined values', async () => {
-    const fetch = vi.fn<FetchLike>(async () => response({}));
+    const fetch = vi.fn<FetchLike>(async () => response({ items: [], nextCursor: null }));
     const api = createApiClient({ fetchImpl: fetch });
     await api.listMetaOperations();
     await api.listMetaOperations({ featureId: 'f &', sessionId: 's/', automationId: 'a?', after: 'next/', limit: 2 });

@@ -15,7 +15,7 @@ import type { ConnectionState } from '../../lib/connection-status.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DiagnosticsBridge {
-  relaunch(): Promise<boolean>;
+  relaunch?(): Promise<boolean>;
 }
 
 interface DiagnosticsSectionProps {
@@ -85,7 +85,7 @@ export function DiagnosticsSection({
   const restart = async () => {
     setRestartFailed(false);
     try {
-      setRestartFailed(await bridge?.relaunch() !== true);
+      setRestartFailed(await bridge?.relaunch?.() !== true);
     } catch {
       setRestartFailed(true);
     }

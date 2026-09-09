@@ -7,22 +7,13 @@ import {
   type UpdateState,
   type UpdateUi,
 } from '../lib/update-state.js';
-
-/**
- * The slice of the Electron preload bridge this hook talks to. Defined locally
- * (each feature keeps its own bridge shape) so the UI has no hard dependency on
- * the desktop shell — in a plain browser the bridge is simply absent.
- */
-interface UpdatesBridge {
-  getState(): Promise<UpdateSnapshot>;
-  check(): Promise<UpdateSnapshot | void>;
-  download(): Promise<UpdateSnapshot | void>;
-  install(): Promise<boolean>;
-  onEvent(cb: (type: string, payload?: UpdateSnapshot) => void): () => void;
-}
+import {
+  desktopUpdatesBridge,
+  type DesktopUpdatesBridge as UpdatesBridge,
+} from '../lib/desktop-bridge.js';
 
 function updatesBridge(): UpdatesBridge | undefined {
-  return (window as unknown as { desktop?: { updates?: UpdatesBridge } }).desktop?.updates;
+  return desktopUpdatesBridge();
 }
 
 export interface UseAppUpdates {
@@ -58,8 +49,8 @@ export function useAppUpdates(): UseAppUpdates {
     }
     let active = true;
     bridge
-      .getState()
-      .then((snapshot) => {
+      .getState?.()
+      ?.then((snapshot) => {
         if (active) {
           apply(snapshot);
         }
@@ -68,7 +59,7 @@ export function useAppUpdates(): UseAppUpdates {
         /* ignore — stay in the default state */
       });
 
-    const unsubscribe = bridge.onEvent((type, payload) => {
+    const unsubscribe = bridge.onEvent?.((type, payload) => {
       if (type === 'event') {
         apply(payload);
       }
@@ -76,16 +67,16 @@ export function useAppUpdates(): UseAppUpdates {
 
     return () => {
       active = false;
-      unsubscribe();
+      unsubscribe?.();
     };
   }, [bridge, apply]);
 
   const check = useCallback(() => {
-    bridge?.check().then((s) => apply(s ?? undefined)).catch(() => {});
+    bridge?.check?.()?.then((s) => apply(s ?? undefined)).catch(() => {});
   }, [bridge, apply]);
 
   const download = useCallback(() => {
-    bridge?.download().then((s) => apply(s ?? undefined)).catch(() => {});
+    bridge?.download?.()?.then((s) => apply(s ?? undefined)).catch(() => {});
   }, [bridge, apply]);
 
   const install = useCallback(() => {
@@ -95,7 +86,13 @@ export function useAppUpdates(): UseAppUpdates {
         ? 'Update not installed. Wait for active work to finish, then retry installation or quit again.'
         : 'Could not open the release page. No installer was started. Retry opening the release page.',
     });
-    bridge?.install().then((installed) => { if (installed !== true) failed(); }).catch(failed);
+    const started = bridge?.install?.();
+    // A shell without an installer must report failure, not silently do nothing.
+    if (!started) {
+      failed();
+      return;
+    }
+    started.then((installed) => { if (installed !== true) failed(); }).catch(failed);
   }, [bridge, apply]);
 
   const ui = useMemo(() => deriveUpdateUi(state), [state]);

@@ -5,14 +5,7 @@ import { ErrorText } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
 import { FileIcon, PencilIcon, PlusIcon } from '../../components/icons.js';
 
-interface DesktopBridge {
-  revealFile(path: string): void;
-}
-
-/** The Electron preload bridge, present only in the desktop app. */
-function desktopBridge(): DesktopBridge | undefined {
-  return (window as unknown as { desktop?: DesktopBridge }).desktop;
-}
+import { desktopBridge } from '../../lib/desktop-bridge.js';
 
 /**
  * Lists the files a session created or edited, read from the CLI's own session
@@ -63,7 +56,7 @@ export function SessionFiles({
         <FileRow
           key={file.path}
           file={file}
-          onReveal={bridge ? () => bridge.revealFile(file.path) : undefined}
+          onReveal={bridge?.revealFile ? () => bridge.revealFile?.(file.path) : undefined}
         />
       ))}
       <ErrorText error={files.error} />

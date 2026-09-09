@@ -19,6 +19,47 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('turns a non-JSON 200 into an honest, retryable backend error', async () => {
+    // Mid-upgrade a proxy can answer 200 with an HTML page. Before, this threw
+    // a raw SyntaxError that read as a UI crash.
+    const html = {
+      ok: true, status: 200,
+      json: async () => { throw new SyntaxError('Unexpected token <'); },
+    } as unknown as Response;
+    const client = createApiClient({ fetchImpl: async () => html });
+    const error = await client.getMetaPools().catch((e: unknown) => e) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toContain('did not return JSON');
+    expect(error.message).toContain('/meta/pools');
+  });
+
+  it('rejects a structurally unusable pools payload instead of rendering it', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({ enabled: true }));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.getMetaPools()).rejects.toThrow('no pool list');
+  });
+
+  it('validates pool mutations too, not just the initial read', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({ pools: [{}] }));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.resizeMetaPool('review', 2)).rejects.toThrow('index 0');
+    await expect(client.createMetaPool('review', 2)).rejects.toThrow('index 0');
+    await expect(client.removeMetaPool('review')).rejects.toThrow('index 0');
+  });
+
+  it('rejects an operation page whose cursor could never terminate paging', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({ items: [], nextCursor: 3 }));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.listMetaOperations()).rejects.toThrow('cursor');
+  });
+
+  it('still returns validated payloads unchanged', async () => {
+    const status = { enabled: true, pools: [{ purpose: 'review', sessions: [] }] };
+    const { fetchImpl } = mockFetch(jsonResponse(status));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.getMetaPools()).resolves.toEqual(status);
+  });
+
   it('lists features against the default base url', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 'f1' }]));
     const client = createApiClient({ fetchImpl });

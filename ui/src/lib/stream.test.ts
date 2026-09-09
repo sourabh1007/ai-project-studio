@@ -137,6 +137,30 @@ describe('usageKey', () => {
 });
 
 describe('parseServerEvent', () => {
+  it('drops a frame that is not JSON instead of throwing at the listener', () => {
+    // This runs inside an EventSource handler, where a throw is an unhandled
+    // error that skips the dispatch and reports nothing.
+    expect(() => parseServerEvent('session.started', '<html>')).not.toThrow();
+    expect(parseServerEvent('session.started', '<html>')).toBeNull();
+    expect(parseServerEvent('session.started', '')).toBeNull();
+  });
+
+  it('drops a frame whose payload is valid JSON but not an object', () => {
+    for (const data of ['null', '7', '"text"', '[]', 'true']) {
+      expect(parseServerEvent('session.started', data)).toBeNull();
+    }
+  });
+
+  it('drops identifier-carrying frames that omit the identifier', () => {
+    // Previously these produced an event carrying `undefined` as an id, which
+    // then addressed the wrong session or silently did nothing.
+    expect(parseServerEvent('session.file', '{}')).toBeNull();
+    expect(parseServerEvent('session.file', '{"sessionId":7}')).toBeNull();
+    expect(parseServerEvent('automation.removed', '{}')).toBeNull();
+    expect(parseServerEvent('session.notice', '{"sessionId":"s1"}')).toBeNull();
+    expect(parseServerEvent('session.notice', '{"message":"hi"}')).toBeNull();
+  });
+
   it('parses session.started', () => {
     const event = parseServerEvent(
       'session.started',

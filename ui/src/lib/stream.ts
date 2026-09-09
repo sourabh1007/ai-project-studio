@@ -159,28 +159,51 @@ export function usageKey(sessionId: string, turnIndex: number): string {
  * Parses a raw backend SSE frame (event name + JSON data) into a normalized
  * {@link StreamEvent}, or null for frames we do not surface (e.g. process exit).
  */
+/**
+ * Decodes one SSE frame. A frame that is not JSON, or is not a JSON object,
+ * cannot be routed to any reducer case, so it is dropped rather than thrown:
+ * this runs inside an EventSource listener where a throw is an unhandled error
+ * that silently skips the dispatch and tells nobody anything useful.
+ */
 export function parseServerEvent(
   name: string,
   data: string,
 ): StreamEvent | null {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!isStreamPayload(payload)) {
+    return null;
+  }
+  return routeServerEvent(name, payload);
+}
+
+function isStreamPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function routeServerEvent(
+  name: string,
+  payload: Record<string, unknown>,
+): StreamEvent | null {
   switch (name) {
     case 'session.started':
-      return { type: 'session.started', session: JSON.parse(data) as Session };
+      return { type: 'session.started', session: payload as unknown as Session };
     case 'session.ended':
-      return { type: 'session.ended', session: JSON.parse(data) as Session };
+      return { type: 'session.ended', session: payload as unknown as Session };
     case 'session.updated':
-      return { type: 'session.updated', session: JSON.parse(data) as Session };
+      return { type: 'session.updated', session: payload as unknown as Session };
     case 'session.file':
-      return {
-        type: 'session.file',
-        sessionId: (JSON.parse(data) as { sessionId: string }).sessionId,
-      };
+      return typeof payload.sessionId === 'string'
+        ? { type: 'session.file', sessionId: payload.sessionId }
+        : null;
     case 'session.notice': {
-      const payload = JSON.parse(data) as {
-        sessionId: string;
-        level?: 'info' | 'error';
-        message: string;
-      };
+      if (typeof payload.sessionId !== 'string' || typeof payload.message !== 'string') {
+        return null;
+      }
       return {
         type: 'session.notice',
         sessionId: payload.sessionId,
@@ -189,41 +212,40 @@ export function parseServerEvent(
       };
     }
     case 'usage.recorded':
-      return { type: 'usage.recorded', usage: JSON.parse(data) as StoredUsage };
+      return { type: 'usage.recorded', usage: payload as unknown as StoredUsage };
     case 'repository.context.updated':
       return {
         type: 'repository.context.updated',
-        context: JSON.parse(data) as RepositoryContext,
+        context: payload as unknown as RepositoryContext,
       };
     case 'pr.review.updated':
       return {
         type: 'pr.review.updated',
-        review: JSON.parse(data) as PrReview,
+        review: payload as unknown as PrReview,
       };
     case 'context.status':
       return {
         type: 'context.status',
-        status: JSON.parse(data) as ContextStatus,
+        status: payload as unknown as ContextStatus,
       };
     case 'automation.updated':
       return {
         type: 'automation.updated',
-        automation: JSON.parse(data) as Automation,
+        automation: payload as unknown as Automation,
       };
     case 'automation.removed':
-      return {
-        type: 'automation.removed',
-        id: (JSON.parse(data) as { id: string }).id,
-      };
+      return typeof payload.id === 'string'
+        ? { type: 'automation.removed', id: payload.id }
+        : null;
     case 'subagent.updated':
       return {
         type: 'subagent.updated',
-        subagent: JSON.parse(data) as Subagent,
+        subagent: payload as unknown as Subagent,
       };
     case 'review.board.activity':
       return {
         type: 'review.board.activity',
-        activity: JSON.parse(data) as ReviewBoardActivity,
+        activity: payload as unknown as ReviewBoardActivity,
       };
     default:
       return null;

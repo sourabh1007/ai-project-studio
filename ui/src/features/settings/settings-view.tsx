@@ -35,7 +35,7 @@ import { AgencyCliSection } from './agency-cli-section.js';
 import { AppearanceSection } from './appearance-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
-import { RetainedImagesSection, type AttachmentsBridge } from './retained-images-section.js';
+import { RetainedImagesSection } from './retained-images-section.js';
 import { WorktreesSection } from './worktrees-section.js';
 import { MetasessionPoolsSection } from './metasession-pools-section.js';
 import { MetaOperationsSection } from '../meta-operations/meta-operations-section.js';
@@ -48,19 +48,7 @@ import {
   updateNamespaceDraftValue,
   type NamespaceDraftState,
 } from './settings-drafts.js';
-
-/** The Electron preload bridge, present only in the desktop app. */
-interface DesktopBridge {
-  attachments?: AttachmentsBridge;
-  revealFile(path: string): void;
-  relaunch(): Promise<boolean>;
-  getVersion?(): Promise<string>;
-  openDocs?(): void;
-}
-
-function desktopBridge(): DesktopBridge | undefined {
-  return (window as unknown as { desktop?: DesktopBridge }).desktop;
-}
+import { desktopBridge } from '../../lib/desktop-bridge.js';
 
 function fallbackDraftState(
   values: Record<string, ConfigValue>,
@@ -619,7 +607,7 @@ export function SettingsView() {
     setRestarting(true);
     setRestartError(null);
     try {
-      if (await bridge?.relaunch() !== true) {
+      if (await bridge?.relaunch?.() !== true) {
         throw new Error('Restart was not confirmed');
       }
     } catch {
@@ -877,10 +865,10 @@ export function SettingsView() {
                   </p>
                 </div>
               </div>
-              {logDirectory && bridge && (
+              {logDirectory && bridge?.revealFile && (
                 <Button
                   variant="ghost"
-                  onClick={() => bridge.revealFile(logDirectory)}
+                  onClick={() => bridge.revealFile?.(logDirectory)}
                 >
                   Open logs folder
                 </Button>

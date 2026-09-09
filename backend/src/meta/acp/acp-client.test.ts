@@ -272,7 +272,7 @@ describe('AcpClient', () => {
     ]) {
       fake.emitRaw(line);
     }
-    const error = await p.catch((e: unknown) => e as AcpRequestError);
+    const error = await p.catch((e: unknown) => e) as AcpRequestError;
     expect(error).toBeInstanceOf(AcpRequestError);
     expect(error.message).toContain('did not speak the protocol');
     expect(error.message).toContain('not authenticated');
@@ -288,7 +288,7 @@ describe('AcpClient', () => {
     const p = client.initialize();
     await flush();
     for (let i = 0; i < 20; i++) fake.emitRaw(`noise-${i} ${'x'.repeat(500)}`);
-    const error = await p.catch((e: unknown) => e as AcpRequestError);
+    const error = await p.catch((e: unknown) => e) as AcpRequestError;
     // It fails at the threshold, so the retained tail is the earliest output —
     // the banner or error that explains the failure — and nothing after it.
     expect(error.message).toContain('noise-0');
@@ -313,9 +313,9 @@ describe('AcpClient', () => {
       // The process has proven it speaks ACP, so chatter must not fail it early.
       for (let i = 0; i < 20; i++) fake.emitRaw(`warning: retrying upstream ${i}`);
       expect(client.reusable).toBe(true);
-      const settled = turn.catch((e: unknown) => e as AcpRequestError);
+      const settled = turn.catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(60);
-      const error = await settled;
+      const error = await settled as AcpRequestError;
       // ...but it is still reported, so the timeout is explainable.
       expect(error.message).toContain('timed out after 50ms');
       expect(error.message).toContain('warning: retrying upstream 19');
@@ -336,9 +336,9 @@ describe('AcpClient', () => {
       });
       const p = client.initialize();
       fake.emitRaw('plain stdout line');
-      const settled = p.catch((e: unknown) => e as AcpRequestError);
+      const settled = p.catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(60);
-      const error = await settled;
+      const error = await settled as AcpRequestError;
       expect(error.message).toContain('stderr: ENOENT');
       expect(error.message).toContain('unexpected output: plain stdout line');
     } finally {

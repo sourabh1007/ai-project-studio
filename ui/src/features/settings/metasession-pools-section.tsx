@@ -52,13 +52,7 @@ interface PoolDraft {
   size: string;
 }
 
-interface DesktopBridge {
-  relaunch(): Promise<boolean>;
-}
-
-function desktopBridge(): DesktopBridge | undefined {
-  return (window as unknown as { desktop?: DesktopBridge }).desktop;
-}
+import { desktopBridge } from '../../lib/desktop-bridge.js';
 
 const STATE_LABEL: Record<MetaSessionState, string> = {
   warming: 'Warming',
@@ -1045,7 +1039,7 @@ export function MetasessionPoolsSection() {
   const bridge = desktopBridge();
   const restart = async () => {
     try {
-      if (await bridge?.relaunch() !== true) {
+      if (await bridge?.relaunch?.() !== true) {
         throw new Error('Restart was not confirmed');
       }
     } catch {

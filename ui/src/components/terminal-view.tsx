@@ -24,6 +24,7 @@ import {
   stripTerminalColorReports,
 } from '../lib/terminal-input.js';
 import { hasOpenModalDialog } from '../lib/focus-ownership.js';
+import { desktopBridge as sharedDesktopBridge } from '../lib/desktop-bridge.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -82,7 +83,7 @@ interface DesktopClipboard extends DesktopClipboardBridge {
 }
 
 function desktopBridge(): DesktopClipboard | undefined {
-  return (window as unknown as { desktop?: DesktopClipboard }).desktop;
+  return sharedDesktopBridge();
 }
 
 function isAllowedExternalUrl(value: string): boolean {

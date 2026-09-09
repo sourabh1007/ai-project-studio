@@ -1,28 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button, Card } from '../../components/ui.js';
 
-export interface RetainedImage {
-  id: string;
-  name: string;
-  bytes: number;
-  createdAt: string;
-}
-
-export interface RetainedImagesSnapshot {
-  status: 'ready';
-  items: RetainedImage[];
-  totalBytes: number;
-  limits: { files: number; totalBytes: number; fileBytes: number };
-}
-
-export interface AttachmentsBridge {
-  list(): Promise<RetainedImagesSnapshot | { status: 'error'; error: string }>;
-  remove(request: { ids: string[] }): Promise<
-    | { status: 'deleted'; deleted: number }
-    | { status: 'cancelled' }
-    | { status: 'error'; error: string; deleted?: number }
-  >;
-}
+export type {
+  AttachmentsBridge,
+  RetainedImage,
+  RetainedImagesSnapshot,
+} from '../../lib/desktop-bridge.js';
+import type {
+  AttachmentsBridge,
+  RetainedImagesSnapshot,
+} from '../../lib/desktop-bridge.js';
 
 function bytesLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

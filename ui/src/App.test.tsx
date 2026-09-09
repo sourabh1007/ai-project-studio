@@ -231,20 +231,29 @@ describe('App workspace tab persistence', () => {
     window.localStorage.clear();
   });
 
+  // Every view is behind React.lazy + Suspense, so the first paint of a view
+  // waits on a dynamic import. Under coverage instrumentation that can exceed
+  // the 1s default and fail a test that is about tab persistence, not startup
+  // latency.
+  const LAZY_VIEW_TIMEOUT = { timeout: 10_000 };
+  const findView = (text: string) => screen.findByText(text, undefined, LAZY_VIEW_TIMEOUT);
+  const findControl = (name: string) =>
+    screen.findByRole('button', { name }, LAZY_VIEW_TIMEOUT);
+
   it('keeps open tabs and the active tab across top-level navigation', async () => {
     renderApp();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open session tab' }));
-    expect(await screen.findByText('Terminal s1')).toBeInTheDocument();
+    fireEvent.click(await findControl('Open session tab'));
+    expect(await findView('Terminal s1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open repo tab' }));
-    expect(await screen.findByText('Repo acme/app')).toBeInTheDocument();
+    expect(await findView('Repo acme/app')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    expect(await screen.findByText('Settings panel')).toBeInTheDocument();
+    expect(await findView('Settings panel')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Explorer' }));
-    expect(await screen.findByText('Repo acme/app')).toBeInTheDocument();
+    expect(await findView('Repo acme/app')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Session 1/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /acme\/app/ })).toHaveAttribute(
       'aria-selected',
@@ -252,21 +261,21 @@ describe('App workspace tab persistence', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }));
-    expect(await screen.findByText('MCP panel')).toBeInTheDocument();
+    expect(await findView('MCP panel')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Explorer' }));
-    expect(await screen.findByText('Repo acme/app')).toBeInTheDocument();
+    expect(await findView('Repo acme/app')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Monitors' }));
-    expect(await screen.findByText('Monitors panel')).toBeInTheDocument();
+    expect(await findView('Monitors panel')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Explorer' }));
-    expect(await screen.findByText('Repo acme/app')).toBeInTheDocument();
+    expect(await findView('Repo acme/app')).toBeInTheDocument();
   });
 
   it('restores persisted tabs after restart and preserves explicit closures', async () => {
     const first = renderApp();
-    fireEvent.click(await screen.findByRole('button', { name: 'Open session tab' }));
+    fireEvent.click(await findControl('Open session tab'));
     fireEvent.click(screen.getByRole('button', { name: 'Open feature tab' }));
-    expect(await screen.findByText('Feature Feature 1')).toBeInTheDocument();
+    expect(await findView('Feature Feature 1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close Session 1' }));
     await waitFor(() =>
@@ -275,7 +284,7 @@ describe('App workspace tab persistence', () => {
     first.unmount();
 
     renderApp();
-    expect(await screen.findByText('Feature Feature 1')).toBeInTheDocument();
+    expect(await findView('Feature Feature 1')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /Session 1/ })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Feature 1/ })).toHaveAttribute(
       'aria-selected',
