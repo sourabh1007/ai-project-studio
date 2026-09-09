@@ -10,6 +10,9 @@ const control = require('../backend-control.cjs');
 
 const source = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+// Shutdown now always waits for exit proof, even when a transport hint fails,
+// so an unconfirmed attempt settles only after the child-exit budget elapses.
+const settle = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function childProcess() {
   const child = new EventEmitter();
@@ -155,6 +158,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
       if (name === './regression-isolation.cjs') return { configure: () => null };
       if (name === './update-manager.cjs') return updater;
       if (name === './ipc-input.cjs') return {};
+      if (name === './backend-identity.cjs') return require('../backend-identity.cjs');
       if (name === 'node:fs') return {
         readFileSync: () => { throw Error('fixture has no theme'); },
         mkdirSync() {},
@@ -175,7 +179,11 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
         assert.deepEqual(Array.from(options.stdio), ['ignore', 'pipe', 'pipe', 'ipc']);
         spawned = childProcess();
         spawned.nonce = options.env.CW_DESKTOP_SHUTDOWN_NONCE;
+        spawned.launchId = options.env.CW_DESKTOP_LAUNCH_ID;
         assert.equal(typeof spawned.nonce, 'string');
+        assert.equal(typeof spawned.launchId, 'string');
+        // The published identity must never carry the shutdown secret.
+        assert.notEqual(spawned.launchId, spawned.nonce);
         return spawned;
       } };
       if (name === './backend-control.cjs') return {
@@ -199,7 +207,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
       reportStartupFailure, isBackendShutdownConfirmed,
       get backend() { return backend; },
       setSplash(splash) { startupSplash = splash; },
-      replace(child) { ownBackend(child, child.nonce); },
+      replace(child) { ownBackend(child, child.nonce, child.launchId); },
     };
   `, context);
   // Exercise the real production IPC bodies in the same lexical environment.
@@ -217,6 +225,26 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     app, owner: context.owner, updater, au, ipc, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
     closePrompts, startupRequests, startupLogs,
     spawn() { context.owner.startBackend(1234); return spawned; },
+    /**
+     * Answers a pending readiness probe the way the real backend's /identity
+     * route does, so startup exercises the full parse-and-verify path.
+     */
+    respondIdentity(index, overrides = {}, statusCode = 200) {
+      const body = overrides === null ? null : {
+        launchId: spawned.launchId,
+        pid: spawned.pid,
+        version: '0.11.3',
+        protocolVersion: 1,
+        ...overrides,
+      };
+      const res = Object.assign(new EventEmitter(), {
+        statusCode, resume() {}, setEncoding() {},
+      });
+      startupRequests[index].respond(res);
+      if (body !== null) res.emit('data', JSON.stringify(body));
+      res.emit('end');
+      return res;
+    },
     counts: () => ({ relaunches, exits, quits, installs, requests }),
   };
 }
@@ -262,14 +290,57 @@ test('readiness uses the configured API path, rejects HTTP errors, and clears al
   const f = fixture({ env: { CW__api__basePath: 'custom/api/' } });
   const child = f.spawn();
   const ready = f.owner.waitForBackend(1234);
-  assert.equal(f.startupRequests[0].url, 'http://127.0.0.1:1234/custom/api/providers');
-  f.startupRequests[0].respond({ statusCode: 404, resume() {} });
+  assert.equal(f.startupRequests[0].url, 'http://127.0.0.1:1234/custom/api/identity');
+  f.respondIdentity(0, {}, 404);
   f.timers[1].callback();
-  f.startupRequests[1].respond({ statusCode: 200, resume() {} });
+  f.respondIdentity(1);
   await ready;
   assert.equal(f.timers[0].cleared, true);
   assert.equal(child.listenerCount('exit'), 1);
   assert.equal(child.listenerCount('error'), 1);
+});
+
+test('a stranger holding the port never satisfies readiness and is named in the timeout', async () => {
+  const f = fixture();
+  f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /did not start in time. Another program is already using this port/);
+  // Unparseable output from a proxy is untrusted and keeps the probe retrying.
+  const res = Object.assign(new EventEmitter(), {
+    statusCode: 200, resume() {}, setEncoding() {},
+  });
+  f.startupRequests[0].respond(res);
+  res.emit('data', '<html>proxy error</html>');
+  res.emit('end');
+  f.timers.at(-1).callback();
+  // A squatting server answers 200 with a body that is not our launch.
+  assert.equal(f.startupRequests.length, 2);
+  f.respondIdentity(1, { launchId: 'someone-else' });
+  f.timers[0].callback();
+  await rejected;
+});
+
+test('a half-upgraded backend fails fast instead of retrying until the readiness timeout', async () => {
+  const f = fixture();
+  f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, /protocol 1 but the backend \(version 0\.10\.3\) speaks 2[\s\S]*reinstall/i);
+  f.respondIdentity(0, { protocolVersion: 2, version: '0.10.3' });
+  await rejected;
+  // Fatal: no retry was scheduled and the probe was torn down.
+  assert.equal(f.startupRequests.length, 1);
+  assert.equal(f.startupRequests[0].destroyed, true);
+  assert.equal(f.timers[0].cleared, true);
+});
+
+test('a foreign process answering for our launch id is refused', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const ready = f.owner.waitForBackend(1234);
+  const rejected = assert.rejects(ready, new RegExp(`different backend process \\(pid ${child.pid + 1}\\)`));
+  f.respondIdentity(0, { pid: child.pid + 1 });
+  f.timers[0].callback();
+  await rejected;
 });
 
 test('readiness cancellation stops requests and retries without releasing a running child', async () => {
@@ -562,7 +633,7 @@ test('quit with a downloaded update and rejected stop leaves the backend owned',
   const child = f.spawn();
   f.au.emit('update-downloaded', {});
   assert.equal(f.app.quit().prevented, true);
-  await tick();
+  await settle();
   assert.equal(f.counts().installs, 0);
   assert.equal(f.counts().quits, 0);
   assert.equal(f.owner.backend, child);
@@ -758,8 +829,14 @@ test('a rejected stop keeps the titlebar-close window visible and retryable', as
   assert.equal(win.close().prevented, true);
   await tick();
   assert.equal(win.isDestroyed(), false);
+  // A second close while the first attempt is still proving exit coalesces onto
+  // it rather than issuing a duplicate shutdown request.
   assert.equal(win.close().prevented, true);
-  await tick();
+  await settle();
+  assert.equal(f.counts().requests, 1);
+  // Once the unconfirmed attempt settles, closing is retryable and does ask again.
+  assert.equal(win.close().prevented, true);
+  await settle();
   assert.equal(f.counts().requests, 2);
   assert.equal(f.counts().quits, 0);
   assert.equal(win.isDestroyed(), false);

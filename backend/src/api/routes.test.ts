@@ -101,6 +101,7 @@ describe('createApiRoutes', () => {
     const signatures = routes.map((r) => `${r.method} ${r.path}`);
     expect(signatures).toEqual([
       'get /health',
+      'get /identity',
       'post /features',
       'get /features',
       'get /features/:id',

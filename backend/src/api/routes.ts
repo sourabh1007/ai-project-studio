@@ -28,6 +28,7 @@ import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
 import { createHealthRoutes } from './health-controller.js';
+import { createIdentityRoutes } from './identity-controller.js';
 import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
 import type {
   DeviceCodeStart,
@@ -228,6 +229,7 @@ export interface ApiRoutesDeps {
 export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
   return applyRouteOwnership([
     ...createHealthRoutes(),
+    ...createIdentityRoutes(),
     ...createFeatureRoutes({ features: deps.features, admin: deps.admin }),
     ...createSessionRoutes({
       launcher: deps.launcher,

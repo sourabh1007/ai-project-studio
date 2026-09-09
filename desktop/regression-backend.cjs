@@ -5,6 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PROTOCOL } = require('./regression-isolation.cjs');
+const { DESKTOP_PROTOCOL_VERSION } = require('./backend-identity.cjs');
 
 function start(env = process.env) {
   const root = env.CW_DESKTOP_SMOKE_ROOT;
@@ -19,6 +20,16 @@ function start(env = process.env) {
     if (req.url === '/api/providers') {
       res.setHeader('Content-Type', 'application/json');
       res.end('[]');
+    } else if (req.url === '/api/identity') {
+      // The shell adopts a backend only after this proves the launch identity,
+      // so the synthetic backend must answer it exactly like production.
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        launchId: env.CW_DESKTOP_LAUNCH_ID ?? null,
+        pid: process.pid,
+        version: env.CW_APP_VERSION ?? 'unknown',
+        protocolVersion: DESKTOP_PROTOCOL_VERSION,
+      }));
     } else if (req.url === '/') {
       res.setHeader('Content-Type', 'text/html');
       res.end(`<!doctype html><html><head><title>Isolated desktop smoke</title></head>

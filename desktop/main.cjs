@@ -16,6 +16,12 @@ const {
   requestBackendShutdownIpc,
   waitForChildExit,
 } = require('./backend-control.cjs');
+const {
+  DESKTOP_PROTOCOL_VERSION,
+  BackendProtocolMismatchError,
+  classifyBackendIdentity,
+  parseBackendIdentity,
+} = require('./backend-identity.cjs');
 
 // The current top-level app window. Captured in createWindow so the update
 // manager (and any future feature) can push messages to the renderer.
@@ -120,16 +126,28 @@ function getFreePort() {
   });
 }
 
-/** Resolves once the backend answers on /api/providers, or rejects on timeout. */
+/**
+ * Resolves once the backend proves, on /identity, that it is the child this
+ * shell just spawned and speaks our protocol version. Rejects on timeout, on
+ * child death, or immediately on a protocol mismatch.
+ */
 function waitForBackend(port) {
   const owner = backendOwner;
   const signal = startupAbort.signal;
   const basePath = (backendControl?.basePath || '/api').replace(/^\/?/, '/').replace(/\/$/, '');
-  const url = `http://${HOST}:${port}${basePath}/providers`;
+  const url = `http://${HOST}:${port}${basePath}/identity`;
+  const expected = {
+    launchId: owner.launchId,
+    pid: owner.child.pid,
+    protocolVersion: DESKTOP_PROTOCOL_VERSION,
+  };
   return new Promise((resolve, reject) => {
     let settled = false;
     let request;
     let retryTimer;
+    // Kept so a timeout blames the stranger on the port rather than reporting a
+    // generic "did not start in time".
+    let lastRejection = null;
     const finish = (error) => {
       if (settled) return;
       settled = true;
@@ -144,7 +162,11 @@ function waitForBackend(port) {
     };
     const stopped = () => finish(backendStartupError(owner));
     const cancelled = () => finish(new Error('Startup cancelled'));
-    const timeout = setTimeout(() => finish(new Error('Backend did not start in time')), STARTUP_TIMEOUT_MS);
+    const timeout = setTimeout(() => finish(new Error(
+      lastRejection
+        ? `Backend did not start in time. ${lastRejection}`
+        : 'Backend did not start in time',
+    )), STARTUP_TIMEOUT_MS);
     const retry = () => {
       if (!settled && !retryTimer) retryTimer = setTimeout(attempt, 300);
     };
@@ -152,12 +174,24 @@ function waitForBackend(port) {
       retryTimer = null;
       if (settled) return;
       const req = http.get(url, (res) => {
-        res.resume();
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          finish();
-        } else {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
           retry();
+          return;
         }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          const verdict = classifyBackendIdentity(parseBackendIdentity(body), expected);
+          if (verdict.state === 'ready') finish();
+          else if (verdict.state === 'mismatch') finish(new BackendProtocolMismatchError(verdict.reason));
+          else {
+            lastRejection = verdict.reason;
+            retry();
+          }
+        });
+        res.on('error', retry);
       });
       request = req;
       req.on('error', retry);
@@ -193,6 +227,10 @@ function startBackend(port) {
   const nodeBin = process.env.CW_NODE_BIN || 'node';
   const apiBasePath = process.env.CW__api__basePath || '/api';
   const shutdownNonce = randomUUID();
+  // Distinct from the shutdown nonce, which authorizes cleanup and must stay
+  // secret: this one is published on /identity purely so startup can recognize
+  // its own child.
+  const launchId = randomUUID();
   const env = {
     ...process.env,
     CW__api__port: String(port),
@@ -203,13 +241,15 @@ function startBackend(port) {
     CW_UI_DIST: UI_DIST,
     CW_LOG_LEVEL: process.env.CW_LOG_LEVEL || 'info',
     CW_DESKTOP_SHUTDOWN_NONCE: shutdownNonce,
+    CW_DESKTOP_LAUNCH_ID: launchId,
+    CW_APP_VERSION: app.getVersion(),
   };
   backendControl = { host: HOST, port, basePath: apiBasePath };
   const child = spawn(nodeBin, [BACKEND_ENTRY], {
     env,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  ownBackend(child, shutdownNonce);
+  ownBackend(child, shutdownNonce, launchId);
 }
 
 function isBackendShutdownConfirmed() {
@@ -252,10 +292,10 @@ function confirmQuitAfterBackendExit() {
   return exitOnlyPrompt;
 }
 
-function ownBackend(child, nonce) {
+function ownBackend(child, nonce, launchId) {
   backend = child;
   backendGeneration += 1;
-  const owner = { child, nonce, acknowledged: false, outcome: null, spawnFailed: false, spawnError: null, stderrTail: '' };
+  const owner = { child, nonce, launchId, acknowledged: false, outcome: null, spawnFailed: false, spawnError: null, stderrTail: '' };
   backendOwner = owner;
   child.on('message', (message) => {
     if (message?.type === 'shutdown-complete' && message.nonce === nonce) {
@@ -299,9 +339,13 @@ async function stopBackend() {
   const owner = backendOwner;
   const control = backendControl;
   const task = (async () => {
-    // IPC remains available after transport closure, allowing a deliberate
-    // retry of later cleanup phases. The root coalesces both request paths.
-    await Promise.all([
+    // Both transports are best-effort *hints*: neither delivery nor its failure
+    // says anything about cleanup. A rejected IPC send used to reject this whole
+    // step and skip the exit proof below, leaving a live backend recorded as
+    // "not confirmed" with no evidence either way. Failures are therefore
+    // absorbed independently, and the acknowledgement plus a clean child exit
+    // stay the only things that confirm shutdown.
+    await Promise.allSettled([
       requestBackendShutdownIpc(child, owner.nonce),
       control ? requestBackendShutdown(control) : Promise.resolve(false),
     ]);

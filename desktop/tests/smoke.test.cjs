@@ -171,7 +171,8 @@ test('package preflight refuses legacy/stale packages before execution', async (
   const asar = require('@electron/asar');
   for (const file of ['main.cjs', 'regression-isolation.cjs', 'regression-backend.cjs',
     'preload.cjs', 'ipc-input.cjs', 'clipboard.cjs', 'regression-clipboard.cjs',
-    'backend-control.cjs', 'owned-attachments.cjs', 'update-manager.cjs', 'package.json']) {
+    'backend-control.cjs', 'backend-identity.cjs', 'owned-attachments.cjs',
+    'update-manager.cjs', 'package.json']) {
     fs.copyFileSync(path.join(repo, 'desktop', file), path.join(input, file));
   }
   const archive = path.join(resourceDir, 'app.asar');
@@ -185,7 +186,7 @@ test('package preflight refuses legacy/stale packages before execution', async (
   await asar.createPackage(input, archive);
   assert.equal(inspectPackage(exe, repo).metadata.version, metadata.version);
   asar.uncache(archive);
-  for (const module of ['backend-control.cjs', 'owned-attachments.cjs']) {
+  for (const module of ['backend-control.cjs', 'backend-identity.cjs', 'owned-attachments.cjs']) {
     fs.appendFileSync(path.join(input, module), '\n// stale');
     await asar.createPackage(input, archive);
     assert.throws(() => inspectPackage(exe, repo), new RegExp(`mismatch: ${module}`));
@@ -207,7 +208,7 @@ test('packaging includes the shutdown owner and clipboard attachment implementat
   const config = fs.readFileSync(path.join(repo, 'desktop', 'electron-builder.yml'), 'utf8');
   const files = /^files:\r?\n((?:[ \t]+-[^\n]*\n)+)/m.exec(config)?.[1];
   assert.ok(files, 'Missing explicit desktop package files');
-  for (const file of ['backend-control.cjs', 'owned-attachments.cjs']) {
+  for (const file of ['backend-control.cjs', 'backend-identity.cjs', 'owned-attachments.cjs']) {
     assert.match(files, new RegExp(`^  - ${file.replaceAll('.', '\\.')}\\r?$`, 'm'));
   }
 });

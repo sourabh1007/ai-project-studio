@@ -40,7 +40,7 @@ function createFixture(output, { readyDelayMs = 0, seed = '0' } = {}) {
   }
   const config = { protocol: PROTOCOL, token, readyDelayMs, seed: String(seed) };
   fs.writeFileSync(path.join(root, 'fixture.json'), JSON.stringify(config));
-  for (const file of ['regression-backend.cjs', 'regression-isolation.cjs']) {
+  for (const file of ['regression-backend.cjs', 'regression-isolation.cjs', 'backend-identity.cjs']) {
     fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
   }
   return { root, token, config };
@@ -139,7 +139,8 @@ function inspectPackage(executable, repo) {
   const asar = require('@electron/asar');
   const files = ['main.cjs', 'regression-isolation.cjs', 'regression-backend.cjs',
     'preload.cjs', 'ipc-input.cjs', 'clipboard.cjs', 'regression-clipboard.cjs',
-    'backend-control.cjs', 'owned-attachments.cjs', 'update-manager.cjs'];
+    'backend-control.cjs', 'backend-identity.cjs', 'owned-attachments.cjs',
+    'update-manager.cjs'];
   const sourceHashes = {};
   for (const file of files) {
     const expected = sha256(fs.readFileSync(path.join(repo, 'desktop', file)));
