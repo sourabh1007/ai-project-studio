@@ -87,6 +87,14 @@ const BACKEND_STOP_TIMEOUT_MS = 10000;
 // A force-kill is not cooperative, so this only bounds how long the desktop
 // waits for the OS to reap the process before it stops offering to close.
 const BACKEND_FORCE_STOP_TIMEOUT_MS = 5000;
+// A backend that dies on its own is restarted automatically. The delays grow so
+// a build that fails immediately on every launch cannot spin, and the run is
+// bounded so a permanently broken backend surfaces to the user instead of
+// restarting behind a window that silently fails every request.
+const BACKEND_RESTART_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
+// Having served for this long means the failure was transient rather than a
+// launch defect, so the next crash starts again from the shortest delay.
+const BACKEND_RESTART_RESET_MS = 60000;
 
 /** @type {import('node:child_process').ChildProcess | null} */
 let backend = null;
@@ -99,6 +107,12 @@ let shutdownAction = null;
 let backendOwner = null;
 let exitOnlyOwner = null;
 let exitOnlyPrompt = null;
+// Null until startup has proven the backend ready. Crash supervision stays off
+// before that, because a backend that never came up is a startup failure with
+// its own diagnostics, not something a blind respawn can fix.
+let supervisedPort = null;
+let backendRestarts = 0;
+let backendRestartTimer = null;
 
 // On Windows, when the app shuts down the stdout/stderr pipe can close before
 // the backend's exit/log handlers run; a raw write then throws EPIPE, which
@@ -356,7 +370,7 @@ function confirmQuitAfterUnresponsiveBackend() {
 function ownBackend(child, nonce, launchId) {
   backend = child;
   backendGeneration += 1;
-  const owner = { child, nonce, launchId, acknowledged: false, outcome: null, spawnFailed: false, spawnError: null, stderrTail: '' };
+  const owner = { child, nonce, launchId, acknowledged: false, outcome: null, spawnFailed: false, spawnError: null, stderrTail: '', startedAt: Date.now() };
   backendOwner = owner;
   child.on('message', (message) => {
     if (message?.type === 'shutdown-complete' && message.nonce === nonce) {
@@ -385,8 +399,81 @@ function ownBackend(child, nonce, launchId) {
     if (backend === child) {
       backend = null;
       backendControl = null;
+      superviseBackendExit(owner);
     }
   });
+}
+
+/** Tells every open window that the backend is gone and will not come back. */
+function notifyBackendUnavailable(detail) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) win.webContents.send('backend:unavailable', detail);
+    } catch {
+      /* A window tearing down cannot receive the notice, and does not need it. */
+    }
+  }
+}
+
+/**
+ * Gives up on restarting and tells the user, leaving the app closable.
+ *
+ * The dead process has already been reaped, so retaining its unconfirmed
+ * ownership would only make recovery impossible: it would block both a
+ * replacement and the relaunch the renderer is about to offer, trapping the
+ * user in a window whose every request fails. Releasing it here permits exactly
+ * those two recoveries and still never claims the backend cleaned up.
+ */
+function reportBackendUnavailable(owner, reason) {
+  safeWrite(process.stderr, `[desktop] backend unavailable: ${reason}\n`);
+  if (backendOwner === owner && owner.outcome) {
+    backendOwner = null;
+  }
+  notifyBackendUnavailable({ reason, stderrTail: owner.stderrTail.slice(-4000) });
+}
+
+/**
+ * Restarts a backend that died on its own.
+ *
+ * A crash used to be terminal. The exit handler dropped the reference and
+ * nothing ever spawned a replacement, so the window stayed open against a
+ * server that no longer existed: the feature tree timed out, skills hung on
+ * skeletons and every review perspective failed at once, with no way back
+ * except quitting the app by hand.
+ *
+ * Only unexpected exits are supervised. An exit that follows a quit, relaunch,
+ * force close or cooperative stop was asked for, and restarting there would
+ * resurrect the very process the user just stopped.
+ */
+function superviseBackendExit(owner) {
+  if (supervisedPort === null || shutdownAction || stoppingBackend || exitOnlyOwner ||
+      owner.acknowledged || backendOwner !== owner) {
+    return;
+  }
+  if (Date.now() - owner.startedAt >= BACKEND_RESTART_RESET_MS) {
+    backendRestarts = 0;
+  }
+  const delay = BACKEND_RESTART_DELAYS_MS[backendRestarts];
+  if (delay === undefined) {
+    reportBackendUnavailable(owner, `it stopped ${backendRestarts} times in a row and could not be restarted`);
+    return;
+  }
+  backendRestarts += 1;
+  safeWrite(process.stderr, `[desktop] backend exited unexpectedly; restarting in ${delay}ms (attempt ${backendRestarts})\n`);
+  backendRestartTimer = setTimeout(() => {
+    backendRestartTimer = null;
+    if (shutdownAction || exitOnlyOwner || backend || backendOwner !== owner) return;
+    // Safe to release: this process is reaped, so nothing of it survives to be
+    // displaced by the replacement.
+    backendOwner = null;
+    try {
+      startBackend(supervisedPort);
+    } catch (error) {
+      backendOwner = owner;
+      reportBackendUnavailable(owner, `restarting it failed (${error})`);
+    }
+  }, delay);
+  backendRestartTimer.unref?.();
 }
 
 async function stopBackend() {
@@ -974,6 +1061,8 @@ async function bootstrap() {
     startBackend(port);
     splash.update('connecting');
     await waitForBackend(port);
+    // Proven ready: from here a backend exit is a crash worth recovering from.
+    supervisedPort = port;
     loadUrl = `http://${HOST}:${port}/`;
   }
   if (startupCancelled) return;
@@ -1044,6 +1133,12 @@ if (!gotLock) {
   app.on('before-quit', (event) => {
     startupCancelled = true;
     startupAbort.abort();
+    // A pending restart must never race a quit into spawning a replacement.
+    supervisedPort = null;
+    if (backendRestartTimer) {
+      clearTimeout(backendRestartTimer);
+      backendRestartTimer = null;
+    }
     if (exitOnlyOwner === backendOwner && !backend && backendOwner?.outcome != null) return;
     if (exitOnlyPrompt) {
       event.preventDefault();

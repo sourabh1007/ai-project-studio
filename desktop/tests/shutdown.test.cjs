@@ -207,6 +207,8 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
       reportStartupFailure, isBackendShutdownConfirmed,
       get backend() { return backend; },
       setSplash(splash) { startupSplash = splash; },
+      supervise(port) { supervisedPort = port; },
+      get restarts() { return backendRestarts; },
       replace(child) { ownBackend(child, child.nonce, child.launchId); },
     };
   `, context);
@@ -665,6 +667,64 @@ test('a hung backend can still be force closed instead of trapping the user', as
   assert.equal(f.counts().installs, 0);
   assert.equal(f.counts().relaunches, 0);
   assert.equal(f.owner.backend, null);
+});
+
+test('a crashed backend is restarted automatically once it has proven ready', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  f.owner.supervise(1234);
+  child.finish(1, null, false);
+  // Restarting is deferred, so a backend that dies on launch cannot spin.
+  assert.equal(f.owner.backend, null);
+  const scheduled = f.timers.at(-1);
+  assert.equal(scheduled.delay, 500);
+  scheduled.callback();
+  const replacement = f.owner.backend;
+  assert.notEqual(replacement, null);
+  assert.notEqual(replacement, child);
+  // The replacement reuses the proven port so the loaded window keeps working.
+  assert.equal(f.owner.isBackendShutdownConfirmed(), false);
+});
+
+test('repeated crashes back off and then report the backend as unavailable', async () => {
+  const f = fixture();
+  f.spawn();
+  f.owner.supervise(1234);
+  const delays = [];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    f.owner.backend.finish(1, null, false);
+    const scheduled = f.timers.at(-1);
+    delays.push(scheduled.delay);
+    scheduled.callback();
+  }
+  assert.deepEqual(delays, [500, 1000, 2000, 5000, 10000]);
+  const before = f.timers.length;
+  f.owner.backend.finish(1, null, false);
+  // The run is bounded: no further restart is scheduled.
+  assert.equal(f.timers.length, before);
+  // Ownership of a reaped process is released so the user can recover, but
+  // nothing claims the backend shut down cleanly.
+  assert.equal(f.owner.backend, null);
+  assert.equal(f.owner.isBackendShutdownConfirmed(), true);
+});
+
+test('an intentional stop is never undone by a restart', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  f.owner.supervise(1234);
+  const stopped = f.owner.stopBackend();
+  child.finish();
+  assert.equal(await stopped, true);
+  assert.equal(f.owner.backend, null);
+  assert.equal(f.owner.restarts, 0);
+});
+
+test('an unsupervised backend that never became ready is not blindly respawned', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  child.finish(1, null, false);
+  assert.equal(f.owner.backend, null);
+  assert.equal(f.owner.restarts, 0);
 });
 
 test('guided install has no updater setImmediate quit window', async () => {

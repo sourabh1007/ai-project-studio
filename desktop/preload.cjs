@@ -68,6 +68,19 @@ contextBridge.exposeInMainWorld('desktop', {
   relaunch() {
     return ipcRenderer.invoke('app:relaunch');
   },
+  /**
+   * Subscribes to the notice that the backend stopped and could not be
+   * restarted, so the UI can say so and offer a restart instead of leaving
+   * every request to fail silently. Returns an unsubscribe function.
+   */
+  onBackendUnavailable(cb) {
+    if (typeof cb !== 'function') {
+      return () => {};
+    }
+    const onUnavailable = (_e, payload) => cb(payload);
+    ipcRenderer.on('backend:unavailable', onUnavailable);
+    return () => ipcRenderer.removeListener('backend:unavailable', onUnavailable);
+  },
   getVersion() {
     return ipcRenderer.invoke('app:getVersion');
   },
