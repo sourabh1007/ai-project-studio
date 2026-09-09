@@ -409,6 +409,7 @@ export function WorkspaceView({
                 contextPhase={
                   live.contextStatus[`feature:${active.feature.id}`]
                 }
+                live={live}
               />
             </Suspense>
           )}

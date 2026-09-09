@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { FeatureUsage } from '../../lib/types.js';
+import type { LiveState } from '../../lib/stream.js';
 import { FeatureDashboard } from './feature-dashboard.js';
 vi.mock('../../components/usage-breakdown.js', () => ({
   UsageBreakdownModal: () => null,
@@ -105,7 +106,7 @@ describe('FeatureDashboard usage freshness', () => {
     vi.setSystemTime(new Date('2026-01-01T12:00:00.000Z'));
   });
 
-  it('shows manual snapshot freshness, refreshes on demand, and keeps prior data on refresh failure', async () => {
+  it('shows snapshot freshness, refreshes on demand, and keeps prior data on refresh failure', async () => {
     const getFeatureUsage = vi.fn()
       .mockResolvedValueOnce(usage(1))
       .mockResolvedValueOnce(usage(2))
@@ -119,7 +120,7 @@ describe('FeatureDashboard usage freshness', () => {
     renderDashboard(client);
     await act(async () => {});
     expect(
-      screen.getByText(/This usage view is a manual snapshot/i),
+      screen.getByText(/Usage refreshes as work is recorded/i),
     ).toBeInTheDocument();
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(getFeatureUsage).toHaveBeenCalledTimes(1);
@@ -150,8 +151,40 @@ describe('FeatureDashboard usage freshness', () => {
     );
   });
 
-  it('quarantines stale feature responses across rapid switches and retries initial failure honestly', async () => {
-    let resolveA!: (value: FeatureUsage) => void;
+  it('refreshes itself when the live stream records work for this feature', async () => {
+    const getFeatureUsage = vi.fn().mockResolvedValue(usage(1));
+    const client = {
+      getFeatureUsage,
+      listSessions: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+    const liveAt = (endedAt: string) => ({
+      usageByKey: { 'session-1:1': { featureId: 'feature-1', endedAt } },
+      sessions: {},
+      contextStatus: {},
+    } as unknown as LiveState);
+    const dashboard = (live: LiveState) => (
+      <ApiProvider value={client}>
+        <FeatureDashboard featureId="feature-1" featureName="Feature 1" live={live} />
+      </ApiProvider>
+    );
+
+    const view = render(dashboard(liveAt('2026-01-01T12:00:00.000Z')));
+    await act(async () => {});
+    expect(getFeatureUsage).toHaveBeenCalledTimes(1);
+
+    // A re-render that carries no new work must not cost a request.
+    view.rerender(dashboard(liveAt('2026-01-01T12:00:00.000Z')));
+    await act(async () => {});
+    expect(getFeatureUsage).toHaveBeenCalledTimes(1);
+
+    view.rerender(dashboard(liveAt('2026-01-01T12:01:00.000Z')));
+    await act(async () => {});
+    expect(getFeatureUsage).toHaveBeenCalledTimes(2);
+    // Refreshing in place must not blank the charts mid-run.
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+  });
+
+  it('quarantines stale feature responses across rapid switches and retries initial failure honestly', async () => {    let resolveA!: (value: FeatureUsage) => void;
     let resolveB!: (value: FeatureUsage) => void;
     const getFeatureUsage = vi.fn((featureId: string) => {
       if (featureId === 'feature-1') {

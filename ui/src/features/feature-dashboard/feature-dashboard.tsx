@@ -39,6 +39,8 @@ import {
 } from '../../components/icons.js';
 import { FeatureWorkSummaryPanel } from './work-summary.js';
 import { SkillTagger } from '../skills/skill-tagger.js';
+import { featureUsageRevision } from '../../lib/feature-usage-freshness.js';
+import type { LiveState } from '../../lib/stream.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 
 const PALETTE = [
@@ -74,7 +76,7 @@ function formatSnapshotTime(value: string): string {
   return snapshotFmt.format(new Date(value));
 }
 
-function useFeatureUsageSnapshot(featureId: string) {
+function useFeatureUsageSnapshot(featureId: string, revision: string) {
   const api = useApi();
   const visitRef = useRef(0);
   const requestRef = useRef(0);
@@ -125,6 +127,21 @@ function useFeatureUsageSnapshot(featureId: string) {
     requestRef.current = 0;
     void load(false);
   }, [featureId, load]);
+
+  // Refresh when the live stream reports work that changes these totals. The
+  // events are already flowing, so this costs no traffic while a feature is
+  // idle and needs no polling interval to be tuned. Data is preserved across
+  // the refetch so the charts never blank out mid-run.
+  const seen = useRef({ featureId, revision });
+  useEffect(() => {
+    const switched = seen.current.featureId !== featureId;
+    const unchanged = seen.current.revision === revision;
+    seen.current = { featureId, revision };
+    // Switching features already triggers a full load above, and the incoming
+    // feature's token is new by definition; refetching for it would double up.
+    if (switched || unchanged) return;
+    void load(true);
+  }, [featureId, revision, load]);
 
   return {
     data: loadedFeatureId === featureId ? data : null,
@@ -565,14 +582,18 @@ export function FeatureDashboard({
   featureName,
   featureDescription,
   contextPhase,
+  live,
 }: {
   featureId: string;
   featureName: string;
   featureDescription?: string;
   contextPhase?: ContextStatusPhase;
+  live?: LiveState;
 }) {
+  const revision = live ? featureUsageRevision(live, featureId) : '';
   const { data, loading, error, lastLoadedAt, reload } = useFeatureUsageSnapshot(
     featureId,
+    revision,
   );
 
   const description = featureDescription?.trim();
@@ -587,8 +608,8 @@ export function FeatureDashboard({
         <h2 className="dash-title">{featureName}</h2>
         <p className="dash-description">{description || 'No description'}</p>
         <p className="muted">
-          This usage view is a manual snapshot. Refresh to fetch the latest totals
-          for this feature.
+          Usage refreshes as work is recorded for this feature. Refresh manually
+          to fetch the latest totals at any time.
         </p>
         {lastLoadedAt && (
           <p className="muted">
