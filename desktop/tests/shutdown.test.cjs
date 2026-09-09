@@ -638,7 +638,33 @@ test('quit with a downloaded update and rejected stop leaves the backend owned',
   assert.equal(f.counts().quits, 0);
   assert.equal(f.owner.backend, child);
   assert.equal(f.updater.getState().status, 'downloaded');
-  assert.match(f.notifications[0].message, /not confirmed/);
+  // An unresponsive backend never exits, so it can never report an outcome.
+  // The user is offered a force close rather than a dead-end error box, and
+  // declining it still leaves the backend owned with no install performed.
+  assert.equal(f.closePrompts.length, 1);
+  assert.match(f.closePrompts[0].detail, /not responding/);
+  // main.cjs runs in a separate vm realm, so compare by value not prototype.
+  assert.deepEqual(Array.from(f.closePrompts[0].buttons), ['Keep open', 'Force close']);
+  assert.equal(f.notifications.length, 0);
+});
+
+test('a hung backend can still be force closed instead of trapping the user', async () => {
+  // Previously only a *crashed* backend could be escaped: the exit-based
+  // consent path required an outcome, which a hung process never produces, so
+  // the app refused to quit forever.
+  const f = fixture({ stopError: true, closeResponse: 1 });
+  const child = f.spawn();
+  // A real SIGKILL is reaped by the OS; the fake child must do the same or the
+  // test would be asserting against a process that ignores kill.
+  child.kill = () => child.finish(null, 'SIGKILL', false);
+  assert.equal(f.app.quit().prevented, true);
+  await settle();
+  assert.equal(f.closePrompts.length, 1);
+  assert.equal(f.counts().quits, 1);
+  // Forcing a close must never claim cleanup or start a replacement.
+  assert.equal(f.counts().installs, 0);
+  assert.equal(f.counts().relaunches, 0);
+  assert.equal(f.owner.backend, null);
 });
 
 test('guided install has no updater setImmediate quit window', async () => {

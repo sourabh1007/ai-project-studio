@@ -84,6 +84,9 @@ const STARTUP_TIMEOUT_MS = Number(process.env.CW_STARTUP_TIMEOUT_MS || 30000);
 // Leave room after the backend's 5s drain budget for persistence and transport
 // closure. Timing out retains ownership; it never escalates to killing the root.
 const BACKEND_STOP_TIMEOUT_MS = 10000;
+// A force-kill is not cooperative, so this only bounds how long the desktop
+// waits for the OS to reap the process before it stops offering to close.
+const BACKEND_FORCE_STOP_TIMEOUT_MS = 5000;
 
 /** @type {import('node:child_process').ChildProcess | null} */
 let backend = null;
@@ -292,6 +295,64 @@ function confirmQuitAfterBackendExit() {
   return exitOnlyPrompt;
 }
 
+/**
+ * Offers a way out when the backend is alive but not answering.
+ *
+ * Cooperative shutdown proves cleanup, so it is always tried first. But when
+ * the backend hangs it never exits, never records an `outcome`, and the
+ * exit-based escape above stays unreachable — leaving the user stuck behind a
+ * "Shutdown not confirmed" dialog whose only button was OK, with no way to
+ * close the app. A crashed backend could be escaped while a hung one could
+ * not, which is the wrong way round.
+ *
+ * Force-closing still cannot claim cleanup, so it takes the same exit-only
+ * path as a crash: the desktop quits, and no replacement or installer starts.
+ */
+function confirmQuitAfterUnresponsiveBackend() {
+  if (exitOnlyPrompt) return exitOnlyPrompt;
+  const owner = backendOwner;
+  const child = backend;
+  const message = 'The backend is not responding, so its shutdown could not be confirmed and background work may still be running. Closing will stop it forcefully without confirming cleanup.';
+  startupSplash?.fail?.(new Error(message));
+  exitOnlyPrompt = (async () => {
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: 'warning', title: 'Backend is not responding',
+        message: 'Force close AI Project Studio?',
+        detail: message, buttons: ['Keep open', 'Force close'],
+        defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (response !== 1 || backendOwner !== owner || backend !== child) return false;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* Already gone, or unkillable; the exit wait below decides either way. */
+      }
+      await waitForChildExit(child, BACKEND_FORCE_STOP_TIMEOUT_MS);
+      if (backendOwner !== owner || !owner.outcome) {
+        reportShutdownFailure('quit');
+        return false;
+      }
+      if (backend === child) {
+        backend = null;
+        backendControl = null;
+      }
+      // Permits only the desktop to exit — never a claim that the backend
+      // completed cooperative cleanup, and never a backend replacement.
+      exitOnlyOwner = owner;
+      app.quit();
+      return true;
+    } catch (error) {
+      safeWrite(process.stderr, `[desktop] Could not force close: ${error}\n`);
+      reportShutdownFailure('quit');
+      return false;
+    } finally {
+      exitOnlyPrompt = null;
+    }
+  })();
+  return exitOnlyPrompt;
+}
+
 function ownBackend(child, nonce, launchId) {
   backend = child;
   backendGeneration += 1;
@@ -396,6 +457,11 @@ function runAfterBackendStop(action, proceed, terminal = true) {
         if (action === 'quit' && !backend && backendOwner?.outcome &&
             backendGeneration === generation) {
           return await confirmQuitAfterBackendExit();
+        }
+        // Alive but unresponsive: no `outcome` will ever arrive, so without
+        // this the user is trapped in an app that refuses to close.
+        if (action === 'quit' && backend && backendGeneration === generation) {
+          return await confirmQuitAfterUnresponsiveBackend();
         }
         reportShutdownFailure(action);
         return false;
