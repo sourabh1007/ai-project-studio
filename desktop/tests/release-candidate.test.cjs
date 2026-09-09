@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const yaml = require('js-yaml');
 const { writeCandidateManifest } = require('../scripts/release-candidate.cjs');
+const { resolvePowerShell } = require('../scripts/smoke-helpers.cjs');
 
 function fixture(t, platform = 'win32') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-candidate-'));
@@ -169,14 +170,18 @@ test('Windows candidate build rejects partial signing without invoking the build
     'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
     'AZURE_CODE_SIGNING_ENDPOINT', 'AZURE_CODE_SIGNING_ACCOUNT', 'AZURE_CODE_SIGNING_PROFILE',
   ];
-  const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  // GitHub Actions runs `run:` steps on windows-latest with PowerShell 7, so
+  // exercise the step under the same host. Legacy powershell.exe also has a
+  // .NET Framework cold start that can exceed a short deadline on a loaded
+  // runner, which previously failed this gate spuriously.
+  const powershell = resolvePowerShell();
   for (const configured of [[], [keys[3]], keys.slice(0, 3), keys]) {
     const env = { ...process.env };
     for (const key of keys) env[key] = configured.includes(key) ? 'fixture' : '';
     const result = spawnSync(powershell, [
       '-NoProfile', '-NonInteractive', '-Command',
       `$ErrorActionPreference = 'Stop'\nfunction npm { Write-Output ('BUILDER:' + ($args -join '|')) }\n${step.run}`,
-    ], { env, encoding: 'utf8', timeout: 15_000, windowsHide: true });
+    ], { env, encoding: 'utf8', timeout: 120_000, windowsHide: true });
     assert.ifError(result.error);
     if (configured.length > 0 && configured.length < keys.length) {
       assert.notEqual(result.status, 0);

@@ -43,7 +43,10 @@ function nativeFixture(t, args, executable = process.execPath) {
     f, child, diagnostics,
     wait,
     waitForController: () => process.platform === 'win32'
-      ? wait(() => stderr.includes('SMOKE_CONTROLLER=launching'), 30000)
+      // Only gates the controller's one-time C# compile. A loaded CI runner can
+      // take far longer than the launcher behaviour this test actually asserts,
+      // so keep it generous — the strict assertions live in `wait` below.
+      ? wait(() => stderr.includes('SMOKE_CONTROLLER=launching'), 180000)
       : Promise.resolve(),
   };
 }
