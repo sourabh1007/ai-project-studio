@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { Request, Response, Router } from 'express';
 import { toExpressHandler, mountRoutes } from './express-adapter.js';
@@ -102,6 +102,71 @@ describe('toExpressHandler', () => {
     expect(res.statusCode).toBe(200);
     expect(res.payload).toBe('ok');
   });
+
+  describe('fault reporting', () => {
+    function faultLogger() {
+      const error = vi.fn();
+      return { error, fault: { logger: { error }, method: 'get', path: '/skills' } };
+    }
+
+    it('logs the real fault that the generic 500 hides from the client', async () => {
+      const boom = new Error('SQLITE_BUSY: database is locked');
+      const { error, fault } = faultLogger();
+      const res = fakeRes();
+      await toExpressHandler(() => {
+        throw boom;
+      }, fault)(fakeReq(), res as unknown as Response);
+
+      expect(res.statusCode).toBe(500);
+      expect(res.payload).toEqual({
+        error: { kind: 'internal', message: 'Internal server error' },
+      });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0][0]).toBe('Unhandled error while serving request');
+      expect(error.mock.calls[0][1]).toMatchObject({
+        method: 'get',
+        path: '/skills',
+        message: 'SQLITE_BUSY: database is locked',
+      });
+    });
+
+    it('does not report an expected app error as a fault', async () => {
+      const { error, fault } = faultLogger();
+      const res = fakeRes();
+      await toExpressHandler(() => {
+        throw new NotFoundError('missing');
+      }, fault)(fakeReq(), res as unknown as Response);
+
+      expect(res.statusCode).toBe(404);
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it('reports the fault even when the caller already disconnected', async () => {
+      // The work still ran and still broke; losing the diagnosis because the
+      // user navigated away is how these faults stayed invisible.
+      const { error, fault } = faultLogger();
+      const req = fakeReq();
+      const res = fakeRes();
+      const pending = toExpressHandler(async () => {
+        await Promise.resolve();
+        throw new Error('late failure');
+      }, fault)(req, res as unknown as Response);
+      res.emit('close');
+      await pending;
+
+      expect(res.statusCode).toBe(0);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0][1]).toMatchObject({ message: 'late failure' });
+    });
+
+    it('still serves when no fault logger is wired', async () => {
+      const res = fakeRes();
+      await toExpressHandler(() => {
+        throw new Error('boom');
+      })(fakeReq(), res as unknown as Response);
+      expect(res.statusCode).toBe(500);
+    });
+  });
 });
 
 describe('mountRoutes', () => {
@@ -126,5 +191,31 @@ describe('mountRoutes', () => {
       'post /b',
     ]);
     expect(typeof calls[0].fn).toBe('function');
+  });
+
+  it('gives every mounted route a fault reporter identifying it', async () => {
+    const mounted: Array<(req: Request, res: Response) => Promise<void>> = [];
+    const router = {
+      get: (_path: string, fn: (req: Request, res: Response) => Promise<void>) => {
+        mounted.push(fn);
+      },
+    } as unknown as Router;
+    const error = vi.fn();
+
+    mountRoutes(router, [{
+      method: 'get',
+      path: '/features/:id/sessions',
+      handler: () => {
+        throw new Error('boom');
+      },
+    }], { error });
+    await mounted[0](fakeReq(), fakeRes() as unknown as Response);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][1]).toMatchObject({
+      method: 'get',
+      path: '/features/:id/sessions',
+      message: 'boom',
+    });
   });
 });

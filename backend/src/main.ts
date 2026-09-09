@@ -22,6 +22,7 @@ import {
   type ProcessAdmissionConfig,
 } from './kernel/process-admission-config.js';
 import { createLogger, type LogLevel } from './kernel/logger.js';
+import { installProcessFaultGuard } from './kernel/process-fault-guard.js';
 import {
   LOGGING_NAMESPACE,
   loggingConfigSchema,
@@ -558,6 +559,13 @@ function main(): void {
     );
   };
   let logger = createLogger(logLevel, consoleSink);
+  // Installed before any service starts: an unhandled rejection during startup
+  // would otherwise terminate the backend silently, and the desktop does not
+  // respawn it, so the whole IDE would come up dead.
+  installProcessFaultGuard({
+    process,
+    logger: { error: (message, data) => logger.error(message, data) },
+  });
   const clock = createClock();
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
@@ -2582,8 +2590,7 @@ function main(): void {
   });
 
   mountRoutes(
-    router,
-    ownApplicationRoutes(createApiRoutes({
+    router,    ownApplicationRoutes(createApiRoutes({
       features: featureService,
       admin: workspaceAdmin,
       launcher,
@@ -2701,6 +2708,9 @@ function main(): void {
       controlToken: studioControlToken,
       logger,
     }), applicationWork),
+    // `logger` is reassigned once the file sink is configured, so the mount
+    // captures a stable indirection rather than the value at mount time.
+    { error: (message, data) => logger.error(message, data) },
   );
   app.use(apiConfig.basePath, router);
 

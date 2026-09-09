@@ -27,3 +27,29 @@ export function toErrorResult(error: unknown): HttpResult {
     body: { error: { kind: 'internal', message: 'Internal server error' } },
   };
 }
+
+/**
+ * Describes a thrown value that the client is *not* told about, so it can be
+ * logged instead of vanishing.
+ *
+ * The generic 500 above deliberately hides internal detail from the response,
+ * but nothing was recording what it hid: a real fault reached the user as
+ * "Internal server error" and left no trace anywhere, making failures
+ * undiagnosable. Returns `null` for an {@link AppError}, whose message is
+ * already in the response and is expected, not a defect.
+ */
+export function describeUnexpectedError(
+  error: unknown,
+): { name: string; message: string; stack?: string } | null {
+  if (isAppError(error)) return null;
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      ...(error.stack === undefined ? {} : { stack: error.stack }),
+    };
+  }
+  // A non-Error throw (string, object, undefined) has no message or stack, but
+  // is exactly the kind of fault worth seeing, so it is still described.
+  return { name: typeof error, message: String(error) };
+}
