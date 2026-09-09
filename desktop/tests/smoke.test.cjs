@@ -33,14 +33,18 @@ function nativeFixture(t, args, executable = process.execPath) {
     `host=${child.smokeControllerHost || 'native'}, ` +
     `exit=${child.exitCode}, signal=${child.signalCode}, error=${error?.message || 'none'}\n` +
     `stdout: ${stdout}\nstderr: ${stderr}`;
+  const wait = (probe, timeoutMs) => waitFor(() => {
+    if (error || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Native launcher exited before readiness: ${diagnostics()}`);
+    }
+    return probe();
+  }, timeoutMs, { diagnostics });
   return {
     f, child, diagnostics,
-    wait: (probe, timeoutMs) => waitFor(() => {
-      if (error || child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`Native launcher exited before readiness: ${diagnostics()}`);
-      }
-      return probe();
-    }, timeoutMs, { diagnostics }),
+    wait,
+    waitForController: () => process.platform === 'win32'
+      ? wait(() => stderr.includes('SMOKE_CONTROLLER=launching'), 30000)
+      : Promise.resolve(),
   };
 }
 
@@ -325,8 +329,9 @@ test('CDP connects to a real ephemeral loopback websocket', async (t) => {
 
 test('owned native launcher forwards stderr and cleans up descendant processes on controller EOF', async (t) => {
   const argumentsToPreserve = ['space here', 'quote"here', 'trailing\\'];
-  const { f, child, wait, diagnostics } = nativeFixture(t,
+  const { f, child, wait, waitForController, diagnostics } = nativeFixture(t,
     [path.join(__dirname, 'fixtures', 'owned-child.cjs'), ...argumentsToPreserve]);
+  await waitForController();
   const record = await wait(() => {
     const file = path.join(f.root, 'owned.json');
     return fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -344,8 +349,9 @@ test('owned native launcher forwards stderr and cleans up descendant processes o
 });
 
 test('owned native launcher reports early executable failure and cleans up its descendants', async (t) => {
-  const { f, child, wait } = nativeFixture(t,
+  const { f, child, wait, waitForController } = nativeFixture(t,
     [path.join(__dirname, 'fixtures', 'owned-child.cjs'), '--exit-parent']);
+  await waitForController();
   await assert.rejects(wait(() => false, 15000),
     /Native launcher exited before readiness:[\s\S]*exit=42[\s\S]*synthetic stderr forwarded/);
   assert.equal(child.exitCode, 42);
@@ -357,7 +363,8 @@ test('owned native launcher reports early executable failure and cleans up its d
 });
 
 test('owned native launcher exposes process creation errors before readiness', async (t) => {
-  const { wait } = nativeFixture(t, [], `${process.execPath}.missing`);
+  const { wait, waitForController } = nativeFixture(t, [], `${process.execPath}.missing`);
+  await waitForController();
   await assert.rejects(wait(() => false, 15000),
     /Native launcher exited before readiness:[\s\S]*(CreateProcess failed \(Win32 2\)|ENOENT)/);
 });
