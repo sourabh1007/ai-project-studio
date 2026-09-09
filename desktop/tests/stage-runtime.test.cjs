@@ -49,7 +49,10 @@ test('staging preserves the exact lock graph and all workspace manifests with ru
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime, 'package.json'))), { ...f.manifest, type: 'module' });
   const run = spawnSync(process.execPath, ['--input-type=module', '-e', "import { ready } from './dist/main.js'; if (!ready) process.exit(1)"], { cwd: runtime, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(fs.readFileSync(path.join(f.build, 'ui', 'index.html'), 'utf8'), '<html>fixture</html>');
+  // Staged one level deeper (`ui/dist`, not flattened to `ui/`) to match
+  // main.cjs's `<resources>/ui/dist` resolution — see the regression test
+  // below for the packaged "Cannot GET /" defect this layout fixes.
+  assert.equal(fs.readFileSync(path.join(f.build, 'ui', 'dist', 'index.html'), 'utf8'), '<html>fixture</html>');
   assert.equal(fs.readFileSync(path.join(f.build, 'docs', 'README.md'), 'utf8'), 'fixture readme');
 });
 
@@ -122,3 +125,26 @@ test('the packaged extraResources mapping does not drop the backend production n
   const builder = require('js-yaml').load(fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'), 'utf8'));
   assert.deepEqual(builder.extraResources, [{ from: 'build', to: '.' }]);
 });
+
+// Regression for a second real "Cannot GET /" packaging defect (found after
+// the node_modules fix let the backend actually start): main.cjs resolves the
+// desktop UI at `<resources>/ui/dist` (the same `path.join(ROOT, 'ui', 'dist')`
+// used in dev, where ROOT is the repo root and `ui/dist` is the real Vite
+// build output). stageRuntime() used to flatten the UI into `build/ui`
+// directly (no `dist` subfolder), so the packaged resources ended up at
+// `resources/ui/index.html` instead — a path CW_UI_DIST never pointed at, so
+// the backend's `existsSync(uiDist)` check silently failed and it never
+// registered static file serving, leaving every packaged build served nothing
+// but Express's default "Cannot GET /" for the root document.
+test('staged UI output lands where main.cjs resolves CW_UI_DIST, both in dev and packaged', async (t) => {
+  const f = await fixture(t);
+  f.stage();
+  // Packaged: ROOT = process.resourcesPath, and extraResources ships build/*
+  // verbatim under resources/, so resources/ui/dist must exist.
+  assert.equal(
+    fs.existsSync(path.join(f.build, 'ui', 'dist', 'index.html')),
+    true,
+    'packaged UI must be staged at ui/dist, matching main.cjs\'s ROOT/ui/dist resolution',
+  );
+});
+

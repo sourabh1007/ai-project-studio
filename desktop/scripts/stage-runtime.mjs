@@ -43,7 +43,13 @@ export function stageRuntime(rootDir, buildDir) {
   mkdirSync(join(runtimeDir, 'backend', 'scripts'), { recursive: true });
   writeFileSync(join(runtimeDir, 'backend', 'scripts', 'fix-pty-permissions.cjs'), ptyInstallScript);
   cpSync(join(rootDir, 'backend', 'dist'), join(runtimeDir, 'dist'), { recursive: true });
-  cpSync(join(rootDir, 'ui', 'dist'), join(buildDir, 'ui'), { recursive: true });
+  // Preserve the `ui/dist` relative layout (not flattened to `ui/`) because
+  // main.cjs resolves the packaged UI at `<resources>/ui/dist` both in dev
+  // (repo root) and packaged (resourcesPath) modes via the same `ui/dist`
+  // join. Flattening here silently orphaned every packaged build: the backend
+  // never found `CW_UI_DIST` and served "Cannot GET /" instead of the app.
+  mkdirSync(join(buildDir, 'ui', 'dist'), { recursive: true });
+  cpSync(join(rootDir, 'ui', 'dist'), join(buildDir, 'ui', 'dist'), { recursive: true });
 
   mkdirSync(join(buildDir, 'docs'), { recursive: true });
   cpSync(join(rootDir, 'docs'), join(buildDir, 'docs'), { recursive: true });
