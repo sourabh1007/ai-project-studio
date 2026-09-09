@@ -5,6 +5,7 @@ import { Button, ErrorText } from '../../components/ui.js';
 import { useUsageStream } from '../../hooks/use-usage-stream.js';
 import { reviewBoardActivityLines } from '../../lib/stream.js';
 import { parseFindingDetail } from '../../lib/finding-detail.js';
+import { analysisFailureCause } from '../../lib/analysis-failure.js';
 import {
   reviewBoardRunStore,
   type PerspectiveProgress,
@@ -647,6 +648,9 @@ export function ReviewBoardPage({
   const failedCount = progressValues.filter(
     (p) => p.status === 'error',
   ).length;
+  const failureCause = analysisFailureCause(
+    progressValues.filter((p) => p.status === 'error').map((p) => p.error),
+  );
   const totalPerspectives = board?.perspectives.length ?? 0;
 
   const perspectiveIds = board?.perspectives.map((p) => p.id) ?? [];
@@ -842,7 +846,9 @@ export function ReviewBoardPage({
           <ErrorText
             error={`${failedCount} perspective${
               failedCount === 1 ? '' : 's'
-            } couldn't be analysed after automatic retries.`}
+            } couldn't be analysed after automatic retries.${
+              failureCause ? ` ${failureCause}` : ''
+            }`}
           />
           <Button variant="ghost" onClick={() => void retryFailed()}>
             <RefreshIcon size={14} /> Retry failed

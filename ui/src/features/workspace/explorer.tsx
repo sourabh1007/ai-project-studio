@@ -39,6 +39,7 @@ import {
   CollapseSidebarIcon,
   FilesIcon,
   FolderIcon,
+  MoveIcon,
   ImportIcon,
   PencilIcon,
   PlusIcon,
@@ -52,6 +53,10 @@ import {
   UsageIcon,
   WarningIcon,
 } from '../../components/icons.js';
+import {
+  featureMoveTargets,
+  type FeatureMoveTarget,
+} from '../../lib/feature-move-targets.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
 import { SkillChips } from '../skills/skill-chips.js';
@@ -336,6 +341,7 @@ function FeatureNode({
   onFeatureDragStart,
   onFeatureDragEnd,
   onNestFeature,
+  onRequestMove,
   draggingFeature,
   onStartReview,
   treeRevision,
@@ -358,6 +364,8 @@ function FeatureNode({
   onFeatureDragEnd: () => void;
   /** Nests `moved` under this feature (drag a feature row onto another). */
   onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
+  /** Opens the destination picker for this feature (drag-free relocation). */
+  onRequestMove: (feature: Feature) => void;
   /** The feature currently being dragged, if any, used to highlight nest targets. */
   draggingFeature: Feature | null;
   /** Starts the PR-review flow for this feature's repository, when it has one. */
@@ -667,6 +675,15 @@ function FeatureNode({
           }}
         >
           <PlusIcon />
+        </button>
+        <button
+          type="button"
+          className="tree-action"
+          title="Move to…"
+          aria-label={`Move ${feature.name}`}
+          onClick={() => onRequestMove(feature)}
+        >
+          <MoveIcon size={14} />
         </button>
         {confirming ? (
           <ConfirmDialog
@@ -999,6 +1016,7 @@ function RepoNode({
   onFeatureDragEnd,
   onMoveFeature,
   onNestFeature,
+  onRequestMove,
   treeRevision,
   onMoveNode,
 }: {
@@ -1030,6 +1048,7 @@ function RepoNode({
     targetIndex: number,
   ) => void;
   onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
+  onRequestMove: (feature: Feature) => void;
   treeRevision: number;
   onMoveNode: (input: MoveNodeInput) => Promise<void>;
 }) {
@@ -1080,6 +1099,7 @@ function RepoNode({
       onFeatureDragStart={onFeatureDragStart}
       onFeatureDragEnd={onFeatureDragEnd}
       onNestFeature={onNestFeature}
+      onRequestMove={onRequestMove}
       draggingFeature={draggingFeature}
       onStartReview={
         repo ? () => onStartReview(repo, feature.id) : undefined
@@ -1329,6 +1349,8 @@ export function Explorer({
     Record<string, RepositoryContext>
   >({});
   const [draggingFeature, setDraggingFeature] = useState<Feature | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [movingFeature, setMovingFeature] = useState<Feature | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
 
   /** Moves a session or group (possibly to a different feature) and refreshes
@@ -1393,15 +1415,38 @@ export function Explorer({
     targetIndex: number,
   ) {
     setDraggingFeature(null);
+    setMoveError(null);
     try {
       await api.moveFeature({ id: feature.id, targetRepoId: nextRepoId, targetIndex });
+    } catch (error) {
+      setMoveError(
+        error instanceof Error ? error.message : 'Could not move the feature.',
+      );
     } finally {
       features.reload();
     }
   }
 
-  async function nestFeature(moved: Feature, parentFeatureId: string) {
-    setDraggingFeature(null);
+  async function moveFeatureTo(moved: Feature, target: FeatureMoveTarget) {
+    setMoveError(null);
+    try {
+      await api.moveFeature({
+        id: moved.id,
+        targetRepoId: target.repoId,
+        targetIndex: APPEND_INDEX,
+        targetParentFeatureId: target.parentFeatureId,
+      });
+    } catch (error) {
+      setMoveError(
+        error instanceof Error ? error.message : 'Could not move the feature.',
+      );
+    } finally {
+      features.reload();
+    }
+  }
+
+  async function nestFeature(moved: Feature, parentFeatureId: string) {    setDraggingFeature(null);
+    setMoveError(null);
     try {
       await api.moveFeature({
         id: moved.id,
@@ -1412,6 +1457,13 @@ export function Explorer({
         targetIndex: APPEND_INDEX,
         targetParentFeatureId: parentFeatureId,
       });
+    } catch (error) {
+      // A rejected move used to disappear entirely: the tree simply snapped
+      // back and the reason (a nesting cycle, a missing target) was never
+      // shown, which read as "dragging into a sub-category does not work".
+      setMoveError(
+        error instanceof Error ? error.message : 'Could not move the feature.',
+      );
     } finally {
       features.reload();
     }
@@ -1579,10 +1631,58 @@ export function Explorer({
         </Modal>
       )}
 
+      {movingFeature && (
+        <Modal
+          title={`Move ${movingFeature.name}`}
+          onClose={() => setMovingFeature(null)}
+        >
+          <div className="stack">
+            <p className="muted">
+              Pick where this feature folder should live. Nested destinations
+              are listed in full, so you don&apos;t have to drag onto a row that
+              may not even be visible.
+            </p>
+            <ul className="move-target-list">
+              {featureMoveTargets(allFeatures, movingFeature, repoList).map(
+                (target) => (
+                  <li
+                    key={`${target.repoId ?? 'none'}:${
+                      target.parentFeatureId ?? 'root'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="move-target"
+                      style={{ paddingLeft: `${8 + target.depth * 14}px` }}
+                      onClick={() => {
+                        const moved = movingFeature;
+                        setMovingFeature(null);
+                        void moveFeatureTo(moved, target);
+                      }}
+                    >
+                      {target.label}
+                    </button>
+                  </li>
+                ),
+              )}
+            </ul>
+            {featureMoveTargets(allFeatures, movingFeature, repoList).length ===
+              0 && (
+              <EmptyState
+                icon={<MoveIcon size={20} />}
+                title="Nowhere to move it"
+                description="Every other place is either this feature itself or one of the folders inside it."
+              />
+            )}
+          </div>
+        </Modal>
+      )}
+
       <div className="explorer-body">
         {(repos.loading || features.loading) && <SkeletonList rows={5} />}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
+        <ErrorText error={moveError} />
         {!repos.loading &&
           !features.loading &&
           repoList.length === 0 &&
@@ -1625,7 +1725,9 @@ export function Explorer({
             draggingFeature={draggingFeature}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
-            onMoveFeature={moveFeature}            onNestFeature={nestFeature}
+            onMoveFeature={moveFeature}
+            onNestFeature={nestFeature}
+            onRequestMove={setMovingFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
           />
@@ -1656,7 +1758,9 @@ export function Explorer({
             draggingFeature={draggingFeature}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
-            onMoveFeature={moveFeature}            onNestFeature={nestFeature}
+            onMoveFeature={moveFeature}
+            onNestFeature={nestFeature}
+            onRequestMove={setMovingFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
           />
