@@ -213,6 +213,7 @@ See [docs/development.md → Auto-update](docs/development.md#auto-update) for t
 | [docs/backend-modules.md](docs/backend-modules.md) | Per-module responsibilities & key files |
 | [docs/ui-guide.md](docs/ui-guide.md) | UI structure, feature areas, and what's actually mounted |
 | [docs/development.md](docs/development.md) | Setup, scripts, testing, debugging, env quirks |
+| [docs/integration-qualification.md](docs/integration-qualification.md) | User-facing capability matrix, integration suites, and environment qualification boundaries |
 | [docs/adding-a-provider.md](docs/adding-a-provider.md) | Add a new CLI tool behind the provider interface |
 
 ## License

@@ -76,7 +76,7 @@ const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'settin
 /** The global keyboard shortcuts, shown in the discoverable shortcuts sheet. */
 const SHORTCUT_BINDINGS: ShortcutBinding[] = [
   { id: 'palette', title: 'Open command palette', key: 'k', ctrlOrMeta: true },
-  { id: 'palette', title: 'Quick open', key: 'p', ctrlOrMeta: true },
+  { id: 'quick-open', title: 'Quick open', key: 'p', ctrlOrMeta: true },
   { id: 'next-view', title: 'Next view', key: 'Tab', ctrlOrMeta: true },
   { id: 'prev-view', title: 'Previous view', key: 'Tab', ctrlOrMeta: true, shift: true },
   { id: 'toggle-sidebar', title: 'Toggle sidebar', key: 'b', ctrlOrMeta: true },
@@ -127,6 +127,7 @@ export function App() {
       event.stopImmediatePropagation?.();
       switch (binding.id) {
         case 'palette':
+        case 'quick-open':
           setPaletteOpen((prev) => !prev);
           break;
         case 'next-view':
