@@ -419,7 +419,7 @@ export function App() {
         </div>
         <div className="statusbar-group">
           <MetaModelStatus />
-          <PlanUsageIndicator usage={planUsage} />
+          <PlanUsageIndicator state={planUsage} />
           <span
             className="statusbar-item statusbar-ide"
             title="IDE AI overhead — AIC spent by the assistant's own meta sessions (summaries, task plans). Separate from feature dev cost."

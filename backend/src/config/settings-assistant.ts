@@ -161,6 +161,9 @@ export function createSettingsAssistant(
         featureId: 'settings-assistant',
         prompt: buildSettingsPrompt(request, context),
         noTools: true,
+        // Answering a settings question needs no tools, but it does not
+        // *require* them off — so it can be served warm rather than cold.
+        toolsOptional: true,
         scope: 'internal',
         purpose: 'general',
         label: `Settings assistant · ${target}`,

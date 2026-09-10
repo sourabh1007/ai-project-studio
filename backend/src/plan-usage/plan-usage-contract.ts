@@ -33,3 +33,21 @@ export interface PlanUsage {
 export interface PlanUsageProbe {
   capture(): Promise<string | null>;
 }
+
+/**
+ * What the plan-usage read is currently able to say. Capturing a snapshot
+ * means booting a `copilot` TUI, which takes tens of seconds, so a read can
+ * legitimately have no data yet. Distinguishing "still capturing" from "the
+ * capture failed" is what lets the status bar explain itself instead of
+ * silently rendering nothing.
+ */
+export type PlanUsageStatus = 'capturing' | 'ready' | 'unavailable';
+
+/** The plan-usage read model: a snapshot plus why it may be missing. */
+export interface PlanUsageState {
+  status: PlanUsageStatus;
+  /** The most recent snapshot, or `null` when none has been captured. */
+  usage: PlanUsage | null;
+  /** Why the last capture produced nothing; `null` unless `unavailable`. */
+  error: string | null;
+}

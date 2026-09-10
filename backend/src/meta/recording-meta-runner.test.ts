@@ -27,6 +27,13 @@ const result = (overrides: Partial<MetaRunResult> = {}): MetaRunResult => ({
 });
 const clock = createClock(() => Date.parse('2026-01-01T00:00:00Z'));
 
+/** A warm pool that never has a session ready, so routing always spills cold. */
+const idlePool = () => ({
+  ready: () => false,
+  stats: () => { throw new Error('unused'); },
+  runDetailed: async () => { throw new Error('unused'); },
+});
+
 describe('durable recording meta runner with production SQLite', () => {
   let db: DatabaseSync;
   let repo: MetaOperationRepo;
@@ -72,7 +79,7 @@ describe('durable recording meta runner with production SQLite', () => {
     async (path) => {
       const h = preflightSetup();
       const routed = path === 'cold' ? h.cold : createPooledMetaRunner({
-        physicalOwnership: h.physical, pools: [], fallback: h.cold,
+        physicalOwnership: h.physical, pool: idlePool(), fallback: h.cold,
         defaultTimeoutMs: 1000, bypass: () => path === 'bypass',
       });
       await expect(h.record(routed).runDetailed({
@@ -99,7 +106,7 @@ describe('durable recording meta runner with production SQLite', () => {
         return saved;
       });
       const routed = path === 'cold' ? h.cold : createPooledMetaRunner({
-        physicalOwnership: h.physical, pools: [], fallback: h.cold, defaultTimeoutMs: 1000,
+        physicalOwnership: h.physical, pool: idlePool(), fallback: h.cold, defaultTimeoutMs: 1000,
       });
       await expect(h.record(routed).runDetailed({
         featureId: 'f', prompt: 'go', signal: controller.signal,
@@ -117,15 +124,15 @@ describe('durable recording meta runner with production SQLite', () => {
     const stop = vi.fn(async () => 'unconfirmed' as const);
     const routed = createPooledMetaRunner({
       physicalOwnership: h.physical, fallback: h.cold, defaultTimeoutMs: 1000,
-      pools: [{
-        purpose: 'general', ready: () => true, stats: () => { throw new Error('unused'); },
+      pool: {
+        ready: () => true, stats: () => { throw new Error('unused'); },
         runDetailed: async (request) => {
           h.physical.register(request.operationId!, { ownerId: 'warm', settled, quiesce: stop });
           throw new AcpRequestError('Pre-dispatch handshake failed', {
             method: 'session/new', allowFallbackToCold: true,
           });
         },
-      }],
+      },
     });
     await expect(h.record(routed).runDetailed({
       featureId: 'f', prompt: 'go', deadlineAt: Date.now() - 1,
@@ -238,7 +245,7 @@ describe('durable recording meta runner with production SQLite', () => {
     const cold = { run: vi.fn(async () => 'cold'), runDetailed: vi.fn(async () => result({ transport: 'session' })) };
     const warm = vi.fn(async () => result());
     const pooled = createPooledMetaRunner({
-      pools: [{ purpose: 'general', ready: () => true, stats: () => { throw new Error('unused'); }, runDetailed: warm }],
+      pool: { ready: () => true, stats: () => { throw new Error('unused'); }, runDetailed: warm },
       fallback: cold, defaultTimeoutMs: 1000,
     });
     const h = setup((request) => pooled.runDetailed(request));

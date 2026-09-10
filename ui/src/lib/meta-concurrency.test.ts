@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { metaConcurrency, GENERAL_PURPOSE } from './meta-concurrency.js';
+import { metaConcurrency } from './meta-concurrency.js';
 import type { MetaPoolsStatus, MetaPoolStat } from './types.js';
 
-function pool(overrides: Partial<MetaPoolStat> & { purpose: string }): MetaPoolStat {
+function pool(overrides: Partial<MetaPoolStat> = {}): MetaPoolStat {
   return {
     size: 1,
     suggestedSize: 1,
@@ -19,7 +19,7 @@ function pool(overrides: Partial<MetaPoolStat> & { purpose: string }): MetaPoolS
 function status(overrides: Partial<MetaPoolsStatus> = {}): MetaPoolsStatus {
   return {
     enabled: true,
-    pools: [pool({ purpose: GENERAL_PURPOSE, size: 5, live: 5, idle: 5 })],
+    pool: pool({ size: 5, live: 5, idle: 5 }),
     ...overrides,
   };
 }
@@ -30,52 +30,32 @@ describe('metaConcurrency', () => {
     expect(metaConcurrency(undefined)).toBe(1);
   });
 
-  it('is 1 when warm pools are disabled', () => {
+  it('is 1 when the warm pool is disabled', () => {
     expect(metaConcurrency(status({ enabled: false }))).toBe(1);
   });
 
-  it('uses the general pool idle capacity for an unspecified purpose', () => {
+  it('is 1 when the status carries no pool', () => {
+    expect(metaConcurrency({ enabled: true })).toBe(1);
+  });
+
+  it('uses the pool idle capacity', () => {
     expect(metaConcurrency(status())).toBe(5);
   });
 
-  it('uses the matching purpose pool idle capacity when present', () => {
-    const s = status({
-      pools: [
-        pool({ purpose: GENERAL_PURPOSE, size: 5 }),
-        pool({ purpose: 'review', size: 5, live: 3, idle: 3 }),
-      ],
-    });
-    expect(metaConcurrency(s, 'review')).toBe(3);
-  });
-
-  it('falls back to the general pool when the purpose has no pool', () => {
-    const s = status({
-      pools: [pool({ purpose: GENERAL_PURPOSE, size: 4, live: 4, idle: 4 })],
-    });
-    expect(metaConcurrency(s, 'review')).toBe(4);
-  });
-
-  it('is 1 when no matching or general pool exists', () => {
-    const s = status({ pools: [pool({ purpose: 'review', size: 3 })] });
-    expect(metaConcurrency(s, 'other')).toBe(1);
-  });
-
   it('never returns less than 1 even for a zero-sized pool', () => {
-    const s = status({ pools: [pool({ purpose: GENERAL_PURPOSE, size: 0 })] });
-    expect(metaConcurrency(s)).toBe(1);
+    expect(metaConcurrency(status({ pool: pool({ size: 0, live: 0, idle: 0 }) }))).toBe(1);
   });
 
   it('does not cold-spawn configured capacity that is still warming or blocked', () => {
     const s = status({
-      pools: [pool({
-        purpose: GENERAL_PURPOSE,
+      pool: pool({
         size: 7,
         live: 4,
         idle: 2,
         busy: 1,
         sessions: [],
         waitingForCapacity: true,
-      })],
+      }),
     });
     expect(metaConcurrency(s)).toBe(2);
   });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PoolDemand, PoolDemandTracker } from './pool-demand.js';
+import { PoolDemandTracker } from './pool-demand.js';
 
 function tracker(overrides: { now?: () => number; windowMs?: number; maxSize?: number } = {}) {
   let clock = overrides.now;
@@ -62,23 +62,5 @@ describe('PoolDemandTracker', () => {
     const d = tracker();
     d.end();
     expect(d.inFlight).toBe(0);
-  });
-});
-
-describe('PoolDemand', () => {
-  it('creates one tracker per purpose lazily and reuses it', () => {
-    let made = 0;
-    const registry = new PoolDemand(() => {
-      made += 1;
-      return new PoolDemandTracker({ now: () => 0, windowMs: 1000, maxSize: 100 });
-    });
-    registry.begin('general');
-    registry.begin('general');
-    registry.begin('review');
-    expect(made).toBe(2);
-    expect(registry.suggestion('general')).toBe(2);
-    expect(registry.suggestion('review')).toBe(1);
-    registry.end('general');
-    expect(registry.suggestion('general')).toBe(2);
   });
 });

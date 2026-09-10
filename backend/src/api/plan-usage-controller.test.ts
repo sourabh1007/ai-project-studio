@@ -27,21 +27,40 @@ const snapshot: PlanUsage = {
 describe('plan-usage-controller', () => {
   it('serves the plan budget snapshot', async () => {
     const planUsage = {
-      read: async () => snapshot,
+      read: () => ({ status: 'ready', usage: snapshot, error: null }),
     } as unknown as PlanUsageService;
     const res = await pick(createPlanUsageRoutes({ planUsage }), 'get', '/usage/plan')(
       req(),
     );
-    expect(res).toEqual({ status: 200, body: snapshot });
+    expect(res).toEqual({
+      status: 200,
+      body: { status: 'ready', usage: snapshot, error: null },
+    });
   });
 
-  it('returns a null body when no snapshot is available yet', async () => {
+  it('reports that a capture is still running rather than a bare null', async () => {
     const planUsage = {
-      read: async () => null,
+      read: () => ({ status: 'capturing', usage: null, error: null }),
     } as unknown as PlanUsageService;
     const res = await pick(createPlanUsageRoutes({ planUsage }), 'get', '/usage/plan')(
       req(),
     );
-    expect(res).toEqual({ status: 200, body: null });
+    expect(res).toEqual({
+      status: 200,
+      body: { status: 'capturing', usage: null, error: null },
+    });
+  });
+
+  it('passes the capture failure through so the UI can explain itself', async () => {
+    const planUsage = {
+      read: () => ({ status: 'unavailable', usage: null, error: 'no panel' }),
+    } as unknown as PlanUsageService;
+    const res = await pick(createPlanUsageRoutes({ planUsage }), 'get', '/usage/plan')(
+      req(),
+    );
+    expect(res).toEqual({
+      status: 200,
+      body: { status: 'unavailable', usage: null, error: 'no panel' },
+    });
   });
 });

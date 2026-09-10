@@ -16,6 +16,9 @@ describe('buildDiagnostics', () => {
       health: 'ok',
       logDirectory: 'C:\\logs',
       failures,
+      backendFailures: [
+        { at: '2024-05-01T00:00:00.000Z', kind: 'exit', code: 1 },
+      ],
       now: '2024-06-01T12:00:00.000Z',
     });
     expect(report.generatedAt).toBe('2024-06-01T12:00:00.000Z');
@@ -26,6 +29,7 @@ describe('buildDiagnostics', () => {
     expect(report.status.health).toBe('ok');
     expect(report.logDirectory).toBe('C:\\logs');
     expect(report.recentFailures).toBe(failures);
+    expect(report.backendFailures).toHaveLength(1);
   });
 
   it('falls back to "unknown" for null/blank values', () => {
@@ -45,6 +49,7 @@ describe('buildDiagnostics', () => {
     expect(report.logDirectory).toBe('unknown');
     expect(report.status.connection).toBe('offline');
     expect(report.recentFailures).toHaveLength(0);
+    expect(report.backendFailures).toHaveLength(0);
   });
 });
 

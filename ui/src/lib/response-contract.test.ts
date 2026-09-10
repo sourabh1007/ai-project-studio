@@ -26,38 +26,40 @@ describe('validateObjectBody', () => {
 });
 
 describe('validateMetaPoolsStatus', () => {
-  const pool = { purpose: 'review', sessions: [] };
+  const pool = { size: 1, sessions: [] };
 
   it('accepts a well formed status, including unknown future fields', () => {
-    expect(validateMetaPoolsStatus({ enabled: true, pools: [pool] })).toBeNull();
+    expect(validateMetaPoolsStatus({ enabled: true, pool })).toBeNull();
     expect(
-      validateMetaPoolsStatus({ enabled: true, pools: [pool], somethingNew: 1 }),
+      validateMetaPoolsStatus({ enabled: true, pool, somethingNew: 1 }),
     ).toBeNull();
   });
 
   it('accepts a pool that omits sessions entirely', () => {
-    expect(validateMetaPoolsStatus({ pools: [{ purpose: 'review' }] })).toBeNull();
+    expect(validateMetaPoolsStatus({ enabled: true, pool: { size: 1 } })).toBeNull();
+  });
+
+  it('accepts a disabled status that reports no pool at all', () => {
+    expect(validateMetaPoolsStatus({ enabled: false })).toBeNull();
+    expect(validateMetaPoolsStatus({ enabled: false, pool: null })).toBeNull();
   });
 
   it('rejects a body that is not an object', () => {
     expect(validateMetaPoolsStatus('<html>')).toContain('/meta/pools');
   });
 
-  it('rejects a missing or non-array pool list', () => {
-    expect(validateMetaPoolsStatus({ enabled: true })).toContain('no pool list');
-    expect(validateMetaPoolsStatus({ pools: {} })).toContain('no pool list');
-  });
-
-  it('reports which pool entry is malformed', () => {
-    expect(validateMetaPoolsStatus({ pools: [pool, null] })).toContain('pool 1');
-    expect(validateMetaPoolsStatus({ pools: [pool, {}] })).toContain('index 1');
+  it('rejects a pool that is not an object', () => {
+    expect(validateMetaPoolsStatus({ enabled: true, pool: 'nope' })).toContain(
+      'for the pool',
+    );
   });
 
   it('rejects non-list sessions, the shape that used to blank the section', () => {
     const problem = validateMetaPoolsStatus({
-      pools: [{ purpose: 'review', sessions: {} }],
+      enabled: true,
+      pool: { size: 1, sessions: {} },
     });
-    expect(problem).toContain('"review"');
+    expect(problem).toContain('pool sessions');
     expect(problem).toContain('instead of a list');
   });
 });

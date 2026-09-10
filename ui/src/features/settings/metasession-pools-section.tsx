@@ -13,9 +13,6 @@ import {
 import {
   ActivityIcon,
   ChevronIcon,
-  InfoIcon,
-  PlusIcon,
-  TrashIcon,
 } from '../../components/icons.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { ErrorState } from '../../components/error-state.js';
@@ -30,7 +27,6 @@ import {
   formatClock,
   formatDuration,
   formatTokens,
-  KNOWN_PURPOSES,
   purposeLabel,
   savedWarmPool as readSavedWarmPool,
   sessionSeq,
@@ -47,10 +43,7 @@ const CONVERGING_POLL_MS = 1000;
 /** Milliseconds an exiting session chip lingers so its removal animates. */
 const EXIT_MS = 320;
 
-interface PoolDraft {
-  purpose: string;
-  size: string;
-}
+
 
 import { desktopBridge } from '../../lib/desktop-bridge.js';
 
@@ -341,13 +334,11 @@ function PoolStatus({
   model,
   draftSize,
   onApplySuggestion,
-  draining = false,
 }: {
   pool: MetaPoolStat;
   model: string | undefined;
   draftSize: number;
   onApplySuggestion: (size: number) => void;
-  draining?: boolean;
 }) {
   const rendered = useAnimatedSessions(pool.sessions);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -418,8 +409,8 @@ function PoolStatus({
         className={`metapool-live-head${justApplied ? ' metapool-live-applied' : ''}`}
       >
         <StatusBadge
-          status={draining ? 'working' : pool.ready ? 'ready' : 'starting'}
-          label={draining ? 'Shutting down…' : pool.ready ? 'Ready' : 'Warming…'}
+          status={pool.ready ? 'ready' : 'starting'}
+          label={pool.ready ? 'Ready' : 'Warming…'}
         />
         <span className="metapool-stats">
           <span>
@@ -435,16 +426,16 @@ function PoolStatus({
             <strong>{pool.served}</strong> served
           </span>
         </span>
-        {!draining && !hasPending && pool.waitingForCapacity && (
+        {!hasPending && pool.waitingForCapacity && (
           <p className="metapool-pending" role="status" aria-live="polite">
             Waiting for shared process capacity — <strong>{readyCount}</strong> of{' '}
             <strong>{pool.size}</strong> ready, <strong>{warmingCount}</strong> warming.
-            The saved target has not reverted. Reduce another warm pool or adjust
-            the processAdmission limits and restart.
+            The saved target has not reverted. Lower the metasession count or
+            adjust the processAdmission limits and restart.
           </p>
         )}
 
-        {!draining && hasPending && (
+        {hasPending && (
           <span
             className={`metapool-target metapool-target-${
               pendingDelta > 0 ? 'grow' : 'shrink'
@@ -454,49 +445,37 @@ function PoolStatus({
             → target <strong>{target}</strong>
           </span>
         )}
-        {draining ? (
+        {converging && (
           <span
-            className="metapool-converge metapool-converge-shrink"
-            title="Retiring every warm session before the pool is removed"
+            className={`metapool-converge metapool-converge-${
+              growing ? 'grow' : 'shrink'
+            }`}
+            title={
+              growing
+                ? 'Warming new sessions up to the saved target'
+                : 'Retiring surplus sessions down to the saved target'
+            }
           >
             <span className="metapool-converge-dot" />
-            removing → <strong>0</strong>
+            {growing ? 'increasing' : 'decreasing'} →{' '}
+            <strong>{pool.size}</strong>
           </span>
-        ) : (
-          converging && (
-            <span
-              className={`metapool-converge metapool-converge-${
-                growing ? 'grow' : 'shrink'
-              }`}
-              title={
-                growing
-                  ? 'Warming new sessions up to the saved target'
-                  : 'Retiring surplus sessions down to the saved target'
-              }
+        )}
+        <span
+          className="metapool-suggest"
+          title="Suggested warm size from observed peak concurrency in the recent telemetry window"
+        >
+          Suggested <strong>{pool.suggestedSize}</strong>
+          {suggestionDiffers && (
+            <button
+              type="button"
+              className="metapool-suggest-apply"
+              onClick={handleApply}
             >
-              <span className="metapool-converge-dot" />
-              {growing ? 'increasing' : 'decreasing'} →{' '}
-              <strong>{pool.size}</strong>
-            </span>
-          )
-        )}
-        {!draining && (
-          <span
-            className="metapool-suggest"
-            title="Suggested warm size from observed peak concurrency in the recent telemetry window"
-          >
-            Suggested <strong>{pool.suggestedSize}</strong>
-            {suggestionDiffers && (
-              <button
-                type="button"
-                className="metapool-suggest-apply"
-                onClick={handleApply}
-              >
-                Apply
-              </button>
-            )}
-          </span>
-        )}
+              Apply
+            </button>
+          )}
+        </span>
       </div>
 
       {(rendered.length > 0 || ghostCount > 0) && (
@@ -560,7 +539,7 @@ function PoolStatus({
         </span>
       </div>
 
-      {!draining && hasPending && (
+      {hasPending && (
         <p className="metapool-pending" role="status">
           {pendingDelta > 0 ? (
             <>
@@ -578,41 +557,28 @@ function PoolStatus({
         </p>
       )}
 
-      {draining ? (
+      {converging && (
         <p
-          className="metapool-transition metapool-transition-shutdown"
+          className={`metapool-transition metapool-transition-${
+            growing ? 'grow' : 'shrink'
+          }`}
           role="status"
           aria-live="polite"
         >
-          Shutting down — <strong>{pool.live}</strong> metasession
-          {pool.live === 1 ? '' : 's'} still{' '}
-          {pool.busy > 0 ? 'finishing their turns before they' : 'to'} retire;
-          this pool disappears once every session is gone.
+          {growing ? (
+            <>
+              Metasessions increasing to <strong>{pool.size}</strong> —{' '}
+              <strong>{readyCount}</strong> of <strong>{pool.size}</strong>{' '}
+              ready, <strong>{warmingCount}</strong> warming…
+            </>
+          ) : (
+            <>
+              Metasessions decreasing to <strong>{pool.size}</strong> —{' '}
+              <strong>{pool.live}</strong> still live,{' '}
+              <strong>{retiringCount}</strong> finishing before they retire…
+            </>
+          )}
         </p>
-      ) : (
-        converging && (
-          <p
-            className={`metapool-transition metapool-transition-${
-              growing ? 'grow' : 'shrink'
-            }`}
-            role="status"
-            aria-live="polite"
-          >
-            {growing ? (
-              <>
-                Metasessions increasing to <strong>{pool.size}</strong> —{' '}
-                <strong>{readyCount}</strong> of <strong>{pool.size}</strong>{' '}
-                ready, <strong>{warmingCount}</strong> warming…
-              </>
-            ) : (
-              <>
-                Metasessions decreasing to <strong>{pool.size}</strong> —{' '}
-                <strong>{pool.live}</strong> still live,{' '}
-                <strong>{retiringCount}</strong> finishing before they retire…
-              </>
-            )}
-          </p>
-        )
       )}
 
       {detail && (
@@ -879,160 +845,75 @@ export function MetasessionPoolsSection() {
   }, [config.data]);
 
   const [enabled, setEnabled] = useState(false);
-  const [pools, setPools] = useState<PoolDraft[]>([]);
+  const [size, setSize] = useState('5');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
-  const [showPurposes, setShowPurposes] = useState(false);
 
   useEffect(() => {
     if (savedWarmPool) {
       setEnabled(savedWarmPool.enabled);
-      setPools(
-        savedWarmPool.pools.map((p) => ({
-          purpose: p.purpose,
-          size: String(p.size),
-        })),
-      );
+      setSize(String(savedWarmPool.size));
       setError(null);
       setSaved(false);
     }
   }, [savedWarmPool]);
 
-  // Poll faster while any pool is still converging on a saved size change or a
+  // Poll faster while the pool is still converging on a saved size change or a
   // session is actively serving a turn, so the chips, counts and the live
   // conversation of a busy session update smoothly instead of stepping every
   // few seconds; fall back to the calm cadence once settled and idle.
-  const anyConverging = useMemo(
-    () =>
-      (status.data?.pools ?? []).some(
-        (p) =>
-          p.draining ||
-          p.sessions.some(
-            (s) => s.state === 'warming' || s.state === 'busy',
-          ) || p.live > p.size,
-      ),
-    [status.data],
+  const live = status.data?.pool;
+  const converging = Boolean(
+    live &&
+      (live.live > live.size ||
+        live.sessions.some((s) => s.state === 'warming' || s.state === 'busy')),
   );
 
   useEffect(() => {
-    const intervalMs = anyConverging ? CONVERGING_POLL_MS : POLL_MS;
+    const intervalMs = converging ? CONVERGING_POLL_MS : POLL_MS;
     const timer = setInterval(status.reload, intervalMs);
     return () => clearInterval(timer);
-  }, [status.reload, anyConverging]);
-
-  const statusByPurpose = useMemo(() => {
-    const map = new Map<string, MetaPoolStat>();
-    for (const pool of status.data?.pools ?? []) {
-      if (!pool.draining) {
-        map.set(pool.purpose, pool);
-      }
-    }
-    return map;
-  }, [status.data]);
-
-  // Pools the backend is draining after a removal. They are no longer in the
-  // editable draft, so they render as read-only "shutting down" sections that
-  // animate each metasession retiring until the pool empties and drops out.
-  const drainingPools = useMemo(
-    () => (status.data?.pools ?? []).filter((p) => p.draining),
-    [status.data],
-  );
-
-  const usedPurposes = useMemo(
-    () => new Set(pools.map((p) => p.purpose.trim())),
-    [pools],
-  );
-
-  function setPool(index: number, patch: Partial<PoolDraft>) {
-    setPools((current) =>
-      current.map((p, i) => (i === index ? { ...p, ...patch } : p)),
-    );
-    setSaved(false);
-  }
-
-  function addPool(purpose = '') {
-    setPools((current) => [...current, { purpose, size: '5' }]);
-    setSaved(false);
-  }
-
-  function removePool(index: number) {
-    setPools((current) => current.filter((_, i) => i !== index));
-    setSaved(false);
-  }
-
-  function validate(): Array<{ purpose: string; size: number }> | string {
-    const seen = new Set<string>();
-    const out: Array<{ purpose: string; size: number }> = [];
-    for (const pool of pools) {
-      const purpose = pool.purpose.trim();
-      if (!purpose) {
-        return 'Every pool needs a purpose.';
-      }
-      if (seen.has(purpose)) {
-        return `Duplicate pool purpose: ${purpose}.`;
-      }
-      seen.add(purpose);
-      const size = Number(pool.size);
-      if (!Number.isInteger(size) || size < 1) {
-        return `Pool "${purpose}" needs a whole size of at least 1.`;
-      }
-      out.push({ purpose, size });
-    }
-    if (!seen.has('general')) {
-      return "A pool with purpose 'general' is required.";
-    }
-    return out;
-  }
+  }, [status.reload, converging]);
 
   async function save() {
     setError(null);
     setSaved(false);
-    const result = validate();
-    if (typeof result === 'string') {
-      setError(result);
+    const next = Number(size);
+    if (!Number.isInteger(next) || next < 1) {
+      setError('The pool needs a whole size of at least 1.');
       return;
     }
     setBusy(true);
     try {
+      // `pools` is a legacy key from when warm capacity was split across
+      // several purpose pools. Drop it so a stale override is not written back
+      // on every save; the backend ignores it, but keeping it would leave
+      // confusing dead state in the stored config.
+      const { pools: _legacyPools, ...rest } = (savedWarmPool ?? {}) as
+        Partial<WarmPoolConfig> & { pools?: unknown };
       await api.updateConfig('meta', {
-        warmPool: { ...savedWarmPool, enabled, pools: result },
+        warmPool: { ...rest, enabled, size: next },
       });
-      // Apply pool edits live so they take effect immediately (with the chip
-      // animations) instead of forcing a restart: resize running pools, spin up
-      // newly-added ones, and tear down removed ones. This only works once the
-      // warm-pool system is already running — turning the whole system on or
-      // off still needs a restart, so that case is left to the persisted config.
-      const systemRunning = status.data?.enabled === true;
-      if (enabled && systemRunning) {
-        const running = new Set(
-          (status.data?.pools ?? []).filter((p) => !p.draining).map((p) => p.purpose),
-        );
-        const desired = new Set(result.map((p) => p.purpose));
-        const ops: Array<Promise<unknown>> = [];
-        for (const pool of result) {
-          ops.push(
-            (running.has(pool.purpose)
-              ? api.resizeMetaPool(pool.purpose, pool.size)
-              : api.createMetaPool(pool.purpose, pool.size)
-            ),
+      // Apply the size live so it takes effect immediately (with the chip
+      // animations) instead of forcing a restart. This only works once the warm
+      // pool is already running — turning it on or off still needs a restart,
+      // so that case is left to the persisted config.
+      if (enabled && status.data?.enabled === true) {
+        try {
+          await api.resizeMetaPool(next);
+        } catch {
+          status.reload();
+          setError(
+            'Configuration saved, but resizing the running pool failed. Your requested size is retained. Click Save changes to retry.',
           );
-        }
-        for (const purpose of running) {
-          if (!desired.has(purpose)) {
-            ops.push(api.removeMetaPool(purpose));
-          }
-        }
-        const applied = await Promise.allSettled(ops);
-        status.reload();
-        if (applied.some((operation) => operation.status === 'rejected')) {
-          setError('Configuration saved, but some live pool changes failed. Your requested sizes are retained. Click Save changes to retry.');
           return;
         }
+        status.reload();
       }
-      // A restart is only needed to turn the whole warm-pool system on or off;
-      // pool add/remove/resize already applied live above.
+      // A restart is only needed to turn the warm pool on or off; the size
+      // already applied live above.
       setNeedsRestart(savedWarmPool?.enabled !== enabled);
       setSaved(true);
       config.reload();
@@ -1054,9 +935,6 @@ export function MetasessionPoolsSection() {
     }
   };
   const loading = config.loading && !config.data;
-  const suggestablePurposes = KNOWN_PURPOSES.filter(
-    (p) => !usedPurposes.has(p.purpose),
-  );
 
   return (
     <Card>
@@ -1064,56 +942,21 @@ export function MetasessionPoolsSection() {
         <div className="page-header-main">
           <IconBadge icon={<ActivityIcon size={22} />} tone="accent" />
           <div>
-            <h2 className="page-title">Metasession pools</h2>
+            <h2 className="page-title">Metasessions</h2>
             <p className="page-subtitle">
               Warm AI sessions kept ready so the IDE responds instantly instead
-              of spawning a CLI per request. Each pool bounds how many turns run
-              in parallel; extra requests reuse the next free session or fall
-              back to a cold spawn. Adding, removing and resizing pools apply
-              live on save; enabling or disabling warm pools needs a restart.
+              of spawning a CLI per request. Every AI feature — PR review,
+              review board, summaries, monitors — draws from this one pool; its
+              size bounds how many turns run in parallel, and extra requests
+              wait for the next free session or fall back to a cold spawn.
+              Resizing applies live on save; turning warm sessions on or off
+              needs a restart.
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          className="metapool-help-toggle"
-          onClick={() => setShowPurposes((v) => !v)}
-        >
-          <InfoIcon size={14} /> What is a purpose?
-        </button>
       </div>
 
       <MetaModelPicker />
-
-      {showPurposes && (
-        <div className="metapool-help">
-          <p className="metapool-help-lead">
-            A <strong>purpose</strong> is a routing key. Every AI turn the IDE
-            runs carries a purpose; it leases a warm session from the pool with
-            the matching purpose, or the required <code>general</code> pool if
-            none matches. Dedicate a pool to a workflow to give it its own warm
-            capacity.
-          </p>
-          <ul className="metapool-help-list">
-            {KNOWN_PURPOSES.map((p) => (
-              <li key={p.purpose}>
-                <code>{p.purpose}</code>
-                <span>{p.hint}</span>
-                {!usedPurposes.has(p.purpose) && (
-                  <button
-                    type="button"
-                    className="metapool-help-add"
-                    disabled={busy}
-                    onClick={() => addPool(p.purpose)}
-                  >
-                    <PlusIcon size={12} /> Add
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {loading && <Loader label="Loading pool configuration" />}
       {config.error && (
@@ -1159,124 +1002,49 @@ export function MetasessionPoolsSection() {
           </label>
 
           <div className="metapool-rows">
-            {pools.map((pool, index) => {
-              const live = statusByPurpose.get(pool.purpose.trim());
-              return (
-                <div className="metapool-row" key={index}>
-                  <div className="metapool-row-fields">
-                    <label className="metapool-field">
-                      <span className="metapool-field-label">Purpose</span>
-                      <input
-                        className="input"
-                        value={pool.purpose}
-                        disabled={busy}
-                        placeholder="general"
-                        onChange={(e) =>
-                          setPool(index, { purpose: e.target.value })
-                        }
-                      />
-                    </label>
-                    <label className="metapool-field metapool-field-size">
-                      <span className="metapool-field-label">
-                        Parallel sessions
-                      </span>
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        value={pool.size}
-                        disabled={busy}
-                        onChange={(e) =>
-                          setPool(index, { size: e.target.value })
-                        }
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="metapool-remove"
-                      title="Remove pool"
-                      disabled={busy || pool.purpose.trim() === 'general'}
-                      onClick={() => removePool(index)}
-                    >
-                      <TrashIcon size={14} />
-                    </button>
-                  </div>
-                  {enabled &&
-                    (live ? (
-                      <PoolStatus
-                        pool={live}
-                        model={status.data?.model}
-                        draftSize={Number(pool.size)}
-                        onApplySuggestion={(size) =>
-                          setPool(index, { size: String(size) })
-                        }
-                      />
-                    ) : status.error ? (
-                      <div className="metapool-live">
-                        <StatusBadge status="error" label="Live status unavailable" />
-                      </div>
-                    ) : (
-                      <div className="metapool-live">
-                        <StatusBadge
-                          status={saved ? 'starting' : 'pending'}
-                          label={saved ? 'Starting…' : 'Save to start live'}
-                        />
-                      </div>
-                    ))}
-                </div>
-              );
-            })}
-          </div>
-
-          {enabled && drainingPools.length > 0 && (
-            <div className="metapool-rows metapool-rows-draining">
-              {drainingPools.map((pool) => (
-                <div
-                  className="metapool-row metapool-row-draining"
-                  key={`draining-${pool.purpose}`}
-                >
-                  <div className="metapool-row-fields">
-                    <label className="metapool-field">
-                      <span className="metapool-field-label">Purpose</span>
-                      <input
-                        className="input"
-                        value={pool.purpose}
-                        disabled
-                        readOnly
-                      />
-                    </label>
-                    <span className="metapool-draining-tag">
-                      <Spinner size={12} /> Removing…
-                    </span>
-                  </div>
-                  <PoolStatus
-                    pool={pool}
-                    model={status.data?.model}
-                    draftSize={0}
-                    onApplySuggestion={() => undefined}
-                    draining
+            <div className="metapool-row">
+              <div className="metapool-row-fields">
+                <label className="metapool-field metapool-field-size">
+                  <span className="metapool-field-label">
+                    Parallel metasessions
+                  </span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={size}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setSize(e.target.value);
+                      setSaved(false);
+                    }}
                   />
-                </div>
-              ))}
+                </label>
+              </div>
+              {enabled &&
+                (live ? (
+                  <PoolStatus
+                    pool={live}
+                    model={status.data?.model}
+                    draftSize={Number(size)}
+                    onApplySuggestion={(next) => {
+                      setSize(String(next));
+                      setSaved(false);
+                    }}
+                  />
+                ) : status.error ? (
+                  <div className="metapool-live">
+                    <StatusBadge status="error" label="Live status unavailable" />
+                  </div>
+                ) : (
+                  <div className="metapool-live">
+                    <StatusBadge
+                      status={saved ? 'starting' : 'pending'}
+                      label={saved ? 'Starting…' : 'Save to start live'}
+                    />
+                  </div>
+                ))}
             </div>
-          )}
-
-          <div className="metapool-add-row">
-            <Button variant="ghost" onClick={() => addPool()} disabled={busy}>
-              <PlusIcon size={13} /> Add pool
-            </Button>
-            {suggestablePurposes.map((p) => (
-              <button
-                key={p.purpose}
-                type="button"
-                className="metapool-purpose-chip"
-                disabled={busy}
-                title={p.hint}
-                onClick={() => addPool(p.purpose)}
-              >
-                <PlusIcon size={11} /> {p.purpose}
-              </button>
-            ))}
           </div>
 
           <ErrorText error={error} />

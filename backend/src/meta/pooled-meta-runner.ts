@@ -6,31 +6,28 @@ import type { MetaOperationPhysicalRegistration } from './meta-operation-contrac
 import { registerUnstartedMetaAttempt } from './meta-operation-physical-ownership.js';
 
 /**
- * One warm pool bound to a routing purpose. The pooled runner leases turns from
- * the pool whose {@link purpose} matches a request, so warm capacity can be
- * dedicated per workflow (e.g. `review`, `general`).
+ * The single warm pool. Every meta AI turn leases from it, so warm capacity is
+ * one shared resource rather than something to partition per workflow.
  */
-export interface PurposePool {
-  /** Stable routing key matched against {@link MetaRequest.purpose}. */
-  purpose: string;
+export interface WarmPool {
   /** True once at least one warm session is ready to serve a turn. */
   ready(): boolean;
   /** Live warm-capacity snapshot for status surfaces. */
   stats(): MetaSessionPoolStats;
-  /** Runs a single turn on a warm session in this pool. */
+  /** Runs a single turn on a warm session. */
   runDetailed(request: MetaRequest): Promise<MetaRunResult>;
 }
 
 export interface PooledMetaRunnerDeps {
   physicalOwnership?: MetaOperationPhysicalRegistration;
-  /** The warm pools, one per purpose. Must include a `general` pool. */
-  pools: readonly PurposePool[];
-  /** Cold runner used while pools warm up or when a warm turn fails pre-dispatch. */
+  /** The shared warm pool every request leases from. */
+  pool: WarmPool;
+  /** Cold runner used while the pool warms up or when a warm turn fails pre-dispatch. */
   fallback: MetaRunner;
   /** Default request timeout budget when the caller did not set one. */
   defaultTimeoutMs: number;
   /** Logs a warm-turn failure before falling back (optional). */
-  onFallback?: (purpose: string, error: unknown) => void;
+  onFallback?: (error: unknown) => void;
   /**
    * When it returns `true` the warm pools are skipped entirely and the request
    * runs on the cold {@link fallback}. Used to honor a runtime model override:
@@ -42,23 +39,22 @@ export interface PooledMetaRunnerDeps {
   supportsWarm?: (request: MetaRequest) => boolean;
   /**
    * Optional demand telemetry. Every routed turn (warm or spilled to cold) is
-   * counted per purpose so the Settings page can suggest a warm size from
-   * observed peak concurrency.
+   * counted so the Settings page can suggest a warm size from observed peak
+   * concurrency.
    */
   demand?: PoolDemandPort;
 }
 
-/** Purpose used for requests that don't match a dedicated pool. */
+/** Purpose recorded for requests that don't name one. */
 export const GENERAL_PURPOSE = 'general';
 
 /**
- * A {@link MetaRunner} that prefers warm `copilot --acp` sessions and falls back
- * to the cold runner transparently. Requests route to the pool matching
- * {@link MetaRequest.purpose} (or the shared `general` pool).
+ * A {@link MetaRunner} that prefers warm `copilot --acp` sessions from the one
+ * shared pool and falls back to the cold runner transparently.
  *
- * Parallelism is bounded by each pool's size: a warm turn is only taken when the
- * pool reports a session ready to lease ({@link PurposePool.ready}), so at most
- * `size` turns run warm-concurrently per purpose. When a pool is still warming,
+ * Parallelism is bounded by the pool's size: a warm turn is only taken when the
+ * pool reports a session ready to lease ({@link WarmPool.ready}), so at most
+ * `size` turns run warm-concurrently. When the pool is still warming,
  * saturated (every warm session busy), or a warm turn fails *before dispatch*,
  * the request spills to the cold runner instead of blocking on a queue —
  * callers never fail or stall just because the pool isn't ready. Once a warm
@@ -68,22 +64,6 @@ export const GENERAL_PURPOSE = 'general';
 export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
   function canFallback(error: unknown): boolean {
     return error instanceof AcpRequestError && error.allowFallbackToCold;
-  }
-
-  // Resolve routing from the *current* pool set on every request so pools added
-  // or removed live (without a restart) take effect immediately — main.ts holds
-  // the same `deps.pools` array reference and mutates it as the user edits the
-  // Settings page.
-  function select(purpose: string | undefined): PurposePool | undefined {
-    const byPurpose = new Map(deps.pools.map((pool) => [pool.purpose, pool]));
-    const general = byPurpose.get(GENERAL_PURPOSE);
-    if (purpose) {
-      const match = byPurpose.get(purpose);
-      if (match) {
-        return match;
-      }
-    }
-    return general;
   }
 
   async function runDetailed(request: MetaRequest): Promise<MetaRunResult> {
@@ -103,26 +83,24 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
     if (deps.bypass?.()) {
       return deps.fallback.runDetailed(bounded);
     }
-    const pool = select(request.purpose);
-    const purpose = pool?.purpose ?? request.purpose ?? GENERAL_PURPOSE;
-    deps.demand?.begin(purpose);
+    deps.demand?.begin();
     try {
       // `ready()` is idle>0 and is claimed synchronously by the warm turn before
       // any await, so a ready pool never queues: overflow past `size` concurrent
       // turns falls through to the cold path below.
-      if ((deps.supportsWarm?.(bounded) ?? true) && pool && pool.ready()) {
+      if ((deps.supportsWarm?.(bounded) ?? true) && deps.pool.ready()) {
         try {
-          return await pool.runDetailed(bounded);
+          return await deps.pool.runDetailed(bounded);
         } catch (error) {
           if (!canFallback(error)) {
             throw error;
           }
-          deps.onFallback?.(pool.purpose, error);
+          deps.onFallback?.(error);
         }
       }
       return await deps.fallback.runDetailed(bounded);
     } finally {
-      deps.demand?.end(purpose);
+      deps.demand?.end();
     }
   }
 
@@ -148,57 +126,33 @@ export interface MetaPoolsStatus {
   };
   enabled: boolean;
   /**
-   * Model powering warm sessions, when known. All warm sessions in every pool
-   * share the CLI's configured model, so it is reported once at the top level.
+   * Model powering warm sessions, when known. Every warm session shares the
+   * CLI's configured model, so it is reported once at the top level.
    */
   model?: string;
-  pools: Array<
-    {
-      purpose: string;
-      suggestedSize: number;
-      /**
-       * True while the pool is being removed and is draining its warm
-       * sessions. Such a pool no longer takes routing and disappears once
-       * every session has retired; the flag lets the UI show it shutting down
-       * live instead of yanking it away instantly.
-       */
-      draining?: boolean;
-    } & MetaSessionPoolStats
-  >;
+  /**
+   * Live capacity of the shared warm pool. Absent when warm pools are disabled.
+   */
+  pool?: MetaSessionPoolStats & {
+    /** Warm size suggested by observed peak concurrency. */
+    suggestedSize: number;
+  };
 }
 
-/**
- * Builds a live status snapshot from the configured purpose pools. Pools passed
- * in `draining` are appended and flagged so the UI can animate them shutting
- * down until they empty out and drop from the snapshot entirely.
- */
+/** Builds a live status snapshot from the shared warm pool. */
 export function metaPoolsStatus(
   enabled: boolean,
-  pools: readonly Pick<PurposePool, 'purpose' | 'stats'>[],
+  pool?: Pick<WarmPool, 'stats'>,
   demand?: Pick<PoolDemand, 'suggestion'>,
   model?: string,
-  draining: readonly Pick<PurposePool, 'purpose' | 'stats'>[] = [],
 ): MetaPoolsStatus {
-  const active = pools.map((pool) => {
-    const stats = pool.stats();
-    return {
-      purpose: pool.purpose,
-      suggestedSize: demand?.suggestion(pool.purpose) ?? stats.size,
-      ...stats,
-    };
-  });
-  const shuttingDown = draining.map((pool) => {
-    const stats = pool.stats();
-    return {
-      purpose: pool.purpose,
-      suggestedSize: stats.size,
-      ...stats,
-      draining: true,
-    };
-  });
+  if (!pool) {
+    return { enabled, ...(model === undefined ? {} : { model }) };
+  }
+  const stats = pool.stats();
   return {
     enabled,
     ...(model === undefined ? {} : { model }),
-    pools: [...active, ...shuttingDown],
+    pool: { ...stats, suggestedSize: demand?.suggestion() ?? stats.size },
   };
 }

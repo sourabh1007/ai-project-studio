@@ -158,12 +158,8 @@ export interface ApiRoutesDeps {
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
   metaOperations: MetaOperationsControllerDeps;
-  /** Live-resizes the warm pool for a purpose (no restart), returning status. */
-  resizeMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
-  /** Live-creates a warm pool for a new purpose (no restart), returning status. */
-  createMetaPool: (purpose: string, size: number) => MetaPoolsStatus;
-  /** Live-removes the warm pool for a purpose (no restart), returning status. */
-  removeMetaPool: (purpose: string) => MetaPoolsStatus;
+  /** Live-resizes the shared warm pool (no restart), returning status. */
+  resizeMetaPool: (size: number) => MetaPoolsStatus;
   /**
    * Live shared headless process budget, stamped onto every pool response by
    * the controller so no route can answer with a partial status.
@@ -307,8 +303,6 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createMetaPoolsRoutes({
       status: deps.metaPools,
       resize: deps.resizeMetaPool,
-      create: deps.createMetaPool,
-      remove: deps.removeMetaPool,
       processAdmission: deps.metaPoolsProcessAdmission,
     }),
     ...createMetaSettingsRoutes({

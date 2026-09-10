@@ -5,7 +5,7 @@ import type { MetaSessionPoolStats } from './acp/acp-pool.js';
 import {
   createPooledMetaRunner,
   metaPoolsStatus,
-  type PurposePool,
+  type WarmPool,
 } from './pooled-meta-runner.js';
 
 function stats(overrides: Partial<MetaSessionPoolStats> = {}): MetaSessionPoolStats {
@@ -22,16 +22,14 @@ function stats(overrides: Partial<MetaSessionPoolStats> = {}): MetaSessionPoolSt
 }
 
 function pool(
-  purpose: string,
   options: {
     ready?: boolean;
     result?: MetaRunResult;
     error?: unknown;
   } = {},
-): PurposePool & { calls: MetaRequest[] } {
+): WarmPool & { calls: MetaRequest[] } {
   const calls: MetaRequest[] = [];
   return {
-    purpose,
     calls,
     ready: () => options.ready ?? true,
     stats: () => stats({ ready: options.ready ?? true }),
@@ -40,7 +38,7 @@ function pool(
       if (options.error !== undefined) {
         throw options.error;
       }
-      return options.result ?? { text: `warm:${purpose}`, sessionId: 'warm' };
+      return options.result ?? { text: 'warm', sessionId: 'warm' };
     },
   };
 }
@@ -64,12 +62,23 @@ const req = (extra: Partial<MetaRequest> = {}): MetaRequest => ({
   ...extra,
 });
 
+/** Records begin/end so a test can assert demand is always balanced. */
+function demandRecorder() {
+  const events: string[] = [];
+  return {
+    events,
+    begin: () => events.push('begin'),
+    end: () => events.push('end'),
+    suggestion: () => 1,
+  };
+}
+
 describe('createPooledMetaRunner', () => {
-  it('bypasses the warm pools and uses the cold path when bypass() is true', async () => {
-    const general = pool('general');
+  it('bypasses the warm pool and uses the cold path when bypass() is true', async () => {
+    const warm = pool();
     const cold = coldRunner();
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
       bypass: () => true,
@@ -77,7 +86,7 @@ describe('createPooledMetaRunner', () => {
     const result = await runner.runDetailed(req());
     expect(result.text).toBe('cold');
     expect(cold.calls).toHaveLength(1);
-    expect(general.calls).toHaveLength(0);
+    expect(warm.calls).toHaveLength(0);
   });
 
   it('stamps a single deadline before bypassing to the cold path', async () => {
@@ -86,7 +95,7 @@ describe('createPooledMetaRunner', () => {
       vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
       const cold = coldRunner();
       const runner = createPooledMetaRunner({
-        pools: [pool('general')],
+        pool: pool(),
         defaultTimeoutMs: 100,
         fallback: cold,
         bypass: () => true,
@@ -104,7 +113,7 @@ describe('createPooledMetaRunner', () => {
       vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
       const cold = coldRunner();
       const runner = createPooledMetaRunner({
-        pools: [pool('general')],
+        pool: pool(),
         defaultTimeoutMs: 75,
         fallback: cold,
         bypass: () => true,
@@ -118,98 +127,53 @@ describe('createPooledMetaRunner', () => {
   });
 
   it('uses the warm pool when bypass() is false', async () => {
-    const general = pool('general');
+    const warm = pool();
     const cold = coldRunner();
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
       bypass: () => false,
     });
     const result = await runner.runDetailed(req());
-    expect(result.text).toBe('warm:general');
+    expect(result.text).toBe('warm');
     expect(cold.calls).toHaveLength(0);
   });
 
-  it('routes to the pool matching the request purpose', async () => {
-    const review = pool('review');
-    const general = pool('general');
+  it('serves every purpose from the one shared pool', async () => {
+    const warm = pool();
     const runner = createPooledMetaRunner({
-      pools: [general, review],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: coldRunner(),
     });
-    const result = await runner.runDetailed(req({ purpose: 'review' }));
-    expect(result.text).toBe('warm:review');
-    expect(review.calls).toHaveLength(1);
-    expect(general.calls).toHaveLength(0);
-  });
-
-  it('falls back to the general pool for an unmatched purpose', async () => {
-    const general = pool('general');
-    const runner = createPooledMetaRunner({
-      pools: [general],
-      defaultTimeoutMs: 100,
-      fallback: coldRunner(),
-    });
-    const result = await runner.runDetailed(req({ purpose: 'unknown' }));
-    expect(result.text).toBe('warm:general');
-    expect(general.calls).toHaveLength(1);
-  });
-
-  it('uses the general pool when no purpose is given', async () => {
-    const general = pool('general');
-    const runner = createPooledMetaRunner({
-      pools: [general],
-      defaultTimeoutMs: 100,
-      fallback: coldRunner(),
-    });
-    const out = await runner.run(req());
-    expect(out).toBe('warm:general');
-  });
-
-  it('routes to a pool added to the live pool set after construction', async () => {
-    const general = pool('general');
-    const pools: Array<ReturnType<typeof pool>> = [general];
-    const runner = createPooledMetaRunner({
-      pools,
-      defaultTimeoutMs: 100,
-      fallback: coldRunner(),
-    });
-    // Before the pool exists, the purpose falls back to general.
-    await runner.runDetailed(req({ purpose: 'review' }));
-    expect(general.calls).toHaveLength(1);
-    // A pool added live (as main.ts does on a Settings save) takes effect at
-    // once, without rebuilding the runner.
-    const review = pool('review');
-    pools.push(review);
-    const result = await runner.runDetailed(req({ purpose: 'review' }));
-    expect(result.text).toBe('warm:review');
-    expect(review.calls).toHaveLength(1);
-    expect(general.calls).toHaveLength(1);
+    expect(await runner.run(req({ purpose: 'review' }))).toBe('warm');
+    expect(await runner.run(req({ purpose: 'self-recovery' }))).toBe('warm');
+    expect(await runner.run(req())).toBe('warm');
+    expect(warm.calls).toHaveLength(3);
   });
 
   it('uses the cold runner while the pool is warming', async () => {
-    const general = pool('general', { ready: false });
+    const warm = pool({ ready: false });
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
     });
     const out = await runner.run(req());
     expect(out).toBe('cold-text');
-    expect(general.calls).toHaveLength(0);
+    expect(warm.calls).toHaveLength(0);
     expect(cold.calls).toHaveLength(1);
   });
 
   it('does not start warm or cold execution when the request is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
-    const general = pool('general');
+    const warm = pool();
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
     });
@@ -220,15 +184,15 @@ describe('createPooledMetaRunner', () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow('Meta request cancelled before it started');
-    expect(general.calls).toHaveLength(0);
+    expect(warm.calls).toHaveLength(0);
     expect(cold.calls).toHaveLength(0);
   });
 
   it('routes incompatible warm requests to cold before execution', async () => {
-    const general = pool('general');
+    const warm = pool();
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
       supportsWarm: (request) => !request.noTools && (request.attachments?.length ?? 0) === 0,
@@ -240,7 +204,7 @@ describe('createPooledMetaRunner', () => {
       attachments: ['C:\\repo\\prompt.md'],
     });
     expect(out).toBe('cold-text');
-    expect(general.calls).toHaveLength(0);
+    expect(warm.calls).toHaveLength(0);
     expect(cold.calls).toHaveLength(1);
   });
 
@@ -249,18 +213,17 @@ describe('createPooledMetaRunner', () => {
       method: 'session/new',
       allowFallbackToCold: true,
     });
-    const general = pool('general', { error: boom });
     const cold = coldRunner('cold-text');
     const onFallback = vi.fn();
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: pool({ error: boom }),
       defaultTimeoutMs: 100,
       fallback: cold,
       onFallback,
     });
     const out = await runner.run(req());
     expect(out).toBe('cold-text');
-    expect(onFallback).toHaveBeenCalledWith('general', boom);
+    expect(onFallback).toHaveBeenCalledWith(boom);
     expect(cold.calls).toHaveLength(1);
   });
 
@@ -272,18 +235,16 @@ describe('createPooledMetaRunner', () => {
         method: 'session/new',
         allowFallbackToCold: true,
       });
-      const general = pool('general', {
-        error: boom,
-      });
+      const warm = pool({ error: boom });
       const cold = coldRunner('cold-text');
       const runner = createPooledMetaRunner({
-        pools: [general],
+        pool: warm,
         defaultTimeoutMs: 100,
         fallback: cold,
       });
       const deadlineAt = Date.now() + 50;
       await runner.run(req({ deadlineAt, timeoutMs: 100 }));
-      expect(general.calls[0]?.deadlineAt).toBe(deadlineAt);
+      expect(warm.calls[0]?.deadlineAt).toBe(deadlineAt);
       expect(cold.calls[0]?.deadlineAt).toBe(deadlineAt);
       expect(cold.calls[0]?.timeoutMs).toBe(100);
     } finally {
@@ -296,11 +257,10 @@ describe('createPooledMetaRunner', () => {
       method: 'session/prompt',
       allowFallbackToCold: false,
     });
-    const general = pool('general', { error: boom });
     const cold = coldRunner('cold-text');
     const onFallback = vi.fn();
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: pool({ error: boom }),
       defaultTimeoutMs: 100,
       fallback: cold,
       onFallback,
@@ -311,11 +271,9 @@ describe('createPooledMetaRunner', () => {
   });
 
   it('does not fall back to cold on an unknown Error from warm execution', async () => {
-    const boom = new Error('unknown warm failure');
-    const general = pool('general', { error: boom });
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: pool({ error: new Error('unknown warm failure') }),
       defaultTimeoutMs: 100,
       fallback: cold,
     });
@@ -324,13 +282,13 @@ describe('createPooledMetaRunner', () => {
   });
 
   it('does not fall back to cold on a non-Error warm failure value', async () => {
-    const general = pool('general');
-    general.runDetailed = async () => {
+    const warm = pool();
+    warm.runDetailed = async () => {
       throw 'string failure';
     };
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
-      pools: [general],
+      pool: warm,
       defaultTimeoutMs: 100,
       fallback: cold,
     });
@@ -338,170 +296,99 @@ describe('createPooledMetaRunner', () => {
     expect(cold.calls).toHaveLength(0);
   });
 
-  it('falls back to cold when there is no general pool at all', async () => {
-    const cold = coldRunner('cold-text');
+  it('records demand telemetry around a warm turn', async () => {
+    const demand = demandRecorder();
     const runner = createPooledMetaRunner({
-      pools: [pool('review', { ready: true })],
-      defaultTimeoutMs: 100,
-      fallback: cold,
-    });
-    const out = await runner.run(req({ purpose: 'other' }));
-    expect(out).toBe('cold-text');
-    expect(cold.calls).toHaveLength(1);
-  });
-
-  it('records demand telemetry for the routed purpose on a warm turn', async () => {
-    const events: string[] = [];
-    const demand = {
-      begin: (purpose: string) => events.push(`begin:${purpose}`),
-      end: (purpose: string) => events.push(`end:${purpose}`),
-      suggestion: () => 1,
-    };
-    const runner = createPooledMetaRunner({
-      pools: [pool('general'), pool('review')],
+      pool: pool(),
       defaultTimeoutMs: 100,
       fallback: coldRunner(),
       demand,
     });
     await runner.runDetailed(req({ purpose: 'review' }));
-    expect(events).toEqual(['begin:review', 'end:review']);
+    expect(demand.events).toEqual(['begin', 'end']);
   });
 
-  it('records demand under general when no pool matches the purpose', async () => {
-    const events: string[] = [];
-    const demand = {
-      begin: (purpose: string) => events.push(`begin:${purpose}`),
-      end: (purpose: string) => events.push(`end:${purpose}`),
-      suggestion: () => 1,
-    };
-    const cold = coldRunner('cold-text');
+  it('records demand for a turn that spills to cold while the pool warms', async () => {
+    const demand = demandRecorder();
     const runner = createPooledMetaRunner({
-      pools: [pool('review', { ready: true })],
-      defaultTimeoutMs: 100,
-      fallback: cold,
-      demand,
-    });
-    await runner.run(req({ purpose: 'nope' }));
-    // No general pool, so it spills to cold but is still counted under the
-    // request's own purpose.
-    expect(events).toEqual(['begin:nope', 'end:nope']);
-  });
-
-  it('ends demand even when a warm turn throws and spills to cold', async () => {
-    const events: string[] = [];
-    const demand = {
-      begin: (purpose: string) => events.push(`begin:${purpose}`),
-      end: (purpose: string) => events.push(`end:${purpose}`),
-      suggestion: () => 1,
-    };
-    const runner = createPooledMetaRunner({
-      pools: [
-        pool('general', {
-          error: new AcpRequestError('session/new failed', {
-            method: 'session/new',
-            allowFallbackToCold: true,
-          }),
-        }),
-      ],
+      pool: pool({ ready: false }),
       defaultTimeoutMs: 100,
       fallback: coldRunner('cold-text'),
       demand,
     });
     await runner.run(req());
-    expect(events).toEqual(['begin:general', 'end:general']);
+    expect(demand.events).toEqual(['begin', 'end']);
+  });
+
+  it('ends demand even when a warm turn throws and spills to cold', async () => {
+    const demand = demandRecorder();
+    const runner = createPooledMetaRunner({
+      pool: pool({
+        error: new AcpRequestError('session/new failed', {
+          method: 'session/new',
+          allowFallbackToCold: true,
+        }),
+      }),
+      defaultTimeoutMs: 100,
+      fallback: coldRunner('cold-text'),
+      demand,
+    });
+    await runner.run(req());
+    expect(demand.events).toEqual(['begin', 'end']);
   });
 
   it('ends demand even when an ambiguous warm failure is rethrown', async () => {
-    const events: string[] = [];
-    const demand = {
-      begin: (purpose: string) => events.push(`begin:${purpose}`),
-      end: (purpose: string) => events.push(`end:${purpose}`),
-      suggestion: () => 1,
-    };
+    const demand = demandRecorder();
     const runner = createPooledMetaRunner({
-      pools: [pool('general', {
+      pool: pool({
         error: new AcpRequestError('timed out', {
           method: 'session/prompt',
           allowFallbackToCold: false,
         }),
-      })],
+      }),
       defaultTimeoutMs: 100,
       fallback: coldRunner('cold-text'),
       demand,
     });
     await expect(runner.run(req())).rejects.toThrow('timed out');
-    expect(events).toEqual(['begin:general', 'end:general']);
-  });
-
-  it('counts demand under general when no pool and no purpose are given', async () => {
-    const events: string[] = [];
-    const demand = {
-      begin: (purpose: string) => events.push(`begin:${purpose}`),
-      end: (purpose: string) => events.push(`end:${purpose}`),
-      suggestion: () => 1,
-    };
-    const runner = createPooledMetaRunner({
-      pools: [pool('review', { ready: true })],
-      defaultTimeoutMs: 100,
-      fallback: coldRunner('cold-text'),
-      demand,
-    });
-    await runner.run(req());
-    expect(events).toEqual(['begin:general', 'end:general']);
+    expect(demand.events).toEqual(['begin', 'end']);
   });
 });
 
 describe('metaPoolsStatus', () => {
-  it('projects each pool into a status entry', () => {
-    const status = metaPoolsStatus(true, [
-      { purpose: 'general', stats: () => stats({ idle: 4, live: 5, size: 5, served: 7 }) },
-      {
-        purpose: 'review',
-        stats: () => stats({ ready: false, idle: 0, live: 0, size: 2, busy: 0 }),
-      },
-    ]);
-    expect(status).toEqual({
+  it('projects the shared pool into a status entry', () => {
+    expect(
+      metaPoolsStatus(true, {
+        stats: () => stats({ idle: 4, live: 5, size: 5, served: 7 }),
+      }),
+    ).toEqual({
       enabled: true,
-      pools: [
-        {
-          purpose: 'general',
-          suggestedSize: 5,
-          size: 5,
-          live: 5,
-          idle: 4,
-          busy: 0,
-          ready: true,
-          served: 7,
-          sessions: [],
-        },
-        {
-          purpose: 'review',
-          suggestedSize: 2,
-          size: 2,
-          live: 0,
-          idle: 0,
-          busy: 0,
-          ready: false,
-          served: 0,
-          sessions: [],
-        },
-      ],
+      pool: {
+        suggestedSize: 5,
+        size: 5,
+        live: 5,
+        idle: 4,
+        busy: 0,
+        ready: true,
+        served: 7,
+        sessions: [],
+      },
     });
   });
 
   it('uses the demand telemetry to suggest a warm size when provided', () => {
     const status = metaPoolsStatus(
       true,
-      [{ purpose: 'general', stats: () => stats({ size: 5 }) }],
-      { suggestion: (purpose) => (purpose === 'general' ? 8 : 1) },
+      { stats: () => stats({ size: 5 }) },
+      { suggestion: () => 8 },
     );
-    expect(status.pools[0].suggestedSize).toBe(8);
+    expect(status.pool?.suggestedSize).toBe(8);
   });
 
   it('includes the model powering warm sessions when provided', () => {
     const status = metaPoolsStatus(
       true,
-      [{ purpose: 'general', stats: () => stats({ size: 5 }) }],
+      { stats: () => stats({ size: 5 }) },
       undefined,
       'claude-opus-4.8',
     );
@@ -509,56 +396,18 @@ describe('metaPoolsStatus', () => {
   });
 
   it('omits the model key when it is unknown', () => {
-    const status = metaPoolsStatus(true, [
-      { purpose: 'general', stats: () => stats({ size: 5 }) },
-    ]);
+    const status = metaPoolsStatus(true, { stats: () => stats({ size: 5 }) });
     expect('model' in status).toBe(false);
   });
 
-  it('appends draining pools flagged so they animate shutting down', () => {
-    const status = metaPoolsStatus(
-      true,
-      [{ purpose: 'general', stats: () => stats({ idle: 5, live: 5, size: 5 }) }],
-      undefined,
-      undefined,
-      [
-        {
-          purpose: 'self-recovery',
-          stats: () => stats({ ready: false, idle: 0, live: 2, size: 0, busy: 2 }),
-        },
-      ],
-    );
-    expect(status.pools).toEqual([
-      {
-        purpose: 'general',
-        suggestedSize: 5,
-        size: 5,
-        live: 5,
-        idle: 5,
-        busy: 0,
-        ready: true,
-        served: 0,
-        sessions: [],
-      },
-      {
-        purpose: 'self-recovery',
-        suggestedSize: 0,
-        size: 0,
-        live: 2,
-        idle: 0,
-        busy: 2,
-        ready: false,
-        served: 0,
-        sessions: [],
-        draining: true,
-      },
-    ]);
+  it('reports no pool when warm pools are disabled', () => {
+    expect(metaPoolsStatus(false)).toEqual({ enabled: false });
   });
 
-  it('has no draining pools when none are passed', () => {
-    const status = metaPoolsStatus(true, [
-      { purpose: 'general', stats: () => stats({ size: 5 }) },
-    ]);
-    expect(status.pools.every((p) => p.draining === undefined)).toBe(true);
+  it('still reports the model when disabled and no pool exists', () => {
+    expect(metaPoolsStatus(false, undefined, undefined, 'auto')).toEqual({
+      enabled: false,
+      model: 'auto',
+    });
   });
 });

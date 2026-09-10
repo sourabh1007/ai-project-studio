@@ -37,26 +37,22 @@ export function validateObjectBody(path: string, body: unknown): string | null {
     : `${path} returned ${describe(body)} instead of an object. The backend may be starting up or an old version may still be running.`;
 }
 
-/** `/meta/pools` — the settings page iterates `pools` and each pool's sessions. */
+/** `/meta/pools` — the settings page renders the pool and its sessions. */
 export function validateMetaPoolsStatus(body: unknown): string | null {
   const objectProblem = validateObjectBody('/meta/pools', body);
   if (objectProblem) return objectProblem;
   const status = body as Record<string, unknown>;
-  if (!Array.isArray(status.pools)) {
-    return `/meta/pools returned no pool list (pools was ${describe(status.pools)}).`;
+  if (status.pool === undefined || status.pool === null) {
+    // A disabled warm pool legitimately reports no pool at all.
+    return null;
   }
-  for (const [index, pool] of status.pools.entries()) {
-    if (!isRecord(pool)) {
-      return `/meta/pools returned ${describe(pool)} for pool ${index} instead of an object.`;
-    }
-    if (typeof pool.purpose !== 'string') {
-      return `/meta/pools returned a pool at index ${index} with no purpose.`;
-    }
-    // `sessions` is what the settings list renders per slot; a non-array here
-    // is precisely the shape that used to blank the whole section.
-    if (pool.sessions !== undefined && !Array.isArray(pool.sessions)) {
-      return `/meta/pools returned ${describe(pool.sessions)} for the "${pool.purpose}" pool sessions instead of a list.`;
-    }
+  if (!isRecord(status.pool)) {
+    return `/meta/pools returned ${describe(status.pool)} for the pool instead of an object.`;
+  }
+  // `sessions` is what the settings list renders per slot; a non-array here is
+  // precisely the shape that used to blank the whole section.
+  if (status.pool.sessions !== undefined && !Array.isArray(status.pool.sessions)) {
+    return `/meta/pools returned ${describe(status.pool.sessions)} for the pool sessions instead of a list.`;
   }
   return null;
 }

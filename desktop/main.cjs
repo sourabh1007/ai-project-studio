@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const regression = require('./regression-isolation.cjs').configure(app);
 const updateManager = regression?.updater || require('./update-manager.cjs');
 const ipcInput = require('./ipc-input.cjs');
+const { createBackendFailureLog } = require('./backend-failure-log.cjs');
 let clipboardAttachmentStore = null;
 const {
   requestBackendShutdown,
@@ -62,6 +63,23 @@ function appIcon() {
 // renderer is the source of truth and pushes updates via the `theme:set` IPC.
 const THEME_FILE = path.join(app.getPath('userData'), 'theme.json');
 const THEME_BG = { dark: '#0b1020', light: '#eef2fb' };
+
+// Durable record of every unexpected backend death, written next to the
+// backend's own logs.
+//
+// Without this a crash left no evidence anywhere: the backend cannot log its
+// own hard exit, the supervisor's stderr goes to a console a packaged app does
+// not have, and the renderer's in-memory notice dies with the next reload. The
+// diagnostics page then had nothing to show but "unreachable", and the reason
+// was unrecoverable. These entries survive both the crash and the restart.
+const failureLog = createBackendFailureLog({
+  logPath: path.join(app.getPath('userData'), 'logs', 'desktop-supervisor.log'),
+  onError: (message) => safeWrite(process.stderr, `${message}\n`),
+});
+
+function recordBackendFailure(entry) {
+  return failureLog.record(entry);
+}
 
 function readPersistedTheme() {
   try {
@@ -399,6 +417,17 @@ function ownBackend(child, nonce, launchId) {
     if (backend === child) {
       backend = null;
       backendControl = null;
+      // Only an *unexpected* death is a failure worth recording; an exit that
+      // follows a quit, relaunch or cooperative stop was asked for.
+      if (!(shutdownAction || stoppingBackend || exitOnlyOwner || owner.acknowledged)) {
+        recordBackendFailure({
+          kind: 'exit',
+          code,
+          signal,
+          stderrTail: owner.stderrTail.slice(-4000),
+          uptimeMs: Date.now() - owner.startedAt,
+        });
+      }
       superviseBackendExit(owner);
     }
   });
@@ -429,7 +458,9 @@ function reportBackendUnavailable(owner, reason) {
   if (backendOwner === owner && owner.outcome) {
     backendOwner = null;
   }
-  notifyBackendUnavailable({ reason, stderrTail: owner.stderrTail.slice(-4000) });
+  const stderrTail = owner.stderrTail.slice(-4000);
+  recordBackendFailure({ kind: 'unavailable', reason, stderrTail });
+  notifyBackendUnavailable({ reason, stderrTail });
 }
 
 /**
@@ -937,6 +968,19 @@ function initializeDesktop() {
       return '';
     }
     return app.getVersion();
+  });
+
+  // Backend crash evidence, served from the main process so it is still
+  // readable when the backend — and therefore its own API — is gone. That is
+  // exactly when it is needed.
+  ipcMain.handle('diagnostics:backend', (event) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    return {
+      logDirectory: failureLog.logDirectory,
+      failures: failureLog.recent(10),
+    };
   });
 
   // Auto-update IPC. All guarded to our own frame; the update manager itself is

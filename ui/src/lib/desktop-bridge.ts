@@ -61,6 +61,7 @@ export interface DesktopBridge {
     cb: (detail: { reason?: string; stderrTail?: string }) => void,
   ): () => void;
   getVersion?(): Promise<string>;
+  backendDiagnostics?(): Promise<unknown>;
   openDocs?(): void;
   attachments?: AttachmentsBridge;
   updates?: DesktopUpdatesBridge;
@@ -73,7 +74,8 @@ export interface DesktopBridge {
  */
 export const DESKTOP_BRIDGE_CAPABILITIES = {
   root: [
-    'attachments', 'clearClipboard', 'copyText', 'getVersion', 'onBackendUnavailable',
+    'attachments', 'backendDiagnostics', 'clearClipboard', 'copyText', 'getVersion',
+    'onBackendUnavailable',
     'openDocs', 'openExternal', 'readImage', 'readText', 'relaunch', 'revealFile',
     'runClipboardSmoke', 'setTheme', 'updates',
   ],

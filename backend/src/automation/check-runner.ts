@@ -78,6 +78,10 @@ export function createCheckRunner(deps: CheckRunnerDeps): CheckRunner {
       prompt: `${prompt}\n\nAnswer strictly with "yes" or "no" on the first line.`,
       cwd,
       noTools: true,
+      // The prompt is self-contained, so tools are a nicety we don't need —
+      // not a requirement. Marked optional so the turn can run on a warm
+      // session (which cannot switch tools off) instead of cold-spawning.
+      toolsOptional: true,
       timeoutMs: deps.timeoutMs,
       scope: 'internal',
       label: 'Automation check',

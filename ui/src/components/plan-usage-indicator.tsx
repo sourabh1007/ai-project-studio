@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { PlanUsage } from '../lib/types.js';
+import type { PlanUsage, PlanUsageState } from '../lib/types.js';
 import { formatDateTime } from '../lib/format.js';
 import { Modal } from './ui.js';
 
@@ -11,12 +11,29 @@ function aic(value: number): string {
  * Status-bar indicator for the signed-in plan's AI-credit budget. Shows a
  * compact "N% used · resets in Nd" chip mirroring the CLI `/usage` footer, and
  * opens a details modal (used / available / total, progress, reset, session
- * spend) on click. Renders nothing until the first snapshot is captured.
+ * spend) on click.
+ *
+ * Before the first snapshot lands it says so rather than rendering nothing:
+ * capturing one boots a Copilot TUI and takes tens of seconds, and a silently
+ * absent chip is indistinguishable from a removed feature.
  */
-export function PlanUsageIndicator({ usage }: { usage: PlanUsage | null }) {
+export function PlanUsageIndicator({ state }: { state: PlanUsageState }) {
   const [open, setOpen] = useState(false);
+  const usage = state.usage;
+
   if (usage === null) {
-    return null;
+    return (
+      <span
+        className="statusbar-item statusbar-plan statusbar-plan-pending"
+        title={
+          state.status === 'unavailable'
+            ? `Plan AI credits unavailable — ${state.error ?? 'the Copilot CLI /usage panel could not be read'}`
+            : 'Reading your plan AI-credit budget from the Copilot CLI — this takes a few seconds after startup.'
+        }
+      >
+        ◈ {state.status === 'unavailable' ? 'plan usage unavailable' : 'plan usage…'}
+      </span>
+    );
   }
 
   const reset =

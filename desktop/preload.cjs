@@ -87,6 +87,13 @@ contextBridge.exposeInMainWorld('desktop', {
   openDocs() {
     ipcRenderer.send('app:openDocs');
   },
+  /**
+   * Backend crash evidence recorded by the main process. Readable while the
+   * backend is down, which is the only time it matters.
+   */
+  backendDiagnostics() {
+    return ipcRenderer.invoke('diagnostics:backend');
+  },
   updates: {
     getState() {
       return ipcRenderer.invoke('update:getState');

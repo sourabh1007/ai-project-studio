@@ -9,6 +9,7 @@
  */
 
 import type { FailureEntry } from './failure-log';
+import type { BackendFailure } from './backend-failure.js';
 
 export interface DiagnosticsInput {
   /** App version from the desktop bridge, if available. */
@@ -25,6 +26,12 @@ export interface DiagnosticsInput {
   readonly logDirectory: string | null;
   /** Recent recorded failures (newest first). */
   readonly failures: readonly FailureEntry[];
+  /**
+   * Backend crashes recorded by the desktop supervisor (newest first). These
+   * carry the reason the app went unreachable, so an exported report is
+   * actionable rather than just saying "unreachable".
+   */
+  readonly backendFailures?: readonly BackendFailure[];
   /** Current time as an ISO string (injected for determinism). */
   readonly now: string;
 }
@@ -42,6 +49,7 @@ export interface DiagnosticsReport {
   };
   readonly logDirectory: string;
   readonly recentFailures: readonly FailureEntry[];
+  readonly backendFailures: readonly BackendFailure[];
 }
 
 const PLACEHOLDER = 'unknown';
@@ -66,6 +74,7 @@ export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
     },
     logDirectory: orUnknown(input.logDirectory),
     recentFailures: input.failures,
+    backendFailures: input.backendFailures ?? [],
   };
 }
 

@@ -1,8 +1,8 @@
 /**
  * Warm-pool demand telemetry. Every meta AI turn — whether it lands on a warm
- * session or spills to the cold path — is counted per purpose so the Settings
- * page can suggest how many warm sessions to keep based on *observed* peak
- * concurrency rather than a guess.
+ * session or spills to the cold path — is counted so the Settings page can
+ * suggest how many warm sessions to keep based on *observed* peak concurrency
+ * rather than a guess.
  *
  * A turn `begin()`s when it starts and `end()`s when it finishes; the tracker
  * records the instantaneous concurrency at each start into a rolling time
@@ -24,7 +24,7 @@ interface DemandSample {
   demand: number;
 }
 
-/** Tracks concurrent demand for a single purpose over a rolling window. */
+/** Tracks concurrent demand for the shared warm pool over a rolling window. */
 export class PoolDemandTracker {
   private readonly samples: DemandSample[] = [];
   private current = 0;
@@ -32,7 +32,7 @@ export class PoolDemandTracker {
 
   constructor(private readonly config: DemandTrackerConfig) {}
 
-  /** A turn for this purpose started. */
+  /** A turn started. */
   begin(): void {
     this.current += 1;
     if (this.current > this.peak) {
@@ -41,14 +41,14 @@ export class PoolDemandTracker {
     this.samples.push({ at: this.config.now(), demand: this.current });
   }
 
-  /** A turn for this purpose finished (success or failure). */
+  /** A turn finished (success or failure). */
   end(): void {
     if (this.current > 0) {
       this.current -= 1;
     }
   }
 
-  /** Turns currently in flight for this purpose. */
+  /** Turns currently in flight. */
   get inFlight(): number {
     return this.current;
   }
@@ -77,46 +77,18 @@ export class PoolDemandTracker {
 }
 
 /**
- * Structural port for per-purpose demand telemetry. Consumers depend on this
- * interface rather than the concrete {@link PoolDemand} class (whose private
- * fields would otherwise force callers and tests to build a real instance).
+ * Structural port for demand telemetry. Consumers depend on this interface
+ * rather than the concrete {@link PoolDemandTracker} (whose private fields
+ * would otherwise force callers and tests to build a real instance).
  */
 export interface PoolDemandPort {
-  /** A turn for `purpose` started. */
-  begin(purpose: string): void;
-  /** A turn for `purpose` finished. */
-  end(purpose: string): void;
-  /** Suggested warm size for `purpose` from observed peak concurrency. */
-  suggestion(purpose: string): number;
+  /** A turn started. */
+  begin(): void;
+  /** A turn finished. */
+  end(): void;
+  /** Suggested warm size from observed peak concurrency. */
+  suggestion(): number;
 }
 
-/** Registry of per-purpose demand trackers, created lazily on first use. */
-export class PoolDemand implements PoolDemandPort {
-  private readonly byPurpose = new Map<string, PoolDemandTracker>();
-
-  constructor(private readonly make: () => PoolDemandTracker) {}
-
-  private tracker(purpose: string): PoolDemandTracker {
-    let existing = this.byPurpose.get(purpose);
-    if (!existing) {
-      existing = this.make();
-      this.byPurpose.set(purpose, existing);
-    }
-    return existing;
-  }
-
-  /** A turn for `purpose` started. */
-  begin(purpose: string): void {
-    this.tracker(purpose).begin();
-  }
-
-  /** A turn for `purpose` finished. */
-  end(purpose: string): void {
-    this.tracker(purpose).end();
-  }
-
-  /** Suggested warm size for `purpose` from observed peak concurrency. */
-  suggestion(purpose: string): number {
-    return this.tracker(purpose).suggestion();
-  }
-}
+/** Back-compat alias: the tracker *is* the demand registry now there is one pool. */
+export type PoolDemand = PoolDemandTracker;

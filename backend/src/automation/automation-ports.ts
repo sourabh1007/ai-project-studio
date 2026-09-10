@@ -37,6 +37,12 @@ export interface AiInvoker {
     attachments?: readonly string[];
     cwd?: string;
     noTools?: boolean;
+    /**
+     * Tools are unnecessary for this turn rather than forbidden, so it may run
+     * on a warm metasession (which cannot switch tools off) instead of
+     * cold-spawning a dedicated process.
+     */
+    toolsOptional?: boolean;
     timeoutMs?: number;
     scope?: 'feature' | 'internal';
     purpose?: string;

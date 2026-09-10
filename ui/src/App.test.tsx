@@ -31,7 +31,7 @@ vi.mock('./hooks/use-ide-usage.js', () => ({
   useIdeUsage: () => ({ totals: { nanoAiu: 0 } }),
 }));
 vi.mock('./hooks/use-plan-usage.js', () => ({
-  usePlanUsage: () => null,
+  usePlanUsage: () => ({ status: 'ready', usage: null, error: null }),
 }));
 vi.mock('./hooks/use-activity.js', () => ({
   useActivity: () => ({ pending: 0, error: null, label: null }),

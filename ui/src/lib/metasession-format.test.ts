@@ -27,22 +27,16 @@ describe('readWarmPool', () => {
     expect(readWarmPool('nope' as ConfigValue)).toBeNull();
   });
 
-  it('rejects objects missing a boolean enabled or an array of pools', () => {
-    expect(readWarmPool({ pools: [] } as unknown as ConfigValue)).toBeNull();
+  it('rejects objects missing a boolean enabled or a numeric size', () => {
+    expect(readWarmPool({ size: 2 } as unknown as ConfigValue)).toBeNull();
     expect(
       readWarmPool({ enabled: true } as unknown as ConfigValue),
     ).toBeNull();
   });
 
   it('returns the config when well-formed', () => {
-    const value = {
-      enabled: true,
-      pools: [{ purpose: 'general', size: 2 }],
-    } as unknown as ConfigValue;
-    expect(readWarmPool(value)).toEqual({
-      enabled: true,
-      pools: [{ purpose: 'general', size: 2 }],
-    });
+    const value = { enabled: true, size: 2 } as unknown as ConfigValue;
+    expect(readWarmPool(value)).toEqual({ enabled: true, size: 2 });
   });
 });
 
@@ -50,7 +44,7 @@ describe('savedWarmPool', () => {
   const running = {
     enabled: true,
     executable: 'copilot',
-    pools: [{ purpose: 'general', size: 5 }],
+    size: 5,
   } as unknown as ConfigValue;
 
   it('shows the stored size rather than the one the backend booted with', () => {
@@ -58,26 +52,24 @@ describe('savedWarmPool', () => {
     // saved, so reading it alone made every saved edit look reverted.
     const saved = savedWarmPool(running, {
       enabled: true,
-      pools: [{ purpose: 'general', size: 9 }],
+      size: 9,
     } as unknown as ConfigValue);
-    expect(saved?.pools).toEqual([{ purpose: 'general', size: 9 }]);
+    expect(saved?.size).toBe(9);
     // Untouched keys still track the running config.
     expect(saved?.executable).toBe('copilot');
   });
 
   it('falls back to the running config when nothing is stored', () => {
-    expect(savedWarmPool(running, null)?.pools).toEqual([
-      { purpose: 'general', size: 5 },
-    ]);
+    expect(savedWarmPool(running, null)?.size).toBe(5);
   });
 
-  it('replaces the pool list wholesale so a removed pool stays removed', () => {
+  it('lets a stored value override the running one wholesale', () => {
     const saved = savedWarmPool(running, {
       enabled: false,
-      pools: [{ purpose: 'review', size: 1 }],
+      size: 1,
     } as unknown as ConfigValue);
     expect(saved?.enabled).toBe(false);
-    expect(saved?.pools).toEqual([{ purpose: 'review', size: 1 }]);
+    expect(saved?.size).toBe(1);
   });
 
   it('is null when neither source is usable', () => {

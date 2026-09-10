@@ -134,12 +134,8 @@ export function MetaModelStatus(): JSX.Element | null {
       : [{ id: draftModel, label: draftModel }];
 
   const warmEnabled = pools?.enabled ?? false;
-  const warmLive = warmEnabled
-    ? pools!.pools.reduce((total, pool) => total + pool.live, 0)
-    : 0;
-  const warmSize = warmEnabled
-    ? pools!.pools.reduce((total, pool) => total + pool.size, 0)
-    : 0;
+  const warmLive = warmEnabled ? (pools?.pool?.live ?? 0) : 0;
+  const warmSize = warmEnabled ? (pools?.pool?.size ?? 0) : 0;
 
   return (
     <div className="statusbar-meta" ref={rootRef}>

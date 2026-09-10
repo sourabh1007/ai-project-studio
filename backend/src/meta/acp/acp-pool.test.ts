@@ -10,7 +10,6 @@ import { createDatabase } from '../../persistence/db/connection.js';
 import { createMetaOperationRepo } from '../../persistence/meta-operation-repo.js';
 import { createClock } from '../../kernel/clock.js';
 import { createProcessAdmission } from '../../kernel/process-admission.js';
-import { drainMetaPool } from '../pool-drain.js';
 
 interface FakeOptions {
   initFails?: boolean;
@@ -72,41 +71,6 @@ class FakeClient implements PooledClient {
 const flush = () => new Promise((r) => setImmediate(r));
 
 describe('fair retryable native pool shutdown', () => {
-  it('keeps a removed pool visible and never replenishes while a failed retirement is retried', async () => {
-    vi.useFakeTimers();
-    const budget = createProcessAdmission({ maxProcesses: 3, maxWarmProcesses: 2, maxQueued: 2 });
-    const clients = [new FakeClient({ disposeExits: false }), new FakeClient({ disposeExits: false })];
-    const original = clients[1].dispose.bind(clients[1]);
-    vi.spyOn(clients[1], 'dispose').mockImplementationOnce(() => {
-      original(); throw new Error('Native kill failure');
-    });
-    let next = 0;
-    const createClient = vi.fn(() => clients[next++]);
-    const pool = new MetaSessionPool({ size: 2, processAdmission: budget, createClient });
-    const onDrained = vi.fn();
-    const onError = vi.fn();
-    try {
-      await pool.start();
-      drainMetaPool({ pool, onDrained, onError });
-      expect(onError).toHaveBeenCalledOnce();
-      expect(pool.stats()).toMatchObject({ size: 0, live: 2, idle: 0 });
-      clients[0].exit();
-      await vi.advanceTimersByTimeAsync(700);
-      expect(clients[1].killed).toBe(2);
-      expect(onDrained).not.toHaveBeenCalled();
-      expect(createClient).toHaveBeenCalledTimes(2);
-      clients[1].exit();
-      await vi.advanceTimersByTimeAsync(700);
-      expect(onDrained).toHaveBeenCalledOnce();
-      expect(budget.stats().processes).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      clients.forEach((client) => client.exit());
-      pool.close(); budget.close();
-      vi.clearAllTimers(); vi.useRealTimers();
-    }
-  });
-
   it('continues a failed shrink and retries quarantined native clients on the next resize', async () => {
     const budget = createProcessAdmission({ maxProcesses: 3, maxWarmProcesses: 2, maxQueued: 2 });
     const clients = [new FakeClient({ disposeExits: false }), new FakeClient({ disposeExits: false })];

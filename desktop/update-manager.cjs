@@ -235,12 +235,14 @@ async function checkForUpdates(manual) {
     return getState();
   }
   try {
-    if (isWindows() && electronUpdater) {
-      setState({ status: Status.CHECKING, error: null });
-      await electronUpdater.autoUpdater.checkForUpdates();
-    } else {
-      await checkGitHubLatest(manual);
-    }
+    // Detection always goes through the GitHub Releases API, on every platform.
+    // electron-updater's feed needs `latest.yml` published beside the
+    // installers, and the release workflow deliberately uploads only the .exe /
+    // .dmg (see .github/workflows/release.yml, "publish installers without
+    // update feeds"). Asking electron-updater to check therefore 404s, and a
+    // background 404 is swallowed — which is why no update ever announced
+    // itself. The Releases API needs no feed, so it works either way.
+    await checkGitHubLatest(manual);
   } catch (err) {
     // Background failures (e.g. offline) shouldn't nag; only show on manual.
     if (manual) {
@@ -253,9 +255,32 @@ async function checkForUpdates(manual) {
 }
 
 /**
- * Lightweight GitHub Releases check used on macOS (and any non-Windows). Never
- * throws to the caller path beyond the awaited promise; compares the latest
- * published tag to the running version.
+ * Picks the newest published release from the Releases list. The list endpoint
+ * is used rather than `/releases/latest` because releases ship as prereleases
+ * marked `--latest=false`, which `/releases/latest` skips entirely — so that
+ * endpoint reported "up to date" no matter how many versions had shipped.
+ * Drafts are ignored; they are not downloadable.
+ */
+function newestRelease(releases) {
+  let best = null;
+  for (const release of Array.isArray(releases) ? releases : []) {
+    if (!release || release.draft) {
+      continue;
+    }
+    const version = String(release.tag_name || '').replace(/^v/, '');
+    if (!version) {
+      continue;
+    }
+    if (!best || isNewer(version, best.version)) {
+      best = { version, release };
+    }
+  }
+  return best;
+}
+
+/**
+ * Lightweight GitHub Releases check. Never throws to the caller path beyond the
+ * awaited promise; compares the newest published tag to the running version.
  */
 function checkGitHubLatest(manual) {
   return new Promise((resolve, reject) => {
@@ -264,7 +289,7 @@ function checkGitHubLatest(manual) {
       {
         method: 'GET',
         hostname: 'api.github.com',
-        path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
+        path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=20`,
         headers: {
           'User-Agent': 'ai-project-studio-updater',
           Accept: 'application/vnd.github+json',
@@ -281,14 +306,13 @@ function checkGitHubLatest(manual) {
             if (!res.statusCode || res.statusCode >= 400) {
               throw new Error(`GitHub API returned ${res.statusCode}`);
             }
-            const json = JSON.parse(body);
-            const tag = String(json.tag_name || '').replace(/^v/, '');
-            const notes = typeof json.body === 'string' ? json.body : null;
-            if (tag && isNewer(tag, safeVersion())) {
+            const best = newestRelease(JSON.parse(body));
+            if (best && isNewer(best.version, safeVersion())) {
+              const json = best.release;
               setState({
                 status: Status.AVAILABLE,
-                availableVersion: tag,
-                releaseNotes: notes,
+                availableVersion: best.version,
+                releaseNotes: typeof json.body === 'string' ? json.body : null,
                 releaseName: json.name || null,
                 releasePageUrl: json.html_url || RELEASES_PAGE,
                 error: null,
@@ -416,5 +440,6 @@ module.exports = {
   dispose,
   // Exported for potential reuse/testing.
   isNewer,
+  newestRelease,
   Status,
 };

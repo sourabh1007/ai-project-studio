@@ -274,7 +274,7 @@ describe('cold physical operation ownership', () => {
     });
     const warm = createAcpMetaRunner({ pool, newSessionId: () => 'warm-app', providerId: 'copilot', defaultModel: () => 'auto' });
     const routed = createPooledMetaRunner({
-      pools: [{ purpose: 'general', ready: () => pool.idleCount > 0, stats: () => pool.stats(), runDetailed: warm.runDetailed }],
+      pool: { ready: () => pool.idleCount > 0, stats: () => pool.stats(), runDetailed: warm.runDetailed },
       fallback: cold, defaultTimeoutMs: 1000,
     });
     try {

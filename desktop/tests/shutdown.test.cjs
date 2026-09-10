@@ -195,7 +195,11 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
           return control.waitForChildExit(child, waitMs);
         },
       };
-      return require(name);
+      // Relative specifiers in main.cjs are relative to desktop/, not to this
+      // test file, so resolve them there before falling back to the real load.
+      return require(
+        name.startsWith('./') ? path.join(__dirname, '..', name) : name,
+      );
     },
   };
   // Evaluate the real entrypoint and its lifecycle registration, without

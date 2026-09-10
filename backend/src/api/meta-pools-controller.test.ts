@@ -6,19 +6,16 @@ import { ValidationError } from '../kernel/error-types.js';
 const status: MetaPoolsStatus = {
   enabled: true,
   model: 'claude-opus-4.8',
-  pools: [
-    {
-      purpose: 'general',
-      suggestedSize: 3,
-      size: 5,
-      live: 5,
-      idle: 3,
-      busy: 2,
-      ready: true,
-      served: 12,
-      sessions: [],
-    },
-  ],
+  pool: {
+    suggestedSize: 3,
+    size: 5,
+    live: 5,
+    idle: 3,
+    busy: 2,
+    ready: true,
+    served: 12,
+    sessions: [],
+  },
 };
 
 describe('createMetaPoolsRoutes', () => {
@@ -28,8 +25,6 @@ describe('createMetaPoolsRoutes', () => {
     return createMetaPoolsRoutes({
       status: () => status,
       resize: () => status,
-      create: () => status,
-      remove: () => status,
       ...overrides,
     });
   }
@@ -41,66 +36,26 @@ describe('createMetaPoolsRoutes', () => {
     expect(route.handler({} as never)).toEqual({ status: 200, body: status });
   });
 
-  it('resizes a pool from the request body and returns the refreshed status', () => {
-    const calls: Array<{ purpose: string; size: number }> = [];
+  it('resizes the pool from the request body and returns the refreshed status', () => {
+    const calls: number[] = [];
     const routes = routesWith({
-      resize: (purpose, size) => {
-        calls.push({ purpose, size });
+      resize: (size) => {
+        calls.push(size);
         return status;
       },
     });
     const route = routes.find((r) => r.path === '/meta/pools/resize')!;
     expect(route.method).toBe('post');
-    const result = route.handler({
-      body: { purpose: 'general', size: 3 },
-    } as never);
+    const result = route.handler({ body: { size: 3 } } as never);
     expect(result).toEqual({ status: 200, body: status });
-    expect(calls).toEqual([{ purpose: 'general', size: 3 }]);
+    expect(calls).toEqual([3]);
   });
 
-  it('creates a pool from the request body and returns the refreshed status', () => {
-    const calls: Array<{ purpose: string; size: number }> = [];
-    const routes = routesWith({
-      create: (purpose, size) => {
-        calls.push({ purpose, size });
-        return status;
-      },
-    });
-    const route = routes.find((r) => r.path === '/meta/pools/create')!;
-    expect(route.method).toBe('post');
-    const result = route.handler({
-      body: { purpose: 'self-recovery', size: 2 },
-    } as never);
-    expect(result).toEqual({ status: 200, body: status });
-    expect(calls).toEqual([{ purpose: 'self-recovery', size: 2 }]);
-  });
-
-  it('removes a pool by purpose and returns the refreshed status', () => {
-    const calls: string[] = [];
-    const routes = routesWith({
-      remove: (purpose) => {
-        calls.push(purpose);
-        return status;
-      },
-    });
-    const route = routes.find((r) => r.path === '/meta/pools/remove')!;
-    expect(route.method).toBe('post');
-    const result = route.handler({
-      body: { purpose: 'self-recovery' },
-    } as never);
-    expect(result).toEqual({ status: 200, body: status });
-    expect(calls).toEqual(['self-recovery']);
-  });
-
-  it('rejects a remove body that is not an object or lacks a purpose', () => {
-    const routes = routesWith();
-    const route = routes.find((r) => r.path === '/meta/pools/remove')!;
-    for (const body of [null, [], 'x', 42]) {
-      expect(() => route.handler({ body } as never)).toThrow(ValidationError);
-    }
-    expect(() => route.handler({ body: { purpose: '  ' } } as never)).toThrow(
-      /purpose must be a non-empty string/,
-    );
+  it('exposes only the status and resize routes', () => {
+    expect(routesWith().map((r) => r.path)).toEqual([
+      '/meta/pools',
+      '/meta/pools/resize',
+    ]);
   });
 
   it('rejects a resize body that is not an object', () => {
@@ -111,24 +66,13 @@ describe('createMetaPoolsRoutes', () => {
     }
   });
 
-  it('rejects a resize with a missing or empty purpose', () => {
-    const routes = routesWith();
-    const route = routes.find((r) => r.path === '/meta/pools/resize')!;
-    expect(() => route.handler({ body: { size: 2 } } as never)).toThrow(
-      /purpose must be a non-empty string/,
-    );
-    expect(() =>
-      route.handler({ body: { purpose: '  ', size: 2 } } as never),
-    ).toThrow(/purpose must be a non-empty string/);
-  });
-
   it('rejects a resize with a non-whole or negative size', () => {
     const routes = routesWith();
     const route = routes.find((r) => r.path === '/meta/pools/resize')!;
     for (const size of [-1, 1.5, 'a', undefined]) {
-      expect(() =>
-        route.handler({ body: { purpose: 'general', size } } as never),
-      ).toThrow(/size must be a whole number/);
+      expect(() => route.handler({ body: { size } } as never)).toThrow(
+        /size must be a whole number/,
+      );
     }
   });
 
@@ -143,12 +87,10 @@ describe('createMetaPoolsRoutes', () => {
       maxQueued: 32,
     };
 
-    /** The four routes and a body each accepts. */
+    /** Both routes and a body each accepts. */
     const cases = [
       { path: '/meta/pools', body: undefined },
-      { path: '/meta/pools/resize', body: { purpose: 'general', size: 3 } },
-      { path: '/meta/pools/create', body: { purpose: 'review', size: 2 } },
-      { path: '/meta/pools/remove', body: { purpose: 'review' } },
+      { path: '/meta/pools/resize', body: { size: 3 } },
     ];
 
     it.each(cases)(

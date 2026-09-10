@@ -21,20 +21,21 @@ export const metaConfigSchema = z.object({
    */
   timeoutMs: z.number().int().positive(),
   /**
-   * Warm ACP metasession pools. When enabled, meta AI turns lease a live
-   * `copilot --acp` session from a warm pool instead of cold-spawning a CLI
-   * process per request, so the heavy startup (MCP proxies + auth) is paid once
-   * and IDE-wide AI responses (PR review, review board, summaries, …) are fast.
+   * The warm ACP metasession pool. When enabled, every meta AI turn leases a
+   * live `copilot --acp` session from this one shared pool instead of
+   * cold-spawning a CLI process per request, so the heavy startup (MCP proxies
+   * + auth) is paid once and IDE-wide AI responses (PR review, review board,
+   * summaries, …) are fast.
    *
-   * Requests are routed to the pool whose `purpose` matches; anything without a
-   * matching pool uses the `general` pool. Each pool keeps `size` sessions warm.
-   * The cold `metaRunner` remains the automatic fallback while a pool is still
-   * warming or when a warm turn fails before any prompt was dispatched. Once a
-   * warm prompt may already have executed, its failure is surfaced instead of
-   * retried cold.
+   * There is deliberately a single pool: every AI feature draws from the same
+   * warm capacity, so the only thing to tune is how many sessions to keep
+   * ready. The cold `metaRunner` remains the automatic fallback while the pool
+   * is still warming or when a warm turn fails before any prompt was
+   * dispatched. Once a warm prompt may already have executed, its failure is
+   * surfaced instead of retried cold.
    */
   warmPool: z.object({
-    /** Whether the warm pools are used (cold path remains the fallback). */
+    /** Whether the warm pool is used (cold path remains the fallback). */
     enabled: z.boolean(),
     /** Absolute path to the copilot executable driving the ACP process. */
     executable: z.string().min(1),
@@ -43,46 +44,15 @@ export const metaConfigSchema = z.object({
     /** Timeout (ms) for a single warm turn (session/new + session/prompt). */
     turnTimeoutMs: z.number().int().positive(),
     /**
-     * Rolling window (ms) over which per-purpose peak concurrency is measured
-     * to suggest a warm size. A longer window smooths spikes; a shorter one
-     * reacts faster to a change in load.
+     * Rolling window (ms) over which peak concurrency is measured to suggest a
+     * warm size. A longer window smooths spikes; a shorter one reacts faster
+     * to a change in load.
      */
     demandWindowMs: z.number().int().positive(),
     /** Upper bound for a telemetry-suggested warm size. */
     maxSuggestedSize: z.number().int().positive(),
-    /**
-     * The warm pools to keep ready, one per purpose. Purposes must be unique;
-     * the `general` pool is the fallback for any unrouted request, so a pool
-     * with that purpose must exist.
-     */
-    pools: z
-      .array(
-        z.object({
-          /** Stable routing key (e.g. 'general', 'review'). */
-          purpose: z.string().min(1),
-          /** Number of warm sessions this pool keeps ready. */
-          size: z.number().int().positive(),
-        }),
-      )
-      .min(1)
-      .superRefine((pools, ctx) => {
-        const seen = new Set<string>();
-        for (const pool of pools) {
-          if (seen.has(pool.purpose)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `Duplicate warm-pool purpose: ${pool.purpose}`,
-            });
-          }
-          seen.add(pool.purpose);
-        }
-        if (!seen.has('general')) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "A warm pool with purpose 'general' is required.",
-          });
-        }
-      }),
+    /** How many warm sessions the pool keeps ready. */
+    size: z.number().int().positive(),
   }),
 });
 
@@ -110,8 +80,7 @@ export const metaDefaults: MetaConfig = {
     demandWindowMs: 600_000,
     // Never suggest keeping more than 12 warm sessions from telemetry alone.
     maxSuggestedSize: 12,
-    // One shared pool of 5 warm sessions. Add purpose-specific pools here to
-    // dedicate warm capacity to a workflow; unrouted requests use 'general'.
-    pools: [{ purpose: 'general', size: 5 }],
+    // One shared pool of 5 warm sessions serving every AI feature.
+    size: 5,
   },
 };

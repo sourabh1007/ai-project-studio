@@ -24,6 +24,7 @@ files:
   - clipboard.cjs
   - backend-control.cjs
   - backend-identity.cjs
+  - backend-failure-log.cjs
   - startup-splash.cjs
   - startup/**/*
   - owned-attachments.cjs

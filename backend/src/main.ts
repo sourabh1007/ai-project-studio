@@ -287,14 +287,13 @@ import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
 import { createMetaOperationRepo } from './persistence/meta-operation-repo.js';
 import { createMetaOperationOwnership } from './meta/meta-operation-ownership.js';
 import { createMetaOperationPhysicalOwnership } from './meta/meta-operation-physical-ownership.js';
-import { drainMetaPool } from './meta/pool-drain.js';
 import { createMetaOperationRecovery } from './meta/meta-operation-recovery.js';
 import {
   META_OPERATIONS_NAMESPACE, metaOperationsConfigSchema, metaOperationsDefaults,
   type MetaOperationsConfig,
 } from './meta/meta-operations-config.js';
 import { MetaSessionPool } from './meta/acp/acp-pool.js';
-import { PoolDemand, PoolDemandTracker } from './meta/pool-demand.js';
+import { PoolDemandTracker } from './meta/pool-demand.js';
 import { AcpClient } from './meta/acp/acp-client.js';
 import { AcpProcessAdapter } from './meta/acp/acp-process-adapter.js';
 import { createAcpMetaRunner } from './meta/acp/acp-meta-runner.js';
@@ -302,7 +301,7 @@ import {
   createPooledMetaRunner,
   GENERAL_PURPOSE,
   metaPoolsStatus,
-  type PurposePool,
+  type WarmPool,
 } from './meta/pooled-meta-runner.js';
 import {
   META_NAMESPACE,
@@ -1765,35 +1764,17 @@ function main(): void {
     now: () => Date.now(),
     ttlMs: 10 * 60 * 1000,
   });
-  const warmPurposePools: PurposePool[] = [];
-  // Pools mid-removal, still reported (flagged draining) so the UI animates
-  // their sessions shutting down; each drops out once it has emptied.
-  const drainingPurposePools: Array<Pick<PurposePool, 'purpose' | 'stats'>> = [];
-  const warmDemand = new PoolDemand(
-    () =>
-      new PoolDemandTracker({
-        now: () => Date.now(),
-        windowMs: warmPoolCfg.demandWindowMs,
-        maxSize: warmPoolCfg.maxSuggestedSize,
-      }),
-  );
+  const warmDemand = new PoolDemandTracker({
+    now: () => Date.now(),
+    windowMs: warmPoolCfg.demandWindowMs,
+    maxSize: warmPoolCfg.maxSuggestedSize,
+  });
   let metaPoolsStatusFn: () => ReturnType<typeof metaPoolsStatus> = () =>
-    metaPoolsStatus(false, []);
-  // Live pools by purpose, so the Settings page can resize one without a
+    metaPoolsStatus(false);
+  // The single live warm pool, so the Settings page can resize it without a
   // restart. Empty until warm pools are enabled/built below.
-  const warmPoolsByPurpose = new Map<string, MetaSessionPool>();
   const allWarmPools = new Set<MetaSessionPool>();
-  let resizeMetaPoolFn: (purpose: string, size: number) => ReturnType<
-    typeof metaPoolsStatus
-  > = () => {
-    throw new NotFoundError('Warm metasession pools are disabled');
-  };
-  let createMetaPoolFn: (purpose: string, size: number) => ReturnType<
-    typeof metaPoolsStatus
-  > = () => {
-    throw new NotFoundError('Warm metasession pools are disabled');
-  };
-  let removeMetaPoolFn: (purpose: string) => ReturnType<
+  let resizeMetaPoolFn: (size: number) => ReturnType<
     typeof metaPoolsStatus
   > = () => {
     throw new NotFoundError('Warm metasession pools are disabled');
@@ -1807,112 +1788,51 @@ function main(): void {
       copilotConfig,
       agencyConfig,
     });
-    // Builds, registers and starts a warm pool for one purpose. Shared by the
-    // startup loop and live pool creation so both spawn sessions identically.
-    const buildWarmPool = (purpose: string, size: number): void => {
-      const pool = new MetaSessionPool({
-        physicalOwnership: metaPhysicalOwnership,
-        processAdmission,
-        size,
-        createClient: () =>
-          new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
-            initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
-            turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
-          }),
+    const pool = new MetaSessionPool({
+      physicalOwnership: metaPhysicalOwnership,
+      processAdmission,
+      size: warmPoolCfg.size,
+      createClient: () =>
+        new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
+          initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
+          turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
+        }),
+    });
+    allWarmPools.add(pool);
+    pool.start().catch((error: unknown) => {
+      logger.error('Warm ACP pool failed to start; using cold path', {
+        error: error instanceof Error ? error.message : String(error),
       });
-      allWarmPools.add(pool);
-      warmPoolsByPurpose.set(purpose, pool);
-      pool.start().catch((error: unknown) => {
-        logger.error(
-          `Warm ACP pool '${purpose}' failed to start; using cold path`,
-          { error: error instanceof Error ? error.message : String(error) },
-        );
-      });
-      const runner = createAcpMetaRunner({
-        pool,
-        newSessionId: () => `acp-${randomUUID()}`,
-        purpose,
-        providerId: warmProviderIdentity ?? COPILOT_NAMESPACE,
-        defaultModel: () => metaSettings.get().model,
-      });
-      warmPurposePools.push({
-        purpose,
-        ready: () => pool.ready,
-        stats: () => pool.stats(),
-        runDetailed: (request) => runner.runDetailed(request),
-      });
+    });
+    const warmRunner = createAcpMetaRunner({
+      pool,
+      newSessionId: () => `acp-${randomUUID()}`,
+      purpose: GENERAL_PURPOSE,
+      providerId: warmProviderIdentity ?? COPILOT_NAMESPACE,
+      defaultModel: () => metaSettings.get().model,
+    });
+    const warmPool: WarmPool = {
+      ready: () => pool.ready,
+      stats: () => pool.stats(),
+      runDetailed: (request) => warmRunner.runDetailed(request),
     };
-    for (const poolCfg of warmPoolCfg.pools) {
-      buildWarmPool(poolCfg.purpose, poolCfg.size);
-    }
     rawMetaAi = createPooledMetaRunner({
       physicalOwnership: metaPhysicalOwnership,
-      pools: warmPurposePools,
+      pool: warmPool,
       fallback: coldMetaRunner,
       defaultTimeoutMs: metaConfig.timeoutMs,
       demand: warmDemand,
       supportsWarm,
-      onFallback: (purpose, error) =>
-        logger.warn(`Warm turn on pool '${purpose}' failed; using cold path`, {
+      onFallback: (error) =>
+        logger.warn('Warm turn failed; using cold path', {
           error: error instanceof Error ? error.message : String(error),
         }),
     });
     warmInlinePrompts = true;
     metaPoolsStatusFn = () =>
-      metaPoolsStatus(
-        true,
-        warmPurposePools,
-        warmDemand,
-        metaSettings.get().model,
-        drainingPurposePools,
-      );
-    resizeMetaPoolFn = (purpose, size) => {
-      const pool = warmPoolsByPurpose.get(purpose);
-      if (!pool) {
-        throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
-      }
+      metaPoolsStatus(true, warmPool, warmDemand, metaSettings.get().model);
+    resizeMetaPoolFn = (size) => {
       pool.resize(size);
-      return metaPoolsStatusFn();
-    };
-    createMetaPoolFn = (purpose, size) => {
-      if (warmPoolsByPurpose.has(purpose)) {
-        throw new ValidationError(
-          `A warm metasession pool already serves purpose: ${purpose}`,
-        );
-      }
-      buildWarmPool(purpose, size);
-      return metaPoolsStatusFn();
-    };
-    removeMetaPoolFn = (purpose) => {
-      if (purpose === GENERAL_PURPOSE) {
-        throw new ValidationError('The general metasession pool cannot be removed');
-      }
-      const pool = warmPoolsByPurpose.get(purpose);
-      if (!pool) {
-        throw new NotFoundError(`No warm metasession pool for purpose: ${purpose}`);
-      }
-      // Stop routing new turns to it and lock it out of further edits at once.
-      warmPoolsByPurpose.delete(purpose);
-      const index = warmPurposePools.findIndex((p) => p.purpose === purpose);
-      if (index !== -1) {
-        warmPurposePools.splice(index, 1);
-      }
-      // Stop prefill immediately; busy turns finish naturally. Keep the pool
-      // visible and retry failed retirements until native exit is confirmed.
-      const draining = { purpose, stats: () => pool.stats() };
-      drainingPurposePools.push(draining);
-      const dropDraining = (): void => {
-        const di = drainingPurposePools.indexOf(draining);
-        if (di !== -1) {
-          drainingPurposePools.splice(di, 1);
-        }
-      };
-      drainMetaPool({
-        pool, onDrained: dropDraining,
-        onError: (error) => logger.warn('Warm metasession pool is still draining', {
-          purpose, error: error instanceof Error ? error.message : String(error),
-        }),
-      });
       return metaPoolsStatusFn();
     };
   }
@@ -1993,6 +1913,7 @@ function main(): void {
       executor: createRepositoryAnalysisExecutor(
         metaAi,
         createTemporaryPromptFileFactory(),
+        warmInlinePrompts,
       ),
       config: repositoryContextConfig,
     }),
@@ -2649,9 +2570,7 @@ function main(): void {
         ...processAdmission.stats(),
         ...processAdmission.limits(),
       }),
-      resizeMetaPool: (purpose, size) => resizeMetaPoolFn(purpose, size),
-      createMetaPool: (purpose, size) => createMetaPoolFn(purpose, size),
-      removeMetaPool: (purpose) => removeMetaPoolFn(purpose),
+      resizeMetaPool: (size) => resizeMetaPoolFn(size),
       metaSettings: () => ({
         ...metaSettings.get(),
         warmPoolEnabled: warmPoolCfg.enabled,

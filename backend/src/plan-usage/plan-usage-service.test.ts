@@ -4,7 +4,7 @@ import type { PlanUsageProbe } from './plan-usage-contract.js';
 
 const PANEL = '2% used 25,000 / 1,000,000 AIC';
 
-function fakeProbe(captures: Array<string | null>): {
+function fakeProbe(captures: Array<string | null | Error>): {
   probe: PlanUsageProbe;
   calls: () => number;
 } {
@@ -15,7 +15,11 @@ function fakeProbe(captures: Array<string | null>): {
     probe: {
       capture: async () => {
         calls += 1;
-        return captures[Math.min(i++, captures.length - 1)];
+        const next = captures[Math.min(i++, captures.length - 1)];
+        if (next instanceof Error) {
+          throw next;
+        }
+        return next;
       },
     },
   };
@@ -31,20 +35,43 @@ function clock(startMs: number) {
   };
 }
 
+/** Lets the fire-and-forget background capture settle. */
+const settle = () => new Promise((r) => setImmediate(r));
+
 describe('plan-usage-service', () => {
-  it('captures on first read and caches the parsed snapshot', async () => {
+  it('never blocks the first read on a capture that takes tens of seconds', async () => {
+    // The regression this guards: awaiting the probe held `GET /usage/plan`
+    // open past the UI's request timeout, so the status bar silently showed
+    // nothing at all.
+    let release: (text: string) => void = () => {};
+    const probe: PlanUsageProbe = {
+      capture: () => new Promise<string>((r) => { release = r; }),
+    };
+    const c = clock(0);
+    const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
+
+    expect(svc.read()).toEqual({ status: 'capturing', usage: null, error: null });
+
+    release(PANEL);
+    await settle();
+    const ready = svc.read();
+    expect(ready.status).toBe('ready');
+    expect(ready.usage?.usedAic).toBe(25000);
+    expect(ready.usage?.totalAic).toBe(1000000);
+    expect(ready.usage?.capturedAt).toBe(new Date(0).toISOString());
+  });
+
+  it('serves a fresh snapshot from cache without re-probing', async () => {
     const { probe, calls } = fakeProbe([PANEL]);
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
 
-    const first = await svc.read();
-    expect(first?.usedAic).toBe(25000);
-    expect(first?.totalAic).toBe(1000000);
-    expect(first?.capturedAt).toBe(new Date(0).toISOString());
-
-    const second = await svc.read();
+    svc.read();
+    await settle();
+    const first = svc.read();
+    const second = svc.read();
     expect(second).toEqual(first);
-    expect(calls()).toBe(1); // served from cache, no second probe
+    expect(calls()).toBe(1);
   });
 
   it('returns the stale snapshot immediately and refreshes in the background', async () => {
@@ -52,16 +79,17 @@ describe('plan-usage-service', () => {
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
 
-    await svc.read();
+    svc.read();
+    await settle();
     c.advance(2000); // expire the cache
 
-    const stale = await svc.read();
-    expect(stale?.usedAic).toBe(25000); // old value returned right away
-    await new Promise((r) => setImmediate(r)); // let background refresh settle
+    const stale = svc.read();
+    expect(stale.status).toBe('ready');
+    expect(stale.usage?.usedAic).toBe(25000); // old value returned right away
+    await settle();
     expect(calls()).toBe(2);
 
-    const refreshed = await svc.read();
-    expect(refreshed?.usedAic).toBe(100000);
+    expect(svc.read().usage?.usedAic).toBe(100000);
   });
 
   it('single-flights overlapping captures', async () => {
@@ -79,10 +107,13 @@ describe('plan-usage-service', () => {
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
 
-    await svc.read();
+    svc.read();
+    await settle();
     c.advance(2000);
     const result = await svc.refresh();
     expect(result?.usedAic).toBe(25000); // previous snapshot kept
+    // Data is still shown even though the newest capture failed.
+    expect(svc.read().status).toBe('ready');
   });
 
   it('retains the cache when a later probe yields unparseable text', async () => {
@@ -90,22 +121,63 @@ describe('plan-usage-service', () => {
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
 
-    await svc.read();
+    svc.read();
+    await settle();
     const result = await svc.refresh();
     expect(result?.usedAic).toBe(25000);
   });
 
-  it('returns null when the very first probe yields no data', async () => {
+  it('reports why the first capture produced nothing instead of staying silent', async () => {
     const { probe } = fakeProbe([null]);
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
-    expect(await svc.read()).toBeNull();
+    svc.read();
+    await settle();
+    const state = svc.read();
+    expect(state.status).toBe('unavailable');
+    expect(state.usage).toBeNull();
+    expect(state.error).toMatch(/usage panel/);
   });
 
-  it('returns null when the first probe text is unparseable', async () => {
+  it('reports unparseable first output as unavailable', async () => {
     const { probe } = fakeProbe(['nothing useful']);
     const c = clock(0);
     const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
-    expect(await svc.read()).toBeNull();
+    svc.read();
+    await settle();
+    expect(svc.read().status).toBe('unavailable');
+  });
+
+  it('surfaces a thrown probe failure rather than crashing the read', async () => {
+    const { probe } = fakeProbe([new Error('copilot is not installed')]);
+    const c = clock(0);
+    const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
+    svc.read();
+    await settle();
+    expect(svc.read()).toEqual({
+      status: 'unavailable',
+      usage: null,
+      error: 'copilot is not installed',
+    });
+  });
+
+  it('surfaces a non-Error probe rejection as text', async () => {
+    const probe: PlanUsageProbe = { capture: () => Promise.reject('boom') };
+    const c = clock(0);
+    const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
+    svc.read();
+    await settle();
+    expect(svc.read().error).toBe('boom');
+  });
+
+  it('clears a previous failure once a capture succeeds', async () => {
+    const { probe } = fakeProbe([null, PANEL]);
+    const c = clock(0);
+    const svc = createPlanUsageService({ probe, now: c.now, ttlMs: 1000 });
+    svc.read();
+    await settle();
+    expect(svc.read().status).toBe('unavailable');
+    await svc.refresh();
+    expect(svc.read()).toMatchObject({ status: 'ready', error: null });
   });
 });

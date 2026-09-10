@@ -868,6 +868,20 @@ export interface PlanUsage {
   capturedAt: string;
 }
 
+/**
+ * Whether the backend has a plan snapshot yet. Capturing one boots a Copilot
+ * TUI and takes tens of seconds, so "no data" is normal at startup and must be
+ * distinguishable from a capture that actually failed.
+ */
+export type PlanUsageStatus = 'capturing' | 'ready' | 'unavailable';
+
+/** `/usage/plan` response: the snapshot plus why it may be missing. */
+export interface PlanUsageState {
+  status: PlanUsageStatus;
+  usage: PlanUsage | null;
+  error: string | null;
+}
+
 export interface FeatureSummary {
   featureId: string;
   content: string;
@@ -1113,10 +1127,9 @@ export interface MetaSessionInfo {
   live?: MetaSessionLiveTurn;
 }
 
-/** Live warm-capacity snapshot for one metasession pool. */
+/** Live warm-capacity snapshot for the shared metasession pool. */
 export interface MetaPoolStat {
   waitingForCapacity?: boolean;
-  purpose: string;
   size: number;
   /** Telemetry-suggested warm size from observed peak concurrency. */
   suggestedSize: number;
@@ -1128,12 +1141,6 @@ export interface MetaPoolStat {
   served: number;
   /** Per-session live status, ordered by creation. */
   sessions: MetaSessionInfo[];
-  /**
-   * True while the pool is being removed and draining its warm sessions. It no
-   * longer takes routing and disappears from the status once every session has
-   * retired; surfaced so the Settings page can show it shutting down live.
-   */
-  draining?: boolean;
 }
 
 /** Aggregate warm metasession pool status for the Settings page. */
@@ -1148,9 +1155,10 @@ export interface MetaPoolsStatus {
     maxQueued: number;
   };
   enabled: boolean;
-  /** Model powering warm sessions, when known (shared across every pool). */
+  /** Model powering warm sessions, when known. */
   model?: string;
-  pools: MetaPoolStat[];
+  /** The shared warm pool; absent when warm sessions are disabled. */
+  pool?: MetaPoolStat;
 }
 
 /** Runtime meta AI provider/model powering new metasessions (status bar). */

@@ -7,16 +7,19 @@ export interface PlanUsageControllerDeps {
 
 /**
  * Route exposing the signed-in Copilot plan's AI-credit budget (used / total /
- * available / reset), scraped from the CLI `/usage` panel. Returns `200` with a
- * `null` body when no snapshot could be captured yet so the UI can hide the
- * indicator gracefully.
+ * available / reset), scraped from the CLI `/usage` panel.
+ *
+ * The response is always a state envelope, never a bare `null`: capturing a
+ * snapshot takes tens of seconds, so the UI needs to tell "still capturing"
+ * apart from "the capture failed" instead of silently hiding the indicator.
+ * The read never awaits a capture, so this route always answers immediately.
  */
 export function createPlanUsageRoutes(deps: PlanUsageControllerDeps): Route[] {
   return [
     {
       method: 'get',
       path: '/usage/plan',
-      handler: async () => ({ status: 200, body: await deps.planUsage.read() }),
+      handler: () => Promise.resolve({ status: 200, body: deps.planUsage.read() }),
     },
   ];
 }

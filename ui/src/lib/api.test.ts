@@ -33,18 +33,18 @@ describe('createApiClient', () => {
     expect(error.message).toContain('/meta/pools');
   });
 
-  it('rejects a structurally unusable pools payload instead of rendering it', async () => {
-    const { fetchImpl } = mockFetch(jsonResponse({ enabled: true }));
+  it('rejects a structurally unusable pool payload instead of rendering it', async () => {
+    const { fetchImpl } = mockFetch(
+      jsonResponse({ enabled: true, pool: { sessions: {} } }),
+    );
     const client = createApiClient({ fetchImpl });
-    await expect(client.getMetaPools()).rejects.toThrow('no pool list');
+    await expect(client.getMetaPools()).rejects.toThrow('instead of a list');
   });
 
   it('validates pool mutations too, not just the initial read', async () => {
-    const { fetchImpl } = mockFetch(jsonResponse({ pools: [{}] }));
+    const { fetchImpl } = mockFetch(jsonResponse({ enabled: true, pool: 'nope' }));
     const client = createApiClient({ fetchImpl });
-    await expect(client.resizeMetaPool('review', 2)).rejects.toThrow('index 0');
-    await expect(client.createMetaPool('review', 2)).rejects.toThrow('index 0');
-    await expect(client.removeMetaPool('review')).rejects.toThrow('index 0');
+    await expect(client.resizeMetaPool(2)).rejects.toThrow('for the pool');
   });
 
   it('rejects an operation page whose cursor could never terminate paging', async () => {
@@ -453,52 +453,22 @@ describe('createApiClient', () => {
 
   it('reads the warm metasession pool status', async () => {
     const { fetchImpl, calls } = mockFetch(
-      jsonResponse({ enabled: true, pools: [] }),
+      jsonResponse({ enabled: true }),
     );
     const client = createApiClient({ fetchImpl });
     await client.getMetaPools();
     expect(calls[0][0]).toBe('/api/meta/pools');
   });
 
-  it('resizes a warm metasession pool with a JSON POST body', async () => {
+  it('resizes the warm metasession pool with a JSON POST body', async () => {
     const { fetchImpl, calls } = mockFetch(
-      jsonResponse({ enabled: true, pools: [] }),
+      jsonResponse({ enabled: true }),
     );
     const client = createApiClient({ fetchImpl });
-    await client.resizeMetaPool('general', 4);
+    await client.resizeMetaPool(4);
     expect(calls[0][0]).toBe('/api/meta/pools/resize');
     expect(calls[0][1]?.method).toBe('POST');
-    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
-      purpose: 'general',
-      size: 4,
-    });
-  });
-
-  it('creates a warm metasession pool with a JSON POST body', async () => {
-    const { fetchImpl, calls } = mockFetch(
-      jsonResponse({ enabled: true, pools: [] }),
-    );
-    const client = createApiClient({ fetchImpl });
-    await client.createMetaPool('self-recovery', 2);
-    expect(calls[0][0]).toBe('/api/meta/pools/create');
-    expect(calls[0][1]?.method).toBe('POST');
-    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
-      purpose: 'self-recovery',
-      size: 2,
-    });
-  });
-
-  it('removes a warm metasession pool with a JSON POST body', async () => {
-    const { fetchImpl, calls } = mockFetch(
-      jsonResponse({ enabled: true, pools: [] }),
-    );
-    const client = createApiClient({ fetchImpl });
-    await client.removeMetaPool('self-recovery');
-    expect(calls[0][0]).toBe('/api/meta/pools/remove');
-    expect(calls[0][1]?.method).toBe('POST');
-    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({
-      purpose: 'self-recovery',
-    });
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ size: 4 });
   });
 
   it('reads the runtime meta AI settings', async () => {

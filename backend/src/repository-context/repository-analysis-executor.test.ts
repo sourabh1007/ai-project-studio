@@ -5,7 +5,7 @@ import { copilotDefaults } from '../provider/copilot-adapter/config.js';
 import { createRepositoryAnalysisExecutor } from './repository-analysis-executor.js';
 import type { TemporaryPromptFileFactory } from './temporary-prompt-file-port.js';
 
-function harness(options: { metaError?: Error; createError?: Error } = {}) {
+function harness(options: { metaError?: Error; createError?: Error; inlinePrompts?: boolean } = {}) {
   const requests: MetaRequest[] = [];
   const created: string[] = [];
   const cleaned: string[] = [];
@@ -40,7 +40,11 @@ function harness(options: { metaError?: Error; createError?: Error } = {}) {
     },
   };
   return {
-    executor: createRepositoryAnalysisExecutor(meta, temporaryPrompts),
+    executor: createRepositoryAnalysisExecutor(
+      meta,
+      temporaryPrompts,
+      options.inlinePrompts,
+    ),
     requests,
     created,
     cleaned,
@@ -114,5 +118,30 @@ describe('repository-analysis-executor', () => {
     ).rejects.toThrow('temp unavailable');
     expect(h.requests).toEqual([]);
     expect(h.cleaned).toEqual([]);
+  });
+
+  it('sends the prompt inline with no attachment so the request can run warm', async () => {
+    const h = harness({ inlinePrompts: true });
+
+    await expect(
+      h.executor.execute({
+        repositoryId: 'r1',
+        repositoryPath: 'C:\\work\\repo',
+        prompt: 'full prompt',
+        maxOutputChars: 10,
+      }),
+    ).resolves.toBe('repository');
+    // No temp file is written at all, which is what keeps the request eligible
+    // for a warm session instead of forcing a cold CLI spawn.
+    expect(h.created).toEqual([]);
+    expect(h.cleaned).toEqual([]);
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]).toMatchObject({
+      featureId: 'repository:r1',
+      prompt: 'full prompt',
+      cwd: 'C:\\work\\repo',
+      scope: 'internal',
+    });
+    expect(h.requests[0].attachments).toBeUndefined();
   });
 });

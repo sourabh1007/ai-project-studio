@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { copyText } from '../../hooks/clipboard-write.js';
 import { Button, Card } from '../../components/ui.js';
 import { useConnectionStatus } from '../../hooks/use-connection-status.js';
@@ -11,11 +11,18 @@ import {
   listFailures,
   type FailureEntry,
 } from '../../lib/failure-log.js';
+import {
+  backendFailureDetail,
+  describeBackendFailure,
+  readBackendDiagnostics,
+  type BackendDiagnostics,
+} from '../../lib/backend-failure.js';
 import type { ConnectionState } from '../../lib/connection-status.js';
 
 /** The Electron preload bridge, present only in the desktop app. */
 interface DiagnosticsBridge {
   relaunch?(): Promise<boolean>;
+  backendDiagnostics?(): Promise<unknown>;
 }
 
 interface DiagnosticsSectionProps {
@@ -82,6 +89,25 @@ export function DiagnosticsSection({
   );
   const [copied, setCopied] = useState(false);
   const [restartFailed, setRestartFailed] = useState(false);
+  const [backend, setBackend] = useState<BackendDiagnostics | null>(null);
+
+  // Backend crash evidence comes from the desktop main process, not the API,
+  // so it is still readable when the backend is the thing that died.
+  useEffect(() => {
+    let alive = true;
+    void Promise.resolve(bridge?.backendDiagnostics?.())
+      .then((value) => {
+        if (alive) setBackend(readBackendDiagnostics(value));
+      })
+      .catch(() => {
+        /* an older desktop shell has no such channel; the panel degrades */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bridge]);
+
+  const resolvedLogDirectory = logDirectory ?? backend?.logDirectory ?? null;
 
   const restart = async () => {
     setRestartFailed(false);
@@ -108,9 +134,10 @@ export function DiagnosticsSection({
       userAgent: readUserAgent(),
       connection: connection.state,
       health: HEALTH_LABEL[connection.state],
-      logDirectory,
+      logDirectory: resolvedLogDirectory,
       failures: listFailures(),
       now: new Date().toISOString(),
+      backendFailures: backend?.failures ?? [],
     });
 
   const copyDiagnostics = () => {
@@ -164,7 +191,37 @@ export function DiagnosticsSection({
           <dt>Platform</dt>
           <dd>{readPlatform()}</dd>
         </div>
+        {resolvedLogDirectory && (
+          <div style={{ display: 'contents' }}>
+            <dt>Log directory</dt>
+            <dd>{resolvedLogDirectory}</dd>
+          </div>
+        )}
       </dl>
+
+      {backend && backend.failures.length > 0 && (
+        <>
+          <h3 className="diag-subtitle">Why the backend stopped</h3>
+          <ul className="diag-failures">
+            {backend.failures.map((failure, i) => {
+              const detail = backendFailureDetail(failure);
+              return (
+                <li className="diag-failure" key={`${failure.at}-${i}`}>
+                  <span className="diag-failure-context">
+                    {describeBackendFailure(failure)}
+                  </span>
+                  {detail && (
+                    <span className="diag-failure-message">{detail}</span>
+                  )}
+                  <time className="diag-failure-time" dateTime={failure.at}>
+                    {new Date(failure.at).toLocaleTimeString()}
+                  </time>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
 
       <div className="diag-failures-head">
         <h3 className="diag-subtitle">Recent failures</h3>

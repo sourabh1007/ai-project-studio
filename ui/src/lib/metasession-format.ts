@@ -4,10 +4,9 @@ import type {
 } from './types.js';
 
 /**
- * Purposes the IDE routes metasession work to. `general` is the required
- * fallback for any request without a dedicated pool; the others are workflow
- * routing keys used across the app. Surfaced so users don't have to guess what
- * to type when adding a pool.
+ * Purposes the IDE tags metasession turns with. These are attribution labels
+ * for the usage/turn views — not routing keys: every turn draws from the one
+ * shared pool.
  */
 export const KNOWN_PURPOSES: Array<{
   purpose: string;
@@ -17,7 +16,7 @@ export const KNOWN_PURPOSES: Array<{
   {
     purpose: 'general',
     label: 'General',
-    hint: 'Fallback for every AI turn without a dedicated pool — PR review, summaries, repo context, review board, monitors.',
+    hint: 'Everyday AI turns — PR review, summaries, repo context, review board, monitors.',
   },
   {
     purpose: 'self-recovery',
@@ -29,20 +28,21 @@ export const KNOWN_PURPOSES: Array<{
 /** The persisted warm-pool config shape read out of the raw settings value. */
 export interface WarmPoolConfig {
   enabled: boolean;
-  pools: Array<{ purpose: string; size: number }>;
+  /** How many metasessions the shared pool keeps warm. */
+  size: number;
   [key: string]: ConfigValue;
 }
 
 /**
  * Narrow an untyped config value to a {@link WarmPoolConfig}, or null when it is
- * missing/malformed, so callers can trust `enabled`/`pools` without re-checking.
+ * missing/malformed, so callers can trust `enabled`/`size` without re-checking.
  */
 export function readWarmPool(value: ConfigValue): WarmPoolConfig | null {
   if (value === null || typeof value !== 'object') {
     return null;
   }
   const wp = value as Record<string, unknown>;
-  if (typeof wp.enabled !== 'boolean' || !Array.isArray(wp.pools)) {
+  if (typeof wp.enabled !== 'boolean' || typeof wp.size !== 'number') {
     return null;
   }
   return wp as unknown as WarmPoolConfig;

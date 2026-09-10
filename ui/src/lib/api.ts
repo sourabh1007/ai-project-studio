@@ -19,7 +19,7 @@ import type {
   FeatureWorkSummary,
   GithubStatus,
   IdeUsage,
-  PlanUsage,
+  PlanUsageState,
   ImportableSession,
   ImportSessionInput,
   ModelInfo,
@@ -429,7 +429,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
-    getPlanUsage: () => request<PlanUsage | null>('/usage/plan'),
+    getPlanUsage: () => request<PlanUsageState>('/usage/plan'),
     generateSummary: (featureId: string) =>
       request<FeatureSummary>(
         `/features/${featureId}/summary`,
@@ -547,22 +547,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     getMetaPools: () =>
       request<MetaPoolsStatus>('/meta/pools', undefined, validateMetaPoolsStatus),
-    resizeMetaPool: (purpose: string, size: number) =>
+    resizeMetaPool: (size: number) =>
       request<MetaPoolsStatus>(
         '/meta/pools/resize',
-        jsonBody({ purpose, size }),
-        validateMetaPoolsStatus,
-      ),
-    createMetaPool: (purpose: string, size: number) =>
-      request<MetaPoolsStatus>(
-        '/meta/pools/create',
-        jsonBody({ purpose, size }),
-        validateMetaPoolsStatus,
-      ),
-    removeMetaPool: (purpose: string) =>
-      request<MetaPoolsStatus>(
-        '/meta/pools/remove',
-        jsonBody({ purpose }),
+        jsonBody({ size }),
         validateMetaPoolsStatus,
       ),
     getMetaSettings: () => request<MetaSettings>('/meta/settings'),
