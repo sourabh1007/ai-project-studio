@@ -25,7 +25,9 @@ export interface WarmProviderIdentityDeps {
 /**
  * ACP warm sessions currently use the executable's built-in defaults: they can
  * only honor requests that stay on that provider's default model, use no
- * attachments, keep tools enabled, and remain in the internal scope.
+ * attachments, and remain in the internal scope. A tool-less request is also
+ * served warm when the caller marked tools optional, since warm sessions cannot
+ * turn tools off but a prompt that needs none simply never calls them.
  */
 export function resolveWarmProviderIdentity(
   deps: WarmProviderIdentityDeps,
@@ -59,7 +61,8 @@ export function createWarmRoutePolicy(
     if ((request.scope ?? 'internal') !== 'internal') {
       return false;
     }
-    if (request.noTools || (request.attachments?.length ?? 0) > 0) {
+    if ((request.noTools && !request.toolsOptional) ||
+        (request.attachments?.length ?? 0) > 0) {
       return false;
     }
     if (deps.warmProviderId === null) {

@@ -29,7 +29,7 @@ describe('shared headless process admission', () => {
     warm.release();
     expect(budget.stats().processes).toBe(0);
     const cancelled = new AbortController(); cancelled.abort();
-    await expect(budget.acquireCold(cancelled.signal)).rejects.toMatchObject({ kind: 'cancelled' });
+    await expect(budget.acquireCold(cancelled.signal)).rejects.toMatchObject({ reason: 'cancelled' });
   });
 
   it('shares queue slots across warm waiters and FIFO cold acquisition, with cancellation cleanup', async () => {
@@ -38,7 +38,7 @@ describe('shared headless process admission', () => {
     const external = budget.reserveQueue(() => {});
     const controller = new AbortController();
     const pending = budget.acquireCold(controller.signal);
-    await expect(budget.acquireCold()).rejects.toMatchObject({ kind: 'queue-full' });
+    await expect(budget.acquireCold()).rejects.toMatchObject({ reason: 'queue-full' });
     expect(budget.tryAcquireWarm()).toBeNull();
     controller.abort();
     await expect(pending).rejects.toBeInstanceOf(ProcessAdmissionError);
@@ -121,7 +121,7 @@ describe('shared headless process admission', () => {
     const a = budget.acquireCold(); const b = budget.acquireCold();
     budget.reconfigure({ maxProcesses: 2, maxWarmProcesses: 0, maxQueued: 0 });
     const granted = await a;
-    await expect(budget.acquireCold()).rejects.toMatchObject({ kind: 'queue-full' });
+    await expect(budget.acquireCold()).rejects.toMatchObject({ reason: 'queue-full' });
     granted.release(); const last = await b;
     active.release(); last.release();
     expect(() => budget.reconfigure({ ...config, maxProcesses: 0 })).toThrow();
@@ -132,7 +132,7 @@ describe('shared headless process admission', () => {
     const budget = createProcessAdmission(config);
     const warm = budget.tryAcquireWarm()!; const active = await budget.acquireCold();
     const pending = budget.acquireCold();
-    const rejected = expect(pending).rejects.toMatchObject({ kind: 'closed' });
+    const rejected = expect(pending).rejects.toMatchObject({ reason: 'closed' });
     const closed = vi.fn();
     budget.reserveQueue(closed);
     budget.close(); budget.close();
@@ -140,8 +140,8 @@ describe('shared headless process admission', () => {
     expect(closed).toHaveBeenCalledTimes(1);
     expect(budget.stats()).toEqual({ processes: 2, warmProcesses: 1, queued: 0, closed: true });
     expect(budget.tryAcquireWarm()).toBeNull();
-    await expect(budget.acquireCold()).rejects.toMatchObject({ kind: 'closed' });
-    expect(() => budget.reserveQueue(() => {})).toThrow('closed');
+    await expect(budget.acquireCold()).rejects.toMatchObject({ reason: 'closed' });
+    expect(() => budget.reserveQueue(() => {})).toThrow('shutting down');
     budget.reconfigure(config);
     active.release(); warm.release();
     expect(budget.stats().processes).toBe(0);

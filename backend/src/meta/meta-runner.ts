@@ -157,6 +157,18 @@ export interface MetaRequest {
    */
   noTools?: boolean;
   /**
+   * Marks {@link noTools} as an optimization rather than a requirement.
+   *
+   * Warm ACP sessions cannot disable tools, so a `noTools` request was excluded
+   * from warm routing outright. Callers that set `noTools` purely for speed —
+   * their prompt already embeds everything the model needs — were therefore
+   * forced to cold-spawn a process each, leaving the warm pool idle while a
+   * burst of parallel work (a full review board pass) exhausted the process
+   * budget. Such a caller sets this so warm routing may serve the turn with
+   * tools merely available and unused; the pool's turn timeout still bounds it.
+   */
+  toolsOptional?: boolean;
+  /**
    * Per-request hard timeout (ms) overriding the runner's configured ceiling.
    * Lets a caller bound a lightweight step more tightly than a full agentic
    * turn so a stall surfaces as a failed step quickly instead of spinning.

@@ -69,6 +69,26 @@ describe('createWarmRoutePolicy', () => {
     expect(supportsWarm({ ...baseRequest, attachments: ['C:\\repo\\a.txt'] })).toBe(false);
     expect(supportsWarm({ ...baseRequest, scope: 'feature' })).toBe(false);
   });
+
+  it('serves a tool-less request warm when the caller marked tools optional', () => {
+    const supportsWarm = createWarmRoutePolicy({
+      settings: { get: () => ({ providerId: 'copilot', model: 'auto' }) },
+      warmProviderId: 'copilot',
+    });
+    expect(supportsWarm({ ...baseRequest, noTools: true })).toBe(false);
+    expect(
+      supportsWarm({ ...baseRequest, noTools: true, toolsOptional: true }),
+    ).toBe(true);
+    // Tools being optional does not excuse a constraint warm cannot meet.
+    expect(
+      supportsWarm({
+        ...baseRequest,
+        noTools: true,
+        toolsOptional: true,
+        attachments: ['C:\\repo\\a.txt'],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('createConfiguredWarmRoutePolicy', () => {

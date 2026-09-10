@@ -285,6 +285,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         cwd: params.review.worktreePath,
         scope: 'internal',
         noTools: true,
+        toolsOptional: true,
         label: params.label,
         timeoutMs: deps.config.stepTimeoutMs,
         onStart: params.onStart,
@@ -307,6 +308,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         // single-shot completion that can't wedge in an agentic tool loop, and a
         // tight per-step timeout fails a stall fast instead of spinning forever.
         noTools: true,
+        toolsOptional: true,
         label: params.label,
         timeoutMs: deps.config.stepTimeoutMs,
         onStart: params.onStart,

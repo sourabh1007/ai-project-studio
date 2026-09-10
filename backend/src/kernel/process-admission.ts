@@ -1,11 +1,28 @@
 import { processAdmissionConfigSchema, type ProcessAdmissionConfig } from './process-admission-config.js';
+import { AppError } from './error-types.js';
 
-export class ProcessAdmissionError extends Error {
-  constructor(readonly kind: 'queue-full' | 'cancelled' | 'closed') {
-    super(`AI process admission ${kind}`);
+/**
+ * Admission refused a process. This is a capacity or lifecycle condition, not a
+ * defect, so it must not surface as a bare "Internal server error" — that told
+ * the user nothing and looked identical to a crash. `conflict` maps to a status
+ * the client can act on, and the message names the actual limit reached.
+ */
+export class ProcessAdmissionError extends AppError {
+  readonly reason: 'queue-full' | 'cancelled' | 'closed';
+
+  constructor(reason: 'queue-full' | 'cancelled' | 'closed') {
+    super('conflict', ADMISSION_MESSAGES[reason]);
     this.name = 'ProcessAdmissionError';
+    this.reason = reason;
   }
 }
+
+const ADMISSION_MESSAGES: Record<'queue-full' | 'cancelled' | 'closed', string> = {
+  'queue-full':
+    'The AI process limit is fully subscribed and the wait queue is full. Reduce the warm pool size or raise the process limit in Settings, then retry.',
+  cancelled: 'The AI process request was cancelled before it started.',
+  closed: 'The backend is shutting down and is not starting new AI processes.',
+};
 
 export interface ProcessPermit {
   /** Native exit, or confirmed failure before native spawn, is required. */

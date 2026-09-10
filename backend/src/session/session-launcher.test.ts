@@ -185,9 +185,9 @@ describe('cold physical operation ownership', () => {
       const launched = await h.launcher.start({ featureId: 'f', prompt: 'cold', kind: 'meta' });
       const controller = new AbortController();
       const queued = h.launcher.start({ featureId: 'f', prompt: 'queued', kind: 'meta', signal: controller.signal });
-      const rejected = expect(queued).rejects.toMatchObject({ kind: 'cancelled' });
+      const rejected = expect(queued).rejects.toMatchObject({ reason: 'cancelled' });
       await new Promise((resolve) => setImmediate(resolve));
-      await expect(h.launcher.start({ featureId: 'f', prompt: 'full', kind: 'meta' })).rejects.toMatchObject({ kind: 'queue-full' });
+      await expect(h.launcher.start({ featureId: 'f', prompt: 'full', kind: 'meta' })).rejects.toMatchObject({ reason: 'queue-full' });
       expect(h.started).toHaveLength(1);
       expect(budget.stats()).toMatchObject({ processes: 2, queued: 1 });
       controller.abort(); await rejected;

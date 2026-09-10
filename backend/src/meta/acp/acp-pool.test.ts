@@ -297,15 +297,15 @@ describe('bounded warm native admission', () => {
     const cancelled = pool.acquire(cancel.signal);
     const cancelledFailure = expect(cancelled).rejects.toThrow();
     const waiting = budget.acquireCold();
-    const coldFailure = expect(waiting).rejects.toMatchObject({ kind: 'closed' });
-    await expect(pool.acquire()).rejects.toMatchObject({ kind: 'queue-full' });
+    const coldFailure = expect(waiting).rejects.toMatchObject({ reason: 'closed' });
+    await expect(pool.acquire()).rejects.toMatchObject({ reason: 'queue-full' });
     cancel.abort(); await cancelledFailure;
     const handoff = pool.acquire();
     pool.release(lease);
     const next = await handoff;
     expect(budget.stats().queued).toBe(1);
     const closing = pool.acquire(new AbortController().signal);
-    const closeFailure = expect(closing).rejects.toMatchObject({ kind: 'closed' });
+    const closeFailure = expect(closing).rejects.toMatchObject({ reason: 'closed' });
     budget.close();
     await Promise.all([closeFailure, coldFailure]);
     expect(budget.stats().queued).toBe(0);
@@ -327,7 +327,7 @@ describe('bounded warm native admission', () => {
     pool.release(active);
     const granted = await handingOff;
     const waiting = pool.acquire();
-    const failure = expect(waiting).rejects.toMatchObject({ kind: 'closed' });
+    const failure = expect(waiting).rejects.toMatchObject({ reason: 'closed' });
     callbacks[0]();
     expect(budget.stats().queued).toBe(1);
     budget.close(); await failure;
