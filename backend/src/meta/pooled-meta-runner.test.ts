@@ -126,6 +126,22 @@ describe('createPooledMetaRunner', () => {
     }
   });
 
+  it('honors forceCold so a retry cannot land on the same warm session', async () => {
+    // A warm turn that fails after dispatch is surfaced rather than re-routed,
+    // so one unhealthy session failed every parallel caller identically. A
+    // retrying caller escapes it by forcing the cold path.
+    const warm = pool();
+    const cold = coldRunner();
+    const runner = createPooledMetaRunner({
+      pool: warm,
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
+    const result = await runner.runDetailed(req({ forceCold: true }));
+    expect(result.text).toBe('cold');
+    expect(warm.calls).toHaveLength(0);
+  });
+
   it('uses the warm pool when bypass() is false', async () => {
     const warm = pool();
     const cold = coldRunner();

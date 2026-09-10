@@ -564,6 +564,105 @@ describe('createTerminalSession', () => {
     expect(late.output).toEqual(['ying']);
   });
 
+  describe('suppressOutput', () => {
+    function suppressible() {
+      const output: string[] = [];
+      return {
+        sink: {
+          suppressible: true,
+          send: (d: string) => output.push(d),
+          exit: () => {},
+        },
+        output,
+      };
+    }
+
+    function build(scrollbackBytes = 1000) {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 's1',
+        pty: f.pty,
+        inputReady: true,
+        scrollbackBytes,
+        transcriptBytes: 1000,
+        onExit: () => {},
+      });
+      return { f, session };
+    }
+
+    it('hides output from watchers while keeping internal observers fed', () => {
+      const { f, session } = build();
+      const watcher = suppressible();
+      const observer = recordingSink();
+      session.attach(watcher.sink);
+      session.attach(observer.sink);
+
+      const release = session.suppressOutput('applying');
+      f.emitData('injected echo');
+      release();
+      f.emitData('after');
+
+      // The watcher sees the status line and the post-release output only.
+      expect(watcher.output).toEqual(['applying', 'after']);
+      // Internal observers must keep seeing everything, or the very logic that
+      // ends suppression (quiet detection) would never fire.
+      expect(observer.output).toEqual(['applying', 'injected echo', 'after']);
+    });
+
+    it('keeps hidden output out of scrollback but in the transcript', () => {
+      const { f, session } = build();
+      const release = session.suppressOutput();
+      f.emitData('hidden');
+      release();
+      f.emitData('shown');
+
+      const late = suppressible();
+      session.attach(late.sink);
+      expect(late.output).toEqual(['shown']);
+      // Summaries still see the applied context even though the user does not.
+      expect(session.transcriptText()).toBe('hiddenshown');
+    });
+
+    it('only resumes once every overlapping hold is released', () => {
+      const { f, session } = build();
+      const watcher = suppressible();
+      session.attach(watcher.sink);
+
+      const outer = session.suppressOutput();
+      const inner = session.suppressOutput();
+      inner();
+      f.emitData('still hidden');
+      outer();
+      f.emitData('visible');
+
+      expect(watcher.output).toEqual(['visible']);
+    });
+
+    it('ignores a repeated release so it cannot un-hide another hold', () => {
+      const { f, session } = build();
+      const watcher = suppressible();
+      session.attach(watcher.sink);
+
+      const first = session.suppressOutput();
+      const second = session.suppressOutput();
+      first();
+      first();
+      f.emitData('hidden');
+      second();
+      f.emitData('visible');
+
+      expect(watcher.output).toEqual(['visible']);
+    });
+
+    it('skips an empty notice', () => {
+      const { session } = build();
+      const watcher = suppressible();
+      session.attach(watcher.sink);
+      session.suppressOutput('')();
+      expect(watcher.output).toEqual([]);
+    });
+  });
+
   it('settles pending input readiness as ready or closed exactly once', () => {
     const readyPty = fakePty();
     const session = createTerminalSession({

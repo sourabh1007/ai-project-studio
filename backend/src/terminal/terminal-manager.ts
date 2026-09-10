@@ -108,9 +108,16 @@ export interface TerminalManager {
    * though it were typed and submitted. Used to apply a skill tagged to a live
    * session (session-scoped skills can only be tagged once the session — and
    * thus its terminal — is open, so they are never picked up by launch-time
-   * seeding). Returns false when no live terminal exists or the block is empty.
+   * seeding). `label` names what is being applied ("Workspace context",
+   * "Skill Foo") and is shown as a one-line status while the injected block
+   * itself stays hidden. Returns false when no live terminal exists or the
+   * block is empty.
    */
-  injectInstructions(sessionId: string, instructions: string): boolean;
+  injectInstructions(
+    sessionId: string,
+    instructions: string,
+    label?: string,
+  ): boolean;
   /**
    * Feeds user keystrokes for a live session into its retry controller so any
    * pending automatic replay derived from an older confirmed request is
@@ -654,6 +661,18 @@ export function createTerminalManager(
   }
 
   /**
+   * One-line status shown in place of a hidden instruction block. Dim so it
+   * reads as IDE chrome rather than model output, and cleared to a fresh line
+   * so it cannot be mistaken for part of the CLI's own rendering.
+   */
+  function injectionNotice(label?: string): string | undefined {
+    if (label === undefined || label.trim().length === 0) {
+      return undefined;
+    }
+    return `\r\n\x1b[2m${label.trim()} is getting applied…\x1b[0m\r\n`;
+  }
+
+  /**
    * Writes an instruction block into a live terminal and submits it with a
    * separate keystroke once the terminal output has settled. The interactive
    * CLI treats a fast multi-line write as a paste and would absorb an
@@ -668,14 +687,21 @@ export function createTerminalManager(
     instructions: string,
     onComplete: () => void = () => {},
     epoch: number | null = null,
+    notice?: string,
   ): void {
     if (epoch !== null && currentReplayEpoch(terminal.sessionId) !== epoch) {
       onComplete();
       return;
     }
+    // Hide the echo of the injected block so the user sees the status line
+    // instead of a wall of text they did not type. `submit()` is the single
+    // convergence point of the quiet, exit and cap paths, so releasing there
+    // guarantees output always comes back.
+    const release = terminal.suppressOutput(notice);
     try {
       terminal.write(instructions);
     } catch {
+      release();
       onComplete();
       return;
     }
@@ -695,6 +721,7 @@ export function createTerminalManager(
           // Input readiness must still settle if the PTY rejects the submit.
         }
       }
+      release();
       onComplete();
     };
 
@@ -871,7 +898,7 @@ export function createTerminalManager(
         if (set.size === 0) listeners.delete(sessionId);
       };
     },
-    injectInstructions(sessionId, instructions) {
+    injectInstructions(sessionId, instructions, label) {
       // kill closes input immediately, while native exit may arrive later.
       const terminal = sessions.get(sessionId);
       if (!terminal || terminal.inputReadiness === 'closed' || instructions.length === 0) {
@@ -879,7 +906,13 @@ export function createTerminalManager(
       }
       bumpReplayEpoch(sessionId);
       retries.get(sessionId)?.confirmReplaySafeRequest('');
-      seedNow(terminal, instructions, undefined, currentReplayEpoch(sessionId));
+      seedNow(
+        terminal,
+        instructions,
+        undefined,
+        currentReplayEpoch(sessionId),
+        injectionNotice(label),
+      );
       return true;
     },
     observeInput(sessionId, data) {

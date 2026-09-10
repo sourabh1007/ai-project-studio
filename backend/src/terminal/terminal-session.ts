@@ -20,6 +20,12 @@ export interface TerminalOutputSink {
    * client's pane width differs from the capture width.
    */
   resize?(cols: number, rows: number): void;
+  /**
+   * Marks this sink as one a user is watching, so it is muted while output is
+   * suppressed (see {@link TerminalSession.suppressOutput}). Internal observers
+   * leave it unset and keep receiving everything.
+   */
+  suppressible?: boolean;
 }
 
 export interface TerminalSessionDeps {
@@ -80,6 +86,18 @@ export interface TerminalSession {
    * the CLI's own output.
    */
   notify(text: string): void;
+  /**
+   * Hides PTY output from clients and scrollback until the returned release is
+   * called, showing `notice` in its place.
+   *
+   * Applying workspace/skill context types the whole instruction block into the
+   * terminal, so the user watched a wall of injected text scroll past that they
+   * had not written and could not act on. Suppressing the echo turns it into a
+   * one-line "context is getting applied" status. The transcript still records
+   * everything, so summaries are unaffected. Release is idempotent, and callers
+   * must guarantee it runs on every path or the session would go silent.
+   */
+  suppressOutput(notice?: string): () => void;
   readonly exited: boolean;
   readonly exitCode: number | null;
   /** ANSI-stripped accumulated output, for persistence / summarization. */
@@ -108,6 +126,13 @@ export function createTerminalSession(
   const stripTranscriptAnsi = createAnsiStripper();
   let exited = false;
   let exitCode: number | null = null;
+  /**
+   * Number of active output-suppression holds. While positive, PTY output is
+   * kept out of the visible stream and scrollback (but not the transcript).
+   * A counter rather than a flag so overlapping injections cannot have the
+   * inner one un-hide the outer one's echo.
+   */
+  let suppressDepth = 0;
   let inputReadiness: 'pending' | 'ready' | 'closed' = deps.inputReady
     ? 'ready'
     : 'pending';
@@ -156,12 +181,24 @@ export function createTerminalSession(
   };
 
   pty.onData((data) => {
-    scrollback.append(data);
+    // The transcript always records, even while the echo of an injected
+    // instruction block is hidden: summarization should still see the context
+    // that was applied, the user just should not have to read it scroll past.
     transcript.append(stripTranscriptAnsi(data));
+    const hidden = suppressDepth > 0;
+    if (!hidden) {
+      scrollback.append(data);
+    }
     for (const sink of sinks) {
+      // Internal observers (quiet detection, retry analysis, MCP watching) must
+      // keep seeing output while it is hidden, or suppression would stall the
+      // very logic that ends it.
+      if (hidden && sink.suppressible) continue;
       sink.send(data);
     }
-    sendToNewlyReadySinks(data);
+    if (!hidden) {
+      sendToNewlyReadySinks(data);
+    }
   });
 
   pty.onExit((code) => {
@@ -246,6 +283,24 @@ export function createTerminalSession(
         sink.send(text);
       }
       sendToNewlyReadySinks(text);
+    },
+    suppressOutput(notice) {
+      if (notice !== undefined && notice.length > 0) {
+        // Show the status line before the hold starts, so it is visible even
+        // though everything after it is hidden.
+        scrollback.append(notice);
+        for (const sink of sinks) {
+          sink.send(notice);
+        }
+        sendToNewlyReadySinks(notice);
+      }
+      suppressDepth += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        suppressDepth -= 1;
+      };
     },
     get exited() {
       return exited;

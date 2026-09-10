@@ -74,6 +74,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
     generation = next.generation;
     setState(state === 'failed' ? 'failed' : 'bootstrapping');
     detach = next.attach({
+      suppressible: true,
       send: (data) => deps.send({ type: 'output', data }),
       resize: (cols, rows) => deps.send({ type: 'resize', cols, rows }),
       exit: (code) => deps.send({ type: 'exit', code }),

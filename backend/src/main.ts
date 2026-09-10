@@ -1596,7 +1596,11 @@ function main(): void {
     features: featureService,
     sessions: sessionRepo,
     inject: (sessionId, instructions) =>
-      terminalManager!.injectInstructions(sessionId, instructions),
+      terminalManager!.injectInstructions(
+        sessionId,
+        instructions,
+        'Workspace context',
+      ),
     config: contextConfig,
   });
   const contextService = createContextService({
@@ -1888,7 +1892,11 @@ function main(): void {
         if (
           session.provider === providerId &&
           session.status === 'running' &&
-          terminalManager?.injectInstructions(session.id, command)
+          terminalManager?.injectInstructions(
+            session.id,
+            command,
+            'MCP configuration',
+          )
         ) {
           applied += 1;
         }
@@ -2510,6 +2518,19 @@ function main(): void {
     healers: [ghInstallHealer, assistantModelHealer],
   });
 
+  /**
+   * Human-readable name for a skill, used as the status line shown while its
+   * instruction block is injected. Falls back to a generic label rather than
+   * failing: a missing skill must never break the injection it describes.
+   */
+  const skillLabel = (skillId: string): string => {
+    try {
+      return `Skill ${skillsService.getSkill(skillId).name}`;
+    } catch {
+      return 'Skill';
+    }
+  };
+
   mountRoutes(
     router,    ownApplicationRoutes(createApiRoutes({
       features: featureService,
@@ -2537,7 +2558,11 @@ function main(): void {
       injectSessionSkill: (sessionId, skillId) => {
         const instructions = skillsService.instructionsForSkill(skillId);
         if (instructions.length > 0) {
-          terminalManager!.injectInstructions(sessionId, instructions);
+          terminalManager!.injectInstructions(
+            sessionId,
+            instructions,
+            skillLabel(skillId),
+          );
         }
       },
       // Reverse a session-scoped skill on its live terminal when it is removed,
@@ -2545,7 +2570,11 @@ function main(): void {
       removeSessionSkill: (sessionId, skillId) => {
         const prompt = skillsService.removalPromptForSkill(skillId);
         if (prompt.length > 0) {
-          terminalManager!.injectInstructions(sessionId, prompt);
+          terminalManager!.injectInstructions(
+            sessionId,
+            prompt,
+            `${skillLabel(skillId)} removal`,
+          );
         }
       },
       tasks: featureTasksService,

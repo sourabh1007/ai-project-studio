@@ -14,10 +14,9 @@
 
 import type { Clock } from '../kernel/clock.js';
 import type { EventBus } from '../kernel/event-bus.js';
-import { ValidationError } from '../kernel/error-types.js';
+import { ProviderError, ValidationError } from '../kernel/error-types.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
-import { isTransientProviderFailure } from '../pr-review/transient-failure.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 import type { ReviewBoardConfig } from './config.js';
 import { discoverProjectModel } from './project-discovery.js';
@@ -195,6 +194,7 @@ export function createReviewBoardService(
     prompt: string,
     hooks?: PromptHooks,
     signal?: AbortSignal,
+    forceCold = false,
   ): Promise<string> {
     const deliverInline =
       deps.inlinePrompts || prompt.length <= deps.config.coldInlineMaxChars;
@@ -206,6 +206,7 @@ export function createReviewBoardService(
         scope: 'internal',
         noTools: true,
         toolsOptional: true,
+        forceCold,
         label: 'Review board',
         timeoutMs: deps.config.stepTimeoutMs,
         signal,
@@ -239,13 +240,27 @@ export function createReviewBoardService(
     }
   }
 
-  /** Run a prompt, retrying only *transient* provider failures. */
+  /**
+   * Runs a prompt with a durable completion guarantee.
+   *
+   * Retries used to be limited to failures a classifier recognised as
+   * transient, so anything it did not recognise died on the first attempt and
+   * reached the user as a bare "Internal server error". Worse, a warm turn that
+   * fails after dispatch is deliberately not re-routed cold, so one unhealthy
+   * warm session failed every perspective of a board pass identically.
+   *
+   * Now every failure except a caller abort is retried, and the final attempt
+   * is forced onto the cold path so it cannot land on the same broken shared
+   * session. What still fails is raised as a {@link ProviderError} carrying the
+   * real provider message, so the UI can say what actually went wrong.
+   */
   async function runPrompt(
     review: PrReview,
     prompt: string,
     hooks?: PromptHooks,
     signal?: AbortSignal,
   ): Promise<string> {
+    let lastError: unknown;
     for (
       let retry = 0;
       retry < deps.config.transientRetryAttempts;
@@ -254,11 +269,20 @@ export function createReviewBoardService(
       try {
         return await runPromptAttempt(review, prompt, hooks, signal);
       } catch (error) {
-        if (!isTransientProviderFailure(errorMessage(error))) throw error;
+        if (signal?.aborted) throw error;
+        lastError = error;
         await deps.sleep(deps.config.transientRetryBackoffMs);
       }
     }
-    return runPromptAttempt(review, prompt, hooks, signal);
+    try {
+      return await runPromptAttempt(review, prompt, hooks, signal, true);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      const cause = errorMessage(error) || errorMessage(lastError);
+      throw new ProviderError(
+        `The review model could not complete this analysis: ${cause}`,
+      );
+    }
   }
 
   return {

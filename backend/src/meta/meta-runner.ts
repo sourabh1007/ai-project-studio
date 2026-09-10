@@ -169,6 +169,16 @@ export interface MetaRequest {
    */
   toolsOptional?: boolean;
   /**
+   * Skips warm routing and runs this turn on the cold path.
+   *
+   * A warm turn that fails *after* dispatch is surfaced rather than retried
+   * cold, so a single unhealthy warm session made every parallel caller fail
+   * identically — a whole review board pass died with the same error. A caller
+   * that retries sets this on its final attempt so the retry cannot land on
+   * the same broken shared resource.
+   */
+  forceCold?: boolean;
+  /**
    * Per-request hard timeout (ms) overriding the runner's configured ceiling.
    * Lets a caller bound a lightweight step more tightly than a full agentic
    * turn so a stall surfaces as a failed step quickly instead of spinning.

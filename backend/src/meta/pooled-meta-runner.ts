@@ -80,7 +80,7 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
       timeoutMs,
       deadlineAt: request.deadlineAt ?? Date.now() + timeoutMs,
     };
-    if (deps.bypass?.()) {
+    if (deps.bypass?.() || bounded.forceCold) {
       return deps.fallback.runDetailed(bounded);
     }
     deps.demand?.begin();

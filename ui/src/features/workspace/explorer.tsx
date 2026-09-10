@@ -1,6 +1,9 @@
 import {
   Fragment,
+  useCallback,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -54,6 +57,7 @@ import {
   WarningIcon,
 } from '../../components/icons.js';
 import {
+  blockedMoveTargets,
   featureMoveTargets,
   type FeatureMoveTarget,
 } from '../../lib/feature-move-targets.js';
@@ -80,6 +84,13 @@ import {
   RepositoryContextBadge,
   RepositoryContextViewer,
 } from './repository-context.js';
+
+/**
+ * How long a drag must hover a collapsed feature row before it opens. Long
+ * enough that passing over a row on the way somewhere else does not disturb
+ * the tree, short enough to feel like a direct response.
+ */
+const HOVER_EXPAND_MS = 600;
 
 function SessionRow({
   session,
@@ -343,6 +354,7 @@ function FeatureNode({
   onNestFeature,
   onRequestMove,
   draggingFeature,
+  canNestInto,
   onStartReview,
   treeRevision,
   onMoveNode,
@@ -368,6 +380,12 @@ function FeatureNode({
   onRequestMove: (feature: Feature) => void;
   /** The feature currently being dragged, if any, used to highlight nest targets. */
   draggingFeature: Feature | null;
+  /**
+   * Whether the dragged feature may be nested under `featureId`. Descendants of
+   * the dragged feature are illegal destinations (the backend rejects the cycle),
+   * so they must not light up as drop targets at all.
+   */
+  canNestInto: (featureId: string) => boolean;
   /** Starts the PR-review flow for this feature's repository, when it has one. */
   onStartReview?: () => void;
   treeRevision: number;
@@ -564,8 +582,30 @@ function FeatureNode({
   const canAcceptFeature = Boolean(
     draggingFeature &&
       draggingFeature.id !== feature.id &&
-      (draggingFeature.parentFeatureId ?? null) !== feature.id,
+      (draggingFeature.parentFeatureId ?? null) !== feature.id &&
+      canNestInto(feature.id),
   );
+
+  // Reveal sub-categories while a drag hovers a collapsed row. Without this a
+  // nested destination is unreachable by dragging at all: its parent has to be
+  // open for the child row to exist, and a drag cannot click the chevron.
+  const expandTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHoverExpand = (): void => {
+    if (expandTimer.current !== null) {
+      clearTimeout(expandTimer.current);
+      expandTimer.current = null;
+    }
+  };
+  const scheduleHoverExpand = (): void => {
+    if (expanded || expandTimer.current !== null) {
+      return;
+    }
+    expandTimer.current = setTimeout(() => {
+      expandTimer.current = null;
+      setExpanded(true);
+    }, HOVER_EXPAND_MS);
+  };
+  useEffect(() => cancelHoverExpand, []);
 
   function handleFeatureNestDrop() {
     if (!draggingFeature || !canAcceptFeature) {
@@ -604,13 +644,19 @@ function FeatureNode({
           } else if (canAcceptFeature) {
             event.preventDefault();
             setFeatureDropTarget(true);
+            scheduleHoverExpand();
+          } else if (draggingFeature) {
+            // Not a legal destination itself, but its subtree may hold one.
+            scheduleHoverExpand();
           }
         }}
         onDragLeave={() => {
+          cancelHoverExpand();
           setNodeDropTarget(false);
           setFeatureDropTarget(false);
         }}
         onDrop={(event) => {
+          cancelHoverExpand();
           if (canAcceptNode) {
             event.preventDefault();
             event.stopPropagation();
@@ -1013,6 +1059,7 @@ function RepoNode({
   onDeleteRepo,
   onContextUpdated,
   draggingFeature,
+  canNestInto,
   onFeatureDragStart,
   onFeatureDragEnd,
   onMoveFeature,
@@ -1041,6 +1088,8 @@ function RepoNode({
   onDeleteRepo: (repo: Repository) => void;
   onContextUpdated: (context: RepositoryContext) => void;
   draggingFeature: Feature | null;
+  /** Whether the dragged feature may be nested under the given feature id. */
+  canNestInto: (featureId: string) => boolean;
   onFeatureDragStart: (feature: Feature) => void;
   onFeatureDragEnd: () => void;
   onMoveFeature: (
@@ -1102,6 +1151,7 @@ function RepoNode({
       onNestFeature={onNestFeature}
       onRequestMove={onRequestMove}
       draggingFeature={draggingFeature}
+      canNestInto={canNestInto}
       onStartReview={
         repo ? () => onStartReview(repo, feature.id) : undefined
       }
@@ -1480,6 +1530,22 @@ export function Explorer({
   const repoList = repos.data ?? [];
   const repoIds = repoList.map((repo) => repo.id).join(',');
 
+  // A feature cannot be nested inside itself or its own descendants — the
+  // backend rejects the cycle. Computing the illegal set here keeps those rows
+  // from lighting up as drop targets at all, so a drag never ends in a failure
+  // the user could not have predicted.
+  const blockedNestTargets = useMemo(
+    () =>
+      draggingFeature
+        ? blockedMoveTargets(allFeatures, draggingFeature.id)
+        : new Set<string>(),
+    [allFeatures, draggingFeature],
+  );
+  const canNestInto = useCallback(
+    (featureId: string) => !blockedNestTargets.has(featureId),
+    [blockedNestTargets],
+  );
+
   useEffect(() => {
     if (!repoIds) {
       return;
@@ -1724,6 +1790,7 @@ export function Explorer({
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
             draggingFeature={draggingFeature}
+            canNestInto={canNestInto}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
             onMoveFeature={moveFeature}
@@ -1757,6 +1824,7 @@ export function Explorer({
             onDeleteRepo={deleteRepo}
             onContextUpdated={updateContext}
             draggingFeature={draggingFeature}
+            canNestInto={canNestInto}
             onFeatureDragStart={setDraggingFeature}
             onFeatureDragEnd={() => setDraggingFeature(null)}
             onMoveFeature={moveFeature}

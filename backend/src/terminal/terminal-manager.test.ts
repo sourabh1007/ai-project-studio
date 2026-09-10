@@ -1526,6 +1526,29 @@ describe('createTerminalManager', () => {
       }
     });
 
+    it('shows a status line for a labelled injection and none for a blank label', async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager } = makeManager('');
+        const terminal = await manager.getOrLaunch(sampleSession());
+        const output: string[] = [];
+        terminal.attach({
+          send: (data) => output.push(data),
+          exit: () => {},
+          suppressible: true,
+        });
+        manager.injectInstructions('sess-1', 'Apply this.', 'Workspace context');
+        expect(output.join('')).toContain('Workspace context is getting applied');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        output.length = 0;
+        // A blank label is a caller bug, not a reason to print empty chrome.
+        manager.injectInstructions('sess-1', 'Apply this.', '   ');
+        expect(output.join('')).toBe('');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('invalidates prior replay authority before submitting a new instruction block', async () => {
       vi.useFakeTimers();
       try {

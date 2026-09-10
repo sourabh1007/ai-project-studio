@@ -237,17 +237,96 @@ describe('createReviewBoardService.analyze', () => {
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry a non-transient failure', async () => {
-    const runDetailed = vi.fn().mockRejectedValue(new Error('bad prompt'));
-    const service = createReviewBoardService(baseDeps({ ai: { runDetailed } }));
-    await expect(service.analyze('f9')).rejects.toThrow('bad prompt');
-    expect(runDetailed).toHaveBeenCalledTimes(1);
+  it('retries a failure the transient classifier does not recognise', async () => {
+    // The classifier is a heuristic, so anything it fails to recognise used to
+    // die on the first attempt and reach the user as "Internal server error".
+    const runDetailed = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('bad prompt'))
+      .mockResolvedValueOnce({ text: '```json\n[]\n```', sessionId: 's2' });
+    const sleep = vi.fn(async () => {});
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep }),
+    );
+    await service.analyze('f9');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
   });
 
-  it('surfaces a non-Error thrown value', async () => {
+  it('forces the final attempt onto the cold path', async () => {
+    // One unhealthy warm session otherwise fails every perspective of a board
+    // pass identically, because a dispatched warm turn is never re-routed.
+    const runDetailed = vi.fn().mockRejectedValue(new Error('warm session died'));
+    const sleep = vi.fn(async () => {});
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep }),
+    );
+    await expect(service.analyze('f9')).rejects.toThrow(/warm session died/);
+    const attempts = runDetailed.mock.calls.map(([request]) => request.forceCold);
+    expect(attempts.slice(0, -1).every((forced) => !forced)).toBe(true);
+    expect(attempts[attempts.length - 1]).toBe(true);
+  });
+
+  it('reports the real provider cause instead of a generic failure', async () => {
     const runDetailed = vi.fn().mockRejectedValue('kaboom');
-    const service = createReviewBoardService(baseDeps({ ai: { runDetailed } }));
-    await expect(service.analyze('f9')).rejects.toBe('kaboom');
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep: vi.fn(async () => {}) }),
+    );
+    // A bare rethrow became an unmapped 500 "Internal server error", leaving the
+    // user with no way to tell what actually went wrong.
+    await expect(service.analyze('f9')).rejects.toMatchObject({
+      kind: 'provider',
+      message: expect.stringContaining('kaboom'),
+    });
+  });
+
+  it('stops retrying immediately when the caller aborts', async () => {
+    // Retrying an aborted request wastes provider work on a result nobody
+    // will read, so the caller's own error is surfaced untouched.
+    const controller = new AbortController();
+    const runDetailed = vi.fn(async () => {
+      controller.abort();
+      throw new Error('caller went away');
+    });
+    const sleep = vi.fn(async () => {});
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep }),
+    );
+    await expect(service.analyze('f9', controller.signal)).rejects.toThrow(
+      /caller went away/,
+    );
+    expect(runDetailed).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an abort raised on the final cold attempt untouched', async () => {
+    const controller = new AbortController();
+    const runDetailed = vi.fn(async (request: MetaRequest) => {
+      if (request.forceCold) {
+        controller.abort();
+        throw new Error('aborted mid-flight');
+      }
+      throw new Error('warm session died');
+    });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep: vi.fn(async () => {}) }),
+    );
+    await expect(service.analyze('f9', controller.signal)).rejects.toThrow(
+      /aborted mid-flight/,
+    );
+  });
+
+  it('falls back to an earlier cause when the last failure has no message', async () => {
+    const runDetailed = vi.fn(async (request: MetaRequest) => {
+      if (request.forceCold) throw new Error('');
+      throw new Error('the original provider complaint');
+    });
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep: vi.fn(async () => {}) }),
+    );
+    await expect(service.analyze('f9')).rejects.toMatchObject({
+      kind: 'provider',
+      message: expect.stringContaining('the original provider complaint'),
+    });
   });
 
   it('exhausts retries and surfaces the final transient failure', async () => {
