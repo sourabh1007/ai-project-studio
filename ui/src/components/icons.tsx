@@ -25,6 +25,7 @@ import {
   FolderGit2,
   FolderInput,
   GitPullRequest,
+  GripVertical,
   Gauge,
   History,
   Info,
@@ -122,6 +123,7 @@ export const FilesIcon = makeIcon(Files);
 export const RepoIcon = makeIcon(FolderGit2);
 export const FolderIcon = makeIcon(Folder);
 export const MoveIcon = makeIcon(FolderInput);
+export const DragHandleIcon = makeIcon(GripVertical);
 export const PullRequestIcon = makeIcon(GitPullRequest);
 export const PrReviewIcon = makeIcon(ScanSearch);
 export const AutomationIcon = makeIcon(Radar);

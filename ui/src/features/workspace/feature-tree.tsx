@@ -21,6 +21,7 @@ import {
   TrashIcon,
 } from '../../components/icons.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
+import { DragHandle } from '../../components/ui.js';
 import { beginDragFx, endDragFx } from './drag-fx.js';
 
 /** A node currently being dragged in the feature tree. */
@@ -226,6 +227,7 @@ function DraggableSession({
         setDragging(null);
       }}
     >
+      <DragHandle label={`Drag to reorder ${session.name ?? 'session'}`} />
       {children}
     </div>
   );
@@ -305,6 +307,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
         onDragLeave={() => setDropTarget(false)}
         onDrop={handleHeaderDrop}
       >
+        <DragHandle label={`Drag to move ${group.name}`} />
         <button
           type="button"
           className="tree-toggle"

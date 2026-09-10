@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   CheckIcon,
   CloseIcon,
+  DragHandleIcon,
   PauseIcon,
   WarningIcon,
 } from './icons.js';
@@ -297,6 +298,26 @@ export function ErrorText({ error }: { error: string | null }) {
     return null;
   }
   return <p className="error-text" role="alert">{error}</p>;
+}
+
+/**
+ * The grip affordance on a draggable row.
+ *
+ * Dragging was previously invisible: a row could be dragged, but nothing said
+ * so, and the only way to find out was to try. The handle sits inside the
+ * draggable row, so grabbing it drags exactly what it labels.
+ */
+export function DragHandle({ label }: { label: string }) {
+  return (
+    <span
+      className="drag-handle"
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <DragHandleIcon size={14} />
+    </span>
+  );
 }
 
 /**

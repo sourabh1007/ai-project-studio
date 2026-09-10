@@ -12236,3 +12236,37 @@ body.is-resizing {
 .move-target:hover {
   background: var(--surface-hover);
 }
+
+/* Grip affordance on draggable rows: dragging used to be invisible, so the
+   only way to discover it was to try. Stays faint until the row is hovered. */
+.drag-handle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: grab;
+  transition: opacity var(--transition-fast);
+}
+
+.tree-branch:hover .drag-handle,
+.tree-group-header:hover .drag-handle,
+.tree-draggable:hover .drag-handle,
+.drag-handle:focus-visible {
+  opacity: 0.75;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.tree-draggable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tree-draggable > :not(.drag-handle) {
+  flex: 1;
+  min-width: 0;
+}

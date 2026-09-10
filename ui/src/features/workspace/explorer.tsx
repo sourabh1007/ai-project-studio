@@ -28,7 +28,7 @@ import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
-import { Button, ConfirmDialog, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { SkeletonList } from '../../components/loading.js';
 import {
   ChevronIcon,
@@ -624,6 +624,7 @@ function FeatureNode({
           }
         }}
       >
+        <DragHandle label={`Drag to move ${feature.name}`} />
         <button
           type="button"
           className="tree-toggle"
