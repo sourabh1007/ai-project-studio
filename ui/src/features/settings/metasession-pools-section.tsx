@@ -827,7 +827,7 @@ function MetaModelPicker(): JSX.Element {
   );
 }
 
-export function MetasessionPoolsSection() {
+export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {}) {
   const api = useApi();
   const status = useAsync(() => api.getMetaPools(), []);
   const config = useAsync(() => api.getConfig(), []);
@@ -936,25 +936,19 @@ export function MetasessionPoolsSection() {
   };
   const loading = config.loading && !config.data;
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div className="page-header-main">
-          <IconBadge icon={<ActivityIcon size={22} />} tone="accent" />
-          <div>
-            <h2 className="page-title">Metasessions</h2>
-            <p className="page-subtitle">
-              Warm AI sessions kept ready so the IDE responds instantly instead
-              of spawning a CLI per request. Every AI feature — PR review,
-              review board, summaries, monitors — draws from this one pool; its
-              size bounds how many turns run in parallel, and extra requests
-              wait for the next free session or fall back to a cold spawn.
-              Resizing applies live on save; turning warm sessions on or off
-              needs a restart.
-            </p>
-          </div>
-        </div>
-      </div>
+  const body = (
+    <>
+      {embedded && (
+        <p className="page-subtitle">
+          Warm AI sessions kept ready so the IDE responds instantly instead
+          of spawning a CLI per request. Every AI feature — PR review,
+          review board, summaries, monitors — draws from this one pool; its
+          size bounds how many turns run in parallel, and extra requests
+          wait for the next free session or fall back to a cold spawn.
+          Resizing applies live on save; turning warm sessions on or off
+          needs a restart.
+        </p>
+      )}
 
       <MetaModelPicker />
 
@@ -1081,6 +1075,33 @@ export function MetasessionPoolsSection() {
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div className="page-header-main">
+          <IconBadge icon={<ActivityIcon size={22} />} tone="accent" />
+          <div>
+            <h2 className="page-title">Metasessions</h2>
+            <p className="page-subtitle">
+              Warm AI sessions kept ready so the IDE responds instantly instead
+              of spawning a CLI per request. Every AI feature — PR review,
+              review board, summaries, monitors — draws from this one pool; its
+              size bounds how many turns run in parallel, and extra requests
+              wait for the next free session or fall back to a cold spawn.
+              Resizing applies live on save; turning warm sessions on or off
+              needs a restart.
+            </p>
+          </div>
+        </div>
+      </div>
+      {body}
     </Card>
   );
 }

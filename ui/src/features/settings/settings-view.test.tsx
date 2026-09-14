@@ -62,6 +62,21 @@ function renderSettings(client: Partial<ApiClient>) {
   );
 }
 
+/**
+ * Settings sections and Configuration namespaces are collapsed by default. Tests
+ * that assert a section's body is present pre-seed its remembered "open" state
+ * so the body renders on first paint instead of clicking every toggle.
+ */
+function openSections(...ids: string[]) {
+  for (const id of ids) {
+    window.localStorage.setItem(`cw-settings-open:${id}`, 'true');
+  }
+}
+
+function openConfigNamespaces(...namespaces: string[]) {
+  openSections(...namespaces.map((namespace) => `config:${namespace}`));
+}
+
 function configWithSchema(
   current: ConfigResponse['current'],
   schema: Record<string, FieldMeta>,
@@ -88,6 +103,7 @@ describe('SettingsView drafts', () => {
     (window as unknown as { desktop: unknown }).desktop = { attachments: {
       list, remove: vi.fn().mockResolvedValue({ status: 'cancelled' }),
     } };
+    openSections('diagnostics-images');
     renderSettings({ getConfig: vi.fn().mockResolvedValue(config({ meta: { mode: 'warm' } })) });
     fireEvent.click(await screen.findByRole('tab', { name: 'Diagnostics' }));
     expect(await screen.findByRole('region', { name: 'Retained clipboard images' })).toBeInTheDocument();
@@ -100,6 +116,7 @@ describe('SettingsView drafts', () => {
 
   it('mounts saved AI operations in the Metasession tab using the active API provider', async () => {
     const listMetaOperations = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
+    openSections('metasession-operations');
     renderSettings({
       getConfig: vi.fn().mockResolvedValue(config({ meta: { mode: 'warm' } })),
       listMetaOperations,
@@ -131,6 +148,7 @@ describe('SettingsView drafts', () => {
         namespace: 'meta', effective: { mode: 'cool' }, override: { mode: 'cool' }, requiresRestart: true,
       } satisfies ConfigUpdateResult),
     };
+    openConfigNamespaces('meta');
     renderSettings(client);
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration' }));
     fireEvent.change(await screen.findByDisplayValue('warm'), { target: { value: 'cool' } });
@@ -168,6 +186,7 @@ describe('SettingsView drafts', () => {
       askSettingsAssistant: vi.fn(),
     };
 
+    openConfigNamespaces('meta', 'providers');
     renderSettings(client);
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration' }));
 
@@ -232,10 +251,16 @@ describe('SettingsView drafts', () => {
     const first = renderSettings(client);
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration' }));
     const providersCard = await screen.findByText('Providers');
+    const providersEditor = providersCard.closest('.config-module-card') as HTMLElement;
+    if (
+      providersEditor
+        .querySelector('.config-module-toggle')
+        ?.getAttribute('aria-expanded') !== 'true'
+    ) {
+      fireEvent.click(providersEditor.querySelector('.config-module-toggle') as HTMLElement);
+    }
     fireEvent.change(
-      within(
-        providersCard.closest('.config-module-card') as HTMLElement,
-      ).getByDisplayValue('gpt-5.5'),
+      within(providersEditor).getByDisplayValue('gpt-5.5'),
       { target: { value: 'claude-opus' } },
     );
     expect(screen.getAllByText('Unsaved changes').length).toBeGreaterThan(0);
@@ -321,6 +346,7 @@ describe('SettingsView field accessibility', () => {
       askSettingsAssistant: vi.fn(),
     };
 
+    openConfigNamespaces('meta', 'providers');
     const first = renderSettings(client);
     const second = renderSettings(client);
     for (const tab of screen.getAllByRole('tab', { name: 'Configuration' })) {
@@ -406,6 +432,7 @@ describe('SettingsView field accessibility', () => {
       askSettingsAssistant: vi.fn(),
     };
 
+    openConfigNamespaces('meta');
     renderSettings(client);
     fireEvent.click(await screen.findByRole('tab', { name: 'Configuration' }));
 

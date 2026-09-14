@@ -370,6 +370,7 @@ import {
 import { createIdeUsageService } from './ide-usage/ide-usage-service.js';
 import { createPlanUsageService } from './plan-usage/plan-usage-service.js';
 import { createPtyPlanUsageProbe } from './plan-usage/pty-plan-usage-probe.js';
+import { buildPlanUsageProbeCommand } from './plan-usage/plan-usage-command.js';
 import { createModelCatalogService } from './meta/model-catalog/model-catalog-service.js';
 import { createAcpModelCatalogProbe } from './meta/model-catalog/acp-model-catalog-probe.js';
 import { createAbortTracker } from './kernel/abort-tracker.js';
@@ -741,24 +742,15 @@ function main(): void {
     reader: createIdeUsageRepo(db, ideUsageConfig),
   });
 
-  // Signed-in plan AI-credit budget (used / total / available / reset). The
-  // only surface exposing quota is the CLI `/usage` panel, so it is scraped
-  // from a throwaway `copilot` PTY and cached (a capture costs seconds).
+  // The plan AI-credit budget (used / total / available) is scraped from the
+  // provider's `/usage` TUI panel — the only surface exposing quota. Wired
+  // below, after `metaSettings`, so the probe can follow the active provider.
   const planUsageEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === 'string') {
       planUsageEnv[key] = value;
     }
   }
-  const planUsageService = createPlanUsageService({
-    probe: createPtyPlanUsageProbe({
-      spawner: createNodePtySpawner(),
-      command: copilotConfig.executable,
-      env: planUsageEnv,
-    }),
-    now: () => new Date(),
-    ttlMs: (config[PLAN_USAGE_NAMESPACE] as PlanUsageConfig).refreshMinutes * 60 * 1000,
-  });
 
   // Providers. Registration is driven by a descriptor list so adding a new
   // provider is a one-line change: append a descriptor and toggle its config
@@ -1728,6 +1720,37 @@ function main(): void {
     providerId: metaConfig.providerId,
     model: metaConfig.model,
   });
+
+  // Signed-in plan AI-credit budget. The probe boots a throwaway TUI for the
+  // *active* provider (Agency wraps the same Copilot CLI, so its `/usage` panel
+  // is the same underlying budget) and reuses one long-lived, admission-gated
+  // session across refreshes so it stops losing the resource race with the warm
+  // pool — the failure that flashed "plan usage unavailable".
+  const planUsageConfig = config[PLAN_USAGE_NAMESPACE] as PlanUsageConfig;
+  const planUsageService = createPlanUsageService({
+    probe: createPtyPlanUsageProbe({
+      spawner: createNodePtySpawner(),
+      resolveCommand: () => {
+        const active = metaSettings.get();
+        return buildPlanUsageProbeCommand({
+          providerId: active.providerId,
+          model: active.model || copilotConfig.defaultModel,
+          sessionId: randomUUID(),
+          copilot: { executable: copilotConfig.executable },
+          agency: {
+            executable: agencyConfig.executable,
+            subcommand: agencyConfig.subcommand,
+          },
+        });
+      },
+      env: planUsageEnv,
+      admission: processAdmission,
+    }),
+    now: () => new Date(),
+    ttlMs: planUsageConfig.refreshMinutes * 60 * 1000,
+    failureThreshold: planUsageConfig.failureThreshold,
+  });
+
   const shutdownOwner = createAbortTracker();
   // Shared headless-AI primitive reused by every AI feature (summaries,
   // task plans, …) so they drive the CLI the same config-driven way.

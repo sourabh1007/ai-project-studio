@@ -12,10 +12,18 @@ export const PLAN_USAGE_NAMESPACE = 'planUsage';
 export const planUsageConfigSchema = z.object({
   /** Minutes between plan AI-credit refreshes (cache TTL and UI poll). */
   refreshMinutes: z.number().int().min(1),
+  /**
+   * Consecutive failed captures tolerated before the status bar reports the
+   * plan as `unavailable`. Booting the probe's TUI can lose the first race for
+   * machine resources against the warm pool and time out transiently, so a
+   * single miss should stay `capturing` and retry rather than flash an error.
+   */
+  failureThreshold: z.number().int().min(1),
 });
 
 export type PlanUsageConfig = z.infer<typeof planUsageConfigSchema>;
 
 export const planUsageDefaults: PlanUsageConfig = {
   refreshMinutes: 5,
+  failureThreshold: 3,
 };

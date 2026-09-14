@@ -176,3 +176,24 @@ it.each([false, 'reject'] as const)('reports a failed pool-settings restart (%s)
   expect(screen.queryByText('private detail')).toBeNull();
   expect(screen.getByRole('button', { name: 'Restart now' })).toBeEnabled();
 });
+
+it('renders metasession controls without the page heading when embedded', async () => {
+  const api: Partial<ApiClient> = {
+    getConfig: vi.fn().mockResolvedValue({
+      current: { meta: { warmPool: { enabled: true, size: 2 } } },
+    }),
+    getMetaPools: vi.fn().mockResolvedValue({
+      enabled: true,
+      pool: {
+        size: 2, suggestedSize: 2, live: 0, idle: 0, busy: 0,
+        ready: false, served: 0, sessions: [],
+      },
+    }),
+    getMetaSettings: vi.fn().mockResolvedValue({ model: 'fixture' }),
+    getMetaModels: vi.fn().mockResolvedValue([{ id: 'fixture', name: 'Fixture' }]),
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection embedded /></ApiProvider>);
+  expect(screen.queryByRole('heading', { name: 'Metasessions' })).toBeNull();
+  expect(await screen.findByText('Keep metasessions warm')).toBeInTheDocument();
+  expect(screen.getByText(/Warm AI sessions kept ready/)).toBeInTheDocument();
+});

@@ -164,9 +164,11 @@ function PromptReadOnly({ entry }: { entry: PromptCatalogReadOnly }) {
  */
 export function PromptsCommandsSection({
   focusAnchor,
+  embedded,
 }: {
   /** When set, scroll to and briefly highlight this entry's anchor. */
   focusAnchor?: string | null;
+  embedded?: boolean;
 }) {
   const api = useApi();
   const { data, loading, error, cause, reload } = useAsync(
@@ -191,24 +193,16 @@ export function PromptsCommandsSection({
     return () => cancelAnimationFrame(raf);
   }, [focusAnchor, data]);
 
-  return (
-    <div className="settings-panel" ref={rootRef}>
-      <Card>
-        <div className="page-header">
-          <div className="page-header-main">
-            <IconBadge icon={<AiMagicIcon size={18} />} tone="ai" glow />
-            <div>
-              <h2 className="page-title">Prompts &amp; Commands</h2>
-              <p className="page-subtitle">
-                Every prompt and command the IDE sends to the AI, grouped by the
-                operation it drives. Edit a prompt to change how that feature
-                reasons; saved changes apply after a restart. Environment
-                variables still take precedence.
-              </p>
-            </div>
-          </div>
-        </div>
-      </Card>
+  const body = (
+    <>
+      {embedded && (
+        <p className="page-subtitle">
+          Every prompt and command the IDE sends to the AI, grouped by the
+          operation it drives. Edit a prompt to change how that feature
+          reasons; saved changes apply after a restart. Environment
+          variables still take precedence.
+        </p>
+      )}
 
       {loading && <Loader label="Loading prompts…" />}
       {error && <ErrorState error={cause ?? error} onRetry={reload} />}
@@ -235,6 +229,32 @@ export function PromptsCommandsSection({
             </div>
           </Card>
         ))}
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <div className="settings-panel" ref={rootRef}>
+      <Card>
+        <div className="page-header">
+          <div className="page-header-main">
+            <IconBadge icon={<AiMagicIcon size={18} />} tone="ai" glow />
+            <div>
+              <h2 className="page-title">Prompts &amp; Commands</h2>
+              <p className="page-subtitle">
+                Every prompt and command the IDE sends to the AI, grouped by the
+                operation it drives. Edit a prompt to change how that feature
+                reasons; saved changes apply after a restart. Environment
+                variables still take precedence.
+              </p>
+            </div>
+          </div>
+        </div>
+      </Card>
+      {body}
     </div>
   );
 }

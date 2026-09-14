@@ -11,7 +11,7 @@ import type { AgencyStatus } from '../../lib/types.js';
  * It polls status on mount and, while an upgrade is in flight, re-polls until it
  * settles.
  */
-export function AgencyCliSection() {
+export function AgencyCliSection({ embedded }: { embedded?: boolean } = {}) {
   const api = useApi();
   const [status, setStatus] = useState<AgencyStatus | null>(null);
 
@@ -47,15 +47,12 @@ export function AgencyCliSection() {
 
   const ui = deriveAgencyUpgradeUi(status);
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">Agency CLI</h2>
-          <p className="page-subtitle">{ui.headline}</p>
-        </div>
+  const body = (
+    <>
+      <p className="page-subtitle agency-cli-headline">
+        {ui.headline}
         {ui.busy && <span className="bootstrap-spinner" aria-hidden />}
-      </div>
+      </p>
       {ui.detail && (
         <p
           className={`agency-cli-detail agency-cli-${ui.tone}`}
@@ -64,6 +61,21 @@ export function AgencyCliSection() {
           {ui.detail}
         </p>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Agency CLI</h2>
+        </div>
+      </div>
+      {body}
     </Card>
   );
 }

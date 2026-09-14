@@ -40,3 +40,10 @@ it.each([false, 'reject'] as const)('reports a rejected diagnostics restart (%s)
   expect(relaunch).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('renders diagnostics body without the page heading when embedded', () => {
+  render(<DiagnosticsSection version="0.10.3" logDirectory="logs" embedded />);
+  expect(screen.queryByRole('heading', { name: 'Diagnostics & recovery' })).toBeNull();
+  expect(screen.getByText('Recent failures')).toBeInTheDocument();
+  expect(screen.getByText('logs')).toBeInTheDocument();
+});

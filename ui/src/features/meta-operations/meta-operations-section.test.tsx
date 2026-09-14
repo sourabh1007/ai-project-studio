@@ -129,6 +129,17 @@ describe('saved AI operation result viewer', () => {
     await act(async () => { if (settle === 'resolve') pending.resolve(response(op)); else pending.reject(new Error('stale')); });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  it('renders saved operations body without the section heading when embedded', async () => {
+    const op = operation('embedded-operation', { state: 'running' });
+    const fetch = vi.fn<FetchLike>(async () => response(page(op)));
+    const api = createApiClient({ fetchImpl: fetch });
+    render(<ApiProvider value={api}><MetaOperationsSection embedded /></ApiProvider>);
+    expect(screen.queryByRole('heading', { name: 'Saved AI operations' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'embedded-operation' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Refresh operations' })).toBeDefined();
+    expect(screen.getByLabelText('Operations by state')).toHaveTextContent('1 running');
+  });
 });
 
 describe('meta operation client routes', () => {

@@ -7,10 +7,24 @@ import { useAppUpdates } from '../../hooks/use-app-updates.js';
  * progress, release notes, and the install action. Only meaningful inside the
  * desktop shell; renders a short note in the browser.
  */
-export function SoftwareUpdateSection() {
+export function SoftwareUpdateSection({ embedded }: { embedded?: boolean } = {}) {
   const { state, ui, supported, check, download, install } = useAppUpdates();
 
   if (!supported) {
+    const body = (
+      <>
+        {embedded && (
+          <p className="page-subtitle">
+            Automatic updates are available in the desktop app.
+          </p>
+        )}
+      </>
+    );
+
+    if (embedded) {
+      return body;
+    }
+
     return (
       <Card>
         <div className="page-header">
@@ -21,21 +35,21 @@ export function SoftwareUpdateSection() {
             </p>
           </div>
         </div>
+        {body}
       </Card>
     );
   }
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">Software updates</h2>
+  const body = (
+    <>
+      {embedded && (
+        <div className="update-section-embedded-head">
           <p className="page-subtitle">{ui.headline}</p>
+          <Button variant="ghost" onClick={check} disabled={!ui.canCheck}>
+            {ui.busy && state.status === 'checking' ? 'Checking…' : 'Check for updates'}
+          </Button>
         </div>
-        <Button variant="ghost" onClick={check} disabled={!ui.canCheck}>
-          {ui.busy && state.status === 'checking' ? 'Checking…' : 'Check for updates'}
-        </Button>
-      </div>
+      )}
 
       <dl className="kv">
         <div style={{ display: 'contents' }}>
@@ -95,6 +109,25 @@ export function SoftwareUpdateSection() {
           )}
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Software updates</h2>
+          <p className="page-subtitle">{ui.headline}</p>
+        </div>
+        <Button variant="ghost" onClick={check} disabled={!ui.canCheck}>
+          {ui.busy && state.status === 'checking' ? 'Checking…' : 'Check for updates'}
+        </Button>
+      </div>
+      {body}
     </Card>
   );
 }

@@ -1,6 +1,6 @@
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -17,7 +17,7 @@ import { Loader } from '../../components/loading.js';
  * reclaim disk by removing them. Worktrees are also cleaned up automatically
  * when a PR-review feature is deleted; this panel handles orphans.
  */
-export function WorktreesSection() {
+export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
   const api = useApi();
   const { data, loading, error, cause, reload } = useAsync(
     () => api.listWorktrees(),
@@ -25,6 +25,19 @@ export function WorktreesSection() {
   );
   const [removing, setRemoving] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const embeddedHeadingRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!embedded) return;
+    const host = embeddedHeadingRef.current?.closest('.settings-collapsible-body');
+    if (!host || host.querySelector('[data-embedded-heading="worktrees"]')) return;
+    const heading = document.createElement('h2');
+    heading.className = 'sr-only';
+    heading.dataset.embeddedHeading = 'worktrees';
+    heading.textContent = 'Review worktrees';
+    host.prepend(heading);
+    return () => heading.remove();
+  }, [embedded]);
 
   async function remove(path: string) {
     setRemoving(path);
@@ -39,24 +52,21 @@ export function WorktreesSection() {
     }
   }
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div className="page-header-main">
-          <IconBadge icon={<RepoIcon size={22} />} tone="neutral" />
-          <div>
-            <h2 className="page-title">Review worktrees</h2>
-            <p className="page-subtitle">
-              Isolated git checkouts the app created under{' '}
-              <code>.ai-worktrees</code> for code reviews. Remove any you no longer
-              need to reclaim disk space.
-            </p>
-          </div>
+  const body = (
+    <>
+      {embedded && <span ref={embeddedHeadingRef} hidden />}
+      {embedded && (
+        <div className="worktree-embedded-head">
+          <p className="page-subtitle">
+            Isolated git checkouts the app created under{' '}
+            <code>.ai-worktrees</code> for code reviews. Remove any you no longer
+            need to reclaim disk space.
+          </p>
+          <Button variant="ghost" onClick={reload} disabled={loading}>
+            Refresh
+          </Button>
         </div>
-        <Button variant="ghost" onClick={reload} disabled={loading}>
-          Refresh
-        </Button>
-      </div>
+      )}
       {loading && <Loader label="Loading worktrees" />}
       {error && <ErrorState error={cause ?? error} onRetry={reload} />}
       {data && data.length === 0 && (
@@ -91,6 +101,32 @@ export function WorktreesSection() {
           ))}
         </ul>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div className="page-header-main">
+          <IconBadge icon={<RepoIcon size={22} />} tone="neutral" />
+          <div>
+            <h2 className="page-title">Review worktrees</h2>
+            <p className="page-subtitle">
+              Isolated git checkouts the app created under{' '}
+              <code>.ai-worktrees</code> for code reviews. Remove any you no longer
+              need to reclaim disk space.
+            </p>
+          </div>
+        </div>
+        <Button variant="ghost" onClick={reload} disabled={loading}>
+          Refresh
+        </Button>
+      </div>
+      {body}
     </Card>
   );
 }

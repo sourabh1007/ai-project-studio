@@ -32,6 +32,14 @@ export interface PlanUsageServiceDeps {
   now: () => Date;
   /** How long a captured snapshot is considered fresh, in milliseconds. */
   ttlMs: number;
+  /**
+   * Consecutive failed captures tolerated before {@link PlanUsageService.read}
+   * reports `unavailable` (when there is no cached snapshot yet). Booting the
+   * probe can transiently lose the first race for machine resources against the
+   * warm pool, so a single miss stays `capturing` and retries. Defaults to 1,
+   * preserving the original "report the first failure" behaviour.
+   */
+  failureThreshold?: number;
 }
 
 const NO_PANEL =
@@ -40,10 +48,12 @@ const NO_PANEL =
 export function createPlanUsageService(
   deps: PlanUsageServiceDeps,
 ): PlanUsageService {
+  const failureThreshold = Math.max(1, deps.failureThreshold ?? 1);
   let cached: PlanUsage | null = null;
   let cachedAt = 0;
   let inFlight: Promise<PlanUsage | null> | null = null;
   let lastError: string | null = null;
+  let consecutiveFailures = 0;
 
   const runProbe = async (): Promise<PlanUsage | null> => {
     let text: string | null;
@@ -51,17 +61,20 @@ export function createPlanUsageService(
       text = await deps.probe.capture();
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+      consecutiveFailures += 1;
       return cached;
     }
     const parsed =
       text === null ? null : parsePlanUsage(text, deps.now().toISOString());
     if (parsed === null) {
       lastError = NO_PANEL;
+      consecutiveFailures += 1;
       return cached;
     }
     cached = parsed;
     cachedAt = deps.now().getTime();
     lastError = null;
+    consecutiveFailures = 0;
     return parsed;
   };
 
@@ -88,9 +101,11 @@ export function createPlanUsageService(
       if (cached !== null) {
         return { status: 'ready', usage: cached, error: null };
       }
-      // No snapshot yet. A capture is always running at this point, so report
-      // the failure only once one has actually failed.
-      return lastError === null
+      // No snapshot yet. A capture is always running at this point. Report a
+      // failure only after enough consecutive misses that it is unlikely to be
+      // a transient boot race; until then keep saying we are still capturing so
+      // the status bar does not flash an error and then recover.
+      return lastError === null || consecutiveFailures < failureThreshold
         ? { status: 'capturing', usage: null, error: null }
         : { status: 'unavailable', usage: null, error: lastError };
     },

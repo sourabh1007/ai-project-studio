@@ -164,3 +164,11 @@ it('does not let an old unmounted request overwrite a reopened snapshot', async 
   expect(screen.queryByText(first.name)).toBeNull();
   expect(api.list).toHaveBeenCalledTimes(2);
 });
+
+it('renders retained image controls without the title when embedded', async () => {
+  const api = bridge();
+  render(<RetainedImagesSection bridge={api} embedded />);
+  expect(screen.queryByRole('heading', { name: 'Retained clipboard images' })).toBeNull();
+  expect(await screen.findByText(first.name)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Refresh images' })).toBeInTheDocument();
+});

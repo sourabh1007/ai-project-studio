@@ -11911,6 +11911,120 @@ body.is-resizing {
   font-weight: var(--weight-semibold);
   line-height: var(--lh-section);
 }
+.config-module-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.config-module-toggle:hover .config-module-title > span:first-child {
+  color: var(--accent);
+}
+.config-module-toggle > svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+/* ---- Per-page settings search + collapsible sections ---- */
+.settings-page-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings-page-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.settings-page-search-input {
+  flex: 1 1 auto;
+  padding-left: 32px;
+}
+.settings-page-search-clear {
+  height: 30px;
+  padding: 0 var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--panel-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.settings-page-search-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.settings-collapsible {
+  padding: 0;
+  overflow: hidden;
+}
+.settings-collapsible-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+.settings-collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-collapsible-caret {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+.settings-collapsible-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-collapsible-heading .page-title {
+  font-size: var(--fs-section);
+  font-weight: var(--weight-semibold);
+  line-height: var(--lh-section);
+  margin: 0;
+}
+.settings-collapsible-heading .page-subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-collapsible-toggle:hover .page-title {
+  color: var(--accent);
+}
+.settings-collapsible-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings-collapsible-body {
+  padding: 0 var(--space-4) var(--space-4);
+  animation: fade-in 0.14s ease both;
+}
 .config-field-row {
   display: grid;
   grid-template-columns: minmax(160px, 240px) 1fr;

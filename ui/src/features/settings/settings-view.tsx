@@ -19,12 +19,14 @@ import {
   type SettingField,
 } from '../../lib/settings-model.js';
 import { Button, Card, EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
+import { SettingsPage, CollapsibleCard } from './settings-page.js';
 import {
   InfoIcon,
   WorkspaceContextIcon,
   LogsIcon,
   ConfigIcon,
   AdvancedIcon,
+  ChevronIcon,
 } from '../../components/icons.js';
 import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
@@ -289,6 +291,10 @@ function NamespaceEditor({
   const [answer, setAnswer] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [assistError, setAssistError] = useState<string | null>(null);
+  const [open, setOpen] = usePersistentState<boolean>(
+    `cw-settings-open:config:${namespace}`,
+    false,
+  );
   const draftValue = (field: SettingField) =>
     draftState.values[field.key] ?? seedValue(field.value, field.control);
   const validationErrors = useMemo(() => {
@@ -384,13 +390,23 @@ function NamespaceEditor({
     return null;
   }
 
+  const expanded = query !== '' || open;
+
   return (
     <div className="config-module-card">
       <div className="config-module-head">
-        <div className="config-module-title">
-          <span>{fieldLabel(namespace)}</span>
-          {overridden && <span className="config-badge">overridden</span>}
-        </div>
+        <button
+          type="button"
+          className="config-module-toggle"
+          aria-expanded={expanded}
+          onClick={() => setOpen(!open)}
+        >
+          <ChevronIcon size={13} open={expanded} />
+          <span className="config-module-title">
+            <span>{fieldLabel(namespace)}</span>
+            {overridden && <span className="config-badge">overridden</span>}
+          </span>
+        </button>
         <div className="config-editor-actions">
           <Button
             variant="ghost"
@@ -423,7 +439,9 @@ function NamespaceEditor({
           </Button>
         </div>
       </div>
-      {assistOpen && (
+      {expanded && (
+        <>
+          {assistOpen && (
         <div className="config-assistant">
           <form
             className="config-assistant-ask"
@@ -491,6 +509,8 @@ function NamespaceEditor({
           />
         ))}
       </div>
+        </>
+      )}
       {draftState.conflicts.length > 0 && (
         <div className="config-dirty" role="alert">
           <span>
@@ -531,12 +551,12 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
-  { id: 'config', label: 'Configuration' },
   { id: 'prompts', label: 'Prompts & Commands' },
   { id: 'metasession', label: 'Metasession' },
   { id: 'network', label: 'Network' },
   { id: 'context', label: 'Workspace context' },
   { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'config', label: 'Configuration' },
 ];
 
 export function SettingsView() {
@@ -690,39 +710,74 @@ export function SettingsView() {
       </div>
 
       {tab === 'general' && (
-        <div className="settings-panel">
-          <Card>
-            <div className="page-header">
-              <div className="page-header-main">
-                <IconBadge icon={<InfoIcon size={22} />} tone="accent" />
-                <div>
-                  <h2 className="page-title">About</h2>
-                  <p className="page-subtitle">
-                    AI Project Studio — an IDE-style workspace for AI coding CLIs.
-                  </p>
-                </div>
-              </div>
-              {bridge?.openDocs && (
+        <SettingsPage searchLabel="Search General settings…">
+          <CollapsibleCard
+            id="general-about"
+            title="About"
+            subtitle="AI Project Studio — an IDE-style workspace for AI coding CLIs."
+            icon={<InfoIcon size={22} />}
+            tone="accent"
+            keywords={['version', 'documentation']}
+            actions={
+              bridge?.openDocs && (
                 <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
                   Open documentation
                 </Button>
-              )}
-            </div>
+              )
+            }
+          >
             <dl className="kv">
               <div style={{ display: 'contents' }}>
                 <dt>Version</dt>
                 <dd>{version ?? '—'}</dd>
               </div>
             </dl>
-          </Card>
-          <SoftwareUpdateSection />
-          <AgencyCliSection />
-        </div>
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="general-updates"
+            title="Software updates"
+            subtitle="Check for and install new versions of the app."
+            keywords={['update', 'version', 'release']}
+          >
+            <SoftwareUpdateSection embedded />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="general-agency"
+            title="Agency CLI"
+            subtitle="The bundled Microsoft Agency CLI is kept current automatically."
+            keywords={['agency', 'cli', 'upgrade']}
+          >
+            <AgencyCliSection embedded />
+          </CollapsibleCard>
+        </SettingsPage>
       )}
 
-      {tab === 'appearance' && <AppearanceSection />}
+      {tab === 'appearance' && (
+        <SettingsPage searchLabel="Search Appearance settings…">
+          <CollapsibleCard
+            id="appearance-main"
+            title="Appearance"
+            subtitle="Theme, density, and other visual preferences."
+            keywords={['theme', 'dark', 'light', 'density', 'font', 'color']}
+          >
+            <AppearanceSection embedded />
+          </CollapsibleCard>
+        </SettingsPage>
+      )}
 
-      {tab === 'prompts' && <PromptsCommandsSection focusAnchor={promptAnchor} />}
+      {tab === 'prompts' && (
+        <SettingsPage searchLabel="Search Prompts & Commands…">
+          <CollapsibleCard
+            id="prompts-main"
+            title="Prompts & Commands"
+            subtitle="Customize the prompts and slash commands used by AI features."
+            defaultOpen
+            keywords={['prompt', 'command', 'slash', 'template']}
+          >
+            <PromptsCommandsSection focusAnchor={promptAnchor} embedded />
+          </CollapsibleCard>
+        </SettingsPage>
+      )}
 
       {tab === 'config' && (
         <div className="settings-panel">
@@ -840,69 +895,78 @@ export function SettingsView() {
       )}
 
       {tab === 'metasession' && (
-        <div className="settings-panel">
-          <MetasessionPoolsSection />
-          <MetaOperationsSection />
-        </div>
+        <SettingsPage searchLabel="Search Metasession settings…">
+          <CollapsibleCard
+            id="metasession-pools"
+            title="Metasession pools"
+            subtitle="Warm pool size and live per-instance status."
+            keywords={['pool', 'warm', 'metasession', 'instance', 'concurrency']}
+          >
+            <MetasessionPoolsSection embedded />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="metasession-operations"
+            title="Saved AI operations"
+            subtitle="Durable results and interrupted work."
+            keywords={['operation', 'credits', 'usage', 'result', 'history']}
+          >
+            <MetaOperationsSection embedded />
+          </CollapsibleCard>
+        </SettingsPage>
       )}
 
       {tab === 'network' && (
-        <div className="settings-panel">
-          <NetworkActivitySection />
-        </div>
+        <SettingsPage searchLabel="Search Network settings…">
+          <CollapsibleCard
+            id="network-activity"
+            title="Network activity"
+            subtitle="Outbound integrations and their authentication state."
+            keywords={['network', 'integration', 'github', 'azure', 'http', 'auth']}
+          >
+            <NetworkActivitySection embedded />
+          </CollapsibleCard>
+        </SettingsPage>
       )}
 
       {tab === 'context' && (
-        <div className="settings-panel">
-          <Card>
-            <div className="shared-context-card-head">
-              <div className="page-header-main">
-                <IconBadge
-                  icon={<WorkspaceContextIcon size={22} />}
-                  tone="accent"
-                />
-                <div>
-                  <h2 className="page-title">Workspace context</h2>
-                  <p className="page-subtitle">
-                    Global knowledge shared with every repository, feature, and
-                    session. Promote durable, workspace-wide conventions here — it
-                    is manual-only and never auto-written.
-                  </p>
-                </div>
-              </div>
-            </div>
+        <SettingsPage searchLabel="Search Workspace context…">
+          <CollapsibleCard
+            id="workspace-context"
+            title="Workspace context"
+            subtitle="Global knowledge shared with every repository, feature, and session. Promote durable, workspace-wide conventions here — it is manual-only and never auto-written."
+            icon={<WorkspaceContextIcon size={22} />}
+            tone="accent"
+            keywords={['context', 'shared', 'knowledge', 'convention']}
+          >
             <SharedContextPanel
               scope="workspace"
               scopeId=""
               title="Workspace shared context"
             />
-          </Card>
-        </div>
+          </CollapsibleCard>
+        </SettingsPage>
       )}
 
       {tab === 'diagnostics' && (
-        <div className="settings-panel">
-          <Card>
-            <div className="page-header">
-              <div className="page-header-main">
-                <IconBadge icon={<LogsIcon size={22} />} tone="neutral" />
-                <div>
-                  <h2 className="page-title">Logs &amp; diagnostics</h2>
-                  <p className="page-subtitle">
-                    The app writes structured logs to a daily file. Open the
-                    folder to inspect or share them when reporting an issue.
-                  </p>
-                </div>
-              </div>
-              {logDirectory && bridge?.revealFile && (
+        <SettingsPage searchLabel="Search Diagnostics…">
+          <CollapsibleCard
+            id="diagnostics-logs"
+            title="Logs & diagnostics"
+            subtitle="The app writes structured logs to a daily file. Open the folder to inspect or share them when reporting an issue."
+            icon={<LogsIcon size={22} />}
+            tone="neutral"
+            keywords={['logs', 'log level', 'directory', 'diagnostics']}
+            actions={
+              logDirectory && bridge?.revealFile && (
                 <Button
                   variant="ghost"
                   onClick={() => bridge.revealFile?.(logDirectory)}
                 >
                   Open logs folder
                 </Button>
-              )}
-            </div>
+              )
+            }
+          >
             <dl className="kv">
               <div style={{ display: 'contents' }}>
                 <dt>Log level</dt>
@@ -913,32 +977,54 @@ export function SettingsView() {
                 <dd className="config-path">{logDirectory ?? '—'}</dd>
               </div>
             </dl>
-          </Card>
-          <DiagnosticsSection
-            version={version}
-            logDirectory={logDirectory ?? null}
-            bridge={bridge}
-          />
-          <RetainedImagesSection bridge={bridge?.attachments} />
-          <WorktreesSection />
-          <Card>
-            <div className="page-header">
-              <div className="page-header-main">
-                <IconBadge icon={<AdvancedIcon size={22} />} tone="neutral" />
-                <div>
-                  <h2 className="page-title">Advanced</h2>
-                  <p className="page-subtitle">
-                    Looking for a specific setting? Every module is editable under
-                    the Configuration tab.
-                  </p>
-                </div>
-              </div>
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="diagnostics-failures"
+            title="Backend & renderer diagnostics"
+            subtitle="Recent supervisor, API, and renderer failures with a restart action."
+            keywords={['failure', 'crash', 'restart', 'backend', 'renderer']}
+          >
+            <DiagnosticsSection
+              version={version}
+              logDirectory={logDirectory ?? null}
+              bridge={bridge}
+              embedded
+            />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="diagnostics-images"
+            title="Retained clipboard images"
+            subtitle="Manually manage images retained for AI history."
+            keywords={['image', 'clipboard', 'retained', 'attachment', 'cleanup']}
+          >
+            <RetainedImagesSection bridge={bridge?.attachments} embedded />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="diagnostics-worktrees"
+            title="Review worktrees"
+            subtitle="Inspect and clean up Review Board worktrees."
+            keywords={['worktree', 'review', 'git', 'cleanup']}
+          >
+            <WorktreesSection embedded />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="diagnostics-advanced"
+            title="Advanced"
+            subtitle="Looking for a specific setting? Every module is editable under the Configuration tab."
+            icon={<AdvancedIcon size={22} />}
+            tone="neutral"
+            keywords={['advanced', 'configuration', 'module']}
+            actions={
               <Button variant="ghost" onClick={() => setTab('config')}>
                 Open Configuration
               </Button>
-            </div>
-          </Card>
-        </div>
+            }
+          >
+            <p className="page-subtitle">
+              Every module setting is editable under the Configuration tab.
+            </p>
+          </CollapsibleCard>
+        </SettingsPage>
       )}
     </>
   );

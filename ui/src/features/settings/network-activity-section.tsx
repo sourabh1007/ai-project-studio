@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Card } from '../../components/ui.js';
 import {
   categoryLabel,
@@ -51,27 +52,39 @@ function IntegrationRow({ integration }: { integration: NetworkIntegration }) {
   );
 }
 
-export function NetworkActivitySection() {
+export function NetworkActivitySection({ embedded }: { embedded?: boolean } = {}) {
   const groups = groupIntegrationsByProvider();
   const summary = summarizeEgress();
+  const embeddedHeadingRef = useRef<HTMLSpanElement | null>(null);
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">Network activity</h2>
-          <p className="page-subtitle">
-            AI Project Studio connects to cloud services to do its work. This is
-            every outbound integration it uses, what it is for, and what data
-            leaves your machine. Nothing here is tracked live — it is a reviewable
-            inventory.
-          </p>
-        </div>
-      </div>
+  useEffect(() => {
+    if (!embedded) return;
+    const host = embeddedHeadingRef.current?.closest('.settings-collapsible-body');
+    if (!host || host.querySelector('[data-embedded-heading="network-activity"]')) return;
+    const heading = document.createElement('h2');
+    heading.className = 'sr-only';
+    heading.dataset.embeddedHeading = 'network-activity';
+    heading.textContent = 'Network activity';
+    host.prepend(heading);
+    return () => heading.remove();
+  }, [embedded]);
+
+  const body = (
+    <>
+      {embedded && <span ref={embeddedHeadingRef} hidden />}
+      {embedded && (
+        <p className="page-subtitle">
+          AI Project Studio connects to cloud services to do its work. This is
+          every outbound integration it uses, what it is for, and what data
+          leaves your machine. Nothing here is tracked live — it is a reviewable
+          inventory.
+        </p>
+      )}
 
       <div className="netact-summary">
         <span>
-          <strong>{summary.total}</strong> integrations
+          <strong>{summary.total}</strong>{' '}
+          {embedded ? 'outbound services' : 'integrations'}
         </span>
         <span>
           <strong>{summary.authenticated}</strong> send credentials
@@ -119,6 +132,27 @@ export function NetworkActivitySection() {
           ))}
         </ul>
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Network activity</h2>
+          <p className="page-subtitle">
+            AI Project Studio connects to cloud services to do its work. This is
+            every outbound integration it uses, what it is for, and what data
+            leaves your machine. Nothing here is tracked live — it is a reviewable
+            inventory.
+          </p>
+        </div>
+      </div>
+      {body}
     </Card>
   );
 }

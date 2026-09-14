@@ -180,4 +180,72 @@ describe('plan-usage-service', () => {
     await svc.refresh();
     expect(svc.read()).toMatchObject({ status: 'ready', error: null });
   });
+
+  it('stays capturing through transient failures below the threshold', async () => {
+    const { probe } = fakeProbe([null, new Error('boot lost the race'), PANEL]);
+    const c = clock(0);
+    const svc = createPlanUsageService({
+      probe,
+      now: c.now,
+      ttlMs: 1000,
+      failureThreshold: 3,
+    });
+
+    svc.read();
+    await settle();
+    // First miss: still capturing, no error flashed to the status bar.
+    expect(svc.read()).toEqual({ status: 'capturing', usage: null, error: null });
+
+    await svc.refresh();
+    // Second miss: still under the threshold, still capturing.
+    expect(svc.read().status).toBe('capturing');
+
+    await svc.refresh();
+    // Third attempt finally succeeds — never having shown 'unavailable'.
+    expect(svc.read()).toMatchObject({ status: 'ready', error: null });
+    expect(svc.read().usage?.usedAic).toBe(25000);
+  });
+
+  it('reports unavailable once consecutive failures reach the threshold', async () => {
+    const { probe } = fakeProbe([null, null, null]);
+    const c = clock(0);
+    const svc = createPlanUsageService({
+      probe,
+      now: c.now,
+      ttlMs: 1000,
+      failureThreshold: 3,
+    });
+
+    svc.read();
+    await settle();
+    expect(svc.read().status).toBe('capturing');
+    await svc.refresh();
+    expect(svc.read().status).toBe('capturing');
+    await svc.refresh();
+    expect(svc.read()).toEqual({
+      status: 'unavailable',
+      usage: null,
+      error: expect.stringMatching(/usage panel/),
+    });
+  });
+
+  it('resets the failure count after a success so later misses forgive again', async () => {
+    const { probe } = fakeProbe([PANEL, null]);
+    const c = clock(0);
+    const svc = createPlanUsageService({
+      probe,
+      now: c.now,
+      ttlMs: 1000,
+      failureThreshold: 2,
+    });
+
+    svc.read();
+    await settle();
+    expect(svc.read().status).toBe('ready');
+    // A single later miss keeps serving the cached snapshot, never unavailable.
+    c.advance(2000);
+    await svc.refresh();
+    expect(svc.read().status).toBe('ready');
+    expect(svc.read().usage?.usedAic).toBe(25000);
+  });
 });

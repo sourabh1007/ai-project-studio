@@ -8,6 +8,7 @@ export interface MetaOperationsSectionProps {
   featureId?: string;
   sessionId?: string;
   automationId?: string;
+  embedded?: boolean;
 }
 
 function credits(operation: MetaOperationSummary | MetaOperation): string {
@@ -86,7 +87,7 @@ function stateCounts(items: MetaOperationSummary[]): Array<{ state: OpState; cou
     .filter((entry) => entry.count > 0);
 }
 
-export function MetaOperationsSection({ featureId, sessionId, automationId }: MetaOperationsSectionProps) {
+export function MetaOperationsSection({ featureId, sessionId, automationId, embedded }: MetaOperationsSectionProps) {
   const api = useApi();
   const [page, setPage] = useState<MetaOperationPage>({ items: [], nextCursor: null });
   const [loading, setLoading] = useState(false);
@@ -130,17 +131,13 @@ export function MetaOperationsSection({ featureId, sessionId, automationId }: Me
 
   const counts = stateCounts(page.items);
 
-  return (
-    <section className="settings-section meta-ops" aria-label="Saved AI operations">
-      <div className="meta-ops-head">
-        <div className="meta-ops-heading">
-          <h3 className="settings-section-title">Saved AI operations</h3>
-          <p className="settings-section-sub">Durable results and interrupted work. Unknown usage is not zero cost.</p>
-        </div>
+  const body = (
+    <>
+      {embedded && (
         <Button variant="ghost" className="meta-ops-refresh" disabled={loading} onClick={() => void loadPage(null)}>
           <RefreshIcon size={14} /> Refresh operations
         </Button>
-      </div>
+      )}
 
       {counts.length > 0 && (
         <div className="meta-ops-summary" aria-label="Operations by state">
@@ -253,6 +250,29 @@ export function MetaOperationsSection({ featureId, sessionId, automationId }: Me
           </>}
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <section className="settings-section meta-ops" role="region" aria-label="Saved AI operations">
+        {body}
+      </section>
+    );
+  }
+
+  return (
+    <section className="settings-section meta-ops" aria-label="Saved AI operations">
+      <div className="meta-ops-head">
+        <div className="meta-ops-heading">
+          <h3 className="settings-section-title">Saved AI operations</h3>
+          <p className="settings-section-sub">Durable results and interrupted work. Unknown usage is not zero cost.</p>
+        </div>
+        <Button variant="ghost" className="meta-ops-refresh" disabled={loading} onClick={() => void loadPage(null)}>
+          <RefreshIcon size={14} /> Refresh operations
+        </Button>
+      </div>
+      {body}
     </section>
   );
 }

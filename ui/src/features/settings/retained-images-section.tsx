@@ -36,7 +36,13 @@ async function readSnapshot(bridge: AttachmentsBridge): Promise<RetainedImagesSn
   return result;
 }
 
-export function RetainedImagesSection({ bridge }: { bridge?: AttachmentsBridge }) {
+export function RetainedImagesSection({
+  bridge,
+  embedded,
+}: {
+  bridge?: AttachmentsBridge;
+  embedded?: boolean;
+}) {
   const heading = useId();
   const warning = useId();
   const [snapshot, setSnapshot] = useState<RetainedImagesSnapshot | null>(null);
@@ -125,74 +131,88 @@ export function RetainedImagesSection({ bridge }: { bridge?: AttachmentsBridge }
     }
   };
 
+  const body = (
+    <>
+      <p id={warning}>
+        Deleting images may break active, past, or resumed prompts that reference them.
+        Deletion cannot be undone. A native confirmation dialog will ask you to confirm
+        before any deletion. There is no automatic deletion or expiry.
+      </p>
+      <p className="page-subtitle">
+        Only app-retained clipboard images are managed here, never copied source files.
+        Storage caps: 64 files, 64 MiB total, 8 MiB per image.
+      </p>
+      {!supported ? (
+        <p>Retained image management is unavailable in this browser or desktop bridge.</p>
+      ) : (
+        <>
+          <div className="diag-actions" aria-describedby={warning}>
+            <Button variant="ghost" onClick={() => { void refresh(); }} disabled={pending !== null}>
+              Refresh images
+            </Button>
+            <Button variant="danger" onClick={() => { void remove(); }}
+              disabled={pending !== null || !snapshot || selected.size === 0}>
+              Delete selected
+            </Button>
+          </div>
+          {pending && <p role="status">{pending === 'loading' ? 'Loading retained images…' : 'Waiting for confirmation, deletion, or refreshed storage usage…'}</p>}
+          {notice && <p role="status">{notice}</p>}
+          {error && <p role="alert">{error}</p>}
+          {snapshot && (
+            <>
+              <p>
+                {snapshot.items.length} of {snapshot.limits.files} files · {bytesLabel(snapshot.totalBytes)} of {bytesLabel(snapshot.limits.totalBytes)} used
+                {' · '}{bytesLabel(snapshot.limits.fileBytes)} maximum per image
+              </p>
+              {snapshot.items.length === 0 ? <p>No retained clipboard images.</p> : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', textAlign: 'left' }}>
+                    <thead><tr><th>Select</th><th>Name</th><th>Size</th><th>Created</th></tr></thead>
+                    <tbody>
+                      {snapshot.items.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <input type="checkbox" aria-label={`Select ${item.name}`}
+                              disabled={pending !== null} checked={selected.has(item.id)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setSelected((previous) => {
+                                  const next = new Set(previous);
+                                  if (checked) next.add(item.id);
+                                  else next.delete(item.id);
+                                  return next;
+                                });
+                              }} />
+                          </td>
+                          <td style={{ overflowWrap: 'anywhere' }}>{item.name}</td>
+                          <td>{bytesLabel(item.bytes)}</td>
+                          <td>{dateLabel(item.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div role="region" aria-label="Retained clipboard images">
+        {body}
+      </div>
+    );
+  }
+
   return (
     <Card>
       <div role="region" aria-labelledby={heading}>
         <h2 id={heading} className="page-title">Retained clipboard images</h2>
-        <p id={warning}>
-          Deleting images may break active, past, or resumed prompts that reference them.
-          Deletion cannot be undone. A native confirmation dialog will ask you to confirm
-          before any deletion. There is no automatic deletion or expiry.
-        </p>
-        <p className="page-subtitle">
-          Only app-retained clipboard images are managed here, never copied source files.
-          Storage caps: 64 files, 64 MiB total, 8 MiB per image.
-        </p>
-        {!supported ? (
-          <p>Retained image management is unavailable in this browser or desktop bridge.</p>
-        ) : (
-          <>
-            <div className="diag-actions" aria-describedby={warning}>
-              <Button variant="ghost" onClick={() => { void refresh(); }} disabled={pending !== null}>
-                Refresh images
-              </Button>
-              <Button variant="danger" onClick={() => { void remove(); }}
-                disabled={pending !== null || !snapshot || selected.size === 0}>
-                Delete selected
-              </Button>
-            </div>
-            {pending && <p role="status">{pending === 'loading' ? 'Loading retained images…' : 'Waiting for confirmation, deletion, or refreshed storage usage…'}</p>}
-            {notice && <p role="status">{notice}</p>}
-            {error && <p role="alert">{error}</p>}
-            {snapshot && (
-              <>
-                <p>
-                  {snapshot.items.length} of {snapshot.limits.files} files · {bytesLabel(snapshot.totalBytes)} of {bytesLabel(snapshot.limits.totalBytes)} used
-                  {' · '}{bytesLabel(snapshot.limits.fileBytes)} maximum per image
-                </p>
-                {snapshot.items.length === 0 ? <p>No retained clipboard images.</p> : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', textAlign: 'left' }}>
-                      <thead><tr><th>Select</th><th>Name</th><th>Size</th><th>Created</th></tr></thead>
-                      <tbody>
-                        {snapshot.items.map((item) => (
-                          <tr key={item.id}>
-                            <td>
-                              <input type="checkbox" aria-label={`Select ${item.name}`}
-                                disabled={pending !== null} checked={selected.has(item.id)}
-                                onChange={(event) => {
-                                  const checked = event.target.checked;
-                                  setSelected((previous) => {
-                                    const next = new Set(previous);
-                                    if (checked) next.add(item.id);
-                                    else next.delete(item.id);
-                                    return next;
-                                  });
-                                }} />
-                            </td>
-                            <td style={{ overflowWrap: 'anywhere' }}>{item.name}</td>
-                            <td>{bytesLabel(item.bytes)}</td>
-                            <td>{dateLabel(item.createdAt)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
+        {body}
       </div>
     </Card>
   );

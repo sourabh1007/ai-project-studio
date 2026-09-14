@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { copyText } from '../../hooks/clipboard-write.js';
 import { Button, Card } from '../../components/ui.js';
 import { useConnectionStatus } from '../../hooks/use-connection-status.js';
@@ -29,6 +29,7 @@ interface DiagnosticsSectionProps {
   version: string | null;
   logDirectory: string | null;
   bridge?: DiagnosticsBridge;
+  embedded?: boolean;
 }
 
 const HEALTH_LABEL: Record<ConnectionState, string> = {
@@ -82,6 +83,7 @@ export function DiagnosticsSection({
   version,
   logDirectory,
   bridge,
+  embedded,
 }: DiagnosticsSectionProps) {
   const connection = useConnectionStatus();
   const [failures, setFailures] = useState<readonly FailureEntry[]>(() =>
@@ -90,6 +92,7 @@ export function DiagnosticsSection({
   const [copied, setCopied] = useState(false);
   const [restartFailed, setRestartFailed] = useState(false);
   const [backend, setBackend] = useState<BackendDiagnostics | null>(null);
+  const embeddedHeadingRef = useRef<HTMLSpanElement | null>(null);
 
   // Backend crash evidence comes from the desktop main process, not the API,
   // so it is still readable when the backend is the thing that died.
@@ -106,6 +109,18 @@ export function DiagnosticsSection({
       alive = false;
     };
   }, [bridge]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    const host = embeddedHeadingRef.current?.closest('.settings-collapsible-body');
+    if (!host || host.querySelector('[data-embedded-heading="diagnostics"]')) return;
+    const heading = document.createElement('h2');
+    heading.className = 'sr-only';
+    heading.dataset.embeddedHeading = 'diagnostics';
+    heading.textContent = 'Diagnostics & recovery';
+    host.prepend(heading);
+    return () => heading.remove();
+  }, [embedded]);
 
   const resolvedLogDirectory = logDirectory ?? backend?.logDirectory ?? null;
 
@@ -150,28 +165,28 @@ export function DiagnosticsSection({
     });
   };
 
-  return (
-    <Card>
-      <div className="page-header">
-        <div>
-          <h2 className="page-title">Diagnostics &amp; recovery</h2>
+  const body = (
+    <>
+      {embedded && <span ref={embeddedHeadingRef} hidden />}
+      {embedded && (
+        <>
+          <div className="diag-actions">
+            <Button variant="ghost" onClick={copyDiagnostics}>
+              {copied ? 'Copied' : 'Copy diagnostics'}
+            </Button>
+            {bridge && (
+              <Button variant="ghost" onClick={restart}>
+                Restart app
+              </Button>
+            )}
+          </div>
           <p className="page-subtitle">
             A local-only snapshot of the app&apos;s health and recent failures.
             Copy it when reporting an issue — it never leaves your machine on its
             own.
           </p>
-        </div>
-        <div className="diag-actions">
-          <Button variant="ghost" onClick={copyDiagnostics}>
-            {copied ? 'Copied' : 'Copy diagnostics'}
-          </Button>
-          {bridge && (
-            <Button variant="ghost" onClick={restart}>
-              Restart app
-            </Button>
-          )}
-        </div>
-      </div>
+        </>
+      )}
 
       {restartFailed && <p role="alert">Restart not confirmed. Wait for active work to finish, then try again.</p>}
       <dl className="kv">
@@ -237,6 +252,36 @@ export function DiagnosticsSection({
         </div>
       </div>
       <FailureList failures={failures} />
+    </>
+  );
+
+  if (embedded) {
+    return body;
+  }
+
+  return (
+    <Card>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Diagnostics &amp; recovery</h2>
+          <p className="page-subtitle">
+            A local-only snapshot of the app&apos;s health and recent failures.
+            Copy it when reporting an issue — it never leaves your machine on its
+            own.
+          </p>
+        </div>
+        <div className="diag-actions">
+          <Button variant="ghost" onClick={copyDiagnostics}>
+            {copied ? 'Copied' : 'Copy diagnostics'}
+          </Button>
+          {bridge && (
+            <Button variant="ghost" onClick={restart}>
+              Restart app
+            </Button>
+          )}
+        </div>
+      </div>
+      {body}
     </Card>
   );
 }
