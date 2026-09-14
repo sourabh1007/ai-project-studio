@@ -43,6 +43,11 @@ const AutomationsView = lazy(() =>
     default: m.AutomationsView,
   })),
 );
+const UsageView = lazy(() =>
+  import('./features/usage/usage-view.js').then((m) => ({
+    default: m.UsageView,
+  })),
+);
 import {
   CommandPalette,
   type PaletteCommand,
@@ -67,12 +72,13 @@ import {
   SettingsIcon,
   SkillsIcon,
   SunIcon,
+  UsageIcon,
 } from './components/icons.js';
 
-type View = 'workspace' | 'skills' | 'mcp' | 'automations' | 'settings';
+type View = 'workspace' | 'skills' | 'mcp' | 'automations' | 'usage' | 'settings';
 
 /** View cycle order for Ctrl+Tab / Ctrl+Shift+Tab. */
-const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'settings'];
+const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'usage', 'settings'];
 
 /** The global keyboard shortcuts, shown in the discoverable shortcuts sheet. */
 const SHORTCUT_BINDINGS: ShortcutBinding[] = [
@@ -205,6 +211,13 @@ export function App() {
         section: 'Navigation',
         keywords: ['monitors', 'automations', 'agents', 'pipelines', 'watch'],
         run: goto('automations'),
+      },
+      {
+        id: 'view-usage',
+        title: 'Open Usage',
+        section: 'Navigation',
+        keywords: ['usage', 'credits', 'aic', 'cost', 'analytics', 'metasession', 'billing'],
+        run: goto('usage'),
       },
       {
         id: 'view-settings',
@@ -340,6 +353,16 @@ export function App() {
             </button>
             <button
               type="button"
+              className={`activity-item ${view === 'usage' ? 'is-active' : ''}`.trim()}
+              title="Usage"
+              aria-label="Usage"
+              aria-current={view === 'usage' ? 'page' : undefined}
+              onClick={() => setView('usage')}
+            >
+              <UsageIcon size={22} />
+            </button>
+            <button
+              type="button"
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
               title="Settings"
               aria-label="Settings"
@@ -386,6 +409,10 @@ export function App() {
                 <div className="settings-pane">
                   <AutomationsView live={live} />
                 </div>
+              ) : view === 'usage' ? (
+                <div className="settings-pane">
+                  <UsageView signal={liveSignal(live)} />
+                </div>
               ) : (
                 <div className="settings-pane">
                   <SettingsView />
@@ -407,6 +434,8 @@ export function App() {
                   ? 'MCP Servers'
                   : view === 'automations'
                   ? 'Monitors'
+                  : view === 'usage'
+                    ? 'Usage'
                     : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>

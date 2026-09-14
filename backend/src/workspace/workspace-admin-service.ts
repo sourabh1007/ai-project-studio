@@ -12,6 +12,11 @@ import type { UsageCaptureRepo } from '../usage/usage-capture-contract.js';
 import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
 import type { MetaOperationRepo } from '../meta/meta-operation-contract.js';
 import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
+import type { Clock } from '../kernel/clock.js';
+import type {
+  RetainedUsageWriter,
+  RetentionReason,
+} from '../usage-retention/usage-retention-contract.js';
 
 /** Closes a live interactive terminal for a session, if one is running. */
 export interface TerminalCloser {
@@ -64,6 +69,13 @@ export interface WorkspaceAdminDeps {
   quiescence: WorkspaceQuiescence;
   usage: Pick<UsageRepo, 'deleteBySession'>;
   usageCaptures?: Pick<UsageCaptureRepo, 'deleteBySession'>;
+  /**
+   * Optional: summarizes a session's usage into the durable retention ledger
+   * BEFORE its live rows are purged, so month/year totals never drop on delete.
+   */
+  retainedUsage?: RetainedUsageWriter;
+  /** Optional: timestamps retention rows; required alongside `retainedUsage`. */
+  clock?: Pick<Clock, 'isoNow'>;
   metaUsage?: Pick<MetaUsageRepo, 'deleteByFeature' | 'deleteBySession'>;
   metaOperations?: Pick<MetaOperationRepo, 'deleteByFeature' | 'deleteBySession'>;
   transcripts: Pick<TranscriptStore, 'delete'>;
@@ -99,7 +111,19 @@ export interface WorkspaceAdmin {
 }
 
 export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
-  async function purgeSession(sessionId: string): Promise<void> {
+  function featureNameOf(featureId: string): string | null {
+    try {
+      return deps.features.get(featureId).name;
+    } catch {
+      return null;
+    }
+  }
+
+  async function purgeSession(
+    session: Session,
+    reason: RetentionReason,
+  ): Promise<void> {
+    const sessionId = session.id;
     await Promise.all([
       deps.quiescence.session(sessionId),
       deps.ownedAutomations?.deleteBySession(sessionId),
@@ -109,6 +133,19 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     // purge it (which would leave a stray row and resurrect the feature).
     deps.liveUsage?.release(sessionId);
     deps.terminals.close(sessionId);
+    // Summarize the session's usage into the durable ledger BEFORE deleting the
+    // live rows, so deletion prunes history without shrinking month/year totals.
+    if (deps.retainedUsage && deps.clock) {
+      deps.retainedUsage.summarizeSession({
+        sessionId,
+        featureId: session.featureId,
+        featureName: featureNameOf(session.featureId),
+        sessionKind: session.kind,
+        scope: session.scope ?? 'feature',
+        reason,
+        retainedAt: deps.clock.isoNow(),
+      });
+    }
     deps.usageCaptures?.deleteBySession(sessionId);
     deps.metaUsage?.deleteBySession(sessionId);
     deps.metaOperations?.deleteBySession(sessionId);
@@ -142,7 +179,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       ]);
       deps.ownedSubagents?.deleteByFeature(id);
       for (const session of deps.sessions.listByFeatureAll(id)) {
-        await purgeSession(session.id);
+        await purgeSession(session, 'feature-deleted');
       }
       deps.sessions.deleteByFeature(id);
       deps.metaUsage?.deleteByFeature(id);
@@ -167,7 +204,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       if (!session) {
         throw new NotFoundError(`Unknown session: ${id}`);
       }
-      await purgeSession(id);
+      await purgeSession(session, 'session-deleted');
       deps.sessions.delete(id);
     },
   };

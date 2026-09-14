@@ -12,6 +12,8 @@ import type { SkillsService } from '../skills/skills-service.js';
 import type { FeatureTasksService } from '../feature-tasks/feature-tasks-service.js';
 import type { FeatureTreeService } from '../feature-tree/feature-tree-service.js';
 import type { IdeUsageService } from '../ide-usage/ide-usage-service.js';
+import type { UsageRollupService } from '../usage-rollup/usage-rollup-service.js';
+import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
 import type { PlanUsageService } from '../plan-usage/plan-usage-service.js';
 import type { ModelCatalogService } from '../meta/model-catalog/model-catalog-service.js';
 import type { UsageDetailService } from '../usage-detail/usage-detail-service.js';
@@ -88,6 +90,7 @@ import type { AutomationService } from '../automation/automation-service.js';
 import type { AutomationScheduler } from '../automation/automation-scheduler.js';
 import type { SubagentService } from '../automation/subagent-service.js';
 import { createIdeUsageRoutes } from './ide-usage-controller.js';
+import { createUsageRollupRoutes } from './usage-rollup-controller.js';
 import { createPlanUsageRoutes } from './plan-usage-controller.js';
 import { createSelfHealRoutes } from './self-heal-controller.js';
 import type { SelfHealService } from '../self-heal/self-heal-contract.js';
@@ -135,6 +138,9 @@ export interface ApiRoutesDeps {
   tree: FeatureTreeService;
   groupLookup: Pick<FeatureGroupsRepo, 'get'>;
   ideUsage: IdeUsageService;
+  usageRollups: UsageRollupService;
+  metaUsageLookup: Pick<MetaUsageRepo, 'listRecent'>;
+  usageActivityLimit: number;
   planUsage: PlanUsageService;
   /** Self-healing service for environment problems (missing CLI, config). */
   selfHeal: SelfHealService;
@@ -278,6 +284,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
+    ...createUsageRollupRoutes({
+      rollups: deps.usageRollups,
+      metaUsage: deps.metaUsageLookup,
+      activityLimit: deps.usageActivityLimit,
+    }),
     ...createPlanUsageRoutes({ planUsage: deps.planUsage }),
     ...createSelfHealRoutes({ selfHeal: deps.selfHeal }),
     ...createMetaModelsRoutes({ metaModels: deps.metaModels }),

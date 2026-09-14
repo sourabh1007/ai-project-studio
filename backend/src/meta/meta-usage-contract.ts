@@ -18,6 +18,9 @@ export interface PersistedMetaUsage {
 export interface MetaUsageRepo {
   get(sessionId: string): PersistedMetaUsage | null;
   save(record: PersistedMetaUsage): void;
+  /** Most-recent warm-ACP usage snapshots, newest first, for the IDE activity
+   * feed (what model ran, why, and how many credits it burned). */
+  listRecent(limit: number): PersistedMetaUsage[];
   deleteByFeature(featureId: string): void;
   deleteBySession(sessionId: string): void;
 }

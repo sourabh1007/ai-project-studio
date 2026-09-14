@@ -12806,3 +12806,127 @@ body.is-resizing {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Usage explorer ─────────────────────────────────────────────────────── */
+.usage-explorer .usage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.usage-tabs,
+.usage-granularity {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface-strong);
+  border: 1px solid var(--dash-border, var(--border));
+}
+
+.usage-tab,
+.usage-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, var(--text));
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.usage-tab:hover,
+.usage-seg:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.usage-tab.is-active,
+.usage-seg.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.usage-kpis {
+  margin-bottom: var(--space-4);
+}
+
+.usage-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.usage-periods {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usage-period-row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.usage-period-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.usage-period-bar .dash-bar-fill {
+  background: var(--accent);
+}
+
+.usage-period-value {
+  min-width: 84px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-period-sub {
+  min-width: 80px;
+  text-align: right;
+  font-size: 12px;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usage-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted, var(--text));
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--dash-border, var(--border));
+}
+
+.usage-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.usage-table .dash-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-activity td:nth-child(2) {
+  max-width: 320px;
+}

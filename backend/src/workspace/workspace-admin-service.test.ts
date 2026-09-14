@@ -47,10 +47,12 @@ function harness(
     withSessionSummaries?: boolean;
     withOwnedAutomationCleanup?: boolean;
     withOwnedSubagentCleanup?: boolean;
+    withRetention?: boolean;
     quiescence?: WorkspaceQuiescence;
   } = {},
 ) {
   const calls: string[] = [];
+  const retained: unknown[] = [];
   const known = new Map<string, Session>(
     featureSessions.map((s) => [s.id, s]),
   );
@@ -162,8 +164,19 @@ function harness(
           deleteBySession: (id) => calls.push(`ownedSubagents.deleteBySession:${id}`),
         }
       : undefined,
+    retainedUsage: options.withRetention
+      ? {
+          summarizeSession: (input) => {
+            calls.push(`retainedUsage.summarizeSession:${input.sessionId}`);
+            retained.push(input);
+          },
+        }
+      : undefined,
+    clock: options.withRetention
+      ? { isoNow: () => '2026-02-02T00:00:00.000Z' }
+      : undefined,
   });
-  return { admin, calls };
+  return { admin, calls, retained };
 }
 
 describe('workspace-admin-service', () => {
@@ -396,6 +409,49 @@ describe('workspace-admin-service', () => {
     await expect(admin.deleteSession('ghost')).rejects.toBeInstanceOf(
       NotFoundError,
     );
+  });
+
+  it('summarizes a deleted session into the retention ledger before purging its live usage', async () => {
+    const { admin, calls, retained } = harness([session('s1')], { withRetention: true });
+    await admin.deleteSession('s1');
+    expect(retained).toEqual([
+      {
+        sessionId: 's1',
+        featureId: 'f1',
+        featureName: 'Login',
+        sessionKind: 'dev',
+        scope: 'feature',
+        reason: 'session-deleted',
+        retainedAt: '2026-02-02T00:00:00.000Z',
+      },
+    ]);
+    expect(calls.indexOf('retainedUsage.summarizeSession:s1'))
+      .toBeLessThan(calls.indexOf('usage.deleteBySession:s1'));
+  });
+
+  it('retains a deleted feature\'s internal session with a null feature name once the feature is gone', async () => {
+    const orphan: Session = { ...session('meta1', 'ghost'), scope: 'internal', kind: 'meta' };
+    const { admin, retained } = harness([orphan], { withRetention: true });
+    await admin.deleteSession('meta1');
+    expect(retained).toEqual([
+      {
+        sessionId: 'meta1',
+        featureId: 'ghost',
+        featureName: null,
+        sessionKind: 'meta',
+        scope: 'internal',
+        reason: 'session-deleted',
+        retainedAt: '2026-02-02T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('tags whole-feature deletions with the feature-deleted retention reason', async () => {
+    const { admin, retained } = harness([session('s1')], { withRetention: true });
+    await admin.deleteFeature('f1');
+    expect(retained).toEqual([
+      expect.objectContaining({ sessionId: 's1', reason: 'feature-deleted' }),
+    ]);
   });
 
   it('deletes a session when no live-usage releaser is wired', async () => {

@@ -375,6 +375,10 @@ import { createModelCatalogService } from './meta/model-catalog/model-catalog-se
 import { createAcpModelCatalogProbe } from './meta/model-catalog/acp-model-catalog-probe.js';
 import { createAbortTracker } from './kernel/abort-tracker.js';
 import { createIdeUsageRepo } from './persistence/ide-usage-repo.js';
+import { createUsageRollupRepo } from './persistence/usage-rollup-repo.js';
+import { createUsageRollupService } from './usage-rollup/usage-rollup-service.js';
+import { createRetainedUsageRepo } from './persistence/retained-usage-repo.js';
+import { createUsageAttributionRepo } from './persistence/usage-attribution-repo.js';
 import {
   IDE_USAGE_NAMESPACE,
   ideUsageConfigSchema,
@@ -741,6 +745,17 @@ function main(): void {
   const ideUsageService = createIdeUsageService({
     reader: createIdeUsageRepo(db, ideUsageConfig),
   });
+  // Consolidated day/week/month/year rollups across every usage source (live
+  // CLI turns, warm-ACP meta snapshots, and retained deletions) for the
+  // workspace, the IDE's own metasession overhead, and each feature.
+  const usageRollupService = createUsageRollupService({
+    reader: createUsageRollupRepo(db, ideUsageConfig),
+  });
+  // Durable retention ledger + move-time attribution keep usage correct across
+  // deletions (summarize, never shrink) and drag-and-drop moves (follow the
+  // session onto its new feature).
+  const retainedUsageRepo = createRetainedUsageRepo(db);
+  const usageAttributionRepo = createUsageAttributionRepo(db);
 
   // The plan AI-credit budget (used / total / available) is scraped from the
   // provider's `/usage` TUI panel — the only surface exposing quota. Wired
@@ -2208,6 +2223,8 @@ function main(): void {
     sessions: sessionRepo,
     usage: usageRepo,
     usageCaptures: usageCaptureRepo,
+    retainedUsage: retainedUsageRepo,
+    clock,
     metaUsage: metaUsageRepo,
     metaOperations: metaOperationRepo,
     quiescence: {
@@ -2286,6 +2303,7 @@ function main(): void {
     groups: featureGroupsRepo,
     sessions: sessionRepo,
     features: featureService,
+    usage: usageAttributionRepo,
     ids,
     clock,
     config: featureTreeConfig,
@@ -2620,6 +2638,9 @@ function main(): void {
       tree: featureTreeService,
       groupLookup: featureGroupsRepo,
       ideUsage: ideUsageService,
+      usageRollups: usageRollupService,
+      metaUsageLookup: metaUsageRepo,
+      usageActivityLimit: ideUsageConfig.activityLimit,
       planUsage: planUsageService,
       metaModels: modelCatalogService,
       usageDetail: usageDetailService,

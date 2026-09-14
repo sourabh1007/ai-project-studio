@@ -19,6 +19,9 @@ import type {
   FeatureWorkSummary,
   GithubStatus,
   IdeUsage,
+  IdeActivityFeed,
+  UsageGranularity,
+  UsageRollup,
   PlanUsageState,
   ImportableSession,
   ImportSessionInput,
@@ -486,6 +489,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
+    getUsageRollup: (granularity: UsageGranularity) =>
+      request<UsageRollup>(`/usage/rollup?granularity=${granularity}`),
+    getIdeUsageRollup: (granularity: UsageGranularity) =>
+      request<UsageRollup>(`/usage/ide/rollup?granularity=${granularity}`),
+    getIdeActivity: () => request<IdeActivityFeed>('/usage/ide/activity'),
+    getFeatureUsageRollup: (featureId: string, granularity: UsageGranularity) =>
+      request<UsageRollup>(
+        `/features/${featureId}/usage/rollup?granularity=${granularity}`,
+      ),
     getPlanUsage: () => request<PlanUsageState>('/usage/plan'),
     generateSummary: (featureId: string) =>
       request<FeatureSummary>(

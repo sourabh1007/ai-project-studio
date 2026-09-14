@@ -145,11 +145,13 @@ function build(
   groups: FeatureGroupsRepo,
   sessions: ReturnType<typeof makeSessionsRepo>,
   features = makeFeatures(['f1', 'f2']),
+  usage?: { reassignSessionFeature: (sessionId: string, featureId: string) => void },
 ): FeatureTreeService {
   return createFeatureTreeService({
     groups,
     sessions,
     features,
+    usage,
     ids: makeIds(),
     clock,
     config: featureTreeDefaults,
@@ -617,6 +619,71 @@ describe('feature-tree service', () => {
       expect(groups.get('a')?.orderIndex).toBe(0);
       expect(groups.get('b')?.orderIndex).toBe(1);
       expect(sessions.get('z')?.orderIndex).toBe(2);
+    });
+
+    it('re-homes usage attribution when a session moves to a different feature', () => {
+      const moves: Array<[string, string]> = [];
+      const usage = {
+        reassignSessionFeature: (sessionId: string, featureId: string) =>
+          moves.push([sessionId, featureId]),
+      };
+      const groups = makeGroupsRepo();
+      const sessions = makeSessionsRepo([
+        session({ id: 's1', featureId: 'f1', groupId: null, orderIndex: 0 }),
+      ]);
+      const service = build(groups, sessions, makeFeatures(['f1', 'f2']), usage);
+      service.moveNode({
+        type: 'session',
+        id: 's1',
+        targetFeatureId: 'f2',
+        targetParentGroupId: null,
+        targetIndex: 0,
+      });
+      expect(moves).toEqual([['s1', 'f2']]);
+    });
+
+    it('leaves usage attribution untouched when a session moves within its own feature', () => {
+      const moves: Array<[string, string]> = [];
+      const usage = {
+        reassignSessionFeature: (sessionId: string, featureId: string) =>
+          moves.push([sessionId, featureId]),
+      };
+      const groups = makeGroupsRepo([group({ id: 'g', featureId: 'f1', parentGroupId: null })]);
+      const sessions = makeSessionsRepo([
+        session({ id: 's1', featureId: 'f1', groupId: null, orderIndex: 0 }),
+      ]);
+      const service = build(groups, sessions, makeFeatures(['f1', 'f2']), usage);
+      service.moveNode({
+        type: 'session',
+        id: 's1',
+        targetFeatureId: 'f1',
+        targetParentGroupId: 'g',
+        targetIndex: 0,
+      });
+      expect(moves).toEqual([]);
+    });
+
+    it('re-homes usage attribution for every session in a moved subtree', () => {
+      const moves: Array<[string, string]> = [];
+      const usage = {
+        reassignSessionFeature: (sessionId: string, featureId: string) =>
+          moves.push([sessionId, featureId]),
+      };
+      const groups = makeGroupsRepo([
+        group({ id: 'root', featureId: 'f1', parentGroupId: null }),
+      ]);
+      const sessions = makeSessionsRepo([
+        session({ id: 'in-subtree', featureId: 'f1', groupId: 'root', orderIndex: 0 }),
+      ]);
+      const service = build(groups, sessions, makeFeatures(['f1', 'f2']), usage);
+      service.moveNode({
+        type: 'group',
+        id: 'root',
+        targetFeatureId: 'f2',
+        targetParentGroupId: null,
+        targetIndex: 0,
+      });
+      expect(moves).toEqual([['in-subtree', 'f2']]);
     });
   });
 });

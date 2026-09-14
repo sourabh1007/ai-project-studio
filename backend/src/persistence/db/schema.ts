@@ -421,6 +421,39 @@ const USAGE_TABLES: readonly TableSchema[] = [
     PRIMARY KEY (session_id, source_key)
   )`,
   },
+  {
+    // Summarized usage that outlives the session/feature it came from. When a
+    // session is deleted (individually or as part of a feature deletion) its
+    // live usage_events and meta_usage_records are rolled up into day/model/
+    // provider buckets here BEFORE the detail rows are purged, so monthly and
+    // yearly totals never drop when history is pruned. `feature_id` is retained
+    // (and `feature_name` snapshotted) so a still-living feature keeps crediting
+    // deleted sub-sessions, while global rollups survive whole-feature deletion.
+    name: 'retained_usage',
+    ddl: `CREATE TABLE IF NOT EXISTS retained_usage (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT,
+    feature_name TEXT,
+    session_id TEXT,
+    session_kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('cli', 'meta')),
+    reason TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    resolved_model TEXT NOT NULL,
+    day TEXT NOT NULL,
+    sessions INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    reasoning_output_tokens INTEGER NOT NULL,
+    cost REAL NOT NULL,
+    credits REAL NOT NULL,
+    nano_aiu INTEGER NOT NULL,
+    purpose TEXT,
+    label TEXT,
+    retained_at TEXT NOT NULL
+  )`,
+  },
 ];
 
 const CONTENT_TABLES: readonly TableSchema[] = [
@@ -639,6 +672,14 @@ const INDEXES: readonly IndexSchema[] = [
   {
     schema: 'usage',
     ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_meta_usage_records_feature_id ON meta_usage_records (feature_id)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_retained_usage_feature_id ON retained_usage (feature_id)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_retained_usage_day ON retained_usage (day)',
   },
   {
     schema: 'usage',

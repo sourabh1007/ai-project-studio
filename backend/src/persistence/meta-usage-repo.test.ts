@@ -43,4 +43,14 @@ describe('createMetaUsageRepo', () => {
     repo.deleteByFeature('f2');
     expect(repo.get('warm-2')).toBeNull();
   });
+
+  it('lists recent records newest-first, bounded by limit', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createMetaUsageRepo(db);
+    repo.save({ ...record(), sessionId: 'warm-1', capturedAt: '2026-01-01T00:00:00.000Z' });
+    repo.save({ ...record(), sessionId: 'warm-2', capturedAt: '2026-03-01T00:00:00.000Z' });
+    repo.save({ ...record(), sessionId: 'warm-3', capturedAt: '2026-02-01T00:00:00.000Z' });
+
+    expect(repo.listRecent(2).map((r) => r.sessionId)).toEqual(['warm-2', 'warm-3']);
+  });
 });

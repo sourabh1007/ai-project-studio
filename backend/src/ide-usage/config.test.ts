@@ -18,6 +18,14 @@ describe('ide-usage config', () => {
     ).toThrow();
   });
 
+  it('defaults the activity feed limit and rejects a non-positive one', () => {
+    expect(ideUsageDefaults.activityLimit).toBe(50);
+    expect(ideUsageConfigSchema.parse({ metaKinds: ['meta'] }).activityLimit).toBe(50);
+    expect(() =>
+      ideUsageConfigSchema.parse({ metaKinds: ['meta'], activityLimit: 0 }),
+    ).toThrow();
+  });
+
   it('rejects an unknown session kind', () => {
     expect(() =>
       ideUsageConfigSchema.parse({ metaKinds: ['other'] }),

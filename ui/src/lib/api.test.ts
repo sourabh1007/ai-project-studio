@@ -784,6 +784,34 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/usage/ide');
   });
 
+  it('reads the workspace usage rollup at a granularity', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ periods: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.getUsageRollup('week');
+    expect(calls[0][0]).toBe('/api/usage/rollup?granularity=week');
+  });
+
+  it('reads the IDE metasession usage rollup at a granularity', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ periods: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.getIdeUsageRollup('month');
+    expect(calls[0][0]).toBe('/api/usage/ide/rollup?granularity=month');
+  });
+
+  it('reads the recent IDE metasession activity feed', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ records: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.getIdeActivity();
+    expect(calls[0][0]).toBe('/api/usage/ide/activity');
+  });
+
+  it('reads a feature usage rollup at a granularity', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ periods: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.getFeatureUsageRollup('f1', 'year');
+    expect(calls[0][0]).toBe('/api/features/f1/usage/rollup?granularity=year');
+  });
+
   it('reads the plan AI-credit budget', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ usedAic: 25000 }));
     const client = createApiClient({ fetchImpl });

@@ -48,6 +48,9 @@ export function createMetaUsageRepo(db: DatabaseSync): MetaUsageRepo {
   const selectOne = db.prepare(
     'SELECT * FROM meta_usage_records WHERE session_id = ?',
   );
+  const selectRecent = db.prepare(
+    'SELECT * FROM meta_usage_records ORDER BY captured_at DESC, session_id DESC LIMIT ?',
+  );
   const save = db.prepare(`INSERT INTO meta_usage_records (
       session_id, feature_id, provider_id, requested_model, resolved_model,
       transport, provider_session_id, purpose, label, input_tokens,
@@ -78,6 +81,9 @@ export function createMetaUsageRepo(db: DatabaseSync): MetaUsageRepo {
     get(sessionId) {
       const row = selectOne.get(sessionId) as MetaUsageRow | undefined;
       return row ? mapRow(row) : null;
+    },
+    listRecent(limit) {
+      return (selectRecent.all(limit) as unknown as MetaUsageRow[]).map(mapRow);
     },
     save(record) {
       save.run(

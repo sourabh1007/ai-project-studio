@@ -873,6 +873,61 @@ export interface IdeUsage {
   byDay: DailyBreakdown[];
 }
 
+/** Rollup bucket size for the consolidated Usage view. */
+export type UsageGranularity = 'day' | 'week' | 'month' | 'year';
+
+/** Which slice of usage a rollup describes. */
+export type UsageRollupScope = 'workspace' | 'ide' | 'feature';
+
+/** One consolidated time bucket (a day, ISO week, month or calendar year). */
+export interface UsagePeriod extends UsageTotals {
+  key: string;
+  start: string;
+  end: string;
+  label: string;
+}
+
+/**
+ * Consolidated usage over a scope, bucketed by the requested granularity and
+ * broken down by model and provider. Includes usage retained from deleted
+ * sessions/features and all metasession overhead, so totals never shrink when
+ * history is pruned.
+ */
+export interface UsageRollup {
+  scope: UsageRollupScope;
+  granularity: UsageGranularity;
+  totals: UsageTotals;
+  periods: UsagePeriod[];
+  byModel: ModelBreakdown[];
+  byProvider: ProviderBreakdown[];
+}
+
+/**
+ * A single IDE metasession usage snapshot: which model burned credits, why
+ * (purpose/label) and how much, so the Usage view can explain IDE overhead.
+ */
+export interface MetaUsageActivity {
+  sessionId: string;
+  featureId: string | null;
+  providerId: string;
+  requestedModel: string;
+  resolvedModel: string | null;
+  transport: string;
+  providerSessionId: string | null;
+  purpose: string | null;
+  label: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  nanoAiu: number | null;
+  credits: number | null;
+  capturedAt: string;
+}
+
+/** `/usage/ide/activity` response: the recent IDE metasession feed. */
+export interface IdeActivityFeed {
+  records: MetaUsageActivity[];
+}
+
 /**
  * Signed-in Copilot plan AI-credit budget, as surfaced by the CLI `/usage`
  * panel: how much of the monthly allowance is used, the total, what remains,

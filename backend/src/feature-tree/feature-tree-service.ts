@@ -11,6 +11,7 @@ import type {
   TreeNodeType,
 } from './feature-tree-contract.js';
 import type { FeatureGroupsRepo } from './feature-groups-repo-port.js';
+import type { UsageAttributionRepo } from '../persistence/usage-attribution-repo.js';
 
 /** The session operations the tree needs: read placement and re-home. */
 export type TreeSessionRepo = Pick<
@@ -23,6 +24,8 @@ export interface FeatureTreeServiceDeps {
   sessions: TreeSessionRepo;
   /** Validates a feature exists (throws NotFoundError otherwise). */
   features: { get(id: string): unknown };
+  /** Optional: keeps denormalized usage attribution in sync with moves. */
+  usage?: UsageAttributionRepo;
   ids: IdGenerator;
   clock: Clock;
   config: FeatureTreeConfig;
@@ -49,7 +52,7 @@ interface OrderedChild {
 export function createFeatureTreeService(
   deps: FeatureTreeServiceDeps,
 ): FeatureTreeService {
-  const { groups, sessions, features, ids, clock, config } = deps;
+  const { groups, sessions, features, usage, ids, clock, config } = deps;
 
   const sessionGroupId = (session: Session): string | null =>
     session.groupId ?? null;
@@ -153,6 +156,7 @@ export function createFeatureTreeService(
           groupId: parent,
           orderIndex: session.orderIndex ?? 0,
         });
+        usage?.reassignSessionFeature(session.id, newFeatureId);
       }
     }
   };
@@ -263,8 +267,14 @@ export function createFeatureTreeService(
         if (targetFeatureId !== moving.featureId) {
           reassignSubtreeFeature(moving, targetFeatureId);
         }
-      } else if (!sessions.get(id)) {
-        throw new NotFoundError(`Unknown session: ${id}`);
+      } else {
+        const session = sessions.get(id);
+        if (!session) {
+          throw new NotFoundError(`Unknown session: ${id}`);
+        }
+        if (session.featureId !== targetFeatureId) {
+          usage?.reassignSessionFeature(id, targetFeatureId);
+        }
       }
 
       const siblings = childrenOf(targetFeatureId, targetParentGroupId).filter(
