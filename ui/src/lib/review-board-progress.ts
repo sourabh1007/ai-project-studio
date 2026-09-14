@@ -158,3 +158,123 @@ export async function mapWithConcurrency<T>(
   const workers = Math.max(1, Math.min(limit, items.length || 1));
   await Promise.all(Array.from({ length: workers }, () => runNext()));
 }
+
+/** Default cadence for re-checking desired concurrency while work is queued. */
+export const DYNAMIC_CONCURRENCY_POLL_MS = 2000;
+
+/** Cancels a scheduled repeating poll. */
+export type CancelPoll = () => void;
+
+export interface DynamicConcurrencyOptions {
+  /**
+   * How often (ms) to re-read the desired limit while items are still queued,
+   * so freshly added capacity is picked up mid-run.
+   */
+  readonly pollMs?: number;
+  /** When true, stop dispatching new items; in-flight tasks still settle. */
+  readonly cancelled?: () => boolean;
+  /** Injectable repeating timer (tests); defaults to `setInterval`. */
+  readonly schedule?: (fn: () => void, ms: number) => CancelPoll;
+}
+
+const defaultSchedule = (fn: () => void, ms: number): CancelPoll => {
+  const timer = setInterval(fn, ms);
+  return () => clearInterval(timer);
+};
+
+/**
+ * Like {@link mapWithConcurrency}, but the in-flight limit is re-evaluated while
+ * work remains queued, so **capacity added mid-run is picked up dynamically**.
+ *
+ * When more metasessions come online (e.g. the warm pool grows or finishes
+ * warming), queued perspectives should start immediately rather than waiting for
+ * the run to restart. Workers are never pre-empted (an AI turn can't be
+ * interrupted safely), but whenever the target limit rises and items are still
+ * waiting, extra workers are spun up to drain the queue across the new capacity.
+ * A shrinking limit simply stops new workers from being added; existing ones
+ * finish their current item and wind down as the queue empties.
+ *
+ * `limit` may be a constant or a (possibly async) getter re-read on each poll;
+ * a throwing/rejecting getter is treated as "no change this cycle". Resolves
+ * once every item has been processed (or `cancelled()` turns true and all
+ * in-flight tasks settle). Individual failures must be handled inside `task`.
+ */
+export async function mapWithDynamicConcurrency<T>(
+  items: readonly T[],
+  limit: number | (() => number | Promise<number>),
+  task: (item: T) => Promise<void>,
+  options: DynamicConcurrencyOptions = {},
+): Promise<void> {
+  const queue = [...items];
+  const getLimit = typeof limit === 'function' ? limit : (): number => limit;
+  const cancelled = options.cancelled ?? ((): boolean => false);
+  let active = 0;
+  let finished = false;
+  let settle!: () => void;
+  const done = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+
+  const maybeFinish = (): void => {
+    if (!finished && active === 0 && (queue.length === 0 || cancelled())) {
+      finished = true;
+      settle();
+    }
+  };
+
+  const spawnWorker = (): void => {
+    active += 1;
+    void (async () => {
+      try {
+        while (!cancelled() && queue.length > 0) {
+          const item = queue.shift() as T;
+          await task(item);
+        }
+      } finally {
+        active -= 1;
+        maybeFinish();
+      }
+    })();
+  };
+
+  const topUp = async (): Promise<void> => {
+    if (finished) return;
+    if (cancelled()) {
+      maybeFinish();
+      return;
+    }
+    let want: number;
+    try {
+      want = Math.max(1, Math.floor(await getLimit()));
+    } catch {
+      want = Math.max(1, active);
+    }
+    const room = Math.min(want - active, queue.length);
+    for (let i = 0; i < room; i += 1) {
+      spawnWorker();
+    }
+    maybeFinish();
+  };
+
+  await topUp();
+  if (finished) return;
+  const schedule = options.schedule ?? defaultSchedule;
+  // Guard against overlapping polls: a starved `getLimit()` (the pool poll
+  // competes for the same browser sockets as the fan-out turns) can take longer
+  // than one interval. Without this guard every tick would launch another poll,
+  // piling up requests that consume the very sockets needed and deepen the
+  // starvation. Skip a tick while the previous poll is still in flight.
+  let polling = false;
+  const cancelPoll = schedule(() => {
+    if (polling) return;
+    polling = true;
+    void topUp().finally(() => {
+      polling = false;
+    });
+  }, options.pollMs ?? DYNAMIC_CONCURRENCY_POLL_MS);
+  try {
+    await done;
+  } finally {
+    cancelPoll();
+  }
+}

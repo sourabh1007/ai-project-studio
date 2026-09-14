@@ -45,8 +45,10 @@ h2 { margin: 0 0 7px; font-size: 15px; font-weight: 600; letter-spacing: -.01em;
 [data-state="active"] { color: #deedff !important; }
 [data-state="active"] .step-dot { background: #9bc9ff; box-shadow: 0 0 0 4px #8bbaff18, 0 0 12px #78adff70; }
 [data-state="complete"] .step-dot { background: #7bdbc1; }
-.loading-track { height: 2px; background: var(--line); overflow: hidden; border-radius: 2px; box-shadow: 0 0 12px #78adff18; }
-.loading-track div { height: 100%; width: 38%; background: linear-gradient(90deg, transparent, #89b7ff, #91e0d7, transparent); animation: sweep 2s ease-in-out infinite; }
+.loading-track { height: 3px; background: var(--line); overflow: hidden; border-radius: 3px; box-shadow: 0 0 12px #78adff18; }
+/* Determinate fill: its width reflects the real stage (see startup.js --progress),
+   with a flowing gradient so it reads as actively working, not stalled. */
+.loading-track div { height: 100%; width: calc(var(--progress, .06) * 100%); min-width: 6%; background: linear-gradient(90deg, #6f9cff, #89b7ff, #91e0d7, #89b7ff); background-size: 220% 100%; border-radius: 3px; transition: width .6s cubic-bezier(.22, 1, .36, 1); animation: track-flow 1.8s linear infinite; }
 footer { display: flex; justify-content: space-between; margin-top: 21px; color: #8290aa; font-size: 10px; letter-spacing: .03em; }
 .ambient { position: absolute; border-radius: 50%; filter: blur(60px); opacity: .2; pointer-events: none; animation: drift 12s ease-in-out infinite alternate; }
 .ambient-one { width: 330px; height: 330px; background: #476be8; left: -150px; top: -120px; }
@@ -68,6 +70,16 @@ body[data-theme="light"][data-failed="true"] h2 { color: #a52836; }
 @keyframes breathe { 50% { transform: translateY(-3px); box-shadow: 0 20px 55px #0005, 0 0 45px #4789ff35; } }
 @keyframes equalize { to { transform: scaleY(.35); opacity: .5; } }
 @keyframes sweep { from { transform: translateX(-110%); } to { transform: translateX(365%); } }
+@keyframes track-flow { to { background-position: 220% 0; } }
 @keyframes drift { to { transform: translate(30px, -20px); opacity: .3; } }
 @keyframes spectral-scan { 0%, 15% { transform: translateX(0) skewX(-18deg); opacity: 0; } 35%, 65% { opacity: 1; } 85%, 100% { transform: translateX(1200px) skewX(-18deg); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .loading-track div { width: 100%; opacity: .6; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  /* A frozen indicator reads as a hang: keep the essential "still loading" cues alive,
+     and let the track keep showing real stage progress via its determinate width. */
+  .activity i { animation: equalize 1s ease-in-out infinite alternate !important; }
+  .activity i:nth-child(2) { animation-delay: -.65s !important; }
+  .activity i:nth-child(3) { animation-delay: -.3s !important; }
+  .loading-track div { animation: track-flow 1.8s linear infinite !important; }
+  body[data-failed="true"] .loading-track div { animation: none !important; }
+}

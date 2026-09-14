@@ -355,6 +355,10 @@ describe('route ownership', () => {
       params: { id: 'feature-1' },
       body: { targetParentFeatureId: 'feature-2' },
     })))).resolves.toEqual({ featureIds: ['feature-1', 'feature-2'] });
+    await expect(Promise.resolve(routes.get('post /features/:id/move')!.workScope!(request({
+      params: { id: 'feature-2' },
+      body: { targetParentGroupId: 'group-1' },
+    })))).resolves.toEqual({ featureIds: ['feature-2', 'feature-1'] });
     await expect(Promise.resolve(routes.get('post /skills/:id/attachments')!.workScope!(request({
       body: { scope: 'feature', targetId: 'feature-1' },
     })))).resolves.toEqual({ featureId: 'feature-1' });
@@ -379,6 +383,9 @@ describe('route ownership', () => {
     await expect(Promise.resolve(routes.get('post /repos/:id/pulls')!.workScope!(request({
       body: { parentFeatureId: 'feature-2' },
     })))).resolves.toEqual({ featureId: 'feature-2' });
+    await expect(Promise.resolve(routes.get('post /repos/:id/pulls')!.workScope!(request({
+      body: { parentGroupId: 'group-1' },
+    })))).resolves.toEqual({ featureId: 'feature-1' });
     await expect(Promise.resolve(routes.get('post /repos/:id/pulls')!.workScope!(request({
       body: {},
     })))).resolves.toEqual({});
@@ -434,6 +441,7 @@ describe('route ownership', () => {
       ids: createIdGenerator(() => `feature-${++featureIds}`),
       clock,
       repos: { get: () => ({ id: 'repo-1' }) },
+      groups: { get: () => null },
     });
     const featureA = features.create({ name: 'A', description: 'alpha' });
     const featureB = features.create({ name: 'B', description: 'beta' });
@@ -537,6 +545,7 @@ describe('route ownership', () => {
       ids: createIdGenerator(() => `feature-${++featureIds}`),
       clock,
       repos: { get: () => ({ id: 'repo-1' }) },
+      groups: { get: () => null },
     });
     const featureA = features.create({ name: 'A', description: 'alpha' });
     const featureB = features.create({ name: 'B', description: 'beta' });

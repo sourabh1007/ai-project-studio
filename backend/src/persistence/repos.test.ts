@@ -40,6 +40,7 @@ function feature(overrides: Partial<Feature> = {}): Feature {
     repoId: null,
     checkoutPath: null,
     parentFeatureId: null,
+    parentGroupId: null,
     orderIndex: 0,
     ...overrides,
   };
@@ -162,6 +163,7 @@ describe('feature-repo', () => {
     repo.updatePlacement('f1', {
       repoId: 'repo-7',
       parentFeatureId: null,
+      parentGroupId: null,
       orderIndex: 3,
     });
     const moved = repo.get('f1');
@@ -170,10 +172,26 @@ describe('feature-repo', () => {
     repo.updatePlacement('f1', {
       repoId: null,
       parentFeatureId: 'p9',
+      parentGroupId: null,
       orderIndex: 0,
     });
     expect(repo.get('f1')?.repoId).toBeNull();
     expect(repo.get('f1')?.parentFeatureId).toBe('p9');
+    repo.updatePlacement('f1', {
+      repoId: 'repo-7',
+      parentFeatureId: null,
+      parentGroupId: 'grp-3',
+      orderIndex: 1,
+    });
+    expect(repo.get('f1')?.parentGroupId).toBe('grp-3');
+    db.close();
+  });
+
+  it('persists a parentGroupId supplied on create', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1', parentGroupId: 'grp-9' }));
+    expect(repo.get('f1')?.parentGroupId).toBe('grp-9');
     db.close();
   });
 

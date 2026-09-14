@@ -68,11 +68,20 @@ export function createWarmRoutePolicy(
     if (deps.warmProviderId === null) {
       return false;
     }
+    // Internal meta work (review board, summaries, task plans, …) is
+    // provider-agnostic: it just needs an AI text turn, so it runs on whatever
+    // warm sessions exist rather than being pinned to the configured provider.
+    //
+    // The request's `providerId` is deliberately NOT consulted here. It is an
+    // *attribution* artifact: `recording-meta-runner` stamps every internal
+    // request with the configured meta provider (e.g. 'agency') for usage
+    // accounting before routing, so it is always populated and never reflects a
+    // genuine per-request routing requirement. Gating on it meant an Agency
+    // default silently refused the Copilot warm pool and cold-spawned a process
+    // per turn — the warm pool sat idle while a review pass started a storm of
+    // cold CLIs. Internal scope is already required above, so the warm pool
+    // (Copilot) serves the turn regardless of the attributed provider.
     const live = deps.settings.get();
-    const providerId = request.providerId ?? live.providerId;
-    if (providerId !== deps.warmProviderId) {
-      return false;
-    }
     const model = request.model ?? live.model;
     return model === 'auto';
   };

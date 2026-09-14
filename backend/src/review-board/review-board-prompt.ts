@@ -22,6 +22,20 @@ function clamp(value: string, max: number): string {
   return `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
+/**
+ * Substitute every `{{key}}` placeholder in a template with its value. Keeping
+ * the perspective prompts template-driven lets the exact wording be reviewed
+ * and tuned from the Settings → Prompts & Commands tab without a code change,
+ * while the dynamic PR evidence is injected here at run time.
+ */
+function applyTemplate(template: string, vars: Record<string, string>): string {
+  let output = template;
+  for (const [key, value] of Object.entries(vars)) {
+    output = output.split(`{{${key}}}`).join(value);
+  }
+  return output;
+}
+
 /** A compact, evidence-first digest of the derived project model. */
 function modelDigest(model: ProjectModel): string {
   const languages = [...model.primaryLanguages, ...model.secondaryLanguages];
@@ -149,81 +163,96 @@ export function buildFindingsPrompt(input: {
  * skips it with a reason (e.g. "no public contracts changed"). This drives the
  * board's live, per-perspective progress.
  */
+export const DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE = [
+  'You are a meticulous staff engineer reviewing a pull request through ONE',
+  'specific lens. Produce concrete, evidence-backed findings for this lens —',
+  'never generic advice. If, and only if, this lens genuinely does not apply',
+  'to the change, skip it and say why in one sentence.',
+  '',
+  '## Review lens: {{lensName}}',
+  'Purpose: {{lensPurpose}}',
+  '',
+  '## Pull request',
+  '- Number: #{{prNumber}}',
+  '- Title: {{prTitle}}',
+  '- Base branch: {{baseBranch}}',
+  '- Files changed: {{filesChanged}}',
+  '',
+  '## Description',
+  '{{description}}',
+  '',
+  '## Derived project model',
+  '{{modelDigest}}',
+  '',
+  '## Changed files',
+  '{{changedFiles}}',
+  '',
+  ...EVIDENCE_RULES,
+  '## Response format',
+  'Reply with ONLY a fenced ```json code block containing a single object:',
+  '{',
+  '  "skipped": boolean — true only if this lens does not apply,',
+  '  "reason": string — required when skipped: why it does not apply,',
+  '  "summary": string — REQUIRED whether or not you found issues: one or two',
+  '    sentences stating exactly what you checked to reach this rating. Name the',
+  '    specific files/symbols you inspected and what you verified about them. No',
+  '    generic phrasing — it must be concrete enough that a reader can audit it,',
+  '  "rationale": [ {  — REQUIRED: an ordered, evidence-backed narrative that',
+  '      justifies the rating so a reader never has to assume the verdict.',
+  '      Use labels natural to this lens. For a problem/solution lens use',
+  '      exactly: "Problem", "Solution implemented", "Why they align",',
+  '      "Verdict". Every detail MUST reference concrete code (file/symbol)',
+  '      from the change — never a generic statement.',
+  '    "label": the step label,',
+  '    "detail": the concrete, code-referenced explanation for this step } ],',
+  '  "checks": [ {  — REQUIRED: a line-by-line audit trail of what you actually',
+  '      inspected. One entry per concrete thing you looked at.',
+  '    "item": the specific file/symbol or aspect inspected (e.g. path — symbol),',
+  '    "finding": what you observed there, in one concrete sentence,',
+  '    "status": one of "pass" | "concern" | "na" } ],',
+  '  "findings": [ {',
+  '    "title": short imperative headline naming the affected file/symbol,',
+  '    "detail": problem + exact location (file + symbol) + concrete fix,',
+  '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
+  '    "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
+  '      specific code demonstrates the finding, "confidence": 0..1 } ]',
+  '  } ]',
+  '}',
+  'When the lens applies but the change is clean, set skipped=false and return',
+  'an empty findings array — but you MUST still populate a non-empty',
+  '`rationale` and non-empty `checks` that prove, with concrete file/symbol',
+  'references, exactly what you inspected and why the change is sound for this',
+  'lens. An approved/clean verdict with an empty rationale or empty checks is',
+  'INVALID: never assume "green" — always show the evidence you based it on.',
+  'Do not add prose outside the code block.',
+].join('\n');
+
 export function buildPerspectivePrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective;
   description: string | null;
   changedPaths: readonly string[];
-  config: { maxContextChars: number };
+  config: { maxContextChars: number; template?: string };
 }): string {
   const { board, perspective } = input;
   const description = clamp(
     (input.description ?? '').trim() || '(no description provided)',
     input.config.maxContextChars,
   );
-  return [
-    'You are a meticulous staff engineer reviewing a pull request through ONE',
-    'specific lens. Produce concrete, evidence-backed findings for this lens —',
-    'never generic advice. If, and only if, this lens genuinely does not apply',
-    'to the change, skip it and say why in one sentence.',
-    '',
-    `## Review lens: ${perspective.name}`,
-    `Purpose: ${perspective.why}`,
-    '',
-    '## Pull request',
-    `- Number: #${board.pull.number}`,
-    `- Title: ${board.pull.title}`,
-    `- Base branch: ${board.baseBranch ?? 'unknown'}`,
-    `- Files changed: ${board.changedFiles}`,
-    '',
-    '## Description',
-    description,
-    '',
-    '## Derived project model',
-    modelDigest(board.model),
-    '',
-    '## Changed files',
-    changedFilesDigest(input.changedPaths, 80),
-    '',
-    ...EVIDENCE_RULES,
-    '## Response format',
-    'Reply with ONLY a fenced ```json code block containing a single object:',
-    '{',
-    '  "skipped": boolean — true only if this lens does not apply,',
-    '  "reason": string — required when skipped: why it does not apply,',
-    '  "summary": string — REQUIRED whether or not you found issues: one or two',
-    '    sentences stating exactly what you checked to reach this rating. Name the',
-    '    specific files/symbols you inspected and what you verified about them. No',
-    '    generic phrasing — it must be concrete enough that a reader can audit it,',
-    '  "rationale": [ {  — REQUIRED: an ordered, evidence-backed narrative that',
-    '      justifies the rating so a reader never has to assume the verdict.',
-    '      Use labels natural to this lens. For a problem/solution lens use',
-    '      exactly: "Problem", "Solution implemented", "Why they align",',
-    '      "Verdict". Every detail MUST reference concrete code (file/symbol)',
-    '      from the change — never a generic statement.',
-    '    "label": the step label,',
-    '    "detail": the concrete, code-referenced explanation for this step } ],',
-    '  "checks": [ {  — REQUIRED: a line-by-line audit trail of what you actually',
-    '      inspected. One entry per concrete thing you looked at.',
-    '    "item": the specific file/symbol or aspect inspected (e.g. path — symbol),',
-    '    "finding": what you observed there, in one concrete sentence,',
-    '    "status": one of "pass" | "concern" | "na" } ],',
-    '  "findings": [ {',
-    '    "title": short imperative headline naming the affected file/symbol,',
-    '    "detail": problem + exact location (file + symbol) + concrete fix,',
-    '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-    '    "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
-    '      specific code demonstrates the finding, "confidence": 0..1 } ]',
-    '  } ]',
-    '}',
-    'When the lens applies but the change is clean, set skipped=false and return',
-    'an empty findings array — but you MUST still populate a non-empty',
-    '`rationale` and non-empty `checks` that prove, with concrete file/symbol',
-    'references, exactly what you inspected and why the change is sound for this',
-    'lens. An approved/clean verdict with an empty rationale or empty checks is',
-    'INVALID: never assume "green" — always show the evidence you based it on.',
-    'Do not add prose outside the code block.',
-  ].join('\n');
+  return applyTemplate(
+    input.config.template ?? DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE,
+    {
+      lensName: perspective.name,
+      lensPurpose: perspective.why,
+      prNumber: String(board.pull.number),
+      prTitle: board.pull.title,
+      baseBranch: board.baseBranch ?? 'unknown',
+      filesChanged: String(board.changedFiles),
+      description,
+      modelDigest: modelDigest(board.model),
+      changedFiles: changedFilesDigest(input.changedPaths, 80),
+    },
+  );
 }
 /** The id of the Problem ↔ Solution lens, which gets a dedicated prompt. */
 export const PROBLEM_SOLUTION_PERSPECTIVE_ID = 'problem-solution';
@@ -302,6 +331,72 @@ export function buildSolutionDigest(input: {
  * whether the solution actually solves that problem. It never grades files one
  * by one; the verdict is about problem/solution alignment as a whole.
  */
+export const DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE = [
+  'You are a staff engineer deciding one thing: does this pull request\'s',
+  'solution actually solve the problem it set out to solve? Judge the change',
+  'as a whole — a general, plain-English assessment. Do NOT evaluate files',
+  'one by one and do NOT produce a file-by-file audit; this lens is about the',
+  'problem and the solution, not individual lines.',
+  '',
+  '## Pull request',
+  '- Number: #{{prNumber}}',
+  '- Title: {{prTitle}}',
+  '- Files changed: {{filesChanged}}',
+  '',
+  '## The problem this PR targets',
+  'Raw PR description (may embed a linked work item):',
+  '{{description}}',
+  '',
+  'Distilled problem statement:',
+  '{{distilledProblem}}',
+  '',
+  '## What the PR implements (the solution)',
+  'Synthesize a GENERAL description of the solution from the change below —',
+  'what capability or behaviour it introduces or fixes. Do not list files.',
+  '{{solutionDigest}}',
+  '',
+  '## What to decide',
+  '1. Problem: state, in plain language, the problem the PR is solving (from',
+  '   the description + linked work item). Be specific about the user-facing',
+  '   or system need — not a summary of the code.',
+  '2. Solution implemented: describe generally what the change does to address',
+  '   it — the approach, not a file list.',
+  '3. Why they align: explain concretely why the solution does (or does not)',
+  '   solve the stated problem. Call out any unaddressed requirement, scope',
+  '   gap, or mismatch. This is the reasoning the reader most needs.',
+  '4. Verdict: rate the alignment. Approve (low risk) only when the solution',
+  '   clearly and fully addresses the problem. Raise the risk / needs-review',
+  '   when there are gaps, and record each gap as a finding.',
+  '',
+  '## Response format',
+  'Reply with ONLY a fenced ```json code block containing a single object:',
+  '{',
+  '  "skipped": false,',
+  '  "summary": string — REQUIRED: one or two plain sentences of the form',
+  '    "The problem is …; the solution …; they align because … (or the gap',
+  '    is …), so it is rated <verdict>." No file names, no jargon dump,',
+  '  "rationale": [  — REQUIRED: exactly these four steps, in this order,',
+  '      each a concrete plain-English explanation (no file-by-file grading):',
+  '    { "label": "Problem", "detail": the problem the PR targets },',
+  '    { "label": "Solution implemented", "detail": what the change does },',
+  '    { "label": "Why they align", "detail": why the solution does or does',
+  '      not solve the problem, naming any gap },',
+  '    { "label": "Verdict", "detail": the rating and the one-line reason } ],',
+  '  "checks": [] — leave empty; this lens is general, not line-by-line,',
+  '  "findings": [ {  — one per real gap where the solution fails to solve the',
+  '      problem; empty when the solution fully solves it:',
+  '    "title": short headline naming the unmet need or mismatch,',
+  '    "detail": what part of the problem is not solved and what is missing,',
+  '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
+  '    "evidence": [ { "source": the unmet requirement or the change area that',
+  '      leaves it unmet, "reason": why it is unsolved, "confidence": 0..1 } ]',
+  '  } ]',
+  '}',
+  'Never assume the change is fine: your "Why they align" MUST give the',
+  'reasoning, so the reader never has to guess why it was approved. Do not add',
+  'prose outside the code block.',
+].join('\n');
+
 export function buildProblemSolutionPrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective;
@@ -309,7 +404,7 @@ export function buildProblemSolutionPrompt(input: {
   problemStatement: string | null;
   problemSufficient: boolean;
   solutionDigest: string;
-  config: { maxContextChars: number };
+  config: { maxContextChars: number; template?: string };
 }): string {
   const { board } = input;
   // Keep each section modest so the assembled prompt stays under the cold-path
@@ -327,71 +422,17 @@ export function buildProblemSolutionPrompt(input: {
       : '(no self-contained problem statement could be distilled from the ' +
         'description — derive the problem from the description above and any ' +
         'linked work item it references)';
-  return [
-    'You are a staff engineer deciding one thing: does this pull request\'s',
-    'solution actually solve the problem it set out to solve? Judge the change',
-    'as a whole — a general, plain-English assessment. Do NOT evaluate files',
-    'one by one and do NOT produce a file-by-file audit; this lens is about the',
-    'problem and the solution, not individual lines.',
-    '',
-    '## Pull request',
-    `- Number: #${board.pull.number}`,
-    `- Title: ${board.pull.title}`,
-    `- Files changed: ${board.changedFiles}`,
-    '',
-    '## The problem this PR targets',
-    'Raw PR description (may embed a linked work item):',
-    description,
-    '',
-    'Distilled problem statement:',
-    distilled,
-    '',
-    '## What the PR implements (the solution)',
-    'Synthesize a GENERAL description of the solution from the change below —',
-    'what capability or behaviour it introduces or fixes. Do not list files.',
-    input.solutionDigest,
-    '',
-    '## What to decide',
-    '1. Problem: state, in plain language, the problem the PR is solving (from',
-    '   the description + linked work item). Be specific about the user-facing',
-    '   or system need — not a summary of the code.',
-    '2. Solution implemented: describe generally what the change does to address',
-    '   it — the approach, not a file list.',
-    '3. Why they align: explain concretely why the solution does (or does not)',
-    '   solve the stated problem. Call out any unaddressed requirement, scope',
-    '   gap, or mismatch. This is the reasoning the reader most needs.',
-    '4. Verdict: rate the alignment. Approve (low risk) only when the solution',
-    '   clearly and fully addresses the problem. Raise the risk / needs-review',
-    '   when there are gaps, and record each gap as a finding.',
-    '',
-    '## Response format',
-    'Reply with ONLY a fenced ```json code block containing a single object:',
-    '{',
-    '  "skipped": false,',
-    '  "summary": string — REQUIRED: one or two plain sentences of the form',
-    '    "The problem is …; the solution …; they align because … (or the gap',
-    '    is …), so it is rated <verdict>." No file names, no jargon dump,',
-    '  "rationale": [  — REQUIRED: exactly these four steps, in this order,',
-    '      each a concrete plain-English explanation (no file-by-file grading):',
-    '    { "label": "Problem", "detail": the problem the PR targets },',
-    '    { "label": "Solution implemented", "detail": what the change does },',
-    '    { "label": "Why they align", "detail": why the solution does or does',
-    '      not solve the problem, naming any gap },',
-    '    { "label": "Verdict", "detail": the rating and the one-line reason } ],',
-    '  "checks": [] — leave empty; this lens is general, not line-by-line,',
-    '  "findings": [ {  — one per real gap where the solution fails to solve the',
-    '      problem; empty when the solution fully solves it:',
-    '    "title": short headline naming the unmet need or mismatch,',
-    '    "detail": what part of the problem is not solved and what is missing,',
-    '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-    '    "evidence": [ { "source": the unmet requirement or the change area that',
-    '      leaves it unmet, "reason": why it is unsolved, "confidence": 0..1 } ]',
-    '  } ]',
-    '}',
-    'Never assume the change is fine: your "Why they align" MUST give the',
-    'reasoning, so the reader never has to guess why it was approved. Do not add',
-    'prose outside the code block.',
-  ].join('\n');
+  return applyTemplate(
+    input.config.template ?? DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE,
+    {
+      prNumber: String(board.pull.number),
+      prTitle: board.pull.title,
+      filesChanged: String(board.changedFiles),
+      description,
+      distilledProblem: distilled,
+      solutionDigest: input.solutionDigest,
+    },
+  );
 }
 
 /**

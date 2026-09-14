@@ -677,6 +677,33 @@ describe('MetaSessionPool', () => {
     expect(pool.idleCount).toBe(1);
   });
 
+  it('gives a queued turn a fresh full budget measured from when it acquires a session', async () => {
+    let now = 0;
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({
+      size: 1,
+      now: () => now,
+      createClient: () => {
+        const client = new FakeClient();
+        created.push(client);
+        return client;
+      },
+    });
+    await pool.start();
+    const busy = await pool.acquire();
+    // Enqueue-time deadline would be now(0) + 100 = 100.
+    const pending = pool.run({ prompt: 'hello', timeoutMs: 100 });
+    pending.catch(() => undefined);
+    await flush();
+    now = 40; // the turn waited 40ms in the queue for a session
+    pool.release(busy);
+    await expect(pending).resolves.toMatchObject({ text: 'ok' });
+    // The turn must run with a fresh full budget from acquire time (40 + 100),
+    // not the leftover of the shared enqueue deadline (100).
+    expect(created[0].turns).toHaveLength(1);
+    expect(created[0].turns[0].deadlineAt).toBe(140);
+  });
+
   it('times out before dispatch when the deadline expires while waiting for a lease', async () => {
     vi.useFakeTimers();
     try {

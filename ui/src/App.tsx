@@ -12,6 +12,7 @@ import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
+import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
 import { ViewSkeleton } from './components/view-skeleton.js';
 
 // Heavy views are code-split so the initial bundle stays small and non-active
@@ -86,7 +87,7 @@ const SHORTCUT_BINDINGS: ShortcutBinding[] = [
 
 export function App() {
   const live = useUsageStream();
-  const { mode, theme, cycle } = useTheme();
+  const { mode, theme, cycle, toggle } = useTheme();
   useApplyUiPreferences(theme);
   const [view, setView] = usePersistentState<View>('cw-active-view', 'workspace', {
     validate: isOneOf(VIEW_ORDER),
@@ -152,6 +153,22 @@ export function App() {
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
+
+  // A prompt "Edit in Settings" deep-link can fire from any view (e.g. the
+  // review board inside the workspace); switch to Settings so its own listener
+  // can open the Prompts & Commands tab and scroll to the entry.
+  useEffect(() => {
+    const onOpenPromptSettings = () => setView('settings');
+    window.addEventListener(
+      OPEN_PROMPT_SETTINGS_EVENT,
+      onOpenPromptSettings,
+    );
+    return () =>
+      window.removeEventListener(
+        OPEN_PROMPT_SETTINGS_EVENT,
+        onOpenPromptSettings,
+      );
+  }, [setView]);
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const goto = (next: View) => () => {
@@ -336,9 +353,9 @@ export function App() {
             <button
               type="button"
               className="activity-item"
-              title={`Theme: ${themeModeLabel(mode)} — click to cycle`}
+              title={`Theme: ${themeModeLabel(mode)} — click to toggle`}
               aria-label={`Theme: ${themeModeLabel(mode)}`}
-              onClick={cycle}
+              onClick={toggle}
             >
               {theme === 'dark' ? <SunIcon size={20} /> : <MoonIcon size={20} />}
             </button>

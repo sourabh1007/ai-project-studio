@@ -124,7 +124,16 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/features/f1/move');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(
-      JSON.stringify({ targetRepoId: 'r2', targetIndex: 2, targetParentFeatureId: null }),
+      JSON.stringify({ targetRepoId: 'r2', targetIndex: 2, targetParentFeatureId: null, targetParentGroupId: null }),
+    );
+  });
+
+  it('places a feature inside a subcategory group when moving', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.moveFeature({ id: 'f1', targetRepoId: null, targetIndex: 0, targetParentGroupId: 'g9' });
+    expect(calls[0][1]?.body).toBe(
+      JSON.stringify({ targetRepoId: null, targetIndex: 0, targetParentFeatureId: null, targetParentGroupId: 'g9' }),
     );
   });
 
@@ -920,7 +929,7 @@ describe('createApiClient', () => {
     expect(init?.method).toBe('POST');
     expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
     expect(init?.body).toBe(
-      JSON.stringify({ number: 42, parentFeatureId: null }),
+      JSON.stringify({ number: 42, parentFeatureId: null, parentGroupId: null }),
     );
   });
 
@@ -929,7 +938,16 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.createPrFeature('r1', 42, 'parent-1');
     expect(calls[0][1]?.body).toBe(
-      JSON.stringify({ number: 42, parentFeatureId: 'parent-1' }),
+      JSON.stringify({ number: 42, parentFeatureId: 'parent-1', parentGroupId: null }),
+    );
+  });
+
+  it('places a review feature inside a subcategory group when given one', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f3' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createPrFeature('r1', 42, null, 'grp-9');
+    expect(calls[0][1]?.body).toBe(
+      JSON.stringify({ number: 42, parentFeatureId: null, parentGroupId: 'grp-9' }),
     );
   });
 
@@ -1285,5 +1303,99 @@ describe('createApiClient', () => {
 
     expect(calls[0][0]).toBe('/api/automations/a1/run');
     expect(calls[0][1]?.body).toBe(JSON.stringify({}));
+  });
+});
+
+/** Build a streaming Response whose body yields the given text chunks. */
+function streamResponse(chunks: string[], status = 200): Response {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => ({}),
+    body: {
+      getReader() {
+        return {
+          read: async () =>
+            i < chunks.length
+              ? { done: false, value: encoder.encode(chunks[i++]) }
+              : { done: true, value: undefined },
+        };
+      },
+    },
+  } as unknown as Response;
+}
+
+describe('analyzeReviewBoardPerspectives (NDJSON stream)', () => {
+  it('delivers each newline-delimited event and ignores blank lines', async () => {
+    const chunks = [
+      '{"type":"analyzing","perspectiveId":"security"}\n',
+      '\n',
+      '{"type":"analyzed","analysis":{"perspectiveId":"security"}}\n',
+      '{"type":"failed","perspectiveId":"perf","error":"boom"}\n',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeReviewBoardPerspectives('f1', (e) => events.push(e));
+    expect(calls[0][0]).toBe(
+      '/api/features/f1/review-board/analyze-perspectives',
+    );
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(events).toEqual([
+      { type: 'analyzing', perspectiveId: 'security' },
+      { type: 'analyzed', analysis: { perspectiveId: 'security' } },
+      { type: 'failed', perspectiveId: 'perf', error: 'boom' },
+    ]);
+  });
+
+  it('handles events split across chunk boundaries and a newline-less tail', async () => {
+    const chunks = [
+      '{"type":"analyzing","perspec',
+      'tiveId":"a"}\n{"type":"analyzing","perspectiveId":"b"}',
+    ];
+    const fetchImpl: FetchLike = async () => streamResponse(chunks);
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeReviewBoardPerspectives(
+      'f1',
+      (e) => events.push(e),
+      new AbortController().signal,
+    );
+    expect(events).toEqual([
+      { type: 'analyzing', perspectiveId: 'a' },
+      { type: 'analyzing', perspectiveId: 'b' },
+    ]);
+  });
+
+  it('ignores a blank tail after the final newline', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse(['{"type":"analyzing","perspectiveId":"a"}\n   ']);
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeReviewBoardPerspectives('f1', (e) => events.push(e));
+    expect(events).toEqual([{ type: 'analyzing', perspectiveId: 'a' }]);
+  });
+
+  it('throws an ApiError when the stream request is not ok', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ error: { message: 'nope' } }, 500);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.analyzeReviewBoardPerspectives('f1', () => {}),
+    ).rejects.toThrow('nope');
+  });
+
+  it('throws an ApiError when the response has no stream body', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({});
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.analyzeReviewBoardPerspectives('f1', () => {}),
+    ).rejects.toBeInstanceOf(ApiError);
   });
 });

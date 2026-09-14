@@ -68,6 +68,7 @@ function api(getReviewBoard: ReturnType<typeof vi.fn>) {
     getReviewBoard,
     getPrReview: vi.fn(),
     analyzeReviewBoardPerspective: vi.fn(),
+    analyzeReviewBoardPerspectives: vi.fn(async () => {}),
     pullLatestPrReview: vi.fn(),
   };
 }

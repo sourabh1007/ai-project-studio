@@ -119,6 +119,7 @@ describe('pr-feature-service', () => {
         repoId: 'r1',
         checkoutPath: 'C:/wt/app-pr-12',
         parentFeatureId: null,
+        parentGroupId: null,
       },
     ]);
     expect(started).toEqual([
@@ -143,6 +144,22 @@ describe('pr-feature-service', () => {
         repoId: 'r1',
         checkoutPath: 'C:/wt/app-pr-12',
         parentFeatureId: 'parent-feat',
+        parentGroupId: null,
+      },
+    ]);
+  });
+
+  it('places the review inside a subcategory group when one is given', async () => {
+    const { svc, created } = harness();
+    await svc.createFromPull('r1', 12, 'parent-feat', 'grp-7');
+    expect(created).toEqual([
+      {
+        name: 'PR #12: Add login',
+        description: 'https://github.com/acme/app/pull/12',
+        repoId: 'r1',
+        checkoutPath: 'C:/wt/app-pr-12',
+        parentFeatureId: null,
+        parentGroupId: 'grp-7',
       },
     ]);
   });

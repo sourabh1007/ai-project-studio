@@ -32,6 +32,7 @@ export function useTheme(): {
   mode: ThemeMode;
   theme: ResolvedTheme;
   cycle: () => void;
+  toggle: () => void;
   setMode: (mode: ThemeMode) => void;
 } {
   const [mode, setMode] = useState<ThemeMode>(initialMode);
@@ -61,5 +62,18 @@ export function useTheme(): {
     [],
   );
 
-  return { mode, theme, cycle, setMode };
+  // A single, unambiguous flip for the quick toggle affordance: always change
+  // the *visible* appearance in one click. Resolving against the live OS
+  // preference means a `system` preference flips to the opposite of what's on
+  // screen (never a no-op step through an identical-looking `system` → explicit
+  // transition, which is what made the toggle feel like it needed two clicks).
+  const toggle = useCallback(
+    () =>
+      setMode((current) =>
+        resolveTheme(current, systemPrefersDark()) === 'dark' ? 'light' : 'dark',
+      ),
+    [],
+  );
+
+  return { mode, theme, cycle, toggle, setMode };
 }

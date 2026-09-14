@@ -96,7 +96,6 @@ describe('shared warm-pool integration', () => {
     });
     const routed = createPooledMetaRunner({
       pool: {
-        ready: () => pool!.ready,
         stats: () => pool!.stats(),
         runDetailed: (input) => warm.runDetailed(input),
       },

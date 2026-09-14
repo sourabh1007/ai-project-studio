@@ -10,11 +10,9 @@ import { registerUnstartedMetaAttempt } from './meta-operation-physical-ownershi
  * one shared resource rather than something to partition per workflow.
  */
 export interface WarmPool {
-  /** True once at least one warm session is ready to serve a turn. */
-  ready(): boolean;
-  /** Live warm-capacity snapshot for status surfaces. */
+  /** Live warm-capacity snapshot for status surfaces and routing. */
   stats(): MetaSessionPoolStats;
-  /** Runs a single turn on a warm session. */
+  /** Runs a single turn on a warm session, waiting for one to free if needed. */
   runDetailed(request: MetaRequest): Promise<MetaRunResult>;
 }
 
@@ -50,16 +48,19 @@ export const GENERAL_PURPOSE = 'general';
 
 /**
  * A {@link MetaRunner} that prefers warm `copilot --acp` sessions from the one
- * shared pool and falls back to the cold runner transparently.
+ * shared pool and falls back to the cold runner only when no warm session
+ * exists yet.
  *
- * Parallelism is bounded by the pool's size: a warm turn is only taken when the
- * pool reports a session ready to lease ({@link WarmPool.ready}), so at most
- * `size` turns run warm-concurrently. When the pool is still warming,
- * saturated (every warm session busy), or a warm turn fails *before dispatch*,
- * the request spills to the cold runner instead of blocking on a queue —
- * callers never fail or stall just because the pool isn't ready. Once a warm
- * turn was actually dispatched, however, its failure is surfaced rather than
- * retried cold, preventing duplicate provider work.
+ * As long as the pool has at least one *live* (booted) session, every eligible
+ * turn leases from it — and when they are all busy it **waits** in the pool's
+ * bounded queue for one to free rather than cold-spawning a new CLI. The wait
+ * is bounded by the request's own deadline, so a saturated pool degrades to a
+ * slower turn (or a surfaced timeout), never an unbounded stall or a storm of
+ * cold processes. The cold runner is used only while the pool is still warming
+ * from a cold start (no live sessions yet) or failed to start, so enabling the
+ * pool never leaves the IDE unable to respond. Once a warm turn was actually
+ * dispatched, its failure is surfaced rather than retried cold, preventing
+ * duplicate provider work.
  */
 export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
   function canFallback(error: unknown): boolean {
@@ -85,10 +86,13 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
     }
     deps.demand?.begin();
     try {
-      // `ready()` is idle>0 and is claimed synchronously by the warm turn before
-      // any await, so a ready pool never queues: overflow past `size` concurrent
-      // turns falls through to the cold path below.
-      if ((deps.supportsWarm?.(bounded) ?? true) && deps.pool.ready()) {
+      // Route warm whenever the pool has a live session. `pool.runDetailed`
+      // leases one, waiting in the pool's bounded queue (capped by the request
+      // deadline) when they are all busy — so an eligible turn waits for a free
+      // warm session instead of cold-spawning. Only spill to cold when the pool
+      // has no live sessions yet (still warming from a cold start, or failed to
+      // start), so the IDE always responds.
+      if ((deps.supportsWarm?.(bounded) ?? true) && deps.pool.stats().live > 0) {
         try {
           return await deps.pool.runDetailed(bounded);
         } catch (error) {

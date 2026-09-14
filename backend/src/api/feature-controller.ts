@@ -8,6 +8,7 @@ const createFeatureSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   repoId: z.string().nullish(),
+  parentGroupId: z.string().nullish(),
 });
 
 const renameFeatureSchema = z.object({
@@ -18,6 +19,7 @@ const moveFeatureSchema = z.object({
   targetRepoId: z.string().nullable(),
   targetIndex: z.number().int().nonnegative(),
   targetParentFeatureId: z.string().nullish(),
+  targetParentGroupId: z.string().nullish(),
 });
 
 export interface FeatureControllerDeps {
@@ -70,6 +72,7 @@ export function createFeatureRoutes(deps: FeatureControllerDeps): Route[] {
           targetRepoId: input.targetRepoId,
           targetIndex: input.targetIndex,
           targetParentFeatureId: input.targetParentFeatureId ?? null,
+          targetParentGroupId: input.targetParentGroupId ?? null,
         });
         return { status: 200, body: deps.features.get(req.params.id) };
       },

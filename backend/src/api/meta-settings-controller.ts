@@ -19,7 +19,10 @@ export interface MetaSettingsControllerDeps {
   /** Current provider/model + warm-pool flag. */
   get: () => MetaSettingsView;
   /** Applies a provider/model patch and returns the resulting settings. */
-  update: (patch: { providerId?: string; model?: string }) => MetaSettingsView;
+  update: (patch: {
+    providerId?: string;
+    model?: string;
+  }) => MetaSettingsView | Promise<MetaSettingsView>;
 }
 
 function assertSettingsPatch(body: unknown): {
@@ -69,9 +72,9 @@ export function createMetaSettingsRoutes(
     {
       method: 'put',
       path: '/meta/settings',
-      handler: (req) => ({
+      handler: async (req) => ({
         status: 200,
-        body: deps.update(assertSettingsPatch(req.body)),
+        body: await deps.update(assertSettingsPatch(req.body)),
       }),
     },
   ];

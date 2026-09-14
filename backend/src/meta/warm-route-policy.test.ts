@@ -47,6 +47,8 @@ describe('createWarmRoutePolicy', () => {
       warmProviderId: 'copilot',
     });
     expect(supportsWarm(baseRequest)).toBe(true);
+    // An explicit provider that matches the warm identity stays warm.
+    expect(supportsWarm({ ...baseRequest, providerId: 'copilot' })).toBe(true);
   });
 
   it('fails closed when the warm provider identity is unknown', () => {
@@ -57,17 +59,20 @@ describe('createWarmRoutePolicy', () => {
     expect(supportsWarm(baseRequest)).toBe(false);
   });
 
-  it('rejects requests that require a concrete model, tools-off, attachments, or another provider', () => {
-    const supportsWarm = createWarmRoutePolicy({
+  it('rejects requests that require a concrete model, tools-off, attachments, or a non-internal scope', () => {
+    const concreteModel = createWarmRoutePolicy({
       settings: { get: () => ({ providerId: 'copilot', model: 'gpt-5' }) },
       warmProviderId: 'copilot',
     });
-    expect(supportsWarm({ ...baseRequest })).toBe(false);
-    expect(supportsWarm({ ...baseRequest, model: 'gpt-5' })).toBe(false);
-    expect(supportsWarm({ ...baseRequest, providerId: 'other' })).toBe(false);
-    expect(supportsWarm({ ...baseRequest, noTools: true })).toBe(false);
-    expect(supportsWarm({ ...baseRequest, attachments: ['C:\\repo\\a.txt'] })).toBe(false);
-    expect(supportsWarm({ ...baseRequest, scope: 'feature' })).toBe(false);
+    expect(concreteModel({ ...baseRequest })).toBe(false);
+    const autoModel = createWarmRoutePolicy({
+      settings: { get: () => ({ providerId: 'copilot', model: 'auto' }) },
+      warmProviderId: 'copilot',
+    });
+    expect(autoModel({ ...baseRequest, model: 'gpt-5' })).toBe(false);
+    expect(autoModel({ ...baseRequest, noTools: true })).toBe(false);
+    expect(autoModel({ ...baseRequest, attachments: ['C:\\repo\\a.txt'] })).toBe(false);
+    expect(autoModel({ ...baseRequest, scope: 'feature' })).toBe(false);
   });
 
   it('serves a tool-less request warm when the caller marked tools optional', () => {
@@ -89,10 +94,24 @@ describe('createWarmRoutePolicy', () => {
       }),
     ).toBe(false);
   });
+
+  it('routes provider-agnostic internal work warm even when the attributed provider differs', () => {
+    const supportsWarm = createWarmRoutePolicy({
+      settings: { get: () => ({ providerId: 'agency', model: 'auto' }) },
+      warmProviderId: 'copilot',
+    });
+    // No provider on the request: internal work uses the warm pool regardless
+    // of the configured default provider.
+    expect(supportsWarm(baseRequest)).toBe(true);
+    // The provider stamped on a request for usage attribution (here 'agency',
+    // the configured meta default) is not a routing constraint: internal work
+    // still leases the shared Copilot warm pool.
+    expect(supportsWarm({ ...baseRequest, providerId: 'agency' })).toBe(true);
+  });
 });
 
 describe('createConfiguredWarmRoutePolicy', () => {
-  it('uses production defaults to route agency-default metasessions cold because warm ACP actually launches Copilot', () => {
+  it('routes agency-default provider-agnostic metasessions warm because internal work uses the shared warm pool', () => {
     const supportsWarm = createConfiguredWarmRoutePolicy({
       settings: {
         get: () => ({
@@ -104,7 +123,7 @@ describe('createConfiguredWarmRoutePolicy', () => {
       copilotConfig: copilotDefaults,
       agencyConfig: agencyDefaults,
     });
-    expect(supportsWarm(baseRequest)).toBe(false);
+    expect(supportsWarm(baseRequest)).toBe(true);
   });
 
   it('allows warm routing only after the live settings match the resolved warm executable identity', () => {

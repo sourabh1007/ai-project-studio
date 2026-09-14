@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import type {
+  Feature,
   MoveNodeInput,
   Session,
   TreeGroup,
@@ -74,6 +75,17 @@ interface TreeContextValue {
   onRenameGroup: (group: TreeGroup, name: string) => void;
   onDeleteGroup: (group: TreeGroup) => void;
   renderSession: (session: Session, ordinal: number) => ReactNode;
+  renderGroupFeatures?: (groupId: string) => ReactNode;
+  onNewFeature?: (parentGroupId: string) => void;
+  /** The feature row currently being dragged, if any (feature DnD). */
+  draggingFeature?: Feature | null;
+  /** Whether the dragged feature may be nested under the given feature id. */
+  canNestInto?: (featureId: string) => boolean;
+  /** Moves the dragged feature into a subcategory folder of this feature. */
+  onMoveFeatureIntoGroup?: (
+    moved: Feature,
+    parentGroupId: string,
+  ) => void | Promise<void>;
 }
 
 const TreeContext = createContext<TreeContextValue | null>(null);
@@ -244,6 +256,11 @@ function GroupNode({ group }: { group: TreeGroup }) {
     onAttachPr,
     onRenameGroup,
     onDeleteGroup,
+    renderGroupFeatures,
+    onNewFeature,
+    draggingFeature,
+    canNestInto,
+    onMoveFeatureIntoGroup,
   } = useTree();
   const [expanded, setExpanded] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -255,6 +272,15 @@ function GroupNode({ group }: { group: TreeGroup }) {
   const label = isPr
     ? `#${group.prNumber} ${group.name}`
     : group.name;
+
+  // A dragged feature row can be dropped onto a subcategory folder to move it
+  // inside. PR containers never hold features, and a feature can't drop into a
+  // folder owned by itself or one of its descendants (the backend cycle guard).
+  const canAcceptFeature =
+    !isPr &&
+    draggingFeature != null &&
+    onMoveFeatureIntoGroup != null &&
+    (canNestInto?.(featureId) ?? true);
 
   function commitName() {
     const next = draft.trim();
@@ -268,6 +294,10 @@ function GroupNode({ group }: { group: TreeGroup }) {
     event.preventDefault();
     event.stopPropagation();
     setDropTarget(false);
+    if (canAcceptFeature && draggingFeature) {
+      void onMoveFeatureIntoGroup?.(draggingFeature, group.id);
+      return;
+    }
     if (!dragging) {
       return;
     }
@@ -299,7 +329,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
           setDragging(null);
         }}
         onDragOver={(event) => {
-          if (dragging) {
+          if (dragging || canAcceptFeature) {
             event.preventDefault();
             setDropTarget(true);
           }
@@ -418,8 +448,20 @@ function GroupNode({ group }: { group: TreeGroup }) {
                   onAddSubcategory(group.id);
                 },
               },
+              ...(!isPr && onNewFeature
+                ? [
+                    {
+                      label: 'New feature',
+                      icon: <PlusIcon />,
+                      onSelect: () => {
+                        setExpanded(true);
+                        onNewFeature(group.id);
+                      },
+                    },
+                  ]
+                : []),
               {
-                label: 'Attach pull request',
+                label: 'Open Pull Request',
                 icon: <PullRequestIcon size={14} />,
                 onSelect: () => {
                   setExpanded(true);
@@ -440,7 +482,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
         <div
           className={`tree-group-children ${dropTarget ? 'is-drop-target' : ''}`}
           onDragOver={(event) => {
-            if (dragging) {
+            if (dragging || canAcceptFeature) {
               event.preventDefault();
               event.stopPropagation();
               setDropTarget(true);
@@ -454,6 +496,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
           onDrop={handleHeaderDrop}
         >
           <TreeContainer parentGroupId={group.id} />
+          {renderGroupFeatures?.(group.id)}
         </div>
       )}
     </div>
@@ -477,6 +520,14 @@ export function FeatureTree(props: {
   onRenameGroup: (group: TreeGroup, name: string) => void;
   onDeleteGroup: (group: TreeGroup) => void;
   renderSession: (session: Session, ordinal: number) => ReactNode;
+  renderGroupFeatures?: (groupId: string) => ReactNode;
+  onNewFeature?: (parentGroupId: string) => void;
+  draggingFeature?: Feature | null;
+  canNestInto?: (featureId: string) => boolean;
+  onMoveFeatureIntoGroup?: (
+    moved: Feature,
+    parentGroupId: string,
+  ) => void | Promise<void>;
 }) {
   const shared = useNodeDragStore();
   const [localDragging, setLocalDragging] = useState<DragNode | null>(null);

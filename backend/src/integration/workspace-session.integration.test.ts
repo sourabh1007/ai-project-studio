@@ -96,6 +96,7 @@ describe('workspace and session integration', () => {
       ids: createIdGenerator(() => `feature-${(featureId += 1)}`),
       clock,
       repos,
+      groups: createFeatureGroupsRepo(db),
     });
     let groupId = 0;
     const tree = createFeatureTreeService({

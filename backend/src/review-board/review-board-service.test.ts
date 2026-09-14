@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createClock } from '../kernel/clock.js';
 import type { MetaRequest, MetaRunResult } from '../meta/meta-runner.js';
+import { MetaAbortError } from '../meta/meta-runner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 import { reviewBoardDefaults } from './config.js';
@@ -264,6 +265,31 @@ describe('createReviewBoardService.analyze', () => {
     const attempts = runDetailed.mock.calls.map(([request]) => request.forceCold);
     expect(attempts.slice(0, -1).every((forced) => !forced)).toBe(true);
     expect(attempts[attempts.length - 1]).toBe(true);
+  });
+
+  it('skips the warm retries on a timeout but still forces the cold attempt', async () => {
+    // A timeout already waited out the whole step budget, so retrying it warm
+    // just burns another full budget on the same stuck session. It should jump
+    // straight to the single forced-cold attempt without any backoff sleeps.
+    const timeout = new MetaAbortError({
+      kind: 'timed_out',
+      timeoutMs: 120_000,
+      termination: 'unconfirmed',
+    });
+    const runDetailed = vi
+      .fn()
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValueOnce({ text: '```json\n[]\n```', sessionId: 's2' });
+    const sleep = vi.fn(async () => {});
+    const service = createReviewBoardService(
+      baseDeps({ ai: { runDetailed }, sleep }),
+    );
+    await service.analyze('f9');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+    const attempts = runDetailed.mock.calls.map(([request]) => request.forceCold);
+    expect(attempts[0]).toBeFalsy();
+    expect(attempts[1]).toBe(true);
   });
 
   it('reports the real provider cause instead of a generic failure', async () => {
@@ -690,5 +716,160 @@ describe('createReviewBoardService.chat', () => {
       { status: 'warning', risk: 'high', findings: [] },
     );
     expect(reply.answer).toBe('n/a');
+  });
+});
+
+describe('createReviewBoardService.analyzeAll', () => {
+  type Event = Parameters<
+    Parameters<
+      ReturnType<typeof createReviewBoardService>['analyzeAll']
+    >[1]['emit']
+  >[0];
+
+  function collect(): { sink: { emit: (e: Event) => void }; events: Event[] } {
+    const events: Event[] = [];
+    return { events, sink: { emit: (e) => events.push(e) } };
+  }
+
+  it('streams analyzing then analyzed for every board perspective', async () => {
+    const service = createReviewBoardService(baseDeps({ inlinePrompts: true }));
+    const ids = service.get('f9').perspectives.map((p) => p.id);
+    const { sink, events } = collect();
+    await service.analyzeAll('f9', sink);
+    const analyzing = events
+      .filter((e) => e.type === 'analyzing')
+      .map((e) => (e.type === 'analyzing' ? e.perspectiveId : ''));
+    const analyzed = events
+      .filter((e) => e.type === 'analyzed')
+      .map((e) => (e.type === 'analyzed' ? e.analysis.perspectiveId : ''));
+    expect(ids.length).toBeGreaterThan(1);
+    expect([...analyzing].sort()).toEqual([...ids].sort());
+    expect([...analyzed].sort()).toEqual([...ids].sort());
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
+  });
+
+  it('throws when the review does not exist, before streaming anything', async () => {
+    const service = createReviewBoardService(
+      baseDeps({
+        reviews: {
+          get: () => {
+            throw new Error('no review');
+          },
+        },
+      }),
+    );
+    const { sink, events } = collect();
+    await expect(service.analyzeAll('missing', sink)).rejects.toThrow(
+      'no review',
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it('streams a failed event (not a throw) when a perspective analysis errors', async () => {
+    const ai = {
+      runDetailed: vi.fn(async () => {
+        throw new Error('model exploded');
+      }),
+    };
+    const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
+    const { sink, events } = collect();
+    await service.analyzeAll('f9', sink);
+    const failed = events.filter((e) => e.type === 'failed');
+    expect(failed.length).toBeGreaterThan(0);
+    expect(
+      failed.every((e) => e.type === 'failed' && e.error.length > 0),
+    ).toBe(true);
+    expect(events.some((e) => e.type === 'analyzed')).toBe(false);
+  });
+
+  it('reserves one session: fans out to (live - 1) perspectives at once', async () => {
+    let active = 0;
+    let peak = 0;
+    const ai = {
+      runDetailed: vi.fn(async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return { text: '', sessionId: 's1' };
+      }),
+    };
+    const liveMetaSessions = vi.fn(() => 3);
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, liveMetaSessions }),
+    );
+    const { sink } = collect();
+    await service.analyzeAll('f9', sink);
+    expect(peak).toBe(2);
+    // Re-read on every scheduling decision so mid-run pool growth is picked up.
+    expect(liveMetaSessions.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('runs one at a time when no warm sessions are reported', async () => {
+    let active = 0;
+    let peak = 0;
+    const ai = {
+      runDetailed: vi.fn(async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        active -= 1;
+        return { text: '', sessionId: 's1' };
+      }),
+    };
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, liveMetaSessions: () => 0 }),
+    );
+    const { sink } = collect();
+    await service.analyzeAll('f9', sink);
+    expect(peak).toBe(1);
+  });
+
+  it('emits nothing when the signal is already aborted', async () => {
+    const service = createReviewBoardService(baseDeps({ inlinePrompts: true }));
+    const controller = new AbortController();
+    controller.abort();
+    const { sink, events } = collect();
+    await service.analyzeAll('f9', sink, controller.signal);
+    expect(events).toHaveLength(0);
+  });
+
+  it('stops emitting results once aborted mid-pass (success in flight)', async () => {
+    const service = createReviewBoardService(
+      baseDeps({ inlinePrompts: true, liveMetaSessions: () => 3 }),
+    );
+    const controller = new AbortController();
+    const events: Event[] = [];
+    const sink = {
+      emit: (e: Event) => {
+        events.push(e);
+        if (e.type === 'analyzing') controller.abort();
+      },
+    };
+    await service.analyzeAll('f9', sink, controller.signal);
+    // Analyzing lines may appear, but no terminal result should be streamed.
+    expect(events.some((e) => e.type === 'analyzed')).toBe(false);
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
+  });
+
+  it('stops emitting results once aborted mid-pass (failure in flight)', async () => {
+    const ai = {
+      runDetailed: vi.fn(async () => {
+        throw new Error('model exploded');
+      }),
+    };
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, liveMetaSessions: () => 2 }),
+    );
+    const controller = new AbortController();
+    const events: Event[] = [];
+    const sink = {
+      emit: (e: Event) => {
+        events.push(e);
+        if (e.type === 'analyzing') controller.abort();
+      },
+    };
+    await service.analyzeAll('f9', sink, controller.signal);
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
   });
 });

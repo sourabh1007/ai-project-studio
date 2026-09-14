@@ -11,6 +11,7 @@ interface FeatureRow {
   repo_id: string | null;
   checkout_path: string | null;
   parent_feature_id: string | null;
+  parent_group_id: string | null;
   order_index: number;
 }
 
@@ -24,6 +25,7 @@ function mapFeature(row: FeatureRow): Feature {
     repoId: row.repo_id ?? null,
     checkoutPath: row.checkout_path ?? null,
     parentFeatureId: row.parent_feature_id ?? null,
+    parentGroupId: row.parent_group_id ?? null,
     orderIndex: row.order_index,
   };
 }
@@ -31,7 +33,7 @@ function mapFeature(row: FeatureRow): Feature {
 /** SQLite-backed implementation of the FeatureRepo port. */
 export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const insert = db.prepare(
-    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path, parent_feature_id, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO features (id, name, description, created_at, summary, repo_id, checkout_path, parent_feature_id, parent_group_id, order_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const selectOne = db.prepare('SELECT * FROM features WHERE id = ?');
   const selectAll = db.prepare(
@@ -40,7 +42,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   const updateSummary = db.prepare('UPDATE features SET summary = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE features SET name = ? WHERE id = ?');
   const updatePlacement = db.prepare(
-    'UPDATE features SET repo_id = ?, parent_feature_id = ?, order_index = ? WHERE id = ?',
+    'UPDATE features SET repo_id = ?, parent_feature_id = ?, parent_group_id = ?, order_index = ? WHERE id = ?',
   );
   const deleteOne = db.prepare('DELETE FROM features WHERE id = ?');
 
@@ -55,6 +57,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
         feature.repoId ?? null,
         feature.checkoutPath ?? null,
         feature.parentFeatureId ?? null,
+        feature.parentGroupId ?? null,
         feature.orderIndex ?? 0,
       );
     },
@@ -75,6 +78,7 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
       updatePlacement.run(
         placement.repoId ?? null,
         placement.parentFeatureId ?? null,
+        placement.parentGroupId ?? null,
         placement.orderIndex,
         id,
       );

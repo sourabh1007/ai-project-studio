@@ -22,6 +22,15 @@ export interface Feature {
    */
   parentFeatureId?: string | null;
   /**
+   * Subcategory (folder) group this feature is nested under, when placed
+   * inside another feature's tree alongside its sessions and groups instead
+   * of directly under a feature/repository. Mutually exclusive with
+   * `parentFeatureId`: at most one of the two is set at a time. The group's
+   * owning feature (`TreeGroup.featureId`) is this feature's effective
+   * parent for repository inheritance and cycle checks.
+   */
+  parentGroupId?: string | null;
+  /**
    * Sort position among sibling features that share the same repository group
    * (repo-less features form their own group). Lower sorts first; ties fall
    * back to creation order. Defaults to 0 until a feature is reordered.
@@ -38,6 +47,12 @@ export interface CreateFeatureInput {
   checkoutPath?: string | null;
   /** Parent feature to nest this one under; null/omitted for a top-level feature. */
   parentFeatureId?: string | null;
+  /**
+   * Subcategory group to place this feature inside; null/omitted for a
+   * top-level feature. Mutually exclusive with `parentFeatureId`. The feature
+   * inherits the group's owning feature's repository.
+   */
+  parentGroupId?: string | null;
 }
 
 /**
@@ -58,4 +73,13 @@ export interface MoveFeatureInput {
    * rejected.
    */
   targetParentFeatureId?: string | null;
+  /**
+   * Subcategory group to place the moved feature inside, or null to leave it
+   * out of any subcategory. When set, the moved feature inherits the group's
+   * owning feature's repository, is reordered among that group's member
+   * features, and its `parentFeatureId` is cleared (the two are mutually
+   * exclusive). Placing a feature inside a group owned by itself or one of its
+   * descendants is rejected. Takes precedence over `targetParentFeatureId`.
+   */
+  targetParentGroupId?: string | null;
 }

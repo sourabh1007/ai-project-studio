@@ -21,13 +21,14 @@ import type {
   PrReview,
   RationalePoint,
   ReviewBoard,
+  ReviewBoardPerspectiveEvent,
   ReviewBoardRatingChange,
 } from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
 import { metaConcurrency } from '../../lib/meta-concurrency.js';
 import {
   applyAgentRatingChange,
-  mapWithConcurrency,
+  mapWithDynamicConcurrency,
   mergeAnalyzedPerspective,
   runWithRetry,
   RetryCancelledError,
@@ -75,6 +76,18 @@ export interface ReviewBoardRunApi {
     perspectiveId: string,
     signal?: AbortSignal,
   ): Promise<PerspectiveAnalysis>;
+  /**
+   * Server-side whole-board fan-out. The backend runs every perspective across
+   * the warm pool (reserving one session) and streams one event per lens as it
+   * settles, so the parallelism is bounded by the pool rather than the browser's
+   * per-origin socket cap. `onEvent` is called for each streamed event; the
+   * promise resolves when the stream ends.
+   */
+  analyzeReviewBoardPerspectives(
+    featureId: string,
+    onEvent: (event: ReviewBoardPerspectiveEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
   /** Read the current PR review (used to poll the change-graph rebuild). */
   getPrReview(featureId: string): Promise<PrReview>;
   /** Re-provision the worktree to the latest remote head and rebuild. */
@@ -462,12 +475,31 @@ export class ReviewBoardRunStore {
    * the pool status can't be read (or warm pools are off).
    */
   private async resolveConcurrency(api: ReviewBoardRunApi): Promise<number> {
-    try {
-      const status = await api.getMetaPools?.();
-      return metaConcurrency(status);
-    } catch {
-      return FALLBACK_CONCURRENCY;
-    }
+    const status = await api.getMetaPools?.();
+    return metaConcurrency(status);
+  }
+
+  /**
+   * A per-run concurrency getter for {@link mapWithDynamicConcurrency} that is
+   * resilient to a *starved* pool poll. The fan-out turns and the periodic
+   * `/meta/pools` poll compete for the same handful of browser sockets, so under
+   * load the poll can hang or time out. If every failure collapsed the target to
+   * {@link FALLBACK_CONCURRENCY}, one unlucky poll would erase capacity we had
+   * already discovered and stall further scale-up. Instead we remember the last
+   * successfully observed width and return it on failure, so a transient starved
+   * poll never shrinks the intent — the next poll that gets through can still
+   * grow the fan-out.
+   */
+  private concurrencyGetter(api: ReviewBoardRunApi): () => Promise<number> {
+    let lastGood = FALLBACK_CONCURRENCY;
+    return async () => {
+      try {
+        lastGood = await this.resolveConcurrency(api);
+      } catch {
+        // Keep the last known width; do not collapse discovered capacity.
+      }
+      return lastGood;
+    };
   }
 
   private async takeLatest(
@@ -599,43 +631,34 @@ export class ReviewBoardRunStore {
 
     const isStale = () => this.record(featureId).runToken !== token;
 
-    const concurrency = await this.resolveConcurrency(api);
-    await mapWithConcurrency(ids, concurrency, async (id) => {
+    // Server-side fan-out: one streamed request drives the whole parallel pass.
+    // The backend reviews every perspective across the warm pool (reserving one
+    // session for other IDE work) and streams a result per lens as it settles,
+    // so concurrency scales with the pool instead of being capped at the
+    // browser's ~6 connections-per-origin. Per-lens retries happen server-side.
+    const applyEvent = (event: ReviewBoardPerspectiveEvent): void => {
       if (isStale()) return;
-      try {
-        const result = await runWithRetry(
-          async (attempt) => {
-            this.setProgress(featureId, id, {
-              status: attempt > 1 ? 'retrying' : 'analyzing',
-              skipReason: null,
-              checked: null,
-              rationale: [],
-              checks: [],
-              error: null,
-              attempt,
-            });
-            return await api.analyzeReviewBoardPerspective(
-              featureId,
-              id,
-              controller.signal,
-            );
-          },
-          {
-            attempts: MAX_ATTEMPTS,
-            delay: (ms) => new Promise((r) => setTimeout(r, ms)),
-            backoffMs: (attempt) => RETRY_BACKOFF_MS * attempt,
-            cancelled: () => isStale() || controller.signal.aborted,
-            shouldRetry: (error) => !isAbort(error),
-          },
-        );
-        if (isStale()) return;
+      if (event.type === 'analyzing') {
+        this.setProgress(featureId, event.perspectiveId, {
+          status: 'analyzing',
+          skipReason: null,
+          checked: null,
+          rationale: [],
+          checks: [],
+          error: null,
+          attempt: 1,
+        });
+        return;
+      }
+      if (event.type === 'analyzed') {
+        const result = event.analysis;
         this.update(featureId, (prev) => ({
           ...prev,
           board: prev.board
             ? mergeAnalyzedPerspective(prev.board, result.perspective)
             : prev.board,
         }));
-        this.setProgress(featureId, id, {
+        this.setProgress(featureId, result.perspectiveId, {
           status: result.skipped ? 'skipped' : 'done',
           skipReason: result.skipReason,
           checked: result.summary,
@@ -644,19 +667,50 @@ export class ReviewBoardRunStore {
           error: null,
           attempt: 0,
         });
-      } catch (error) {
-        if (isStale() || isAbort(error)) return;
-        this.setProgress(featureId, id, {
-          status: 'error',
-          skipReason: null,
-          checked: null,
-          rationale: [],
-          checks: [],
-          error: messageOf(error, 'This perspective could not be analysed.'),
-          attempt: 0,
-        });
+        return;
       }
-    });
+      this.setProgress(featureId, event.perspectiveId, {
+        status: 'error',
+        skipReason: null,
+        checked: null,
+        rationale: [],
+        checks: [],
+        error: event.error || 'This perspective could not be analysed.',
+        attempt: 0,
+      });
+    };
+
+    try {
+      await api.analyzeReviewBoardPerspectives(
+        featureId,
+        applyEvent,
+        controller.signal,
+      );
+    } catch (error) {
+      // A stream-level failure (backend restart, dropped socket) isn't tied to
+      // any single lens, so surface it on every perspective still waiting rather
+      // than leaving them stuck on their spinners.
+      if (!isStale() && !isAbort(error)) {
+        const message = messageOf(
+          error,
+          'The review stream ended unexpectedly. Please retry.',
+        );
+        const progress = this.record(featureId).state.progress;
+        for (const [id, p] of Object.entries(progress)) {
+          if (p.status === 'pending' || p.status === 'analyzing') {
+            this.setProgress(featureId, id, {
+              status: 'error',
+              skipReason: null,
+              checked: null,
+              rationale: [],
+              checks: [],
+              error: message,
+              attempt: 0,
+            });
+          }
+        }
+      }
+    }
 
     if (!isStale()) {
       this.update(featureId, (prev) => ({ ...prev, running: false }));
@@ -806,8 +860,10 @@ export class ReviewBoardRunStore {
       },
     }));
 
-    const concurrency = await this.resolveConcurrency(api);
-    await mapWithConcurrency(failed, concurrency, async (id) => {
+    await mapWithDynamicConcurrency(
+      failed,
+      this.concurrencyGetter(api),
+      async (id) => {
       if (isStale()) return;
       try {
         const result = await runWithRetry(
@@ -863,7 +919,9 @@ export class ReviewBoardRunStore {
           attempt: 0,
         });
       }
-    });
+      },
+      { cancelled: isStale },
+    );
 
     if (!isStale()) {
       this.update(featureId, (prev) => ({ ...prev, running: false }));

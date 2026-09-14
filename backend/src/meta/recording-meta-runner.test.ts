@@ -27,10 +27,11 @@ const result = (overrides: Partial<MetaRunResult> = {}): MetaRunResult => ({
 });
 const clock = createClock(() => Date.parse('2026-01-01T00:00:00Z'));
 
-/** A warm pool that never has a session ready, so routing always spills cold. */
+/** A warm pool that never has a live session, so routing always spills cold. */
 const idlePool = () => ({
-  ready: () => false,
-  stats: () => { throw new Error('unused'); },
+  stats: () => ({
+    size: 0, live: 0, idle: 0, busy: 0, ready: false, served: 0, sessions: [],
+  }),
   runDetailed: async () => { throw new Error('unused'); },
 });
 
@@ -125,7 +126,7 @@ describe('durable recording meta runner with production SQLite', () => {
     const routed = createPooledMetaRunner({
       physicalOwnership: h.physical, fallback: h.cold, defaultTimeoutMs: 1000,
       pool: {
-        ready: () => true, stats: () => { throw new Error('unused'); },
+        stats: () => ({ size: 1, live: 1, idle: 1, busy: 0, ready: true, served: 0, sessions: [] }),
         runDetailed: async (request) => {
           h.physical.register(request.operationId!, { ownerId: 'warm', settled, quiesce: stop });
           throw new AcpRequestError('Pre-dispatch handshake failed', {
@@ -245,7 +246,7 @@ describe('durable recording meta runner with production SQLite', () => {
     const cold = { run: vi.fn(async () => 'cold'), runDetailed: vi.fn(async () => result({ transport: 'session' })) };
     const warm = vi.fn(async () => result());
     const pooled = createPooledMetaRunner({
-      pool: { ready: () => true, stats: () => { throw new Error('unused'); }, runDetailed: warm },
+      pool: { stats: () => ({ size: 1, live: 1, idle: 1, busy: 0, ready: true, served: 0, sessions: [] }), runDetailed: warm },
       fallback: cold, defaultTimeoutMs: 1000,
     });
     const h = setup((request) => pooled.runDetailed(request));

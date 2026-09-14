@@ -15,7 +15,7 @@
 import type { Clock } from '../kernel/clock.js';
 import type { EventBus } from '../kernel/event-bus.js';
 import { ProviderError, ValidationError } from '../kernel/error-types.js';
-import type { MetaRunner } from '../meta/meta-runner.js';
+import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 import type { ReviewBoardConfig } from './config.js';
@@ -42,7 +42,9 @@ import type {
   ReviewBoardChatReply,
   ReviewBoardChatContext,
   ReviewBoardEventMap,
+  ReviewBoardPerspectiveEvent,
   ReviewBoardService,
+  ReviewBoardStreamSink,
   ReviewPerspective,
 } from './review-board-contract.js';
 
@@ -71,6 +73,14 @@ export interface ReviewBoardServiceDeps {
   sleep: (ms: number) => Promise<void>;
   /** When true the prompt is carried inline over stdio (warm pool). */
   inlinePrompts?: boolean;
+  /**
+   * Live count of booted warm metasessions (idle + busy). Sizes how many
+   * perspectives {@link ReviewBoardService.analyzeAll} fans out at once: it uses
+   * all but one so a session is always reserved for other IDE work. Re-read as
+   * the pass proceeds, so capacity added mid-run is picked up. Absent/zero runs
+   * one perspective at a time (the safe cold-path default).
+   */
+  liveMetaSessions?: () => number;
 }
 
 /** Optional live-progress hooks forwarded to the AI runner for a prompt. */
@@ -253,6 +263,12 @@ export function createReviewBoardService(
    * is forced onto the cold path so it cannot land on the same broken shared
    * session. What still fails is raised as a {@link ProviderError} carrying the
    * real provider message, so the UI can say what actually went wrong.
+   *
+   * A *timeout* is the one failure that skips the intermediate warm retries: it
+   * already waited out the whole step budget, so retrying it warm just burns
+   * another full budget on the same (likely stuck) session. It goes straight to
+   * the single forced-cold attempt below — the escape hatch for a broken warm
+   * session — instead of amplifying provider load with repeated 120s waits.
    */
   async function runPrompt(
     review: PrReview,
@@ -271,6 +287,9 @@ export function createReviewBoardService(
       } catch (error) {
         if (signal?.aborted) throw error;
         lastError = error;
+        if (error instanceof MetaAbortError && error.kind === 'timed_out') {
+          break;
+        }
         await deps.sleep(deps.config.transientRetryBackoffMs);
       }
     }
@@ -285,7 +304,49 @@ export function createReviewBoardService(
     }
   }
 
-  return {
+  /**
+   * Fan `items` out to `task` with at most `limit()` running at once, re-reading
+   * `limit()` each time a slot frees so warm capacity added mid-pass is picked
+   * up. Never rejects — `task` owns its own failures; resolves once every item
+   * has settled, or immediately once aborted and all in-flight work has drained.
+   */
+  async function runReserved<T>(
+    items: readonly T[],
+    limit: () => number,
+    task: (item: T) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const queue = [...items];
+    let active = 0;
+    await new Promise<void>((resolve) => {
+      const pump = (): void => {
+        if (signal?.aborted) {
+          if (active === 0) resolve();
+          return;
+        }
+        while (active < Math.max(1, limit()) && queue.length > 0) {
+          const item = queue.shift() as T;
+          active += 1;
+          void task(item).finally(() => {
+            active -= 1;
+            pump();
+          });
+        }
+        if (active === 0 && queue.length === 0) {
+          resolve();
+        }
+      };
+      pump();
+    });
+  }
+
+  /** How many perspectives to review at once: all live warm sessions but one. */
+  function fanOutWidth(): number {
+    const live = deps.liveMetaSessions?.() ?? 0;
+    return live > 1 ? live - 1 : 1;
+  }
+
+  const service: ReviewBoardService = {
     get(featureId: string): ReviewBoard {
       return buildEmptyBoard(toBuildInput(deps.reviews.get(featureId)));
     },
@@ -346,14 +407,20 @@ export function createReviewBoardService(
               nodes: toSolutionNodes(review),
               maxChars: Math.min(deps.config.maxContextChars, 10_000),
             }),
-            config: { maxContextChars: deps.config.maxContextChars },
+            config: {
+              maxContextChars: deps.config.maxContextChars,
+              template: deps.config.problemSolutionPromptTemplate,
+            },
           })
         : buildPerspectivePrompt({
             board,
             perspective,
             description: review.description,
             changedPaths: changedPathsOf(input),
-            config: { maxContextChars: deps.config.maxContextChars },
+            config: {
+              maxContextChars: deps.config.maxContextChars,
+              template: deps.config.perspectivePromptTemplate,
+            },
           });
       // Stream what the reviewer is doing for this lens in real time. A fresh
       // metasession id (new run or self-healing attempt) lets the client reset
@@ -430,6 +497,54 @@ export function createReviewBoardService(
       };
     },
 
+    async analyzeAll(
+      featureId: string,
+      sink: ReviewBoardStreamSink,
+      signal?: AbortSignal,
+    ): Promise<void> {
+      // Resolve (and validate) the review up front so a missing PR review
+      // surfaces as a thrown error before we start streaming, matching
+      // analyzePerspective. The board also gives us the canonical lens ids.
+      const perspectiveIds = service
+        .get(featureId)
+        .perspectives.map((p) => p.id);
+      await runReserved(
+        perspectiveIds,
+        fanOutWidth,
+        async (perspectiveId) => {
+          if (signal?.aborted) {
+            return;
+          }
+          const event: ReviewBoardPerspectiveEvent = {
+            type: 'analyzing',
+            perspectiveId,
+          };
+          sink.emit(event);
+          try {
+            const analysis = await service.analyzePerspective(
+              featureId,
+              perspectiveId,
+              signal,
+            );
+            if (signal?.aborted) {
+              return;
+            }
+            sink.emit({ type: 'analyzed', analysis });
+          } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
+            sink.emit({
+              type: 'failed',
+              perspectiveId,
+              error: errorMessage(error),
+            });
+          }
+        },
+        signal,
+      );
+    },
+
     async chat(
       featureId: string,
       perspectiveId: string | null,
@@ -466,4 +581,6 @@ export function createReviewBoardService(
       return parseChatReply(text, perspective?.id ?? null);
     },
   };
+
+  return service;
 }

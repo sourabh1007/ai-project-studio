@@ -236,6 +236,26 @@ describe('buildPerspectivePrompt', () => {
     });
     expect(prompt).toContain('…');
   });
+
+  it('honours a custom prompt template, substituting evidence placeholders', () => {
+    const prompt = buildPerspectivePrompt({
+      board,
+      perspective,
+      description: 'Adds a cache layer.',
+      changedPaths: ['src/Cache.cs'],
+      config: {
+        maxContextChars: 20_000,
+        template:
+          'Lens {{lensName}} — {{lensPurpose}}\nPR #{{prNumber}}: {{prTitle}}\n' +
+          'Base {{baseBranch}}, files {{filesChanged}}\n{{description}}\n' +
+          '{{modelDigest}}\n{{changedFiles}}',
+      },
+    });
+    expect(prompt).toContain(`Lens ${perspective.name} — ${perspective.why}`);
+    expect(prompt).toContain('Adds a cache layer.');
+    expect(prompt).toContain('src/Cache.cs');
+    expect(prompt).not.toContain('meticulous staff engineer');
+  });
 });
 
 function solNode(overrides: Partial<SolutionNode> = {}): SolutionNode {
@@ -372,6 +392,27 @@ describe('buildProblemSolutionPrompt', () => {
       config: { maxContextChars: 10 },
     });
     expect(prompt).toContain('…');
+  });
+
+  it('honours a custom prompt template, substituting evidence placeholders', () => {
+    const prompt = buildProblemSolutionPrompt({
+      board,
+      perspective,
+      description: 'Adds a cache layer.',
+      problemStatement: 'Reads are slow.',
+      problemSufficient: true,
+      solutionDigest: 'Introduces a read-through cache.',
+      config: {
+        maxContextChars: 20_000,
+        template:
+          'PR #{{prNumber}} {{prTitle}} ({{filesChanged}} files)\n' +
+          'Problem: {{description}} / {{distilledProblem}}\n' +
+          'Solution: {{solutionDigest}}',
+      },
+    });
+    expect(prompt).toContain('Reads are slow.');
+    expect(prompt).toContain('Introduces a read-through cache.');
+    expect(prompt).not.toContain('staff engineer deciding one thing');
   });
 });
 

@@ -52,6 +52,7 @@ import type {
   ReviewRisk,
   ReviewStatus,
 } from '../../lib/types.js';
+import { PerspectivePromptPreview } from './perspective-prompt-preview.js';
 
 const RISK_LABEL: Record<ReviewRisk, string> = {
   low: 'Low',
@@ -386,6 +387,7 @@ export function ReviewBoardPage({
     () => ({
       getReviewBoard: api.getReviewBoard,
       analyzeReviewBoardPerspective: api.analyzeReviewBoardPerspective,
+      analyzeReviewBoardPerspectives: api.analyzeReviewBoardPerspectives,
       getPrReview: api.getPrReview,
       pullLatestPrReview: api.pullLatestPrReview,
       getMetaPools: api.getMetaPools,
@@ -642,8 +644,12 @@ export function ReviewBoardPage({
         p.status === 'pending' ||
         p.status === 'retrying',
     );
-  const analyzedCount = progressValues.filter(
-    (p) => p.status === 'done' || p.status === 'skipped' || p.status === 'error',
+  // Perspectives the reviewer has actually picked up — done, skipped, errored,
+  // or currently in flight. Excludes those still queued as `pending` so the
+  // "Reviewing N of M" progress reflects real activity (with parallel runs more
+  // than one is in flight at once), not just the completed count.
+  const reviewingCount = progressValues.filter(
+    (p) => p.status !== 'pending',
   ).length;
   const failedCount = progressValues.filter(
     (p) => p.status === 'error',
@@ -767,7 +773,7 @@ export function ReviewBoardPage({
             }`}
           >
             {analyzing
-              ? `Reviewing ${analyzedCount}/${totalPerspectives}`
+              ? `Reviewing ${reviewingCount}/${totalPerspectives}`
               : prReviewed
                 ? 'PR reviewed'
                 : RECOMMENDATION_LABEL[board.recommendation]}
@@ -805,23 +811,26 @@ export function ReviewBoardPage({
           )}
           <button
             type="button"
-            className="rb-act rb-act-icon rb-act-primary"
+            className="rb-act rb-act-primary"
             onClick={() => void analyze()}
             disabled={analyzing}
             title={
               analyzing
-                ? 'Analyzing…'
+                ? 'Reviewing…'
                 : analyzed
-                  ? 'Re-analyze all perspectives with AI'
-                  : 'Analyze all perspectives with AI'
+                  ? 'Start Review again (re-analyze all perspectives)'
+                  : 'Start Review'
             }
-            aria-label={analyzing ? 'Analyzing' : 'Analyze with AI'}
+            aria-label={analyzing ? 'Reviewing' : 'Start Review'}
           >
             {analyzing ? (
               <span className="spinner" aria-hidden="true" />
             ) : (
               <AiMagicIcon size={15} />
             )}
+            <span className="rb-act-label">
+              {analyzing ? 'Reviewing…' : analyzed ? 'Start Review again' : 'Start Review'}
+            </span>
           </button>
           <button
             type="button"
@@ -860,7 +869,7 @@ export function ReviewBoardPage({
         <div className="rb-analyzing" role="status">
           <span className="spinner" aria-hidden="true" />
           <span>
-            Reviewing {analyzedCount} of {totalPerspectives} perspectives —
+            Reviewing {reviewingCount} of {totalPerspectives} perspectives —
             findings appear as each one completes. Runs several in parallel
             across the warm metasessions and keeps going if you switch tabs.
             Select any perspective to follow along.
@@ -901,7 +910,7 @@ export function ReviewBoardPage({
           className="rb-confirm-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label="Analyze with AI"
+          aria-label="Start Review"
           onClick={() => setPendingAnalyze(null)}
         >
           <div
@@ -1096,6 +1105,10 @@ export function ReviewBoardPage({
                 >
                   <AiMagicIcon size={14} />
                 </button>
+                <PerspectivePromptPreview
+                  perspectiveId={selected.id}
+                  perspectiveName={selected.name}
+                />
                 <button
                   type="button"
                   className={`rb-act rb-act-icon ${

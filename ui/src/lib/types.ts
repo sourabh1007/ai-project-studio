@@ -544,6 +544,19 @@ export interface PerspectiveAnalysis {
 }
 
 /**
+ * One streamed event from the server-side whole-board analysis pass. The
+ * backend fans every perspective out across the warm metasession pool and emits
+ * `analyzing` when a lens starts, then exactly one terminal `analyzed`/`failed`
+ * per lens as it settles — all over a single streamed request, so the number
+ * reviewed at once is bounded by the pool, not the browser's per-origin socket
+ * cap.
+ */
+export type ReviewBoardPerspectiveEvent =
+  | { type: 'analyzing'; perspectiveId: string }
+  | { type: 'analyzed'; analysis: PerspectiveAnalysis }
+  | { type: 'failed'; perspectiveId: string; error: string };
+
+/**
  * A single live activity line streamed while a perspective is being analysed.
  * `sessionId` identifies the metasession; a new id means a fresh run/attempt,
  * so the client resets the accumulated activity for that perspective.
@@ -659,6 +672,11 @@ export interface Feature {
    * top-level feature. Set when a PR review is opened from within a feature.
    */
   parentFeatureId?: string | null;
+  /**
+   * Subcategory group this feature is placed inside; null for a feature that
+   * is not inside any subcategory. Mutually exclusive with parentFeatureId.
+   */
+  parentGroupId?: string | null;
   /** Sort position among sibling features in the same repository group. */
   orderIndex?: number;
 }
@@ -670,6 +688,8 @@ export interface MoveFeatureInput {
   targetIndex: number;
   /** When set, nest the feature under this parent feature. Null moves it to the top level. */
   targetParentFeatureId?: string | null;
+  /** When set, place the feature inside this subcategory group (takes precedence). */
+  targetParentGroupId?: string | null;
 }
 
 export type SessionStatus =
@@ -1176,6 +1196,8 @@ export interface CreateFeatureInput {
   name: string;
   description: string;
   repoId?: string | null;
+  /** When set, create the feature inside this subcategory group. */
+  parentGroupId?: string | null;
 }
 
 export interface StartSessionInput {

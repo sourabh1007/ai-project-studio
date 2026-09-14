@@ -315,6 +315,25 @@ export type ReviewBoardEventMap = {
   'review.board.activity': ReviewBoardActivity;
 };
 
+/**
+ * One streamed event from a whole-board analysis pass ({@link
+ * ReviewBoardService.analyzeAll}). The server fans the perspectives out across
+ * the warm metasession pool and emits one `analyzing` when a lens starts, then
+ * exactly one terminal `analyzed`/`failed` when it settles. Streaming these as
+ * they complete lets the UI drive the entire parallel pass over a *single*
+ * long-lived request instead of one browser socket per perspective — so the
+ * real limiter becomes the pool, not the browser's per-origin connection cap.
+ */
+export type ReviewBoardPerspectiveEvent =
+  | { type: 'analyzing'; perspectiveId: string }
+  | { type: 'analyzed'; analysis: PerspectiveAnalysis }
+  | { type: 'failed'; perspectiveId: string; error: string };
+
+/** Sink the server-side fan-out writes each per-perspective event to. */
+export interface ReviewBoardStreamSink {
+  emit(event: ReviewBoardPerspectiveEvent): void;
+}
+
 /** Application service backing the Project Review Board page. */
 export interface ReviewBoardService {
   /** The board for a review feature, or throws when no review exists. */
@@ -336,6 +355,21 @@ export interface ReviewBoardService {
     perspectiveId: string,
     signal?: AbortSignal,
   ): Promise<PerspectiveAnalysis>;
+  /**
+   * Run the AI reviewer over *every* perspective, fanning them out across the
+   * warm metasession pool (reserving one session for other IDE work) and
+   * streaming each lens' result to `sink` as it settles. Runs entirely
+   * server-side so the whole parallel pass is driven over one request rather
+   * than one browser connection per perspective. Resolves when every
+   * perspective has settled (or the request is aborted). Throws only when no PR
+   * review exists; individual perspective failures are streamed as `failed`
+   * events, not thrown.
+   */
+  analyzeAll(
+    featureId: string,
+    sink: ReviewBoardStreamSink,
+    signal?: AbortSignal,
+  ): Promise<void>;
   /**
    * Ask the context-aware review agent a question. `perspectiveId` scopes the
    * conversation to one lens (or is null for the whole board). `context` carries

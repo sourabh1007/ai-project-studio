@@ -426,7 +426,10 @@ import {
   type ReviewBoardConfig,
 } from './review-board/config.js';
 import { createReviewBoardService } from './review-board/review-board-service.js';
-import type { ReviewBoardEventMap } from './review-board/review-board-contract.js';
+import type {
+  ReviewBoardEventMap,
+  ReviewBoardStreamSink,
+} from './review-board/review-board-contract.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
 import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
 import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
@@ -442,6 +445,7 @@ import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
 import { createPrReviewRepo } from './persistence/pr-review-repo.js';
 
 import { createApiRoutes } from './api/routes.js';
+import { toErrorResult } from './api/http-error-mapper.js';
 import { ownApplicationRoutes } from './api/route-ownership.js';
 import { mountRoutes } from './api/express-adapter.js';
 import { subscribeStream, type StreamEventMap } from './api/usage-stream.js';
@@ -1412,6 +1416,7 @@ function main(): void {
     bus: bus as unknown as Parameters<typeof createSessionLauncher>[0]['bus'],
     clock,
     config: sessionConfig,
+    logger,
     bootstrap: {
       assertFeatureReady: (featureId) =>
         sessionBootstrap.assertFeatureReady(featureId),
@@ -1579,11 +1584,13 @@ function main(): void {
   stoppedCaptureRecovery.start();
 
   // Feature + summarizer.
+  const featureGroupsRepo = createFeatureGroupsRepo(db);
   const featureService = createFeatureService({
     repo: featureRepo,
     ids,
     clock,
     repos: repoService,
+    groups: featureGroupsRepo,
   });
   // Seed a default "Scratchpad" feature on a fresh workspace so a new instance
   // can start ad-hoc sessions immediately. No-op once any feature exists.
@@ -1816,7 +1823,6 @@ function main(): void {
       defaultModel: () => metaSettings.get().model,
     });
     const warmPool: WarmPool = {
-      ready: () => pool.ready,
       stats: () => pool.stats(),
       runDetailed: (request) => warmRunner.runDetailed(request),
     };
@@ -2040,6 +2046,16 @@ function main(): void {
     temporaryPrompts: createTemporaryPromptFileFactory(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     bus: bus as unknown as EventBus<ReviewBoardEventMap>,
+    // Live warm-session count across every pool, re-read on demand so the
+    // server-side board fan-out (analyzeAll) scales with the pool and picks up
+    // capacity added mid-run, always reserving one session for other IDE work.
+    liveMetaSessions: () => {
+      let live = 0;
+      for (const warm of allWarmPools) {
+        live += warm.stats().live;
+      }
+      return live;
+    },
   });
   // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
   // Azure DevOps (REST) gateway from the repo's provider, so the comments
@@ -2243,7 +2259,6 @@ function main(): void {
     clock,
     config: featureTasksConfig,
   });
-  const featureGroupsRepo = createFeatureGroupsRepo(db);
   const featureTreeService = createFeatureTreeService({
     groups: featureGroupsRepo,
     sessions: sessionRepo,
@@ -2604,10 +2619,42 @@ function main(): void {
         ...metaSettings.get(),
         warmPoolEnabled: warmPoolCfg.enabled,
       }),
-      updateMetaSettings: (patch) => {
-        const next = metaSettings.set(patch);
+      updateMetaSettings: async (patch) => {
+        const current = metaSettings.get();
+        const effectiveProviderId = patch.providerId ?? current.providerId;
+        const provider = providers.has(effectiveProviderId)
+          ? providers.get(effectiveProviderId)
+          : null;
+        // An explicit model must be valid for the (possibly new) provider —
+        // reject it up front rather than persist a combination that fails
+        // every metasession the moment it is used.
+        if (patch.model !== undefined && patch.model !== 'auto' && provider) {
+          const models = await provider.listModels();
+          if (!models.some((m) => m.id === patch.model)) {
+            throw new ValidationError(
+              `Model '${patch.model}' is not available for provider '${effectiveProviderId}'`,
+            );
+          }
+        }
+        // Switching provider without an explicit model can silently strand
+        // the *previous* provider's model, which is invalid for the new one
+        // and would fail every metasession identically. Reset to 'auto' in
+        // that case instead of persisting a combination nothing can run.
+        let resolvedPatch = patch;
+        if (
+          patch.providerId !== undefined &&
+          patch.model === undefined &&
+          current.model !== 'auto' &&
+          provider
+        ) {
+          const models = await provider.listModels();
+          if (!models.some((m) => m.id === current.model)) {
+            resolvedPatch = { ...patch, model: 'auto' };
+          }
+        }
+        const next = metaSettings.set(resolvedPatch);
         // Persist so the choice survives an IDE restart.
-        configOverrideService.update(META_NAMESPACE, { ...patch });
+        configOverrideService.update(META_NAMESPACE, { ...resolvedPatch });
         return { ...next, warmPoolEnabled: warmPoolCfg.enabled };
       },
       agencyStatus: () => agencyBootstrapper.status(),
@@ -2690,6 +2737,70 @@ function main(): void {
     heartbeat = setInterval(() => stream.comment('ping'), apiConfig.sseHeartbeatMs);
     stream.comment('connected');
   });
+
+  // Server-side review-board fan-out. The whole parallel pass runs here and is
+  // streamed back as newline-delimited JSON over ONE request, so the number of
+  // perspectives reviewed concurrently is bounded by the warm metasession pool
+  // (all-but-one) rather than the browser's ~6-connections-per-origin cap that
+  // would otherwise hold one socket per in-flight perspective. Each line is a
+  // ReviewBoardPerspectiveEvent; live per-lens activity still rides the SSE bus.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/review-board/analyze-perspectives`,
+    (req, res) => {
+      const featureId = req.params.featureId;
+      // Validate the review exists before committing to a 200 stream, so a
+      // missing PR review returns a normal JSON error with the right status.
+      try {
+        reviewBoardService.get(featureId);
+      } catch (error) {
+        const result = toErrorResult(error);
+        res.status(result.status).json(result.body);
+        return;
+      }
+      const controller = new AbortController();
+      let closed = false;
+      // Abort only on a genuine *client* disconnect before we finish. This must
+      // listen on the response, not the request: `req`'s 'close' fires as soon
+      // as express.json() finishes reading the (empty) POST body — which is
+      // immediate — and binding the abort there tore down the whole fan-out
+      // right after the first wave of events, leaving the warm pool idle while
+      // the UI spun forever. `res` 'close' only fires when the response stream
+      // ends; `writableFinished` is false only when the socket dropped mid-run.
+      res.on('close', () => {
+        if (!res.writableFinished) {
+          closed = true;
+          controller.abort();
+        }
+      });
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.flushHeaders();
+      const sink: ReviewBoardStreamSink = {
+        emit: (event) => {
+          if (!closed) res.write(`${JSON.stringify(event)}\n`);
+        },
+      };
+      reviewBoardService
+        .analyzeAll(featureId, sink, controller.signal)
+        .catch((error: unknown) => {
+          if (!closed) {
+            res.write(
+              `${JSON.stringify({
+                type: 'failed',
+                perspectiveId: '',
+                error: error instanceof Error ? error.message : String(error),
+              })}\n`,
+            );
+          }
+        })
+        .finally(() => {
+          if (!closed) res.end();
+        });
+    },
+  );
 
   // First-run agency install, streamed as SSE so the UI can show live progress.
   // A shared in-flight promise dedupes concurrent connections (e.g. UI reconnect)

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { LineAssembler } from '../../provider/process-kernel/stream-reader.js';
+import { killProcessTree } from '../../provider/process-kernel/process-tree-kill.js';
 import type { AcpProcess } from './acp-client.js';
 
 export interface AcpReadableStream {
@@ -226,7 +227,7 @@ export class AcpProcessAdapter implements AcpProcess {
   }
 
   kill(): void {
-    this.child.kill();
+    killProcessTree(this.child.pid, () => this.child.kill());
   }
 
   private terminateAfterStdinFailure(): void {
@@ -234,7 +235,7 @@ export class AcpProcessAdapter implements AcpProcess {
       return;
     }
     this.terminatingForStdinFailure = true;
-    this.child.kill();
+    killProcessTree(this.child.pid, () => this.child.kill());
   }
 
   private captureDiagnosticEvents(events: DiagnosticEvent[]): void {

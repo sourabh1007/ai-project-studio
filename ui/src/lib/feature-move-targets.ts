@@ -3,11 +3,26 @@ export interface MovableFeature {
   name: string;
   repoId: string | null;
   parentFeatureId?: string | null;
+  parentGroupId?: string | null;
+}
+
+/** A subcategory group a feature may be moved into. */
+export interface MovableGroup {
+  id: string;
+  name: string;
+  /** The feature that owns this group. */
+  featureId: string;
+  /** Parent subcategory group, or null when directly under its feature. */
+  parentGroupId: string | null;
+  /** 'subcategory' folders accept features; 'pr' containers do not. */
+  kind?: string;
 }
 
 export interface FeatureMoveTarget {
   /** Destination parent feature, or null for the top level of a repository. */
   parentFeatureId: string | null;
+  /** Destination subcategory group, or null when not moving into a group. */
+  parentGroupId?: string | null;
   repoId: string | null;
   /** Indented path shown in the picker, e.g. "Reviews / CosmosDB". */
   label: string;
@@ -53,9 +68,11 @@ export function featureMoveTargets(
   features: readonly MovableFeature[],
   moved: MovableFeature,
   repos: readonly { id: string; name: string }[],
+  groups: readonly MovableGroup[] = [],
 ): FeatureMoveTarget[] {
   const blocked = blockedMoveTargets(features, moved.id);
   const currentParent = moved.parentFeatureId ?? null;
+  const currentGroup = moved.parentGroupId ?? null;
   const targets: FeatureMoveTarget[] = [];
 
   const walk = (parentId: string, repoId: string | null, depth: number, prefix: string): void => {
@@ -76,7 +93,7 @@ export function featureMoveTargets(
 
   for (const repo of repos) {
     const roots = childrenOf(features, null).filter((f) => f.repoId === repo.id);
-    if (currentParent !== null || moved.repoId !== repo.id) {
+    if (currentParent !== null || currentGroup !== null || moved.repoId !== repo.id) {
       targets.push({
         parentFeatureId: null,
         repoId: repo.id,
@@ -97,5 +114,49 @@ export function featureMoveTargets(
       walk(root.id, root.repoId, 2, root.name);
     }
   }
+
+  appendGroupTargets(features, groups, blocked, currentGroup, targets);
   return targets;
+}
+
+/**
+ * Adds every subcategory folder a feature may be moved into. A feature can live
+ * inside a subcategory of any other (non-blocked) feature; the destination
+ * inherits the owning feature's repository. PR containers are skipped — only
+ * folders hold features — as is the moved feature's current folder (a no-op).
+ */
+function appendGroupTargets(
+  features: readonly MovableFeature[],
+  groups: readonly MovableGroup[],
+  blocked: ReadonlySet<string>,
+  currentGroup: string | null,
+  targets: FeatureMoveTarget[],
+): void {
+  const featureById = new Map(features.map((f) => [f.id, f]));
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const labelFor = (group: MovableGroup): string => {
+    const parts: string[] = [];
+    let cursor: MovableGroup | undefined = group;
+    const seen = new Set<string>();
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      parts.unshift(cursor.name);
+      cursor = cursor.parentGroupId ? groupById.get(cursor.parentGroupId) : undefined;
+    }
+    const owner = featureById.get(group.featureId);
+    return [owner?.name ?? '', ...parts].filter(Boolean).join(' / ');
+  };
+  for (const group of groups) {
+    if ((group.kind ?? 'subcategory') !== 'subcategory') continue;
+    if (blocked.has(group.featureId)) continue;
+    if (group.id === currentGroup) continue;
+    const owner = featureById.get(group.featureId);
+    targets.push({
+      parentFeatureId: null,
+      parentGroupId: group.id,
+      repoId: owner?.repoId ?? null,
+      label: labelFor(group),
+      depth: 1,
+    });
+  }
 }

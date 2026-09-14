@@ -177,15 +177,29 @@ function contextScope(request: HttpRequest): ApplicationWorkScope {
     : {};
 }
 
-function featureMoveScope(request: HttpRequest): ApplicationWorkScope {
+function featureMoveScope(
+  deps: Pick<RouteOwnershipDeps, 'groupLookup'>,
+  request: HttpRequest,
+): ApplicationWorkScope {
+  const targetGroupId = stringField(request.body, 'targetParentGroupId');
   return combineScopes(
     featureScope(request.params.id),
     featureScope(stringField(request.body, 'targetParentFeatureId')),
+    targetGroupId
+      ? featureScope(requireGroupFeatureId(deps, targetGroupId))
+      : {},
   );
 }
 
-function repoPullScope(request: HttpRequest): ApplicationWorkScope {
-  return featureScope(stringField(request.body, 'parentFeatureId'));
+function repoPullScope(
+  deps: Pick<RouteOwnershipDeps, 'groupLookup'>,
+  request: HttpRequest,
+): ApplicationWorkScope {
+  const groupId = stringField(request.body, 'parentGroupId');
+  return combineScopes(
+    featureScope(stringField(request.body, 'parentFeatureId')),
+    groupId ? featureScope(requireGroupFeatureId(deps, groupId)) : {},
+  );
 }
 
 function treeMoveScope(
@@ -266,7 +280,7 @@ export function applyRouteOwnership(
   const ownership = new Map<string, Route['workScope']>([
     ['put /features/:id', (request) => featureScope(request.params.id)],
     ['delete /features/:id', (request) => featureScope(request.params.id)],
-    ['post /features/:id/move', featureMoveScope],
+    ['post /features/:id/move', (request) => featureMoveScope(deps, request)],
     ['put /sessions/:id', (request) => requireSessionScope(deps, request.params.id)],
     ['delete /sessions/:id', (request) => requireSessionScope(deps, request.params.id)],
     ['post /features/:featureId/sessions/:sessionId/summary', (request) =>
@@ -310,7 +324,7 @@ export function applyRouteOwnership(
       requireSubagentScope(deps, request.params.id)],
     ['post /subagents/:id/fail', (request) =>
       requireSubagentScope(deps, request.params.id)],
-    ['post /repos/:id/pulls', repoPullScope],
+    ['post /repos/:id/pulls', (request) => repoPullScope(deps, request)],
   ]);
 
   return routes.map((route) => {

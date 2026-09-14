@@ -5,6 +5,7 @@ import {
   ProcessLifecycle,
   type ProcessLifecycleSnapshot,
 } from './process-lifecycle.js';
+import { killProcessTree } from './process-tree-kill.js';
 
 export interface SpawnRequest {
   command: string;
@@ -33,6 +34,7 @@ export interface RawStream {
 }
 
 export interface RawChildProcess {
+  pid?: number;
   stdout: RawStream | null;
   stderr: RawStream | null;
   on(event: 'close', cb: (code: number | null) => void): void;
@@ -135,7 +137,7 @@ export function createProcessSpawner(
         onStdoutLine: (cb) => stdoutCbs.push(cb),
         onStderrLine: (cb) => stderrCbs.push(cb),
         onExit: (cb) => exitCbs.push(cb),
-        kill: () => child.kill(),
+        kill: () => killProcessTree(child.pid, () => child.kill()),
         done,
         snapshot: () => lifecycle.snapshot(),
       };

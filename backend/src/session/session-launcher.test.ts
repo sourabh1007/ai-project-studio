@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createSessionLauncher, type SessionEventMap } from './session-launcher.js';
 import { createSessionFactory } from './session-factory.js';
 import { sessionDefaults } from './config.js';
@@ -72,6 +72,7 @@ function harness(options: {
   onStartSession?: (spec: SessionSpec) => void;
   kill?: () => void;
   save?: (transcript: Transcript) => Promise<void>;
+  logger?: { warn: (...args: unknown[]) => void };
 } = {}) {
   const rs = fakeRunning(options.kill);
   let capturedSpec: SessionSpec | undefined;
@@ -134,6 +135,7 @@ function harness(options: {
     bus,
     clock: createClock(() => Date.parse('2025-01-01T00:00:05.000Z')),
     config: sessionDefaults,
+    logger: options.logger,
     bootstrap: {
       assertFeatureReady: async (featureId) => {
         bootstrapCalls.push(`ready:${featureId}`);
@@ -218,6 +220,40 @@ describe('cold physical operation ownership', () => {
     expect(budget.stats().processes).toBe(0);
   });
 
+  it('force-releases the process permit if a killed process never confirms exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const budget = createProcessAdmission({ maxProcesses: 1, maxWarmProcesses: 0, maxQueued: 0 });
+      const warn = vi.fn();
+      const controller = new AbortController();
+      const h = harness({ processAdmission: budget, logger: { warn } });
+      const launched = await h.launcher.start({
+        featureId: 'f',
+        prompt: 'stuck',
+        kind: 'meta',
+        signal: controller.signal,
+      });
+      expect(budget.stats().processes).toBe(1);
+      controller.abort();
+      // The kill() call never resolves `done` -- simulating an orphaned
+      // grandchild holding stdio open so 'exit'/'close' never fires.
+      expect(h.rs.kills).toBe(1);
+      expect(budget.stats().processes).toBe(1);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(budget.stats().processes).toBe(1);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(budget.stats().processes).toBe(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      // A later, actual exit confirmation must not double-release or throw.
+      h.rs.finish(0);
+      await launched.completion;
+      expect(budget.stats().processes).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never releases a process permit on rejected completion without native exit', async () => {
     const budget = createProcessAdmission({ maxProcesses: 1, maxWarmProcesses: 0, maxQueued: 1 });
     const h = harness({ processAdmission: budget });
@@ -274,7 +310,7 @@ describe('cold physical operation ownership', () => {
     });
     const warm = createAcpMetaRunner({ pool, newSessionId: () => 'warm-app', providerId: 'copilot', defaultModel: () => 'auto' });
     const routed = createPooledMetaRunner({
-      pool: { ready: () => pool.idleCount > 0, stats: () => pool.stats(), runDetailed: warm.runDetailed },
+      pool: { stats: () => pool.stats(), runDetailed: warm.runDetailed },
       fallback: cold, defaultTimeoutMs: 1000,
     });
     try {

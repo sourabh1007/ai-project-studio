@@ -23,16 +23,16 @@ function stats(overrides: Partial<MetaSessionPoolStats> = {}): MetaSessionPoolSt
 
 function pool(
   options: {
-    ready?: boolean;
+    live?: number;
     result?: MetaRunResult;
     error?: unknown;
   } = {},
 ): WarmPool & { calls: MetaRequest[] } {
   const calls: MetaRequest[] = [];
+  const live = options.live ?? 1;
   return {
     calls,
-    ready: () => options.ready ?? true,
-    stats: () => stats({ ready: options.ready ?? true }),
+    stats: () => stats({ live, idle: Math.max(0, live), ready: live > 0 }),
     runDetailed: async (request) => {
       calls.push(request);
       if (options.error !== undefined) {
@@ -169,8 +169,8 @@ describe('createPooledMetaRunner', () => {
     expect(warm.calls).toHaveLength(3);
   });
 
-  it('uses the cold runner while the pool is warming', async () => {
-    const warm = pool({ ready: false });
+  it('uses the cold runner while the pool has no live sessions yet (still warming)', async () => {
+    const warm = pool({ live: 0 });
     const cold = coldRunner('cold-text');
     const runner = createPooledMetaRunner({
       pool: warm,
@@ -181,6 +181,24 @@ describe('createPooledMetaRunner', () => {
     expect(out).toBe('cold-text');
     expect(warm.calls).toHaveLength(0);
     expect(cold.calls).toHaveLength(1);
+  });
+
+  it('waits for a warm session instead of cold-spawning when the pool is live but saturated', async () => {
+    // Every warm session is busy (idle 0) but the pool is live, so the turn
+    // must lease from the pool — which queues and waits for one to free — never
+    // cold-spawn a new CLI.
+    const warm = pool({ live: 3 });
+    warm.stats = () => stats({ live: 3, idle: 0, busy: 3, ready: false });
+    const cold = coldRunner('cold-text');
+    const runner = createPooledMetaRunner({
+      pool: warm,
+      defaultTimeoutMs: 100,
+      fallback: cold,
+    });
+    const out = await runner.run(req());
+    expect(out).toBe('warm');
+    expect(warm.calls).toHaveLength(1);
+    expect(cold.calls).toHaveLength(0);
   });
 
   it('does not start warm or cold execution when the request is already aborted', async () => {
@@ -327,7 +345,7 @@ describe('createPooledMetaRunner', () => {
   it('records demand for a turn that spills to cold while the pool warms', async () => {
     const demand = demandRecorder();
     const runner = createPooledMetaRunner({
-      pool: pool({ ready: false }),
+      pool: pool({ live: 0 }),
       defaultTimeoutMs: 100,
       fallback: coldRunner('cold-text'),
       demand,

@@ -766,6 +766,11 @@ const ADDED_COLUMNS: readonly {
     ddl: 'ALTER TABLE features ADD COLUMN parent_feature_id TEXT',
   },
   {
+    table: 'features',
+    column: 'parent_group_id',
+    ddl: 'ALTER TABLE features ADD COLUMN parent_group_id TEXT',
+  },
+  {
     table: 'repository_contexts',
     column: 'failure_step',
     ddl: 'ALTER TABLE repository_contexts ADD COLUMN failure_step TEXT',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAgentRatingChange,
   mapWithConcurrency,
+  mapWithDynamicConcurrency,
   mergeAnalyzedPerspective,
   recommendationFor,
   runWithRetry,
@@ -187,6 +188,235 @@ describe('mapWithConcurrency', () => {
       seen.push(s);
     });
     expect(seen).toEqual(['only']);
+  });
+});
+
+describe('mapWithDynamicConcurrency', () => {
+  const flush = (): Promise<void> =>
+    new Promise((r) => {
+      setTimeout(r, 0);
+    });
+
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  const noPoll = (): (() => void) => () => {};
+
+  it('processes every item with a constant limit', async () => {
+    const seen: number[] = [];
+    await mapWithDynamicConcurrency(
+      [1, 2, 3, 4, 5],
+      2,
+      async (n) => {
+        seen.push(n);
+      },
+      { schedule: () => noPoll() },
+    );
+    expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('resolves immediately for an empty list without scheduling a poll', async () => {
+    let scheduled = 0;
+    await mapWithDynamicConcurrency([], 4, async () => {}, {
+      schedule: () => {
+        scheduled += 1;
+        return noPoll();
+      },
+    });
+    expect(scheduled).toBe(0);
+  });
+
+  it('spins up more workers when the limit rises mid-run', async () => {
+    const started: string[] = [];
+    const gates: Array<{ resolve: () => void }> = [];
+    let limit = 1;
+    let poll: () => void = () => {};
+    let cancelPollCalls = 0;
+    const run = mapWithDynamicConcurrency(
+      ['a', 'b', 'c', 'd'],
+      () => limit,
+      async (id) => {
+        started.push(id);
+        const gate = deferred();
+        gates.push(gate);
+        await gate.promise;
+      },
+      {
+        pollMs: 50,
+        schedule: (fn) => {
+          poll = fn;
+          return () => {
+            cancelPollCalls += 1;
+          };
+        },
+      },
+    );
+    await flush();
+    expect(started).toEqual(['a']); // limit 1 → a single worker
+
+    limit = 3;
+    poll(); // freshly added capacity is picked up by the queued items
+    await flush();
+    expect(started).toEqual(['a', 'b', 'c']);
+
+    // Drain until every item (including the queued 'd') has been processed.
+    for (let i = 0; i < 10 && gates.length > 0; i += 1) {
+      gates.splice(0).forEach((g) => g.resolve());
+      await flush();
+    }
+    await run;
+    expect(started.slice().sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(cancelPollCalls).toBe(1); // the poll is torn down on completion
+
+    poll(); // a late tick after completion is a no-op (already finished)
+    await flush();
+    expect(started.slice().sort()).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('skips overlapping polls while a slow limit read is still in flight', async () => {
+    const started: string[] = [];
+    const gates: Array<{ resolve: () => void }> = [];
+    let limitCalls = 0;
+    let releaseLimit: () => void = () => {};
+    let currentLimit = 1;
+    let poll: () => void = () => {};
+    const getLimit = (): Promise<number> => {
+      limitCalls += 1;
+      return new Promise<number>((resolve) => {
+        releaseLimit = () => resolve(currentLimit);
+      });
+    };
+    const run = mapWithDynamicConcurrency(
+      ['a', 'b', 'c'],
+      getLimit,
+      async (id) => {
+        started.push(id);
+        const gate = deferred();
+        gates.push(gate);
+        await gate.promise;
+      },
+      {
+        pollMs: 10,
+        schedule: (fn) => {
+          poll = fn;
+          return noPoll();
+        },
+      },
+    );
+    // The initial top-up reads the limit once and awaits it (call #1).
+    expect(limitCalls).toBe(1);
+    releaseLimit(); // resolve at limit 1 → a single worker starts on 'a'
+    await flush();
+    expect(started).toEqual(['a']);
+
+    // Raise the target, then start a poll whose limit read stays pending.
+    currentLimit = 3;
+    poll(); // in-flight top-up reads the limit (call #2), then suspends
+    expect(limitCalls).toBe(2);
+    poll(); // overlapping ticks are skipped while a poll is in flight…
+    poll();
+    expect(limitCalls).toBe(2); // …so no extra reads pile up on the sockets
+
+    releaseLimit(); // the single in-flight poll resolves → scales up to 3
+    await flush();
+    expect(started).toEqual(['a', 'b', 'c']);
+
+    for (let i = 0; i < 6 && gates.length > 0; i += 1) {
+      gates.splice(0).forEach((g) => g.resolve());
+      await flush();
+    }
+    await run;
+    expect(started.slice().sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('never exceeds the current limit', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    await mapWithDynamicConcurrency(
+      [1, 2, 3, 4, 5, 6],
+      3,
+      async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await flush();
+        inFlight -= 1;
+      },
+      { schedule: () => noPoll() },
+    );
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('falls back to the current worker count when the limit getter throws', async () => {
+    const seen: number[] = [];
+    await mapWithDynamicConcurrency(
+      [1, 2],
+      () => {
+        throw new Error('pool status unavailable');
+      },
+      async (n) => {
+        seen.push(n);
+      },
+      { schedule: () => noPoll() },
+    );
+    expect(seen.slice().sort()).toEqual([1, 2]);
+  });
+
+  it('stops dispatching once cancelled and settles in-flight work', async () => {
+    const started: number[] = [];
+    let cancelled = false;
+    let poll: () => void = () => {};
+    const gate = deferred();
+    const run = mapWithDynamicConcurrency(
+      [1, 2, 3, 4],
+      1,
+      async (n) => {
+        started.push(n);
+        if (n === 1) await gate.promise;
+      },
+      {
+        cancelled: () => cancelled,
+        schedule: (fn) => {
+          poll = fn;
+          return noPoll();
+        },
+      },
+    );
+    await flush();
+    expect(started).toEqual([1]);
+
+    cancelled = true;
+    gate.resolve();
+    await flush(); // the in-flight worker unwinds and the run settles
+    poll(); // a tick after cancellation is a harmless no-op
+    await run;
+    expect(started).toEqual([1]); // 2, 3, 4 were never dispatched
+  });
+
+  it('dispatches nothing when cancelled before the first tick', async () => {
+    const started: number[] = [];
+    await mapWithDynamicConcurrency(
+      [1, 2],
+      2,
+      async (n) => {
+        started.push(n);
+      },
+      { cancelled: () => true, schedule: () => noPoll() },
+    );
+    expect(started).toEqual([]);
+  });
+
+  it('drives itself with the default interval scheduler when none is injected', async () => {
+    const seen: number[] = [];
+    await mapWithDynamicConcurrency([1, 2, 3], 2, async (n) => {
+      seen.push(n);
+      await flush();
+    });
+    expect(seen.slice().sort()).toEqual([1, 2, 3]);
   });
 });
 

@@ -228,3 +228,36 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * Essential progress/status indicators keep animating even under reduced
+ * motion. A frozen spinner or a still "in progress" dot misinforms — it reads
+ * as stuck rather than calm — so these small, in-place liveness cues are
+ * exempted from the blanket animation kill above. This is the accessibility
+ * carve-out for indicators that convey ongoing state, not decoration; large
+ * decorative motion still honours the preference. The higher-specificity
+ * selectors (a class beats the universal `*`) let these `!important`
+ * re-declarations win over the kill switch.
+ *
+ * `data-motion='off'` is the user's explicit "no animation at all" choice and
+ * is respected in full — it gets no exemption here.
+ */
+:root[data-motion='reduced'] .spinner,
+:root[data-motion='reduced'] .spinner-lg,
+:root[data-motion='reduced'] .rb-nav-spin {
+  animation: spin 0.7s linear infinite !important;
+}
+:root[data-motion='reduced'] .rb-dot-reviewing {
+  animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .spinner-lg,
+  .rb-nav-spin {
+    animation: spin 0.7s linear infinite !important;
+  }
+  .rb-dot-reviewing {
+    animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;
+  }
+}

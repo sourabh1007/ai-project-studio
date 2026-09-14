@@ -52,6 +52,7 @@ import type {
   ReviewBoardChatReply,
   ReviewBoardChatContext,
   PerspectiveAnalysis,
+  ReviewBoardPerspectiveEvent,
   ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
@@ -272,10 +273,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       repoId: string,
       number: number,
       parentFeatureId?: string | null,
+      parentGroupId?: string | null,
     ) =>
       request<Feature>(
         `/repos/${repoId}/pulls`,
-        jsonBody({ number, parentFeatureId: parentFeatureId ?? null }),
+        jsonBody({
+          number,
+          parentFeatureId: parentFeatureId ?? null,
+          parentGroupId: parentGroupId ?? null,
+        }),
       ),
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),
@@ -295,6 +301,56 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/review-board/perspectives/${perspectiveId}/analyze`,
         { ...jsonBody({}), signal },
       ),
+    // Server-side fan-out: one long-lived POST whose body is a stream of
+    // newline-delimited JSON ReviewBoardPerspectiveEvents. The whole parallel
+    // pass runs on the backend (bounded by the warm pool, reserving one
+    // session), so the browser holds a single socket for the entire board
+    // instead of one per perspective. Each event is delivered to `onEvent` as
+    // it arrives; resolves when the stream ends (or the signal aborts).
+    analyzeReviewBoardPerspectives: async (
+      featureId: string,
+      onEvent: (event: ReviewBoardPerspectiveEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/review-board/analyze-perspectives`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody({}),
+        ...(signal ? { signal } : {}),
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, await errorMessage(response, path));
+      }
+      if (!response.body) {
+        throw new ApiError(
+          0,
+          `Request failed: ${path} returned no stream. The backend may be starting up — please retry.`,
+        );
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const flush = (chunk: string): void => {
+        buffer += chunk;
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line.length > 0) {
+            onEvent(JSON.parse(line) as ReviewBoardPerspectiveEvent);
+          }
+          newline = buffer.indexOf('\n');
+        }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        flush(decoder.decode(value, { stream: true }));
+      }
+      const tail = buffer.trim();
+      if (tail.length > 0) {
+        onEvent(JSON.parse(tail) as ReviewBoardPerspectiveEvent);
+      }
+    },
     chatReviewBoard: (
       featureId: string,
       perspectiveId: string | null,
@@ -384,6 +440,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
         targetRepoId: input.targetRepoId,
         targetIndex: input.targetIndex,
         targetParentFeatureId: input.targetParentFeatureId ?? null,
+        targetParentGroupId: input.targetParentGroupId ?? null,
       })),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),

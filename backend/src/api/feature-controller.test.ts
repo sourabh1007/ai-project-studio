@@ -151,7 +151,7 @@ describe('feature-controller', () => {
     expect(result.status).toBe(200);
     expect((result.body as Feature).id).toBe('f1');
     expect(h.moved).toEqual([
-      { id: 'f1', targetRepoId: 'r2', targetIndex: 1, targetParentFeatureId: null },
+      { id: 'f1', targetRepoId: 'r2', targetIndex: 1, targetParentFeatureId: null, targetParentGroupId: null },
     ]);
   });
 
@@ -165,7 +165,7 @@ describe('feature-controller', () => {
     );
     expect(result.status).toBe(200);
     expect(h.moved).toEqual([
-      { id: 'f1', targetRepoId: null, targetIndex: 0, targetParentFeatureId: null },
+      { id: 'f1', targetRepoId: null, targetIndex: 0, targetParentFeatureId: null, targetParentGroupId: null },
     ]);
   });
 
@@ -179,7 +179,21 @@ describe('feature-controller', () => {
     );
     expect(result.status).toBe(200);
     expect(h.moved).toEqual([
-      { id: 'f1', targetRepoId: 'r2', targetIndex: 0, targetParentFeatureId: 'p9' },
+      { id: 'f1', targetRepoId: 'r2', targetIndex: 0, targetParentFeatureId: 'p9', targetParentGroupId: null },
+    ]);
+  });
+
+  it('places a feature into a subcategory group when targetParentGroupId is given', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features/:id/move')(
+      req({
+        params: { id: 'f1' },
+        body: { targetRepoId: null, targetIndex: 0, targetParentGroupId: 'g9' },
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(h.moved).toEqual([
+      { id: 'f1', targetRepoId: null, targetIndex: 0, targetParentFeatureId: null, targetParentGroupId: 'g9' },
     ]);
   });
 

@@ -26,12 +26,25 @@ export function describeRequest(method: string, path: string): string {
   return 'Working…';
 }
 
+/** True for a deliberately cancelled request (superseded run, unmount, a
+ * client-side GET timeout, …). These are routine, not failures — surfacing
+ * the browser's raw "signal is aborted without reason" text as a persistent
+ * red banner is misleading and, worse, never clears on its own while nothing
+ * else is in flight (e.g. while the user is just sitting on a settings page).
+ */
+export function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === 'AbortError') ||
+    (err instanceof Error && err.name === 'AbortError')
+  );
+}
+
 /**
  * A fetch wrapper that reports every request into the global activity store so
  * the status bar reflects in-flight work and surfaces failures. Errors are
  * re-thrown unchanged so callers still handle them inline.
  */
-const activityFetch: FetchLike = async (input, init) => {
+export const activityFetch: FetchLike = async (input, init) => {
   const label = describeRequest(init?.method ?? 'GET', String(input));
   beginActivity(label);
   try {
@@ -43,7 +56,12 @@ const activityFetch: FetchLike = async (input, init) => {
     }
     return response;
   } catch (err) {
-    failActivity(err instanceof Error ? err.message : label);
+    if (isAbortError(err)) {
+      // A cancelled request is not a failure worth alarming the user over.
+      endActivity();
+    } else {
+      failActivity(err instanceof Error ? err.message : label);
+    }
     throw err;
   }
 };

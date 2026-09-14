@@ -39,6 +39,12 @@ import { RetainedImagesSection } from './retained-images-section.js';
 import { WorktreesSection } from './worktrees-section.js';
 import { MetasessionPoolsSection } from './metasession-pools-section.js';
 import { MetaOperationsSection } from '../meta-operations/meta-operations-section.js';
+import { PromptsCommandsSection } from './prompts-commands-section.js';
+import {
+  OPEN_PROMPT_SETTINGS_EVENT,
+  takePromptSettingsAnchor,
+  type OpenPromptSettingsDetail,
+} from './prompts-nav.js';
 import {
   applyConfigUpdateToDraftStore,
   createNamespaceDraftState,
@@ -511,6 +517,7 @@ type TabId =
   | 'general'
   | 'appearance'
   | 'config'
+  | 'prompts'
   | 'metasession'
   | 'network'
   | 'context'
@@ -525,6 +532,7 @@ const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'config', label: 'Configuration' },
+  { id: 'prompts', label: 'Prompts & Commands' },
   { id: 'metasession', label: 'Metasession' },
   { id: 'network', label: 'Network' },
   { id: 'context', label: 'Workspace context' },
@@ -541,6 +549,7 @@ export function SettingsView() {
     validate: isSettingsDraftStore,
   });
   const [tab, setTab] = useState<TabId>('general');
+  const [promptAnchor, setPromptAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [subTab, setSubTab] = useState<string | null>(null);
   const [restartPending, setRestartPending] = useState(false);
@@ -549,6 +558,24 @@ export function SettingsView() {
   const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
 
+  // Deep-link into a specific prompt entry: either from a fresh mount (another
+  // view stashed the anchor) or from a live event while Settings is open.
+  useEffect(() => {
+    const initial = takePromptSettingsAnchor();
+    if (initial) {
+      setTab('prompts');
+      setPromptAnchor(initial);
+    }
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<OpenPromptSettingsDetail>).detail;
+      setTab('prompts');
+      // Force the effect to re-run even if the same anchor is requested twice.
+      setPromptAnchor(null);
+      requestAnimationFrame(() => setPromptAnchor(detail?.anchorId ?? null));
+    };
+    window.addEventListener(OPEN_PROMPT_SETTINGS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_PROMPT_SETTINGS_EVENT, onOpen);
+  }, []);
   useEffect(() => {
     if (!data) {
       return;
@@ -694,6 +721,8 @@ export function SettingsView() {
       )}
 
       {tab === 'appearance' && <AppearanceSection />}
+
+      {tab === 'prompts' && <PromptsCommandsSection focusAnchor={promptAnchor} />}
 
       {tab === 'config' && (
         <div className="settings-panel">

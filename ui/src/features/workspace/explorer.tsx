@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { ApiError } from '../../lib/api.js';
 import type { LiveState } from '../../lib/stream.js';
 import {
   liveSignal,
@@ -60,6 +61,7 @@ import {
   blockedMoveTargets,
   featureMoveTargets,
   type FeatureMoveTarget,
+  type MovableGroup,
 } from '../../lib/feature-move-targets.js';
 import { OverflowMenu } from '../../components/overflow-menu.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
@@ -353,6 +355,7 @@ function FeatureNode({
   onFeatureDragEnd,
   onNestFeature,
   onRequestMove,
+  onMoveFeatureIntoGroup,
   draggingFeature,
   canNestInto,
   onStartReview,
@@ -360,6 +363,8 @@ function FeatureNode({
   onMoveNode,
   childFeatures,
   renderChildFeature,
+  renderGroupFeatures,
+  onCreateFeatureInGroup,
 }: {
   feature: Feature;
   live: LiveState;
@@ -378,6 +383,11 @@ function FeatureNode({
   onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
   /** Opens the destination picker for this feature (drag-free relocation). */
   onRequestMove: (feature: Feature) => void;
+  /** Moves a dragged feature into one of this feature's subcategory folders. */
+  onMoveFeatureIntoGroup: (
+    moved: Feature,
+    parentGroupId: string,
+  ) => void | Promise<void>;
   /** The feature currently being dragged, if any, used to highlight nest targets. */
   draggingFeature: Feature | null;
   /**
@@ -394,6 +404,14 @@ function FeatureNode({
   childFeatures?: Feature[];
   /** Renders a nested child feature (recursive), supplied by the parent list. */
   renderChildFeature?: (feature: Feature) => ReactNode;
+  /** Renders the features that live inside a subcategory group (by group id). */
+  renderGroupFeatures?: (groupId: string) => ReactNode;
+  /** Creates a new feature inside a subcategory group of this feature's repo. */
+  onCreateFeatureInGroup?: (
+    repoId: string | null,
+    parentGroupId: string,
+    name: string,
+  ) => Promise<void>;
 }) {
   const api = useApi();
   const nodeStore = useNodeDragStore();
@@ -403,6 +421,8 @@ function FeatureNode({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [viewingUsage, setViewingUsage] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nodeDropTarget, setNodeDropTarget] = useState(false);
@@ -414,6 +434,11 @@ function FeatureNode({
     string | null | false
   >(false);
   const [subcategoryName, setSubcategoryName] = useState('');
+  const [featureGroupParent, setFeatureGroupParent] = useState<string | false>(
+    false,
+  );
+  const [featureGroupName, setFeatureGroupName] = useState('');
+  const [featureGroupBusy, setFeatureGroupBusy] = useState(false);
   const sessions = useAsync(
     () => (expanded ? api.listSessions(feature.id) : Promise.resolve([])),
     [feature.id, expanded, treeRevision, live.sessionRevision],
@@ -527,6 +552,35 @@ function FeatureNode({
         }),
       'Failed to create group.',
     );
+  }
+
+  function handleNewFeatureInGroup(parentGroupId: string) {
+    setActionError(null);
+    setFeatureGroupName('');
+    setFeatureGroupParent(parentGroupId);
+  }
+
+  async function submitNewFeatureInGroup() {
+    if (featureGroupParent === false || !onCreateFeatureInGroup) {
+      return;
+    }
+    const name = featureGroupName.trim();
+    if (!name) {
+      return;
+    }
+    const parentGroupId = featureGroupParent;
+    setFeatureGroupBusy(true);
+    try {
+      await onCreateFeatureInGroup(feature.repoId, parentGroupId, name);
+      setFeatureGroupParent(false);
+      setFeatureGroupName('');
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to create feature.',
+      );
+    } finally {
+      setFeatureGroupBusy(false);
+    }
   }
 
   function handleAttachPr(pull: PickedPull, parentGroupId: string | null) {
@@ -723,20 +777,13 @@ function FeatureNode({
         >
           <PlusIcon />
         </button>
-        <button
-          type="button"
-          className="tree-action"
-          title="Move to…"
-          aria-label={`Move ${feature.name}`}
-          onClick={() => onRequestMove(feature)}
-        >
-          <MoveIcon size={14} />
-        </button>
         {confirming ? (
           <ConfirmDialog
             title="Delete feature"
             icon={<WarningIcon />}
             confirmLabel="Delete feature"
+            busy={deleting}
+            error={deleteError}
             message={
               <>
                 <p className="confirm-dialog-lead">
@@ -748,10 +795,27 @@ function FeatureNode({
                 </p>
               </>
             }
-            onCancel={() => setConfirming(false)}
-            onConfirm={() => {
+            onCancel={() => {
               setConfirming(false);
-              void onDeleteFeature(feature);
+              setDeleteError(null);
+            }}
+            onConfirm={() => {
+              setDeleting(true);
+              setDeleteError(null);
+              void (async () => {
+                try {
+                  await onDeleteFeature(feature);
+                  setConfirming(false);
+                } catch (error) {
+                  setDeleteError(
+                    error instanceof Error
+                      ? error.message
+                      : 'Could not delete the feature.',
+                  );
+                } finally {
+                  setDeleting(false);
+                }
+              })();
             }}
           />
         ) : null}
@@ -771,10 +835,15 @@ function FeatureNode({
                   handleAddSubcategory(null);
                 },
               },
+              {
+                label: 'Move to…',
+                icon: <MoveIcon size={14} />,
+                onSelect: () => onRequestMove(feature),
+              },
               ...(onStartReview
                 ? [
                     {
-                      label: 'Open a PR',
+                      label: 'Open Pull Request',
                       icon: <PullRequestIcon size={14} />,
                       onSelect: onStartReview,
                     },
@@ -871,6 +940,13 @@ function FeatureNode({
             onAttachPr={(parentGroupId) => setPrPickerParent(parentGroupId)}
             onRenameGroup={handleRenameGroup}
             onDeleteGroup={handleDeleteGroup}
+            renderGroupFeatures={renderGroupFeatures}
+            draggingFeature={draggingFeature}
+            canNestInto={canNestInto}
+            onMoveFeatureIntoGroup={onMoveFeatureIntoGroup}
+            onNewFeature={
+              onCreateFeatureInGroup ? handleNewFeatureInGroup : undefined
+            }
             renderSession={(session, ordinal) => (
               <SessionRow
                 session={session}
@@ -948,15 +1024,48 @@ function FeatureNode({
           </div>
         </Modal>
       )}
+      {featureGroupParent !== false && (
+        <Modal
+          title="New feature"
+          onClose={() => setFeatureGroupParent(false)}
+        >
+          <div className="feature-form">
+            <div className="field">
+              <label htmlFor="new-group-feature-name">Name</label>
+              <input
+                id="new-group-feature-name"
+                className="input"
+                autoFocus
+                value={featureGroupName}
+                onChange={(event) => setFeatureGroupName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    void submitNewFeatureInGroup();
+                  }
+                }}
+                placeholder="e.g. Checkout redesign"
+              />
+            </div>
+            <div className="row modal-actions">
+              <Button
+                variant="ghost"
+                onClick={() => setFeatureGroupParent(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void submitNewFeatureInGroup()}
+                disabled={!featureGroupName.trim() || featureGroupBusy}
+              >
+                {featureGroupBusy ? 'Creating…' : 'Create feature'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
-
-/**
- * The "+" affordance on a repository row. Opens a small menu offering the two
- * ways to start work on a repo: reviewing an existing pull request or creating
- * a fresh feature. Closes on outside click, Escape, or after a choice.
- */
 function RepoAddMenu({
   title,
   onNewFeature,
@@ -972,7 +1081,7 @@ function RepoAddMenu({
       icon={<PlusIcon />}
       triggerClassName="tree-action"
       actions={[
-        { label: 'Open a PR', icon: <TagIcon />, onSelect: onReviewPr },
+        { label: 'Open Pull Request', icon: <TagIcon />, onSelect: onReviewPr },
         { label: 'New feature', icon: <PlusIcon />, onSelect: onNewFeature },
       ]}
     />
@@ -1064,9 +1173,11 @@ function RepoNode({
   onFeatureDragEnd,
   onMoveFeature,
   onNestFeature,
+  onMoveFeatureIntoGroup,
   onRequestMove,
   treeRevision,
   onMoveNode,
+  onCreateFeatureInGroup,
 }: {
   repo: Repository | null;
   repositoryContext?: RepositoryContext | null;
@@ -1098,9 +1209,18 @@ function RepoNode({
     targetIndex: number,
   ) => void;
   onNestFeature: (moved: Feature, parentFeatureId: string) => void | Promise<void>;
+  onMoveFeatureIntoGroup: (
+    moved: Feature,
+    parentGroupId: string,
+  ) => void | Promise<void>;
   onRequestMove: (feature: Feature) => void;
   treeRevision: number;
   onMoveNode: (input: MoveNodeInput) => Promise<void>;
+  onCreateFeatureInGroup: (
+    repoId: string | null,
+    parentGroupId: string,
+    name: string,
+  ) => Promise<void>;
 }) {
   const repoId = repo?.id ?? null;
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -1128,7 +1248,27 @@ function RepoNode({
       childrenByParent.set(parentId, siblings);
     }
   }
+  // Features placed inside a subcategory folder render within that folder (via
+  // renderGroupFeatures), not at the repository top level.
+  const membersByGroup = new Map<string, Feature[]>();
+  for (const f of features) {
+    const groupId = f.parentGroupId ?? null;
+    if (groupId) {
+      const members = membersByGroup.get(groupId) ?? [];
+      members.push(f);
+      membersByGroup.set(groupId, members);
+    }
+  }
+  const orderMembers = (members: Feature[]): Feature[] =>
+    [...members].sort(
+      (l, r) =>
+        (l.orderIndex ?? 0) - (r.orderIndex ?? 0) ||
+        l.createdAt.localeCompare(r.createdAt),
+    );
   const topFeatures = features.filter((f) => {
+    if (f.parentGroupId) {
+      return false;
+    }
     const parentId = f.parentFeatureId ?? null;
     return !parentId || !featureIds.has(parentId);
   });
@@ -1149,6 +1289,7 @@ function RepoNode({
       onFeatureDragStart={onFeatureDragStart}
       onFeatureDragEnd={onFeatureDragEnd}
       onNestFeature={onNestFeature}
+      onMoveFeatureIntoGroup={onMoveFeatureIntoGroup}
       onRequestMove={onRequestMove}
       draggingFeature={draggingFeature}
       canNestInto={canNestInto}
@@ -1159,6 +1300,11 @@ function RepoNode({
       onMoveNode={onMoveNode}
       childFeatures={childrenByParent.get(feature.id) ?? []}
       renderChildFeature={renderFeatureNode}
+      renderGroupFeatures={(groupId) => {
+        const members = membersByGroup.get(groupId);
+        return members ? orderMembers(members).map(renderFeatureNode) : null;
+      }}
+      onCreateFeatureInGroup={onCreateFeatureInGroup}
     />
   );
 
@@ -1404,6 +1550,28 @@ export function Explorer({
   const [movingFeature, setMovingFeature] = useState<Feature | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
 
+  // Subcategory groups across every feature, loaded lazily only while the move
+  // dialog is open so the destination picker can offer folders as targets.
+  const moveGroups = useAsync(async () => {
+    if (!movingFeature) {
+      return [] as MovableGroup[];
+    }
+    const lists = await Promise.all(
+      (features.data ?? []).map((f) =>
+        api.listGroups(f.id).then((groups) =>
+          groups.map((g) => ({
+            id: g.id,
+            name: g.name,
+            featureId: f.id,
+            parentGroupId: g.parentGroupId ?? null,
+            kind: g.kind,
+          })),
+        ),
+      ),
+    );
+    return lists.flat();
+  }, [movingFeature, treeRevision]);
+
   /** Moves a session or group (possibly to a different feature) and refreshes
    * every expanded feature so both the source and target reflect the change. */
   async function moveNode(input: MoveNodeInput) {
@@ -1450,13 +1618,50 @@ export function Explorer({
     setFormError(null);
   }
 
+  async function createFeatureInGroup(
+    repoId: string | null,
+    parentGroupId: string,
+    featureName: string,
+  ) {
+    await api.createFeature({
+      name: featureName,
+      description: '',
+      repoId,
+      parentGroupId,
+    });
+    features.reload();
+  }
+
   async function renameFeature(feature: Feature, next: string) {
     await onRenameFeature(feature, next);
     features.reload();
   }
 
   async function deleteFeature(feature: Feature) {
-    await onDeleteFeature(feature);
+    // Deleting a feature first cancels any work it still owns (an in-flight
+    // review or metasession). That cancellation is asynchronous: the backend
+    // aborts the work, then waits a few seconds for it to confirm stopped and
+    // otherwise answers 409 ("blocked until all owned work has stopped"). The
+    // cancellation *has* already been requested, so a slow-to-abort operation
+    // used to force the user to click delete a second time. Retry the delete
+    // until the aborted work settles so a single confirmation is enough.
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await onDeleteFeature(feature);
+        break;
+      } catch (error) {
+        const stillStopping =
+          error instanceof ApiError &&
+          error.status === 409 &&
+          Date.now() < deadline;
+        if (!stillStopping) {
+          features.reload();
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
     features.reload();
   }
 
@@ -1485,7 +1690,10 @@ export function Explorer({
         id: moved.id,
         targetRepoId: target.repoId,
         targetIndex: APPEND_INDEX,
-        targetParentFeatureId: target.parentFeatureId,
+        targetParentFeatureId: target.parentGroupId
+          ? null
+          : target.parentFeatureId,
+        targetParentGroupId: target.parentGroupId ?? null,
       });
     } catch (error) {
       setMoveError(
@@ -1496,7 +1704,8 @@ export function Explorer({
     }
   }
 
-  async function nestFeature(moved: Feature, parentFeatureId: string) {    setDraggingFeature(null);
+  async function nestFeature(moved: Feature, parentFeatureId: string) {
+    setDraggingFeature(null);
     setMoveError(null);
     try {
       await api.moveFeature({
@@ -1512,6 +1721,29 @@ export function Explorer({
       // A rejected move used to disappear entirely: the tree simply snapped
       // back and the reason (a nesting cycle, a missing target) was never
       // shown, which read as "dragging into a sub-category does not work".
+      setMoveError(
+        error instanceof Error ? error.message : 'Could not move the feature.',
+      );
+    } finally {
+      features.reload();
+    }
+  }
+
+  // Drag a feature row onto a subcategory folder header to place it inside that
+  // folder. The folder's owning feature supplies repo inheritance and the cycle
+  // check on the backend, so targetRepoId here is advisory.
+  async function moveFeatureIntoGroup(moved: Feature, parentGroupId: string) {
+    setDraggingFeature(null);
+    setMoveError(null);
+    try {
+      await api.moveFeature({
+        id: moved.id,
+        targetRepoId: moved.repoId ?? null,
+        targetIndex: APPEND_INDEX,
+        targetParentFeatureId: null,
+        targetParentGroupId: parentGroupId,
+      });
+    } catch (error) {
       setMoveError(
         error instanceof Error ? error.message : 'Could not move the feature.',
       );
@@ -1709,38 +1941,47 @@ export function Explorer({
               are listed in full, so you don&apos;t have to drag onto a row that
               may not even be visible.
             </p>
-            <ul className="move-target-list">
-              {featureMoveTargets(allFeatures, movingFeature, repoList).map(
-                (target) => (
-                  <li
-                    key={`${target.repoId ?? 'none'}:${
-                      target.parentFeatureId ?? 'root'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      className="move-target"
-                      style={{ paddingLeft: `${8 + target.depth * 14}px` }}
-                      onClick={() => {
-                        const moved = movingFeature;
-                        setMovingFeature(null);
-                        void moveFeatureTo(moved, target);
-                      }}
+            {(() => {
+              const targets = featureMoveTargets(
+                allFeatures,
+                movingFeature,
+                repoList,
+                moveGroups.data ?? [],
+              );
+              if (targets.length === 0) {
+                return (
+                  <EmptyState
+                    icon={<MoveIcon size={20} />}
+                    title="Nowhere to move it"
+                    description="Every other place is either this feature itself or one of the folders inside it."
+                  />
+                );
+              }
+              return (
+                <ul className="move-target-list">
+                  {targets.map((target) => (
+                    <li
+                      key={`${target.repoId ?? 'none'}:${
+                        target.parentFeatureId ?? 'root'
+                      }:${target.parentGroupId ?? 'nogroup'}`}
                     >
-                      {target.label}
-                    </button>
-                  </li>
-                ),
-              )}
-            </ul>
-            {featureMoveTargets(allFeatures, movingFeature, repoList).length ===
-              0 && (
-              <EmptyState
-                icon={<MoveIcon size={20} />}
-                title="Nowhere to move it"
-                description="Every other place is either this feature itself or one of the folders inside it."
-              />
-            )}
+                      <button
+                        type="button"
+                        className="move-target"
+                        style={{ paddingLeft: `${8 + target.depth * 14}px` }}
+                        onClick={() => {
+                          const moved = movingFeature;
+                          setMovingFeature(null);
+                          void moveFeatureTo(moved, target);
+                        }}
+                      >
+                        {target.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
           </div>
         </Modal>
       )}
@@ -1795,9 +2036,11 @@ export function Explorer({
             onFeatureDragEnd={() => setDraggingFeature(null)}
             onMoveFeature={moveFeature}
             onNestFeature={nestFeature}
+            onMoveFeatureIntoGroup={moveFeatureIntoGroup}
             onRequestMove={setMovingFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
+            onCreateFeatureInGroup={createFeatureInGroup}
           />
         ))}
         {orphanFeatures.length > 0 && (
@@ -1829,9 +2072,11 @@ export function Explorer({
             onFeatureDragEnd={() => setDraggingFeature(null)}
             onMoveFeature={moveFeature}
             onNestFeature={nestFeature}
+            onMoveFeatureIntoGroup={moveFeatureIntoGroup}
             onRequestMove={setMovingFeature}
             treeRevision={treeRevision}
             onMoveNode={moveNode}
+            onCreateFeatureInGroup={createFeatureInGroup}
           />
         )}
         </NodeDragStoreProvider>

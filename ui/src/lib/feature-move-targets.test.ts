@@ -3,6 +3,7 @@ import {
   blockedMoveTargets,
   featureMoveTargets,
   type MovableFeature,
+  type MovableGroup,
 } from './feature-move-targets.js';
 
 const repos = [
@@ -76,5 +77,48 @@ describe('featureMoveTargets', () => {
       repoId: 'r1',
       label: 'CosmosDB (top level)',
     });
+  });
+});
+
+const groups: MovableGroup[] = [
+  { id: 'g1', name: 'Folder', featureId: 'a', parentGroupId: null },
+  { id: 'g2', name: 'Sub', featureId: 'a', parentGroupId: 'g1', kind: 'subcategory' },
+  { id: 'gpr', name: 'PR #5', featureId: 'a', parentGroupId: null, kind: 'pr' },
+  { id: 'gdangling', name: 'Lost', featureId: 'ghost', parentGroupId: 'missing', kind: 'subcategory' },
+  { id: 'gself', name: 'Loop', featureId: 'e', parentGroupId: 'gself', kind: 'subcategory' },
+];
+
+describe('featureMoveTargets with subcategory groups', () => {
+  it('offers subcategory folders, skipping PR containers, with nested paths', () => {
+    const moved = features.find((f) => f.id === 'd') as MovableFeature;
+    const targets = featureMoveTargets(features, moved, repos, groups);
+    const groupTargets = targets.filter((t) => t.parentGroupId);
+    expect(groupTargets.map((t) => ({ id: t.parentGroupId, label: t.label, repoId: t.repoId }))).toEqual([
+      { id: 'g1', label: 'Reviews / Folder', repoId: 'r1' },
+      { id: 'g2', label: 'Reviews / Folder / Sub', repoId: 'r1' },
+      { id: 'gdangling', label: 'Lost', repoId: null },
+      { id: 'gself', label: 'Other / Loop', repoId: 'r2' },
+    ]);
+  });
+
+  it('excludes folders owned by the moved feature or its descendants', () => {
+    const moved = features.find((f) => f.id === 'a') as MovableFeature;
+    const targets = featureMoveTargets(features, moved, repos, groups);
+    const groupTargets = targets.filter((t) => t.parentGroupId);
+    expect(groupTargets.map((t) => t.parentGroupId)).toEqual(['gdangling', 'gself']);
+  });
+
+  it('skips the folder the feature already lives in and offers its repo top level', () => {
+    const moved: MovableFeature = {
+      id: 'x',
+      name: 'Placed',
+      repoId: 'r1',
+      parentFeatureId: null,
+      parentGroupId: 'g1',
+    };
+    const targets = featureMoveTargets(features, moved, repos, groups);
+    expect(targets.some((t) => t.label === 'CosmosDB (top level)')).toBe(true);
+    const groupTargets = targets.filter((t) => t.parentGroupId);
+    expect(groupTargets.map((t) => t.parentGroupId)).toEqual(['g2', 'gdangling', 'gself']);
   });
 });

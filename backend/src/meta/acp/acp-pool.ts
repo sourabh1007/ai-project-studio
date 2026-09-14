@@ -452,11 +452,21 @@ export class MetaSessionPool {
       if (request.signal?.aborted) throw new MetaAbortError({ kind: 'aborted', termination: 'not-started' });
       physical?.dispatched();
       dispatched = true;
+      // Decouple the turn budget from the queue wait. The enqueue-time
+      // `deadlineAt` bounds only session acquisition and the pre-turn checks
+      // above; once we hold a session, the model turn gets a fresh full
+      // `timeoutMs` budget measured from now. Otherwise a request that waited in
+      // the pool queue would run its turn with only the leftover time, which
+      // starves serialized perspectives on a small warm pool.
+      const turnDeadlineAt =
+        request.timeoutMs === undefined
+          ? undefined
+          : this.now() + request.timeoutMs;
       const turn = client.runTurn({
         ...observed,
-        deadlineAt,
+        deadlineAt: turnDeadlineAt,
       });
-      const result = await this.awaitTurn(turn, client, request, deadlineAt);
+      const result = await this.awaitTurn(turn, client, request, turnDeadlineAt);
       responded = true;
       this.servedCount += 1;
       const at = this.now();

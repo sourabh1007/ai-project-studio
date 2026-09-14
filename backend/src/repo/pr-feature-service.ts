@@ -45,6 +45,7 @@ export interface PrFeatureService {
     repoId: string,
     number: number,
     parentFeatureId?: string | null,
+    parentGroupId?: string | null,
   ): Promise<Feature>;
   /**
    * Re-fetches the pull request from its remote and rebuilds the review against
@@ -66,7 +67,7 @@ export function createPrFeatureService(
       return deps.listPulls(repo, filter);
     },
 
-    async createFromPull(repoId, number, parentFeatureId = null) {
+    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null) {
       const repo = deps.repos.get(repoId);
       // Opening a PR that already has a review must not create a duplicate: reuse
       // its existing review feature (and its checked-out worktree) instead.
@@ -87,8 +88,11 @@ export function createPrFeatureService(
         repoId: repo.id,
         checkoutPath: worktree.worktreePath,
         // Nest the review under the feature it was opened from, when any, so it
-        // renders as a child rather than a sibling in the explorer tree.
-        parentFeatureId,
+        // renders as a child rather than a sibling in the explorer tree. When a
+        // subcategory group is given instead, the review lands inside it (the
+        // two are mutually exclusive).
+        parentFeatureId: parentGroupId ? null : parentFeatureId,
+        parentGroupId,
       });
       deps.reviews.start({
         featureId: feature.id,

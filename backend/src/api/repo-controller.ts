@@ -21,6 +21,7 @@ const createRepoSchema = z.object({
 const reviewPullSchema = z.object({
   number: z.number().int().positive(),
   parentFeatureId: z.string().min(1).nullish(),
+  parentGroupId: z.string().min(1).nullish(),
 });
 
 const refreshContextSchema = z.object({}).strict().optional();
@@ -148,6 +149,7 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
           req.params.id,
           input.number,
           input.parentFeatureId ?? null,
+          input.parentGroupId ?? null,
         );
         return { status: 201, body: feature };
       },

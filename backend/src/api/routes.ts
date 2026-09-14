@@ -171,7 +171,7 @@ export interface ApiRoutesDeps {
   updateMetaSettings: (patch: {
     providerId?: string;
     model?: string;
-  }) => MetaSettingsView;
+  }) => MetaSettingsView | Promise<MetaSettingsView>;
   /** Reports whether the bundled `agency` CLI is installed. */
   agencyStatus: () => AgencyStatus;
   /** Reports the IDE's current GitHub authentication status. */

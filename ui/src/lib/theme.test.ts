@@ -133,6 +133,20 @@ describe('motion accessibility stylesheet policy', () => {
     expect(APP_CSS).not.toContain('animation-duration: 1.6s !important;');
   });
 
+  it('exempts essential progress indicators from the reduced-motion kill switch', () => {
+    // Spinners and the review "in progress" dot stay animated under both the
+    // app-level reduced preference and OS reduced motion.
+    expect(DESIGN_TOKENS_CSS).toContain(":root[data-motion='reduced'] .spinner");
+    expect(DESIGN_TOKENS_CSS).toContain(
+      "animation: spin 0.7s linear infinite !important;",
+    );
+    expect(DESIGN_TOKENS_CSS).toContain(
+      "animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;",
+    );
+    // The explicit "off" choice is still honoured in full — no exemption.
+    expect(DESIGN_TOKENS_CSS).not.toContain(":root[data-motion='off'] .spinner");
+  });
+
   it('keeps primary button hover/active states free of color filters', () => {
     expect(cssBlock(APP_CSS, '.btn-primary:hover')).not.toContain('filter:');
     expect(APP_CSS).toMatch(/\.btn:active\s*\{\s*transform: translateY\(1px\);\s*\}/);

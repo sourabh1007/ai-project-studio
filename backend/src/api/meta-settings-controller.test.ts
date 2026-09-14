@@ -30,7 +30,7 @@ describe('createMetaSettingsRoutes', () => {
     expect(get.handler(req(undefined))).toEqual({ status: 200, body: view });
   });
 
-  it('applies a provider + model patch on PUT', () => {
+  it('applies a provider + model patch on PUT', async () => {
     const updated: MetaSettingsView = {
       providerId: 'copilot',
       model: 'gpt-5',
@@ -40,7 +40,9 @@ describe('createMetaSettingsRoutes', () => {
     const { put } = routesFor(update);
     expect(put.method).toBe('put');
     expect(put.path).toBe('/meta/settings');
-    expect(put.handler(req({ providerId: 'copilot', model: 'gpt-5' }))).toEqual({
+    await expect(
+      put.handler(req({ providerId: 'copilot', model: 'gpt-5' })),
+    ).resolves.toEqual({
       status: 200,
       body: updated,
     });
@@ -50,29 +52,31 @@ describe('createMetaSettingsRoutes', () => {
     });
   });
 
-  it('applies a model-only patch', () => {
+  it('applies a model-only patch', async () => {
     const { put, update } = routesFor();
-    put.handler(req({ model: 'gpt-5' }));
+    await put.handler(req({ model: 'gpt-5' }));
     expect(update).toHaveBeenCalledWith({ model: 'gpt-5' });
   });
 
-  it('rejects a non-object body', () => {
+  it('rejects a non-object body', async () => {
     const { put } = routesFor();
-    expect(() => put.handler(req('nope'))).toThrow(ValidationError);
-    expect(() => put.handler(req(['a']))).toThrow(ValidationError);
+    await expect(put.handler(req('nope'))).rejects.toThrow(ValidationError);
+    await expect(put.handler(req(['a']))).rejects.toThrow(ValidationError);
   });
 
-  it('rejects blank provider or model values', () => {
+  it('rejects blank provider or model values', async () => {
     const { put } = routesFor();
-    expect(() => put.handler(req({ providerId: '   ' }))).toThrow(
+    await expect(put.handler(req({ providerId: '   ' }))).rejects.toThrow(
       ValidationError,
     );
-    expect(() => put.handler(req({ model: 42 }))).toThrow(ValidationError);
+    await expect(put.handler(req({ model: 42 }))).rejects.toThrow(
+      ValidationError,
+    );
   });
 
-  it('rejects an empty patch with no fields', () => {
+  it('rejects an empty patch with no fields', async () => {
     const { put, update } = routesFor();
-    expect(() => put.handler(req({}))).toThrow(ValidationError);
+    await expect(put.handler(req({}))).rejects.toThrow(ValidationError);
     expect(update).not.toHaveBeenCalled();
   });
 });

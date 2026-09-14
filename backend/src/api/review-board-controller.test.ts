@@ -33,6 +33,7 @@ function service(overrides: Partial<ReviewBoardService> = {}): ReviewBoardServic
       checks: [],
     })),
     chat: vi.fn(async () => ({ answer: 'ok', ratingChange: null })),
+    analyzeAll: vi.fn(async () => {}),
     ...overrides,
   };
 }

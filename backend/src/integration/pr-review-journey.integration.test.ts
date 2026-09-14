@@ -169,6 +169,7 @@ function createHarness(options: { boardFailures?: number } = {}): Harness {
     ids: createIdGenerator(() => 'feature-1'),
     clock,
     repos: repo,
+    groups: { get: () => null },
   });
   const reviewBus = createEventBus<PrReviewEventMap>();
   const reviewRequests: MetaRequest[] = [];

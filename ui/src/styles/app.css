@@ -468,6 +468,13 @@
   margin: 0;
 }
 
+.confirm-dialog-error {
+  font-size: var(--fs-secondary);
+  color: var(--danger, #ef4444);
+  line-height: var(--lh-secondary, 18px);
+  margin: var(--space-2) 0 0;
+}
+
 .confirm-dialog-actions {
   display: flex;
   gap: var(--space-3);
@@ -1240,7 +1247,10 @@
 }
 
 .statusbar-ide {
-  color: var(--accent);
+  /* The status bar has a fixed indigo background that is nearly identical to
+     the default indigo accent, so accent-coloured text is illegible on it.
+     Use the status bar's own foreground; the leading icon keeps it distinct. */
+  color: var(--statusbar-fg);
 }
 
 .statusbar-plan {
@@ -1360,6 +1370,7 @@
   gap: var(--space-3, 12px);
   padding: var(--space-4, 16px);
   background: var(--surface, #1e1e1e);
+  color: var(--text);
   border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
   border-radius: var(--radius-md, 10px);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
@@ -1385,7 +1396,7 @@
   padding: 0 var(--space-2, 8px);
   font-size: 13px;
   color: var(--text, #e6e6e6);
-  background: var(--surface-2, #2a2a2a);
+  background: var(--surface-strong);
   border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
   border-radius: var(--radius-sm, 6px);
 }
@@ -10284,6 +10295,22 @@ body.is-resizing {
   justify-content: flex-end;
   gap: 8px;
 }
+.rb-act-label {
+  white-space: nowrap;
+}
+/* Below this width there isn't room for every header control plus a text
+ * label on the primary action; drop the label and shrink back to an
+ * icon-only button so the whole cluster stays on one line instead of
+ * wrapping onto a second row and pushing content around. */
+@media (max-width: 900px) {
+  .rb-act-label {
+    display: none;
+  }
+  .rb-act-primary {
+    width: 28px;
+    padding: 0;
+  }
+}
 .rb-reco {
   font-size: 12px;
   font-weight: 600;
@@ -10908,6 +10935,18 @@ body.is-resizing {
 }
 .rb-dot-reviewing {
   color: var(--accent);
+  animation: rb-reviewing-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rb-reviewing-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.72);
+  }
 }
 .rb-nav-skip-dot {
   color: var(--text-muted);
@@ -12269,4 +12308,387 @@ body.is-resizing {
 .tree-draggable > :not(.drag-handle) {
   flex: 1;
   min-width: 0;
+}
+
+/* --- Prompts & Commands settings tab --- */
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.prompt-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompt-section-title {
+  margin: 0;
+  font-size: 15px;
+}
+.prompt-section-desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.prompt-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.prompt-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  scroll-margin-top: 80px;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.prompt-entry-highlight {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.prompt-entry-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prompt-entry-title {
+  margin: 0;
+  font-size: 14px;
+}
+.prompt-entry-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-strong);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.prompt-entry-flag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.prompt-entry-flag-ro {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border-color: var(--border);
+}
+.prompt-entry-desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.prompt-entry-placeholders {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.prompt-entry-placeholders code,
+.prompt-entry-pre code {
+  font-size: 11px;
+  background: var(--surface-strong);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+.prompt-entry-textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+}
+.prompt-entry-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.prompt-entry-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prompt-entry-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--success, #16a34a);
+}
+.prompt-entry-readonly .prompt-entry-pre,
+.prompt-entry-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* --- Review board: per-perspective prompt preview popover --- */
+.rb-prompt-preview {
+  position: relative;
+  display: inline-flex;
+}
+.rb-prompt-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: min(440px, 80vw);
+  max-height: 60vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+.rb-prompt-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rb-prompt-pop-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.rb-prompt-pop-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.rb-prompt-pop-note code {
+  font-size: 11px;
+  background: var(--surface-strong);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+.rb-prompt-pop-body {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rb-prompt-pop-loading,
+.rb-prompt-pop-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.rb-prompt-pop-error {
+  color: var(--danger, #dc2626);
+}
+.rb-prompt-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Saved AI operations (meta-operations) ─────────────────────────────── */
+.meta-ops {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.meta-ops-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.meta-ops-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.meta-ops-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+.meta-ops-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.meta-ops-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+.meta-ops-callout {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+.meta-ops-callout-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+.meta-ops-empty {
+  text-align: center;
+}
+.meta-ops-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.meta-op-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.meta-op-card:hover {
+  background: var(--surface-strong);
+}
+.meta-op-card[data-state='failed'] {
+  border-left-color: var(--danger);
+}
+.meta-op-card[data-state='interrupted'] {
+  border-left-color: var(--warning);
+}
+.meta-op-card[data-state='completed'] {
+  border-left-color: var(--success);
+}
+.meta-op-card[data-state='running'] {
+  border-left-color: var(--accent);
+}
+.meta-op-card[data-state='pending'] {
+  border-left-color: var(--border);
+}
+.meta-op-card-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.meta-op-title {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.meta-op-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.meta-op-when {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+.meta-op-caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+}
+.meta-op-meta {
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.meta-ops-more {
+  align-self: flex-start;
+}
+
+.meta-op-reason {
+  margin: 0;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--warning);
+  overflow-wrap: anywhere;
+}
+.meta-op-card[data-state='failed'] .meta-op-reason {
+  color: var(--danger);
+}
+.meta-op-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+.meta-op-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+}
+.meta-op-detail dt {
+  margin: 0;
+  font-size: var(--fs-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+.meta-op-detail dd {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }

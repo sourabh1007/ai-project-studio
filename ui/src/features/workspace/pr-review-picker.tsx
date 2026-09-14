@@ -153,7 +153,7 @@ export function PrReviewPicker({
   }
 
   return (
-    <Modal title={`Open a PR · ${repo.name}`} onClose={onClose}>
+    <Modal title={`Open Pull Request · ${repo.name}`} onClose={onClose}>
       <div className="pr-picker">
         {busy && (
           <div className="pr-checkout-overlay" role="status" aria-live="polite">

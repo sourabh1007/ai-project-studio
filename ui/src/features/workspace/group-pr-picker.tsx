@@ -48,7 +48,7 @@ export function GroupPrPicker({
   }, [list, query]);
 
   return (
-    <Modal title="Attach a pull request" onClose={onClose}>
+    <Modal title="Open Pull Request" onClose={onClose}>
       <div className="pr-picker">
         {!pulls.loading && !pulls.error && list.length > 0 && (
           <input

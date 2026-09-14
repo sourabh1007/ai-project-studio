@@ -14,6 +14,12 @@ export interface FeatureServiceDeps {
   clock: Clock;
   /** Validates a target repository exists (throws NotFoundError otherwise). */
   repos: { get(id: string): unknown };
+  /**
+   * Resolves a subcategory group to its owning feature, so a feature moved
+   * into a group can inherit the group's feature's repository and be checked
+   * for cycles. Returns null when the group does not exist.
+   */
+  groups: { get(id: string): { featureId: string } | null };
 }
 
 export interface FeatureService {
@@ -53,6 +59,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
       repoId: input.repoId ?? null,
       checkoutPath: input.checkoutPath ?? null,
       parentFeatureId: input.parentFeatureId ?? null,
+      parentGroupId: input.parentGroupId ?? null,
     };
     deps.repo.create(feature);
     return feature;
@@ -90,15 +97,48 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
     },
     moveFeature(input) {
       requireFeature(input.id);
-      const targetParentFeatureId = input.targetParentFeatureId ?? null;
       const all = deps.repo.list();
+      const byId = new Map(all.map((feature) => [feature.id, feature]));
+      const targetParentGroupId = input.targetParentGroupId ?? null;
+      let targetParentFeatureId = input.targetParentFeatureId ?? null;
+      let targetGroupId: string | null = null;
       let targetRepoId = input.targetRepoId ?? null;
-      if (targetParentFeatureId !== null) {
+      if (targetParentGroupId !== null) {
+        // Placing a feature inside a subcategory group takes precedence over a
+        // parent-feature target and clears it (the two are mutually exclusive).
+        const group = deps.groups.get(targetParentGroupId);
+        if (!group) {
+          throw new NotFoundError(`Unknown group: ${targetParentGroupId}`);
+        }
+        const owner = requireFeature(group.featureId);
+        // Reject placing a feature inside a group owned by itself or one of its
+        // descendants. Walk up from the group's owning feature following the
+        // effective parent (a group's owning feature, else the parent feature);
+        // reaching the moved feature means the owner is a descendant of it.
+        let cursor: string | null = owner.id;
+        while (cursor !== null) {
+          if (cursor === input.id) {
+            throw new ValidationError(
+              'Cannot place a feature inside one of its own subcategories.',
+            );
+          }
+          const current = byId.get(cursor);
+          if (!current) {
+            break;
+          }
+          cursor =
+            (current.parentGroupId ?? null) !== null
+              ? (deps.groups.get(current.parentGroupId!)?.featureId ?? null)
+              : (current.parentFeatureId ?? null);
+        }
+        targetGroupId = targetParentGroupId;
+        targetParentFeatureId = null;
+        targetRepoId = owner.repoId ?? null;
+      } else if (targetParentFeatureId !== null) {
         const parent = requireFeature(targetParentFeatureId);
         // Reject nesting a feature under itself or one of its own descendants,
         // which would orphan a cycle. Walk up from the intended parent: if we
         // reach the feature being moved, the parent is a descendant of it.
-        const byId = new Map(all.map((feature) => [feature.id, feature]));
         let cursor: string | null = targetParentFeatureId;
         while (cursor !== null) {
           if (cursor === input.id) {
@@ -118,6 +158,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
           (feature) =>
             (feature.repoId ?? null) === targetRepoId &&
             (feature.parentFeatureId ?? null) === targetParentFeatureId &&
+            (feature.parentGroupId ?? null) === targetGroupId &&
             feature.id !== input.id,
         )
         .sort(
@@ -136,6 +177,7 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
         deps.repo.updatePlacement(feature.id, {
           repoId: targetRepoId,
           parentFeatureId: targetParentFeatureId,
+          parentGroupId: targetGroupId,
           orderIndex: position,
         });
       });

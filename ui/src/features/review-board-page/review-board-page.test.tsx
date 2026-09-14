@@ -151,6 +151,7 @@ function client(getReviewBoard: ReturnType<typeof vi.fn>): Partial<ApiClient> {
     getReviewBoard,
     getPrReview: vi.fn((featureId: string) => Promise.resolve(review(featureId, 'sha-a'))),
     analyzeReviewBoardPerspective: vi.fn(),
+    analyzeReviewBoardPerspectives: vi.fn(async () => {}),
     pullLatestPrReview: vi.fn(),
     getMetaPools: vi.fn(),
     chatReviewBoard: vi.fn(),

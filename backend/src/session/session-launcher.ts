@@ -2,6 +2,7 @@ import type { Clock } from '../kernel/clock.js';
 import type { EventBus } from '../kernel/event-bus.js';
 import { ConflictError } from '../kernel/error-types.js';
 import { createWorkTracker } from '../kernel/work-tracker.js';
+import type { Logger } from '../kernel/logger.js';
 import type { MetaOperationPhysicalRegistration } from '../meta/meta-operation-contract.js';
 import type { ProcessAdmission, ProcessPermit } from '../kernel/process-admission.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
@@ -76,6 +77,8 @@ export interface SessionLauncherDeps {
     SessionBootstrap,
     'assertFeatureReady' | 'composeForSession'
   >;
+  /** Optional; used only to warn when a kill goes unconfirmed (see below). */
+  logger?: Pick<Logger, 'warn'>;
 }
 
 /** Handle returned when a session is launched. */
@@ -97,6 +100,25 @@ export interface ManagedSessionLauncher extends SessionLauncher {
   quiesceSession(sessionId: string, timeoutMs: number): Promise<boolean>;
   quiesceFeature(featureId: string, timeoutMs: number): Promise<boolean>;
 }
+
+/**
+ * How long to wait, once a kill has been requested, for the OS to actually
+ * confirm the process is gone (via its 'exit'/'close' event) before giving up
+ * and releasing its process-admission slot anyway.
+ *
+ * A killed process is not always confirmed promptly: on Windows in
+ * particular, a provider CLI that itself spawns a child process (e.g. the
+ * Agency CLI wrapping the Copilot CLI) can leave that grandchild holding the
+ * stdio pipes open as an orphan even after the immediate child has been
+ * terminated, so Node's 'close' event never fires. Waiting on that
+ * confirmation forever would starve the whole process-admission budget for
+ * every future session — a single wedged process would eventually make the
+ * entire app unusable. Releasing the accounting slot after a bounded grace
+ * window trades a slight risk of over-provisioning for guaranteed liveness;
+ * if the process does turn out to still be alive, the OS will still reclaim
+ * it in the background and this is purely a bookkeeping decision.
+ */
+const FORCE_RELEASE_GRACE_MS = 5_000;
 
 interface LaunchOwner {
   featureId: string;
@@ -276,6 +298,18 @@ export function createSessionLauncher(
         } catch {
           // Best effort: the provider may already be gone.
         }
+        // See FORCE_RELEASE_GRACE_MS: don't let an unconfirmed kill hold this
+        // process's admission slot hostage forever.
+        const forceRelease = setTimeout(() => {
+          if (!owner.exited && owner.processPermit) {
+            deps.logger?.warn(
+              'Process did not confirm exit after kill; releasing its admission slot anyway',
+              { sessionId: session.id, graceMs: FORCE_RELEASE_GRACE_MS },
+            );
+            owner.processPermit.release();
+          }
+        }, FORCE_RELEASE_GRACE_MS);
+        forceRelease.unref?.();
       };
       if (request.signal?.aborted) {
         abortRunning();

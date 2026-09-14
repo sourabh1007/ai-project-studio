@@ -13,6 +13,7 @@ export interface FeatureRepo {
     placement: {
       repoId: string | null;
       parentFeatureId: string | null;
+      parentGroupId: string | null;
       orderIndex: number;
     },
   ): void;

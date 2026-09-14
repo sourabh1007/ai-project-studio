@@ -31,6 +31,7 @@ function inMemoryRepo(): FeatureRepo {
           ...f,
           repoId: placement.repoId,
           parentFeatureId: placement.parentFeatureId,
+          parentGroupId: placement.parentGroupId,
           orderIndex: placement.orderIndex,
         });
       }
@@ -51,13 +52,28 @@ function repos(known: string[] = []): { get(id: string): unknown } {
   };
 }
 
-function service(repo = inMemoryRepo(), known: string[] = ['repo-9', 'repo-1']) {
+/** A group→owning-feature lookup backed by a static id→featureId map. */
+function groups(
+  map: Record<string, string> = {},
+): { get(id: string): { featureId: string } | null } {
+  return {
+    get: (id: string) =>
+      id in map ? { featureId: map[id] } : null,
+  };
+}
+
+function service(
+  repo = inMemoryRepo(),
+  known: string[] = ['repo-9', 'repo-1'],
+  groupMap: Record<string, string> = {},
+) {
   let n = 0;
   return createFeatureService({
     repo,
     ids: createIdGenerator(() => `feat-${(n += 1)}`),
     clock: createClock(() => Date.parse('2025-01-01T00:00:00.000Z')),
     repos: repos(known),
+    groups: groups(groupMap),
   });
 }
 
@@ -74,6 +90,7 @@ describe('feature-service', () => {
       repoId: null,
       checkoutPath: null,
       parentFeatureId: null,
+      parentGroupId: null,
     });
     expect(svc.get('feat-1')).toEqual(feature);
   });
@@ -104,6 +121,7 @@ describe('feature-service', () => {
       repoId: null,
       checkoutPath: null,
       parentFeatureId: null,
+      parentGroupId: null,
     });
   });
 
@@ -375,5 +393,200 @@ describe('feature-service', () => {
         targetParentFeatureId: 'ghost',
       }),
     ).toThrow(AppError);
+  });
+
+  it('inherits a null repo when the group owner is repo-less', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'feat-1' });
+    svc.create({ name: 'Owner', description: 'o' }); // feat-1, repo-less
+    svc.create({ name: 'Mover', description: 'm', repoId: 'repo-9' }); // feat-2
+    svc.moveFeature({
+      id: 'feat-2',
+      targetRepoId: 'repo-9',
+      targetIndex: 0,
+      targetParentGroupId: 'grp-1',
+    });
+    const moved = svc.get('feat-2');
+    expect(moved.parentGroupId).toBe('grp-1');
+    expect(moved.repoId).toBeNull();
+  });
+
+  it('creates a feature inside a subcategory group', () => {
+    const svc = service(inMemoryRepo(), ['repo-9'], { 'grp-1': 'feat-owner' });
+    const feature = svc.create({
+      name: 'Inside',
+      description: 'in a folder',
+      repoId: 'repo-9',
+      parentGroupId: 'grp-1',
+    });
+    expect(feature.parentGroupId).toBe('grp-1');
+  });
+
+  it('places a feature into a subcategory group, inheriting the owner repo', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9', 'repo-1'], { 'grp-1': 'feat-1' });
+    svc.create({ name: 'Owner', description: 'o', repoId: 'repo-9' }); // feat-1
+    svc.create({ name: 'Mover', description: 'm', repoId: 'repo-1' }); // feat-2
+    svc.moveFeature({
+      id: 'feat-2',
+      targetRepoId: 'repo-1',
+      targetIndex: 0,
+      targetParentGroupId: 'grp-1',
+    });
+    const moved = svc.get('feat-2');
+    expect(moved.parentGroupId).toBe('grp-1');
+    expect(moved.parentFeatureId).toBeNull();
+    expect(moved.repoId).toBe('repo-9');
+    expect(moved.orderIndex).toBe(0);
+  });
+
+  it('reorders features within a subcategory group', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'feat-1' });
+    svc.create({ name: 'Owner', description: 'o', repoId: 'repo-9' }); // feat-1
+    svc.create({ name: 'A', description: 'a' }); // feat-2
+    svc.create({ name: 'B', description: 'b' }); // feat-3
+    svc.moveFeature({ id: 'feat-2', targetRepoId: null, targetIndex: 0, targetParentGroupId: 'grp-1' });
+    svc.moveFeature({ id: 'feat-3', targetRepoId: null, targetIndex: 1, targetParentGroupId: 'grp-1' });
+    svc.moveFeature({ id: 'feat-3', targetRepoId: null, targetIndex: 0, targetParentGroupId: 'grp-1' });
+    const members = svc
+      .list()
+      .filter((f) => f.parentGroupId === 'grp-1')
+      .sort((l, r) => (l.orderIndex ?? 0) - (r.orderIndex ?? 0));
+    expect(members.map((f) => f.id)).toEqual(['feat-3', 'feat-2']);
+  });
+
+  it('un-nests a feature out of a subcategory group', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'feat-1' });
+    svc.create({ name: 'Owner', description: 'o', repoId: 'repo-9' });
+    svc.create({ name: 'Mover', description: 'm' });
+    svc.moveFeature({ id: 'feat-2', targetRepoId: null, targetIndex: 0, targetParentGroupId: 'grp-1' });
+    expect(svc.get('feat-2').parentGroupId).toBe('grp-1');
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0 });
+    expect(svc.get('feat-2').parentGroupId).toBeNull();
+    expect(svc.get('feat-2').repoId).toBe('repo-9');
+  });
+
+  it('rejects placing a feature into an unknown group', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo);
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' });
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentGroupId: 'ghost',
+      }),
+    ).toThrow(AppError);
+  });
+
+  it('rejects placing a feature into a group it owns', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'feat-1' });
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' });
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentGroupId: 'grp-1',
+      }),
+    ).toThrow(AppError);
+  });
+
+  it('rejects placing a feature into a group owned by its descendant', () => {
+    const repo = inMemoryRepo();
+    // grp-1 is owned by feat-2, which we nest under feat-1.
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'feat-2' });
+    svc.create({ name: 'A', description: 'a', repoId: 'repo-9' }); // feat-1
+    svc.create({ name: 'B', description: 'b', repoId: 'repo-9' }); // feat-2
+    svc.moveFeature({ id: 'feat-2', targetRepoId: 'repo-9', targetIndex: 0, targetParentFeatureId: 'feat-1' });
+    expect(() =>
+      svc.moveFeature({
+        id: 'feat-1',
+        targetRepoId: 'repo-9',
+        targetIndex: 0,
+        targetParentGroupId: 'grp-1',
+      }),
+    ).toThrow(AppError);
+  });
+
+  it('tolerates a dangling group ancestor when checking for cycles', () => {
+    const repo = inMemoryRepo();
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'owner', 'grp-x': 'ghost' });
+    // The group owner points at a group whose owning feature no longer exists;
+    // the cycle walk must break rather than throw.
+    repo.create({
+      id: 'owner',
+      name: 'Owner',
+      description: 'o',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      summary: null,
+      repoId: 'repo-9',
+      checkoutPath: null,
+      parentFeatureId: null,
+      parentGroupId: 'grp-x',
+      orderIndex: 0,
+    });
+    repo.create({
+      id: 'mover',
+      name: 'Mover',
+      description: 'm',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      summary: null,
+      repoId: null,
+      checkoutPath: null,
+      parentFeatureId: null,
+      parentGroupId: null,
+      orderIndex: 0,
+    });
+    svc.moveFeature({
+      id: 'mover',
+      targetRepoId: null,
+      targetIndex: 0,
+      targetParentGroupId: 'grp-1',
+    });
+    expect(svc.get('mover').parentGroupId).toBe('grp-1');
+    expect(svc.get('mover').repoId).toBe('repo-9');
+  });
+
+  it('stops the cycle walk when a group ancestor no longer resolves', () => {
+    const repo = inMemoryRepo();
+    // grp-1 is owned by owner2, whose parentGroupId points at a group that is
+    // not in the lookup, so resolving the next ancestor yields null.
+    const svc = service(repo, ['repo-9'], { 'grp-1': 'owner2' });
+    repo.create({
+      id: 'owner2',
+      name: 'Owner2',
+      description: 'o',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      summary: null,
+      repoId: 'repo-9',
+      checkoutPath: null,
+      parentFeatureId: null,
+      parentGroupId: 'grp-missing',
+      orderIndex: 0,
+    });
+    repo.create({
+      id: 'mover',
+      name: 'Mover',
+      description: 'm',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      summary: null,
+      repoId: null,
+      checkoutPath: null,
+      parentFeatureId: null,
+      parentGroupId: null,
+      orderIndex: 0,
+    });
+    svc.moveFeature({
+      id: 'mover',
+      targetRepoId: null,
+      targetIndex: 0,
+      targetParentGroupId: 'grp-1',
+    });
+    expect(svc.get('mover').parentGroupId).toBe('grp-1');
   });
 });

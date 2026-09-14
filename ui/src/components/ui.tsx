@@ -332,6 +332,8 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   icon,
   danger = true,
+  busy = false,
+  error = null,
   onConfirm,
   onCancel,
 }: {
@@ -341,11 +343,15 @@ export function ConfirmDialog({
   cancelLabel?: string;
   icon?: ReactNode;
   danger?: boolean;
+  /** Keep the dialog open with a spinner while the confirmed action runs. */
+  busy?: boolean;
+  /** Surface a failure without closing the dialog so the user can retry. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   return (
-    <Modal title={title} onClose={onCancel}>
+    <Modal title={title} onClose={busy ? () => {} : onCancel}>
       <div className="confirm-dialog">
         {icon ? (
           <span
@@ -355,12 +361,23 @@ export function ConfirmDialog({
             {icon}
           </span>
         ) : null}
-        <div className="confirm-dialog-body">{message}</div>
+        <div className="confirm-dialog-body">
+          {message}
+          {error ? (
+            <p className="confirm-dialog-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
         <div className="confirm-dialog-actions">
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
+          <Button
+            variant={danger ? 'danger' : 'primary'}
+            onClick={onConfirm}
+            loading={busy}
+          >
             {confirmLabel}
           </Button>
         </div>
