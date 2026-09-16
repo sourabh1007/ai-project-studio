@@ -270,6 +270,7 @@ const FEATURE_ROUTE_SIGNATURES = [
   'post /features/:featureId/review-board/analyze',
   'post /features/:featureId/review-board/perspectives/:perspectiveId/analyze',
   'post /features/:featureId/review-board/chat',
+  'post /features/:featureId/agents',
 ] as const;
 
 export function applyRouteOwnership(

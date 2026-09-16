@@ -274,6 +274,39 @@ describe('TerminalView scrollback repaint', () => {
     expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
   });
 
+  it('rebuilds the WebGL atlas and repaints the shell when the app theme toggles', async () => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    expect((term.options.theme as { background: string }).background).toBe(
+      '#0a0f1e',
+    );
+
+    term.refresh.mockClear();
+    h.webgl?.clearTextureAtlas.mockClear();
+    await act(async () => {
+      document.documentElement.setAttribute('data-theme', 'light');
+      await Promise.resolve();
+    });
+    expect((term.options.theme as { background: string }).background).toBe(
+      '#ffffff',
+    );
+
+    h.webgl?.clearTextureAtlas.mockClear();
+    await act(async () => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      await Promise.resolve();
+    });
+    // Back to dark: the palette must return to the deep-navy shell AND the
+    // WebGL texture atlas must be cleared so no white background lingers.
+    expect((term.options.theme as { background: string }).background).toBe(
+      '#0a0f1e',
+    );
+    expect(h.webgl?.clearTextureAtlas).toHaveBeenCalled();
+    expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
+    document.documentElement.setAttribute('data-theme', 'dark');
+  });
+
   it('copies cleaned terminal selections without frame pipes', () => {
     const copyText = vi.fn(async () => ({ ok: true }));
     (window as unknown as { desktop: { copyText: typeof copyText } }).desktop = {
@@ -1072,7 +1105,7 @@ describe('TerminalView scrollback repaint', () => {
     expect(inputs[0]).not.toContain('rgb');
   });
 
-  it('suppresses xterm auto-replies to OSC color queries but allows palette sets', () => {
+  it('suppresses OSC fg/bg/cursor sets and queries but allows palette sets', () => {
     render(<TerminalView sessionId="s1" />);
 
     const term = h.term!;
@@ -1083,9 +1116,13 @@ describe('TerminalView scrollback repaint', () => {
     // Queries (contain '?') are handled (return true) → xterm's reply is suppressed.
     expect(term.oscHandlers[4]('0;?')).toBe(true);
     expect(term.oscHandlers[11]('?')).toBe(true);
-    // Sets fall through (return false) so the CLI can still recolor the terminal.
+    // Indexed-palette (OSC 4) sets fall through (false) so the CLI can recolor.
     expect(term.oscHandlers[4]('0;rgb:2e2e/3434/3636')).toBe(false);
-    expect(term.oscHandlers[10]('rgb:ffff/ffff/ffff')).toBe(false);
+    // But fg/bg/cursor sets are suppressed (true) so the app theme stays put and
+    // the CLI can't repaint the shell white on ready.
+    expect(term.oscHandlers[10]('rgb:ffff/ffff/ffff')).toBe(true);
+    expect(term.oscHandlers[11]('rgb:ffff/ffff/ffff')).toBe(true);
+    expect(term.oscHandlers[12]('rgb:ffff/ffff/ffff')).toBe(true);
   });
 
   it('regression: suppresses every palette+fg/bg/cursor color query so none can reply', () => {

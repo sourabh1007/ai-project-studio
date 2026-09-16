@@ -16,12 +16,16 @@ class FakeProcess implements AcpProcess {
   killed = 0;
   diagnosticText: string | null = null;
   throwOnMethod: string | null = null;
+  throwOnWrite = false;
   throwOnKill = false;
   private lineHandler: ((line: string) => void) | null = null;
   private exitHandler: ((code: number | null) => void) | null = null;
 
   write(line: string): void {
     const parsed = JSON.parse(line) as WrittenRequest;
+    if (this.throwOnWrite) {
+      throw new Error('write failed');
+    }
     if (parsed.method === this.throwOnMethod) {
       throw new Error(`write failed for ${parsed.method}`);
     }
@@ -144,6 +148,171 @@ describe('AcpClient', () => {
       usage: { inputTokens: 10, outputTokens: 2 },
     });
     expect(chunks).toEqual(['WA', 'RM']);
+  });
+
+  it('surfaces thoughts and tool calls via onNotice, kept out of the result text', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const notices: string[] = [];
+    const p = client.runTurn({
+      prompt: 'plan it',
+      onNotice: (line) => notices.push(line),
+    });
+    await flush();
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    // A tool call, whole and partial thought lines, and real response text.
+    fake.update('s1', { sessionUpdate: 'tool_call', title: 'Read README.md' });
+    fake.update('s1', {
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text: 'first line\nsecond ' },
+    });
+    fake.update('s1', {
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text: 'line\n\ntrailing bit' },
+    });
+    fake.update('s1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'PLAN' },
+    });
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    const result = await p;
+    expect(result.text).toBe('PLAN');
+    expect(notices).toEqual([
+      '🔧 Read README.md',
+      '🤔 first line',
+      '🤔 second line',
+      '🤔 trailing bit',
+    ]);
+  });
+
+  it('ignores thoughts and tool calls when no onNotice is provided', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const p = client.runTurn({ prompt: 'plan it' });
+    await flush();
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    fake.update('s1', { sessionUpdate: 'tool_call', title: 'Read README.md' });
+    fake.update('s1', {
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text: 'thinking\n' },
+    });
+    fake.update('s1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'PLAN' },
+    });
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    const result = await p;
+    expect(result.text).toBe('PLAN');
+  });
+
+  it('auto-approves a mid-turn permission request and surfaces it via onNotice', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const notices: string[] = [];
+    const p = client.runTurn({
+      prompt: 'ship it',
+      onNotice: (line) => notices.push(line),
+    });
+    await flush();
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    // The agent asks permission before writing a file.
+    fake.emit({
+      jsonrpc: '2.0',
+      id: 4242,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's1',
+        options: [
+          { optionId: 'once', kind: 'allow_once' },
+          { optionId: 'always', kind: 'allow_always' },
+        ],
+      },
+    });
+    const reply = fake.written.find((w) => w.id === 4242);
+    expect(reply).toMatchObject({
+      id: 4242,
+      result: { outcome: { outcome: 'selected', optionId: 'always' } },
+    });
+    expect(notices).toContain('🔓 Auto-approved a tool request');
+    fake.update('s1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'DONE' },
+    });
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    const result = await p;
+    expect(result.text).toBe('DONE');
+  });
+
+  it('cancels a permission request that offers no usable options', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const notices: string[] = [];
+    const p = client.runTurn({
+      prompt: 'ship it',
+      onNotice: (line) => notices.push(line),
+    });
+    await flush();
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    fake.emit({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'session/request_permission',
+      params: { sessionId: 's1', options: [] },
+    });
+    expect(fake.written.find((w) => w.id === 7)).toMatchObject({
+      id: 7,
+      result: { outcome: { outcome: 'cancelled' } },
+    });
+    expect(notices).toContain('🔒 Declined a tool request');
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    await p;
+  });
+
+  it('refuses an unsupported agent request with a method-not-found error', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    void client.initialize();
+    await flush();
+    fake.respond('initialize', {});
+    fake.emit({ jsonrpc: '2.0', id: 11, method: 'fs/read_text_file', params: {} });
+    expect(fake.written.find((w) => w.id === 11)).toMatchObject({
+      id: 11,
+      error: { code: -32601, message: 'Unsupported client method: fs/read_text_file' },
+    });
+  });
+
+  it('swallows a write failure while answering a permission request', () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    fake.throwOnWrite = true;
+    expect(() =>
+      fake.emit({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'session/request_permission',
+        params: { options: [{ optionId: 'ok', kind: 'allow_once' }] },
+      }),
+    ).not.toThrow();
+    expect(client.alive).toBe(true);
+  });
+
+  it('ignores an agent request once the process is dead', () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    fake.exit(1);
+    expect(client.alive).toBe(false);
+    const before = fake.written.length;
+    fake.emit({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'session/request_permission',
+      params: { options: [{ optionId: 'ok', kind: 'allow_once' }] },
+    });
+    expect(fake.written.length).toBe(before);
   });
 
   it('accumulates text even without an onActivity callback and tolerates missing usage', async () => {

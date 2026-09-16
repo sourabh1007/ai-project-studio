@@ -83,6 +83,10 @@ import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import { createReviewBoardRoutes } from './review-board-controller.js';
 import type { ReviewBoardService } from '../review-board/review-board-contract.js';
+import { createNewTaskRoutes } from './new-task-controller.js';
+import type { NewTaskService } from '../new-task/new-task-contract.js';
+import { createAgentRoutes } from './agent-controller.js';
+import type { AgentService } from '../agents/agent-service.js';
 import { createWorktreeRoutes } from './worktree-controller.js';
 import type { WorktreeService } from '../worktrees/worktree-contract.js';
 import { createAutomationRoutes } from './automation-controller.js';
@@ -210,6 +214,10 @@ export interface ApiRoutesDeps {
   prReviews: PrReviewService;
   /** Derived, evidence-based Project Review Board for a review feature. */
   reviewBoard: ReviewBoardService;
+  /** The New Task agent: plan → implement → open PR for a feature's repo. */
+  newTask: NewTaskService;
+  /** The attachable agent platform (catalog, per-feature attach/detach). */
+  agents: AgentService;
   /** Live PR comment threads (list / add / resolve) for the review page. */
   prComments: PrCommentsService;
   /** Live PR approval for the review page. */
@@ -282,6 +290,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prFeatures: deps.prFeatures,
     }),
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
+    ...createNewTaskRoutes({ newTask: deps.newTask }),
+    ...createAgentRoutes({ agents: deps.agents }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createUsageRollupRoutes({

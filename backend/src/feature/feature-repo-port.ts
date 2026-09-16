@@ -7,6 +7,8 @@ export interface FeatureRepo {
   list(): Feature[];
   setSummary(id: string, summary: string): void;
   rename(id: string, name: string): void;
+  /** Repoints the feature's session working directory (e.g. onto a PR worktree). */
+  setCheckoutPath(id: string, checkoutPath: string | null): void;
   /** Re-homes a feature to a repository group and parent at a given sort position. */
   updatePlacement(
     id: string,

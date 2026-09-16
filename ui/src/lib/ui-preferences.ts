@@ -38,6 +38,16 @@ export type Radius = 'sharp' | 'soft' | 'round';
 export type Motion = 'full' | 'reduced' | 'off';
 export type FontChoice = 'system' | 'rounded' | 'reading' | 'mono-ui';
 
+/** Monospace family for the embedded session terminal. */
+export type TerminalFont =
+  | 'jetbrains'
+  | 'cascadia'
+  | 'fira-code'
+  | 'source-code'
+  | 'ibm-plex'
+  | 'ubuntu-mono';
+export type TerminalTextSize = 'small' | 'default' | 'large' | 'x-large';
+
 export interface UiPreferences {
   accent: AccentValue;
   textSize: TextSize;
@@ -45,6 +55,10 @@ export interface UiPreferences {
   radius: Radius;
   motion: Motion;
   font: FontChoice;
+  terminalFont: TerminalFont;
+  terminalTextSize: TerminalTextSize;
+  /** Terminal foreground: the sentinel `'theme'` or a `#rrggbb` override. */
+  terminalTextColor: string;
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
@@ -54,6 +68,9 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   radius: 'soft',
   motion: 'full',
   font: 'system',
+  terminalFont: 'jetbrains',
+  terminalTextSize: 'default',
+  terminalTextColor: 'theme',
 };
 
 export const TEXT_SIZES: readonly TextSize[] = [
@@ -70,6 +87,21 @@ export const FONTS: readonly FontChoice[] = [
   'rounded',
   'reading',
   'mono-ui',
+];
+
+export const TERMINAL_FONTS: readonly TerminalFont[] = [
+  'jetbrains',
+  'cascadia',
+  'fira-code',
+  'source-code',
+  'ibm-plex',
+  'ubuntu-mono',
+];
+export const TERMINAL_TEXT_SIZES: readonly TerminalTextSize[] = [
+  'small',
+  'default',
+  'large',
+  'x-large',
 ];
 
 /** Base type ramp (px). Multiplied by the text-size factor. */
@@ -132,6 +164,24 @@ const FONT_STACK: Record<FontChoice, string> = {
   'mono-ui': "'Cascadia Code', 'Consolas', ui-monospace, monospace",
 };
 
+/** Monospace stacks offered for the session terminal. */
+const TERMINAL_FONT_STACK: Record<TerminalFont, string> = {
+  jetbrains: "'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace",
+  cascadia: "'Cascadia Code', Consolas, ui-monospace, monospace",
+  'fira-code': "'Fira Code', Consolas, ui-monospace, monospace",
+  'source-code': "'Source Code Pro', Consolas, ui-monospace, monospace",
+  'ibm-plex': "'IBM Plex Mono', Consolas, ui-monospace, monospace",
+  'ubuntu-mono': "'Ubuntu Mono', Consolas, ui-monospace, monospace",
+};
+
+/** Terminal font size in px for each named step. */
+const TERMINAL_FONT_PX: Record<TerminalTextSize, number> = {
+  small: 12,
+  default: 13,
+  large: 15,
+  'x-large': 17,
+};
+
 /**
  * Premium motion durations/easings. `full` is the crafted default; `reduced`
  * shortens everything for users who want snappier, calmer transitions; `off`
@@ -165,6 +215,17 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/** True for a `#rrggbb` hex color string. */
+export function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+/** Normalize a persisted terminal color to `'theme'` or a lowercase hex. */
+function normalizeTerminalColor(value: unknown): string {
+  if (isHexColor(value)) return value.toLowerCase();
+  return DEFAULT_UI_PREFERENCES.terminalTextColor;
+}
+
 /** A type guard for a persisted, possibly-partial preferences object. */
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = (typeof value === 'object' && value !== null ? value : {}) as Record<
@@ -184,6 +245,35 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
     radius: pick(raw.radius, RADII, DEFAULT_UI_PREFERENCES.radius),
     motion: pick(raw.motion, MOTIONS, DEFAULT_UI_PREFERENCES.motion),
     font: pick(raw.font, FONTS, DEFAULT_UI_PREFERENCES.font),
+    terminalFont: pick(
+      raw.terminalFont,
+      TERMINAL_FONTS,
+      DEFAULT_UI_PREFERENCES.terminalFont,
+    ),
+    terminalTextSize: pick(
+      raw.terminalTextSize,
+      TERMINAL_TEXT_SIZES,
+      DEFAULT_UI_PREFERENCES.terminalTextSize,
+    ),
+    terminalTextColor: normalizeTerminalColor(raw.terminalTextColor),
+  };
+}
+
+/** Resolved terminal appearance the xterm instance consumes. */
+export interface TerminalAppearance {
+  fontFamily: string;
+  fontSize: number;
+  /** A `#rrggbb` foreground override, or `null` to keep the theme default. */
+  foreground: string | null;
+}
+
+/** Derive the concrete terminal appearance from the user's preferences. */
+export function terminalAppearance(prefs: UiPreferences): TerminalAppearance {
+  return {
+    fontFamily: TERMINAL_FONT_STACK[prefs.terminalFont],
+    fontSize: TERMINAL_FONT_PX[prefs.terminalTextSize],
+    foreground:
+      prefs.terminalTextColor === 'theme' ? null : prefs.terminalTextColor,
   };
 }
 
@@ -247,6 +337,12 @@ export function optionLabel(value: string): string {
   const map: Record<string, string> = {
     'x-large': 'Extra large',
     'mono-ui': 'Monospace',
+    jetbrains: 'JetBrains Mono',
+    cascadia: 'Cascadia Code',
+    'fira-code': 'Fira Code',
+    'source-code': 'Source Code Pro',
+    'ibm-plex': 'IBM Plex Mono',
+    'ubuntu-mono': 'Ubuntu Mono',
   };
   return (
     map[value] ??

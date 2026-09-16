@@ -45,3 +45,27 @@ export const COLOR_QUERY_OSC_IDENTS = [4, 10, 11, 12] as const;
 export function isColorQuery(payload: string): boolean {
   return payload.includes('?');
 }
+
+/**
+ * Decides whether xterm should suppress an OSC 4/10/11/12 sequence entirely
+ * (return `true` from the custom handler → xterm's default never runs).
+ *
+ * The app theme is the single source of truth for the terminal's default
+ * foreground (OSC 10), background (OSC 11) and cursor (OSC 12): we suppress both
+ * their *queries* (whose replies the hosted CLI mis-parses) AND their *sets*.
+ * Suppressing the query reply means the CLI can't detect our dark shell and
+ * assumes a light terminal, so on reaching ready it emits an OSC 11 that would
+ * repaint the whole shell white — locking these three keeps the terminal on the
+ * app theme (readability of the CLI's own colours is preserved by xterm's
+ * `minimumContrastRatio`).
+ *
+ * The indexed ANSI palette (OSC 4) is left to the CLI: we suppress only its
+ * mis-parsed query replies and let *sets* through so 16-colour output still
+ * themes correctly.
+ */
+export function suppressOscColor(ident: number, payload: string): boolean {
+  if (ident === 10 || ident === 11 || ident === 12) {
+    return true;
+  }
+  return isColorQuery(payload);
+}

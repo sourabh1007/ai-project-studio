@@ -98,6 +98,7 @@ Each feature has a focused how-to guide in **[docs/features/](docs/features/READ
 - **[Sessions](docs/features/sessions.md)** — run the Copilot/Agency chat TUI in an embedded `xterm.js` terminal, with launch-time context bootstrap, auto summaries, and history import.
 - **[Skills](docs/features/skills.md)** — reusable instruction blocks tagged onto features/sessions and auto-seeded into a session's first prompt.
 - **[PR reviews](docs/features/pr-reviews.md)** — an "Open a PR" flow with a dedicated review page: AI summary, 0–100 scoring, a navigable per-file **change graph** (zoom/pan/scroll/full-screen), inline code diffs, **live PR comments**, and one-click **Approve** (GitHub & Azure DevOps).
+- **[New Task](docs/features/new-task.md)** — attach the **New Task agent** to a feature to solve a problem end to end: it plans the change for review, then implements it with a **team of parallel agents** (a lead agent + developer/tester sub-agents on separate metasessions), shows the live hierarchy with per-agent time/token/credit metrics and per-file diffs, and opens a pull request.
 - **[Monitors & Automations](docs/features/automations.md)** — background monitors that run shell, HTTP, AI, or CI checks on an interval, evaluate conditions, and fire metasession, subagent, report, or command actions.
 - **[MCP servers](docs/features/mcp-servers.md)** — add/edit/**restart** Model Context Protocol servers, discover their tools, and **toggle individual tools** live — applied to open sessions without a shell restart.
 - **[Usage & cost](docs/features/usage-and-cost.md)** — live credit (AIC), token, cost & time from the CLIs' own telemetry, feature dashboards, and **IDE AI** metasession attribution that rolls up across the whole hierarchy.
@@ -199,6 +200,7 @@ See [docs/development.md → Auto-update](docs/development.md#auto-update) for t
 | ↳ [Sessions](docs/features/sessions.md) | Running the AI CLI, summaries, importing history. |
 | ↳ [Skills](docs/features/skills.md) | Reusable instructions auto-seeded into prompts. |
 | ↳ [PR reviews](docs/features/pr-reviews.md) | Open a PR: review page, change graph, comments, scoring. |
+| ↳ [New Task](docs/features/new-task.md) | Plan a change, implement it with a parallel agent team, open a PR. |
 | ↳ [Monitors & Automations](docs/features/automations.md) | Background monitors, actions, tracked subagents, and automation controls. |
 | ↳ [MCP servers](docs/features/mcp-servers.md) | Manage MCP servers and toggle tools live. |
 | ↳ [Usage & cost](docs/features/usage-and-cost.md) | Credits, tokens, dashboards, IDE AI. |
@@ -210,6 +212,8 @@ See [docs/development.md → Auto-update](docs/development.md#auto-update) for t
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | How to work in this repo: conventions, invariants, workflow |
 | [docs/architecture.md](docs/architecture.md) | Application architecture design: layers, data flow, key patterns |
+| [docs/metasessions.md](docs/metasessions.md) | Headless AI turns: the MetaRunner chain, warm pool, internal scope, Saved AI operations |
+| [docs/agents.md](docs/agents.md) | The agent platform: attachable feature agents (Review Board, New Task) and how to add one |
 | [docs/backend-modules.md](docs/backend-modules.md) | Per-module responsibilities & key files |
 | [docs/ui-guide.md](docs/ui-guide.md) | UI structure, feature areas, and what's actually mounted |
 | [docs/development.md](docs/development.md) | Setup, scripts, testing, debugging, env quirks |

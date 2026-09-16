@@ -39,19 +39,19 @@ it('renders the prompts heading by default', async () => {
   const client = api();
   render(<ApiProvider value={client as unknown as ApiClient}><PromptsCommandsSection /></ApiProvider>);
   expect(screen.getByRole('heading', { name: 'Prompts & Commands' })).toBeInTheDocument();
-  expect(await screen.findByText('Review Board')).toBeInTheDocument();
+  expect(await screen.findByText('Task Plans')).toBeInTheDocument();
 });
 
 it('renders prompt editors without the heading when embedded and saves edits', async () => {
   const client = api();
   render(<ApiProvider value={client as unknown as ApiClient}><PromptsCommandsSection embedded /></ApiProvider>);
   expect(screen.queryByRole('heading', { name: 'Prompts & Commands' })).toBeNull();
-  expect(await screen.findByText('Perspective lens review')).toBeInTheDocument();
+  expect(await screen.findByText('Feature task-plan generation')).toBeInTheDocument();
   expect(screen.getByText(/Every prompt and command the IDE sends/)).toBeInTheDocument();
-  const editor = screen.getByLabelText('Perspective lens review prompt template');
+  const editor = screen.getByLabelText('Feature task-plan generation prompt template');
   fireEvent.change(editor, { target: { value: 'custom prompt' } });
   fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0]);
-  await waitFor(() => expect(client.updateConfig).toHaveBeenCalledWith('reviewBoard', { perspectivePromptTemplate: 'custom prompt' }));
+  await waitFor(() => expect(client.updateConfig).toHaveBeenCalledWith('featureTasks', { promptTemplate: 'custom prompt' }));
 });
 
 it('keeps prompt deep links working when embedded', async () => {
@@ -62,9 +62,9 @@ it('keeps prompt deep links working when embedded', async () => {
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
-  const anchor = promptAnchorId('reviewBoard', 'perspectivePromptTemplate');
+  const anchor = promptAnchorId('featureTasks', 'promptTemplate');
   render(<ApiProvider value={api() as unknown as ApiClient}><PromptsCommandsSection embedded focusAnchor={anchor} /></ApiProvider>);
-  await screen.findByLabelText('Perspective lens review prompt template');
+  await screen.findByLabelText('Feature task-plan generation prompt template');
   await act(async () => {});
   expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
 });

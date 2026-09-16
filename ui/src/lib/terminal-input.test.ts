@@ -3,6 +3,7 @@ import {
   COLOR_QUERY_OSC_IDENTS,
   isColorQuery,
   stripTerminalColorReports,
+  suppressOscColor,
 } from './terminal-input.js';
 
 describe('stripTerminalColorReports', () => {
@@ -129,5 +130,20 @@ describe('isColorQuery', () => {
 describe('COLOR_QUERY_OSC_IDENTS', () => {
   it('covers the palette, fg, bg and cursor color OSC idents', () => {
     expect([...COLOR_QUERY_OSC_IDENTS]).toEqual([4, 10, 11, 12]);
+  });
+});
+
+describe('suppressOscColor', () => {
+  it('always suppresses foreground, background and cursor sets and queries', () => {
+    for (const ident of [10, 11, 12]) {
+      expect(suppressOscColor(ident, '?')).toBe(true);
+      expect(suppressOscColor(ident, 'rgb:ffff/ffff/ffff')).toBe(true);
+      expect(suppressOscColor(ident, '#1e1e1e')).toBe(true);
+    }
+  });
+
+  it('suppresses indexed-palette queries but lets palette sets through', () => {
+    expect(suppressOscColor(4, '0;?')).toBe(true);
+    expect(suppressOscColor(4, '0;rgb:2e2e/3434/3636')).toBe(false);
   });
 });

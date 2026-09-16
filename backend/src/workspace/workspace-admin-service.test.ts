@@ -47,6 +47,7 @@ function harness(
     withSessionSummaries?: boolean;
     withOwnedAutomationCleanup?: boolean;
     withOwnedSubagentCleanup?: boolean;
+    withOwnedAgentCleanup?: boolean;
     withRetention?: boolean;
     quiescence?: WorkspaceQuiescence;
   } = {},
@@ -164,6 +165,11 @@ function harness(
           deleteBySession: (id) => calls.push(`ownedSubagents.deleteBySession:${id}`),
         }
       : undefined,
+    ownedAgents: options.withOwnedAgentCleanup
+      ? {
+          deleteByFeature: (id) => calls.push(`ownedAgents.deleteByFeature:${id}`),
+        }
+      : undefined,
     retainedUsage: options.withRetention
       ? {
           summarizeSession: (input) => {
@@ -265,6 +271,14 @@ describe('workspace-admin-service', () => {
   it('throws NotFound when renaming an unknown session', () => {
     const { admin } = harness([session('s1')]);
     expect(() => admin.renameSession('ghost', 'x')).toThrow(NotFoundError);
+  });
+
+  it('removes attached agents when a feature is deleted', async () => {
+    const { admin, calls } = harness([session('s1')], {
+      withOwnedAgentCleanup: true,
+    });
+    await admin.deleteFeature('f1');
+    expect(calls).toContain('ownedAgents.deleteByFeature:f1');
   });
 
   it('cascades feature deletion across sessions, usage, transcripts and summary', async () => {

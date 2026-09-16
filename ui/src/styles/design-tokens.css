@@ -247,6 +247,9 @@ body {
 :root[data-motion='reduced'] .rb-nav-spin {
   animation: spin 0.7s linear infinite !important;
 }
+:root[data-motion='reduced'] .new-task-spinner {
+  animation: new-task-spin 0.7s linear infinite !important;
+}
 :root[data-motion='reduced'] .rb-dot-reviewing {
   animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;
 }
@@ -256,6 +259,9 @@ body {
   .spinner-lg,
   .rb-nav-spin {
     animation: spin 0.7s linear infinite !important;
+  }
+  .new-task-spinner {
+    animation: new-task-spin 0.7s linear infinite !important;
   }
   .rb-dot-reviewing {
     animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;

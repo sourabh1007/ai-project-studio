@@ -75,30 +75,48 @@ export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
       <ErrorText error={removeError} />
       {data && data.length > 0 && (
         <ul className="worktree-list">
-          {data.map((wt) => (
-            <li key={wt.path} className="worktree-row">
-              <div className="worktree-info">
-                <span className="worktree-repo">
-                  {wt.repoName}
-                  {wt.pullNumber !== null && (
-                    <span className="worktree-pr"> · PR #{wt.pullNumber}</span>
-                  )}
-                  {wt.branch && (
-                    <span className="worktree-branch"> · {wt.branch}</span>
-                  )}
+          {data.map((wt) => {
+            const isTask =
+              wt.pullNumber === null &&
+              (wt.path.includes('-task-') ||
+                (wt.branch?.includes('new-task') ?? false));
+            return (
+              <li key={wt.path} className="worktree-row">
+                <span className="worktree-icon" aria-hidden="true">
+                  <RepoIcon size={16} />
                 </span>
-                <span className="worktree-path">{wt.path}</span>
-              </div>
-              <Button
-                variant="ghost"
-                onClick={() => void remove(wt.path)}
-                disabled={removing !== null}
-              >
-                <TrashIcon size={13} />{' '}
-                {removing === wt.path ? 'Removing…' : 'Remove'}
-              </Button>
-            </li>
-          ))}
+                <div className="worktree-info">
+                  <div className="worktree-head">
+                    <span className="worktree-repo">{wt.repoName}</span>
+                    {wt.pullNumber !== null && (
+                      <span className="worktree-badge is-pr">
+                        PR #{wt.pullNumber}
+                      </span>
+                    )}
+                    {isTask && (
+                      <span className="worktree-badge is-task">New Task</span>
+                    )}
+                    {wt.branch && (
+                      <span className="worktree-branch-chip" title={wt.branch}>
+                        {wt.branch}
+                      </span>
+                    )}
+                  </div>
+                  <span className="worktree-path" title={wt.path}>
+                    {wt.path}
+                  </span>
+                </div>
+                <Button
+                  variant="danger"
+                  onClick={() => void remove(wt.path)}
+                  disabled={removing !== null}
+                  loading={removing === wt.path}
+                >
+                  <TrashIcon size={13} /> Remove
+                </Button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </>

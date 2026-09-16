@@ -9,6 +9,7 @@ function fakePool(
     deadlineAt?: number;
     timeoutMs?: number;
     onActivity?: (text: string) => void;
+    onNotice?: (line: string) => void;
     onStart?: () => void;
     signal?: AbortSignal;
   }) => AcpTurnResult,
@@ -162,11 +163,35 @@ describe('createAcpMetaRunner', () => {
     const { pool } = fakePool((request) => {
       // No activity sink provided.
       expect(request.onActivity).toBeUndefined();
+      expect(request.onNotice).toBeUndefined();
       return result('quiet');
     });
     const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
     const out = await runner.runDetailed({ featureId: 'f', prompt: 'p' });
     expect(out.text).toBe('quiet');
+  });
+
+  it('forwards pre-formatted notices verbatim through the activity sink', async () => {
+    const activity: string[] = [];
+    const { pool } = fakePool((request) => {
+      request.onNotice?.('🔧 Read README.md');
+      request.onActivity?.('plan text\n');
+      request.onNotice?.('🤔 thinking hard');
+      return result('done');
+    });
+    const runner = createAcpMetaRunner(deps(pool, { newSessionId: () => 's' }));
+    await runner.runDetailed({
+      featureId: 'f',
+      prompt: 'p',
+      onActivity: (line) => activity.push(line),
+    });
+    // Notices pass straight through (no 💬 prefix, no line buffering); the
+    // streamed text is still buffered and prefixed as before.
+    expect(activity).toEqual([
+      '🔧 Read README.md',
+      '💬 plan text',
+      '🤔 thinking hard',
+    ]);
   });
 
   it("attributes the turn to the request's purpose for the usage history", async () => {

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createWorktreeService } from './worktree-service.js';
 import type { Repository } from '../repo/repo-contract.js';
 import type { GitRunResult } from '../repo/pr-worktree-provisioner.js';
@@ -22,8 +25,10 @@ function harness(options: {
   repos?: Repository[];
   review?: { repoId: string; worktreePath: string } | null;
   run?: (args: string[], cwd: string) => Promise<GitRunResult>;
+  removeDir?: (path: string) => Promise<void>;
 }) {
   const calls: { args: string[]; cwd: string }[] = [];
+  const removedDirs: string[] = [];
   const run =
     options.run ??
     (async (args: string[], cwd: string) => {
@@ -43,8 +48,13 @@ function harness(options: {
     },
     reviews: { find: () => options.review ?? null },
     git: { run: (args, cwd) => (calls.push({ args, cwd }), run(args, cwd)) },
+    removeDir:
+      options.removeDir ??
+      (async (path: string) => {
+        removedDirs.push(path);
+      }),
   });
-  return { service, calls };
+  return { service, calls, removedDirs };
 }
 
 describe('createWorktreeService.list', () => {
@@ -69,10 +79,24 @@ describe('createWorktreeService.list', () => {
 
 describe('createWorktreeService.remove', () => {
   it('removes and prunes the owning repository worktree', async () => {
-    const { service, calls } = harness({});
+    const { service, calls, removedDirs } = harness({});
     await service.remove('/repos/.ai-worktrees/app-pr-7');
     const gitCalls = calls.map((c) => c.args.join(' '));
     expect(gitCalls).toContain('worktree remove --force /repos/.ai-worktrees/app-pr-7');
+    expect(gitCalls).toContain('worktree prune');
+    // The checkout directory must be deleted from disk, not just unregistered.
+    expect(removedDirs).toContain('/repos/.ai-worktrees/app-pr-7');
+  });
+
+  it('removes a New Task worktree named with the -task- prefix', async () => {
+    const { service, calls } = harness({});
+    await service.remove(
+      '/repos/.ai-worktrees/app-task-b8094ae7-d4ea-4533-911d-48b2654844b9',
+    );
+    const gitCalls = calls.map((c) => c.args.join(' '));
+    expect(gitCalls).toContain(
+      'worktree remove --force /repos/.ai-worktrees/app-task-b8094ae7-d4ea-4533-911d-48b2654844b9',
+    );
     expect(gitCalls).toContain('worktree prune');
   });
 
@@ -81,6 +105,28 @@ describe('createWorktreeService.remove', () => {
     const { service } = harness({ run });
     await service.remove('/somewhere/else/pr-1');
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('deletes the checkout from disk with the default remover', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'wt-svc-'));
+    try {
+      const repoLocalPath = join(base, 'app');
+      const worktreePath = join(base, '.ai-worktrees', 'app-task-1');
+      await mkdir(worktreePath, { recursive: true });
+      const service = createWorktreeService({
+        repos: {
+          list: () => [repo({ localPath: repoLocalPath })],
+          get: () => repo({ localPath: repoLocalPath }),
+        },
+        reviews: { find: () => null },
+        git: { run: async () => ok() },
+        // No removeDir → exercises the real fs-backed default.
+      });
+      await service.remove(worktreePath);
+      await expect(stat(worktreePath)).rejects.toThrow();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
 

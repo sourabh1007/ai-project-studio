@@ -20,11 +20,16 @@ import {
 import { copyText, isInternalClipboardFocusTransfer } from '../hooks/clipboard-write.js';
 import {
   COLOR_QUERY_OSC_IDENTS,
-  isColorQuery,
+  suppressOscColor,
   stripTerminalColorReports,
 } from '../lib/terminal-input.js';
 import { hasOpenModalDialog } from '../lib/focus-ownership.js';
 import { desktopBridge as sharedDesktopBridge } from '../lib/desktop-bridge.js';
+import { useUiPreferences } from '../hooks/use-ui-preferences.js';
+import {
+  terminalAppearance,
+  type TerminalAppearance,
+} from '../lib/ui-preferences.js';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -41,9 +46,15 @@ function currentThemeMode(): ThemeMode {
 /**
  * The xterm palette for each app theme. Dark keeps the original deep-navy shell;
  * light uses a white background with dark text and a VS Code Light+ ANSI palette
- * so CLI output (including bright colours) stays readable on white.
+ * so CLI output (including bright colours) stays readable on white. An optional
+ * `foreground` override lets the user recolour the default (uncoloured) text.
  */
-function xtermTheme(mode: ThemeMode): ITheme {
+function xtermTheme(mode: ThemeMode, foreground?: string | null): ITheme {
+  const base = xtermPalette(mode);
+  return foreground ? { ...base, foreground } : base;
+}
+
+function xtermPalette(mode: ThemeMode): ITheme {
   if (mode === 'light') {
     return {
       background: '#ffffff',
@@ -71,9 +82,26 @@ function xtermTheme(mode: ThemeMode): ITheme {
   }
   return {
     background: '#0a0f1e',
-    foreground: '#c9d6ef',
+    foreground: '#d7e2f7',
     cursor: '#818cf8',
+    cursorAccent: '#0a0f1e',
     selectionBackground: 'rgba(129, 140, 248, 0.3)',
+    black: '#0a0f1e',
+    red: '#ff6b6b',
+    green: '#5ff2a0',
+    yellow: '#ffd479',
+    blue: '#7aa2ff',
+    magenta: '#d78bff',
+    cyan: '#5fd7e0',
+    white: '#c9d6ef',
+    brightBlack: '#8b98c2',
+    brightRed: '#ff8787',
+    brightGreen: '#7ff5b4',
+    brightYellow: '#ffe0a3',
+    brightBlue: '#9db8ff',
+    brightMagenta: '#e3a7ff',
+    brightCyan: '#8ce7ee',
+    brightWhite: '#f4f7ff',
   };
 }
 
@@ -179,6 +207,12 @@ export function TerminalView({
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const repaintRef = useRef<(() => void) | null>(null);
+  const { prefs } = useUiPreferences();
+  const appearance = terminalAppearance(prefs);
+  const appearanceRef = useRef<TerminalAppearance>(appearance);
+  appearanceRef.current = appearance;
   const [connectionStatus, setConnectionStatus] = useState<{ state: TerminalState; notice: string }>({ state: 'connecting', notice: '' });
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -203,9 +237,41 @@ export function TerminalView({
   // remounting it (which would drop scrollback and the WebSocket).
   useEffect(() => {
     if (termRef.current) {
-      termRef.current.options.theme = xtermTheme(themeMode);
+      termRef.current.options.theme = xtermTheme(
+        themeMode,
+        appearanceRef.current.foreground,
+      );
+      // WebGL caches glyphs (including the cell background) in a texture atlas
+      // that a bare `options.theme` assignment does NOT invalidate — without
+      // this the renderer keeps painting the previous theme's background (e.g.
+      // a white shell lingering after switching to the dark theme).
+      repaintRef.current?.();
     }
   }, [themeMode]);
+
+  // Apply the user's terminal font/size/colour preferences live. Font metrics
+  // change the cell size, so refit and repaint after updating the options.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) {
+      return;
+    }
+    term.options.fontFamily = appearance.fontFamily;
+    term.options.fontSize = appearance.fontSize;
+    term.options.theme = xtermTheme(themeModeRef.current, appearance.foreground);
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* xterm throws if measured before layout; the resize burst will refit */
+    }
+    // Rebuild the WebGL texture atlas so the new font metrics and text colour
+    // take effect (and any cached background is cleared) instead of lingering.
+    if (repaintRef.current) {
+      repaintRef.current();
+    } else {
+      term.refresh(0, term.rows - 1);
+    }
+  }, [appearance.fontFamily, appearance.fontSize, appearance.foreground]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -232,21 +298,25 @@ export function TerminalView({
       // cursor stays visible regardless of focus.
       cursorStyle: 'block',
       cursorInactiveStyle: 'block',
-      fontFamily:
-        'JetBrains Mono, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontFamily: appearanceRef.current.fontFamily,
+      fontSize: appearanceRef.current.fontSize,
       lineHeight: 1.2,
       letterSpacing: 0,
       allowProposedApi: true,
+      // Keep faint (SGR-dim) and low-contrast CLI colours legible against the
+      // shell background by nudging any pair below this ratio apart. Without it
+      // dimmed prose renders near-invisible on the dark theme.
+      minimumContrastRatio: 3,
       linkHandler: {
         activate: (_event, uri) => openExternal(uri),
         allowNonHttpProtocols: true,
       },
       scrollback: 5000,
-      theme: xtermTheme(themeModeRef.current),
+      theme: xtermTheme(themeModeRef.current, appearanceRef.current.foreground),
       ...windowsPtyOptions,
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     const webLinks = new WebLinksAddon((_event, uri) => openExternal(uri));
     term.loadAddon(webLinks);
@@ -259,11 +329,15 @@ export function TerminalView({
     // and injects the printable body (`4;0;rgb:2e2e/3434/3636…`) into its input
     // line. A custom OSC handler that returns true marks the sequence handled so
     // xterm's built-in responder never runs — killing the reply before it can be
-    // generated, regardless of onData chunking. Palette *sets* (no `?`) return
-    // false and fall through to xterm's default handler, so the CLI can still
-    // recolor the terminal. The onData strip below stays as defense-in-depth.
+    // generated, regardless of onData chunking. `suppressOscColor` also locks
+    // the default fg/bg/cursor (OSC 10/11/12) to the app theme so the CLI can't
+    // repaint the shell white on ready; indexed-palette (OSC 4) *sets* still
+    // fall through so 16-colour output themes correctly. The onData strip below
+    // stays as defense-in-depth.
     for (const ident of COLOR_QUERY_OSC_IDENTS) {
-      term.parser.registerOscHandler(ident, (payload) => isColorQuery(payload));
+      term.parser.registerOscHandler(ident, (payload) =>
+        suppressOscColor(ident, payload),
+      );
     }
     const focusTerminal = (respectExternalFocus: boolean) => {
       if (hasOpenModalDialog()) {
@@ -321,6 +395,7 @@ export function TerminalView({
       webgl?.clearTextureAtlas();
       termRef.current?.refresh(0, term.rows - 1);
     };
+    repaintRef.current = repaintViewport;
 
     // The FitAddon can only size the terminal once xterm has measured a
     // character cell (which happens asynchronously after `open`). Firing a
@@ -889,6 +964,8 @@ export function TerminalView({
       webLinks.dispose();
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
+      repaintRef.current = null;
       delete host.dataset.focusOwner;
       delete host.dataset.focusToken;
     };

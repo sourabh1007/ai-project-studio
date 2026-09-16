@@ -10,16 +10,22 @@ import {
   MOTIONS,
   RADII,
   TEXT_SIZES,
+  TERMINAL_FONTS,
+  TERMINAL_TEXT_SIZES,
   accentColor,
   accentSwatch,
   accentWasAdjusted,
   isAccentKey,
+  isHexColor,
   optionLabel,
   parseAccentValue,
   type AccentKey,
 } from '../../lib/ui-preferences.js';
 
 const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
+
+/** Fallback swatch shown in the terminal colour picker while on the theme default. */
+const TERMINAL_DEFAULT_SWATCH = '#d7e2f7';
 
 function Segmented<T extends string>({
   label,
@@ -28,6 +34,7 @@ function Segmented<T extends string>({
   options,
   onChange,
   render,
+  itemAriaLabel,
 }: {
   label: string;
   hint?: string;
@@ -35,6 +42,7 @@ function Segmented<T extends string>({
   options: readonly T[];
   onChange: (value: T) => void;
   render?: (value: T) => string;
+  itemAriaLabel?: (value: T) => string;
 }) {
   return (
     <div className="appearance-row">
@@ -53,6 +61,7 @@ function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={value === option}
+            aria-label={itemAriaLabel ? itemAriaLabel(option) : undefined}
             className={`segmented-item${value === option ? ' is-active' : ''}`}
             onClick={() => onChange(option)}
           >
@@ -220,6 +229,80 @@ export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
         options={FONTS}
         onChange={(font) => setPrefs({ font })}
       />
+
+      <div className="appearance-group-heading">Session terminal</div>
+
+      <Segmented
+        label="Terminal font"
+        hint="Monospace family for session output"
+        value={prefs.terminalFont}
+        options={TERMINAL_FONTS}
+        onChange={(terminalFont) => setPrefs({ terminalFont })}
+        itemAriaLabel={(font) => `Terminal font ${optionLabel(font)}`}
+      />
+
+      <Segmented
+        label="Terminal text size"
+        value={prefs.terminalTextSize}
+        options={TERMINAL_TEXT_SIZES}
+        onChange={(terminalTextSize) => setPrefs({ terminalTextSize })}
+        itemAriaLabel={(size) => `Terminal text size ${optionLabel(size)}`}
+      />
+
+      <div className="appearance-row">
+        <div className="appearance-row-head">
+          <span className="appearance-row-label">Terminal text color</span>
+          <span className="appearance-row-hint">
+            Recolors default (uncolored) terminal text; ANSI colors are
+            preserved
+          </span>
+        </div>
+        <div className="accent-picker">
+          <div
+            className="accent-swatches"
+            role="radiogroup"
+            aria-label="Terminal text color"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={prefs.terminalTextColor === 'theme'}
+              className={`segmented-item${
+                prefs.terminalTextColor === 'theme' ? ' is-active' : ''
+              }`}
+              onClick={() => setPrefs({ terminalTextColor: 'theme' })}
+            >
+              Theme default
+            </button>
+            <label
+              className={`accent-swatch accent-swatch-custom${
+                isHexColor(prefs.terminalTextColor) ? ' is-active' : ''
+              }`}
+              title="Custom terminal text color"
+              style={
+                isHexColor(prefs.terminalTextColor)
+                  ? { background: prefs.terminalTextColor }
+                  : undefined
+              }
+            >
+              <span className="sr-only">Custom terminal text color</span>
+              <input
+                type="color"
+                className="accent-color-input"
+                aria-label="Custom terminal text color"
+                value={
+                  isHexColor(prefs.terminalTextColor)
+                    ? prefs.terminalTextColor
+                    : TERMINAL_DEFAULT_SWATCH
+                }
+                onChange={(event) =>
+                  setPrefs({ terminalTextColor: event.target.value })
+                }
+              />
+            </label>
+          </div>
+        </div>
+      </div>
     </>
   );
 

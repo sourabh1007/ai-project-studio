@@ -298,6 +298,50 @@ const CORE_TABLES: readonly TableSchema[] = [
     updated_at TEXT NOT NULL
   )`,
   },
+  {
+    // Attaches an agent (e.g. the Review Board) to a feature. Attachments are
+    // the source of truth for which agents render on a feature; mirrors the
+    // skill_attachments shape.
+    name: 'agent_attachments',
+    ddl: `CREATE TABLE IF NOT EXISTS agent_attachments (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    feature_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  },
+  {
+    // One row per completed one-shot agent backfill (e.g. auto-attaching the
+    // Review Board to pre-existing PR features exactly once), so a later detach
+    // is never undone by a subsequent startup.
+    name: 'agent_backfill_state',
+    ddl: `CREATE TABLE IF NOT EXISTS agent_backfill_state (
+    key TEXT PRIMARY KEY,
+    completed_at TEXT NOT NULL
+  )`,
+  },
+  {
+    // One row per New Task agent run, keyed by the backing agent attachment id.
+    // Holds the captured problem/context, the reviewed plan, and the lifecycle
+    // through to the opened PR + its nested review feature ("PR task").
+    name: 'new_task_runs',
+    ddl: `CREATE TABLE IF NOT EXISTS new_task_runs (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL,
+    problem TEXT NOT NULL,
+    context TEXT NOT NULL,
+    plan TEXT,
+    status TEXT NOT NULL,
+    branch TEXT,
+    pr_number INTEGER,
+    pr_url TEXT,
+    review_feature_id TEXT,
+    error TEXT,
+    agents TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  },
 ];
 
 const USAGE_TABLES: readonly TableSchema[] = [
@@ -722,6 +766,18 @@ const INDEXES: readonly IndexSchema[] = [
     ddl: 'CREATE INDEX IF NOT EXISTS main.idx_skill_attachments_target ON skill_attachments (scope, target_id)',
   },
   {
+    schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_agent_attachments_feature ON agent_attachments (feature_id)',
+  },
+  {
+    schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_agent_attachments_agent ON agent_attachments (agent_id)',
+  },
+  {
+    schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_new_task_runs_feature ON new_task_runs (feature_id)',
+  },
+  {
     schema: 'tasks',
     ddl: 'CREATE INDEX IF NOT EXISTS tasks.idx_feature_tasks_feature_id ON feature_tasks (feature_id)',
   },
@@ -927,6 +983,13 @@ const ADDED_COLUMNS: readonly {
     column: 'document',
     schema: 'content',
     ddl: 'ALTER TABLE content.pr_reviews ADD COLUMN document TEXT',
+  },
+  {
+    // The per-run implementation team (manager + workers) with each agent's
+    // final metrics, stored as JSON. Nullable: pre-team runs have none.
+    table: 'new_task_runs',
+    column: 'agents',
+    ddl: 'ALTER TABLE new_task_runs ADD COLUMN agents TEXT',
   },
 ];
 

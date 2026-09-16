@@ -68,6 +68,33 @@ describe('describeMetaActivity', () => {
     ).toBe('🔧 tool');
   });
 
+  it('appends the file/target a tool is acting on', () => {
+    expect(
+      describeMetaActivity(
+        JSON.stringify({
+          type: 'tool.execution_start',
+          data: { name: 'edit', path: 'src/a.ts' },
+        }),
+      ),
+    ).toBe('🔧 running edit · src/a.ts');
+    expect(
+      describeMetaActivity(
+        JSON.stringify({
+          type: 'tool.execution_start',
+          data: { name: 'create', arguments: { file: 'src/b.ts' } },
+        }),
+      ),
+    ).toBe('🔧 running create · src/b.ts');
+    expect(
+      describeMetaActivity(
+        JSON.stringify({
+          type: 'tool.execution_start',
+          data: { name: 'edit', arguments: 'noop', input: { filePath: 'src/c.ts' } },
+        }),
+      ),
+    ).toBe('🔧 running edit · src/c.ts');
+  });
+
   it('shows reasoning text when present and skips it when empty', () => {
     expect(
       describeMetaActivity(JSON.stringify({ type: 'reasoning', data: { text: 'thinking' } })),

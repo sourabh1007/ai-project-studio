@@ -28,9 +28,15 @@ export interface PrFeatureServiceDeps {
     repo: Repository,
     pull: RemotePullRequest,
   ) => Promise<ProvisionedWorktree>;
-  features: Pick<FeatureService, 'create' | 'get'>;
+  features: Pick<FeatureService, 'create' | 'get' | 'setCheckoutPath'>;
   /** Kicks off the automated AI review for the new PR feature. */
   reviews: Pick<PrReviewService, 'start' | 'findByPull' | 'find' | 'refresh'>;
+  /**
+   * Optional: notified once, with the new feature id, right after a PR review
+   * feature is created. Wired in `main.ts` to auto-attach the Review Board
+   * agent so imported PRs get it by default (and remain detachable).
+   */
+  onReviewFeatureCreated?: (featureId: string) => void;
 }
 
 /**
@@ -46,6 +52,19 @@ export interface PrFeatureService {
     number: number,
     parentFeatureId?: string | null,
     parentGroupId?: string | null,
+  ): Promise<Feature>;
+  /**
+   * Converts an existing (non-PR) feature into a PR feature in place: checks the
+   * pull request out into its own worktree, repoints the feature's sessions
+   * there, and starts the review — making the feature Review-Board-eligible
+   * without creating a separate child feature. Any agent state already attached
+   * to the feature (e.g. a New Task run) is preserved because the feature id is
+   * unchanged. Idempotent: a feature that already has a review is returned as-is.
+   */
+  convertToPrFeature(
+    repoId: string,
+    number: number,
+    featureId: string,
   ): Promise<Feature>;
   /**
    * Re-fetches the pull request from its remote and rebuilds the review against
@@ -106,7 +125,42 @@ export function createPrFeatureService(
         // branch, and yields an empty diff when the default branch is unknown.
         baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
       });
+      deps.onReviewFeatureCreated?.(feature.id);
       return feature;
+    },
+
+    async convertToPrFeature(repoId, number, featureId) {
+      const repo = deps.repos.get(repoId);
+      const feature = deps.features.get(featureId);
+      // Idempotent: if this feature is already a PR feature, keep its review and
+      // worktree rather than provisioning a duplicate.
+      if (deps.reviews.find(featureId)) {
+        return feature;
+      }
+      const pull = await deps.getPull(repo, number);
+      if (!pull) {
+        throw new NotFoundError(
+          `Pull request #${number} not found in ${repo.name}`,
+        );
+      }
+      const worktree = await deps.provisionWorktree(repo, pull);
+      // Repoint the same feature's sessions onto the PR worktree so it behaves
+      // like any other PR feature, without changing its id (which preserves the
+      // attached New Task run and any other agent state).
+      const converted = deps.features.setCheckoutPath(
+        featureId,
+        worktree.worktreePath,
+      );
+      deps.reviews.start({
+        featureId,
+        repoId: repo.id,
+        pull,
+        worktreePath: worktree.worktreePath,
+        headSha: worktree.headSha,
+        baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
+      });
+      deps.onReviewFeatureCreated?.(featureId);
+      return converted;
     },
 
     async pullLatest(featureId) {

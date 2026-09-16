@@ -51,6 +51,8 @@ function api(contextValue: RepositoryContext): ApiClient {
     getRepositoryContext: vi.fn().mockResolvedValue(contextValue),
     getRepoInsights: vi.fn().mockResolvedValue(null),
     listFeatureSkills: vi.fn().mockResolvedValue([]),
+    listFeatureAgents: vi.fn().mockResolvedValue([]),
+    listAvailableAgents: vi.fn().mockResolvedValue([]),
     getGithubStatus: vi.fn().mockResolvedValue({ authenticated: false, login: null }),
     getAzureStatus: vi.fn().mockResolvedValue({ authenticated: false, account: null }),
   } as unknown as ApiClient;
@@ -60,7 +62,7 @@ const callbacks = {
   onOpenSession: vi.fn(),
   onOpenFeature: vi.fn(),
   onOpenPrReview: vi.fn(),
-  onOpenReviewBoard: vi.fn(),
+  onOpenAgent: vi.fn(),
   onOpenRepo: vi.fn(),
   onRenameSession: vi.fn(),
   onRenameFeature: vi.fn(),

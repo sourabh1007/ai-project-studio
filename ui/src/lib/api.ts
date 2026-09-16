@@ -1,6 +1,10 @@
 import type {
   ConfigResponse,
   ConfigUpdateResult,
+  AgentCatalogItem,
+  AgentAttachment,
+  AttachedAgent,
+  AvailableAgent,
   MetaPoolsStatus,
   MetaSettings,
   MetaModelOption,
@@ -56,6 +60,9 @@ import type {
   ReviewBoardChatContext,
   PerspectiveAnalysis,
   ReviewBoardPerspectiveEvent,
+  NewTaskRun,
+  NewTaskImplementEvent,
+  NewTaskFileDiff,
   ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
@@ -133,6 +140,51 @@ export function createApiClient(options: ApiClientOptions = {}) {
       // Non-JSON or empty error body; fall back to a generic message below.
     }
     return `Request failed: ${path}`;
+  }
+
+  /**
+   * Read a New Task NDJSON stream, delivering each event to `onEvent`. Shared by
+   * the plan and implement passes — both stream {activity|done|failed} lines
+   * over a single long-lived socket.
+   */
+  async function streamNewTaskEvents(
+    response: Response,
+    path: string,
+    onEvent: (event: NewTaskImplementEvent) => void,
+  ): Promise<void> {
+    if (!response.ok) {
+      throw new ApiError(response.status, await errorMessage(response, path));
+    }
+    if (!response.body) {
+      throw new ApiError(
+        0,
+        `Request failed: ${path} returned no stream. The backend may be starting up — please retry.`,
+      );
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const flush = (chunk: string): void => {
+      buffer += chunk;
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line.length > 0) {
+          onEvent(JSON.parse(line) as NewTaskImplementEvent);
+        }
+        newline = buffer.indexOf('\n');
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      flush(decoder.decode(value, { stream: true }));
+    }
+    const tail = buffer.trim();
+    if (tail.length > 0) {
+      onEvent(JSON.parse(tail) as NewTaskImplementEvent);
+    }
   }
 
   // Guard idempotent reads with a client-side timeout so a hung request (a
@@ -363,6 +415,84 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<ReviewBoardChatReply>(
         `/features/${featureId}/review-board/chat`,
         jsonBody({ perspectiveId, messages, context: context ?? null }),
+      ),
+    getNewTask: (featureId: string, attachmentId: string) =>
+      request<{ run: NewTaskRun | null }>(
+        `/features/${featureId}/new-task/${attachmentId}`,
+      ),
+    getNewTaskFileDiff: (
+      featureId: string,
+      attachmentId: string,
+      path: string,
+    ) =>
+      request<NewTaskFileDiff>(
+        `/features/${featureId}/new-task/${attachmentId}/file-diff` +
+          `?path=${encodeURIComponent(path)}`,
+      ),
+    saveNewTaskInputs: (
+      featureId: string,
+      attachmentId: string,
+      inputs: { problem: string; context: string },
+    ) =>
+      request<NewTaskRun>(
+        `/features/${featureId}/new-task/${attachmentId}/inputs`,
+        jsonBody(inputs),
+      ),
+    planNewTask: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: NewTaskImplementEvent) => void,
+      signal?: AbortSignal,
+      options?: { baseBranch?: string; suggestion?: string },
+    ): Promise<void> => {
+      const path = `/features/${featureId}/new-task/${attachmentId}/plan`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody(options ?? {}),
+        ...(signal ? { signal } : {}),
+      });
+      await streamNewTaskEvents(response, path, onEvent);
+    },
+    // Long-lived POST whose body is a stream of newline-delimited JSON
+    // NewTaskImplementEvents: the implement turn, PR creation and Review-Board
+    // conversion all run on the backend behind a single socket. Each event is
+    // delivered to `onEvent` as it arrives; resolves when the stream ends.
+    implementNewTask: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: NewTaskImplementEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/new-task/${attachmentId}/implement`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody({}),
+        ...(signal ? { signal } : {}),
+      });
+      await streamNewTaskEvents(response, path, onEvent);
+    },
+    // Reconnect (GET) to a New Task run already in flight so a window returning
+    // after a switch resumes the live logs. Replays buffered events then tails
+    // live ones; ends immediately with no events when no run is active, letting
+    // the caller fall back to its "interrupted — resume" affordance.
+    streamNewTask: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: NewTaskImplementEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/new-task/${attachmentId}/stream`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...(signal ? { signal } : {}),
+      });
+      await streamNewTaskEvents(response, path, onEvent);
+    },
+    // Cancel-and-reset an in-flight New Task run: aborts the background
+    // metasession (terminating any attached agent process) and resets the run
+    // to a clean draft. Returns whether a live run was cancelled plus the reset
+    // run (or null when none existed).
+    cancelNewTask: (featureId: string, attachmentId: string) =>
+      request<{ cancelled: boolean; run: NewTaskRun | null }>(
+        `/features/${featureId}/new-task/${attachmentId}/cancel`,
+        jsonBody({}),
       ),
     refreshPrReview: (featureId: string) =>
       request<PrReview>(
@@ -603,6 +733,20 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<FeatureTask>(`/tasks/${taskId}`, putBody({})),
     removeFeatureTask: (taskId: string) =>
       request<{ id: string }>(`/tasks/${taskId}`, del()),
+    listAgents: () => request<AgentCatalogItem[]>('/agents'),
+    getAgent: (agentId: string) =>
+      request<AgentCatalogItem>(`/agents/${encodeURIComponent(agentId)}`),
+    listFeatureAgents: (featureId: string) =>
+      request<AttachedAgent[]>(`/features/${featureId}/agents`),
+    listAvailableAgents: (featureId: string) =>
+      request<AvailableAgent[]>(`/features/${featureId}/agents/available`),
+    attachAgent: (featureId: string, agentId: string) =>
+      request<AgentAttachment>(
+        `/features/${featureId}/agents`,
+        jsonBody({ agentId }),
+      ),
+    detachAgent: (attachmentId: string) =>
+      request<{ id: string }>(`/agents/attachments/${attachmentId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
     updateConfig: (namespace: string, values: Record<string, unknown>) =>
       request<ConfigUpdateResult>(

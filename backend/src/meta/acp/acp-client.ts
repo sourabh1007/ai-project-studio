@@ -1,12 +1,18 @@
 import {
+  encodeError,
   encodeNotification,
   encodeRequest,
+  encodeResult,
+  noticeFromUpdate,
   parseMessage,
+  selectPermissionOption,
   sessionIdFromUpdate,
   sessionIdOf,
   stateFromUpdate,
   stopReasonOf,
   textFromUpdate,
+  thoughtFromUpdate,
+  type AcpAgentRequest,
 } from './acp-protocol.js';
 
 /**
@@ -57,6 +63,13 @@ export interface AcpTurnRequest {
   signal?: AbortSignal;
   /** Invoked with each streamed assistant text chunk as the turn runs. */
   onActivity?: (text: string) => void;
+  /**
+   * Invoked with discrete, already-formatted progress lines that are NOT part
+   * of the returned response text — buffered agent "thinking" lines and tool
+   * calls (file reads/writes, commands). Lets the UI show what the agent is
+   * doing during phases (like planning) that emit little or no prose.
+   */
+  onNotice?: (line: string) => void;
 }
 
 export interface AcpTurnResult {
@@ -94,8 +107,11 @@ interface ActiveTurn {
   sessionId: string;
   requestId: number | null;
   text: string;
+  /** Buffers `agent_thought_chunk` text into whole lines for `onNotice`. */
+  thought: string;
   acceptingActivity: boolean;
   onActivity?: (text: string) => void;
+  onNotice?: (line: string) => void;
 }
 
 interface Disposal {
@@ -231,8 +247,10 @@ export class AcpClient {
       sessionId,
       requestId: null,
       text: '',
+      thought: '',
       acceptingActivity: true,
       onActivity: request.onActivity,
+      onNotice: request.onNotice,
     };
     this.active = turn;
     try {
@@ -251,6 +269,11 @@ export class AcpClient {
           onTimeout: () => this.disposeTurn(turn),
         },
       );
+      const tail = turn.thought.trim();
+      if (tail.length > 0) {
+        turn.onNotice?.(`🤔 ${tail}`);
+        turn.thought = '';
+      }
       return {
         text: turn.text,
         sessionId,
@@ -342,6 +365,44 @@ export class AcpClient {
     });
   }
 
+  /**
+   * Answers an agent-initiated request so the agent never blocks on us. The
+   * agent sends `session/request_permission` before a tool call that needs
+   * approval (e.g. writing a file); we auto-grant it so New Task's autonomous
+   * planning/implementation proceeds unattended, surfacing the decision on the
+   * live activity channel. Any other client request is refused decisively with
+   * a JSON-RPC "method not found" rather than being dropped, which would hang
+   * the turn. Never throws: a failed write just means the agent already exited.
+   */
+  private handleAgentRequest(message: AcpAgentRequest): void {
+    if (this.dead) {
+      return;
+    }
+    try {
+      if (message.method === 'session/request_permission') {
+        const optionId = selectPermissionOption(message.params);
+        const result = optionId
+          ? { outcome: { outcome: 'selected', optionId } }
+          : { outcome: { outcome: 'cancelled' } };
+        this.active?.onNotice?.(
+          optionId ? '🔓 Auto-approved a tool request' : '🔒 Declined a tool request',
+        );
+        this.process.write(encodeResult(message.id, result));
+        return;
+      }
+      this.process.write(
+        encodeError(
+          message.id,
+          -32601,
+          `Unsupported client method: ${message.method}`,
+        ),
+      );
+    } catch {
+      // The process exited between reading its request and our reply; the exit
+      // handler already fails any in-flight turn, so there is nothing to do.
+    }
+  }
+
   private handleLine(line: string): void {
     const message = parseMessage(line);
     if (!message) {
@@ -351,6 +412,10 @@ export class AcpClient {
     this.spokeProtocol = true;
     this.unparsed = [];
     this.unparsedCharacters = 0;
+    if (message.kind === 'request') {
+      this.handleAgentRequest(message);
+      return;
+    }
     if (message.kind === 'notification') {
       if (message.method === 'session/update') {
         const sessionId = sessionIdFromUpdate(message.params);
@@ -368,6 +433,25 @@ export class AcpClient {
           if (text !== null) {
             this.active.text += text;
             this.active.onActivity?.(text);
+          }
+          if (this.active.onNotice) {
+            const thought = thoughtFromUpdate(message.params);
+            if (thought !== null) {
+              this.active.thought += thought;
+              let index = this.active.thought.indexOf('\n');
+              while (index !== -1) {
+                const thoughtLine = this.active.thought.slice(0, index).trim();
+                if (thoughtLine.length > 0) {
+                  this.active.onNotice(`🤔 ${thoughtLine}`);
+                }
+                this.active.thought = this.active.thought.slice(index + 1);
+                index = this.active.thought.indexOf('\n');
+              }
+            }
+            const notice = noticeFromUpdate(message.params);
+            if (notice !== null) {
+              this.active.onNotice(notice);
+            }
           }
         }
         const state = stateFromUpdate(message.params);

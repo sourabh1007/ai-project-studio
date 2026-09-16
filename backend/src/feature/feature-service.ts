@@ -34,6 +34,11 @@ export interface FeatureService {
   list(): Feature[];
   attachSummary(id: string, summary: string): Feature;
   rename(id: string, name: string): Feature;
+  /**
+   * Repoints the feature's session working directory. Used when converting a
+   * plain feature into a PR feature: its sessions then run in the PR worktree.
+   */
+  setCheckoutPath(id: string, checkoutPath: string | null): Feature;
   /** Reorders a feature within, or moves it between, repository groups. */
   moveFeature(input: MoveFeatureInput): void;
   remove(id: string): void;
@@ -93,6 +98,11 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
     rename(id, name) {
       requireFeature(id);
       deps.repo.rename(id, name);
+      return requireFeature(id);
+    },
+    setCheckoutPath(id, checkoutPath) {
+      requireFeature(id);
+      deps.repo.setCheckoutPath(id, checkoutPath);
       return requireFeature(id);
     },
     moveFeature(input) {

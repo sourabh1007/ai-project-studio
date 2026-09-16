@@ -146,6 +146,18 @@ describe('feature-repo', () => {
     db.close();
   });
 
+  it('repoints and clears a feature checkout path after creation', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createFeatureRepo(db);
+    repo.create(feature({ id: 'f1' }));
+    expect(repo.get('f1')?.checkoutPath).toBeNull();
+    repo.setCheckoutPath('f1', 'C:/wt/app-pr-8');
+    expect(repo.get('f1')?.checkoutPath).toBe('C:/wt/app-pr-8');
+    repo.setCheckoutPath('f1', null);
+    expect(repo.get('f1')?.checkoutPath).toBeNull();
+    db.close();
+  });
+
   it('round-trips a parent feature id on a nested feature', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const repo = createFeatureRepo(db);

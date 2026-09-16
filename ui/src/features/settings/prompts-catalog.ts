@@ -45,103 +45,11 @@ export interface PromptCatalogSection {
 
 /**
  * The sections rendered in Settings → Prompts & Commands, ordered to mirror how
- * a reviewer meets them in the UI (review board first, then the supporting
- * analysis prompts, then cross-cutting IDE prompts, then the raw CLI commands).
+ * a reviewer meets them in the UI. Agent-owned prompts (e.g. the Review Board's
+ * perspective templates) are intentionally excluded here — those live in each
+ * agent's own settings, reached from the Agents view.
  */
 export const PROMPT_CATALOG: PromptCatalogSection[] = [
-  {
-    id: 'review-board',
-    title: 'Review Board',
-    description:
-      'Prompts that run each review-board perspective. Editing these changes ' +
-      'how honestly and from what angle the reviewer critiques a change.',
-    fields: [
-      {
-        namespace: 'reviewBoard',
-        key: 'perspectivePromptTemplate',
-        label: 'Perspective lens review',
-        description:
-          'Runs a pull request through one generic lens (Architecture, Code ' +
-          'Quality, Performance, Security, …) and returns evidence-backed ' +
-          'findings.',
-        placeholders: [
-          'lensName',
-          'lensPurpose',
-          'prNumber',
-          'prTitle',
-          'baseBranch',
-          'filesChanged',
-          'description',
-          'modelDigest',
-          'changedFiles',
-        ],
-      },
-      {
-        namespace: 'reviewBoard',
-        key: 'problemSolutionPromptTemplate',
-        label: 'Problem ↔ Solution verdict',
-        description:
-          'The dedicated Problem ↔ Solution lens — a general, plain-English ' +
-          'judgement of whether the change actually solves its stated problem.',
-        placeholders: [
-          'prNumber',
-          'prTitle',
-          'filesChanged',
-          'description',
-          'distilledProblem',
-          'solutionDigest',
-        ],
-      },
-    ],
-  },
-  {
-    id: 'pr-review',
-    title: 'PR Review & Change Graph',
-    description:
-      'Prompts behind the per-file change explanations and the change-graph ' +
-      'chat used when exploring a pull request.',
-    fields: [
-      {
-        namespace: 'prReview',
-        key: 'problemStatementPromptTemplate',
-        label: 'Problem statement extraction',
-        description:
-          'Distils a self-contained problem statement strictly from the PR ' +
-          'description.',
-        placeholders: [
-          'untrusted',
-          'pullHeader',
-          'description',
-          'problemHeading',
-          'insufficientMarker',
-        ],
-      },
-      {
-        namespace: 'prReview',
-        key: 'fileExplanationPromptTemplate',
-        label: 'Per-file explanation',
-        description:
-          'Explains what a changed file does and what the PR changed in it.',
-        placeholders: [
-          'untrusted',
-          'path',
-          'changeKind',
-          'problemStatement',
-          'diff',
-          'methodsShape',
-          'methodsGuidance',
-        ],
-      },
-      {
-        namespace: 'prReview',
-        key: 'graphChatPromptTemplate',
-        label: 'Change-graph chat',
-        description:
-          'Answers a question about a change-graph category using a bounded ' +
-          'graph summary and prior conversation.',
-      },
-    ],
-  },
   {
     id: 'task-plans',
     title: 'Task Plans',

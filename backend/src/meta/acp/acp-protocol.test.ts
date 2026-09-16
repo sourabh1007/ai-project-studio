@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   encodeRequest,
   encodeNotification,
+  encodeResult,
+  encodeError,
   parseMessage,
+  selectPermissionOption,
   textFromUpdate,
+  thoughtFromUpdate,
+  noticeFromUpdate,
   stopReasonOf,
   sessionIdOf,
   sessionIdFromUpdate,
@@ -79,6 +84,75 @@ describe('acp-protocol', () => {
     });
   });
 
+  it('classifies a message with both id and method as an agent request', () => {
+    const msg = parseMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'session/request_permission',
+        params: { sessionId: 's1', options: [] },
+      }),
+    );
+    expect(msg).toEqual({
+      kind: 'request',
+      id: 9,
+      method: 'session/request_permission',
+      params: { sessionId: 's1', options: [] },
+    });
+  });
+
+  it('encodes JSON-RPC result and error responses', () => {
+    expect(JSON.parse(encodeResult(5, { outcome: { outcome: 'cancelled' } }))).toEqual(
+      { jsonrpc: '2.0', id: 5, result: { outcome: { outcome: 'cancelled' } } },
+    );
+    const err = encodeError(6, -32601, 'nope');
+    expect(err.endsWith('\n')).toBe(true);
+    expect(JSON.parse(err)).toEqual({
+      jsonrpc: '2.0',
+      id: 6,
+      error: { code: -32601, message: 'nope' },
+    });
+  });
+
+  it('selects a granting permission option by preference, then falls back', () => {
+    expect(
+      selectPermissionOption({
+        options: [
+          { optionId: 'once', kind: 'allow_once' },
+          { optionId: 'always', kind: 'allow_always' },
+          { optionId: 'no', kind: 'reject_once' },
+        ],
+      }),
+    ).toBe('always');
+    expect(
+      selectPermissionOption({
+        options: [
+          { optionId: 'once', kind: 'allow_once' },
+          { optionId: 'no', kind: 'reject_once' },
+        ],
+      }),
+    ).toBe('once');
+    expect(
+      selectPermissionOption({
+        options: [{ optionId: 'allowish', kind: 'allow_something' }],
+      }),
+    ).toBe('allowish');
+    // No allow option at all: still reply decisively with the first offered.
+    expect(
+      selectPermissionOption({ options: [{ optionId: 'nope', kind: 'reject_once' }] }),
+    ).toBe('nope');
+    // An option missing its kind defaults to a non-granting empty kind.
+    expect(
+      selectPermissionOption({ options: [{ optionId: 'bare' }] }),
+    ).toBe('bare');
+    // Malformed/empty options yield null so the client cancels.
+    expect(selectPermissionOption({ options: [] })).toBeNull();
+    expect(selectPermissionOption({ options: [{ kind: 'allow_once' }] })).toBeNull();
+    expect(selectPermissionOption({ options: [42, null] })).toBeNull();
+    expect(selectPermissionOption({})).toBeNull();
+    expect(selectPermissionOption(null)).toBeNull();
+  });
+
   it('returns null for blank, non-JSON, non-object, and shapeless messages', () => {
     expect(parseMessage('')).toBeNull();
     expect(parseMessage('   ')).toBeNull();
@@ -115,6 +189,52 @@ describe('acp-protocol', () => {
       }),
     ).toBe('flat');
     expect(textFromUpdate(null)).toBeNull();
+  });
+
+  it('extracts reasoning text only from agent_thought_chunk text content', () => {
+    expect(
+      thoughtFromUpdate({
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'pondering' } },
+      }),
+    ).toBe('pondering');
+
+    expect(
+      thoughtFromUpdate({
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } },
+      }),
+    ).toBeNull();
+    expect(
+      thoughtFromUpdate({
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'image' } },
+      }),
+    ).toBeNull();
+    expect(
+      thoughtFromUpdate({
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 7 } },
+      }),
+    ).toBeNull();
+    expect(thoughtFromUpdate({ update: 'nope' })).toBeNull();
+    expect(thoughtFromUpdate(null)).toBeNull();
+  });
+
+  it('formats tool_call updates into a readable notice line', () => {
+    expect(
+      noticeFromUpdate({
+        update: { sessionUpdate: 'tool_call', title: 'Read package.json' },
+      }),
+    ).toBe('🔧 Read package.json');
+    expect(
+      noticeFromUpdate({ update: { sessionUpdate: 'tool_call', title: '   ' } }),
+    ).toBe('🔧 Working…');
+    expect(
+      noticeFromUpdate({ update: { sessionUpdate: 'tool_call' } }),
+    ).toBe('🔧 Working…');
+    expect(
+      noticeFromUpdate({
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } },
+      }),
+    ).toBeNull();
+    expect(noticeFromUpdate(null)).toBeNull();
   });
 
   it('reads stop reason, state, and session id defensively', () => {

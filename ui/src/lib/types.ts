@@ -556,6 +556,92 @@ export type ReviewBoardPerspectiveEvent =
   | { type: 'analyzed'; analysis: PerspectiveAnalysis }
   | { type: 'failed'; perspectiveId: string; error: string };
 
+/** The lifecycle of one New Task agent run. */
+export type NewTaskStatus =
+  | 'draft'
+  | 'planning'
+  | 'planned'
+  | 'implementing'
+  | 'pr-created'
+  | 'failed';
+
+/** The specialization a New Task agent plays in a run. */
+export type NewTaskAgentRole =
+  | 'planner'
+  | 'manager'
+  | 'developer'
+  | 'tester';
+
+/** The lifecycle status of a single New Task agent. */
+export type NewTaskAgentStatus = 'pending' | 'running' | 'done' | 'failed';
+
+/** One agent in a New Task run's hierarchy, with its live metrics. */
+export interface NewTaskAgent {
+  id: string;
+  parentId: string | null;
+  role: NewTaskAgentRole;
+  title: string;
+  files: string[];
+  status: NewTaskAgentStatus;
+  /** Epoch-ms the current turn started, or null before it runs. */
+  startedAt: number | null;
+  durationMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  credits: number | null;
+}
+
+/** One New Task run as returned by the backend. */
+export interface NewTaskRun {
+  id: string;
+  featureId: string;
+  problem: string;
+  context: string;
+  plan: string | null;
+  status: NewTaskStatus;
+  branch: string | null;
+  prNumber: number | null;
+  prUrl: string | null;
+  reviewFeatureId: string | null;
+  error: string | null;
+  agents: NewTaskAgent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** How a single file was affected by a New Task implementation. */
+export type NewTaskFileChangeType =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed';
+
+/** One file the New Task implementation changed, for the post-run summary. */
+export interface NewTaskFileChange {
+  path: string;
+  changeType: NewTaskFileChangeType;
+}
+
+/** The unified diff and full current content of one changed file on the branch. */
+export interface NewTaskFileDiff {
+  path: string;
+  diff: string;
+  content: string;
+}
+
+/** One streamed line while a New Task plan/implement pass runs. */
+export type NewTaskImplementEvent =
+  | {
+      type: 'activity';
+      phase: 'planning' | 'implementing' | 'creating-pr' | 'done';
+      line: string;
+      agentId?: string;
+    }
+  | { type: 'agent'; agent: NewTaskAgent }
+  | { type: 'done'; run: NewTaskRun; files?: NewTaskFileChange[] }
+  | { type: 'failed'; error: string }
+  | { type: 'cancelled' };
+
 /**
  * A single live activity line streamed while a perspective is being analysed.
  * `sessionId` identifies the metasession; a new id means a fresh run/attempt,
@@ -1294,6 +1380,62 @@ export interface SkillAttachment {
 
 export interface TaggedSkill extends Skill {
   attachmentId: string;
+}
+
+/** One editable prompt/setting an agent exposes, backed by a config field. */
+export interface AgentPromptField {
+  namespace: string;
+  key: string;
+  label: string;
+  description: string;
+  placeholders?: string[];
+}
+
+/** Static identity and rules of an attachable feature agent (Review Board, …). */
+export interface AgentManifest {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  allowMultiplePerFeature: boolean;
+  prerequisiteLabel: string;
+  usageLabel: string;
+  promptFields: AgentPromptField[];
+}
+
+/** Rolled-up usage for a single agent across all of its runs. */
+export interface AgentUsageSummary {
+  totalCredits: number | null;
+  runs: number;
+  averageCredits: number | null;
+}
+
+/** A persisted link attaching an agent to a feature. */
+export interface AgentAttachment {
+  id: string;
+  agentId: string;
+  featureId: string;
+  createdAt: string;
+}
+
+/** A catalog entry in the Agents management view. */
+export interface AgentCatalogItem {
+  manifest: AgentManifest;
+  usage: AgentUsageSummary;
+  attachmentCount: number;
+}
+
+/** An attached agent enriched with its manifest, for rendering on a feature. */
+export interface AttachedAgent {
+  attachment: AgentAttachment;
+  manifest: AgentManifest;
+}
+
+/** An agent offered for attachment to a feature, with its eligibility. */
+export interface AvailableAgent {
+  manifest: AgentManifest;
+  attachable: boolean;
+  reason?: string;
 }
 
 export interface CreateSkillInput {

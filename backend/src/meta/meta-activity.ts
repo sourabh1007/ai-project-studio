@@ -37,6 +37,55 @@ function toolLabel(data: Record<string, unknown> | null): string {
   return name ? ` ${name}` : '';
 }
 
+/** Where a tool's file/target argument tends to live in the event payload. */
+const TOOL_ARG_CONTAINERS = [
+  'arguments',
+  'input',
+  'parameters',
+  'args',
+  'toolInput',
+  'params',
+] as const;
+
+const TOOL_TARGET_KEYS = [
+  'path',
+  'file',
+  'filePath',
+  'file_path',
+  'filename',
+  'fileName',
+  'target',
+  'pattern',
+  'query',
+  'command',
+  'url',
+] as const;
+
+/**
+ * The concrete thing a tool is acting on — usually the file path it reads or
+ * writes, but falling back to a search pattern, command, or URL. Looked up both
+ * directly on the event data and inside the common argument sub-objects so the
+ * log can say "editing src/foo.ts" instead of an opaque "running edit".
+ */
+function toolTarget(data: Record<string, unknown> | null): string {
+  if (!data) {
+    return '';
+  }
+  let hit = firstString(data, TOOL_TARGET_KEYS);
+  if (!hit) {
+    for (const container of TOOL_ARG_CONTAINERS) {
+      const nested = asRecord(data[container]);
+      if (nested) {
+        hit = firstString(nested, TOOL_TARGET_KEYS);
+        if (hit) {
+          break;
+        }
+      }
+    }
+  }
+  return hit ? ` · ${clip(hit)}` : '';
+}
+
 /**
  * Turns one raw metasession output line into a concise, human-readable activity
  * entry — or null when the line carries nothing worth showing (empty lines,
@@ -95,7 +144,7 @@ export function describeMetaActivity(line: string): string | null {
       : type.includes('complete') || type.includes('end')
         ? 'finished'
         : 'tool';
-    return `🔧 ${verb}${toolLabel(data)}`;
+    return `🔧 ${verb}${toolLabel(data)}${toolTarget(data)}`;
   }
 
   if (type.startsWith('reasoning')) {

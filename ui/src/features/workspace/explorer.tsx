@@ -27,6 +27,7 @@ import type {
   Session,
   SessionBreakdown,
   TreeGroup,
+  AttachedAgent,
 } from '../../lib/types.js';
 import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
@@ -47,7 +48,6 @@ import {
   ImportIcon,
   PencilIcon,
   PlusIcon,
-  PrReviewIcon,
   PullRequestIcon,
   RepoIcon,
   SkillsIcon,
@@ -57,6 +57,7 @@ import {
   UsageIcon,
   WarningIcon,
 } from '../../components/icons.js';
+import { AgentIcon } from '../../agent-host/agent-icon.js';
 import {
   blockedMoveTargets,
   featureMoveTargets,
@@ -310,32 +311,177 @@ function SessionRow({
   );
 }
 
-function ReviewBoardChild({
+function AttachedAgents({
   feature,
-  active,
-  onOpen,
+  expanded,
+  reviewSignal,
+  refreshSignal,
+  onOpenAgent,
 }: {
   feature: Feature;
-  active: boolean;
-  onOpen: () => void;
+  expanded: boolean;
+  /** Changes when the feature's PR review updates, to re-poll attachments. */
+  reviewSignal: unknown;
+  /** Bumped when an agent is attached elsewhere (the catalogue modal), to re-poll. */
+  refreshSignal: unknown;
+  onOpenAgent: (feature: Feature, attached: AttachedAgent) => void;
 }) {
+  const api = useApi();
+  const [attached, setAttached] = useState<AttachedAgent[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(() => {
+    void api
+      .listFeatureAgents(feature.id)
+      .then(setAttached)
+      .catch(() => setAttached([]));
+  }, [api, feature.id]);
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+    reload();
+  }, [expanded, reload, reviewSignal, refreshSignal]);
+
+  async function detach(attachmentId: string) {
+    setBusy(true);
+    try {
+      await api.detachAgent(attachmentId);
+      reload();
+    } catch {
+      // Detach failed; keep the agent shown.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (attached.length === 0) {
+    return null;
+  }
+
   return (
-    <div className={`session-card pr-review-child ${active ? 'is-active' : ''}`.trim()}>
-      <div className="session-card-head">
-        <button
-          type="button"
-          className="session-open"
-          aria-current={active ? 'true' : undefined}
-          onClick={onOpen}
-          title={`Review Board for ${feature.name}`}
-        >
-          <span className="pr-review-child-icon" aria-hidden="true">
-            <PrReviewIcon size={14} />
-          </span>
-          <span className="session-name">Review Board</span>
-        </button>
+    <div className="attached-agents">
+      <div className="attached-agents-label">
+        <SkillsIcon size={12} />
+        <span>Agents</span>
+        <span className="attached-agents-count">{attached.length}</span>
       </div>
+      {attached.map((entry) => (
+        <div
+          key={entry.attachment.id}
+          className="session-card pr-review-child attached-agent-row"
+        >
+          <div className="session-card-head">
+            <button
+              type="button"
+              className="session-open"
+              onClick={() => onOpenAgent(feature, entry)}
+              title={`${entry.manifest.title} for ${feature.name}`}
+            >
+              <span className="pr-review-child-icon" aria-hidden="true">
+                <AgentIcon icon={entry.manifest.icon} size={14} />
+              </span>
+              <span className="session-name">{entry.manifest.title}</span>
+            </button>
+            <button
+              type="button"
+              className="tree-action"
+              title={`Detach ${entry.manifest.title}`}
+              aria-label={`Detach ${entry.manifest.title}`}
+              disabled={busy}
+              onClick={() => void detach(entry.attachment.id)}
+            >
+              <CloseIcon size={12} />
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
+  );
+}
+
+/**
+ * A modal that presents the agent catalogue for a feature. Every installed
+ * agent is listed with its eligibility for this feature; attachable ones can be
+ * added in place, ineligible ones show why (e.g. a missing prerequisite).
+ */
+function AddAgentModal({
+  feature,
+  onClose,
+  onAttached,
+}: {
+  feature: Feature;
+  onClose: () => void;
+  onAttached: () => void;
+}) {
+  const api = useApi();
+  const { data, loading, error, reload } = useAsync(
+    () => api.listAvailableAgents(feature.id),
+    [feature.id],
+  );
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+
+  async function add(agentId: string) {
+    setBusyId(agentId);
+    setAttachError(null);
+    try {
+      await api.attachAgent(feature.id, agentId);
+      onAttached();
+      onClose();
+    } catch (err) {
+      setAttachError(
+        err instanceof Error ? err.message : 'Could not add the agent.',
+      );
+      reload();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <Modal title={`Add agent to ${feature.name}`} onClose={onClose}>
+      <div className="agent-catalog">
+        {loading && <SkeletonList rows={3} />}
+        <ErrorText error={error} />
+        {data && data.length === 0 && (
+          <EmptyState message="No agents are installed." />
+        )}
+        {data?.map((entry) => (
+          <div
+            key={entry.manifest.id}
+            className={`agent-catalog-item${entry.attachable ? '' : ' is-unavailable'}`}
+          >
+            <span className="agent-catalog-icon" aria-hidden="true">
+              <AgentIcon icon={entry.manifest.icon} size={18} />
+            </span>
+            <div className="agent-catalog-body">
+              <span className="agent-catalog-title">{entry.manifest.title}</span>
+              <span className="agent-catalog-desc">
+                {entry.manifest.description}
+              </span>
+              {!entry.attachable && (
+                <span className="agent-catalog-reason">
+                  {entry.reason ??
+                    `Requires ${entry.manifest.prerequisiteLabel}.`}
+                </span>
+              )}
+            </div>
+            <Button
+              variant="secondary"
+              disabled={!entry.attachable || busyId !== null}
+              loading={busyId === entry.manifest.id}
+              onClick={() => void add(entry.manifest.id)}
+              ariaLabel={`Add ${entry.manifest.title} to ${feature.name}`}
+            >
+              Add
+            </Button>
+          </div>
+        ))}
+        <ErrorText error={attachError} />
+      </div>
+    </Modal>
   );
 }
 
@@ -346,7 +492,7 @@ function FeatureNode({
   names,
   onOpenSession,
   onOpenFeature,
-  onOpenReviewBoard,
+  onOpenAgent,
   onRenameSession,
   onRenameFeature,
   onDeleteFeature,
@@ -372,7 +518,7 @@ function FeatureNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onOpenReviewBoard: (feature: Feature) => void;
+  onOpenAgent: (feature: Feature, attached: AttachedAgent) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
   onDeleteFeature: (feature: Feature) => Promise<void>;
@@ -424,6 +570,8 @@ function FeatureNode({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [viewingUsage, setViewingUsage] = useState(false);
+  const [addingAgent, setAddingAgent] = useState(false);
+  const [agentRefresh, setAgentRefresh] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [nodeDropTarget, setNodeDropTarget] = useState(false);
   const [featureDropTarget, setFeatureDropTarget] = useState(false);
@@ -864,6 +1012,14 @@ function FeatureNode({
                 onSelect: () => setViewingUsage(true),
               },
               {
+                label: 'Add agent',
+                icon: <AgentIcon icon="add" size={14} />,
+                onSelect: () => {
+                  setExpanded(true);
+                  setAddingAgent(true);
+                },
+              },
+              {
                 label: 'Delete feature',
                 icon: <TrashIcon />,
                 danger: true,
@@ -884,15 +1040,26 @@ function FeatureNode({
         />
       )}
 
+      {addingAgent && (
+        <AddAgentModal
+          feature={feature}
+          onClose={() => setAddingAgent(false)}
+          onAttached={() => {
+            setExpanded(true);
+            setAgentRefresh((n) => n + 1);
+          }}
+        />
+      )}
+
       {expanded && (
         <div className="tree-children">
-          {(feature.checkoutPath !== null || live.prReviews[feature.id]) && (
-            <ReviewBoardChild
-              feature={feature}
-              active={false}
-              onOpen={() => onOpenReviewBoard(feature)}
-            />
-          )}
+          <AttachedAgents
+            feature={feature}
+            expanded={expanded}
+            reviewSignal={live.prReviews[feature.id]}
+            refreshSignal={agentRefresh}
+            onOpenAgent={onOpenAgent}
+          />
           {creating && (
             <NewSessionForm
               featureId={feature.id}
@@ -1157,7 +1324,7 @@ function RepoNode({
   names,
   onOpenSession,
   onOpenFeature,
-  onOpenReviewBoard,
+  onOpenAgent,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -1188,7 +1355,7 @@ function RepoNode({
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
-  onOpenReviewBoard: (feature: Feature) => void;
+  onOpenAgent: (feature: Feature, attached: AttachedAgent) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -1281,7 +1448,7 @@ function RepoNode({
       names={names}
       onOpenSession={onOpenSession}
       onOpenFeature={onOpenFeature}
-      onOpenReviewBoard={onOpenReviewBoard}
+      onOpenAgent={onOpenAgent}
       onRenameSession={onRenameSession}
       onRenameFeature={onRenameFeature}
       onDeleteFeature={onDeleteFeature}
@@ -1506,7 +1673,7 @@ export function Explorer({
   onOpenSession,
   onOpenFeature,
   onOpenPrReview,
-  onOpenReviewBoard,
+  onOpenAgent,
   onOpenRepo,
   onRenameSession,
   onRenameFeature,
@@ -1520,7 +1687,7 @@ export function Explorer({
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
   onOpenPrReview: (feature: Feature) => void;
-  onOpenReviewBoard: (feature: Feature) => void;
+  onOpenAgent: (feature: Feature, attached: AttachedAgent) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
   onRenameFeature: (feature: Feature, name: string) => Promise<void>;
@@ -2018,7 +2185,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
-            onOpenReviewBoard={onOpenReviewBoard}
+            onOpenAgent={onOpenAgent}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}
@@ -2054,7 +2221,7 @@ export function Explorer({
             names={names}
             onOpenSession={onOpenSession}
             onOpenFeature={onOpenFeature}
-            onOpenReviewBoard={onOpenReviewBoard}
+            onOpenAgent={onOpenAgent}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
             onRenameFeature={renameFeature}

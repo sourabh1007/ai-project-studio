@@ -4,6 +4,14 @@ export type WorkspaceTab =
   | { kind: 'session'; id: string; label: string; session: Session }
   | { kind: 'feature'; id: string; label: string; feature: Feature }
   | { kind: 'review-board'; id: string; label: string; feature: Feature }
+  | {
+      kind: 'agent';
+      id: string;
+      label: string;
+      agentId: string;
+      attachmentId: string;
+      feature: Feature;
+    }
   | { kind: 'repo'; id: string; label: string; repo: Repository };
 
 export interface WorkspaceTabsState {
@@ -136,6 +144,12 @@ function isWorkspaceTab(value: unknown): value is WorkspaceTab {
     case 'feature':
     case 'review-board':
       return isFeature(value.feature);
+    case 'agent':
+      return (
+        isString(value.agentId) &&
+        isString(value.attachmentId) &&
+        isFeature(value.feature)
+      );
     case 'repo':
       return isRepository(value.repo);
     default:
@@ -220,6 +234,7 @@ export function removeFeatureWorkspaceTabs(
     (tab) =>
       !(tab.kind === 'feature' && tab.feature.id === featureId) &&
       !(tab.kind === 'review-board' && tab.feature.id === featureId) &&
+      !(tab.kind === 'agent' && tab.feature.id === featureId) &&
       !(tab.kind === 'session' && tab.session.featureId === featureId),
   );
   return { tabs, activeId: normalizeActiveId(tabs, state.activeId) };
@@ -233,13 +248,21 @@ function reconcileTab(
   tab: WorkspaceTab,
   sources: WorkspaceTabReconcileSources,
 ): WorkspaceTab | null {
-  if (tab.kind === 'feature' || tab.kind === 'review-board') {
+  if (
+    tab.kind === 'feature' ||
+    tab.kind === 'review-board' ||
+    tab.kind === 'agent'
+  ) {
     if (!sources.features) {
       return tab;
     }
     const feature = sources.features.get(tab.feature.id);
     if (!feature) {
       return null;
+    }
+    if (tab.kind === 'agent') {
+      const prefix = tab.label.split(' · ')[0];
+      return { ...tab, feature, label: `${prefix} · ${feature.name}` };
     }
     const label =
       tab.kind === 'review-board'

@@ -63,6 +63,11 @@ export interface OwnedSubagentRemover {
   deleteBySession(sessionId: string): void;
 }
 
+/** Removes agent attachments bound to a feature when the feature is deleted. */
+export interface OwnedAgentRemover {
+  deleteByFeature(featureId: string): void;
+}
+
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
   sessions: Pick<SessionRepo, 'get' | 'listByFeatureAll' | 'delete' | 'deleteByFeature' | 'rename'>;
@@ -95,6 +100,8 @@ export interface WorkspaceAdminDeps {
   ownedAutomations?: OwnedAutomationRemover;
   /** Optional: removes detached subagent records owned by the deleted feature/session. */
   ownedSubagents?: OwnedSubagentRemover;
+  /** Optional: removes agent attachments owned by the deleted feature. */
+  ownedAgents?: OwnedAgentRemover;
 }
 
 /**
@@ -178,6 +185,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
         deps.ownedAutomations?.deleteByFeature(id),
       ]);
       deps.ownedSubagents?.deleteByFeature(id);
+      deps.ownedAgents?.deleteByFeature(id);
       for (const session of deps.sessions.listByFeatureAll(id)) {
         await purgeSession(session, 'feature-deleted');
       }

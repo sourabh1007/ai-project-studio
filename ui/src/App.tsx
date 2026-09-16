@@ -48,6 +48,11 @@ const UsageView = lazy(() =>
     default: m.UsageView,
   })),
 );
+const AgentsView = lazy(() =>
+  import('./features/agents/agents-view.js').then((m) => ({
+    default: m.AgentsView,
+  })),
+);
 import {
   CommandPalette,
   type PaletteCommand,
@@ -66,6 +71,7 @@ import { isOneOf } from './lib/persisted-state.js';
 import { hasOpenModalDialog } from './lib/focus-ownership.js';
 import {
   AutomationIcon,
+  AiChatIcon,
   FilesIcon,
   McpIcon,
   MoonIcon,
@@ -75,10 +81,10 @@ import {
   UsageIcon,
 } from './components/icons.js';
 
-type View = 'workspace' | 'skills' | 'mcp' | 'automations' | 'usage' | 'settings';
+type View = 'workspace' | 'skills' | 'mcp' | 'automations' | 'usage' | 'agents' | 'settings';
 
 /** View cycle order for Ctrl+Tab / Ctrl+Shift+Tab. */
-const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'usage', 'settings'];
+const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'usage', 'agents', 'settings'];
 
 /** The global keyboard shortcuts, shown in the discoverable shortcuts sheet. */
 const SHORTCUT_BINDINGS: ShortcutBinding[] = [
@@ -218,6 +224,13 @@ export function App() {
         section: 'Navigation',
         keywords: ['usage', 'credits', 'aic', 'cost', 'analytics', 'metasession', 'billing'],
         run: goto('usage'),
+      },
+      {
+        id: 'view-agents',
+        title: 'Open Agents',
+        section: 'Navigation',
+        keywords: ['agents', 'review board', 'analysis', 'attach'],
+        run: goto('agents'),
       },
       {
         id: 'view-settings',
@@ -363,6 +376,16 @@ export function App() {
             </button>
             <button
               type="button"
+              className={`activity-item ${view === 'agents' ? 'is-active' : ''}`.trim()}
+              title="Agents"
+              aria-label="Agents"
+              aria-current={view === 'agents' ? 'page' : undefined}
+              onClick={() => setView('agents')}
+            >
+              <AiChatIcon size={22} />
+            </button>
+            <button
+              type="button"
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
               title="Settings"
               aria-label="Settings"
@@ -413,6 +436,10 @@ export function App() {
                 <div className="settings-pane">
                   <UsageView signal={liveSignal(live)} />
                 </div>
+              ) : view === 'agents' ? (
+                <div className="settings-pane">
+                  <AgentsView />
+                </div>
               ) : (
                 <div className="settings-pane">
                   <SettingsView />
@@ -436,7 +463,9 @@ export function App() {
                   ? 'Monitors'
                   : view === 'usage'
                     ? 'Usage'
-                    : 'Settings'}
+                    : view === 'agents'
+                      ? 'Agents'
+                      : 'Settings'}
           </span>
           <span className="statusbar-item">{activeSessions} active</span>
           <span

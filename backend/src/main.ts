@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   writeFileSync,
+  rmSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -435,6 +436,26 @@ import type {
   ReviewBoardEventMap,
   ReviewBoardStreamSink,
 } from './review-board/review-board-contract.js';
+import { createAgentRegistry } from './agents/agent-registry.js';
+import { createAgentService } from './agents/agent-service.js';
+import { createReviewBoardAgent, REVIEW_BOARD_AGENT_ID } from './agents/review-board-agent.js';
+import { createNewTaskAgent } from './agents/new-task-agent.js';
+import {
+  NEW_TASK_NAMESPACE,
+  newTaskConfigSchema,
+  newTaskDefaults,
+  type NewTaskConfig,
+} from './new-task/config.js';
+import { createNewTaskService } from './new-task/new-task-service.js';
+import { createNewTaskRunHub } from './new-task/new-task-run-hub.js';
+import type { NewTaskStreamEvent } from './new-task/new-task-run-hub.js';
+import { createNewTaskGit } from './new-task/new-task-git.js';
+import { createNewTaskPr } from './new-task/new-task-pr.js';
+import { createNewTaskTeam } from './new-task/new-task-team.js';
+import { createNewTaskRunRepo } from './persistence/new-task-run-repo.js';
+import type { NewTaskEventMap } from './new-task/new-task-contract.js';
+import { createAgentAttachmentRepo } from './persistence/agent-attachment-repo.js';
+import { createAgentUsageReader } from './persistence/agent-usage-reader.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
 import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
 import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
@@ -514,6 +535,11 @@ function main(): void {
     namespace: REVIEW_BOARD_NAMESPACE,
     schema: reviewBoardConfigSchema,
     defaults: reviewBoardDefaults,
+  });
+  registry.register({
+    namespace: NEW_TASK_NAMESPACE,
+    schema: newTaskConfigSchema,
+    defaults: newTaskDefaults,
   });
   registry.register({
     namespace: AUTOMATION_NAMESPACE,
@@ -694,6 +720,7 @@ function main(): void {
   const repoInsightsConfig = config[REPO_INSIGHTS_NAMESPACE] as RepoInsightsConfig;
   const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
   const reviewBoardConfig = config[REVIEW_BOARD_NAMESPACE] as ReviewBoardConfig;
+  const newTaskConfig = config[NEW_TASK_NAMESPACE] as NewTaskConfig;
   const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
   const authWarmerConfig = config[AUTH_WARMER_NAMESPACE] as AuthWarmerConfig;
   const selfRecoveryConfig = config[
@@ -2095,6 +2122,40 @@ function main(): void {
       return live;
     },
   });
+  // The Agent platform: the Review Board expressed as the first attachable
+  // agent. The registry is the single place agents are contributed; the service
+  // owns attachment persistence, prerequisite gating and usage roll-up so new
+  // agents need no core wiring. Its prerequisite reads the non-throwing PR-review
+  // lookup, so the Review Board only attaches where a review exists.
+  const agentAttachmentRepo = createAgentAttachmentRepo(db);
+  const agentUsageReader = createAgentUsageReader(db);
+  const agentRegistry = createAgentRegistry([
+    createReviewBoardAgent({
+      hasReview: (featureId) => prReviewService.find(featureId) !== null,
+    }),
+    createNewTaskAgent({
+      hasRepo: (featureId) =>
+        featureService.list().some(
+          (feature) => feature.id === featureId && !!feature.repoId,
+        ),
+      hasReview: (featureId) => prReviewService.find(featureId) !== null,
+    }),
+  ]);
+  const agentService = createAgentService({
+    registry: agentRegistry,
+    attachments: agentAttachmentRepo,
+    usage: agentUsageReader,
+    clock,
+    newId: () => ids.next(),
+  });
+  // One-shot: attach the Review Board to every pre-existing eligible feature so
+  // PR reviews imported before the platform existed keep the board, without ever
+  // undoing a later manual detach.
+  agentService.backfillAutoAttachments(
+    REVIEW_BOARD_AGENT_ID,
+    featureService.list().map((feature) => feature.id),
+  );
+
   // Provider-agnostic live PR comments. The resolver picks the GitHub (`gh`) or
   // Azure DevOps (REST) gateway from the repo's provider, so the comments
   // service stays pure and every operation posts against the real pull request.
@@ -2217,7 +2278,64 @@ function main(): void {
       ),
     features: featureService,
     reviews: prReviewService,
+    onReviewFeatureCreated: (featureId) =>
+      agentService.autoAttach(featureId, REVIEW_BOARD_AGENT_ID),
   });
+  // The New Task agent: plan a change, implement it in an isolated worktree,
+  // open a pull request, and convert the task into a Review-Board-eligible "PR
+  // task" by importing that PR (which nests a review feature and auto-attaches
+  // the Review Board). All git/GitHub work runs behind narrow ports.
+  const newTaskRunRepo = createNewTaskRunRepo(db);
+  const newTaskService = createNewTaskService({
+    repo: newTaskRunRepo,
+    workspace: {
+      resolve: (featureId) => {
+        const feature = featureService.get(featureId);
+        if (!feature.repoId) {
+          throw new ValidationError(
+            'This feature has no repository, so New Task cannot open a pull request.',
+          );
+        }
+        const repo = repoService.get(feature.repoId);
+        return {
+          repoId: repo.id,
+          repoLocalPath: repo.localPath,
+          baseBranch: repo.defaultBranch ?? 'main',
+        };
+      },
+    },
+    git: createNewTaskGit({
+      // Bound the network fetch so a slow/unreachable origin fails fast (default
+      // ~20s) and falls back to the local base branch instead of stalling
+      // planning for up to 15 minutes. Local operations (worktree add, commit,
+      // push) keep the long-running budget.
+      git: (args) =>
+        gitRun(args, { longRunning: !args.includes('fetch') }),
+      pathExists: existsSync,
+      removeDir: (path) => rmSync(path, { recursive: true, force: true }),
+    }),
+    pr: createNewTaskPr({
+      resolveRepo: (repoId) => repoService.get(repoId),
+      gh: ghRun,
+      azure: { token: azureTokenFor, httpPost: azureHttpPost },
+    }),
+    reviews: {
+      makeEligible: async ({ repoId, prNumber, featureId }) => {
+        const feature = await prFeatureService.convertToPrFeature(
+          repoId,
+          prNumber,
+          featureId,
+        );
+        return feature.id;
+      },
+    },
+    config: newTaskConfig,
+    clock,
+    ai: metaAi,
+    team: createNewTaskTeam({ ai: metaAi, clock, config: newTaskConfig }),
+    bus: bus as unknown as EventBus<NewTaskEventMap>,
+  });
+  const newTaskRunHub = createNewTaskRunHub({ service: newTaskService });
   const workspaceAdmin = createWorkspaceAdmin({
     features: featureService,
     sessions: sessionRepo,
@@ -2268,6 +2386,12 @@ function main(): void {
       },
       deleteBySession: (sessionId) => {
         subagentRepo.deleteByOriginSession(sessionId);
+      },
+    },
+    ownedAgents: {
+      deleteByFeature: (featureId) => {
+        agentService.removeFeature(featureId);
+        newTaskRunRepo.deleteByFeature(featureId);
       },
     },
   });
@@ -2736,6 +2860,8 @@ function main(): void {
       prFeatures: prFeatureService,
       prReviews: prReviewService,
       reviewBoard: reviewBoardService,
+      newTask: newTaskService,
+      agents: agentService,
       prComments: prCommentsService,
       prApprovals: prApprovalService,
       prDescriptions: prDescriptionService,
@@ -2843,6 +2969,127 @@ function main(): void {
         .finally(() => {
           if (!closed) res.end();
         });
+    },
+  );
+
+  // New Task: produce the reviewable plan — streamed as newline-delimited JSON
+  // over ONE request so the browser sees the meta-session's live planning logs
+  // as they happen. Each line is an {type:'activity'|'done'|'failed'} event,
+  // mirroring the implement stream. The request body may carry an optional
+  // { baseBranch, suggestion } to cut the branch from a specific base or feed
+  // reviewer feedback into a re-plan.
+  // Streams a New Task run's buffered + live events to an HTTP response by
+  // attaching to the run hub. A client disconnect only detaches this listener —
+  // it never cancels the background run, so switching windows can't stop a
+  // planning or implementation pass.
+  const streamNewTaskRun = (attachmentId: string, res: express.Response): void => {
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    let ended = false;
+    let detach = (): void => {};
+    const finish = (): void => {
+      if (ended) return;
+      ended = true;
+      detach();
+      res.end();
+    };
+    const write = (event: NewTaskStreamEvent): void => {
+      if (ended) return;
+      res.write(`${JSON.stringify(event)}\n`);
+      if (event.type === 'done' || event.type === 'failed' || event.type === 'cancelled')
+        finish();
+    };
+    detach = newTaskRunHub.attach(attachmentId, write);
+    if (ended) {
+      // A terminal event was replayed synchronously; drop the just-added
+      // listener that finish() removed before detach was assigned.
+      detach();
+    } else {
+      res.on('close', () => {
+        if (!res.writableFinished) {
+          ended = true;
+          detach();
+        }
+      });
+    }
+  };
+
+  // New Task: produce the reviewable plan — streamed as newline-delimited JSON.
+  // The pass runs in the background (via the run hub) so it survives the browser
+  // closing this socket; the response replays buffered activity and then tails
+  // live events. The request body may carry an optional { baseBranch, suggestion }
+  // to cut the branch from a specific base or feed reviewer feedback into a
+  // re-plan.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/plan`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const body = (req.body ?? {}) as {
+        baseBranch?: unknown;
+        suggestion?: unknown;
+      };
+      const options = {
+        baseBranch:
+          typeof body.baseBranch === 'string' ? body.baseBranch : undefined,
+        suggestion:
+          typeof body.suggestion === 'string' ? body.suggestion : undefined,
+      };
+      newTaskRunHub.startPlan(attachmentId, options);
+      streamNewTaskRun(attachmentId, res);
+    },
+  );
+
+  // New Task: reconnect to a run already in flight (planning or implementing)
+  // WITHOUT starting anything, so a window returning after a switch shows live
+  // logs again. When no live run exists the stream ends immediately with no
+  // events, letting the UI fall back to its "interrupted — resume" affordance.
+  app.get(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/stream`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      // Nothing in flight (e.g. the app restarted mid-run): end at once with an
+      // empty body so the UI stops waiting and shows its "interrupted — resume"
+      // affordance instead of hanging on an open socket.
+      if (!newTaskRunHub.isLive(attachmentId)) {
+        res.writeHead(200, {
+          'Content-Type': 'application/x-ndjson',
+          'Cache-Control': 'no-cache',
+        });
+        res.end();
+        return;
+      }
+      streamNewTaskRun(attachmentId, res);
+    },
+  );
+
+  // New Task: implement the accepted plan, open a PR, and convert the task into
+  // a Review-Board-eligible "PR task". The pass runs in the background via the
+  // run hub so closing this socket (e.g. switching windows) never stops it;
+  // reconnect with the GET stream endpoint to keep watching the live logs.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/implement`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      newTaskRunHub.startImplement(attachmentId);
+      streamNewTaskRun(attachmentId, res);
+    },
+  );
+
+  // New Task: cancel-and-reset the in-flight run. Aborts the background
+  // metasession (terminating any attached agent process), then resets the
+  // persisted run to a clean draft so the user can retry. Attached stream
+  // sockets receive a terminal `cancelled` event and end on their own.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/cancel`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const cancelled = newTaskRunHub.cancel(attachmentId);
+      const run = newTaskService.reset(attachmentId);
+      res.json({ cancelled, run });
     },
   );
 

@@ -20,6 +20,7 @@ export interface AcpTurnPool {
       deadlineAt?: number;
       timeoutMs?: number;
       onActivity?: (text: string) => void;
+      onNotice?: (line: string) => void;
       onStart?: () => void;
       signal?: AbortSignal;
     },
@@ -87,6 +88,9 @@ export function createAcpMetaRunner(
           deadlineAt: request.deadlineAt,
           timeoutMs: request.timeoutMs,
           onActivity,
+          // Discrete tool-call / thinking lines arrive already formatted, so
+          // forward them verbatim (no line buffering) straight to the caller.
+          onNotice: emit ? (line: string): void => emit(line) : undefined,
           onStart: () => request.onStart?.(sessionId),
           signal: request.signal,
         },

@@ -1427,3 +1427,236 @@ describe('analyzeReviewBoardPerspectives (NDJSON stream)', () => {
     ).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe('agent client', () => {
+  it('lists the agent catalog via GET /agents', async () => {
+    const catalog = [
+      { manifest: { id: 'review-board' }, usage: { runs: 0 }, attachmentCount: 0 },
+    ];
+    const { fetchImpl, calls } = mockFetch(jsonResponse(catalog));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.listAgents()).resolves.toEqual(catalog);
+    expect(calls[0][0]).toBe('/api/agents');
+  });
+
+  it('reads one agent and encodes its id', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ manifest: { id: 'a/b' } }));
+    const client = createApiClient({ fetchImpl });
+    await client.getAgent('a/b');
+    expect(calls[0][0]).toBe('/api/agents/a%2Fb');
+  });
+
+  it('lists a feature’s attached agents', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 'att1' }]));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listFeatureAgents('f1');
+    expect(result).toEqual([{ id: 'att1' }]);
+    expect(calls[0][0]).toBe('/api/features/f1/agents');
+  });
+
+  it('lists the agents still available to attach', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ manifest: { id: 'x' } }]));
+    const client = createApiClient({ fetchImpl });
+    await client.listAvailableAgents('f1');
+    expect(calls[0][0]).toBe('/api/features/f1/agents/available');
+  });
+
+  it('attaches an agent with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.attachAgent('f1', 'review-board');
+    expect(result).toEqual({ id: 'att1' });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/agents');
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(init?.body).toBe(JSON.stringify({ agentId: 'review-board' }));
+  });
+
+  it('detaches an agent with a DELETE request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.detachAgent('att1');
+    expect(result).toEqual({ id: 'att1' });
+    expect(calls[0][0]).toBe('/api/agents/attachments/att1');
+    expect(calls[0][1]?.method).toBe('DELETE');
+  });
+});
+
+describe('new task client', () => {
+  it('reads the current run via GET', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ run: null }));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.getNewTask('f1', 'att1')).resolves.toEqual({
+      run: null,
+    });
+    expect(calls[0][0]).toBe('/api/features/f1/new-task/att1');
+  });
+
+  it('reads a file diff via GET with an encoded path query', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ path: 'src/a b.ts', diff: 'D', content: 'C' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.getNewTaskFileDiff('f1', 'att1', 'src/a b.ts'),
+    ).resolves.toEqual({ path: 'src/a b.ts', diff: 'D', content: 'C' });
+    expect(calls[0][0]).toBe(
+      '/api/features/f1/new-task/att1/file-diff?path=src%2Fa%20b.ts',
+    );
+  });
+
+  it('saves inputs with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.saveNewTaskInputs('f1', 'att1', {
+      problem: 'P',
+      context: 'C',
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/inputs');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ problem: 'P', context: 'C' }));
+  });
+
+  it('streams plan events, forwards options and the abort signal', async () => {
+    const chunks = [
+      '{"type":"activity","phase":"planning","line":"reading code"}\n',
+      '{"type":"done","run":{"id":"att1","status":"planned"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.planNewTask('f1', 'att1', (e) => events.push(e), signal, {
+      baseBranch: 'main',
+      suggestion: 'be specific',
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/plan');
+    expect(init?.method).toBe('POST');
+    expect(init?.signal).toBe(signal);
+    expect(init?.body).toBe(
+      JSON.stringify({ baseBranch: 'main', suggestion: 'be specific' }),
+    );
+    expect(events).toEqual([
+      { type: 'activity', phase: 'planning', line: 'reading code' },
+      { type: 'done', run: { id: 'att1', status: 'planned' } },
+    ]);
+  });
+
+  it('plans without a signal or options', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(['{"type":"done","run":{"id":"att1"}}']);
+    };
+    const client = createApiClient({ fetchImpl });
+    await client.planNewTask('f1', 'att1', () => {});
+    expect(calls[0][1]?.signal).toBeUndefined();
+    expect(calls[0][1]?.body).toBe(JSON.stringify({}));
+  });
+
+  it('streams implement events line by line', async () => {
+    const chunks = [
+      '{"type":"activity","phase":"implementing","line":"edit"}\n',
+      '\n',
+      '{"type":"done","run":{"id":"att1","status":"pr-created"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.implementNewTask('f1', 'att1', (e) => events.push(e));
+    expect(calls[0][0]).toBe('/api/features/f1/new-task/att1/implement');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(events).toEqual([
+      { type: 'activity', phase: 'implementing', line: 'edit' },
+      { type: 'done', run: { id: 'att1', status: 'pr-created' } },
+    ]);
+  });
+
+  it('forwards the abort signal and reads a newline-less tail', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse(['{"type":"failed","error":"boom"}']);
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.implementNewTask('f1', 'att1', (e) => events.push(e), signal);
+    expect(events).toEqual([{ type: 'failed', error: 'boom' }]);
+  });
+
+  it('throws an ApiError when the implement request is not ok', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ error: { message: 'nope' } }, 500);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.implementNewTask('f1', 'att1', () => {}),
+    ).rejects.toThrow('nope');
+  });
+
+  it('throws an ApiError when the implement response has no stream body', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({});
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.implementNewTask('f1', 'att1', () => {}),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('reconnects to a live run over GET and streams its events', async () => {
+    const chunks = [
+      '{"type":"activity","phase":"implementing","line":"resuming"}\n',
+      '{"type":"done","run":{"id":"att1","status":"pr-created"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.streamNewTask('f1', 'att1', (e) => events.push(e), signal);
+    expect(calls[0][0]).toBe('/api/features/f1/new-task/att1/stream');
+    expect(calls[0][1]?.method).toBeUndefined();
+    expect(calls[0][1]?.body).toBeUndefined();
+    expect(calls[0][1]?.signal).toBe(signal);
+    expect(events).toEqual([
+      { type: 'activity', phase: 'implementing', line: 'resuming' },
+      { type: 'done', run: { id: 'att1', status: 'pr-created' } },
+    ]);
+  });
+
+  it('reconnects without a signal', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse([]);
+    };
+    const client = createApiClient({ fetchImpl });
+    await client.streamNewTask('f1', 'att1', () => {});
+    expect(calls[0][1]?.signal).toBeUndefined();
+  });
+
+  it('cancels a run with a JSON POST and returns the reset run', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ cancelled: true, run: { id: 'att1', status: 'draft' } }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(client.cancelNewTask('f1', 'att1')).resolves.toEqual({
+      cancelled: true,
+      run: { id: 'att1', status: 'draft' },
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/cancel');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+});

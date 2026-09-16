@@ -11,10 +11,14 @@ import {
   MOTIONS,
   RADII,
   TEXT_SIZES,
+  TERMINAL_FONTS,
+  TERMINAL_TEXT_SIZES,
   accentColor,
   deriveCssVariables,
+  isHexColor,
   normalizeUiPreferences,
   optionLabel,
+  terminalAppearance,
 } from './ui-preferences.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -207,7 +211,15 @@ describe('deriveCssVariables', () => {
             for (const motion of MOTIONS)
               for (const font of FONTS) {
                 const v = deriveCssVariables(
-                  { accent, textSize, density, radius, motion, font },
+                  {
+                    ...DEFAULT_UI_PREFERENCES,
+                    accent,
+                    textSize,
+                    density,
+                    radius,
+                    motion,
+                    font,
+                  },
                   'dark',
                 );
                 expect(v['--accent']).toMatch(/^#/);
@@ -287,5 +299,67 @@ describe('accentColor + optionLabel', () => {
     expect(optionLabel('mono-ui')).toBe('Monospace');
     expect(optionLabel('compact')).toBe('Compact');
     expect(optionLabel('cozy')).toBe('Cozy');
+    expect(optionLabel('jetbrains')).toBe('JetBrains Mono');
+    expect(optionLabel('fira-code')).toBe('Fira Code');
+    expect(optionLabel('ubuntu-mono')).toBe('Ubuntu Mono');
+  });
+});
+
+describe('terminal preferences', () => {
+  it('validates hex colors', () => {
+    expect(isHexColor('#a1b2c3')).toBe(true);
+    expect(isHexColor('#ABCDEF')).toBe(true);
+    expect(isHexColor('#abc')).toBe(false);
+    expect(isHexColor('theme')).toBe(false);
+    expect(isHexColor(42)).toBe(false);
+  });
+
+  it('keeps valid terminal values and normalizes the color', () => {
+    const p = normalizeUiPreferences({
+      terminalFont: 'cascadia',
+      terminalTextSize: 'large',
+      terminalTextColor: '#AABBCC',
+    });
+    expect(p.terminalFont).toBe('cascadia');
+    expect(p.terminalTextSize).toBe('large');
+    expect(p.terminalTextColor).toBe('#aabbcc');
+  });
+
+  it('falls back to defaults for invalid terminal values', () => {
+    const p = normalizeUiPreferences({
+      terminalFont: 'nope',
+      terminalTextSize: 99,
+      terminalTextColor: 'rgb(1,2,3)',
+    });
+    expect(p.terminalFont).toBe(DEFAULT_UI_PREFERENCES.terminalFont);
+    expect(p.terminalTextSize).toBe(DEFAULT_UI_PREFERENCES.terminalTextSize);
+    expect(p.terminalTextColor).toBe('theme');
+  });
+
+  it('derives font stack, size and a null theme foreground by default', () => {
+    const a = terminalAppearance(DEFAULT_UI_PREFERENCES);
+    expect(a.fontFamily).toContain('JetBrains Mono');
+    expect(a.fontSize).toBe(13);
+    expect(a.foreground).toBeNull();
+  });
+
+  it('derives a custom foreground and resolves every font/size', () => {
+    const custom = terminalAppearance({
+      ...DEFAULT_UI_PREFERENCES,
+      terminalTextColor: '#ff8800',
+      terminalTextSize: 'x-large',
+    });
+    expect(custom.foreground).toBe('#ff8800');
+    expect(custom.fontSize).toBe(17);
+    for (const terminalFont of TERMINAL_FONTS)
+      for (const terminalTextSize of TERMINAL_TEXT_SIZES) {
+        const a = terminalAppearance({
+          ...DEFAULT_UI_PREFERENCES,
+          terminalFont,
+          terminalTextSize,
+        });
+        expect(a.fontFamily.length).toBeGreaterThan(0);
+        expect(a.fontSize).toBeGreaterThan(0);
+      }
   });
 });

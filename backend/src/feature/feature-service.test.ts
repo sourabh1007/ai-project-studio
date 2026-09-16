@@ -24,6 +24,12 @@ function inMemoryRepo(): FeatureRepo {
         store.set(id, { ...f, name });
       }
     },
+    setCheckoutPath: (id, checkoutPath) => {
+      const f = store.get(id);
+      if (f) {
+        store.set(id, { ...f, checkoutPath });
+      }
+    },
     updatePlacement: (id, placement) => {
       const f = store.get(id);
       if (f) {
@@ -166,6 +172,15 @@ describe('feature-service', () => {
     const updated = svc.rename('feat-1', 'A2');
     expect(updated.name).toBe('A2');
     expect(svc.get('feat-1').name).toBe('A2');
+  });
+
+  it('repoints a feature checkout path and returns the updated feature', () => {
+    const svc = service();
+    svc.create({ name: 'A', description: 'a' });
+    const updated = svc.setCheckoutPath('feat-1', 'C:/wt/app-pr-9');
+    expect(updated.checkoutPath).toBe('C:/wt/app-pr-9');
+    expect(svc.get('feat-1').checkoutPath).toBe('C:/wt/app-pr-9');
+    expect(() => svc.setCheckoutPath('nope', 'x')).toThrow(AppError);
   });
 
   it('removes a feature', () => {

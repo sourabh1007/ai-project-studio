@@ -58,6 +58,7 @@ Full detail: [docs/architecture.md](docs/architecture.md) · module reference: [
 - **Add an API endpoint** → add a controller in `api/`, register it in `api/routes.ts` (`ApiRoutesDeps` + `createApiRoutes`), wire deps in `main.ts`, test the controller.
 - **Add a domain module** → create `<module>/` with a `*-contract.ts` (ports/types), a pure service, a `config.ts` trio, and a repo port if it persists. Wire in `main.ts`. Mirror an existing module like `skills/` or `feature-tasks/`.
 - **Add a new CLI tool/provider** → implement `IAIProvider` under `provider/<tool>-adapter/`, register in `main.ts`. See [docs/adding-a-provider.md](docs/adding-a-provider.md).
+- **Add a feature agent** (an attachable analysis surface like the Review Board) → create `agents/<id>/` (manifest + config trio + service + `routes(ctx)`) and `ui/src/agents/<id>/`, register in the two agent arrays. See [docs/agents.md](docs/agents.md).
 - **Change persisted shape** → update `persistence/db/schema.ts` + the relevant `*-repo.ts` and its tests.
 
 ## Build / test / run

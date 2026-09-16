@@ -1,4 +1,5 @@
 import { basename, dirname, join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import type { Repository } from '../repo/repo-contract.js';
 import {
   APP_WORKTREE_DIR,
@@ -23,13 +24,23 @@ export interface WorktreeServiceDeps {
   /** Resolves the worktree a feature's PR review checked out into. */
   reviews: WorktreeReviewLookup;
   git: WorktreeGit;
+  /**
+   * Deletes a directory tree from disk. Defaults to `fs.rm`. `git worktree
+   * remove` unregisters the worktree but, especially on Windows, can leave the
+   * checkout folder behind (locked/read-only files); this guarantees the files
+   * are actually reclaimed rather than just hidden from the listing.
+   */
+  removeDir?: (path: string) => Promise<void>;
 }
 
 /** True when `worktreePath` is the app worktree directory of `repoLocalPath`. */
 function belongsToRepo(worktreePath: string, repoLocalPath: string): boolean {
   const norm = (p: string): string => p.replace(/\\/g, '/');
   const container = norm(join(dirname(repoLocalPath), APP_WORKTREE_DIR));
-  const prefix = `${basename(repoLocalPath)}-pr-`;
+  // App worktrees are named `<repo>-<kind>-<id>` (e.g. `-pr-2299392`,
+  // `-task-b8094ae7…`); match the repo prefix so every kind is removable, not
+  // only PR review worktrees.
+  const prefix = `${basename(repoLocalPath)}-`;
   return (
     norm(dirname(worktreePath)) === container &&
     basename(worktreePath).startsWith(prefix)
@@ -39,8 +50,17 @@ function belongsToRepo(worktreePath: string, repoLocalPath: string): boolean {
 export function createWorktreeService(
   deps: WorktreeServiceDeps,
 ): WorktreeService {
+  const removeDir =
+    deps.removeDir ??
+    ((path: string) =>
+      rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
+
   async function removeAt(repoLocalPath: string, path: string): Promise<void> {
     await deps.git.run(['worktree', 'remove', '--force', path], repoLocalPath);
+    // `git worktree remove` can unregister the worktree yet leave its directory
+    // on disk (Windows file locks, read-only files). Delete it explicitly so
+    // the space is truly reclaimed, then prune the now-stale admin entry.
+    await removeDir(path);
     await deps.git.run(['worktree', 'prune'], repoLocalPath);
   }
 

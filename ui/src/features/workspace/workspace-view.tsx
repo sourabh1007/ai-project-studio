@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
-import type { Feature, Repository, Session } from '../../lib/types.js';
+import type { Feature, Repository, Session, AttachedAgent } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { createDisposer } from '../../lib/disposer.js';
@@ -12,6 +12,7 @@ import { AiMagicIcon } from '../../components/icons.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
+import { getAgentModule } from '../../agent-host/agent-registry.js';
 import {
   closeWorkspaceTab,
   emptyWorkspaceTabsState,
@@ -37,11 +38,6 @@ const FeatureDashboard = lazy(() =>
     default: m.FeatureDashboard,
   })),
 );
-const ReviewBoardPage = lazy(() =>
-  import('../review-board-page/review-board-page.js').then((m) => ({
-    default: m.ReviewBoardPage,
-  })),
-);
 const RepoDashboard = lazy(() =>
   import('../repo-dashboard/repo-dashboard.js').then((m) => ({
     default: m.RepoDashboard,
@@ -50,10 +46,6 @@ const RepoDashboard = lazy(() =>
 
 function featureTabId(featureId: string): string {
   return `feature:${featureId}`;
-}
-
-function reviewBoardTabId(featureId: string): string {
-  return `review-board:${featureId}`;
 }
 
 function repoTabId(repoId: string): string {
@@ -110,7 +102,10 @@ export function WorkspaceView({
 
   useEffect(() => {
     const featureTabs = tabs.filter(
-      (tab) => tab.kind === 'feature' || tab.kind === 'review-board',
+      (tab) =>
+        tab.kind === 'feature' ||
+        tab.kind === 'review-board' ||
+        tab.kind === 'agent',
     );
     const sessionFeatureIds = [
       ...new Set(
@@ -204,9 +199,26 @@ export function WorkspaceView({
 
   function openReviewBoard(feature: Feature) {
     openTab({
-      kind: 'review-board',
-      id: reviewBoardTabId(feature.id),
+      kind: 'agent',
+      id: `agent:review-board:${feature.id}`,
       label: `Review Board · ${feature.name}`,
+      agentId: 'review-board',
+      attachmentId: `review-board:${feature.id}`,
+      feature,
+    });
+  }
+
+  function openAgent(feature: Feature, attached: AttachedAgent) {
+    const { manifest, attachment } = attached;
+    const id = manifest.allowMultiplePerFeature
+      ? `agent:${attachment.id}`
+      : `agent:${manifest.id}:${feature.id}`;
+    openTab({
+      kind: 'agent',
+      id,
+      label: `${manifest.title} · ${feature.name}`,
+      agentId: manifest.id,
+      attachmentId: attachment.id,
       feature,
     });
   }
@@ -327,7 +339,7 @@ export function WorkspaceView({
             onOpenSession={openSession}
             onOpenFeature={openFeature}
             onOpenPrReview={openReviewBoard}
-            onOpenReviewBoard={openReviewBoard}
+            onOpenAgent={openAgent}
             onOpenRepo={openRepo}
             onRenameSession={renameSession}
             onRenameFeature={renameFeature}
@@ -413,16 +425,38 @@ export function WorkspaceView({
               />
             </Suspense>
           )}
-          {active?.kind === 'review-board' && (
-            <ErrorBoundary label="Review Board">
-              <Suspense fallback={<ViewSkeleton label="review board" />}>
-                <ReviewBoardPage
-                  key={active.feature.id}
-                  featureId={active.feature.id}
-                />
-              </Suspense>
-            </ErrorBoundary>
-          )}
+          {active?.kind === 'agent' &&
+            (() => {
+              const agentModule = getAgentModule(active.agentId);
+              if (!agentModule) {
+                return (
+                  <div className="editor-empty">
+                    <EmptyState
+                      icon={<AiMagicIcon size={28} />}
+                      title="Unknown agent"
+                      description={`No UI is registered for "${active.agentId}".`}
+                    />
+                  </div>
+                );
+              }
+              const AgentComponent = agentModule.component;
+              return (
+                <ErrorBoundary label={agentModule.title}>
+                  <Suspense
+                    fallback={<ViewSkeleton label={agentModule.title} />}
+                  >
+                    <AgentComponent
+                      key={active.id}
+                      ctx={{
+                        feature: active.feature,
+                        attachmentId: active.attachmentId,
+                        agentId: active.agentId,
+                      }}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              );
+            })()}
           {active?.kind === 'repo' && (
             <Suspense fallback={<ViewSkeleton label="repository" />}>
               <RepoDashboard key={active.repo.id} repo={active.repo} />

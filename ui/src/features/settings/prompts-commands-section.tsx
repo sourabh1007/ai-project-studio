@@ -22,7 +22,7 @@ function errorMessage(error: unknown): string {
 }
 
 /** Editor for one config-backed prompt/command, persisted per-key on save. */
-function PromptFieldEditor({
+export function PromptFieldEditor({
   field,
   data,
   onSaved,

@@ -7,7 +7,10 @@ the patterns that keep the backend testable.
 > Looking for how to *use* a feature instead? See the task-focused
 > **[feature guides](features/README.md)**. For the module-by-module code map see
 > **[backend-modules.md](backend-modules.md)**; for the UI structure see
-> **[ui-guide.md](ui-guide.md)**.
+> **[ui-guide.md](ui-guide.md)**. Two cross-cutting concepts have their own
+> pages: **[metasessions](metasessions.md)** (headless AI turns) and
+> **[agents](agents.md)** (attachable feature surfaces like Review Board and New
+> Task).
 
 ## Layers
 
@@ -90,6 +93,22 @@ The interactive CLI treats a fast multi-line write as a *paste*. `terminal/termi
 
 ### Internal AI accounting
 Repository analysis reuses the normal provider-neutral meta runner with the repository checkout as `cwd` and a stable `repository:<id>` attribution key. Automation checks, actions, reports, and subagents also run AI work through the shared meta runner. These sessions have `scope = internal`: they are persisted so usage can be tailed and credited, but are hidden from feature session lists, workspace session counts, feature/workspace development rollups, and session SSE events. Their `kind = meta` usage remains included in the separate **IDE AI** totals. Automation usage is attributed to the originating feature when one is present; otherwise it uses a stable `automation:<id>` key under **IDE AI**.
+
+### New Task agent (a metasession team)
+The **New Task** agent (`new-task/`, surfaced through the [agent platform](agents.md)) turns a problem statement into a merged pull request. It runs the change as a small **team of [metasessions](metasessions.md)** rather than one serial agent:
+
+```
+Describe (problem + context)
+  ─▶ new-task-service.ts: planner metasession reads the repo ─▶ reviewable plan
+  ─▶ user approves (or re-plans: old branch dropped, fresh worktree cut)
+  ─▶ new-task-team.ts: lead agent decomposes the plan into file-disjoint slices
+       ─▶ N sub-agents (developer/tester), each leasing its own metasession, implement in parallel
+       ─▶ lead agent reviews the merged result and builds only the affected projects
+  ─▶ new-task-git.ts commits in an isolated worktree ─▶ new-task-pr.ts opens the PR
+  ─▶ task becomes Review-Board-eligible; live per-agent time/token/credit metrics stream over the bus + SSE
+```
+
+Every port is pure aside from the injected AI/clock, so the 100% gate exercises parse fallbacks, sub-agent failure, and abort without a provider. Runs are isolated per git worktree (which persists so the UI can show file diffs) and reconnect to live logs after a window switch.
 
 ## Storage
 

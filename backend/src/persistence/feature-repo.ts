@@ -41,6 +41,9 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
   );
   const updateSummary = db.prepare('UPDATE features SET summary = ? WHERE id = ?');
   const updateName = db.prepare('UPDATE features SET name = ? WHERE id = ?');
+  const updateCheckoutPath = db.prepare(
+    'UPDATE features SET checkout_path = ? WHERE id = ?',
+  );
   const updatePlacement = db.prepare(
     'UPDATE features SET repo_id = ?, parent_feature_id = ?, parent_group_id = ?, order_index = ? WHERE id = ?',
   );
@@ -73,6 +76,9 @@ export function createFeatureRepo(db: DatabaseSync): FeatureRepo {
     },
     rename(id, name) {
       updateName.run(name, id);
+    },
+    setCheckoutPath(id, checkoutPath) {
+      updateCheckoutPath.run(checkoutPath ?? null, id);
     },
     updatePlacement(id, placement) {
       updatePlacement.run(
