@@ -1,4 +1,4 @@
-import { AiChatIcon, LaunchIcon, PrReviewIcon } from '../components/icons.js';
+import { AiChatIcon, BugBashIcon, LaunchIcon, PrReviewIcon } from '../components/icons.js';
 
 /**
  * Resolves an agent manifest `icon` id to a rendered glyph. Unknown ids fall
@@ -16,6 +16,8 @@ export function AgentIcon({
       return <PrReviewIcon size={size} />;
     case 'new-task':
       return <LaunchIcon size={size} />;
+    case 'bug-bash':
+      return <BugBashIcon size={size} />;
     default:
       return <AiChatIcon size={size} />;
   }

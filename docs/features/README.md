@@ -11,6 +11,7 @@ use it step by step**.
 | [Skills](skills.md) | Reusable instruction blocks tagged onto features/sessions and auto-seeded into prompts. |
 | [PR reviews](pr-reviews.md) | The "Open a PR" flow: review page, change graph, inline comments, and scoring. |
 | [New Task](new-task.md) | Attach the New Task agent: plan a change, implement it with a parallel agent team, and open a PR. |
+| [Bug Bash](bug-bash.md) | Attach the Bug Bash agent: generate edge-case test scenarios, run them across a parallel tester team, and report what breaks. |
 | [Monitors & Automations](automations.md) | Background monitors that run checks on an interval, evaluate conditions, and fire actions or tracked subagents. |
 | [MCP servers](mcp-servers.md) | Managing Model Context Protocol servers and toggling their tools live. |
 | [Usage & cost](usage-and-cost.md) | Live credit/token/cost meters, feature dashboards, and IDE AI attribution. |
@@ -30,7 +31,7 @@ The window has an **activity bar** on the far left with these destinations:
 | Settings | **Settings** | see [development.md](../development.md) |
 
 The **Agents** view is a catalog of every installed agent (Review Board, New
-Task) with its prompts, settings, and average credits per run.
+Task, Bug Bash) with its prompts, settings, and average credits per run.
 
 The bottom **status bar** always shows the active view, active session count, and
 live **IDE AI**, **AIC**, and token totals. A theme toggle (sun/moon) sits at the

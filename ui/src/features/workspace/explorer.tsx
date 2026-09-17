@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { ApiError } from '../../lib/api.js';
 import type { LiveState } from '../../lib/stream.js';
 import {
@@ -119,7 +120,10 @@ function SessionRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = usePersistentState(
+    `explorer.session.${session.id}.files`,
+    false,
+  );
   const [managingSkills, setManagingSkills] = useState(false);
   const [viewingUsage, setViewingUsage] = useState(false);
   const [skillSignal, setSkillSignal] = useState(0);
@@ -561,7 +565,10 @@ function FeatureNode({
 }) {
   const api = useApi();
   const nodeStore = useNodeDragStore();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = usePersistentState(
+    `explorer.feature.${feature.id}.expanded`,
+    false,
+  );
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -1390,7 +1397,10 @@ function RepoNode({
   ) => Promise<void>;
 }) {
   const repoId = repo?.id ?? null;
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = usePersistentState(
+    `explorer.repo.${repoId ?? 'none'}.expanded`,
+    defaultExpanded,
+  );
   const [confirming, setConfirming] = useState(false);
   const [viewingContext, setViewingContext] = useState(false);
   const [viewingUsage, setViewingUsage] = useState(false);

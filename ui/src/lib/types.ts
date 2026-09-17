@@ -642,6 +642,85 @@ export type NewTaskImplementEvent =
   | { type: 'failed'; error: string }
   | { type: 'cancelled' };
 
+/** The lifecycle of one Bug Bash agent run. */
+export type BugBashStatus =
+  | 'draft'
+  | 'generating'
+  | 'generated'
+  | 'running'
+  | 'reported'
+  | 'failed';
+
+/** The verdict a tester reached for one scenario. */
+export type BugBashScenarioStatus = 'pending' | 'pass' | 'fail' | 'blocked';
+
+/** One edge-case scenario the analyst proposed for the feature. */
+export interface BugBashScenario {
+  id: string;
+  title: string;
+  input: string;
+  steps: string[];
+  expectedOutput: string;
+  confirmation: string;
+  status: BugBashScenarioStatus;
+  observations: string;
+}
+
+/** The specialization a Bug Bash agent plays in a run. */
+export type BugBashAgentRole = 'analyst' | 'lead' | 'tester';
+
+/** The lifecycle status of a single Bug Bash agent. */
+export type BugBashAgentStatus = 'pending' | 'running' | 'done' | 'failed';
+
+/** One agent in a Bug Bash run's hierarchy, with its live metrics. */
+export interface BugBashAgent {
+  id: string;
+  parentId: string | null;
+  role: BugBashAgentRole;
+  title: string;
+  scenarioIds: string[];
+  status: BugBashAgentStatus;
+  startedAt: number | null;
+  durationMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  credits: number | null;
+}
+
+/** One Bug Bash run as returned by the backend. */
+export interface BugBashRun {
+  id: string;
+  featureId: string;
+  featureInfo: string;
+  setupInfo: string;
+  scenarios: BugBashScenario[];
+  report: string | null;
+  status: BugBashStatus;
+  error: string | null;
+  agents: BugBashAgent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The two free-text inputs that seed a Bug Bash run. */
+export interface BugBashInputs {
+  featureInfo: string;
+  setupInfo: string;
+}
+
+/** One streamed line while a Bug Bash generate/run pass runs. */
+export type BugBashStreamEvent =
+  | {
+      type: 'activity';
+      phase: 'generating' | 'running' | 'reporting' | 'done';
+      line: string;
+      agentId?: string;
+    }
+  | { type: 'agent'; agent: BugBashAgent }
+  | { type: 'done'; run: BugBashRun }
+  | { type: 'failed'; error: string }
+  | { type: 'cancelled' };
+
 /**
  * A single live activity line streamed while a perspective is being analysed.
  * `sessionId` identifies the metasession; a new id means a fresh run/attempt,

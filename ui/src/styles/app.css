@@ -14418,3 +14418,137 @@ body.is-resizing {
 .new-task-plan-recap .new-task-plan-md {
   margin-top: var(--space-3);
 }
+
+/* ---- Bug Bash scenario cards ---- */
+.bug-bash-scenario-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.bug-bash-scenarios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bug-bash-scenario {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bug-bash-scenario.is-pass {
+  border-left-color: var(--success, #3fb950);
+}
+
+.bug-bash-scenario.is-fail {
+  border-left-color: var(--danger, #f85149);
+}
+
+.bug-bash-scenario.is-blocked {
+  border-left-color: var(--warning, #d29922);
+}
+
+.bug-bash-scenario-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bug-bash-scenario-head strong {
+  font-size: 0.9rem;
+}
+
+.bug-bash-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  white-space: nowrap;
+}
+
+.bug-bash-scenario.is-pass .bug-bash-verdict {
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 14%, transparent);
+}
+
+.bug-bash-scenario.is-fail .bug-bash-verdict {
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 14%, transparent);
+}
+
+.bug-bash-scenario.is-blocked .bug-bash-verdict {
+  color: var(--warning, #d29922);
+  background: color-mix(in srgb, var(--warning, #d29922) 14%, transparent);
+}
+
+.bug-bash-verdict-glyph {
+  font-weight: 900;
+}
+
+.bug-bash-scenario-body {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px var(--space-3);
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.bug-bash-scenario-body > div {
+  display: contents;
+}
+
+.bug-bash-scenario-body dt {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  padding-top: 2px;
+}
+
+.bug-bash-scenario-body dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bug-bash-steps {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bug-bash-report {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: var(--space-3) var(--space-4);
+}
+

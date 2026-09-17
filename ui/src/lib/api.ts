@@ -63,6 +63,9 @@ import type {
   NewTaskRun,
   NewTaskImplementEvent,
   NewTaskFileDiff,
+  BugBashRun,
+  BugBashInputs,
+  BugBashStreamEvent,
   ManagedWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
@@ -184,6 +187,51 @@ export function createApiClient(options: ApiClientOptions = {}) {
     const tail = buffer.trim();
     if (tail.length > 0) {
       onEvent(JSON.parse(tail) as NewTaskImplementEvent);
+    }
+  }
+
+  /**
+   * Read a Bug Bash NDJSON stream, delivering each event to `onEvent`. Shared by
+   * the generate and run passes, which both stream {activity|agent|done|failed|
+   * cancelled} lines over a single long-lived socket.
+   */
+  async function streamBugBashEvents(
+    response: Response,
+    path: string,
+    onEvent: (event: BugBashStreamEvent) => void,
+  ): Promise<void> {
+    if (!response.ok) {
+      throw new ApiError(response.status, await errorMessage(response, path));
+    }
+    if (!response.body) {
+      throw new ApiError(
+        0,
+        `Request failed: ${path} returned no stream. The backend may be starting up — please retry.`,
+      );
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const flush = (chunk: string): void => {
+      buffer += chunk;
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line.length > 0) {
+          onEvent(JSON.parse(line) as BugBashStreamEvent);
+        }
+        newline = buffer.indexOf('\n');
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      flush(decoder.decode(value, { stream: true }));
+    }
+    const tail = buffer.trim();
+    if (tail.length > 0) {
+      onEvent(JSON.parse(tail) as BugBashStreamEvent);
     }
   }
 
@@ -492,6 +540,72 @@ export function createApiClient(options: ApiClientOptions = {}) {
     cancelNewTask: (featureId: string, attachmentId: string) =>
       request<{ cancelled: boolean; run: NewTaskRun | null }>(
         `/features/${featureId}/new-task/${attachmentId}/cancel`,
+        jsonBody({}),
+      ),
+    getBugBash: (featureId: string, attachmentId: string) =>
+      request<{ run: BugBashRun | null }>(
+        `/features/${featureId}/bug-bash/${attachmentId}`,
+      ),
+    saveBugBashInputs: (
+      featureId: string,
+      attachmentId: string,
+      inputs: BugBashInputs,
+    ) =>
+      request<BugBashRun>(
+        `/features/${featureId}/bug-bash/${attachmentId}/inputs`,
+        jsonBody(inputs),
+      ),
+    // Long-lived POST that generates the reviewable scenarios in the background
+    // (via the run hub) and streams newline-delimited progress events. Survives
+    // this socket closing; reconnect with streamBugBash to keep watching.
+    generateBugBash: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: BugBashStreamEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/bug-bash/${attachmentId}/generate`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody({}),
+        ...(signal ? { signal } : {}),
+      });
+      await streamBugBashEvents(response, path, onEvent);
+    },
+    // Long-lived POST that runs the accepted scenarios across the tester team
+    // and compiles the report, streaming live agent + activity events.
+    runBugBash: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: BugBashStreamEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/bug-bash/${attachmentId}/run`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody({}),
+        ...(signal ? { signal } : {}),
+      });
+      await streamBugBashEvents(response, path, onEvent);
+    },
+    // Reconnect (GET) to a Bug Bash pass already in flight so a window returning
+    // after a switch resumes the live logs. Ends immediately with no events when
+    // no pass is active, letting the caller fall back to its resume affordance.
+    streamBugBash: async (
+      featureId: string,
+      attachmentId: string,
+      onEvent: (event: BugBashStreamEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/features/${featureId}/bug-bash/${attachmentId}/stream`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...(signal ? { signal } : {}),
+      });
+      await streamBugBashEvents(response, path, onEvent);
+    },
+    // Cancel-and-reset an in-flight Bug Bash pass: aborts the background
+    // metasession (terminating any attached agent process) and resets the run.
+    cancelBugBash: (featureId: string, attachmentId: string) =>
+      request<{ cancelled: boolean; run: BugBashRun | null }>(
+        `/features/${featureId}/bug-bash/${attachmentId}/cancel`,
         jsonBody({}),
       ),
     refreshPrReview: (featureId: string) =>

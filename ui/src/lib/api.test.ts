@@ -1660,3 +1660,168 @@ describe('new task client', () => {
     expect(init?.body).toBe(JSON.stringify({}));
   });
 });
+
+describe('bug bash client', () => {
+  it('reads the current run via GET', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ run: null }));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.getBugBash('f1', 'att1')).resolves.toEqual({
+      run: null,
+    });
+    expect(calls[0][0]).toBe('/api/features/f1/bug-bash/att1');
+  });
+
+  it('saves inputs with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.saveBugBashInputs('f1', 'att1', {
+      featureInfo: 'F',
+      setupInfo: 'S',
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/inputs');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ featureInfo: 'F', setupInfo: 'S' }),
+    );
+  });
+
+  it('streams generate events and forwards the abort signal', async () => {
+    const chunks = [
+      '{"type":"activity","phase":"generating","line":"reading code"}\n',
+      '{"type":"done","run":{"id":"att1","status":"generated"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.generateBugBash('f1', 'att1', (e) => events.push(e), signal);
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/generate');
+    expect(init?.method).toBe('POST');
+    expect(init?.signal).toBe(signal);
+    expect(init?.body).toBe(JSON.stringify({}));
+    expect(events).toEqual([
+      { type: 'activity', phase: 'generating', line: 'reading code' },
+      { type: 'done', run: { id: 'att1', status: 'generated' } },
+    ]);
+  });
+
+  it('generates without a signal', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(['{"type":"done","run":{"id":"att1"}}']);
+    };
+    const client = createApiClient({ fetchImpl });
+    await client.generateBugBash('f1', 'att1', () => {});
+    expect(calls[0][1]?.signal).toBeUndefined();
+    expect(calls[0][1]?.body).toBe(JSON.stringify({}));
+  });
+
+  it('streams run events line by line, skipping blanks', async () => {
+    const chunks = [
+      '{"type":"agent","agent":{"id":"tester-1"}}\n',
+      '\n',
+      '{"type":"done","run":{"id":"att1","status":"reported"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.runBugBash('f1', 'att1', (e) => events.push(e));
+    expect(calls[0][0]).toBe('/api/features/f1/bug-bash/att1/run');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(events).toEqual([
+      { type: 'agent', agent: { id: 'tester-1' } },
+      { type: 'done', run: { id: 'att1', status: 'reported' } },
+    ]);
+  });
+
+  it('forwards the abort signal and reads a newline-less tail', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse(['{"type":"failed","error":"boom"}']);
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.runBugBash('f1', 'att1', (e) => events.push(e), signal);
+    expect(events).toEqual([{ type: 'failed', error: 'boom' }]);
+  });
+
+  it('throws an ApiError when the run request is not ok', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ error: { message: 'nope' } }, 500);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.runBugBash('f1', 'att1', () => {}),
+    ).rejects.toThrow('nope');
+  });
+
+  it('throws an ApiError when the response has no stream body', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({});
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.runBugBash('f1', 'att1', () => {}),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('reconnects to a live pass over GET and streams its events', async () => {
+    const chunks = [
+      '{"type":"activity","phase":"running","line":"resuming"}\n',
+      '{"type":"done","run":{"id":"att1","status":"reported"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const signal = new AbortController().signal;
+    const events: unknown[] = [];
+    await client.streamBugBash('f1', 'att1', (e) => events.push(e), signal);
+    expect(calls[0][0]).toBe('/api/features/f1/bug-bash/att1/stream');
+    expect(calls[0][1]?.method).toBeUndefined();
+    expect(calls[0][1]?.body).toBeUndefined();
+    expect(calls[0][1]?.signal).toBe(signal);
+    expect(events).toEqual([
+      { type: 'activity', phase: 'running', line: 'resuming' },
+      { type: 'done', run: { id: 'att1', status: 'reported' } },
+    ]);
+  });
+
+  it('reconnects without a signal', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse([]);
+    };
+    const client = createApiClient({ fetchImpl });
+    await client.streamBugBash('f1', 'att1', () => {});
+    expect(calls[0][1]?.signal).toBeUndefined();
+  });
+
+  it('cancels a pass with a JSON POST and returns the reset run', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        cancelled: true,
+        run: { id: 'att1', status: 'generated' },
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(client.cancelBugBash('f1', 'att1')).resolves.toEqual({
+      cancelled: true,
+      run: { id: 'att1', status: 'generated' },
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/cancel');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+});

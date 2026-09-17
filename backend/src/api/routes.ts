@@ -85,6 +85,8 @@ import { createReviewBoardRoutes } from './review-board-controller.js';
 import type { ReviewBoardService } from '../review-board/review-board-contract.js';
 import { createNewTaskRoutes } from './new-task-controller.js';
 import type { NewTaskService } from '../new-task/new-task-contract.js';
+import { createBugBashRoutes } from './bug-bash-controller.js';
+import type { BugBashService } from '../bug-bash/bug-bash-contract.js';
 import { createAgentRoutes } from './agent-controller.js';
 import type { AgentService } from '../agents/agent-service.js';
 import { createWorktreeRoutes } from './worktree-controller.js';
@@ -216,6 +218,8 @@ export interface ApiRoutesDeps {
   reviewBoard: ReviewBoardService;
   /** The New Task agent: plan → implement → open PR for a feature's repo. */
   newTask: NewTaskService;
+  /** The Bug Bash agent: generate → run edge-case scenarios for a feature. */
+  bugBash: BugBashService;
   /** The attachable agent platform (catalog, per-feature attach/detach). */
   agents: AgentService;
   /** Live PR comment threads (list / add / resolve) for the review page. */
@@ -291,6 +295,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     }),
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
     ...createNewTaskRoutes({ newTask: deps.newTask }),
+    ...createBugBashRoutes({ bugBash: deps.bugBash }),
     ...createAgentRoutes({ agents: deps.agents }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),

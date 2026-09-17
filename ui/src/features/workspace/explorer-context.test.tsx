@@ -138,6 +138,32 @@ describe('Explorer repository context gating', () => {
     expect(screen.queryByText(/pending analysis/i)).not.toBeInTheDocument();
   });
 
+  it('restores expanded features after the Explorer unmounts and remounts', async () => {
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn().mockResolvedValue([]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      listSessionSkills: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+    };
+    const tree = (
+      <ApiProvider value={client}>
+        <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+      </ApiProvider>
+    );
+    const first = render(tree);
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    // Expanding persists, so the collapse affordance is now present.
+    await screen.findByRole('button', { name: `Collapse ${feature.name}` });
+    // Navigating away unmounts the Explorer; navigating back remounts it fresh.
+    first.unmount();
+    render(tree);
+    // The feature is expanded again from persisted state, not collapsed.
+    expect(
+      await screen.findByRole('button', { name: `Collapse ${feature.name}` }),
+    ).toBeInTheDocument();
+  });
+
   it('keeps repository-less feature session creation enabled', async () => {
     const client = {
       ...api(context('pending', '2025-01-01T00:00:01Z')),

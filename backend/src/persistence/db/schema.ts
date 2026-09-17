@@ -342,6 +342,25 @@ const CORE_TABLES: readonly TableSchema[] = [
     updated_at TEXT NOT NULL
   )`,
   },
+  {
+    // One row per Bug Bash agent run, keyed by the backing agent attachment id.
+    // Holds the captured feature/setup info, the generated scenarios (with their
+    // results once run) and the compiled report, plus the per-run tester team.
+    name: 'bug_bash_runs',
+    ddl: `CREATE TABLE IF NOT EXISTS bug_bash_runs (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL,
+    feature_info TEXT NOT NULL,
+    setup_info TEXT NOT NULL,
+    scenarios TEXT,
+    report TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    agents TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  },
 ];
 
 const USAGE_TABLES: readonly TableSchema[] = [
@@ -776,6 +795,10 @@ const INDEXES: readonly IndexSchema[] = [
   {
     schema: 'main',
     ddl: 'CREATE INDEX IF NOT EXISTS main.idx_new_task_runs_feature ON new_task_runs (feature_id)',
+  },
+  {
+    schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_bug_bash_runs_feature ON bug_bash_runs (feature_id)',
   },
   {
     schema: 'tasks',

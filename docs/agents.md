@@ -3,12 +3,13 @@
 An **agent** is an isolated, attachable analysis/automation surface a user
 attaches to a **feature**. Agents are contributed to a registry and never
 hand-wired into core: the host owns attachment, prerequisite gating, usage
-roll-up, and the management view generically. Two ship today:
+roll-up, and the management view generically. Three ship today:
 
 | Agent | Attaches when | Does |
 | --- | --- | --- |
 | **Review Board** | the feature has a PR review | Scores and analyses a pull request ([PR reviews](features/pr-reviews.md)). |
 | **New Task** | the feature has a linked repository | Plans and implements a change, then opens a PR ([New Task](features/new-task.md)). |
+| **Bug Bash** | the feature has a linked repository | Generates edge-case test scenarios, runs them across a tester team, and reports what breaks ([Bug Bash](features/bug-bash.md)). |
 
 An agent:
 
@@ -29,7 +30,8 @@ An agent:
    it can attach; the UI only offers it where the prereq is met and the backend
    re-checks on attach.
 2. **Multiplicity** — each manifest sets `allowMultiplePerFeature`. Review Board
-   is single-instance; New Task allows many (one per problem).
+   is single-instance; New Task and Bug Bash allow many (one per problem or
+   feature under test).
 3. **Isolation** — capabilities are **injected**, routes and config are
    **namespaced** (`/agents/:id/*`, config namespace = id), and manifests are
    validated at registration. An agent cannot reach globals, the DB, the
@@ -43,7 +45,7 @@ An agent:
 | --- | --- |
 | Platform contract | `backend/src/agents/agent-contract.ts` |
 | Registry + service | `backend/src/agents/agent-registry.ts`, `agent-service.ts` |
-| Shipped agents | `backend/src/agents/review-board-agent.ts`, `new-task-agent.ts` |
+| Shipped agents | `backend/src/agents/review-board-agent.ts`, `new-task-agent.ts`, `bug-bash-agent.ts` |
 | UI host + registry | `ui/src/agent-host/` |
 | UI agent modules | `ui/src/agents/<id>/<id>-module.tsx` |
 

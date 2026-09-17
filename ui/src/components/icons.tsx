@@ -13,6 +13,7 @@ import {
   BookOpen,
   Bot,
   BrainCircuit,
+  Bug,
   Check,
   ChevronRight,
   Circle,
@@ -155,6 +156,7 @@ export const AiIcon = makeIcon(Sparkles);
 export const AiMagicIcon = makeIcon(WandSparkles);
 export const IntelligenceIcon = makeIcon(BrainCircuit);
 export const LaunchIcon = makeIcon(Rocket);
+export const BugBashIcon = makeIcon(Bug);
 export const AiChatIcon = makeIcon(Bot);
 export const SendIcon = makeIcon(Send);
 export const McpIcon = makeIcon(Plug);

@@ -454,6 +454,19 @@ import { createNewTaskPr } from './new-task/new-task-pr.js';
 import { createNewTaskTeam } from './new-task/new-task-team.js';
 import { createNewTaskRunRepo } from './persistence/new-task-run-repo.js';
 import type { NewTaskEventMap } from './new-task/new-task-contract.js';
+import { createBugBashAgent } from './agents/bug-bash-agent.js';
+import {
+  BUG_BASH_NAMESPACE,
+  bugBashConfigSchema,
+  bugBashDefaults,
+  type BugBashConfig,
+} from './bug-bash/config.js';
+import { createBugBashService } from './bug-bash/bug-bash-service.js';
+import { createBugBashRunHub } from './bug-bash/bug-bash-run-hub.js';
+import type { BugBashStreamEvent } from './bug-bash/bug-bash-run-hub.js';
+import { createBugBashTeam } from './bug-bash/bug-bash-team.js';
+import { createBugBashRunRepo } from './persistence/bug-bash-run-repo.js';
+import type { BugBashEventMap } from './bug-bash/bug-bash-contract.js';
 import { createAgentAttachmentRepo } from './persistence/agent-attachment-repo.js';
 import { createAgentUsageReader } from './persistence/agent-usage-reader.js';
 import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
@@ -540,6 +553,11 @@ function main(): void {
     namespace: NEW_TASK_NAMESPACE,
     schema: newTaskConfigSchema,
     defaults: newTaskDefaults,
+  });
+  registry.register({
+    namespace: BUG_BASH_NAMESPACE,
+    schema: bugBashConfigSchema,
+    defaults: bugBashDefaults,
   });
   registry.register({
     namespace: AUTOMATION_NAMESPACE,
@@ -721,6 +739,7 @@ function main(): void {
   const prReviewConfig = config[PR_REVIEW_NAMESPACE] as PrReviewConfig;
   const reviewBoardConfig = config[REVIEW_BOARD_NAMESPACE] as ReviewBoardConfig;
   const newTaskConfig = config[NEW_TASK_NAMESPACE] as NewTaskConfig;
+  const bugBashConfig = config[BUG_BASH_NAMESPACE] as BugBashConfig;
   const automationConfig = config[AUTOMATION_NAMESPACE] as AutomationConfig;
   const authWarmerConfig = config[AUTH_WARMER_NAMESPACE] as AuthWarmerConfig;
   const selfRecoveryConfig = config[
@@ -2140,6 +2159,12 @@ function main(): void {
         ),
       hasReview: (featureId) => prReviewService.find(featureId) !== null,
     }),
+    createBugBashAgent({
+      hasRepo: (featureId) =>
+        featureService.list().some(
+          (feature) => feature.id === featureId && !!feature.repoId,
+        ),
+    }),
   ]);
   const agentService = createAgentService({
     registry: agentRegistry,
@@ -2336,6 +2361,32 @@ function main(): void {
     bus: bus as unknown as EventBus<NewTaskEventMap>,
   });
   const newTaskRunHub = createNewTaskRunHub({ service: newTaskService });
+  // The Bug Bash agent: read the feature's repository to generate edge-case
+  // scenarios, then run the accepted ones across a team of parallel tester
+  // sub-agents and compile a report. It never edits code or opens a PR, so it
+  // only needs the repo's local checkout to read/exercise.
+  const bugBashRunRepo = createBugBashRunRepo(db);
+  const bugBashService = createBugBashService({
+    repo: bugBashRunRepo,
+    workspace: {
+      resolve: (featureId) => {
+        const feature = featureService.get(featureId);
+        if (!feature.repoId) {
+          throw new ValidationError(
+            'This feature has no repository, so Bug Bash cannot read its code.',
+          );
+        }
+        const repo = repoService.get(feature.repoId);
+        return { repoId: repo.id, repoLocalPath: repo.localPath };
+      },
+    },
+    config: bugBashConfig,
+    clock,
+    ai: metaAi,
+    team: createBugBashTeam({ ai: metaAi, clock, config: bugBashConfig }),
+    bus: bus as unknown as EventBus<BugBashEventMap>,
+  });
+  const bugBashRunHub = createBugBashRunHub({ service: bugBashService });
   const workspaceAdmin = createWorkspaceAdmin({
     features: featureService,
     sessions: sessionRepo,
@@ -2392,6 +2443,7 @@ function main(): void {
       deleteByFeature: (featureId) => {
         agentService.removeFeature(featureId);
         newTaskRunRepo.deleteByFeature(featureId);
+        bugBashRunRepo.deleteByFeature(featureId);
       },
     },
   });
@@ -2861,6 +2913,7 @@ function main(): void {
       prReviews: prReviewService,
       reviewBoard: reviewBoardService,
       newTask: newTaskService,
+      bugBash: bugBashService,
       agents: agentService,
       prComments: prCommentsService,
       prApprovals: prApprovalService,
@@ -3089,6 +3142,111 @@ function main(): void {
       const attachmentId = req.params.attachmentId;
       const cancelled = newTaskRunHub.cancel(attachmentId);
       const run = newTaskService.reset(attachmentId);
+      res.json({ cancelled, run });
+    },
+  );
+
+  // Bug Bash: stream a run's buffered + live events to an HTTP response by
+  // attaching to its run hub. A client disconnect only detaches this listener —
+  // it never cancels the background pass, so switching windows can't stop
+  // generation or a run.
+  const streamBugBashRun = (
+    attachmentId: string,
+    res: express.Response,
+  ): void => {
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    let ended = false;
+    let detach = (): void => {};
+    const finish = (): void => {
+      if (ended) return;
+      ended = true;
+      detach();
+      res.end();
+    };
+    const write = (event: BugBashStreamEvent): void => {
+      if (ended) return;
+      res.write(`${JSON.stringify(event)}\n`);
+      if (
+        event.type === 'done' ||
+        event.type === 'failed' ||
+        event.type === 'cancelled'
+      )
+        finish();
+    };
+    detach = bugBashRunHub.attach(attachmentId, write);
+    if (ended) {
+      detach();
+    } else {
+      res.on('close', () => {
+        if (!res.writableFinished) {
+          ended = true;
+          detach();
+        }
+      });
+    }
+  };
+
+  // Bug Bash: generate the reviewable scenarios — streamed as newline-delimited
+  // JSON. The pass runs in the background (via the run hub) so it survives the
+  // browser closing this socket; the response replays buffered activity and then
+  // tails live events.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/bug-bash/:attachmentId/generate`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      bugBashRunHub.startGenerate(attachmentId);
+      streamBugBashRun(attachmentId, res);
+    },
+  );
+
+  // Bug Bash: reconnect to a pass already in flight WITHOUT starting anything,
+  // so a window returning after a switch shows live logs again. When no live
+  // pass exists the stream ends immediately with no events, letting the UI fall
+  // back to its "interrupted — resume" affordance.
+  app.get(
+    `${apiConfig.basePath}/features/:featureId/bug-bash/:attachmentId/stream`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      if (!bugBashRunHub.isLive(attachmentId)) {
+        res.writeHead(200, {
+          'Content-Type': 'application/x-ndjson',
+          'Cache-Control': 'no-cache',
+        });
+        res.end();
+        return;
+      }
+      streamBugBashRun(attachmentId, res);
+    },
+  );
+
+  // Bug Bash: run the accepted scenarios across the tester team and compile the
+  // report. The pass runs in the background via the run hub so closing this
+  // socket never stops it; reconnect with the GET stream endpoint to keep
+  // watching the live logs.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/bug-bash/:attachmentId/run`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      bugBashRunHub.startRun(attachmentId);
+      streamBugBashRun(attachmentId, res);
+    },
+  );
+
+  // Bug Bash: cancel-and-reset the in-flight pass. Aborts the background
+  // metasession (terminating any attached agent process), then resets the
+  // persisted run so the user can retry. Attached stream sockets receive a
+  // terminal `cancelled` event and end on their own.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/bug-bash/:attachmentId/cancel`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const cancelled = bugBashRunHub.cancel(attachmentId);
+      const run = bugBashService.reset(attachmentId);
       res.json({ cancelled, run });
     },
   );

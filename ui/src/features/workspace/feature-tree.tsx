@@ -5,6 +5,7 @@ import {
   type DragEvent,
   type ReactNode,
 } from 'react';
+import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import type {
   Feature,
   MoveNodeInput,
@@ -262,7 +263,10 @@ function GroupNode({ group }: { group: TreeGroup }) {
     canNestInto,
     onMoveFeatureIntoGroup,
   } = useTree();
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = usePersistentState(
+    `explorer.group.${group.id}.expanded`,
+    true,
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(group.name);
   const [confirming, setConfirming] = useState(false);
