@@ -14,6 +14,11 @@ import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { NewTaskConfig } from './config.js';
 import { buildPlanPrompt } from './new-task-prompt.js';
+import {
+  buildRefinePrompt,
+  parseRefineResponse,
+  type RefineChatMessage,
+} from '../refine-chat/refine-chat.js';
 import { agentMetricsOf, type NewTaskTeam } from './new-task-team.js';
 import type {
   NewTaskAgent,
@@ -238,6 +243,41 @@ export function createNewTaskService(
       };
       deps.repo.create(run);
       return run;
+    },
+
+    async refine(attachmentId, history: RefineChatMessage[], message, signal) {
+      const run = requireRun(attachmentId);
+      const text = message.trim();
+      if (text.length === 0) {
+        throw new ValidationError('A message is required.');
+      }
+      const workspace = deps.workspace.resolve(run.featureId);
+      const prompt = buildRefinePrompt(deps.config.refinePromptTemplate, {
+        artifactLabel: 'implementation plan',
+        featureContext: `Problem:\n${run.problem}\n\nContext:\n${run.context}`,
+        artifact: run.plan ?? '',
+        revisedHint:
+          'When you change the plan, set "revised" to the COMPLETE new plan as ' +
+          'a markdown string (not a diff). Otherwise set "revised" to null.',
+        messages: history,
+        message: text,
+      });
+      const result = await deps.ai.runDetailed({
+        featureId: run.featureId,
+        prompt,
+        cwd: workspace.repoLocalPath,
+        scope: 'internal',
+        model: 'auto',
+        label: 'New task · Refine',
+        timeoutMs: deps.config.planTimeoutMs,
+        signal,
+      });
+      const parsed = parseRefineResponse(result.text);
+      let next = run;
+      if (typeof parsed.revised === 'string' && parsed.revised.trim().length > 0) {
+        next = touch(run, { plan: parsed.revised });
+      }
+      return { reply: parsed.reply, run: next };
     },
 
     async plan(attachmentId, signal, sink, options) {

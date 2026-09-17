@@ -14,11 +14,14 @@ import type { EventBus } from '../kernel/event-bus.js';
 import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { BugBashConfig } from './config.js';
-import { buildGeneratePrompt } from './bug-bash-prompt.js';
-import { agentMetricsOf, type BugBashTeam } from './bug-bash-team.js';
 import { parseScenarios } from './bug-bash-scenarios.js';
+import {
+  buildRefinePrompt,
+  parseRefineResponse,
+} from '../refine-chat/refine-chat.js';
+import type { BugBashTeam } from './bug-bash-team.js';
+import type { BugBashGenerateTeam } from './bug-bash-generate-team.js';
 import type {
-  BugBashAgent,
   BugBashEventMap,
   BugBashInputs,
   BugBashRun,
@@ -35,8 +38,10 @@ export interface BugBashServiceDeps {
   workspace: BugBashWorkspaceResolver;
   config: BugBashConfig;
   clock: Clock;
-  /** The reusable "run an AI prompt" primitive. */
+  /** The reusable "run an AI prompt" primitive, used by the refine chat. */
   ai: Pick<MetaRunner, 'runDetailed'>;
+  /** The lead-analyst-led team that generates scenarios in parallel. */
+  generateTeam: BugBashGenerateTeam;
   /** The lead-led team that runs accepted scenarios in parallel. */
   team: BugBashTeam;
   /** Publishes live progress so the UI can stream it over the bus too. */
@@ -46,15 +51,6 @@ export interface BugBashServiceDeps {
 /** Read the message from an unknown thrown value. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Render the exact prompt handed to the metasession as a single, multi-line
- * activity entry so the live log opens with "here is what the agent was asked
- * to do" before the streamed reasoning/tool events arrive.
- */
-function promptActivity(prompt: string): string {
-  return `📝 Prompt sent to the agent:\n${prompt.trim()}`;
 }
 
 export function createBugBashService(
@@ -77,31 +73,6 @@ export function createBugBashService(
     agentId?: string,
   ): void {
     deps.bus.emit('bug-bash.activity', { runId: run.id, phase, line, agentId });
-  }
-
-  /** Build the single "Analyst" snapshot from a generation turn's result. */
-  function analystAgent(
-    result: { usage?: Parameters<typeof agentMetricsOf>[0]['usage'] },
-    startedAt: number,
-    durationMs: number | null,
-    status: BugBashAgent['status'],
-  ): BugBashAgent {
-    const metrics = agentMetricsOf(
-      result as Parameters<typeof agentMetricsOf>[0],
-    );
-    return {
-      id: 'analyst',
-      parentId: null,
-      role: 'analyst',
-      title: 'Scenario analyst',
-      scenarioIds: [],
-      status,
-      startedAt: status === 'running' ? startedAt : null,
-      durationMs,
-      inputTokens: metrics.inputTokens,
-      outputTokens: metrics.outputTokens,
-      credits: metrics.credits,
-    };
   }
 
   function requireRun(attachmentId: string): BugBashRun {
@@ -181,32 +152,25 @@ export function createBugBashService(
       const workspace = deps.workspace.resolve(run.featureId);
       run = touch(run, { status: 'generating', error: null });
       try {
-        const prompt = buildGeneratePrompt(deps.config.generatePromptTemplate, {
-          featureInfo: run.featureInfo,
-          setupInfo: run.setupInfo,
-        });
-        sink?.activity({ phase: 'generating', line: promptActivity(prompt) });
         sink?.activity({
           phase: 'generating',
-          line: '🔎 Reading the feature code to design edge-case scenarios…',
+          line: '🔎 Assembling an analyst team to design edge-case scenarios…',
         });
-        const startedMs = deps.clock.now().getTime();
-        sink?.agent?.(analystAgent({}, startedMs, null, 'running'));
-        const result = await deps.ai.runDetailed({
+        const team = await deps.generateTeam.generate({
           featureId: run.featureId,
-          prompt,
           cwd: workspace.repoLocalPath,
-          scope: 'internal',
-          model: 'auto',
-          label: 'Bug bash',
-          timeoutMs: deps.config.generateTimeoutMs,
+          featureInfo: run.featureInfo,
+          setupInfo: run.setupInfo,
           signal,
-          onActivity: (line) => {
-            emit(run, 'generating', line, 'analyst');
-            sink?.activity({ phase: 'generating', line, agentId: 'analyst' });
+          sink: {
+            activity: (activity) => {
+              sink?.activity(activity);
+              emit(run, activity.phase, activity.line, activity.agentId);
+            },
+            agent: (agent) => sink?.agent?.(agent),
           },
         });
-        const scenarios: BugBashScenario[] = parseScenarios(result.text).map(
+        const scenarios: BugBashScenario[] = team.scenarios.map(
           (parsed, index) => ({
             id: `scenario-${index + 1}`,
             title: parsed.title,
@@ -218,13 +182,6 @@ export function createBugBashService(
             observations: '',
           }),
         );
-        const analyst = analystAgent(
-          result,
-          startedMs,
-          deps.clock.now().getTime() - startedMs,
-          'done',
-        );
-        sink?.agent?.(analyst);
         sink?.activity({
           phase: 'generating',
           line: `🧪 Generated ${scenarios.length} scenario${
@@ -234,7 +191,7 @@ export function createBugBashService(
         const generated = touch(run, {
           scenarios,
           status: 'generated',
-          agents: [analyst],
+          agents: team.agents,
         });
         sink?.done(generated);
         return generated;
@@ -251,6 +208,69 @@ export function createBugBashService(
         }
         throw error;
       }
+    },
+
+    async refine(attachmentId, history, message, signal) {
+      const run = requireRun(attachmentId);
+      const text = message.trim();
+      if (text.length === 0) {
+        throw new ValidationError('A message is required.');
+      }
+      const workspace = deps.workspace.resolve(run.featureId);
+      const artifact = JSON.stringify(
+        {
+          scenarios: run.scenarios.map((scenario) => ({
+            title: scenario.title,
+            input: scenario.input,
+            steps: scenario.steps,
+            expectedOutput: scenario.expectedOutput,
+            confirmation: scenario.confirmation,
+          })),
+        },
+        null,
+        2,
+      );
+      const prompt = buildRefinePrompt(deps.config.refinePromptTemplate, {
+        artifactLabel: 'bug bash test scenarios',
+        featureContext: `Feature information:\n${run.featureInfo}\n\nSetup information:\n${run.setupInfo}`,
+        artifact,
+        revisedHint:
+          'When you change the scenarios, set "revised" to an object shaped ' +
+          '{"scenarios":[{"title":"","input":"","steps":["",""],' +
+          '"expectedOutput":"","confirmation":""}]} containing the COMPLETE new ' +
+          'list of scenarios (not a diff). Otherwise set "revised" to null.',
+        messages: history,
+        message: text,
+      });
+      const result = await deps.ai.runDetailed({
+        featureId: run.featureId,
+        prompt,
+        cwd: workspace.repoLocalPath,
+        scope: 'internal',
+        model: 'auto',
+        label: 'Bug bash · Refine',
+        timeoutMs: deps.config.generateTimeoutMs,
+        signal,
+      });
+      const parsed = parseRefineResponse(result.text);
+      let next = run;
+      if (parsed.revised && typeof parsed.revised === 'object') {
+        const revised = parseScenarios(JSON.stringify(parsed.revised));
+        if (revised.length > 0) {
+          const scenarios: BugBashScenario[] = revised.map((scenario, index) => ({
+            id: `scenario-${index + 1}`,
+            title: scenario.title,
+            input: scenario.input,
+            steps: scenario.steps,
+            expectedOutput: scenario.expectedOutput,
+            confirmation: scenario.confirmation,
+            status: 'pending',
+            observations: '',
+          }));
+          next = touch(run, { scenarios, status: 'generated', report: null });
+        }
+      }
+      return { reply: parsed.reply, run: next };
     },
 
     async run(attachmentId, sink: BugBashRunSink, signal) {

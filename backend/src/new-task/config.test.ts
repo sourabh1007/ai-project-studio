@@ -16,6 +16,13 @@ describe('new-task config', () => {
     expect(newTaskDefaults.implementTimeoutMs).toBeGreaterThan(0);
     expect(newTaskDefaults.planPromptTemplate.length).toBeGreaterThan(0);
     expect(newTaskDefaults.implementPromptTemplate.length).toBeGreaterThan(0);
+    expect(newTaskDefaults.refinePromptTemplate.length).toBeGreaterThan(0);
+  });
+
+  it('rejects an empty refine prompt template', () => {
+    expect(() =>
+      newTaskConfigSchema.parse({ ...newTaskDefaults, refinePromptTemplate: '' }),
+    ).toThrow();
   });
 
   it('rejects a non-positive timeout', () => {

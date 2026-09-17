@@ -17,6 +17,7 @@ import {
   TaskPlanSkillIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
+import { RefineChatPanel } from '../../components/refine-chat-panel.js';
 import type {
   BugBashAgent,
   BugBashRun,
@@ -976,6 +977,23 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
                     <ScenarioCard key={scenario.id} scenario={scenario} />
                   ))}
                 </ul>
+                {scenariosReady && (
+                  <RefineChatPanel<BugBashRun>
+                    title="Refine with the analyst"
+                    context="Challenge or edit these scenarios in plain language before you run them."
+                    hint="e.g. “Drop the duplicate login checks and add one for an expired session token.” The analyst reads the repo and rewrites the scenarios when you ask."
+                    placeholder="Ask the analyst to change the scenarios…"
+                    onSend={(history, message) =>
+                      api.refineBugBash(
+                        feature.id,
+                        attachmentId,
+                        history,
+                        message,
+                      )
+                    }
+                    onRevised={hydrate}
+                  />
+                )}
               </section>
             ) : (
               <p className="muted">No scenarios yet — generate them first.</p>

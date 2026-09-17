@@ -11,6 +11,8 @@
  * reports what it found. Everything project-specific is derived at run time.
  */
 
+import type { RefineChatMessage } from '../refine-chat/refine-chat.js';
+
 /**
  * The lifecycle of one Bug Bash run.
  *
@@ -159,6 +161,14 @@ export type BugBashEventMap = {
   'bug-bash.activity': BugBashActivity;
 };
 
+/** The settled outcome of one refine-chat turn. */
+export interface BugBashRefineResult {
+  /** The assistant's markdown reply to append to the chat. */
+  reply: string;
+  /** The run, with revised scenarios applied when the turn changed them. */
+  run: BugBashRun;
+}
+
 /** Sink a streaming generate/run pass writes its progress + result to. */
 export interface BugBashRunSink {
   activity(activity: Omit<BugBashActivity, 'runId'>): void;
@@ -201,6 +211,18 @@ export interface BugBashService {
     sink: BugBashRunSink,
     signal?: AbortSignal,
   ): Promise<void>;
+  /**
+   * Run one refine-chat turn: the user challenges or asks to edit the generated
+   * scenarios in plain language. `history` is the prior conversation and
+   * `message` the new user message. Returns the assistant reply and the run,
+   * with the scenarios replaced when the turn revised them.
+   */
+  refine(
+    attachmentId: string,
+    history: RefineChatMessage[],
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<BugBashRefineResult>;
   /**
    * Cancel-and-reset: revert an in-flight (`generating`/`running`) or `failed`
    * run to a clean state so it can be retried. Inputs and any already-generated

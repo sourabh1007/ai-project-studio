@@ -14552,3 +14552,90 @@ body.is-resizing {
   padding: var(--space-3) var(--space-4);
 }
 
+
+/* Refine chat — conversational panel to challenge/edit generated artifacts
+   (Bug Bash scenarios, New Task plan). Reused by both agents. */
+.refine-chat {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1, transparent);
+}
+.refine-chat-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.refine-chat-title {
+  flex: 1 1 auto;
+  text-align: left;
+}
+.refine-chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+.refine-chat-context {
+  margin: 0;
+  font-size: 12px;
+}
+.refine-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.refine-chat-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
+}
+.refine-chat-msg {
+  font-size: 13px;
+  line-height: 18px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.refine-chat-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  max-width: 85%;
+  white-space: pre-wrap;
+}
+.refine-chat-assistant {
+  align-self: flex-start;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  color: var(--text);
+  max-width: 92%;
+}
+.refine-chat-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.refine-chat-input {
+  flex: 1 1 auto;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-1, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.refine-chat-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}

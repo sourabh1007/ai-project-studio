@@ -485,6 +485,24 @@ export interface ReviewBoardChatMessage {
   content: string;
 }
 
+/** One message in a refine-chat conversation (Bug Bash scenarios / New Task plan). */
+export interface RefineChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** The settled outcome of one Bug Bash scenario refine turn. */
+export interface BugBashRefineResult {
+  reply: string;
+  run: BugBashRun;
+}
+
+/** The settled outcome of one New Task plan refine turn. */
+export interface NewTaskRefineResult {
+  reply: string;
+  run: NewTaskRun;
+}
+
 /**
  * The analysed state of the focused perspective the reviewer is looking at,
  * handed to the agent so it can reason about the concrete findings/evidence on

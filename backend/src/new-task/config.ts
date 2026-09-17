@@ -6,6 +6,7 @@ import {
   DEFAULT_REVIEW_PROMPT_TEMPLATE,
   DEFAULT_WORKER_PROMPT_TEMPLATE,
 } from './new-task-prompt.js';
+import { DEFAULT_REFINE_PROMPT_TEMPLATE } from '../refine-chat/refine-chat.js';
 
 /** Configuration schema for the New Task agent. */
 export const NEW_TASK_NAMESPACE = 'newTask';
@@ -46,6 +47,12 @@ export const newTaskConfigSchema = z.object({
    * projects. Placeholders: {{problem}}, {{context}}, {{plan}}.
    */
   reviewPromptTemplate: z.string().min(1),
+  /**
+   * Refine-chat prompt: lets the user challenge and edit the generated plan
+   * conversationally. Placeholders: {{artifactLabel}}, {{featureContext}},
+   * {{artifact}}, {{revisedHint}}, {{transcript}}, {{message}}.
+   */
+  refinePromptTemplate: z.string().min(1),
 });
 
 export type NewTaskConfig = z.infer<typeof newTaskConfigSchema>;
@@ -64,4 +71,5 @@ export const newTaskDefaults: NewTaskConfig = {
   decomposePromptTemplate: DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   workerPromptTemplate: DEFAULT_WORKER_PROMPT_TEMPLATE,
   reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+  refinePromptTemplate: DEFAULT_REFINE_PROMPT_TEMPLATE,
 };

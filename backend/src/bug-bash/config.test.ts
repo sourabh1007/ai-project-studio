@@ -15,9 +15,12 @@ describe('bug-bash config', () => {
     expect(bugBashDefaults.generateTimeoutMs).toBeGreaterThan(0);
     expect(bugBashDefaults.runTimeoutMs).toBeGreaterThan(0);
     expect(bugBashDefaults.maxTesters).toBeGreaterThanOrEqual(1);
+    expect(bugBashDefaults.maxAnalysts).toBeGreaterThanOrEqual(1);
+    expect(bugBashDefaults.decomposePromptTemplate.length).toBeGreaterThan(0);
     expect(bugBashDefaults.generatePromptTemplate.length).toBeGreaterThan(0);
     expect(bugBashDefaults.testerPromptTemplate.length).toBeGreaterThan(0);
     expect(bugBashDefaults.reportPromptTemplate.length).toBeGreaterThan(0);
+    expect(bugBashDefaults.refinePromptTemplate.length).toBeGreaterThan(0);
   });
 
   it('rejects a non-positive timeout', () => {
@@ -28,7 +31,13 @@ describe('bug-bash config', () => {
 
   it('rejects too many testers', () => {
     expect(() =>
-      bugBashConfigSchema.parse({ ...bugBashDefaults, maxTesters: 9 }),
+      bugBashConfigSchema.parse({ ...bugBashDefaults, maxTesters: 11 }),
+    ).toThrow();
+  });
+
+  it('rejects too many analysts', () => {
+    expect(() =>
+      bugBashConfigSchema.parse({ ...bugBashDefaults, maxAnalysts: 11 }),
     ).toThrow();
   });
 });

@@ -465,6 +465,7 @@ import { createBugBashService } from './bug-bash/bug-bash-service.js';
 import { createBugBashRunHub } from './bug-bash/bug-bash-run-hub.js';
 import type { BugBashStreamEvent } from './bug-bash/bug-bash-run-hub.js';
 import { createBugBashTeam } from './bug-bash/bug-bash-team.js';
+import { createBugBashGenerateTeam } from './bug-bash/bug-bash-generate-team.js';
 import { createBugBashRunRepo } from './persistence/bug-bash-run-repo.js';
 import type { BugBashEventMap } from './bug-bash/bug-bash-contract.js';
 import { createAgentAttachmentRepo } from './persistence/agent-attachment-repo.js';
@@ -2383,6 +2384,11 @@ function main(): void {
     config: bugBashConfig,
     clock,
     ai: metaAi,
+    generateTeam: createBugBashGenerateTeam({
+      ai: metaAi,
+      clock,
+      config: bugBashConfig,
+    }),
     team: createBugBashTeam({ ai: metaAi, clock, config: bugBashConfig }),
     bus: bus as unknown as EventBus<BugBashEventMap>,
   });
@@ -3146,6 +3152,36 @@ function main(): void {
     },
   );
 
+  // New Task: one plan refine-chat turn. The client posts the full prior
+  // conversation plus the new message; the server runs a single AI turn and
+  // returns the reply plus the run, with the plan replaced when revised.
+  // Plain request/response — no stream.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/refine`,
+    async (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const body = (req.body ?? {}) as {
+        history?: unknown;
+        message?: unknown;
+      };
+      const history = Array.isArray(body.history)
+        ? (body.history as Parameters<typeof newTaskService.refine>[1])
+        : [];
+      const message = typeof body.message === 'string' ? body.message : '';
+      try {
+        const result = await newTaskService.refine(
+          attachmentId,
+          history,
+          message,
+        );
+        res.json(result);
+      } catch (error) {
+        const mapped = toErrorResult(error);
+        res.status(mapped.status).json(mapped.body);
+      }
+    },
+  );
+
   // Bug Bash: stream a run's buffered + live events to an HTTP response by
   // attaching to its run hub. A client disconnect only detaches this listener —
   // it never cancels the background pass, so switching windows can't stop
@@ -3248,6 +3284,35 @@ function main(): void {
       const cancelled = bugBashRunHub.cancel(attachmentId);
       const run = bugBashService.reset(attachmentId);
       res.json({ cancelled, run });
+    },
+  );
+
+  // Bug Bash: one refine-chat turn. The user challenges or asks to edit the
+  // generated scenarios; the agent replies and, when asked, returns a revised
+  // scenario list that replaces the old one. Plain request/response — no stream.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/bug-bash/:attachmentId/refine`,
+    async (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const body = (req.body ?? {}) as {
+        history?: unknown;
+        message?: unknown;
+      };
+      const history = Array.isArray(body.history)
+        ? (body.history as Parameters<typeof bugBashService.refine>[1])
+        : [];
+      const message = typeof body.message === 'string' ? body.message : '';
+      try {
+        const result = await bugBashService.refine(
+          attachmentId,
+          history,
+          message,
+        );
+        res.json(result);
+      } catch (error) {
+        const mapped = toErrorResult(error);
+        res.status(mapped.status).json(mapped.body);
+      }
     },
   );
 

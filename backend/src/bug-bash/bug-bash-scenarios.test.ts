@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractJsonObject,
+  parseAreas,
   parseResults,
   parseScenarios,
 } from './bug-bash-scenarios.js';
@@ -117,5 +118,42 @@ describe('parseResults', () => {
 
   it('returns [] when the json does not match the schema', () => {
     expect(parseResults(fence('{"results":[{"status":"pass"}]}'))).toEqual([]);
+  });
+});
+
+describe('parseAreas', () => {
+  it('parses areas and trims fields', () => {
+    const text = fence(
+      JSON.stringify({
+        areas: [
+          { title: '  Input parsing  ', focus: '  malformed input  ' },
+          { title: 'Concurrency', focus: 'races' },
+        ],
+      }),
+    );
+    expect(parseAreas(text)).toEqual([
+      { title: 'Input parsing', focus: 'malformed input' },
+      { title: 'Concurrency', focus: 'races' },
+    ]);
+  });
+
+  it('falls back the focus to the title when missing', () => {
+    const text = fence(JSON.stringify({ areas: [{ title: 'Errors' }] }));
+    expect(parseAreas(text)).toEqual([{ title: 'Errors', focus: 'Errors' }]);
+  });
+
+  it('drops areas with a blank title', () => {
+    const text = fence(
+      JSON.stringify({ areas: [{ title: '  ' }, { title: 'Keep' }] }),
+    );
+    expect(parseAreas(text).map((a) => a.title)).toEqual(['Keep']);
+  });
+
+  it('returns [] when no json object exists', () => {
+    expect(parseAreas('nope')).toEqual([]);
+  });
+
+  it('returns [] when the json does not match the schema', () => {
+    expect(parseAreas(fence('{"areas":"nope"}'))).toEqual([]);
   });
 });

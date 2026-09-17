@@ -27,6 +27,12 @@ export interface ParsedResult {
   observations: string;
 }
 
+/** A focus area as parsed from the lead analyst's decomposition turn. */
+export interface ParsedArea {
+  title: string;
+  focus: string;
+}
+
 /**
  * Pull the first JSON object out of a model response, tolerating a ```json
  * fence and surrounding prose. Returns null when no object-shaped span exists.
@@ -129,4 +135,41 @@ export function parseResults(text: string): ParsedResult[] {
     });
   }
   return results;
+}
+
+const areasSchema = z.object({
+  areas: z.array(
+    z.object({
+      title: z.string(),
+      focus: z.string().optional(),
+    }),
+  ),
+});
+
+/**
+ * Parse the lead analyst's focus areas. Areas with a blank title are dropped;
+ * a missing focus falls back to the title so the area still has something to
+ * probe. Returns an empty array when the response can't be parsed, letting the
+ * caller fall back to a single whole-feature analyst.
+ */
+export function parseAreas(text: string): ParsedArea[] {
+  const json = extractJsonObject(text);
+  if (!json) {
+    return [];
+  }
+  let parsed: z.infer<typeof areasSchema>;
+  try {
+    parsed = areasSchema.parse(JSON.parse(json));
+  } catch {
+    return [];
+  }
+  const areas: ParsedArea[] = [];
+  for (const raw of parsed.areas) {
+    const title = raw.title.trim();
+    if (title.length === 0) {
+      continue;
+    }
+    areas.push({ title, focus: (raw.focus ?? '').trim() || title });
+  }
+  return areas;
 }

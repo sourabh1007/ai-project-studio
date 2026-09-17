@@ -1659,6 +1659,30 @@ describe('new task client', () => {
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(JSON.stringify({}));
   });
+
+  it('refines the plan with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ reply: 'ok', run: { id: 'att1', plan: 'NEW' } }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.refineNewTask(
+        'f1',
+        'att1',
+        [{ role: 'user', content: 'why?' }],
+        'rewrite it',
+      ),
+    ).resolves.toEqual({ reply: 'ok', run: { id: 'att1', plan: 'NEW' } });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/refine');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({
+        history: [{ role: 'user', content: 'why?' }],
+        message: 'rewrite it',
+      }),
+    );
+  });
 });
 
 describe('bug bash client', () => {
@@ -1823,5 +1847,24 @@ describe('bug bash client', () => {
     expect(url).toBe('/api/features/f1/bug-bash/att1/cancel');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('refines the scenarios with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ reply: 'done', run: { id: 'att1', status: 'generated' } }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.refineBugBash('f1', 'att1', [], 'add a scenario'),
+    ).resolves.toEqual({
+      reply: 'done',
+      run: { id: 'att1', status: 'generated' },
+    });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/refine');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ history: [], message: 'add a scenario' }),
+    );
   });
 });

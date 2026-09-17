@@ -418,6 +418,92 @@ describe('new-task-service plan', () => {
   });
 });
 
+describe('new-task-service refine', () => {
+  async function seededPlan(overrides: Partial<NewTaskServiceDeps> = {}) {
+    const h = harness(overrides);
+    h.service.saveInputs('a1', 'f1', { problem: 'P', context: 'C' });
+    h.deps.repo.update({ ...h.service.get('a1')!, plan: 'OLD PLAN' });
+    return h;
+  }
+
+  it('rejects a blank message', async () => {
+    const { service } = await seededPlan();
+    await expect(service.refine('a1', [], '   ')).rejects.toThrow(
+      'A message is required.',
+    );
+  });
+
+  it('throws when there is no run', async () => {
+    const { service } = harness();
+    await expect(service.refine('missing', [], 'hi')).rejects.toThrow(
+      NotFoundError,
+    );
+  });
+
+  it('replies without changing the plan when nothing is revised', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '```json\n{"reply":"Here is why","revised":null}\n```',
+      sessionId: 's',
+    }));
+    const { service } = await seededPlan({ ai: { runDetailed } });
+    const result = await service.refine(
+      'a1',
+      [{ role: 'user', content: 'why?' }],
+      'why?',
+    );
+    expect(result.reply).toBe('Here is why');
+    expect(result.run.plan).toBe('OLD PLAN');
+    expect(runDetailed.mock.calls[0][0]).toMatchObject({
+      label: 'New task · Refine',
+      cwd: '/repo',
+    });
+  });
+
+  it('applies a revised plan string', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '```json\n{"reply":"Updated","revised":"NEW PLAN"}\n```',
+      sessionId: 's',
+    }));
+    const { service, deps } = await seededPlan({ ai: { runDetailed } });
+    const result = await service.refine('a1', [], 'rewrite it');
+    expect(result.reply).toBe('Updated');
+    expect(result.run.plan).toBe('NEW PLAN');
+    expect(deps.repo.get('a1')!.plan).toBe('NEW PLAN');
+  });
+
+  it('ignores a blank revised plan string', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '```json\n{"reply":"ok","revised":"   "}\n```',
+      sessionId: 's',
+    }));
+    const { service } = await seededPlan({ ai: { runDetailed } });
+    const result = await service.refine('a1', [], 'clear it');
+    expect(result.run.plan).toBe('OLD PLAN');
+  });
+
+  it('ignores a non-string revised payload', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '```json\n{"reply":"ok","revised":{"a":1}}\n```',
+      sessionId: 's',
+    }));
+    const { service } = await seededPlan({ ai: { runDetailed } });
+    const result = await service.refine('a1', [], 'hello');
+    expect(result.run.plan).toBe('OLD PLAN');
+  });
+  it('handles a run with no plan yet', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '```json\n{"reply":"draft","revised":null}\n```',
+      sessionId: 's',
+    }));
+    const h = harness({ ai: { runDetailed } });
+    h.service.saveInputs('a1', 'f1', { problem: 'P', context: 'C' });
+    const result = await h.service.refine('a1', [], 'suggest a plan');
+    expect(result.reply).toBe('draft');
+    expect(result.run.plan).toBeNull();
+    expect(runDetailed.mock.calls[0][0].prompt).toContain('(empty)');
+  });
+});
+
 describe('new-task-service reset', () => {
   it('returns null when there is no run', () => {
     const { service } = harness();

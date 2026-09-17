@@ -22,6 +22,7 @@ import {
   TaskPlanSkillIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
+import { RefineChatPanel } from '../../components/refine-chat-panel.js';
 import { annotateDiffLines } from '../../lib/diff-lines.js';
 import type {
   Feature,
@@ -1216,6 +1217,23 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                       Re-plan with this feedback
                     </Button>
                   </div>
+                )}
+                {planReady && (
+                  <RefineChatPanel<NewTaskRun>
+                    title="Refine with the planner"
+                    context="Challenge or edit this plan in plain language before you implement it."
+                    hint="e.g. “Skip the migration and reuse the existing table instead.” The planner reads the repo and rewrites the plan when you ask — it edits no files."
+                    placeholder="Ask the planner to change the plan…"
+                    onSend={(history, message) =>
+                      api.refineNewTask(
+                        feature.id,
+                        attachmentId,
+                        history,
+                        message,
+                      )
+                    }
+                    onRevised={hydrate}
+                  />
                 )}
               </section>
             ) : (

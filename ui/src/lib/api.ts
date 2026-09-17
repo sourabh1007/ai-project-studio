@@ -56,6 +56,9 @@ import type {
   PrDescriptionExportResult,
   ReviewBoard,
   ReviewBoardChatMessage,
+  RefineChatMessage,
+  BugBashRefineResult,
+  NewTaskRefineResult,
   ReviewBoardChatReply,
   ReviewBoardChatContext,
   PerspectiveAnalysis,
@@ -542,6 +545,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/new-task/${attachmentId}/cancel`,
         jsonBody({}),
       ),
+    // One New Task plan refine-chat turn: post the full prior conversation plus
+    // the new message; the server runs a single AI turn and returns the reply
+    // plus the run, with the plan replaced when the turn revised it.
+    refineNewTask: (
+      featureId: string,
+      attachmentId: string,
+      history: RefineChatMessage[],
+      message: string,
+    ) =>
+      request<NewTaskRefineResult>(
+        `/features/${featureId}/new-task/${attachmentId}/refine`,
+        jsonBody({ history, message }),
+      ),
     getBugBash: (featureId: string, attachmentId: string) =>
       request<{ run: BugBashRun | null }>(
         `/features/${featureId}/bug-bash/${attachmentId}`,
@@ -607,6 +623,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ cancelled: boolean; run: BugBashRun | null }>(
         `/features/${featureId}/bug-bash/${attachmentId}/cancel`,
         jsonBody({}),
+      ),
+    // One Bug Bash scenario refine-chat turn: post the full prior conversation
+    // plus the new message; the server runs a single AI turn and returns the
+    // reply plus the run, with the scenarios replaced when the turn revised them.
+    refineBugBash: (
+      featureId: string,
+      attachmentId: string,
+      history: RefineChatMessage[],
+      message: string,
+    ) =>
+      request<BugBashRefineResult>(
+        `/features/${featureId}/bug-bash/${attachmentId}/refine`,
+        jsonBody({ history, message }),
       ),
     refreshPrReview: (featureId: string) =>
       request<PrReview>(

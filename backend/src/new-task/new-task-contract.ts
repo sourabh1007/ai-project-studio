@@ -9,6 +9,8 @@
  * is derived from the repository at run time; nothing here is hardcoded.
  */
 
+import type { RefineChatMessage } from '../refine-chat/refine-chat.js';
+
 /**
  * The lifecycle of one New Task run.
  *
@@ -224,6 +226,14 @@ export interface NewTaskReviewPort {
   }): Promise<string>;
 }
 
+/** The settled outcome of one plan refine-chat turn. */
+export interface NewTaskRefineResult {
+  /** The assistant's markdown reply to append to the chat. */
+  reply: string;
+  /** The run, with the plan replaced when the turn revised it. */
+  run: NewTaskRun;
+}
+
 /** One streamed progress line while a run's plan/implement turn executes. */
 export interface NewTaskActivity {
   runId: string;
@@ -350,6 +360,18 @@ export interface NewTaskService {
     sink: NewTaskImplementSink,
     signal?: AbortSignal,
   ): Promise<void>;
+  /**
+   * Run one plan refine-chat turn: the user challenges or asks to edit the
+   * generated plan in plain language. `history` is the prior conversation and
+   * `message` the new user message. Returns the assistant reply and the run,
+   * with the plan replaced when the turn revised it.
+   */
+  refine(
+    attachmentId: string,
+    history: RefineChatMessage[],
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<NewTaskRefineResult>;
   /**
    * Cancel-and-reset: revert an in-flight (`planning`/`implementing`) or
    * `failed` run to a clean `draft` so it can be retried from its inputs. The

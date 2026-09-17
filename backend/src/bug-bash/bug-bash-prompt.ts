@@ -33,8 +33,46 @@ export function applyTemplate(
 export const NO_SETUP_MARKER = '(no setup information provided)';
 
 /**
- * The default scenario-generation prompt for the analyst. Placeholders:
- * {{featureInfo}}, {{setupInfo}}.
+ * Focus injected when a generation turn is not scoped to a specific area (e.g.
+ * the deterministic single-analyst fallback), telling the analyst to cover the
+ * whole feature.
+ */
+export const WHOLE_FEATURE_FOCUS = 'the entire feature, end to end';
+
+/**
+ * The default decomposition prompt for the lead analyst. It divides the feature
+ * into disjoint focus areas so separate analyst sub-agents can design scenarios
+ * for each in parallel. Placeholders: {{featureInfo}}, {{setupInfo}},
+ * {{maxAreas}}.
+ */
+export const DEFAULT_DECOMPOSE_PROMPT_TEMPLATE = [
+  'You are the lead QA analyst planning a bug bash for a feature. Read the',
+  'feature description, the setup information, and the ACTUAL code in the current',
+  'working directory. Do NOT modify any files.',
+  '',
+  'Feature information:',
+  '{{featureInfo}}',
+  '',
+  'Setup information (documentation, sample programs, how to run/test it):',
+  '{{setupInfo}}',
+  '',
+  'Divide the testing surface of this feature into at most {{maxAreas}} distinct',
+  'focus areas so separate analysts can design edge-case scenarios for each in',
+  'parallel WITHOUT overlap. Each area should be a cohesive slice of behaviour —',
+  'a code path, an input class, a configuration, an integration, or a failure',
+  'mode — grounded in what the code actually does. Prefer fewer, meatier areas',
+  'over many thin ones.',
+  '',
+  'Respond with ONLY a JSON object in a ```json code block, no prose, shaped:',
+  '{"areas":[{',
+  '"title":"short area name",',
+  '"focus":"what to probe in this area and why it is likely to break"',
+  '}]}',
+].join('\n');
+
+/**
+ * The default scenario-generation prompt for an analyst. Placeholders:
+ * {{featureInfo}}, {{setupInfo}}, {{focus}}.
  */
 export const DEFAULT_GENERATE_PROMPT_TEMPLATE = [
   'You are a meticulous QA analyst planning a bug bash for a feature. Read the',
@@ -47,11 +85,14 @@ export const DEFAULT_GENERATE_PROMPT_TEMPLATE = [
   'Setup information (documentation, sample programs, how to run/test it):',
   '{{setupInfo}}',
   '',
+  'Your assigned focus area (other analysts cover the rest — stay within yours):',
+  '{{focus}}',
+  '',
   'Investigate the code paths that implement this feature and design test',
-  'scenarios that are most likely to BREAK it. Focus on edge cases: boundary',
-  'values, empty/malformed input, concurrency, error handling, unusual',
-  'configurations, and interactions the happy path ignores. Ground every',
-  'scenario in behaviour the code actually has.',
+  'scenarios that are most likely to BREAK it within your focus area. Focus on',
+  'edge cases: boundary values, empty/malformed input, concurrency, error',
+  'handling, unusual configurations, and interactions the happy path ignores.',
+  'Ground every scenario in behaviour the code actually has.',
   '',
   'Respond with ONLY a JSON object in a ```json code block, no prose, shaped:',
   '{"scenarios":[{',
@@ -116,17 +157,34 @@ export const DEFAULT_REPORT_PROMPT_TEMPLATE = [
   '- "## Blocked": a bullet per blocked scenario and what was missing. Omit when',
   '  none were blocked.',
   '- "## Passed": a short bullet list of what worked.',
+  '- "## Scenario details": a subsection (### <scenario title>) for EVERY',
+  '  scenario, each stating its status (pass/fail/blocked), the exact steps to',
+  '  replicate it, the expected output, and what was actually observed. This is',
+  '  the reproducible record the owner uses to act on each result.',
   'Be concise and specific. Do not invent results that were not reported.',
 ].join('\n');
 
 /** Render the analyst scenario-generation prompt from the user's inputs. */
 export function buildGeneratePrompt(
   template: string,
-  input: { featureInfo: string; setupInfo: string },
+  input: { featureInfo: string; setupInfo: string; focus?: string },
 ): string {
   return applyTemplate(template, {
     featureInfo: input.featureInfo.trim(),
     setupInfo: input.setupInfo.trim() || NO_SETUP_MARKER,
+    focus: input.focus?.trim() || WHOLE_FEATURE_FOCUS,
+  });
+}
+
+/** Render the lead analyst's decomposition prompt from the user's inputs. */
+export function buildDecomposePrompt(
+  template: string,
+  input: { featureInfo: string; setupInfo: string; maxAreas: number },
+): string {
+  return applyTemplate(template, {
+    featureInfo: input.featureInfo.trim(),
+    setupInfo: input.setupInfo.trim() || NO_SETUP_MARKER,
+    maxAreas: String(input.maxAreas),
   });
 }
 
@@ -167,9 +225,17 @@ export function buildTesterPrompt(
 
 /** Render one scenario's result as a labelled block for the report prompt. */
 export function renderResult(scenario: BugBashScenario): string {
+  const steps =
+    scenario.steps.length > 0
+      ? scenario.steps.map((step, index) => `  ${index + 1}. ${step}`).join('\n')
+      : '  (no steps provided)';
   return [
     `Scenario ${scenario.id}: ${scenario.title}`,
     `- Status: ${scenario.status}`,
+    `- Input: ${scenario.input || '(none)'}`,
+    '- Steps to replicate:',
+    steps,
+    `- Expected output: ${scenario.expectedOutput || '(unspecified)'}`,
     `- Observations: ${scenario.observations || '(none reported)'}`,
   ].join('\n');
 }
@@ -215,6 +281,23 @@ export function summarizeResults(scenarios: BugBashScenario[]): string {
     for (const s of passed) {
       lines.push(`- ${s.title}`);
     }
+  }
+  lines.push('', '## Scenario details');
+  for (const s of scenarios) {
+    const steps =
+      s.steps.length > 0
+        ? s.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+        : '(no steps provided)';
+    lines.push(
+      '',
+      `### ${s.title}`,
+      `- Status: ${s.status}`,
+      `- Input: ${s.input || '(none)'}`,
+      '- Steps to replicate:',
+      steps,
+      `- Expected output: ${s.expectedOutput || '(unspecified)'}`,
+      `- Observations: ${s.observations || '(none reported)'}`,
+    );
   }
   return lines.join('\n');
 }
