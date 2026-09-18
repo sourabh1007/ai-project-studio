@@ -4021,6 +4021,16 @@ body.is-resizing {
   flex: 1;
 }
 
+.repo-path-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.repo-path-row .input {
+  flex: 1;
+}
+
 .repo-search .input {
   width: 100%;
 }
@@ -8334,6 +8344,12 @@ body.is-resizing {
   border-radius: var(--radius-sm, 4px);
   background: rgba(245, 158, 11, 0.1);
   font-size: 0.78rem;
+}
+
+.automation-auth-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .automation-auth strong {
@@ -14507,6 +14523,166 @@ body.is-resizing {
 
 .bug-bash-verdict-glyph {
   font-weight: 900;
+}
+
+.bug-bash-ran-flag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.bug-bash-ran-flag.did-run {
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 12%, transparent);
+}
+
+.bug-bash-ran-flag.not-run {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+}
+
+.bug-bash-block-reason {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--warning, #d29922);
+  background: color-mix(in srgb, var(--warning, #d29922) 12%, transparent);
+}
+
+.bug-bash-block-reason.reason-permission {
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 12%, transparent);
+}
+
+.bug-bash-report-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--text-muted) 4%, transparent);
+}
+
+.bug-bash-report-section + .bug-bash-report-section {
+  margin-top: var(--space-4);
+}
+
+.bug-bash-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+}
+
+.bug-bash-section-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.bug-bash-scenario-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bug-bash-scenario-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface, transparent);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  border-left-width: 3px;
+}
+
+.bug-bash-scenario-row:hover {
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.bug-bash-scenario-row.is-pass {
+  border-left-color: var(--success, #3fb950);
+}
+
+.bug-bash-scenario-row.is-fail {
+  border-left-color: var(--danger, #f85149);
+}
+
+.bug-bash-scenario-row.is-blocked {
+  border-left-color: var(--warning, #d29922);
+}
+
+.bug-bash-scenario-row.is-pending {
+  border-left-color: var(--text-muted);
+}
+
+.bug-bash-scenario-row-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.bug-bash-scenario-row-chevron {
+  display: inline-flex;
+  transform: rotate(-90deg);
+  color: var(--text-muted);
+}
+
+.bug-bash-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bug-bash-run-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.bug-bash-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bug-bash-diagnostics-raw dt {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+}
+
+.bug-bash-diagnostics-raw pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .bug-bash-scenario-body {

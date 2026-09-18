@@ -12,7 +12,10 @@
  * without invoking a provider.
  */
 
-import type { BugBashScenario } from './bug-bash-contract.js';
+import type {
+  BugBashBlockedReason,
+  BugBashScenario,
+} from './bug-bash-contract.js';
 
 /**
  * Substitute every `{{key}}` placeholder in a template with its value. Missing
@@ -125,13 +128,20 @@ export const DEFAULT_TESTER_PROMPT_TEMPLATE = [
   '',
   'For each scenario: perform the steps, compare the actual behaviour against the',
   'expected output, and decide a status — "pass" (behaved as expected), "fail" (a',
-  'bug: it did not), or "blocked" (could not run it, e.g. missing setup). Keep',
-  'observations concise and specific (what you saw, and for a failure why it is a',
-  'bug). Do NOT modify source files to make a scenario pass.',
+  'bug: it did not), or "blocked" (could not run it). Set "ran" to true ONLY when',
+  'you actually executed the steps; false when you could not attempt them. Record',
+  'the concrete "actualOutput" you observed, keep "observations" as a concise note',
+  '(for a failure, why it is a bug). When a scenario is blocked, categorise it with',
+  '"blockedReason": "permission" (you lacked access/rights/credentials), or one of',
+  '"environment" (setup/config missing), "tooling" (a required tool was absent), or',
+  '"other". Put any commands run, logs, errors, or telemetry in "diagnostics". Do',
+  'NOT modify source files to make a scenario pass.',
   '',
   'Respond with ONLY a JSON object in a ```json code block, no prose, shaped:',
-  '{"results":[{"id":"<scenario id>","status":"pass",',
-  '"observations":"what happened"}]}',
+  '{"results":[{"id":"<scenario id>","status":"pass","ran":true,',
+  '"actualOutput":"what actually happened","observations":"concise note",',
+  '"blockedReason":"permission|environment|tooling|other (only when blocked)",',
+  '"diagnostics":"commands run, logs, errors, telemetry"}]}',
 ].join('\n');
 
 /**
@@ -154,13 +164,18 @@ export const DEFAULT_REPORT_PROMPT_TEMPLATE = [
   '  vs failed, and the overall health of the feature.',
   '- "## Bugs found": a bullet per failing scenario with what breaks and why it',
   '  matters. Omit the section when nothing failed.',
-  '- "## Blocked": a bullet per blocked scenario and what was missing. Omit when',
-  '  none were blocked.',
+  '- "## Blocked — needs access": a bullet per scenario blocked on permission',
+  '  (missing access/rights/credentials) and exactly what access was missing.',
+  '  Omit when none were blocked on access.',
+  '- "## Blocked — could not run": a bullet per scenario blocked for a',
+  '  non-permission reason (environment, tooling, or other) and what was missing.',
+  '  Omit when none apply.',
   '- "## Passed": a short bullet list of what worked.',
   '- "## Scenario details": a subsection (### <scenario title>) for EVERY',
-  '  scenario, each stating its status (pass/fail/blocked), the exact steps to',
-  '  replicate it, the expected output, and what was actually observed. This is',
-  '  the reproducible record the owner uses to act on each result.',
+  '  scenario, each stating its status (pass/fail/blocked), whether it actually',
+  '  ran, the exact steps to replicate it, the expected output, and the actual',
+  '  output observed. This is the reproducible record the owner uses to act on',
+  '  each result.',
   'Be concise and specific. Do not invent results that were not reported.',
 ].join('\n');
 
@@ -223,21 +238,42 @@ export function buildTesterPrompt(
   });
 }
 
+/** Human-readable label for each blocked-reason category. */
+export const BLOCKED_REASON_LABEL: Record<BugBashBlockedReason, string> = {
+  permission: 'needs access',
+  environment: 'environment not ready',
+  tooling: 'tooling missing',
+  other: 'could not run',
+};
+
 /** Render one scenario's result as a labelled block for the report prompt. */
 export function renderResult(scenario: BugBashScenario): string {
   const steps =
     scenario.steps.length > 0
       ? scenario.steps.map((step, index) => `  ${index + 1}. ${step}`).join('\n')
       : '  (no steps provided)';
-  return [
+  const lines = [
     `Scenario ${scenario.id}: ${scenario.title}`,
     `- Status: ${scenario.status}`,
+    `- Actually ran: ${scenario.ran ? 'yes' : 'no'}`,
+  ];
+  if (scenario.status === 'blocked' && scenario.blockedReason) {
+    lines.push(
+      `- Blocked reason: ${scenario.blockedReason} (${BLOCKED_REASON_LABEL[scenario.blockedReason]})`,
+    );
+  }
+  lines.push(
     `- Input: ${scenario.input || '(none)'}`,
     '- Steps to replicate:',
     steps,
     `- Expected output: ${scenario.expectedOutput || '(unspecified)'}`,
+    `- Actual output: ${scenario.actualOutput || '(none reported)'}`,
     `- Observations: ${scenario.observations || '(none reported)'}`,
-  ].join('\n');
+  );
+  if (scenario.diagnostics) {
+    lines.push(`- Diagnostics: ${scenario.diagnostics}`);
+  }
+  return lines.join('\n');
 }
 
 /** Render the lead report prompt from the run scenarios. */
@@ -259,10 +295,15 @@ export function summarizeResults(scenarios: BugBashScenario[]): string {
   const passed = scenarios.filter((s) => s.status === 'pass');
   const failed = scenarios.filter((s) => s.status === 'fail');
   const blocked = scenarios.filter((s) => s.status === 'blocked');
+  const blockedAccess = blocked.filter((s) => s.blockedReason === 'permission');
+  const blockedOther = blocked.filter((s) => s.blockedReason !== 'permission');
+  const ranCount = scenarios.filter((s) => s.ran).length;
   const lines: string[] = [
     '## Summary',
-    `Ran ${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'}: ` +
-      `${passed.length} passed, ${failed.length} failed, ${blocked.length} blocked.`,
+    `Ran ${ranCount} of ${scenarios.length} scenario` +
+      `${scenarios.length === 1 ? '' : 's'}: ${passed.length} passed, ` +
+      `${failed.length} failed, ${blocked.length} blocked ` +
+      `(${blockedAccess.length} needing access).`,
   ];
   if (failed.length > 0) {
     lines.push('', '## Bugs found');
@@ -270,10 +311,19 @@ export function summarizeResults(scenarios: BugBashScenario[]): string {
       lines.push(`- ${s.title}: ${s.observations || '(no details)'}`);
     }
   }
-  if (blocked.length > 0) {
-    lines.push('', '## Blocked');
-    for (const s of blocked) {
+  if (blockedAccess.length > 0) {
+    lines.push('', '## Blocked — needs access');
+    for (const s of blockedAccess) {
       lines.push(`- ${s.title}: ${s.observations || '(no details)'}`);
+    }
+  }
+  if (blockedOther.length > 0) {
+    lines.push('', '## Blocked — could not run');
+    for (const s of blockedOther) {
+      const reason = s.blockedReason
+        ? ` [${BLOCKED_REASON_LABEL[s.blockedReason]}]`
+        : '';
+      lines.push(`- ${s.title}${reason}: ${s.observations || '(no details)'}`);
     }
   }
   if (passed.length > 0) {
@@ -291,11 +341,12 @@ export function summarizeResults(scenarios: BugBashScenario[]): string {
     lines.push(
       '',
       `### ${s.title}`,
-      `- Status: ${s.status}`,
+      `- Status: ${s.status}${s.ran ? '' : ' (not run)'}`,
       `- Input: ${s.input || '(none)'}`,
       '- Steps to replicate:',
       steps,
       `- Expected output: ${s.expectedOutput || '(unspecified)'}`,
+      `- Actual output: ${s.actualOutput || '(none reported)'}`,
       `- Observations: ${s.observations || '(none reported)'}`,
     );
   }

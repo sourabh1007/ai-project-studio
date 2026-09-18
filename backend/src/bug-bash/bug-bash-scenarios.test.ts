@@ -91,16 +91,81 @@ describe('parseResults', () => {
       }),
     );
     expect(parseResults(text)).toEqual([
-      { id: 'scenario-1', status: 'pass', observations: 'worked' },
-      { id: 'scenario-2', status: 'fail', observations: 'broke' },
+      {
+        id: 'scenario-1',
+        status: 'pass',
+        observations: 'worked',
+        ran: true,
+        actualOutput: '',
+        blockedReason: null,
+        diagnostics: '',
+      },
+      {
+        id: 'scenario-2',
+        status: 'fail',
+        observations: 'broke',
+        ran: true,
+        actualOutput: '',
+        blockedReason: null,
+        diagnostics: '',
+      },
     ]);
   });
 
   it('defaults a missing status to blocked and missing observations to empty', () => {
     const text = fence(JSON.stringify({ results: [{ id: 'scenario-1' }] }));
     expect(parseResults(text)).toEqual([
-      { id: 'scenario-1', status: 'blocked', observations: '' },
+      {
+        id: 'scenario-1',
+        status: 'blocked',
+        observations: '',
+        ran: false,
+        actualOutput: '',
+        blockedReason: 'other',
+        diagnostics: '',
+      },
     ]);
+  });
+
+  it('captures ran, actualOutput, blockedReason and diagnostics and trims them', () => {
+    const text = fence(
+      JSON.stringify({
+        results: [
+          {
+            id: 'scenario-1',
+            status: 'blocked',
+            ran: false,
+            actualOutput: '  nothing happened  ',
+            blockedReason: 'permission',
+            diagnostics: '  401 from api  ',
+          },
+        ],
+      }),
+    );
+    expect(parseResults(text)).toEqual([
+      {
+        id: 'scenario-1',
+        status: 'blocked',
+        observations: '',
+        ran: false,
+        actualOutput: 'nothing happened',
+        blockedReason: 'permission',
+        diagnostics: '401 from api',
+      },
+    ]);
+  });
+
+  it('forces blockedReason to null for a non-blocked status even when supplied', () => {
+    const text = fence(
+      JSON.stringify({
+        results: [
+          { id: 'scenario-1', status: 'pass', ran: false, blockedReason: 'permission' },
+        ],
+      }),
+    );
+    const [result] = parseResults(text);
+    expect(result.blockedReason).toBeNull();
+    expect(result.ran).toBe(false);
   });
 
   it('drops entries with a blank id', () => {

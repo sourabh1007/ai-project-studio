@@ -672,6 +672,16 @@ export type BugBashStatus =
 /** The verdict a tester reached for one scenario. */
 export type BugBashScenarioStatus = 'pending' | 'pass' | 'fail' | 'blocked';
 
+/**
+ * Why a blocked scenario could not run. `permission` (missing access) is
+ * triaged separately from environment/tooling/other "couldn't attempt" cases.
+ */
+export type BugBashBlockedReason =
+  | 'permission'
+  | 'environment'
+  | 'tooling'
+  | 'other';
+
 /** One edge-case scenario the analyst proposed for the feature. */
 export interface BugBashScenario {
   id: string;
@@ -682,6 +692,16 @@ export interface BugBashScenario {
   confirmation: string;
   status: BugBashScenarioStatus;
   observations: string;
+  /** Whether a tester actually executed the steps. */
+  ran: boolean;
+  /** The concrete output/behaviour the tester observed. */
+  actualOutput: string;
+  /** For a blocked scenario, the category of blocker; null otherwise. */
+  blockedReason: BugBashBlockedReason | null;
+  /** The tester agent id that executed this scenario, or null. */
+  testerId: string | null;
+  /** Free-form diagnostic/telemetry detail surfaced on demand. */
+  diagnostics: string;
 }
 
 /** The specialization a Bug Bash agent plays in a run. */

@@ -166,8 +166,24 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
 
       const resultById = new Map<
         string,
-        { status: BugBashScenario['status']; observations: string }
+        {
+          status: BugBashScenario['status'];
+          observations: string;
+          ran: boolean;
+          actualOutput: string;
+          blockedReason: BugBashScenario['blockedReason'];
+          diagnostics: string;
+          testerId: string;
+        }
       >();
+      // Which tester a scenario was assigned to, so an unreported scenario can
+      // still record who should have run it.
+      const assignedTesterById = new Map<string, string>();
+      testers.forEach((tester) => {
+        for (const scenarioId of tester.scenarioIds) {
+          assignedTesterById.set(scenarioId, tester.id);
+        }
+      });
 
       await Promise.all(
         testers.map(async (tester, index) => {
@@ -197,6 +213,11 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
               resultById.set(parsed.id, {
                 status: parsed.status,
                 observations: parsed.observations,
+                ran: parsed.ran,
+                actualOutput: parsed.actualOutput,
+                blockedReason: parsed.blockedReason,
+                diagnostics: parsed.diagnostics,
+                testerId: tester.id,
               });
             }
             const metrics = agentMetricsOf(result);
@@ -219,12 +240,29 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
       // tester reported on is left blocked.
       const scenarios: BugBashScenario[] = request.scenarios.map((scenario) => {
         const found = resultById.get(scenario.id);
+        if (found) {
+          return {
+            ...scenario,
+            status: found.status,
+            observations: found.observations,
+            ran: found.ran,
+            actualOutput: found.actualOutput,
+            blockedReason: found.blockedReason,
+            testerId: found.testerId,
+            diagnostics: found.diagnostics,
+          };
+        }
         return {
           ...scenario,
-          status: found?.status ?? 'blocked',
-          observations: found
-            ? found.observations
-            : 'No tester reported a result for this scenario.',
+          status: 'blocked',
+          observations: 'No tester reported a result for this scenario.',
+          ran: false,
+          actualOutput: '',
+          blockedReason: 'other',
+          // Every scenario is assigned to exactly one tester, so this lookup
+          // always resolves — attribute the blocked result to that tester.
+          testerId: assignedTesterById.get(scenario.id)!,
+          diagnostics: '',
         };
       });
 

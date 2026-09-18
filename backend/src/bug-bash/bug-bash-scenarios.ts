@@ -9,7 +9,10 @@
  */
 
 import { z } from 'zod';
-import type { BugBashScenarioStatus } from './bug-bash-contract.js';
+import type {
+  BugBashBlockedReason,
+  BugBashScenarioStatus,
+} from './bug-bash-contract.js';
 
 /** A scenario as parsed from the analyst, before an id is assigned. */
 export interface ParsedScenario {
@@ -25,6 +28,14 @@ export interface ParsedResult {
   id: string;
   status: BugBashScenarioStatus;
   observations: string;
+  /** Whether the tester actually executed the steps. */
+  ran: boolean;
+  /** The concrete output/behaviour observed, empty when none reported. */
+  actualOutput: string;
+  /** For a blocked result, the category of blocker; null otherwise. */
+  blockedReason: BugBashBlockedReason | null;
+  /** Free-form diagnostic/telemetry detail, empty when none reported. */
+  diagnostics: string;
 }
 
 /** A focus area as parsed from the lead analyst's decomposition turn. */
@@ -102,6 +113,12 @@ const resultsSchema = z.object({
       id: z.string(),
       status: z.enum(['pass', 'fail', 'blocked']).optional(),
       observations: z.string().optional(),
+      ran: z.boolean().optional(),
+      actualOutput: z.string().optional(),
+      blockedReason: z
+        .enum(['permission', 'environment', 'tooling', 'other'])
+        .optional(),
+      diagnostics: z.string().optional(),
     }),
   ),
 });
@@ -110,6 +127,11 @@ const resultsSchema = z.object({
  * Parse a tester's per-scenario results. Entries without an id are dropped (they
  * cannot be matched back to a scenario). Returns an empty array when the
  * response can't be parsed, leaving the affected scenarios `blocked`.
+ *
+ * `ran` defaults to whether the verdict implies an execution (pass/fail did
+ * run, blocked did not) when the tester omits it. `blockedReason` only applies
+ * to a `blocked` result — it is forced to null otherwise and defaults to
+ * `other` when a blocked result omits it.
  */
 export function parseResults(text: string): ParsedResult[] {
   const json = extractJsonObject(text);
@@ -128,10 +150,18 @@ export function parseResults(text: string): ParsedResult[] {
     if (id.length === 0) {
       continue;
     }
+    const status = raw.status ?? 'blocked';
+    const ran = raw.ran ?? (status === 'pass' || status === 'fail');
+    const blockedReason =
+      status === 'blocked' ? (raw.blockedReason ?? 'other') : null;
     results.push({
       id,
-      status: raw.status ?? 'blocked',
+      status,
       observations: (raw.observations ?? '').trim(),
+      ran,
+      actualOutput: (raw.actualOutput ?? '').trim(),
+      blockedReason,
+      diagnostics: (raw.diagnostics ?? '').trim(),
     });
   }
   return results;

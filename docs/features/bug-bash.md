@@ -29,8 +29,27 @@ Describe ──▶ Generate ──▶ Review ──▶ Run ───────
 4. **Run** — a **lead agent** splits the accepted scenarios round-robin across
    specialized **tester** sub-agents that each lease their own metasession and
    run **in parallel**. The lead merges the verdicts and compiles the report.
-5. **Report** — pass/fail/blocked tallies, the compiled markdown findings, the
-   agent team with time and AI credits, and every scenario's verdict.
+5. **Report** — pass / fail / blocked / **needs-access** tallies, the compiled
+   markdown findings, the agent team with time and AI credits, and every
+   scenario's verdict with its **diagnostics**.
+
+## Reading a verdict
+
+Each scenario in the report carries the reproducible record and how its result
+was reached:
+
+- **Ran vs Not run** — whether a tester actually executed the steps, so a
+  verdict grounded in a real run is distinguished from one that could not be
+  attempted.
+- **Expected vs Actual** — the expected behaviour beside the concrete output the
+  tester observed.
+- **Blocked categories** — a blocked scenario is tagged with why it could not
+  run. **Needs access** (missing permission/credentials) is tallied and shown
+  separately from non-permission blockers (environment, tooling, other) so
+  access gaps triage apart from genuine "couldn't attempt" cases.
+- **Diagnostics** — the ℹ️ control on a scenario opens its diagnostic /
+  telemetry detail: the responsible tester and its metrics, expected vs actual,
+  observations, and the raw log the tester captured.
 
 ## The agent team
 

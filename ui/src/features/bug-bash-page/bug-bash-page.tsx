@@ -20,6 +20,7 @@ import { renderMarkdownComment } from '../../lib/markdown.js';
 import { RefineChatPanel } from '../../components/refine-chat-panel.js';
 import type {
   BugBashAgent,
+  BugBashBlockedReason,
   BugBashRun,
   BugBashScenario,
   BugBashStreamEvent,
@@ -68,6 +69,14 @@ const VERDICT_META: Record<
   pass: { label: 'Pass', glyph: '✓' },
   fail: { label: 'Fail', glyph: '✕' },
   blocked: { label: 'Blocked', glyph: '!' },
+};
+
+/** Human-readable label per blocked-reason category. */
+const BLOCKED_REASON_LABEL: Record<BugBashBlockedReason, string> = {
+  permission: 'Needs access',
+  environment: 'Environment not ready',
+  tooling: 'Tooling missing',
+  other: 'Could not run',
 };
 
 /**
@@ -299,6 +308,166 @@ function AgentLogModal({
   );
 }
 
+/**
+ * A per-scenario popup with two views. The **detail** view is the reproducible
+ * record — input, steps, expected vs actual, observations. The **run** view,
+ * opened from the top-right button, shows how the IDE actually ran it: the
+ * responsible tester's metrics, the raw diagnostics/telemetry it captured
+ * (actual code, ids, errors), and the tester's full activity log.
+ */
+function ScenarioDetailModal({
+  scenario,
+  tester,
+  lines,
+  nowMs,
+  onClose,
+}: {
+  scenario: BugBashScenario;
+  tester: BugBashAgent | undefined;
+  lines: string[];
+  nowMs: number;
+  onClose: () => void;
+}) {
+  const [view, setView] = useState<'detail' | 'run'>('detail');
+  const verdict = VERDICT_META[scenario.status];
+  const reasonLabel = scenario.blockedReason
+    ? BLOCKED_REASON_LABEL[scenario.blockedReason]
+    : null;
+  return (
+    <div
+      className="new-task-modal-overlay"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="new-task-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${scenario.title} ${view === 'run' ? 'run detail' : 'detail'}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="new-task-modal-head">
+          <div>
+            <span className="new-task-agent-role">
+              {view === 'run' ? 'How the IDE ran this' : 'Scenario'}
+            </span>
+            <strong>{scenario.title}</strong>
+          </div>
+          <div className="bug-bash-modal-actions">
+            {view === 'detail' ? (
+              <Button variant="secondary" onClick={() => setView('run')}>
+                <ActivityIcon size={15} />
+                How the IDE ran this
+              </Button>
+            ) : (
+              <Button variant="ghost" onClick={() => setView('detail')}>
+                <span className="new-task-chevron-back" aria-hidden="true">
+                  <ChevronIcon size={16} />
+                </span>
+                Back to scenario
+              </Button>
+            )}
+            <button
+              type="button"
+              className="new-task-modal-close"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </header>
+        <div className="new-task-modal-metrics">
+          <span>
+            Verdict: {verdict.label}
+            {reasonLabel ? ` · ${reasonLabel}` : ''}
+          </span>
+          <span>Actually ran: {scenario.ran ? 'Yes' : 'No'}</span>
+          <span>Tester: {tester ? tester.title : 'Unassigned'}</span>
+          {tester && (
+            <>
+              <span>Time: {formatDuration(agentDuration(tester, nowMs))}</span>
+              <span>AIC: {formatCredits(tester.credits)}</span>
+              <span>
+                Tokens: {(tester.inputTokens ?? 0).toLocaleString()} in /{' '}
+                {(tester.outputTokens ?? 0).toLocaleString()} out
+              </span>
+            </>
+          )}
+        </div>
+        {view === 'detail' ? (
+          <div className="new-task-modal-log bug-bash-diagnostics">
+            <dl className="bug-bash-scenario-body">
+              {scenario.input && (
+                <div>
+                  <dt>Input</dt>
+                  <dd>{scenario.input}</dd>
+                </div>
+              )}
+              <div>
+                <dt>Steps to replicate</dt>
+                <dd>
+                  {scenario.steps.length > 0 ? (
+                    <ol className="bug-bash-steps">
+                      {scenario.steps.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    '(no steps provided)'
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Expected</dt>
+                <dd>{scenario.expectedOutput || '(unspecified)'}</dd>
+              </div>
+              <div>
+                <dt>Actual</dt>
+                <dd>{scenario.actualOutput || '(none reported)'}</dd>
+              </div>
+              <div>
+                <dt>Observations</dt>
+                <dd>{scenario.observations || '(none reported)'}</dd>
+              </div>
+            </dl>
+          </div>
+        ) : (
+          <div className="new-task-modal-log bug-bash-diagnostics">
+            <div className="bug-bash-diagnostics-raw">
+              <dt>Diagnostics / telemetry — actual code, ids &amp; errors</dt>
+              {scenario.diagnostics ? (
+                <pre>{scenario.diagnostics}</pre>
+              ) : (
+                <p className="muted new-task-log-empty">
+                  No diagnostics were captured for this scenario.
+                </p>
+              )}
+            </div>
+            <div className="bug-bash-diagnostics-raw">
+              <dt>Tester activity log</dt>
+              {lines.length > 0 ? (
+                <div className="bug-bash-run-log">
+                  {lines.map((line, i) => (
+                    <div key={i} className="new-task-log-line">
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted new-task-log-empty">
+                  No activity was captured for the tester that ran this
+                  scenario.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** The numbered progress rail across the top of the wizard. */
 function Stepper({
   current,
@@ -412,7 +581,7 @@ function RunActivityLog({
   );
 }
 
-/** A single scenario card, used in both review (pre-run) and report (verdict). */
+/** A single scenario card, used in the review step before a run. */
 function ScenarioCard({ scenario }: { scenario: BugBashScenario }) {
   const verdict = VERDICT_META[scenario.status];
   return (
@@ -447,6 +616,12 @@ function ScenarioCard({ scenario }: { scenario: BugBashScenario }) {
           <div>
             <dt>Expected</dt>
             <dd>{scenario.expectedOutput}</dd>
+          </div>
+        )}
+        {scenario.actualOutput && (
+          <div>
+            <dt>Actual</dt>
+            <dd>{scenario.actualOutput}</dd>
           </div>
         )}
         {scenario.confirmation && (
@@ -513,6 +688,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
   const [agents, setAgents] = useState<Record<string, BugBashAgent>>({});
   const [agentLogs, setAgentLogs] = useState<Record<string, string[]>>({});
   const [openAgentId, setOpenAgentId] = useState<string | null>(null);
+  const [openScenarioId, setOpenScenarioId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [phase, setPhase] = useState<string | null>(null);
   const [step, setStep] = useState<Step>('describe');
@@ -560,6 +736,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
     setRunLog([]);
     setAgentLogs({});
     setOpenAgentId(null);
+    setOpenScenarioId(null);
     reconnectedRef.current = false;
   }, []);
 
@@ -810,6 +987,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
     return map;
   }, [scenarios]);
   const openAgent = openAgentId ? agents[openAgentId] : undefined;
+  const openScenario = openScenarioId ? scenariosById[openScenarioId] : undefined;
 
   if (loading) {
     return <div className="agent-page">Loading…</div>;
@@ -852,7 +1030,11 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
 
   const passCount = scenarios.filter((s) => s.status === 'pass').length;
   const failCount = scenarios.filter((s) => s.status === 'fail').length;
-  const blockedCount = scenarios.filter((s) => s.status === 'blocked').length;
+  const blockedScenarios = scenarios.filter((s) => s.status === 'blocked');
+  const needsAccessCount = blockedScenarios.filter(
+    (s) => s.blockedReason === 'permission',
+  ).length;
+  const blockedCount = blockedScenarios.length - needsAccessCount;
 
   return (
     <div className="agent-page new-task-page bug-bash-page">
@@ -1090,12 +1272,72 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
         {step === 'report' && (
           <div className="new-task-step-body">
             {reported ? (
-              <section className="new-task-result">
-                <div className="new-task-result-hero">
-                  <BugBashIcon size={22} />
-                  <div>
-                    <h3>Bug bash complete</h3>
-                    <p className="muted">
+              <section className="new-task-result bug-bash-report">
+                {/* Section 1 — every scenario covered, click to drill in. */}
+                <div className="bug-bash-report-section">
+                  <div className="bug-bash-section-head">
+                    <h3>Scenarios covered</h3>
+                    <span className="muted">
+                      {scenarios.length} scenario
+                      {scenarios.length === 1 ? '' : 's'} · click any to see the
+                      full detail and how the IDE ran it
+                    </span>
+                  </div>
+                  <ul className="bug-bash-scenario-list">
+                    {scenarios.map((scenario) => {
+                      const verdict = VERDICT_META[scenario.status];
+                      const reasonLabel = scenario.blockedReason
+                        ? BLOCKED_REASON_LABEL[scenario.blockedReason]
+                        : null;
+                      return (
+                        <li key={scenario.id}>
+                          <button
+                            type="button"
+                            className={`bug-bash-scenario-row is-${scenario.status}`}
+                            onClick={() => setOpenScenarioId(scenario.id)}
+                          >
+                            <span
+                              className="bug-bash-verdict"
+                              title={verdict.label}
+                            >
+                              <span className="bug-bash-verdict-glyph">
+                                {verdict.glyph}
+                              </span>
+                              {verdict.label}
+                            </span>
+                            <span className="bug-bash-scenario-row-title">
+                              {scenario.title}
+                            </span>
+                            <span
+                              className={`bug-bash-ran-flag ${scenario.ran ? 'did-run' : 'not-run'}`}
+                            >
+                              {scenario.ran ? 'Ran' : 'Not run'}
+                            </span>
+                            {scenario.status === 'blocked' && reasonLabel && (
+                              <span
+                                className={`bug-bash-block-reason reason-${scenario.blockedReason}`}
+                              >
+                                {reasonLabel}
+                              </span>
+                            )}
+                            <span
+                              className="bug-bash-scenario-row-chevron"
+                              aria-hidden="true"
+                            >
+                              <ChevronIcon size={16} />
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+
+                {/* Section 2 — summary and supporting information. */}
+                <div className="bug-bash-report-section">
+                  <div className="bug-bash-section-head">
+                    <h3>Summary &amp; details</h3>
+                    <span className="muted">
                       {scenarios.length} scenario
                       {scenarios.length === 1 ? '' : 's'} tested across{' '}
                       {teamAgents.filter((a) => a.role === 'tester').length}{' '}
@@ -1104,61 +1346,58 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
                         ? ''
                         : 's'}
                       .
-                    </p>
-                  </div>
-                </div>
-
-                <div className="new-task-stats">
-                  <div className="new-task-stat">
-                    <span className="new-task-stat-num">{passCount}</span>
-                    <span className="new-task-stat-label">Passed</span>
-                  </div>
-                  <div className="new-task-stat">
-                    <span className="new-task-stat-num">{failCount}</span>
-                    <span className="new-task-stat-label">Failed</span>
-                  </div>
-                  <div className="new-task-stat">
-                    <span className="new-task-stat-num">{blockedCount}</span>
-                    <span className="new-task-stat-label">Blocked</span>
-                  </div>
-                  <div className="new-task-stat">
-                    <span className="new-task-stat-num">
-                      {agentList.length || '—'}
                     </span>
-                    <span className="new-task-stat-label">Agents</span>
                   </div>
-                  <div className="new-task-stat">
-                    <span className="new-task-stat-num">
-                      {formatCredits(sumCredits(agentList))}
-                    </span>
-                    <span className="new-task-stat-label">AI credits</span>
+
+                  <div className="new-task-stats">
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">{passCount}</span>
+                      <span className="new-task-stat-label">Passed</span>
+                    </div>
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">{failCount}</span>
+                      <span className="new-task-stat-label">Failed</span>
+                    </div>
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">{blockedCount}</span>
+                      <span className="new-task-stat-label">Blocked</span>
+                    </div>
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">
+                        {needsAccessCount}
+                      </span>
+                      <span className="new-task-stat-label">Needs access</span>
+                    </div>
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">
+                        {agentList.length || '—'}
+                      </span>
+                      <span className="new-task-stat-label">Agents</span>
+                    </div>
+                    <div className="new-task-stat">
+                      <span className="new-task-stat-num">
+                        {formatCredits(sumCredits(agentList))}
+                      </span>
+                      <span className="new-task-stat-label">AI credits</span>
+                    </div>
                   </div>
+
+                  {run?.report && (
+                    <div
+                      className="cg-chat-md new-task-plan-md bug-bash-report-md"
+                      dangerouslySetInnerHTML={{ __html: reportHtml }}
+                    />
+                  )}
+
+                  {agentList.length > 0 && (
+                    <AgentTeamPanel
+                      agents={agentList}
+                      nowMs={nowMs}
+                      scenariosById={scenariosById}
+                      onOpen={setOpenAgentId}
+                    />
+                  )}
                 </div>
-
-                {run?.report && (
-                  <div
-                    className="cg-chat-md new-task-plan-md bug-bash-report"
-                    dangerouslySetInnerHTML={{ __html: reportHtml }}
-                  />
-                )}
-
-                {agentList.length > 0 && (
-                  <AgentTeamPanel
-                    agents={agentList}
-                    nowMs={nowMs}
-                    scenariosById={scenariosById}
-                    onOpen={setOpenAgentId}
-                  />
-                )}
-
-                <details className="new-task-plan-recap">
-                  <summary>Scenario verdicts</summary>
-                  <ul className="bug-bash-scenarios">
-                    {scenarios.map((scenario) => (
-                      <ScenarioCard key={scenario.id} scenario={scenario} />
-                    ))}
-                  </ul>
-                </details>
               </section>
             ) : (
               <p className="muted">No report yet — run the bug bash first.</p>
@@ -1175,6 +1414,21 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
           lines={agentLogs[openAgent.id] ?? []}
           nowMs={nowMs}
           onClose={() => setOpenAgentId(null)}
+        />
+      )}
+      {openScenario && (
+        <ScenarioDetailModal
+          scenario={openScenario}
+          tester={
+            openScenario.testerId ? agents[openScenario.testerId] : undefined
+          }
+          lines={
+            openScenario.testerId
+              ? (agentLogs[openScenario.testerId] ?? [])
+              : []
+          }
+          nowMs={nowMs}
+          onClose={() => setOpenScenarioId(null)}
         />
       )}
     </div>

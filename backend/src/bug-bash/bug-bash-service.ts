@@ -32,6 +32,30 @@ import type {
   BugBashWorkspaceResolver,
 } from './bug-bash-contract.js';
 
+/**
+ * The pristine per-scenario result fields, applied when a scenario is created
+ * or its stale results are cleared so every scenario starts un-run with no
+ * observations, actual output, blocked reason, tester, or diagnostics.
+ */
+const CLEARED_SCENARIO_RESULT = {
+  status: 'pending',
+  observations: '',
+  ran: false,
+  actualOutput: '',
+  blockedReason: null,
+  testerId: null,
+  diagnostics: '',
+} satisfies Pick<
+  BugBashScenario,
+  | 'status'
+  | 'observations'
+  | 'ran'
+  | 'actualOutput'
+  | 'blockedReason'
+  | 'testerId'
+  | 'diagnostics'
+>;
+
 /** Dependencies for {@link createBugBashService}. */
 export interface BugBashServiceDeps {
   repo: BugBashRunRepo;
@@ -97,8 +121,7 @@ export function createBugBashService(
       // regenerating, but clear their stale results and the report/error.
       const scenarios: BugBashScenario[] = run.scenarios.map((scenario) => ({
         ...scenario,
-        status: 'pending',
-        observations: '',
+        ...CLEARED_SCENARIO_RESULT,
       }));
       return touch(run, {
         status: scenarios.length > 0 ? 'generated' : 'draft',
@@ -178,8 +201,7 @@ export function createBugBashService(
             steps: parsed.steps,
             expectedOutput: parsed.expectedOutput,
             confirmation: parsed.confirmation,
-            status: 'pending',
-            observations: '',
+            ...CLEARED_SCENARIO_RESULT,
           }),
         );
         sink?.activity({
@@ -264,8 +286,7 @@ export function createBugBashService(
             steps: scenario.steps,
             expectedOutput: scenario.expectedOutput,
             confirmation: scenario.confirmation,
-            status: 'pending',
-            observations: '',
+            ...CLEARED_SCENARIO_RESULT,
           }));
           next = touch(run, { scenarios, status: 'generated', report: null });
         }

@@ -34,6 +34,18 @@ export type BugBashStatus =
 /** The outcome of running a single scenario. */
 export type BugBashScenarioStatus = 'pending' | 'pass' | 'fail' | 'blocked';
 
+/**
+ * Why a blocked scenario could not run. `permission` (missing access/rights) is
+ * called out separately from the rest so access gaps are triaged apart from
+ * genuine "couldn't attempt" cases (`environment` setup, missing `tooling`, or
+ * `other`). Null when the scenario is not blocked.
+ */
+export type BugBashBlockedReason =
+  | 'permission'
+  | 'environment'
+  | 'tooling'
+  | 'other';
+
 /** One generated test scenario, with its result filled in after a run. */
 export interface BugBashScenario {
   /** Stable id within a run, e.g. `scenario-1`. */
@@ -52,6 +64,24 @@ export interface BugBashScenario {
   status: BugBashScenarioStatus;
   /** The tester's observations after running it, empty before a run. */
   observations: string;
+  /**
+   * Whether a tester actually executed the steps. False when the scenario could
+   * not be attempted (blocked) or has not run yet, so the report can flag which
+   * verdicts are grounded in a real execution versus reasoning.
+   */
+  ran: boolean;
+  /** The concrete output/behaviour the tester observed, empty before a run. */
+  actualOutput: string;
+  /** For a `blocked` scenario, the category of blocker; null otherwise. */
+  blockedReason: BugBashBlockedReason | null;
+  /** The tester agent id that executed this scenario, or null when none did. */
+  testerId: string | null;
+  /**
+   * Free-form diagnostic/telemetry detail (commands run, logs, error output)
+   * captured while executing, surfaced on demand behind the scenario's info
+   * control. Empty when the tester reported none.
+   */
+  diagnostics: string;
 }
 
 /** The user-supplied inputs that seed a run. */

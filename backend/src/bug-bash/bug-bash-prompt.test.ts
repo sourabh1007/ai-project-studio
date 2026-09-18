@@ -27,6 +27,11 @@ function scenario(overrides: Partial<BugBashScenario> = {}): BugBashScenario {
     confirmation: '',
     status: 'pending',
     observations: '',
+    ran: false,
+    actualOutput: '',
+    blockedReason: null,
+    testerId: null,
+    diagnostics: '',
     ...overrides,
   };
 }
@@ -122,20 +127,53 @@ describe('buildTesterPrompt', () => {
 });
 
 describe('renderResult', () => {
-  it('renders status, steps to replicate and observations', () => {
-    const text = renderResult(scenario({ status: 'fail', observations: 'crashed' }));
+  it('renders status, ran, steps to replicate, actual output and observations', () => {
+    const text = renderResult(
+      scenario({
+        status: 'fail',
+        ran: true,
+        actualOutput: 'it threw',
+        observations: 'crashed',
+      }),
+    );
     expect(text).toContain('- Status: fail');
+    expect(text).toContain('- Actually ran: yes');
     expect(text).toContain('- Steps to replicate:');
     expect(text).toContain('1. run it');
+    expect(text).toContain('- Actual output: it threw');
     expect(text).toContain('- Observations: crashed');
   });
 
-  it('falls back when observations and steps are empty', () => {
+  it('renders the blocked reason and diagnostics when present', () => {
+    const text = renderResult(
+      scenario({
+        status: 'blocked',
+        ran: false,
+        blockedReason: 'permission',
+        diagnostics: '401 from api',
+      }),
+    );
+    expect(text).toContain('- Actually ran: no');
+    expect(text).toContain('- Blocked reason: permission (needs access)');
+    expect(text).toContain('- Diagnostics: 401 from api');
+  });
+
+  it('omits the blocked reason line when a blocked scenario has no reason', () => {
+    const text = renderResult(scenario({ status: 'blocked', blockedReason: null }));
+    expect(text).toContain('- Status: blocked');
+    expect(text).not.toContain('- Blocked reason:');
+  });
+
+  it('falls back when observations, actual output and steps are empty', () => {
     const text = renderResult(scenario({ steps: [], input: '', expectedOutput: '' }));
     expect(text).toContain('(none reported)');
     expect(text).toContain('(no steps provided)');
     expect(text).toContain('- Input: (none)');
     expect(text).toContain('- Expected output: (unspecified)');
+    expect(text).toContain('- Actual output: (none reported)');
+    // A non-blocked scenario with no diagnostics omits those lines.
+    expect(text).not.toContain('- Blocked reason:');
+    expect(text).not.toContain('- Diagnostics:');
   });
 });
 
@@ -151,32 +189,57 @@ describe('buildReportPrompt', () => {
 });
 
 describe('summarizeResults', () => {
-  it('summarizes a mix of pass/fail/blocked', () => {
+  it('summarizes a mix of pass/fail/blocked and splits blocked by access', () => {
     const report = summarizeResults([
-      scenario({ id: 's1', title: 'A', status: 'pass' }),
-      scenario({ id: 's2', title: 'B', status: 'fail', observations: 'bug' }),
-      scenario({ id: 's3', title: 'C', status: 'blocked' }),
+      scenario({ id: 's1', title: 'A', status: 'pass', ran: true }),
+      scenario({ id: 's2', title: 'B', status: 'fail', ran: true, observations: 'bug' }),
+      scenario({
+        id: 's3',
+        title: 'C',
+        status: 'blocked',
+        blockedReason: 'permission',
+      }),
+      scenario({
+        id: 's4',
+        title: 'D',
+        status: 'blocked',
+        blockedReason: 'environment',
+      }),
     ]);
-    expect(report).toContain('Ran 3 scenarios: 1 passed, 1 failed, 1 blocked.');
+    expect(report).toContain(
+      'Ran 2 of 4 scenarios: 1 passed, 1 failed, 2 blocked (1 needing access).',
+    );
     expect(report).toContain('## Bugs found');
     expect(report).toContain('- B: bug');
-    expect(report).toContain('## Blocked');
+    expect(report).toContain('## Blocked — needs access');
     expect(report).toContain('- C: (no details)');
+    expect(report).toContain('## Blocked — could not run');
+    expect(report).toContain('- D [environment not ready]: (no details)');
     expect(report).toContain('## Passed');
     expect(report).toContain('- A');
     // Per-scenario reproducible detail for every scenario.
     expect(report).toContain('## Scenario details');
     expect(report).toContain('### A');
-    expect(report).toContain('### B');
     expect(report).toContain('### C');
     expect(report).toContain('- Steps to replicate:');
+    expect(report).toContain('- Actual output: (none reported)');
+    expect(report).toContain('- Status: blocked (not run)');
+  });
+
+  it('renders a blocked scenario with no reason under could-not-run', () => {
+    const report = summarizeResults([
+      scenario({ id: 's1', title: 'A', status: 'blocked', blockedReason: null }),
+    ]);
+    expect(report).toContain('## Blocked — could not run');
+    expect(report).toContain('- A: (no details)');
+    expect(report).not.toContain('## Blocked — needs access');
   });
 
   it('omits the empty sections and uses the singular form', () => {
     const report = summarizeResults([
-      scenario({ id: 's1', title: 'A', status: 'pass', steps: [] }),
+      scenario({ id: 's1', title: 'A', status: 'pass', ran: true, steps: [] }),
     ]);
-    expect(report).toContain('Ran 1 scenario:');
+    expect(report).toContain('Ran 1 of 1 scenario:');
     expect(report).not.toContain('## Bugs found');
     expect(report).not.toContain('## Blocked');
     expect(report).toContain('## Passed');
