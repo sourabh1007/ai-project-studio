@@ -371,21 +371,44 @@ export function TerminalView({
     // viewport is scrolled back over output a full-screen TUI drew with cursor
     // moves, leaves misaligned/overlapping rows — the "garbled, unreadable"
     // scrollback the user saw. The WebGL renderer paints every cell onto one
-    // grid canvas, so scrollback stays pixel-aligned and legible. If the GPU
-    // context is unavailable or is later lost (driver reset, tab backgrounding),
-    // dispose the addon so xterm transparently falls back to the DOM renderer.
+    // grid canvas, so scrollback stays pixel-aligned and legible.
+    //
+    // A GPU context can be lost at runtime (driver reset, sleep/resume, the
+    // browser reclaiming contexts when many are open). xterm does NOT recreate
+    // the renderer on its own, so a one-shot "dispose on loss" leaves the
+    // terminal permanently degraded to the DOM renderer — which is exactly how
+    // the garbled scrollback silently returns mid-session until an app restart.
+    // Instead we recover: on loss we dispose the dead addon and re-create a
+    // fresh one shortly after, repainting so scrollback stays crisp. Only after
+    // repeated failures do we give up and let xterm fall back to the DOM
+    // renderer (the repaint-on-scroll below is the safety net for that case).
     let webgl: WebglAddon | null = null;
-    try {
-      webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
+    let webglRetryTimer: number | undefined;
+    let webglRecoveries = 0;
+    const MAX_WEBGL_RECOVERIES = 3;
+    const loadWebgl = (): void => {
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => {
+          addon.dispose();
+          if (webgl === addon) webgl = null;
+          if (disposed || webglRecoveries >= MAX_WEBGL_RECOVERIES) return;
+          webglRecoveries += 1;
+          window.clearTimeout(webglRetryTimer);
+          webglRetryTimer = window.setTimeout(() => {
+            if (disposed || webgl) return;
+            loadWebgl();
+            repaintRef.current?.();
+          }, 500);
+        });
+        term.loadAddon(addon);
+        webgl = addon;
+      } catch {
         webgl?.dispose();
         webgl = null;
-      });
-      term.loadAddon(webgl);
-    } catch {
-      webgl?.dispose();
-      webgl = null;
-    }
+      }
+    };
+    loadWebgl();
 
     const repaintViewport = () => {
       if (replayAwaitingTerminalSettle) {
@@ -930,6 +953,7 @@ export function TerminalView({
       clipboardMounted = false;
       disposed = true;
       window.clearTimeout(reconnectTimer);
+      window.clearTimeout(webglRetryTimer);
       invalidateClipboardRead();
       invalidateFocusToken();
       cancelReplayBarrier();
