@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   listAzureRepos,
+  parseAzureRepoLocation,
   repositoriesUrl,
   repoCloneUrl,
   type AzureHttpResponse,
@@ -19,6 +20,80 @@ describe('azure repo lister url helpers', () => {
     expect(repoCloneUrl('org', 'Team Proj', 'my repo')).toBe(
       'https://dev.azure.com/org/Team%20Proj/_git/my%20repo',
     );
+  });
+});
+
+describe('parseAzureRepoLocation', () => {
+  it('returns null parts for blank input', () => {
+    expect(parseAzureRepoLocation(null)).toEqual({
+      org: null,
+      project: null,
+      repo: null,
+    });
+    expect(parseAzureRepoLocation('   ')).toEqual({
+      org: null,
+      project: null,
+      repo: null,
+    });
+  });
+
+  it('treats a bare name as an organization', () => {
+    expect(parseAzureRepoLocation('msdata')).toEqual({
+      org: 'msdata',
+      project: null,
+      repo: null,
+    });
+  });
+
+  it('parses a dev.azure.com repository URL', () => {
+    expect(
+      parseAzureRepoLocation(
+        'https://dev.azure.com/msdata/CosmosDB/_git/CosmosDB',
+      ),
+    ).toEqual({ org: 'msdata', project: 'CosmosDB', repo: 'CosmosDB' });
+  });
+
+  it('parses a legacy visualstudio.com repository URL', () => {
+    expect(
+      parseAzureRepoLocation(
+        'https://msdata.visualstudio.com/CosmosDB/_git/CosmosDB',
+      ),
+    ).toEqual({ org: 'msdata', project: 'CosmosDB', repo: 'CosmosDB' });
+  });
+
+  it('ignores trailing slashes and a missing _git repo segment', () => {
+    expect(
+      parseAzureRepoLocation('https://dev.azure.com/msdata/CosmosDB/_git/'),
+    ).toEqual({ org: 'msdata', project: 'CosmosDB', repo: null });
+  });
+
+  it('accepts URL-shaped values without a scheme', () => {
+    expect(parseAzureRepoLocation('dev.azure.com/msdata/')).toEqual({
+      org: 'msdata',
+      project: null,
+      repo: null,
+    });
+  });
+
+  it('returns a null org for host-only and malformed visualstudio.com URLs', () => {
+    expect(parseAzureRepoLocation('https://dev.azure.com')).toEqual({
+      org: null,
+      project: null,
+      repo: null,
+    });
+    expect(parseAzureRepoLocation('https://.visualstudio.com/')).toEqual({
+      org: null,
+      project: null,
+      repo: null,
+    });
+  });
+
+  it('falls back to the raw value when URL parsing fails', () => {
+    expect(parseAzureRepoLocation('http://')).toEqual({
+      org: 'http://',
+      project: null,
+      repo: null,
+    });
   });
 });
 
@@ -113,7 +188,31 @@ describe('listAzureRepos', () => {
   it('throws when the org is blank', async () => {
     await expect(
       listAzureRepos(deps('tok', () => okBody({ value: [] })), '   '),
-    ).rejects.toThrow('organization is required');
+    ).rejects.toMatchObject({
+      kind: 'validation',
+      message: 'Enter an Azure DevOps organization to load repositories.',
+    });
+  });
+
+  it('accepts a full repo URL and lists repositories for its organization', async () => {
+    let tokenOrg = '';
+    let requested = '';
+    const repos = await listAzureRepos(
+      {
+        token: async (org) => {
+          tokenOrg = org;
+          return 'tok';
+        },
+        httpGet: async (url) => {
+          requested = url;
+          return okBody({ value: [] });
+        },
+      },
+      ' https://dev.azure.com/msdata/CosmosDB/_git/CosmosDB ',
+    );
+    expect(repos).toEqual([]);
+    expect(tokenOrg).toBe('msdata');
+    expect(requested).toBe(repositoriesUrl('msdata'));
   });
 
   it('throws an auth-required error when there is no cached token', async () => {
@@ -131,10 +230,23 @@ describe('listAzureRepos', () => {
     ).rejects.toMatchObject({ kind: 'auth_required' });
   });
 
-  it('throws a generic error when the repositories request fails otherwise', async () => {
+  it('throws a provider error for an inaccessible org', async () => {
+    await expect(
+      listAzureRepos(deps('tok', () => ({ status: 404, body: null })), 'badorg'),
+    ).rejects.toMatchObject({
+      kind: 'provider',
+      message:
+        'Azure DevOps organization "badorg" was not found or you do not have access. Check the organization name and sign in again if needed.',
+    });
+  });
+
+  it('throws a friendly provider error when the repositories request fails otherwise', async () => {
     await expect(
       listAzureRepos(deps('tok', () => ({ status: 500, body: null })), 'org'),
-    ).rejects.toThrow('HTTP 500');
+    ).rejects.toMatchObject({
+      kind: 'provider',
+      message: 'Could not load Azure DevOps repositories (HTTP 500). Please try again.',
+    });
   });
 
   it('skips repos missing a name or project, and disabled repos', async () => {

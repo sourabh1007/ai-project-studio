@@ -12,6 +12,8 @@
 export interface AzureConnection {
   /** The organization, when it could be resolved. */
   org: string | null;
+  /** The project, when the input was a repo URL. */
+  project: string | null;
   /** The repository, when the input was a repo URL. */
   repo: string | null;
   /** A compact label such as "org" or "org / repo", or '' when nothing parsed. */
@@ -22,19 +24,19 @@ export interface AzureConnection {
 export function describeAzureConnection(input: string | null | undefined): AzureConnection {
   const raw = (input ?? '').trim();
   if (!raw) {
-    return { org: null, repo: null, label: '' };
+    return { org: null, project: null, repo: null, label: '' };
   }
 
   const looksLikeUrl = raw.includes('://') || raw.includes('/') || raw.includes('.');
   if (!looksLikeUrl) {
-    return { org: raw, repo: null, label: raw };
+    return { org: raw, project: null, repo: null, label: raw };
   }
 
   let url: URL;
   try {
     url = new URL(raw.includes('://') ? raw : `https://${raw}`);
   } catch {
-    return { org: raw, repo: null, label: raw };
+    return { org: raw, project: null, repo: null, label: raw };
   }
 
   const host = url.hostname.toLowerCase();
@@ -43,12 +45,15 @@ export function describeAzureConnection(input: string | null | undefined): Azure
   const repo = gitIndex >= 0 ? (segments[gitIndex + 1] ?? null) : null;
 
   let org: string | null;
+  let project: string | null = null;
   if (host.endsWith('.visualstudio.com')) {
     org = host.split('.')[0] || null;
+    project = gitIndex > 0 ? segments[0] : null;
   } else {
     org = segments[0] ?? null;
+    project = gitIndex > 1 ? segments[1] : null;
   }
 
   const label = [org, repo].filter(Boolean).join(' / ');
-  return { org, repo, label };
+  return { org, project, repo, label };
 }

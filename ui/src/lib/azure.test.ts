@@ -5,11 +5,13 @@ describe('describeAzureConnection', () => {
   it('returns empty for blank input', () => {
     expect(describeAzureConnection('')).toEqual({
       org: null,
+      project: null,
       repo: null,
       label: '',
     });
     expect(describeAzureConnection(null)).toEqual({
       org: null,
+      project: null,
       repo: null,
       label: '',
     });
@@ -20,6 +22,7 @@ describe('describeAzureConnection', () => {
   it('treats a bare org name as the org', () => {
     expect(describeAzureConnection('fabrikam')).toEqual({
       org: 'fabrikam',
+      project: null,
       repo: null,
       label: 'fabrikam',
     });
@@ -28,6 +31,7 @@ describe('describeAzureConnection', () => {
   it('parses a dev.azure.com org URL', () => {
     expect(describeAzureConnection('https://dev.azure.com/fabrikam')).toEqual({
       org: 'fabrikam',
+      project: null,
       repo: null,
       label: 'fabrikam',
     });
@@ -40,6 +44,7 @@ describe('describeAzureConnection', () => {
       ),
     ).toEqual({
       org: 'fabrikam',
+      project: 'Northwind',
       repo: 'inventory-api',
       label: 'fabrikam / inventory-api',
     });
@@ -50,6 +55,7 @@ describe('describeAzureConnection', () => {
       describeAzureConnection('https://dev.azure.com/fabrikam/Northwind/_git'),
     ).toEqual({
       org: 'fabrikam',
+      project: 'Northwind',
       repo: null,
       label: 'fabrikam',
     });
@@ -62,6 +68,7 @@ describe('describeAzureConnection', () => {
       ),
     ).toEqual({
       org: 'fabrikam',
+      project: 'Northwind',
       repo: 'inventory-api',
       label: 'fabrikam / inventory-api',
     });
@@ -70,6 +77,7 @@ describe('describeAzureConnection', () => {
   it('accepts a URL without a scheme', () => {
     expect(describeAzureConnection('dev.azure.com/fabrikam')).toEqual({
       org: 'fabrikam',
+      project: null,
       repo: null,
       label: 'fabrikam',
     });
@@ -78,8 +86,32 @@ describe('describeAzureConnection', () => {
   it('falls back to the raw string when a URL-shaped value cannot be parsed', () => {
     expect(describeAzureConnection('http://')).toEqual({
       org: 'http://',
+      project: null,
       repo: null,
       label: 'http://',
+    });
+  });
+
+  it('verifies the documented Azure DevOps URL examples', () => {
+    expect(
+      describeAzureConnection(
+        ' https://msdata.visualstudio.com/CosmosDB/_git/CosmosDB ',
+      ),
+    ).toEqual({
+      org: 'msdata',
+      project: 'CosmosDB',
+      repo: 'CosmosDB',
+      label: 'msdata / CosmosDB',
+    });
+    expect(
+      describeAzureConnection(
+        'https://dev.azure.com/msdata/CosmosDB/_git/CosmosDB/',
+      ),
+    ).toEqual({
+      org: 'msdata',
+      project: 'CosmosDB',
+      repo: 'CosmosDB',
+      label: 'msdata / CosmosDB',
     });
   });
 
@@ -94,6 +126,7 @@ describe('describeAzureConnection', () => {
       describeAzureConnection('https://onprem.example.com/myorg/proj/_git/repo'),
     ).toEqual({
       org: 'myorg',
+      project: 'proj',
       repo: 'repo',
       label: 'myorg / repo',
     });

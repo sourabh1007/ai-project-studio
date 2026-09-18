@@ -1,5 +1,5 @@
 import type { GhRunner } from '../github-auth/github-auth-service.js';
-import { AuthRequiredError } from '../kernel/error-types.js';
+import { AuthRequiredError, ProviderError } from '../kernel/error-types.js';
 import type { RemoteRepo } from './remote-repo-contract.js';
 
 interface GhRepoJson {
@@ -65,7 +65,9 @@ export async function listGithubRepos(
         'github',
       );
     }
-    throw new Error(stderr || 'Failed to list GitHub repositories');
+    throw new ProviderError(
+      stderr || 'Could not load GitHub repositories. Please try again.',
+    );
   }
   return parseGithubRepos(res.stdout);
 }

@@ -87,16 +87,19 @@ describe('listGithubRepos', () => {
     expect(args).toContain('100');
   });
 
-  it('throws the stderr message when gh fails', async () => {
+  it('throws a provider error with the stderr message when gh fails', async () => {
     await expect(
       listGithubRepos(async () => ({ code: 1, stdout: '', stderr: 'gh boom' })),
-    ).rejects.toThrow('gh boom');
+    ).rejects.toMatchObject({ kind: 'provider', message: 'gh boom' });
   });
 
-  it('throws a default message when gh fails without stderr', async () => {
+  it('throws a friendly provider error when gh fails without stderr', async () => {
     await expect(
       listGithubRepos(async () => ({ code: 1, stdout: '', stderr: '' })),
-    ).rejects.toThrow('Failed to list GitHub repositories');
+    ).rejects.toMatchObject({
+      kind: 'provider',
+      message: 'Could not load GitHub repositories. Please try again.',
+    });
   });
 
   it('throws an auth-required error when gh reports the user is not logged in', async () => {

@@ -1,4 +1,8 @@
-import { AuthRequiredError } from '../kernel/error-types.js';
+import {
+  AuthRequiredError,
+  ProviderError,
+  ValidationError,
+} from '../kernel/error-types.js';
 import type { RemoteRepo } from './remote-repo-contract.js';
 
 export interface AzureHttpResponse {
@@ -55,7 +59,58 @@ interface AdoRepository {
   isDisabled?: boolean | null;
 }
 
+export interface AzureRepoLocation {
+  org: string | null;
+  project: string | null;
+  repo: string | null;
+}
+
 const API_VERSION = '7.1';
+
+/**
+ * Resolves a user-entered Azure DevOps organization field. Accepts a bare org
+ * name and both Azure Repos URL shapes:
+ * `https://dev.azure.com/{org}/{project}/_git/{repo}` and
+ * `https://{org}.visualstudio.com/{project}/_git/{repo}`.
+ */
+export function parseAzureRepoLocation(
+  input: string | null | undefined,
+): AzureRepoLocation {
+  const raw = (input ?? '').trim();
+  if (!raw) {
+    return { org: null, project: null, repo: null };
+  }
+
+  const looksLikeUrl =
+    raw.includes('://') || raw.includes('/') || raw.includes('.');
+  if (!looksLikeUrl) {
+    return { org: raw, project: null, repo: null };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+  } catch {
+    return { org: raw, project: null, repo: null };
+  }
+
+  const host = url.hostname.toLowerCase();
+  const segments = url.pathname.split('/').filter(Boolean);
+  const gitIndex = segments.indexOf('_git');
+  const repo = gitIndex >= 0 ? (segments[gitIndex + 1] ?? null) : null;
+  if (host.endsWith('.visualstudio.com')) {
+    return {
+      org: host.split('.')[0] || null,
+      project: gitIndex > 0 ? segments[0] : null,
+      repo,
+    };
+  }
+  return {
+    org: segments[0] ?? null,
+    project: gitIndex > 1 ? segments[1] : null,
+    repo,
+  };
+}
 
 /**
  * REST URL that lists every git repository across every project in an
@@ -117,9 +172,9 @@ export async function listAzureRepos(
   deps: { token: AzureTokenGetter; httpGet: AzureHttpGetter },
   org: string,
 ): Promise<RemoteRepo[]> {
-  const trimmed = org.trim();
+  const trimmed = parseAzureRepoLocation(org).org;
   if (!trimmed) {
-    throw new Error('An Azure DevOps organization is required');
+    throw new ValidationError('Enter an Azure DevOps organization to load repositories.');
   }
   const token = await deps.token(trimmed);
   if (!token) {
@@ -139,9 +194,14 @@ export async function listAzureRepos(
       'azure-devops',
     );
   }
+  if (res.status === 404) {
+    throw new ProviderError(
+      `Azure DevOps organization "${trimmed}" was not found or you do not have access. Check the organization name and sign in again if needed.`,
+    );
+  }
   if (res.status !== 200) {
-    throw new Error(
-      `Failed to list Azure DevOps repositories (HTTP ${res.status})`,
+    throw new ProviderError(
+      `Could not load Azure DevOps repositories (HTTP ${res.status}). Please try again.`,
     );
   }
 
