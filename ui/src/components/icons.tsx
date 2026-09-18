@@ -32,6 +32,7 @@ import {
   Info,
   Layers,
   ListChecks,
+  LogIn,
   Maximize2,
   Minimize2,
   Moon,
@@ -156,6 +157,7 @@ export const AiIcon = makeIcon(Sparkles);
 export const AiMagicIcon = makeIcon(WandSparkles);
 export const IntelligenceIcon = makeIcon(BrainCircuit);
 export const LaunchIcon = makeIcon(Rocket);
+export const SignInIcon = makeIcon(LogIn);
 export const BugBashIcon = makeIcon(Bug);
 export const AiChatIcon = makeIcon(Bot);
 export const SendIcon = makeIcon(Send);

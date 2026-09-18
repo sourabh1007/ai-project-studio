@@ -962,6 +962,31 @@ function initializeDesktop() {
     });
   });
 
+  // Native folder picker for choosing a local checkout/clone directory when
+  // adding a repository, so the user can browse instead of typing a raw path.
+  // Returns the selected absolute path, or null if the dialog was dismissed.
+  ipcMain.handle('dialog:selectDirectory', async (event, options) => {
+    if (!isTrustedSender(event)) {
+      return null;
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const opts = options && typeof options === 'object' ? options : {};
+    const dialogOptions = { properties: ['openDirectory', 'createDirectory'] };
+    if (typeof opts.title === 'string' && opts.title) {
+      dialogOptions.title = opts.title;
+    }
+    if (typeof opts.defaultPath === 'string' && opts.defaultPath) {
+      dialogOptions.defaultPath = opts.defaultPath;
+    }
+    const result = parent
+      ? await dialog.showOpenDialog(parent, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
+  });
+
   // Exposes the packaged app version to the renderer's About section.
   ipcMain.handle('app:getVersion', (event) => {
     if (!isTrustedSender(event)) {

@@ -13,10 +13,9 @@ import type { CheckResult } from './automation-contract.js';
 
 /** User-facing prompt shown when a monitor needs the user to authenticate. */
 export const AUTH_REQUIRED_MESSAGE =
-  "Sign-in required to reach this resource. The monitor reuses this machine's " +
-  'existing logins, so if you are already signed in (in the IDE, or via ' +
-  '`az login` / `gh auth login`) just click Resume. If not, sign in once in a ' +
-  'terminal, then Resume.';
+  "Sign-in required to reach this resource. The monitor reuses the IDE's own " +
+  'sign-in, so if you are already signed in just click Resume. Otherwise click ' +
+  'Sign in to authorize in a browser window — no terminal needed.';
 
 /** Phrases that indicate an auth failure in a check's error/output text. */
 const AUTH_TEXT_PATTERN =

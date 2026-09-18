@@ -70,6 +70,14 @@ function client(
     runAutomation: vi.fn().mockResolvedValue(automation()),
     deleteAutomation: vi.fn().mockResolvedValue({ id: 'a1' }),
     updateAutomationInterval: vi.fn().mockResolvedValue(automation()),
+    githubSignInStart: vi.fn().mockResolvedValue({
+      userCode: 'ABCD-1234',
+      verificationUri: 'https://github.com/login/device',
+      deviceCode: 'dev-code',
+      interval: 5,
+      expiresIn: 900,
+    }),
+    githubSignInPoll: vi.fn().mockResolvedValue({ status: 'pending' }),
     ...overrides,
   } as unknown as ApiClient;
 }
@@ -531,9 +539,20 @@ describe('AutomationsView', () => {
       'Sign-in required',
     );
     fireEvent.click(
-      within(card).getByRole('button', { name: /Signed in — resume/i }),
+      within(card).getByRole('button', { name: /Already signed in — resume/i }),
     );
     await waitFor(() => expect(api.resumeAutomation).toHaveBeenCalledWith('a1'));
+  });
+
+  it('opens an interactive sign-in window from a needs-auth monitor', async () => {
+    const api = client([automation({ status: 'needs-auth' })]);
+    renderView(api);
+    const card = (await screen.findByText('Watch CI')).closest(
+      '.automation-card',
+    ) as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: /^Sign in$/i }));
+    expect(await screen.findByText('Sign in to GitHub')).toBeInTheDocument();
+    await waitFor(() => expect(api.githubSignInStart).toHaveBeenCalled());
   });
 
   it('requires explicit confirmation before retrying uncertain work', async () => {

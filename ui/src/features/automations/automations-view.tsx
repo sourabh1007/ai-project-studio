@@ -56,7 +56,9 @@ import {
   ChevronIcon,
   LogsIcon,
   WarningIcon,
+  SignInIcon,
 } from '../../components/icons.js';
+import { GithubSignInModal } from '../github/github-signin.js';
 
 type LifecycleAction = 'pause' | 'resume' | 'cancel' | 'run' | 'delete';
 
@@ -268,6 +270,7 @@ function AutomationCard({
 }) {
   const api = useApi();
   const [logsOpen, setLogsOpen] = useState(false);
+  const [signInOpen, setSignInOpen] = useState(false);
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationRun[] | null>(null);
@@ -423,11 +426,20 @@ function AutomationCard({
           <strong>Sign-in required</strong>
           <span>
             {automation.failure ??
-              "The monitor reuses this machine's existing logins. If you are " +
-                'already signed in (in the IDE, or via `az login` / ' +
-                '`gh auth login`) just Resume; otherwise sign in once in a ' +
-                'terminal, then Resume.'}
+              'This monitor reuses the same GitHub sign-in as the IDE. If it ' +
+                'lost access, sign in below to authorize in a browser window — ' +
+                'no terminal needed. If you already signed in elsewhere, just ' +
+                'Resume.'}
           </span>
+          <div className="automation-auth-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => setSignInOpen(true)}
+            >
+              <SignInIcon size={14} /> Sign in
+            </button>
+          </div>
         </div>
       ) : (
         automation.failure && !automation.uncertainty && (
@@ -484,16 +496,14 @@ function AutomationCard({
         {canResume(automation.status) && (
           <button
             type="button"
-            className={
-              needsAuth(automation.status) ? 'primary-button' : 'ghost-button'
-            }
+            className="ghost-button"
             disabled={busyKey === `resume:${automation.id}`}
             onClick={() => {
               void onAction(automation.id, 'resume');
             }}
           >
             <PlayIcon size={14} />{' '}
-            {needsAuth(automation.status) ? 'Signed in — resume' : 'Resume'}
+            {needsAuth(automation.status) ? 'Already signed in — resume' : 'Resume'}
           </button>
         )}
         {runnable && (
@@ -616,6 +626,16 @@ function AutomationCard({
                 setRetryError(error);
               },
             );
+          }}
+        />
+      )}
+
+      {signInOpen && (
+        <GithubSignInModal
+          onClose={() => setSignInOpen(false)}
+          onAuthenticated={() => {
+            setSignInOpen(false);
+            void onAction(automation.id, 'resume');
           }}
         />
       )}

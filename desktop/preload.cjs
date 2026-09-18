@@ -69,6 +69,15 @@ contextBridge.exposeInMainWorld('desktop', {
     return ipcRenderer.invoke('app:relaunch');
   },
   /**
+   * Opens a native folder picker for choosing a local checkout/clone
+   * directory. Resolves to the selected absolute path, or null if dismissed.
+   * @param {{ title?: string, defaultPath?: string }} [options]
+   * @returns {Promise<string | null>}
+   */
+  chooseDirectory(options) {
+    return ipcRenderer.invoke('dialog:selectDirectory', options);
+  },
+  /**
    * Subscribes to the notice that the backend stopped and could not be
    * restarted, so the UI can say so and offer a restart instead of leaving
    * every request to fail silently. Returns an unsubscribe function.

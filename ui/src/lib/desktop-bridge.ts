@@ -57,6 +57,10 @@ export interface DesktopBridge {
   readText?(): Promise<string>;
   readImage?(request: { sessionId: string }): Promise<ClipboardAttachmentResult>;
   relaunch?(): Promise<boolean>;
+  chooseDirectory?(options?: {
+    title?: string;
+    defaultPath?: string;
+  }): Promise<string | null>;
   onBackendUnavailable?(
     cb: (detail: { reason?: string; stderrTail?: string }) => void,
   ): () => void;
@@ -74,7 +78,8 @@ export interface DesktopBridge {
  */
 export const DESKTOP_BRIDGE_CAPABILITIES = {
   root: [
-    'attachments', 'backendDiagnostics', 'clearClipboard', 'copyText', 'getVersion',
+    'attachments', 'backendDiagnostics', 'chooseDirectory', 'clearClipboard', 'copyText',
+    'getVersion',
     'onBackendUnavailable',
     'openDocs', 'openExternal', 'readImage', 'readText', 'relaunch', 'revealFile',
     'runClipboardSmoke', 'setTheme', 'updates',

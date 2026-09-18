@@ -86,7 +86,8 @@ To recover:
 - If you are already signed in on this machine (in the IDE, or via
   `az login` / `gh auth login`), just click **Resume** — the monitor reuses
   that login.
-- Otherwise sign in once in a terminal, then **Resume**.
+- Otherwise click **Sign in** on the monitor to authorize in a browser window
+  — no terminal needed — then the monitor resumes automatically.
 
 > Tip: `ci-pipeline` with `provider: "azure"` expects an Azure Pipelines repo,
 > not a classic release URL. To watch an Azure DevOps release, use an `http`
