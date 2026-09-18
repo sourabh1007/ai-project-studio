@@ -12,12 +12,15 @@ import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { RepoIcon } from '../../components/icons.js';
 import { GithubSignInModal } from '../github/github-signin.js';
+import { desktopBridge } from '../../lib/desktop-bridge.js';
+import { describeAzureConnection } from '../../lib/azure.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
 
 function readSavedOrg(): string {
   try {
-    return window.localStorage.getItem(ORG_STORAGE_KEY) ?? '';
+    const saved = window.localStorage.getItem(ORG_STORAGE_KEY) ?? '';
+    return describeAzureConnection(saved).org ?? '';
   } catch {
     return '';
   }
@@ -30,6 +33,20 @@ function readSavedOrg(): string {
 function repoLeaf(name: string): string {
   const parts = name.split('/');
   return parts[parts.length - 1] || name;
+}
+
+function providerName(provider: RepoProvider): string {
+  return provider === 'github' ? 'GitHub' : 'Azure DevOps';
+}
+
+function repoListError(provider: RepoProvider, error: string | null): string | null {
+  if (!error) {
+    return null;
+  }
+  if (/internal server error/i.test(error)) {
+    return `Could not load ${providerName(provider)} repositories. Please try again.`;
+  }
+  return error;
 }
 
 /**
@@ -72,7 +89,7 @@ export function RepoPicker({
     remote.cause instanceof ApiError && remote.cause.status === 401;
 
   async function signInAzure() {
-    const target = (org || orgDraft).trim();
+    const target = describeAzureConnection(org || orgDraft).org ?? '';
     if (azureSigningIn || !target) {
       return;
     }
@@ -89,15 +106,23 @@ export function RepoPicker({
         );
       }
     } catch (err) {
-      setAzureSigninError(err instanceof Error ? err.message : 'Sign-in failed.');
+      setAzureSigninError(
+        repoListError(
+          'azure-devops',
+          err instanceof Error ? err.message : 'Sign-in failed.',
+        ),
+      );
     } finally {
       setAzureSigningIn(false);
     }
   }
 
   function loadAzure() {
-    const next = orgDraft.trim();
+    const parsed = describeAzureConnection(orgDraft);
+    const next = parsed.org ?? '';
     if (!next) {
+      setFilter('');
+      setOrg('');
       return;
     }
     try {
@@ -105,7 +130,10 @@ export function RepoPicker({
     } catch {
       /* storage unavailable; listing still works for this session */
     }
-    setFilter('');
+    setOrgDraft(next);
+    setFilter(
+      parsed.repo ? (parsed.project ? `${parsed.project}/${parsed.repo}` : parsed.repo) : '',
+    );
     setOrg(next);
   }
 
@@ -120,10 +148,12 @@ export function RepoPicker({
     );
   }
 
+  const visibleRepos = remote.error || remote.loading ? [] : (remote.data ?? []);
+  const displayError = repoListError(provider, remote.error);
   const query = filter.trim().toLowerCase();
   const filtered = query
-    ? (remote.data ?? []).filter((repo) => repo.name.toLowerCase().includes(query))
-    : (remote.data ?? []);
+    ? visibleRepos.filter((repo) => repo.name.toLowerCase().includes(query))
+    : visibleRepos;
 
   return (
     <Modal title="Add repository" onClose={onClose}>
@@ -178,7 +208,7 @@ export function RepoPicker({
           </div>
         )}
 
-        {(remote.data?.length ?? 0) > 0 && (
+        {visibleRepos.length > 0 && (
           <div className="repo-search">
             <input
               className="input"
@@ -197,7 +227,7 @@ export function RepoPicker({
           {!remote.loading && authRequired && (
             <RepoAuthPrompt
               provider={provider}
-              message={remote.error}
+              message={displayError}
               azureSigningIn={azureSigningIn}
               azureSigninError={azureSigninError}
               onGithubSignIn={() => setGithubSignin(true)}
@@ -206,16 +236,16 @@ export function RepoPicker({
           )}
           {!remote.loading && !authRequired && (
             <>
-              <ErrorText error={remote.error} />
+              <ErrorText error={displayError} />
               {provider === 'azure-devops' && !org && (
                 <EmptyState message="Enter an organization to list repositories." />
               )}
-              {(remote.data?.length ?? 0) === 0 &&
-                !remote.error &&
+              {visibleRepos.length === 0 &&
+                !displayError &&
                 (org || provider === 'github') && (
                   <EmptyState message="No repositories found." />
                 )}
-              {(remote.data?.length ?? 0) > 0 && filtered.length === 0 && (
+              {visibleRepos.length > 0 && filtered.length === 0 && (
                 <EmptyState message="No repositories match your search." />
               )}
               {filtered.map((repo) => (
@@ -315,8 +345,53 @@ function ProvisionForm({
   const [localPath, setLocalPath] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const canBrowse = typeof desktopBridge()?.chooseDirectory === 'function';
+
+  /**
+   * Opens the native folder picker. For "clone" the user picks the parent
+   * folder and we append the repo's leaf name, because git refuses to clone
+   * into an existing directory. For "existing" the picked folder is the
+   * checkout itself.
+   */
+  async function browse() {
+    const bridge = desktopBridge();
+    if (!bridge?.chooseDirectory) {
+      return;
+    }
+    const picked = await bridge.chooseDirectory({
+      title:
+        mode === 'clone'
+          ? 'Choose a parent folder to clone into'
+          : 'Select the existing checkout folder',
+      defaultPath: localPath.trim() || undefined,
+    });
+    if (!picked) {
+      return;
+    }
+    if (mode === 'clone') {
+      const sep = picked.includes('\\') ? '\\' : '/';
+      const trimmed = picked.replace(/[\\/]+$/, '');
+      const leaf = repoLeaf(repo.name);
+      const lastSegment = trimmed.split(/[\\/]/).pop() ?? '';
+      // The picker returns the parent folder and we append the repo's leaf, but
+      // if the user selected a folder that already ends with the leaf (e.g. an
+      // intended target they created themselves) don't append it again, which
+      // would produce a duplicated "…/geneva_config/geneva_config" path.
+      setLocalPath(
+        lastSegment.toLowerCase() === leaf.toLowerCase()
+          ? trimmed
+          : `${trimmed}${sep}${leaf}`,
+      );
+    } else {
+      setLocalPath(picked);
+    }
+    setError(null);
+  }
 
   async function submit() {
+    if (submitting) {
+      return;
+    }
     const path = localPath.trim();
     if (!path) {
       setError('A local folder path is required.');
@@ -375,24 +450,35 @@ function ProvisionForm({
           <label htmlFor="repo-local-path">
             {mode === 'clone' ? 'New folder path' : 'Existing checkout path'}
           </label>
-          <input
-            id="repo-local-path"
-            className="input"
-            autoFocus
-            value={localPath}
-            onChange={(e) => setLocalPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                void submit();
+          <div className="repo-path-row">
+            <input
+              id="repo-local-path"
+              className="input"
+              autoFocus
+              value={localPath}
+              onChange={(e) => setLocalPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  void submit();
+                }
+              }}
+              placeholder={
+                mode === 'clone'
+                  ? `C:\\repos\\${repoLeaf(repo.name)}`
+                  : `C:\\repos\\${repoLeaf(repo.name)}`
               }
-            }}
-            placeholder={
-              mode === 'clone'
-                ? `C:\\repos\\${repoLeaf(repo.name)}`
-                : `C:\\repos\\${repoLeaf(repo.name)}`
-            }
-            spellCheck={false}
-          />
+              spellCheck={false}
+            />
+            {canBrowse && (
+              <Button
+                variant="ghost"
+                onClick={() => void browse()}
+                disabled={submitting}
+              >
+                Browse…
+              </Button>
+            )}
+          </div>
         </div>
 
         <ErrorText error={error} />

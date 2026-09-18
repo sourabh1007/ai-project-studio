@@ -17,6 +17,25 @@ export interface RepoProvisionerDeps {
   pathExists: (path: string) => boolean;
 }
 
+/**
+ * Picks the meaningful failure line out of git's clone stderr. Git always emits
+ * "Cloning into '<path>'..." first, even when the clone then fails, so that line
+ * alone (which is what surfaced in the dialog) tells the user nothing. Prefer an
+ * explicit `fatal:`/`error:` line, otherwise the last non-progress line, and
+ * fall back to a generic message when git said nothing useful.
+ */
+export function cloneFailureMessage(stderr: string): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const fatal = lines.filter((line) => /^(fatal|error):/i.test(line));
+  const candidates = fatal.length
+    ? fatal
+    : lines.filter((line) => !/^Cloning into /i.test(line));
+  return candidates[candidates.length - 1] ?? 'git clone failed';
+}
+
 export interface ProvisionRepoInput {
   provider: RepoProvider;
   remoteUrl: string;
@@ -54,7 +73,7 @@ export async function provisionRepo(
       targetPath: localPath,
     });
     if (res.code !== 0) {
-      throw new ValidationError(res.stderr.trim() || 'git clone failed');
+      throw new ValidationError(cloneFailureMessage(res.stderr));
     }
   } else if (!deps.pathExists(localPath)) {
     throw new ValidationError(`Path does not exist: ${localPath}`);

@@ -1224,6 +1224,12 @@ function main(): void {
   const cloneRepo = (request: { remoteUrl: string; targetPath: string }) =>
     gitRun(['clone', request.remoteUrl, request.targetPath], {
       interactive: false,
+      // A real clone of a sizable repo runs for minutes and streams megabytes
+      // of "Receiving objects: X%" progress to stderr. Without longRunning it
+      // gets the 20s / 1 MB ceilings, so a slow clone is killed mid-flight and
+      // surfaces git's partial "Cloning into…" stderr as a failure while the
+      // dialog's submit button re-enables before the checkout ever completes.
+      longRunning: true,
     });
   const provisionRepoInput = (input: Parameters<typeof provisionRepo>[1]) =>
     provisionRepo({ clone: cloneRepo, pathExists: existsSync }, input);

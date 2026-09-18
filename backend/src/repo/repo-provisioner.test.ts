@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { provisionRepo } from './repo-provisioner.js';
+import { provisionRepo, cloneFailureMessage } from './repo-provisioner.js';
 
 const base = {
   provider: 'github' as const,
@@ -91,5 +91,46 @@ describe('provisionRepo', () => {
         { ...base, mode: 'existing', localPath: '   ' },
       ),
     ).rejects.toThrow('A local path is required');
+  });
+
+  it('surfaces the fatal git line, skipping the "Cloning into" progress noise', async () => {
+    await expect(
+      provisionRepo(
+        {
+          pathExists: () => false,
+          clone: async () => ({
+            code: 128,
+            stdout: '',
+            stderr:
+              "Cloning into 'C:/work/app'...\nremote: Repository not found\nfatal: authentication failed for 'https://dev.azure.com/'",
+          }),
+        },
+        { ...base, mode: 'clone', localPath: 'C:/work/app' },
+      ),
+    ).rejects.toThrow("fatal: authentication failed for 'https://dev.azure.com/'");
+  });
+});
+
+describe('cloneFailureMessage', () => {
+  it('prefers the last fatal/error line over progress noise', () => {
+    expect(
+      cloneFailureMessage(
+        "Cloning into 'x'...\nerror: early hint\nfatal: could not read Username",
+      ),
+    ).toBe('fatal: could not read Username');
+  });
+
+  it('falls back to the last non-progress line when no fatal line exists', () => {
+    expect(cloneFailureMessage("Cloning into 'x'...\nwarning: slow network")).toBe(
+      'warning: slow network',
+    );
+  });
+
+  it('defaults when git only emitted the "Cloning into" progress line', () => {
+    expect(cloneFailureMessage("Cloning into 'x'...")).toBe('git clone failed');
+  });
+
+  it('defaults on empty stderr', () => {
+    expect(cloneFailureMessage('')).toBe('git clone failed');
   });
 });
