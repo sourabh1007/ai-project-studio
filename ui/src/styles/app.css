@@ -8852,9 +8852,9 @@ body.is-resizing {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  flex-wrap: wrap;
-  margin: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  flex-wrap: nowrap;
+  margin: var(--space-2) var(--space-3);
+  padding: 8px var(--space-3);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
@@ -8869,22 +8869,19 @@ body.is-resizing {
 .update-banner-danger {
   border-left-color: var(--danger);
 }
-.update-banner-body {
+.update-banner-main {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: var(--space-3);
   min-width: 0;
-  flex: 1 1 260px;
-}
-.update-banner-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 .update-banner-title {
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .update-banner-detail {
   font-size: 0.8rem;
@@ -8892,20 +8889,23 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 .update-banner-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 .update-banner-progress {
   position: relative;
-  width: 100%;
+  width: 140px;
   height: 6px;
   border-radius: 999px;
   background: var(--border);
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .update-banner-progress-fill {
   height: 100%;
@@ -13264,6 +13264,13 @@ body.is-resizing {
   overflow-y: auto;
 }
 
+/* Bug Bash presents dense, multi-column live status (tester teams, scenario
+   grids, reports) that benefit from the full pane width, so it opts out of the
+   readability cap and expands to fill the window. */
+.bug-bash-page {
+  max-width: none;
+}
+
 .agent-page-header {
   display: flex;
   align-items: flex-start;
@@ -13348,6 +13355,257 @@ body.is-resizing {
 
 .new-task-base input[type='text'] {
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Bug Bash — Prepare step (dynamically-generated prerequisite questions). */
+.bug-bash-prepare-intro {
+  margin-bottom: 4px;
+}
+
+.bug-bash-prepare-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px;
+  border: 1px dashed var(--border, #d0d7de);
+  border-radius: 10px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.06));
+}
+
+.bug-bash-prepare-empty p {
+  margin: 0;
+  color: var(--muted, #6e7781);
+}
+
+.bug-bash-prereq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bug-bash-prereq {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  background: var(--surface, rgba(127, 127, 127, 0.03));
+}
+
+.bug-bash-prereq-question {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.bug-bash-prereq-detail {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.bug-bash-prereq-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.bug-bash-prereq-option {
+  padding: 4px 12px;
+  font-size: 0.85rem;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 999px;
+  background: var(--surface, transparent);
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.bug-bash-prereq-option:hover:not(:disabled) {
+  border-color: var(--accent, #4c8dff);
+}
+
+.bug-bash-prereq-option.is-selected {
+  border-color: var(--accent, #4c8dff);
+  background: var(--accent-soft, rgba(76, 141, 255, 0.15));
+  font-weight: 600;
+}
+
+.bug-bash-prereq-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.bug-bash-prereq textarea {
+  margin-top: 4px;
+}
+
+/* Prepare step — analysing transition + skeletons + question entrance. */
+.bug-bash-prepare-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: bug-bash-fade-in 0.25s ease both;
+}
+
+.bug-bash-prepare-loading-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.95rem;
+  color: var(--muted, #6e7781);
+}
+
+.bug-bash-prepare-orb {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 30% 30%,
+    var(--accent, #4c8dff),
+    transparent 70%
+  );
+  box-shadow: 0 0 0 0 var(--accent-soft, rgba(76, 141, 255, 0.5));
+  animation: bug-bash-orb-pulse 1.4s ease-in-out infinite;
+}
+
+.bug-bash-prereq-skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bug-bash-prereq-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 10px;
+  background: var(--surface, rgba(127, 127, 127, 0.03));
+}
+
+.skeleton-line,
+.skeleton-chip {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.14));
+}
+
+.skeleton-line {
+  height: 12px;
+}
+
+.skeleton-line-q {
+  width: 60%;
+}
+
+.skeleton-line-d {
+  width: 40%;
+  height: 10px;
+}
+
+.skeleton-chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.skeleton-chip {
+  width: 64px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+.skeleton-line::after,
+.skeleton-chip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--surface-hover, rgba(255, 255, 255, 0.18)),
+    transparent
+  );
+  animation: bug-bash-shimmer 1.4s ease-in-out infinite;
+}
+
+.bug-bash-prereq-enter {
+  animation: bug-bash-rise-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bug-bash-prereq-enter:nth-child(2) {
+  animation-delay: 0.06s;
+}
+.bug-bash-prereq-enter:nth-child(3) {
+  animation-delay: 0.12s;
+}
+.bug-bash-prereq-enter:nth-child(4) {
+  animation-delay: 0.18s;
+}
+.bug-bash-prereq-enter:nth-child(5) {
+  animation-delay: 0.24s;
+}
+.bug-bash-prereq-enter:nth-child(n + 6) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bug-bash-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes bug-bash-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bug-bash-orb-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--accent-soft, rgba(76, 141, 255, 0.5));
+    transform: scale(0.9);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(76, 141, 255, 0);
+    transform: scale(1.05);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(76, 141, 255, 0);
+    transform: scale(0.9);
+  }
+}
+
+@keyframes bug-bash-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bug-bash-prepare-loading,
+  .bug-bash-prereq-enter,
+  .bug-bash-prepare-orb,
+  .skeleton-line::after,
+  .skeleton-chip::after {
+    animation: none;
+  }
 }
 
 .new-task-inputs .btn,
@@ -14122,6 +14380,8 @@ body.is-resizing {
   letter-spacing: 0.03em;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .new-task-agent-metrics {
@@ -14249,27 +14509,34 @@ body.is-resizing {
 .new-task-modal {
   display: flex;
   flex-direction: column;
-  width: min(720px, 100%);
-  max-height: 80vh;
+  width: min(760px, 100%);
+  min-width: 340px;
+  min-height: 240px;
+  max-width: 96vw;
+  max-height: 90vh;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 10px);
   background: var(--bg, var(--panel));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+  resize: both;
+  overflow: hidden;
 }
 
 .new-task-modal-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
-.new-task-modal-head > div {
+.new-task-modal-head > div:first-child {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .new-task-modal-head strong {
@@ -14281,7 +14548,6 @@ body.is-resizing {
 }
 
 .new-task-modal-close {
-  margin-left: auto;
   border: 0;
   background: transparent;
   color: var(--text-muted);
@@ -14290,6 +14556,7 @@ body.is-resizing {
   cursor: pointer;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
+  flex-shrink: 0;
 }
 
 .new-task-modal-close:hover {
@@ -14305,6 +14572,67 @@ body.is-resizing {
   border-bottom: 1px solid var(--border);
   font-size: 0.74rem;
   font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.new-task-modal-metrics.is-pass,
+.new-task-modal-metrics.is-fail,
+.new-task-modal-metrics.is-blocked {
+  column-gap: var(--space-3);
+}
+
+.bug-bash-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.bug-bash-metric-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.bug-bash-metric-value {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.bug-bash-metric-verdict {
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+
+.new-task-modal-metrics.is-pass .bug-bash-metric-verdict {
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 16%, transparent);
+}
+
+.new-task-modal-metrics.is-fail .bug-bash-metric-verdict {
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 16%, transparent);
+}
+
+.new-task-modal-metrics.is-blocked .bug-bash-metric-verdict {
+  color: var(--warning, #d29922);
+  background: color-mix(in srgb, var(--warning, #d29922) 16%, transparent);
+}
+
+.bug-bash-metric-ran.did-run .bug-bash-metric-value {
+  color: var(--success, #3fb950);
+}
+
+.bug-bash-metric-ran.unverified .bug-bash-metric-value {
+  color: var(--warning, #d29922);
+}
+
+.bug-bash-metric-ran.not-run .bug-bash-metric-value {
   color: var(--text-muted);
 }
 
@@ -14440,13 +14768,57 @@ body.is-resizing {
   padding: 1px 8px;
   border-radius: 999px;
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 220px;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.bug-bash-scenario-chip.is-running {
+  color: color-mix(in srgb, var(--success, #3fb950) 72%, black);
+  background:
+    linear-gradient(
+      100deg,
+      color-mix(in srgb, var(--success, #3fb950) 14%, transparent) 0%,
+      color-mix(in srgb, var(--success, #3fb950) 14%, transparent) 36%,
+      color-mix(in srgb, var(--success, #3fb950) 34%, white) 50%,
+      color-mix(in srgb, var(--success, #3fb950) 14%, transparent) 64%,
+      color-mix(in srgb, var(--success, #3fb950) 14%, transparent) 100%
+    );
+  background-size: 200% 100%;
+  border-color: color-mix(in srgb, var(--success, #3fb950) 48%, transparent);
+  animation: bug-bash-chip-loader 1.15s linear infinite;
+}
+
+.bug-bash-scenario-chip.is-done {
+  color: #f0fdf4;
+  background: color-mix(in srgb, var(--success, #3fb950) 55%, black);
+  border-color: color-mix(in srgb, var(--success, #3fb950) 65%, black);
+  font-weight: 600;
+}
+
+@keyframes bug-bash-chip-loader {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -20% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bug-bash-scenario-chip.is-running {
+    animation: none;
+    background:
+      color-mix(in srgb, var(--success, #3fb950) 16%, transparent);
+  }
 }
 
 .bug-bash-scenarios {
@@ -14489,6 +14861,24 @@ body.is-resizing {
 
 .bug-bash-scenario-head strong {
   font-size: 0.9rem;
+}
+
+/* Numbered counter shown on each scenario card / row. */
+.bug-bash-scenario-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 22%, transparent);
 }
 
 .bug-bash-verdict {
@@ -14545,6 +14935,75 @@ body.is-resizing {
   background: color-mix(in srgb, var(--text-muted) 12%, transparent);
 }
 
+.bug-bash-ran-flag.unverified {
+  color: var(--warning, #d29922);
+  background: color-mix(in srgb, var(--warning, #d29922) 14%, transparent);
+}
+
+/* Row badge flagging a verdict whose evidence is incomplete (e.g. a pass with
+   no repro script), even when it technically "ran". */
+.bug-bash-evidence-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 12%, transparent);
+}
+
+/* The alert banner shown at the top of a scenario modal when its verdict is
+   missing corroborating evidence. */
+.bug-bash-evidence-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning, #d29922) 45%, transparent);
+  border-radius: var(--radius-sm, 8px);
+  background: color-mix(in srgb, var(--warning, #d29922) 12%, transparent);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.bug-bash-evidence-warning svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warning, #d29922);
+}
+
+/* The per-scenario repro script section: a header row with a copy button and a
+   monospace code block a developer can run locally. */
+.bug-bash-repro-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.bug-bash-repro {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-code, color-mix(in srgb, var(--text-muted) 8%, transparent));
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .bug-bash-block-reason {
   padding: 1px 7px;
   border-radius: 999px;
@@ -14579,8 +15038,16 @@ body.is-resizing {
 .bug-bash-section-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-2) var(--space-3);
+}
+
+.bug-bash-section-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .bug-bash-section-head h3 {
@@ -14650,6 +15117,11 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.bug-bash-modal-actions .btn {
+  white-space: nowrap;
 }
 
 .bug-bash-run-log {
@@ -14664,6 +15136,7 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  padding: var(--space-3);
 }
 
 .bug-bash-diagnostics-raw dt {
@@ -14713,12 +15186,79 @@ body.is-resizing {
   overflow-wrap: anywhere;
 }
 
+.bug-bash-scenario-body > div:not(:first-child) > dt,
+.bug-bash-scenario-body > div:not(:first-child) > dd {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+}
+
 .bug-bash-steps {
   margin: 0;
   padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.bug-bash-bullets {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: disc;
+}
+
+.bug-bash-bullets + .bug-bash-json,
+.bug-bash-json + .bug-bash-bullets {
+  margin-top: var(--space-2);
+}
+
+.bug-bash-json {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.bug-bash-hl {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  color: var(--text);
+}
+
+.bug-bash-hl-path {
+  color: var(--accent, #58a6ff);
+  background: color-mix(in srgb, var(--accent, #58a6ff) 12%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.bug-bash-hl-status {
+  font-weight: 700;
+}
+
+.bug-bash-hl-status.s2xx {
+  color: var(--success, #3fb950);
+  background: color-mix(in srgb, var(--success, #3fb950) 16%, transparent);
+}
+
+.bug-bash-hl-status.s3xx {
+  color: var(--accent, #58a6ff);
+  background: color-mix(in srgb, var(--accent, #58a6ff) 16%, transparent);
+}
+
+.bug-bash-hl-status.s4xx,
+.bug-bash-hl-status.s5xx {
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 16%, transparent);
 }
 
 .bug-bash-report {

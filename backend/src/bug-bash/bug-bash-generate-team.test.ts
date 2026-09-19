@@ -29,6 +29,7 @@ function makeSink() {
   const sink: BugBashTeamSink = {
     activity: (a) => activities.push(a),
     agent: (a) => agents.push(a),
+    scenario: () => {},
   };
   return { sink, activities, agents };
 }

@@ -55,6 +55,13 @@ function scenario(overrides: Partial<BugBashScenario> = {}): BugBashScenario {
     confirmation: '',
     status: 'pending',
     observations: '',
+    ran: false,
+    actualOutput: '',
+    blockedReason: null,
+    testerId: null,
+    diagnostics: '',
+    reproScript: '',
+    evidenceGaps: [],
     ...overrides,
   };
 }
@@ -77,12 +84,14 @@ function makeSink() {
   const events = {
     activities: [] as Array<Omit<BugBashActivity, 'runId'>>,
     agents: [] as BugBashAgent[],
+    scenarios: [] as Array<{ id: string; status: string }>,
     done: [] as BugBashRun[],
     failed: [] as string[],
   };
   const sink: BugBashRunSink = {
     activity: (a) => events.activities.push(a),
     agent: (a) => events.agents.push(a),
+    scenario: (progress) => events.scenarios.push(progress),
     done: (r) => events.done.push(r),
     failed: (e) => events.failed.push(e),
   };
@@ -147,10 +156,12 @@ describe('bug-bash-service: saveInputs', () => {
     const run = service.saveInputs('a1', 'f1', {
       featureInfo: '  a feature ',
       setupInfo: '  docs ',
+      otherInfo: '  extra notes  ',
     });
     expect(run.status).toBe('draft');
     expect(run.featureInfo).toBe('a feature');
     expect(run.setupInfo).toBe('docs');
+    expect(run.otherInfo).toBe('extra notes');
     expect(repo.map.get('a1')).toBeDefined();
   });
 
@@ -161,10 +172,119 @@ describe('bug-bash-service: saveInputs', () => {
     const run = service.saveInputs('a1', 'f1', {
       featureInfo: 'new',
       setupInfo: '',
+      otherInfo: '',
     });
     expect(run.status).toBe('draft');
     expect(run.scenarios).toEqual([]);
     expect(run.report).toBeNull();
+  });
+});
+
+describe('bug-bash-service: prerequisites', () => {
+  it('generates prerequisite questions from the inputs', async () => {
+    const { service, repo } = makeService({
+      ...seeded({ otherInfo: 'extra' }),
+      runDetailed: async () => ({
+        text: fence(
+          '{"prerequisites":[{"question":"Which account?","detail":"needed to connect","options":["Shared","Personal"]},{"question":"","detail":"dropped"}]}',
+        ),
+        sessionId: 's',
+      }),
+    });
+    const run = await service.generatePrerequisites('a1');
+    expect(run.prerequisites).toEqual([
+      {
+        id: 'prereq-1',
+        question: 'Which account?',
+        detail: 'needed to connect',
+        options: ['Shared', 'Personal'],
+        answer: '',
+      },
+    ]);
+    expect(repo.map.get('a1')!.prerequisites).toHaveLength(1);
+  });
+
+  it('preserves an existing answer for an unchanged question on regenerate', async () => {
+    const { service } = makeService({
+      ...seeded({
+        prerequisites: [
+          {
+            id: 'prereq-1',
+            question: 'Which account?',
+            detail: 'old',
+            answer: 'account-42',
+          },
+        ],
+      }),
+      runDetailed: async () => ({
+        text: fence(
+          '{"prerequisites":[{"question":"Which account?","detail":"new"}]}',
+        ),
+        sessionId: 's',
+      }),
+    });
+    const run = await service.generatePrerequisites('a1');
+    expect(run.prerequisites[0].answer).toBe('account-42');
+    expect(run.prerequisites[0].detail).toBe('new');
+  });
+
+  it('saves answers by id, leaving other questions untouched', () => {
+    const { service } = makeService(
+      seeded({
+        prerequisites: [
+          { id: 'prereq-1', question: 'Q1', detail: '', answer: '' },
+          { id: 'prereq-2', question: 'Q2', detail: '', answer: 'keep' },
+        ],
+      }),
+    );
+    const run = service.savePrerequisiteAnswers('a1', [
+      { id: 'prereq-1', answer: 'answered' },
+      { id: 'missing', answer: 'ignored' },
+    ]);
+    expect(run.prerequisites[0].answer).toBe('answered');
+    expect(run.prerequisites[1].answer).toBe('keep');
+  });
+
+  it('folds other info and answered prerequisites into the generation context', async () => {
+    let capturedSetup = '';
+    const generateTeam: BugBashGenerateTeam = {
+      generate: async (request): Promise<BugBashGenerateResult> => {
+        capturedSetup = request.setupInfo;
+        return { agents: [], scenarios: [] };
+      },
+    };
+    const { service } = makeService({
+      ...seeded({
+        setupInfo: 'run it',
+        otherInfo: 'be careful',
+        prerequisites: [
+          { id: 'prereq-1', question: 'Which account?', detail: '', answer: 'acct-1' },
+          { id: 'prereq-2', question: 'Unanswered?', detail: '', answer: '   ' },
+        ],
+      }),
+      generateTeam,
+    });
+    await service.generate('a1');
+    expect(capturedSetup).toContain('run it');
+    expect(capturedSetup).toContain('Other information:\nbe careful');
+    expect(capturedSetup).toContain('Q: Which account?\nA: acct-1');
+    expect(capturedSetup).not.toContain('Unanswered?');
+  });
+
+  it('yields an empty context when nothing extra is provided', async () => {
+    let capturedSetup = 'unset';
+    const generateTeam: BugBashGenerateTeam = {
+      generate: async (request): Promise<BugBashGenerateResult> => {
+        capturedSetup = request.setupInfo;
+        return { agents: [], scenarios: [] };
+      },
+    };
+    const { service } = makeService({
+      ...seeded({ setupInfo: '', otherInfo: '', prerequisites: [] }),
+      generateTeam,
+    });
+    await service.generate('a1');
+    expect(capturedSetup).toBe('');
   });
 });
 
@@ -234,6 +354,7 @@ describe('bug-bash-service: generate', () => {
             agentId: 'analyst-1',
           });
           req.sink.agent({ ...subAnalyst, status: 'running' });
+          req.sink.scenario({ id: 'scenario-1', status: 'running' });
           req.sink.agent(subAnalyst);
           return {
             agents: [leadAnalyst, subAnalyst],
@@ -261,6 +382,9 @@ describe('bug-bash-service: generate', () => {
     expect(run.agents.every((a) => a.role === 'analyst')).toBe(true);
     // The sub-agent's running/done snapshots reached the sink.
     expect(events.agents.map((a) => a.status)).toEqual(['running', 'done']);
+    expect(events.scenarios).toEqual([
+      { id: 'scenario-1', status: 'running' },
+    ]);
     expect(events.done).toHaveLength(1);
     // The streamed activity line reached the bus and the sink.
     expect(emitted.some((e) => e.line === 'reading code')).toBe(true);
@@ -500,6 +624,8 @@ describe('bug-bash-service: run', () => {
         run: async (req) => {
           req.sink.activity({ phase: 'running', line: 'go', agentId: 'lead' });
           req.sink.agent({ ...lead });
+          req.sink.scenario({ id: 'scenario-1', status: 'running' });
+          req.sink.scenario({ id: 'scenario-1', status: 'pass' });
           return { agents: [lead], scenarios: ranScenarios, report: '## Summary' };
         },
       },
@@ -514,6 +640,10 @@ describe('bug-bash-service: run', () => {
     expect(stored.agents.map((a) => a.role)).toEqual(['analyst', 'lead']);
     expect(events.done).toHaveLength(1);
     expect(events.activities.some((a) => a.line === 'go')).toBe(true);
+    expect(events.scenarios).toEqual([
+      { id: 'scenario-1', status: 'running' },
+      { id: 'scenario-1', status: 'pass' },
+    ]);
     expect(emitted.some((e) => e.phase === 'done')).toBe(true);
   });
 
@@ -571,6 +701,8 @@ function seeded(overrides: Partial<BugBashRun>): { repo: ReturnType<typeof makeR
     featureId: 'f1',
     featureInfo: 'a feature',
     setupInfo: 'setup',
+    otherInfo: '',
+    prerequisites: [],
     scenarios: [],
     report: null,
     status: 'draft',

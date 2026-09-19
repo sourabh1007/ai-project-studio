@@ -14,7 +14,7 @@ describe('bug-bash config', () => {
     expect(() => bugBashConfigSchema.parse(bugBashDefaults)).not.toThrow();
     expect(bugBashDefaults.generateTimeoutMs).toBeGreaterThan(0);
     expect(bugBashDefaults.runTimeoutMs).toBeGreaterThan(0);
-    expect(bugBashDefaults.maxTesters).toBeGreaterThanOrEqual(1);
+    expect(bugBashDefaults.maxTesters).toBe(8);
     expect(bugBashDefaults.maxAnalysts).toBeGreaterThanOrEqual(1);
     expect(bugBashDefaults.decomposePromptTemplate.length).toBeGreaterThan(0);
     expect(bugBashDefaults.generatePromptTemplate.length).toBeGreaterThan(0);

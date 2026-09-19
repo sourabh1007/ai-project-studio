@@ -6,10 +6,11 @@ export interface BugBashControllerDeps {
   bugBash: BugBashService;
 }
 
-/** Validate and extract the `{ featureInfo, setupInfo }` of an inputs request. */
+/** Validate and extract the `{ featureInfo, setupInfo, otherInfo }` of an inputs request. */
 function assertInputs(body: unknown): {
   featureInfo: string;
   setupInfo: string;
+  otherInfo: string;
 } {
   const featureInfo = (body as { featureInfo?: unknown })?.featureInfo;
   if (typeof featureInfo !== 'string' || featureInfo.trim().length === 0) {
@@ -19,10 +20,34 @@ function assertInputs(body: unknown): {
   if (rawSetup !== undefined && typeof rawSetup !== 'string') {
     throw new ValidationError('"setupInfo" must be a string when provided.');
   }
+  const rawOther = (body as { otherInfo?: unknown })?.otherInfo;
+  if (rawOther !== undefined && typeof rawOther !== 'string') {
+    throw new ValidationError('"otherInfo" must be a string when provided.');
+  }
   return {
     featureInfo,
     setupInfo: typeof rawSetup === 'string' ? rawSetup : '',
+    otherInfo: typeof rawOther === 'string' ? rawOther : '',
   };
+}
+
+/** Validate the `{ answers: [{ id, answer }] }` of a prerequisite-answers request. */
+function assertAnswers(body: unknown): { id: string; answer: string }[] {
+  const rawAnswers = (body as { answers?: unknown })?.answers;
+  if (!Array.isArray(rawAnswers)) {
+    throw new ValidationError('An "answers" array is required.');
+  }
+  return rawAnswers.map((entry) => {
+    const id = (entry as { id?: unknown })?.id;
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throw new ValidationError('Each answer requires a non-empty "id".');
+    }
+    const answer = (entry as { answer?: unknown })?.answer;
+    if (answer !== undefined && typeof answer !== 'string') {
+      throw new ValidationError('"answer" must be a string when provided.');
+    }
+    return { id, answer: typeof answer === 'string' ? answer : '' };
+  });
 }
 
 /**
@@ -45,16 +70,35 @@ export function createBugBashRoutes(deps: BugBashControllerDeps): Route[] {
       method: 'post',
       path: '/features/:featureId/bug-bash/:attachmentId/inputs',
       handler: (req) => {
-        const { featureInfo, setupInfo } = assertInputs(req.body);
+        const { featureInfo, setupInfo, otherInfo } = assertInputs(req.body);
         return {
           status: 200,
           body: deps.bugBash.saveInputs(
             req.params.attachmentId,
             req.params.featureId,
-            { featureInfo, setupInfo },
+            { featureInfo, setupInfo, otherInfo },
           ),
         };
       },
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/bug-bash/:attachmentId/prerequisites',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.bugBash.generatePrerequisites(req.params.attachmentId),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
+      handler: (req) => ({
+        status: 200,
+        body: deps.bugBash.savePrerequisiteAnswers(
+          req.params.attachmentId,
+          assertAnswers(req.body),
+        ),
+      }),
     },
   ];
 }

@@ -1701,12 +1701,37 @@ describe('bug bash client', () => {
     await client.saveBugBashInputs('f1', 'att1', {
       featureInfo: 'F',
       setupInfo: 'S',
+      otherInfo: 'O',
     });
     const [url, init] = calls[0];
     expect(url).toBe('/api/features/f1/bug-bash/att1/inputs');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(
-      JSON.stringify({ featureInfo: 'F', setupInfo: 'S' }),
+      JSON.stringify({ featureInfo: 'F', setupInfo: 'S', otherInfo: 'O' }),
+    );
+  });
+
+  it('generates prerequisite questions with a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.generateBugBashPrerequisites('f1', 'att1');
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/prerequisites');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('saves prerequisite answers with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'att1' }));
+    const client = createApiClient({ fetchImpl });
+    await client.saveBugBashPrerequisiteAnswers('f1', 'att1', [
+      { id: 'prereq-1', answer: 'yes' },
+    ]);
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/bug-bash/att1/prerequisites/answers');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ answers: [{ id: 'prereq-1', answer: 'yes' }] }),
     );
   });
 

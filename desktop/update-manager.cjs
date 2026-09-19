@@ -20,6 +20,9 @@
 
 const { app, shell } = require('electron');
 const https = require('node:https');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
 
 const GITHUB_OWNER = 'sourabh1007';
 const GITHUB_REPO = 'ai-project-studio';
@@ -44,6 +47,11 @@ let started = false;
 let intervalTimer = null;
 let downloaded = false;
 let installing = null;
+// Windows seamless auto-update: the installer asset from the newest release,
+// its downloaded local path, and an in-flight download guard.
+let installerAsset = null;
+let installerPath = null;
+let downloading = null;
 
 // The single source of truth for the update state, echoed to the renderer on
 // every change and returned by `getState()` for late-subscribing views.
@@ -309,16 +317,26 @@ function checkGitHubLatest(manual) {
             const best = newestRelease(JSON.parse(body));
             if (best && isNewer(best.version, safeVersion())) {
               const json = best.release;
+              installerAsset = pickWindowsInstaller(json.assets);
               setState({
                 status: Status.AVAILABLE,
                 availableVersion: best.version,
                 releaseNotes: typeof json.body === 'string' ? json.body : null,
                 releaseName: json.name || null,
                 releasePageUrl: json.html_url || RELEASES_PAGE,
+                // Windows with a downloadable installer asset can install and
+                // relaunch in the background; everything else stays guided.
+                canAutoInstall: isWindows() && Boolean(installerAsset),
                 error: null,
               });
             } else {
-              setState({ status: Status.NOT_AVAILABLE, availableVersion: null, error: null });
+              installerAsset = null;
+              setState({
+                status: Status.NOT_AVAILABLE,
+                availableVersion: null,
+                canAutoInstall: false,
+                error: null,
+              });
             }
             resolve();
           } catch (err) {
@@ -372,10 +390,36 @@ function parseVersion(v) {
   return { nums: nums.slice(0, 3), pre: pre || '' };
 }
 
-/** Opens the release page for a user-managed download on supported platforms. */
+/** Chooses the Windows NSIS installer (.exe) asset from a release's assets. */
+function pickWindowsInstaller(assets) {
+  if (!Array.isArray(assets)) {
+    return null;
+  }
+  const exe = assets.find(
+    (a) =>
+      a &&
+      typeof a.name === 'string' &&
+      /\.exe$/i.test(a.name) &&
+      !/\.blockmap$/i.test(a.name),
+  );
+  return exe && exe.browser_download_url
+    ? { url: exe.browser_download_url, name: exe.name }
+    : null;
+}
+
+/**
+ * Primary "update" action.
+ *  - Windows with a downloadable installer: download it in the background
+ *    (streaming progress to the banner) and, on completion, silently install
+ *    and relaunch — the whole flow from a single click, no further prompts.
+ *  - Everything else (macOS / no asset): guided install by opening the page.
+ */
 async function downloadUpdate() {
   if (!active()) {
     return getState();
+  }
+  if (isWindows() && installerAsset && installerAsset.url) {
+    return downloadAndInstallWindows();
   }
   try {
     await shell.openExternal(state?.releasePageUrl || RELEASES_PAGE);
@@ -386,13 +430,163 @@ async function downloadUpdate() {
 }
 
 /**
- * Opens the release page for guided installation. A true result acknowledges
- * only the page-opening request, never installation or permission to quit.
- * Downloaded artifacts remain untouched and retry does not start an installer.
+ * Downloads the Windows installer to a temp file with live progress, then hands
+ * off to the silent installer. Guarded so repeated clicks share one download.
+ */
+function downloadAndInstallWindows() {
+  if (downloading) {
+    return downloading;
+  }
+  downloading = (async () => {
+    try {
+      const dest = path.join(app.getPath('temp'), installerAsset.name);
+      setState({
+        status: Status.DOWNLOADING,
+        percent: 0,
+        transferred: 0,
+        total: 0,
+        error: null,
+      });
+      await downloadFile(installerAsset.url, dest, (transferred, total) => {
+        setState({
+          status: Status.DOWNLOADING,
+          transferred,
+          total,
+          percent:
+            total > 0
+              ? Math.max(0, Math.min(100, (transferred / total) * 100))
+              : state?.percent ?? 0,
+        });
+      });
+      installerPath = dest;
+      downloaded = true;
+      setState({ status: Status.DOWNLOADED, percent: 100, error: null });
+      // Seamless finish: install + relaunch in the background.
+      runSilentInstall();
+    } catch (err) {
+      reportError(err);
+    }
+    return getState();
+  })();
+  const attempt = downloading;
+  void attempt.then(() => {
+    if (downloading === attempt) {
+      downloading = null;
+    }
+  });
+  return attempt;
+}
+
+/** Streams a URL to a local file, following redirects and reporting progress. */
+function downloadFile(url, dest, onProgress, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) {
+      reject(new Error('Too many redirects while downloading the update'));
+      return;
+    }
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent': 'ai-project-studio-updater',
+          Accept: 'application/octet-stream',
+        },
+        timeout: 60000,
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        const location = res.headers.location;
+        if (status >= 300 && status < 400 && location) {
+          res.resume();
+          resolve(downloadFile(location, dest, onProgress, redirects + 1));
+          return;
+        }
+        if (status >= 400) {
+          res.resume();
+          reject(new Error(`Update download failed with HTTP ${status}`));
+          return;
+        }
+        const total = Number.parseInt(res.headers['content-length'] || '0', 10) || 0;
+        let transferred = 0;
+        const out = fs.createWriteStream(dest);
+        res.on('data', (chunk) => {
+          transferred += chunk.length;
+          try {
+            onProgress(transferred, total);
+          } catch {
+            /* progress reporting must never break the download */
+          }
+        });
+        res.on('error', reject);
+        out.on('error', reject);
+        out.on('finish', () => out.close(() => resolve()));
+        res.pipe(out);
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('Update download timed out')));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Launches the downloaded NSIS installer silently and quits so it can swap the
+ * binaries; `--force-run` relaunches the app afterwards. Mirrors what
+ * electron-updater does internally, but for a manually-fetched asset.
+ */
+function runSilentInstall() {
+  if (!isWindows() || !installerPath) {
+    return false;
+  }
+  try {
+    const child = spawn(installerPath, ['/S', '--force-run'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', (err) => {
+      log(`silent install spawn error: ${err}`);
+      setState({
+        status: Status.DOWNLOADED,
+        error: 'Automatic install could not start. Retry to install the downloaded update.',
+      });
+    });
+    child.unref();
+    // Give the installer a moment to attach, then quit so it can replace files.
+    setTimeout(() => {
+      try {
+        app.quit();
+      } catch {
+        /* ignore */
+      }
+    }, 1200).unref?.();
+    return true;
+  } catch (err) {
+    log(`silent install error: ${err}`);
+    setState({
+      status: Status.DOWNLOADED,
+      error: 'Automatic install could not start. Retry to install the downloaded update.',
+    });
+    return false;
+  }
+}
+
+/**
+ * Install action.
+ *  - Windows: run the silent installer if the update is already downloaded, or
+ *    download-then-install if the user reached here first.
+ *  - Everything else: guided install by opening the release page. A true result
+ *    acknowledges only the page-opening request, never a forced quit.
  */
 function installNow() {
   if (!active()) {
     return Promise.resolve(false);
+  }
+  if (isWindows() && installerAsset) {
+    if (installerPath) {
+      return Promise.resolve(runSilentInstall());
+    }
+    return downloadAndInstallWindows()
+      .then(() => true)
+      .catch(() => false);
   }
   if (installing) {
     return installing;

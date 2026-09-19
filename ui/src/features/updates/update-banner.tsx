@@ -18,11 +18,15 @@ export function UpdateBanner() {
 
   return (
     <div className={`update-banner update-banner-${ui.tone}`} role="status" aria-live="polite">
-      <div className="update-banner-body">
-        <div className="update-banner-text">
-          <strong className="update-banner-title">{ui.headline}</strong>
-          {ui.detail && <span className="update-banner-detail">{ui.detail}</span>}
-        </div>
+      <div className="update-banner-main">
+        <span className="update-banner-title" title={ui.headline}>
+          {ui.headline}
+        </span>
+        {ui.detail && (
+          <span className="update-banner-detail" title={ui.detail}>
+            {ui.detail}
+          </span>
+        )}
         {ui.showProgress && (
           <div
             className="update-banner-progress"
@@ -41,7 +45,7 @@ export function UpdateBanner() {
       <div className="update-banner-actions">
         {ui.canDownload && (
           <Button variant="primary" onClick={download}>
-            {ui.autoInstall ? 'Download' : 'Get update'}
+            {ui.autoInstall ? 'Update & restart' : 'Get update'}
           </Button>
         )}
         {ui.canInstall && (

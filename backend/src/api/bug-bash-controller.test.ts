@@ -12,6 +12,8 @@ function run(overrides: Partial<BugBashRun> = {}): BugBashRun {
     featureId: 'f1',
     featureInfo: 'a feature',
     setupInfo: '',
+    otherInfo: '',
+    prerequisites: [],
     scenarios: [],
     report: null,
     status: 'draft',
@@ -27,6 +29,8 @@ function service(overrides: Partial<BugBashService> = {}): BugBashService {
   return {
     get: () => run(),
     saveInputs: () => run(),
+    generatePrerequisites: async () => run(),
+    savePrerequisiteAnswers: () => run(),
     generate: async () => run({ status: 'generated' }),
     run: async () => undefined,
     reset: () => run(),
@@ -74,17 +78,17 @@ describe('bug-bash-controller', () => {
     );
     const result = await call(route, {
       params: { featureId: 'f1', attachmentId: 'a1' },
-      body: { featureInfo: 'a feature', setupInfo: 'docs' },
+      body: { featureInfo: 'a feature', setupInfo: 'docs', otherInfo: 'extra' },
     });
     expect(result.status).toBe(200);
     expect(saved).toEqual({
       id: 'a1',
       featureId: 'f1',
-      inputs: { featureInfo: 'a feature', setupInfo: 'docs' },
+      inputs: { featureInfo: 'a feature', setupInfo: 'docs', otherInfo: 'extra' },
     });
   });
 
-  it('defaults a missing setupInfo to empty', async () => {
+  it('defaults a missing setupInfo and otherInfo to empty', async () => {
     let seen: unknown;
     const routes = createBugBashRoutes({
       bugBash: service({
@@ -103,7 +107,7 @@ describe('bug-bash-controller', () => {
       params: { attachmentId: 'a1' },
       body: { featureInfo: 'x' },
     });
-    expect(seen).toEqual({ featureInfo: 'x', setupInfo: '' });
+    expect(seen).toEqual({ featureInfo: 'x', setupInfo: '', otherInfo: '' });
   });
 
   it('rejects a missing featureInfo', async () => {
@@ -128,5 +132,100 @@ describe('bug-bash-controller', () => {
     await expect(
       call(route, { body: { featureInfo: 'x', setupInfo: 5 } }),
     ).rejects.toThrow('"setupInfo" must be a string');
+  });
+
+  it('rejects a non-string otherInfo', async () => {
+    const routes = createBugBashRoutes({ bugBash: service() });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/inputs',
+    );
+    await expect(
+      call(route, { body: { featureInfo: 'x', otherInfo: 5 } }),
+    ).rejects.toThrow('"otherInfo" must be a string');
+  });
+
+  it('generates prerequisite questions for an attachment', async () => {
+    let seen: string | undefined;
+    const routes = createBugBashRoutes({
+      bugBash: service({
+        generatePrerequisites: async (id) => {
+          seen = id;
+          return run({ prerequisites: [{ id: 'prereq-1', question: 'Q', detail: '', answer: '' }] });
+        },
+      }),
+    });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/prerequisites',
+    );
+    const result = await call(route, { params: { attachmentId: 'a1' } });
+    expect(seen).toBe('a1');
+    expect(result.status).toBe(200);
+    expect((result.body as BugBashRun).prerequisites).toHaveLength(1);
+  });
+
+  it('saves prerequisite answers', async () => {
+    let seen: unknown;
+    const routes = createBugBashRoutes({
+      bugBash: service({
+        savePrerequisiteAnswers: (_id, answers) => {
+          seen = answers;
+          return run();
+        },
+      }),
+    });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
+    );
+    const result = await call(route, {
+      params: { attachmentId: 'a1' },
+      body: { answers: [{ id: 'prereq-1', answer: 'yes' }, { id: 'prereq-2' }] },
+    });
+    expect(result.status).toBe(200);
+    expect(seen).toEqual([
+      { id: 'prereq-1', answer: 'yes' },
+      { id: 'prereq-2', answer: '' },
+    ]);
+  });
+
+  it('rejects prerequisite answers that are not an array', async () => {
+    const routes = createBugBashRoutes({ bugBash: service() });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
+    );
+    await expect(call(route, { body: {} })).rejects.toThrow(
+      'An "answers" array is required.',
+    );
+  });
+
+  it('rejects a prerequisite answer with no id', async () => {
+    const routes = createBugBashRoutes({ bugBash: service() });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
+    );
+    await expect(
+      call(route, { body: { answers: [{ answer: 'x' }] } }),
+    ).rejects.toThrow('non-empty "id"');
+  });
+
+  it('rejects a prerequisite answer with a non-string answer', async () => {
+    const routes = createBugBashRoutes({ bugBash: service() });
+    const route = find(
+      routes,
+      'post',
+      '/features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
+    );
+    await expect(
+      call(route, { body: { answers: [{ id: 'p1', answer: 5 }] } }),
+    ).rejects.toThrow('"answer" must be a string');
   });
 });

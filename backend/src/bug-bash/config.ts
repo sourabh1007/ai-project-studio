@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   DEFAULT_GENERATE_PROMPT_TEMPLATE,
+  DEFAULT_PREREQUISITES_PROMPT_TEMPLATE,
   DEFAULT_REPORT_PROMPT_TEMPLATE,
   DEFAULT_TESTER_PROMPT_TEMPLATE,
 } from './bug-bash-prompt.js';
@@ -37,6 +38,12 @@ export const bugBashConfigSchema = z.object({
    */
   generatePromptTemplate: z.string().min(1),
   /**
+   * Prerequisites prompt: identifies the information still needed for the
+   * scenarios to run. Placeholders: {{featureInfo}}, {{setupInfo}},
+   * {{otherInfo}}.
+   */
+  prerequisitesPromptTemplate: z.string().min(1),
+  /**
    * Tester prompt: runs one group of scenarios. Placeholders: {{featureInfo}},
    * {{setupInfo}}, {{scenarios}}.
    */
@@ -65,10 +72,11 @@ export const bugBashDefaults: BugBashConfig = {
   // "Cancel & reset" control is the intended way to stop a run.
   generateTimeoutMs: 86_400_000,
   runTimeoutMs: 86_400_000,
-  maxTesters: 4,
+  maxTesters: 8,
   maxAnalysts: 4,
   decomposePromptTemplate: DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   generatePromptTemplate: DEFAULT_GENERATE_PROMPT_TEMPLATE,
+  prerequisitesPromptTemplate: DEFAULT_PREREQUISITES_PROMPT_TEMPLATE,
   testerPromptTemplate: DEFAULT_TESTER_PROMPT_TEMPLATE,
   reportPromptTemplate: DEFAULT_REPORT_PROMPT_TEMPLATE,
   refinePromptTemplate: DEFAULT_REFINE_PROMPT_TEMPLATE,

@@ -2,12 +2,13 @@
  * The Bug Bash tester "team".
  *
  * Running every accepted scenario serially is slow. This module runs a run as a
- * small team instead: a *lead agent* splits the accepted scenarios into disjoint
- * groups, one *tester sub-agent* per group executes its scenarios in parallel
- * (each leasing its own metasession, so several run at once), and the lead then
- * reviews the collected results and compiles the final markdown report. Every
- * agent reports live activity and metrics (time, tokens, AI credits) so the UI
- * can show the hierarchy and per-agent cost.
+ * scalable team instead: a *lead agent* splits the accepted scenarios into
+ * disjoint groups, one *tester sub-agent* per group runs its scenarios one by
+ * one while testers run in parallel with each other (each leasing its own
+ * metasession, so several run at once), and the lead then reviews the collected
+ * results and compiles the final markdown report. Every agent reports live
+ * activity and metrics (time, tokens, AI credits) so the UI can show the
+ * hierarchy and per-agent cost.
  *
  * Everything is port-driven and pure aside from the injected AI/clock, so the
  * 100% coverage gate can exercise every branch (empty groups, tester failure,
@@ -22,20 +23,28 @@ import {
   buildTesterPrompt,
   summarizeResults,
 } from './bug-bash-prompt.js';
-import { parseResults } from './bug-bash-scenarios.js';
+import { auditScenarioEvidence, parseResults } from './bug-bash-scenarios.js';
 import type {
   BugBashActivity,
   BugBashAgent,
   BugBashScenario,
+  BugBashScenarioProgress,
 } from './bug-bash-contract.js';
 
 /** The id the lead agent always uses. */
 export const LEAD_AGENT_ID = 'lead';
 
+/** The id the evidence auditor always uses. */
+export const AUDITOR_AGENT_ID = 'auditor';
+
+/** Target batch size for scaling tester sub-agents to the workload. */
+export const SCENARIOS_PER_TESTER = 4;
+
 /** Sink the team streams its per-agent activity and metrics to. */
 export interface BugBashTeamSink {
   activity(activity: Omit<BugBashActivity, 'runId'>): void;
   agent(agent: BugBashAgent): void;
+  scenario(progress: BugBashScenarioProgress): void;
 }
 
 /** Inputs for one tester-team run. */
@@ -69,15 +78,32 @@ export interface BugBashTeam {
 }
 
 /**
- * Split scenarios into up to `maxTesters` disjoint groups, round-robin so the
- * counts stay balanced. Returns one group per tester; empty input yields no
- * groups.
+ * Choose a tester count that scales with scenario volume without exceeding the
+ * configured cap.
+ */
+export function chooseTesterCount(
+  scenarioCount: number,
+  maxTesters: number,
+  perTester: number = SCENARIOS_PER_TESTER,
+): number {
+  if (scenarioCount <= 0) {
+    return 0;
+  }
+  const safeMax = Math.max(maxTesters, 1);
+  const safePerTester = Math.max(perTester, 1);
+  return Math.min(Math.ceil(scenarioCount / safePerTester), safeMax);
+}
+
+/**
+ * Split scenarios into scaled, disjoint groups, round-robin so the counts stay
+ * balanced. Returns one group per tester; empty input yields no groups.
  */
 export function splitScenarios(
   scenarios: BugBashScenario[],
   maxTesters: number,
+  perTester: number = SCENARIOS_PER_TESTER,
 ): BugBashScenario[][] {
-  const groupCount = Math.min(Math.max(maxTesters, 1), scenarios.length);
+  const groupCount = chooseTesterCount(scenarios.length, maxTesters, perTester);
   if (groupCount === 0) {
     return [];
   }
@@ -110,6 +136,16 @@ export function agentMetricsOf(result: MetaRunResult): {
     outputTokens: usage?.outputTokens ?? null,
     credits,
   };
+}
+
+function addKnown(
+  current: number | null,
+  next: number | null,
+): number | null {
+  if (next == null) {
+    return current;
+  }
+  return (current ?? 0) + next;
 }
 
 export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
@@ -173,6 +209,7 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
           actualOutput: string;
           blockedReason: BugBashScenario['blockedReason'];
           diagnostics: string;
+          reproScript: string;
           testerId: string;
         }
       >();
@@ -193,39 +230,53 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
           sink.agent({ ...tester });
           const started = tester.startedAt;
           try {
-            const result = await deps.ai.runDetailed({
-              featureId: request.featureId,
-              prompt: buildTesterPrompt(deps.config.testerPromptTemplate, {
-                featureInfo: request.featureInfo,
-                setupInfo: request.setupInfo,
-                scenarios: group,
-              }),
-              cwd: request.cwd,
-              scope: 'internal',
-              model: 'auto',
-              label: `Bug bash · ${tester.title}`,
-              timeoutMs: deps.config.runTimeoutMs,
-              signal,
-              onActivity: (line) =>
-                sink.activity({ phase: 'running', line, agentId: tester.id }),
-            });
-            for (const parsed of parseResults(result.text)) {
-              resultById.set(parsed.id, {
-                status: parsed.status,
-                observations: parsed.observations,
-                ran: parsed.ran,
-                actualOutput: parsed.actualOutput,
-                blockedReason: parsed.blockedReason,
-                diagnostics: parsed.diagnostics,
-                testerId: tester.id,
+            for (const scenario of group) {
+              sink.scenario({ id: scenario.id, status: 'running' });
+              const result = await deps.ai.runDetailed({
+                featureId: request.featureId,
+                prompt: buildTesterPrompt(deps.config.testerPromptTemplate, {
+                  featureInfo: request.featureInfo,
+                  setupInfo: request.setupInfo,
+                  scenarios: [scenario],
+                }),
+                cwd: request.cwd,
+                scope: 'internal',
+                model: 'auto',
+                label: `Bug bash · ${tester.title}`,
+                timeoutMs: deps.config.runTimeoutMs,
+                signal,
+                onActivity: (line) =>
+                  sink.activity({ phase: 'running', line, agentId: tester.id }),
               });
+              const parsed = parseResults(result.text);
+              const found =
+                parsed.find((entry) => entry.id === scenario.id) ?? parsed[0];
+              const terminal = found?.status ?? 'blocked';
+              if (found) {
+                resultById.set(scenario.id, {
+                  status: found.status,
+                  observations: found.observations,
+                  ran: found.ran,
+                  actualOutput: found.actualOutput,
+                  blockedReason: found.blockedReason,
+                  diagnostics: found.diagnostics,
+                  reproScript: found.reproScript,
+                  testerId: tester.id,
+                });
+              }
+              sink.scenario({ id: scenario.id, status: terminal });
+              const metrics = agentMetricsOf(result);
+              tester.inputTokens = addKnown(tester.inputTokens, metrics.inputTokens);
+              tester.outputTokens = addKnown(
+                tester.outputTokens,
+                metrics.outputTokens,
+              );
+              tester.credits = addKnown(tester.credits, metrics.credits);
+              tester.durationMs = nowMs() - started;
+              sink.agent({ ...tester });
             }
-            const metrics = agentMetricsOf(result);
             tester.status = 'done';
             tester.durationMs = nowMs() - started;
-            tester.inputTokens = metrics.inputTokens;
-            tester.outputTokens = metrics.outputTokens;
-            tester.credits = metrics.credits;
             sink.agent({ ...tester });
           } catch (error) {
             tester.status = 'failed';
@@ -238,7 +289,7 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
 
       // Merge each tester's findings back onto the scenarios; a scenario no
       // tester reported on is left blocked.
-      const scenarios: BugBashScenario[] = request.scenarios.map((scenario) => {
+      const merged: BugBashScenario[] = request.scenarios.map((scenario) => {
         const found = resultById.get(scenario.id);
         if (found) {
           return {
@@ -250,6 +301,8 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
             blockedReason: found.blockedReason,
             testerId: found.testerId,
             diagnostics: found.diagnostics,
+            reproScript: found.reproScript,
+            evidenceGaps: [],
           };
         }
         return {
@@ -263,8 +316,61 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
           // always resolves — attribute the blocked result to that tester.
           testerId: assignedTesterById.get(scenario.id)!,
           diagnostics: '',
+          reproScript: '',
+          evidenceGaps: [],
         };
       });
+
+      // The evidence auditor (a developer/tech-PM role) deterministically checks
+      // that every pass/fail verdict is backed by the artefacts a developer
+      // needs to trust and replay it — actual output, diagnostics/logs, and a
+      // repro script — and stamps the gaps onto each scenario so a green result
+      // cannot hide missing proof. This runs no AI turn, so it reports zero cost.
+      const auditStartedAt = nowMs();
+      const auditor: BugBashAgent = {
+        id: AUDITOR_AGENT_ID,
+        parentId: LEAD_AGENT_ID,
+        role: 'auditor',
+        title: 'Evidence auditor',
+        scenarioIds: merged.map((scenario) => scenario.id),
+        status: 'running',
+        startedAt: auditStartedAt,
+        durationMs: null,
+        inputTokens: null,
+        outputTokens: null,
+        credits: null,
+      };
+      sink.agent({ ...auditor });
+      const auditActivity = (line: string): void =>
+        sink.activity({ phase: 'running', line, agentId: AUDITOR_AGENT_ID });
+      auditActivity(
+        `🔍 Auditing evidence for ${merged.length} scenario` +
+          `${merged.length === 1 ? '' : 's'} — checking actual output, ` +
+          'diagnostics/logs, and a repro script back every verdict…',
+      );
+      const scenarios: BugBashScenario[] = merged.map((scenario) => ({
+        ...scenario,
+        evidenceGaps: auditScenarioEvidence(scenario),
+      }));
+      const flagged = scenarios.filter((s) => s.evidenceGaps.length > 0);
+      for (const scenario of flagged) {
+        auditActivity(
+          `⚠️ ${scenario.id} “${scenario.title}” marked ${scenario.status} ` +
+            `but missing ${scenario.evidenceGaps.join(', ')}.`,
+        );
+      }
+      auditActivity(
+        flagged.length === 0
+          ? '✅ Every pass/fail verdict is backed by output, logs, and a repro script.'
+          : `⚠️ ${flagged.length} of ${scenarios.length} verdict` +
+              `${scenarios.length === 1 ? '' : 's'} are missing evidence.`,
+      );
+      auditor.status = 'done';
+      auditor.durationMs = nowMs() - auditStartedAt;
+      auditor.inputTokens = 0;
+      auditor.outputTokens = 0;
+      auditor.credits = 0;
+      sink.agent({ ...auditor });
 
       // The lead reviews the collected results and compiles the report.
       leadActivity('📋 Reviewing the results and compiling the report…');
@@ -292,7 +398,7 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
       emitLead();
 
       const report = review.text.trim() || summarizeResults(scenarios);
-      return { agents: [lead, ...testers], scenarios, report };
+      return { agents: [lead, ...testers, auditor], scenarios, report };
     },
   };
 }

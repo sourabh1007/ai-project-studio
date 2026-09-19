@@ -352,6 +352,8 @@ const CORE_TABLES: readonly TableSchema[] = [
     feature_id TEXT NOT NULL,
     feature_info TEXT NOT NULL,
     setup_info TEXT NOT NULL,
+    other_info TEXT NOT NULL DEFAULT '',
+    prerequisites TEXT,
     scenarios TEXT,
     report TEXT,
     status TEXT NOT NULL,
@@ -1013,6 +1015,20 @@ const ADDED_COLUMNS: readonly {
     table: 'new_task_runs',
     column: 'agents',
     ddl: 'ALTER TABLE new_task_runs ADD COLUMN agents TEXT',
+  },
+  {
+    // Extra free-form information the user supplies on the describe step, folded
+    // into the analyst/tester context. Older runs default to empty.
+    table: 'bug_bash_runs',
+    column: 'other_info',
+    ddl: "ALTER TABLE bug_bash_runs ADD COLUMN other_info TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    // Dynamically-generated prerequisite questions (with the user's answers),
+    // stored as JSON. Nullable: runs created before the feature have none.
+    table: 'bug_bash_runs',
+    column: 'prerequisites',
+    ddl: 'ALTER TABLE bug_bash_runs ADD COLUMN prerequisites TEXT',
   },
 ];
 

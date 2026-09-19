@@ -571,6 +571,24 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/bug-bash/${attachmentId}/inputs`,
         jsonBody(inputs),
       ),
+    // Dynamically identify the information the bug bash still needs to run its
+    // scenarios successfully, returning the run with freshly-generated
+    // prerequisite questions for the user to answer.
+    generateBugBashPrerequisites: (featureId: string, attachmentId: string) =>
+      request<BugBashRun>(
+        `/features/${featureId}/bug-bash/${attachmentId}/prerequisites`,
+        jsonBody({}),
+      ),
+    // Persist the user's answers to the generated prerequisite questions.
+    saveBugBashPrerequisiteAnswers: (
+      featureId: string,
+      attachmentId: string,
+      answers: { id: string; answer: string }[],
+    ) =>
+      request<BugBashRun>(
+        `/features/${featureId}/bug-bash/${attachmentId}/prerequisites/answers`,
+        jsonBody({ answers }),
+      ),
     // Long-lived POST that generates the reviewable scenarios in the background
     // (via the run hub) and streams newline-delimited progress events. Survives
     // this socket closing; reconnect with streamBugBash to keep watching.

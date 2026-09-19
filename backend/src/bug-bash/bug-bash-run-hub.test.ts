@@ -11,6 +11,8 @@ const RUN: BugBashRun = {
   featureId: 'f1',
   featureInfo: 'a feature',
   setupInfo: 'setup',
+  otherInfo: '',
+  prerequisites: [],
   scenarios: [],
   report: null,
   status: 'generated',
@@ -28,6 +30,8 @@ function stubService(
     get: () => null,
     reset: () => null,
     saveInputs: () => RUN,
+    generatePrerequisites: async () => RUN,
+    savePrerequisiteAnswers: () => RUN,
     generate: async () => RUN,
     run: async () => undefined,
     ...overrides,
@@ -180,7 +184,7 @@ describe('bug-bash run hub', () => {
     expect(seen).toEqual([{ type: 'failed', error: 'validation failed' }]);
   });
 
-  it('streams a run pass with an agent event', async () => {
+  it('streams a run pass with agent and scenario events', async () => {
     const agent = {
       id: 'lead',
       parentId: null,
@@ -198,6 +202,8 @@ describe('bug-bash run hub', () => {
       service: stubService({
         run: async (_id, sink) => {
           sink.agent?.(agent);
+          sink.scenario?.({ id: 'scenario-1', status: 'running' });
+          sink.scenario?.({ id: 'scenario-1', status: 'pass' });
           sink.done(RUN);
         },
       }),
@@ -206,6 +212,14 @@ describe('bug-bash run hub', () => {
     const seen: BugBashStreamEvent[] = [];
     hub.attach('a1', (event) => seen.push(event));
     expect(seen).toContainEqual({ type: 'agent', agent });
+    expect(seen).toContainEqual({
+      type: 'scenario',
+      progress: { id: 'scenario-1', status: 'running' },
+    });
+    expect(seen).toContainEqual({
+      type: 'scenario',
+      progress: { id: 'scenario-1', status: 'pass' },
+    });
     expect(seen).toContainEqual({ type: 'done', run: RUN });
   });
 

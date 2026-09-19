@@ -14,7 +14,8 @@ import type { EventBus } from '../kernel/event-bus.js';
 import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { BugBashConfig } from './config.js';
-import { parseScenarios } from './bug-bash-scenarios.js';
+import { parseScenarios, parsePrerequisites } from './bug-bash-scenarios.js';
+import { buildPrerequisitesPrompt } from './bug-bash-prompt.js';
 import {
   buildRefinePrompt,
   parseRefineResponse,
@@ -24,6 +25,7 @@ import type { BugBashGenerateTeam } from './bug-bash-generate-team.js';
 import type {
   BugBashEventMap,
   BugBashInputs,
+  BugBashPrerequisite,
   BugBashRun,
   BugBashRunRepo,
   BugBashRunSink,
@@ -45,6 +47,8 @@ const CLEARED_SCENARIO_RESULT = {
   blockedReason: null,
   testerId: null,
   diagnostics: '',
+  reproScript: '',
+  evidenceGaps: [],
 } satisfies Pick<
   BugBashScenario,
   | 'status'
@@ -54,6 +58,8 @@ const CLEARED_SCENARIO_RESULT = {
   | 'blockedReason'
   | 'testerId'
   | 'diagnostics'
+  | 'reproScript'
+  | 'evidenceGaps'
 >;
 
 /** Dependencies for {@link createBugBashService}. */
@@ -75,6 +81,32 @@ export interface BugBashServiceDeps {
 /** Read the message from an unknown thrown value. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Build the setup context handed to the analyst/tester teams, folding the extra
+ * "other information" and the user's answered prerequisite questions into the
+ * setup information so every downstream prompt is grounded in them without
+ * changing the team/prompt signatures.
+ */
+function runContext(run: BugBashRun): string {
+  const parts: string[] = [];
+  if (run.setupInfo.trim()) {
+    parts.push(run.setupInfo.trim());
+  }
+  if (run.otherInfo.trim()) {
+    parts.push(`Other information:\n${run.otherInfo.trim()}`);
+  }
+  const answered = run.prerequisites.filter((p) => p.answer.trim().length > 0);
+  if (answered.length > 0) {
+    parts.push(
+      'Answers to prerequisite questions:\n' +
+        answered
+          .map((p) => `Q: ${p.question}\nA: ${p.answer.trim()}`)
+          .join('\n\n'),
+    );
+  }
+  return parts.join('\n\n');
 }
 
 export function createBugBashService(
@@ -138,14 +170,19 @@ export function createBugBashService(
         throw new ValidationError('Feature information is required.');
       }
       const setupInfo = inputs.setupInfo.trim();
+      const otherInfo = inputs.otherInfo.trim();
       const now = deps.clock.isoNow();
       const existing = deps.repo.get(attachmentId);
       if (existing) {
-        // Re-editing discards prior scenarios/report and returns to a draft.
+        // Re-editing discards prior scenarios/report and the stale prerequisite
+        // questions (they are regenerated from the new description), returning
+        // to a draft.
         return touch(existing, {
           featureId,
           featureInfo,
           setupInfo,
+          otherInfo,
+          prerequisites: [],
           scenarios: [],
           report: null,
           status: 'draft',
@@ -158,6 +195,8 @@ export function createBugBashService(
         featureId,
         featureInfo,
         setupInfo,
+        otherInfo,
+        prerequisites: [],
         scenarios: [],
         report: null,
         status: 'draft',
@@ -168,6 +207,54 @@ export function createBugBashService(
       };
       deps.repo.create(run);
       return run;
+    },
+
+    async generatePrerequisites(attachmentId, signal) {
+      const run = requireRun(attachmentId);
+      const workspace = deps.workspace.resolve(run.featureId);
+      const prompt = buildPrerequisitesPrompt(
+        deps.config.prerequisitesPromptTemplate,
+        {
+          featureInfo: run.featureInfo,
+          setupInfo: run.setupInfo,
+          otherInfo: run.otherInfo,
+        },
+      );
+      const result = await deps.ai.runDetailed({
+        featureId: run.featureId,
+        prompt,
+        cwd: workspace.repoLocalPath,
+        scope: 'internal',
+        model: 'auto',
+        label: 'Bug bash · Prerequisites',
+        timeoutMs: deps.config.generateTimeoutMs,
+        signal,
+      });
+      // Preserve any answers the user already gave for an unchanged question so
+      // regenerating does not wipe their work.
+      const priorAnswers = new Map(
+        run.prerequisites.map((p) => [p.question.trim().toLowerCase(), p.answer]),
+      );
+      const prerequisites: BugBashPrerequisite[] = parsePrerequisites(
+        result.text,
+      ).map((parsed, index) => ({
+        id: `prereq-${index + 1}`,
+        question: parsed.question,
+        detail: parsed.detail,
+        options: parsed.options,
+        answer: priorAnswers.get(parsed.question.trim().toLowerCase()) ?? '',
+      }));
+      return touch(run, { prerequisites });
+    },
+
+    savePrerequisiteAnswers(attachmentId, answers) {
+      const run = requireRun(attachmentId);
+      const byId = new Map(answers.map((a) => [a.id, a.answer]));
+      const prerequisites = run.prerequisites.map((p) => {
+        const answer = byId.get(p.id);
+        return answer === undefined ? p : { ...p, answer };
+      });
+      return touch(run, { prerequisites });
     },
 
     async generate(attachmentId, signal, sink) {
@@ -183,7 +270,7 @@ export function createBugBashService(
           featureId: run.featureId,
           cwd: workspace.repoLocalPath,
           featureInfo: run.featureInfo,
-          setupInfo: run.setupInfo,
+          setupInfo: runContext(run),
           signal,
           sink: {
             activity: (activity) => {
@@ -191,6 +278,7 @@ export function createBugBashService(
               emit(run, activity.phase, activity.line, activity.agentId);
             },
             agent: (agent) => sink?.agent?.(agent),
+            scenario: (progress) => sink?.scenario?.(progress),
           },
         });
         const scenarios: BugBashScenario[] = team.scenarios.map(
@@ -254,7 +342,7 @@ export function createBugBashService(
       );
       const prompt = buildRefinePrompt(deps.config.refinePromptTemplate, {
         artifactLabel: 'bug bash test scenarios',
-        featureContext: `Feature information:\n${run.featureInfo}\n\nSetup information:\n${run.setupInfo}`,
+        featureContext: `Feature information:\n${run.featureInfo}\n\nSetup information:\n${runContext(run)}`,
         artifact,
         revisedHint:
           'When you change the scenarios, set "revised" to an object shaped ' +
@@ -317,7 +405,7 @@ export function createBugBashService(
           featureId: run.featureId,
           cwd: workspace.repoLocalPath,
           featureInfo: run.featureInfo,
-          setupInfo: run.setupInfo,
+          setupInfo: runContext(run),
           scenarios: run.scenarios,
           signal,
           sink: {
@@ -326,6 +414,7 @@ export function createBugBashService(
               emit(run, activity.phase, activity.line, activity.agentId);
             },
             agent: (agent) => sink.agent?.(agent),
+            scenario: (progress) => sink.scenario?.(progress),
           },
         });
         // Keep the analyst snapshot(s) from generation so the summary can still

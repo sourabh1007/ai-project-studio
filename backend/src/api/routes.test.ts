@@ -180,6 +180,8 @@ describe('createApiRoutes', () => {
       'get /features/:featureId/new-task/:attachmentId/file-diff',
       'get /features/:featureId/bug-bash/:attachmentId',
       'post /features/:featureId/bug-bash/:attachmentId/inputs',
+      'post /features/:featureId/bug-bash/:attachmentId/prerequisites',
+      'post /features/:featureId/bug-bash/:attachmentId/prerequisites/answers',
       'get /agents',
       'get /agents/:agentId',
       'get /features/:featureId/agents',

@@ -16,6 +16,13 @@ function scenario(overrides: Partial<BugBashScenario> = {}): BugBashScenario {
     confirmation: '',
     status: 'pending',
     observations: '',
+    ran: false,
+    actualOutput: '',
+    blockedReason: null,
+    testerId: null,
+    diagnostics: '',
+    reproScript: '',
+    evidenceGaps: [],
     ...overrides,
   };
 }
@@ -26,6 +33,8 @@ function run(overrides: Partial<BugBashRun> = {}): BugBashRun {
     featureId: 'f1',
     featureInfo: 'a feature',
     setupInfo: 'setup here',
+    otherInfo: '',
+    prerequisites: [],
     scenarios: [],
     report: null,
     status: 'draft',
@@ -113,16 +122,107 @@ describe('bug-bash-run-repo', () => {
       run({
         agents: undefined as unknown as BugBashRun['agents'],
         scenarios: undefined as unknown as BugBashRun['scenarios'],
+        otherInfo: undefined as unknown as BugBashRun['otherInfo'],
+        prerequisites: undefined as unknown as BugBashRun['prerequisites'],
       }),
     );
     expect(r.get('a1')!.agents).toEqual([]);
+    expect(r.get('a1')!.otherInfo).toBe('');
+    expect(r.get('a1')!.prerequisites).toEqual([]);
     r.update(
       run({
         agents: undefined as unknown as BugBashRun['agents'],
         scenarios: undefined as unknown as BugBashRun['scenarios'],
+        otherInfo: undefined as unknown as BugBashRun['otherInfo'],
+        prerequisites: undefined as unknown as BugBashRun['prerequisites'],
       }),
     );
     expect(r.get('a1')!.scenarios).toEqual([]);
+    db.close();
+  });
+
+  it('backfills scenario fields missing from a legacy persisted run', () => {
+    const { db, repo: r } = repo();
+    r.create(run({ id: 'legacy' }));
+    // A run persisted before reproScript/evidenceGaps existed.
+    const legacyScenario = JSON.stringify([
+      {
+        id: 'scenario-1',
+        title: 'Old',
+        input: '',
+        steps: [],
+        expectedOutput: '',
+        confirmation: '',
+        status: 'pass',
+        observations: 'ok',
+        ran: true,
+        actualOutput: 'ran',
+        blockedReason: null,
+        testerId: 'tester-1',
+        diagnostics: 'log',
+      },
+    ]).replace(/'/g, "''");
+    db.exec(
+      `UPDATE bug_bash_runs SET scenarios = '${legacyScenario}' WHERE id = 'legacy'`,
+    );
+    const [loaded] = r.get('legacy')!.scenarios;
+    expect(loaded.reproScript).toBe('');
+    expect(loaded.evidenceGaps).toEqual([]);
+    db.close();
+  });
+
+  it('round-trips other info and prerequisite questions', () => {
+    const { db, repo: r } = repo();
+    r.create(
+      run({
+        otherInfo: 'extra notes',
+        prerequisites: [
+          {
+            id: 'prereq-1',
+            question: 'Which account?',
+            detail: 'to connect',
+            options: ['Shared', 'Personal'],
+            answer: 'acct-1',
+          },
+        ],
+      }),
+    );
+    const loaded = r.get('a1')!;
+    expect(loaded.otherInfo).toBe('extra notes');
+    expect(loaded.prerequisites).toEqual([
+      {
+        id: 'prereq-1',
+        question: 'Which account?',
+        detail: 'to connect',
+        options: ['Shared', 'Personal'],
+        answer: 'acct-1',
+      },
+    ]);
+    db.close();
+  });
+
+  it('backfills options missing from a legacy persisted prerequisite', () => {
+    const { db, repo: r } = repo();
+    r.create(run({ id: 'legacy' }));
+    const legacyPrereq = JSON.stringify([
+      { id: 'prereq-1', question: 'Q?', detail: '', answer: '' },
+    ]).replace(/'/g, "''");
+    db.exec(
+      `UPDATE bug_bash_runs SET prerequisites = '${legacyPrereq}' WHERE id = 'legacy'`,
+    );
+    expect(r.get('legacy')!.prerequisites[0].options).toEqual([]);
+    db.close();
+  });
+
+  it('backfills prerequisites missing from a legacy persisted run', () => {
+    const { db, repo: r } = repo();
+    r.create(run({ id: 'legacy' }));
+    db.exec(
+      "UPDATE bug_bash_runs SET prerequisites = NULL WHERE id = 'legacy'",
+    );
+    const loaded = r.get('legacy')!;
+    expect(loaded.otherInfo).toBe('');
+    expect(loaded.prerequisites).toEqual([]);
     db.close();
   });
 

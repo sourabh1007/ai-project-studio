@@ -3,12 +3,15 @@ import {
   applyTemplate,
   buildDecomposePrompt,
   buildGeneratePrompt,
+  buildPrerequisitesPrompt,
   buildReportPrompt,
   buildTesterPrompt,
   DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   DEFAULT_GENERATE_PROMPT_TEMPLATE,
+  DEFAULT_PREREQUISITES_PROMPT_TEMPLATE,
   DEFAULT_REPORT_PROMPT_TEMPLATE,
   DEFAULT_TESTER_PROMPT_TEMPLATE,
+  NO_OTHER_MARKER,
   NO_SETUP_MARKER,
   renderResult,
   renderScenario,
@@ -32,6 +35,8 @@ function scenario(overrides: Partial<BugBashScenario> = {}): BugBashScenario {
     blockedReason: null,
     testerId: null,
     diagnostics: '',
+    reproScript: '',
+    evidenceGaps: [],
     ...overrides,
   };
 }
@@ -87,6 +92,31 @@ describe('buildDecomposePrompt', () => {
     expect(prompt).toContain('A feature');
     expect(prompt).toContain(NO_SETUP_MARKER);
     expect(prompt).toContain('at most 4 distinct');
+  });
+});
+
+describe('buildPrerequisitesPrompt', () => {
+  it('injects the trimmed feature, setup and other info', () => {
+    const prompt = buildPrerequisitesPrompt(DEFAULT_PREREQUISITES_PROMPT_TEMPLATE, {
+      featureInfo: '  A feature  ',
+      setupInfo: '  docs  ',
+      otherInfo: '  extra notes  ',
+    });
+    expect(prompt).toContain('A feature');
+    expect(prompt).toContain('docs');
+    expect(prompt).toContain('extra notes');
+    expect(prompt).not.toContain(NO_SETUP_MARKER);
+    expect(prompt).not.toContain(NO_OTHER_MARKER);
+  });
+
+  it('substitutes markers when setup and other info are blank', () => {
+    const prompt = buildPrerequisitesPrompt(DEFAULT_PREREQUISITES_PROMPT_TEMPLATE, {
+      featureInfo: 'A feature',
+      setupInfo: '   ',
+      otherInfo: '   ',
+    });
+    expect(prompt).toContain(NO_SETUP_MARKER);
+    expect(prompt).toContain(NO_OTHER_MARKER);
   });
 });
 
@@ -175,6 +205,25 @@ describe('renderResult', () => {
     expect(text).not.toContain('- Blocked reason:');
     expect(text).not.toContain('- Diagnostics:');
   });
+  it('renders the repro script and evidence gaps when present', () => {
+    const text = renderResult(
+      scenario({
+        status: 'pass',
+        ran: true,
+        actualOutput: 'ok',
+        reproScript: 'curl -s localhost/health',
+        evidenceGaps: ['a repro script'],
+      }),
+    );
+    expect(text).toContain('- Repro script:\ncurl -s localhost/health');
+    expect(text).toContain('- Evidence gaps: missing a repro script');
+  });
+
+  it('omits the repro script and evidence gaps lines when empty', () => {
+    const text = renderResult(scenario({ status: 'pass', ran: true }));
+    expect(text).not.toContain('- Repro script:');
+    expect(text).not.toContain('- Evidence gaps:');
+  });
 });
 
 describe('buildReportPrompt', () => {
@@ -253,5 +302,32 @@ describe('summarizeResults', () => {
       scenario({ id: 's2', title: 'B', status: 'fail', observations: '' }),
     ]);
     expect(report).toContain('- B: (no details)');
+  });
+
+  it('adds an evidence audit section and repro script for flagged scenarios', () => {
+    const report = summarizeResults([
+      scenario({
+        id: 's1',
+        title: 'A',
+        status: 'pass',
+        ran: true,
+        actualOutput: 'ok',
+        reproScript: 'curl -s localhost/health',
+        evidenceGaps: ['diagnostics/logs', 'a repro script'],
+      }),
+    ]);
+    expect(report).toContain('## Evidence audit');
+    expect(report).toContain('- A: missing diagnostics/logs, a repro script');
+    expect(report).toContain('- Repro script:');
+    expect(report).toContain('curl -s localhost/health');
+    expect(report).toContain('- Evidence gaps: missing diagnostics/logs, a repro script');
+  });
+
+  it('omits the evidence audit section when every verdict is evidenced', () => {
+    const report = summarizeResults([
+      scenario({ id: 's1', title: 'A', status: 'pass', ran: true }),
+    ]);
+    expect(report).not.toContain('## Evidence audit');
+    expect(report).not.toContain('- Repro script:');
   });
 });

@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import type {
   BugBashBlockedReason,
+  BugBashScenario,
   BugBashScenarioStatus,
 } from './bug-bash-contract.js';
 
@@ -36,12 +37,21 @@ export interface ParsedResult {
   blockedReason: BugBashBlockedReason | null;
   /** Free-form diagnostic/telemetry detail, empty when none reported. */
   diagnostics: string;
+  /** A runnable script/code to reproduce the scenario locally, empty when none. */
+  reproScript: string;
 }
 
 /** A focus area as parsed from the lead analyst's decomposition turn. */
 export interface ParsedArea {
   title: string;
   focus: string;
+}
+
+/** A prerequisite question as parsed from the analyst, before an id is assigned. */
+export interface ParsedPrerequisite {
+  question: string;
+  detail: string;
+  options: string[];
 }
 
 /**
@@ -119,6 +129,7 @@ const resultsSchema = z.object({
         .enum(['permission', 'environment', 'tooling', 'other'])
         .optional(),
       diagnostics: z.string().optional(),
+      reproScript: z.string().optional(),
     }),
   ),
 });
@@ -128,10 +139,13 @@ const resultsSchema = z.object({
  * cannot be matched back to a scenario). Returns an empty array when the
  * response can't be parsed, leaving the affected scenarios `blocked`.
  *
- * `ran` defaults to whether the verdict implies an execution (pass/fail did
- * run, blocked did not) when the tester omits it. `blockedReason` only applies
- * to a `blocked` result — it is forced to null otherwise and defaults to
- * `other` when a blocked result omits it.
+ * `ran` reflects whether the scenario *really* executed: the tester's claim
+ * (explicit `ran`, or implied by a pass/fail verdict) is only trusted when it
+ * is corroborated by concrete evidence — a non-empty `actualOutput` or
+ * `diagnostics`. A verdict with no evidence is treated as not run, so an
+ * unverified "pass" cannot masquerade as a genuine execution. `blockedReason`
+ * only applies to a `blocked` result — it is forced to null otherwise and
+ * defaults to `other` when a blocked result omits it.
  */
 export function parseResults(text: string): ParsedResult[] {
   const json = extractJsonObject(text);
@@ -151,7 +165,16 @@ export function parseResults(text: string): ParsedResult[] {
       continue;
     }
     const status = raw.status ?? 'blocked';
-    const ran = raw.ran ?? (status === 'pass' || status === 'fail');
+    const actualOutput = (raw.actualOutput ?? '').trim();
+    const diagnostics = (raw.diagnostics ?? '').trim();
+    const reproScript = (raw.reproScript ?? '').trim();
+    // Only trust that a scenario really ran when the tester backs the verdict
+    // with concrete evidence — an observed actual output or captured
+    // diagnostics/telemetry. A pass/fail (or an explicit ran:true) with no
+    // evidence is treated as not actually run, so an unverified "pass" surfaces
+    // as PASS + NOT RUN instead of masquerading as a genuine execution.
+    const claimedRun = raw.ran ?? (status === 'pass' || status === 'fail');
+    const ran = claimedRun && (actualOutput !== '' || diagnostics !== '');
     const blockedReason =
       status === 'blocked' ? (raw.blockedReason ?? 'other') : null;
     results.push({
@@ -159,12 +182,49 @@ export function parseResults(text: string): ParsedResult[] {
       status,
       observations: (raw.observations ?? '').trim(),
       ran,
-      actualOutput: (raw.actualOutput ?? '').trim(),
+      actualOutput,
       blockedReason,
-      diagnostics: (raw.diagnostics ?? '').trim(),
+      diagnostics,
+      reproScript,
     });
   }
   return results;
+}
+
+/**
+ * Audit one scenario's evidence, returning the corroborating artefacts a
+ * `pass`/`fail` verdict is missing. This is the deterministic check the evidence
+ * auditor (a developer/tech-PM role) runs so a verdict cannot ship without the
+ * proof a developer needs to trust and replay it:
+ *
+ * - `actual output` — the concrete behaviour the tester observed.
+ * - `diagnostics/logs` — the commands/logs/telemetry captured while running.
+ * - `a repro script` — the runnable script a developer can execute locally.
+ *
+ * Only `pass`/`fail` verdicts require evidence; a `blocked` or `pending`
+ * scenario never ran, so it returns no gaps. An empty result means the verdict
+ * is fully evidenced.
+ */
+export function auditScenarioEvidence(
+  scenario: Pick<
+    BugBashScenario,
+    'status' | 'actualOutput' | 'diagnostics' | 'reproScript'
+  >,
+): string[] {
+  if (scenario.status !== 'pass' && scenario.status !== 'fail') {
+    return [];
+  }
+  const gaps: string[] = [];
+  if (scenario.actualOutput.trim() === '') {
+    gaps.push('actual output');
+  }
+  if (scenario.diagnostics.trim() === '') {
+    gaps.push('diagnostics/logs');
+  }
+  if (scenario.reproScript.trim() === '') {
+    gaps.push('a repro script');
+  }
+  return gaps;
 }
 
 const areasSchema = z.object({
@@ -202,4 +262,50 @@ export function parseAreas(text: string): ParsedArea[] {
     areas.push({ title, focus: (raw.focus ?? '').trim() || title });
   }
   return areas;
+}
+
+const prerequisitesSchema = z.object({
+  prerequisites: z.array(
+    z.object({
+      question: z.string(),
+      detail: z.string().optional(),
+      options: z.array(z.string()).optional(),
+    }),
+  ),
+});
+
+/**
+ * Parse the analyst's dynamically-generated prerequisite questions. Entries with
+ * a blank question are dropped (there is nothing to answer). Blank/duplicate
+ * options are trimmed away so the UI only offers real choices. Returns an empty
+ * array when the response can't be parsed, so the caller can surface "no
+ * prerequisites were identified" rather than crash.
+ */
+export function parsePrerequisites(text: string): ParsedPrerequisite[] {
+  const json = extractJsonObject(text);
+  if (!json) {
+    return [];
+  }
+  let parsed: z.infer<typeof prerequisitesSchema>;
+  try {
+    parsed = prerequisitesSchema.parse(JSON.parse(json));
+  } catch {
+    return [];
+  }
+  const prerequisites: ParsedPrerequisite[] = [];
+  for (const raw of parsed.prerequisites) {
+    const question = raw.question.trim();
+    if (question.length === 0) {
+      continue;
+    }
+    const options: string[] = [];
+    for (const option of raw.options ?? []) {
+      const trimmed = option.trim();
+      if (trimmed.length > 0 && !options.includes(trimmed)) {
+        options.push(trimmed);
+      }
+    }
+    prerequisites.push({ question, detail: (raw.detail ?? '').trim(), options });
+  }
+  return prerequisites;
 }

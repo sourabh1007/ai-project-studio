@@ -11,6 +11,7 @@ import type {
   BugBashActivity,
   BugBashAgent,
   BugBashRun,
+  BugBashScenarioProgress,
   BugBashService,
 } from './bug-bash-contract.js';
 
@@ -18,6 +19,7 @@ import type {
 export type BugBashStreamEvent =
   | ({ type: 'activity' } & Omit<BugBashActivity, 'runId'>)
   | { type: 'agent'; agent: BugBashAgent }
+  | { type: 'scenario'; progress: BugBashScenarioProgress }
   | { type: 'done'; run: BugBashRun }
   | { type: 'failed'; error: string }
   | { type: 'cancelled' };
@@ -72,6 +74,7 @@ export function createBugBashRunHub(deps: {
       sink: {
         activity(activity: Omit<BugBashActivity, 'runId'>): void;
         agent(agent: BugBashAgent): void;
+        scenario(progress: BugBashScenarioProgress): void;
         done(run: BugBashRun): void;
         failed(error: string): void;
       },
@@ -94,6 +97,8 @@ export function createBugBashRunHub(deps: {
       activity: (activity: Omit<BugBashActivity, 'runId'>) =>
         emit(live, { type: 'activity', ...activity }),
       agent: (agent: BugBashAgent) => emit(live, { type: 'agent', agent }),
+      scenario: (progress: BugBashScenarioProgress) =>
+        emit(live, { type: 'scenario', progress }),
       done: (settledRun: BugBashRun) =>
         emit(live, { type: 'done', run: settledRun }),
       failed: (error: string) => emit(live, { type: 'failed', error }),

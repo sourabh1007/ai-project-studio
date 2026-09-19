@@ -34,6 +34,12 @@ export type BugBashStatus =
 /** The outcome of running a single scenario. */
 export type BugBashScenarioStatus = 'pending' | 'pass' | 'fail' | 'blocked';
 
+/** Live, non-persisted progress for a single scenario during a run. */
+export type BugBashScenarioProgress = {
+  id: string;
+  status: BugBashScenarioStatus | 'running';
+};
+
 /**
  * Why a blocked scenario could not run. `permission` (missing access/rights) is
  * called out separately from the rest so access gaps are triaged apart from
@@ -82,6 +88,43 @@ export interface BugBashScenario {
    * control. Empty when the tester reported none.
    */
   diagnostics: string;
+  /**
+   * A self-contained, pre-generated script/code a developer can run locally to
+   * reproduce this scenario and check the reported result for themselves. Empty
+   * when the tester produced none. Never executed by the app — it is evidence a
+   * human can replay.
+   */
+  reproScript: string;
+  /**
+   * The evidence gaps the auditor found for this scenario: the corroborating
+   * artefacts a `pass`/`fail` verdict is missing (e.g. actual output, captured
+   * diagnostics/logs, or a repro script). Empty when the verdict is fully
+   * evidenced or when none is required (a blocked/pending scenario). This is
+   * what lets the UI flag a "pass" that has no real activity behind it.
+   */
+  evidenceGaps: string[];
+}
+
+/**
+ * A prerequisite the bug bash needs answered before it can generate scenarios
+ * that actually run. The questions are generated dynamically from the feature
+ * description (never a fixed set): the agent first identifies what information
+ * it would need to exercise the feature successfully, then the user answers.
+ */
+export interface BugBashPrerequisite {
+  /** Stable id within a run, e.g. `prereq-1`. */
+  id: string;
+  /** The generated question the user must answer. */
+  question: string;
+  /** Why this information is needed to run the bug bash successfully. */
+  detail: string;
+  /**
+   * A small set of suggested answers the user can pick instead of typing, when
+   * the analyst could enumerate likely values; empty for open-ended questions.
+   */
+  options: string[];
+  /** The user's answer, empty until provided. */
+  answer: string;
 }
 
 /** The user-supplied inputs that seed a run. */
@@ -90,6 +133,8 @@ export interface BugBashInputs {
   featureInfo: string;
   /** Documentation links, sample-program links, and setup/test instructions. */
   setupInfo: string;
+  /** Any extra free-form information the user wants the bug bash to consider. */
+  otherInfo: string;
 }
 
 /** One Bug Bash run, persisted per agent attachment. */
@@ -99,6 +144,13 @@ export interface BugBashRun {
   featureId: string;
   featureInfo: string;
   setupInfo: string;
+  /** Any extra free-form information the user wants considered, empty by default. */
+  otherInfo: string;
+  /**
+   * The dynamically-generated prerequisite questions the user answers before a
+   * run so scenarios can actually execute. Empty until they are generated.
+   */
+  prerequisites: BugBashPrerequisite[];
   /** The generated scenarios (with results once run), empty before generating. */
   scenarios: BugBashScenario[];
   /** The compiled markdown report, or null before a run completes. */
@@ -158,9 +210,12 @@ export interface BugBashActivity {
 /**
  * The specialization a {@link BugBashAgent} plays. Generation runs a single
  * `analyst`; a run runs a `lead` that splits the scenarios and compiles the
- * report, plus `tester` sub-agents that execute disjoint groups in parallel.
+ * report, `tester` sub-agents that execute disjoint groups in parallel, and an
+ * `auditor` (a developer/tech-PM role) that checks every scenario's evidence —
+ * actual output, diagnostics/logs, and a repro script — is actually in place so
+ * a "pass" cannot ship without proof.
  */
-export type BugBashAgentRole = 'analyst' | 'lead' | 'tester';
+export type BugBashAgentRole = 'analyst' | 'lead' | 'tester' | 'auditor';
 
 /** Lifecycle of a single agent's turn. */
 export type BugBashAgentStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -208,6 +263,8 @@ export interface BugBashRunSink {
    * how a running agent's live metrics update.
    */
   agent?(agent: BugBashAgent): void;
+  /** Publish the live state of one scenario while a tester works through it. */
+  scenario?(progress: BugBashScenarioProgress): void;
   done(run: BugBashRun): void;
   failed(error: string): void;
 }
@@ -221,6 +278,22 @@ export interface BugBashService {
     attachmentId: string,
     featureId: string,
     inputs: BugBashInputs,
+  ): BugBashRun;
+  /**
+   * Analyse the captured inputs (and the repository code) to identify what
+   * information the bug bash still needs to run its scenarios successfully, and
+   * return the run with a freshly-generated set of prerequisite questions. The
+   * questions are always derived from the current description — never a fixed
+   * list. Existing answers for an unchanged question are preserved.
+   */
+  generatePrerequisites(
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<BugBashRun>;
+  /** Persist the user's answers to the generated prerequisite questions. */
+  savePrerequisiteAnswers(
+    attachmentId: string,
+    answers: { id: string; answer: string }[],
   ): BugBashRun;
   /**
    * Generate the edge-case scenarios grounded in the inputs and repository code.

@@ -702,10 +702,18 @@ export interface BugBashScenario {
   testerId: string | null;
   /** Free-form diagnostic/telemetry detail surfaced on demand. */
   diagnostics: string;
+  /** A runnable script/code a developer can run locally to reproduce it. */
+  reproScript: string;
+  /**
+   * Evidence artefacts a pass/fail verdict is missing (actual output,
+   * diagnostics/logs, or a repro script), as flagged by the evidence auditor.
+   * Empty when fully evidenced or when none is required.
+   */
+  evidenceGaps: string[];
 }
 
 /** The specialization a Bug Bash agent plays in a run. */
-export type BugBashAgentRole = 'analyst' | 'lead' | 'tester';
+export type BugBashAgentRole = 'analyst' | 'lead' | 'tester' | 'auditor';
 
 /** The lifecycle status of a single Bug Bash agent. */
 export type BugBashAgentStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -731,6 +739,8 @@ export interface BugBashRun {
   featureId: string;
   featureInfo: string;
   setupInfo: string;
+  otherInfo: string;
+  prerequisites: BugBashPrerequisite[];
   scenarios: BugBashScenario[];
   report: string | null;
   status: BugBashStatus;
@@ -740,10 +750,20 @@ export interface BugBashRun {
   updatedAt: string;
 }
 
-/** The two free-text inputs that seed a Bug Bash run. */
+/** A dynamically-generated prerequisite question the user answers before a run. */
+export interface BugBashPrerequisite {
+  id: string;
+  question: string;
+  detail: string;
+  options: string[];
+  answer: string;
+}
+
+/** The free-text inputs that seed a Bug Bash run. */
 export interface BugBashInputs {
   featureInfo: string;
   setupInfo: string;
+  otherInfo: string;
 }
 
 /** One streamed line while a Bug Bash generate/run pass runs. */
@@ -755,6 +775,10 @@ export type BugBashStreamEvent =
       agentId?: string;
     }
   | { type: 'agent'; agent: BugBashAgent }
+  | {
+      type: 'scenario';
+      progress: { id: string; status: BugBashScenarioStatus | 'running' };
+    }
   | { type: 'done'; run: BugBashRun }
   | { type: 'failed'; error: string }
   | { type: 'cancelled' };
