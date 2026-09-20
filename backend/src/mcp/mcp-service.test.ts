@@ -93,6 +93,28 @@ describe('createMcpService.listProviders', () => {
 });
 
 describe('createMcpService.getServers', () => {
+  it('presents a proxy-wrapped spec as the user’s original spec', async () => {
+    const original = { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } };
+    const doc: McpConfigDocument = {
+      mcpServers: {
+        wrapped: {
+          command: '/node',
+          args: ['/proxy.js', 'npx', '-y', 'srv'],
+          env: { A: '1', STUDIO_MCP_ORIGINAL: JSON.stringify(original) },
+        },
+      },
+    };
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => doc),
+      config: enabled,
+    });
+    const result = await service.getServers('agency');
+    expect(result.servers[0]).toMatchObject({ name: 'wrapped', spec: original });
+  });
+
   it('uses the default path directly (no meta-session) when it exists', async () => {
     const doc: McpConfigDocument = {
       mcpServers: {
@@ -323,6 +345,8 @@ describe('createMcpService.inspectServer', () => {
       status: 'skipped',
       message: 'Server is disabled in provider config',
       output: [],
+      authRequired: false,
+      authUrl: null,
     });
   });
 
@@ -342,6 +366,8 @@ describe('createMcpService.inspectServer', () => {
       status: 'failed',
       message: 'boom',
       output: [],
+      authRequired: false,
+      authUrl: null,
     });
 
     const plain = createMcpService({
@@ -395,6 +421,134 @@ describe('createMcpService.inspectServer', () => {
     });
     await expect(
       disabledService.inspectServer('agency', 's'),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe('createMcpService.serverStatus', () => {
+  it('reports a connected server with its tool count', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({
+        mcpServers: { s: { command: 'x' } },
+      })),
+      config: enabled,
+    });
+    expect(await service.serverStatus('agency', ' s ')).toEqual({
+      name: 's',
+      status: 'connected',
+      toolCount: 2,
+      authRequired: false,
+      authUrl: null,
+      message: null,
+    });
+  });
+
+  it('reports a disabled server without spawning a probe', async () => {
+    const inspect = vi.fn();
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({ inspect }),
+      files: fileStore(async () => ({
+        mcpServers: { off: { command: 'x', enabled: false } },
+      })),
+      config: enabled,
+    });
+    const status = await service.serverStatus('agency', 'off');
+    expect(inspect).not.toHaveBeenCalled();
+    expect(status.status).toBe('disabled');
+    expect(status.toolCount).toBe(0);
+  });
+
+  it('reports a URL-only server as unsupported without probing', async () => {
+    const inspect = vi.fn();
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({ inspect }),
+      files: fileStore(async () => ({
+        mcpServers: { remote: { url: 'https://example.com/mcp' } },
+      })),
+      config: enabled,
+    });
+    const status = await service.serverStatus('agency', 'remote');
+    expect(inspect).not.toHaveBeenCalled();
+    expect(status.status).toBe('unsupported');
+  });
+
+  it('reports auth-required with the login URL the probe surfaced', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async (): Promise<McpToolInspection> => ({
+          status: 'failed',
+          message: 'Please sign in to continue',
+          output: ['Open https://login.example.com/device to authenticate'],
+          tools: [],
+          authRequired: true,
+          authUrl: 'https://login.example.com/device',
+        })),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    expect(await service.serverStatus('agency', 's')).toEqual({
+      name: 's',
+      status: 'auth-required',
+      toolCount: 0,
+      authRequired: true,
+      authUrl: 'https://login.example.com/device',
+      message: 'Please sign in to continue',
+    });
+  });
+
+  it('reports a non-auth probe failure as an error', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({
+        inspect: vi.fn(async (): Promise<McpToolInspection> => ({
+          status: 'failed',
+          message: 'MCP server exited before tool discovery completed',
+          output: [],
+          tools: [],
+          authRequired: false,
+          authUrl: null,
+        })),
+      }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    const status = await service.serverStatus('agency', 's');
+    expect(status.status).toBe('error');
+    expect(status.authRequired).toBe(false);
+  });
+
+  it('rejects empty names and when disabled', async () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    await expect(service.serverStatus('agency', '  ')).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+
+    const disabledService = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: disabled,
+    });
+    await expect(
+      disabledService.serverStatus('agency', 's'),
     ).rejects.toBeInstanceOf(ValidationError);
   });
 });
@@ -741,6 +895,8 @@ describe('createMcpService.restartServer', () => {
       status: 'ok',
       message: null,
       output: ['device code ABCD'],
+      authRequired: false,
+      authUrl: null,
     });
     expect(result.liveReloadedSessions).toBe(1);
   });

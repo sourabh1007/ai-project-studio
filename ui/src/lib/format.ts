@@ -52,6 +52,21 @@ function roundToOne(n: number): string {
   return String(Math.round(n * 10) / 10);
 }
 
+/** Formats a byte count as B/KB/MB/GB (1024-based), e.g. 2048 → "2 KB". */
+export function formatBytes(bytes: number): string {
+  const abs = Math.abs(bytes);
+  if (abs < 1024) {
+    return `${bytes} B`;
+  }
+  if (abs < 1024 * 1024) {
+    return `${roundToOne(bytes / 1024)} KB`;
+  }
+  if (abs < 1024 * 1024 * 1024) {
+    return `${roundToOne(bytes / (1024 * 1024))} MB`;
+  }
+  return `${roundToOne(bytes / (1024 * 1024 * 1024))} GB`;
+}
+
 /** Renders an ISO timestamp as a locale date-time, or a dash when absent. */
 export function formatDateTime(iso: string | null): string {
   if (!iso) {

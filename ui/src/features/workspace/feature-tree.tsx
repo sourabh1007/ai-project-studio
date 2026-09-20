@@ -318,7 +318,9 @@ function GroupNode({ group }: { group: TreeGroup }) {
   return (
     <div className="tree-group">
       <div
-        className={`tree-group-header ${dropTarget ? 'is-drop-target' : ''}`}
+        className={`tree-group-header ${dropTarget ? 'is-drop-target' : ''} ${
+          confirming || editing ? 'is-actions-open' : ''
+        }`.trim()}
         draggable={!editing}
         onDragStart={(event) => {
           event.stopPropagation();
@@ -396,91 +398,97 @@ function GroupNode({ group }: { group: TreeGroup }) {
             {label}
           </button>
         )}
-        <button
-          type="button"
-          className="tree-action"
-          title="Add subcategory"
-          aria-label={`Add subcategory in ${group.name}`}
-          onClick={() => {
-            setExpanded(true);
-            onAddSubcategory(group.id);
-          }}
-        >
-          <PlusIcon />
-        </button>
-        {confirming ? (
-          <span className="row-confirm" role="group" aria-label="Confirm delete">
-            <button
-              type="button"
-              className="row-confirm-yes"
-              title="Confirm delete"
-              aria-label={`Confirm delete ${group.name}`}
-              onClick={() => {
-                setConfirming(false);
-                onDeleteGroup(group);
-              }}
+        <div className="tree-branch-trail">
+          <button
+            type="button"
+            className="tree-action"
+            title="Add subcategory"
+            aria-label={`Add subcategory in ${group.name}`}
+            onClick={() => {
+              setExpanded(true);
+              onAddSubcategory(group.id);
+            }}
+          >
+            <PlusIcon />
+          </button>
+          {confirming ? (
+            <span
+              className="row-confirm"
+              role="group"
+              aria-label="Confirm delete"
             >
-              <CheckIcon />
-            </button>
-            <button
-              type="button"
-              className="row-confirm-no"
-              title="Cancel"
-              aria-label="Cancel delete"
-              onClick={() => setConfirming(false)}
-            >
-              <CloseIcon />
-            </button>
-          </span>
-        ) : (
-          <OverflowMenu
-            label={`Actions for ${group.name}`}
-            actions={[
-              {
-                label: 'Rename',
-                icon: <PencilIcon />,
-                onSelect: () => {
-                  setDraft(group.name);
-                  setEditing(true);
+              <button
+                type="button"
+                className="row-confirm-yes"
+                title="Confirm delete"
+                aria-label={`Confirm delete ${group.name}`}
+                onClick={() => {
+                  setConfirming(false);
+                  onDeleteGroup(group);
+                }}
+              >
+                <CheckIcon />
+              </button>
+              <button
+                type="button"
+                className="row-confirm-no"
+                title="Cancel"
+                aria-label="Cancel delete"
+                onClick={() => setConfirming(false)}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          ) : (
+            <OverflowMenu
+              label={`Actions for ${group.name}`}
+              actions={[
+                {
+                  label: 'Rename',
+                  icon: <PencilIcon />,
+                  onSelect: () => {
+                    setDraft(group.name);
+                    setEditing(true);
+                  },
                 },
-              },
-              {
-                label: 'Add subcategory',
-                icon: <FolderIcon size={14} />,
-                onSelect: () => {
-                  setExpanded(true);
-                  onAddSubcategory(group.id);
+                {
+                  label: 'Add subcategory',
+                  icon: <FolderIcon size={14} />,
+                  onSelect: () => {
+                    setExpanded(true);
+                    onAddSubcategory(group.id);
+                  },
                 },
-              },
-              ...(!isPr && onNewFeature
-                ? [
-                    {
-                      label: 'New feature',
-                      icon: <PlusIcon />,
-                      onSelect: () => {
-                        setExpanded(true);
-                        onNewFeature(group.id);
+                ...(!isPr && onNewFeature
+                  ? [
+                      {
+                        label: 'New feature',
+                        icon: <PlusIcon />,
+                        onSelect: () => {
+                          setExpanded(true);
+                          onNewFeature(group.id);
+                        },
                       },
-                    },
-                  ]
-                : []),
-              {
-                label: 'Open Pull Request',
-                icon: <PullRequestIcon size={14} />,
-                onSelect: () => {
-                  setExpanded(true);
-                  onAttachPr(group.id);
+                    ]
+                  : []),
+                {
+                  label: 'Open Pull Request',
+                  icon: <PullRequestIcon size={14} />,
+                  onSelect: () => {
+                    setExpanded(true);
+                    onAttachPr(group.id);
+                  },
                 },
-              },
-              {
-                label: 'Delete group',
-                icon: <TrashIcon />,
-                danger: true,
-                onSelect: () => setConfirming(true),
-              },
-            ]}
-          />
-        )}
+                {
+                  label: 'Delete group',
+                  icon: <TrashIcon />,
+                  danger: true,
+                  onSelect: () => setConfirming(true),
+                },
+              ]}
+            />
+          )}
+        </div>
       </div>
       {expanded && (
         <div

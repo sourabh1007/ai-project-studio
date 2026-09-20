@@ -10,6 +10,7 @@ import type { SessionFilesStore } from '../session-files/session-files-contract.
 import type { ContextService } from '../context-store/context-service.js';
 import type { UsageCaptureRepo } from '../usage/usage-capture-contract.js';
 import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
+import type { McpUsageRepo } from '../mcp-usage/mcp-usage-contract.js';
 import type { MetaOperationRepo } from '../meta/meta-operation-contract.js';
 import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
 import type { Clock } from '../kernel/clock.js';
@@ -83,6 +84,8 @@ export interface WorkspaceAdminDeps {
   clock?: Pick<Clock, 'isoNow'>;
   metaUsage?: Pick<MetaUsageRepo, 'deleteByFeature' | 'deleteBySession'>;
   metaOperations?: Pick<MetaOperationRepo, 'deleteByFeature' | 'deleteBySession'>;
+  /** Optional: purges proxy-measured MCP server usage on feature/session delete. */
+  mcpUsage?: Pick<McpUsageRepo, 'deleteByFeature' | 'deleteBySession'>;
   transcripts: Pick<TranscriptStore, 'delete'>;
   summaries: Pick<SummaryStore, 'delete'>;
   sessionSummaries?: Pick<SessionSummaryStore, 'delete'>;
@@ -156,6 +159,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     deps.usageCaptures?.deleteBySession(sessionId);
     deps.metaUsage?.deleteBySession(sessionId);
     deps.metaOperations?.deleteBySession(sessionId);
+    deps.mcpUsage?.deleteBySession(sessionId);
     deps.usage.deleteBySession(sessionId);
     deps.sessionFiles.deleteBySession(sessionId);
     deps.sessionSummaries?.delete(sessionId);
@@ -192,6 +196,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       deps.sessions.deleteByFeature(id);
       deps.metaUsage?.deleteByFeature(id);
       deps.metaOperations?.deleteByFeature(id);
+      deps.mcpUsage?.deleteByFeature(id);
       deps.summaries.delete(id);
       // Remove the on-disk worktree before purging the review row it is
       // resolved from; a failure here must not block feature deletion.

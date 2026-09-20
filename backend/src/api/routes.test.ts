@@ -92,6 +92,8 @@ function deps(): ApiRoutesDeps {
     context: empty,
     automations: empty,
     subagents: empty,
+    mcpUsage: empty,
+    clock: empty,
     logger: empty,
   };
 }
@@ -119,6 +121,7 @@ describe('createApiRoutes', () => {
       'get /providers/:id/models',
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
+      'get /mcp/providers/:providerId/servers/:serverName/status',
       'get /mcp/providers/:providerId/servers/:serverName/tools',
       'put /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
@@ -129,6 +132,7 @@ describe('createApiRoutes', () => {
       'get /sessions/:sessionId/usage',
       'get /features/:featureId/usage/events',
       'get /repos/:repoId/usage/events',
+      'post /mcp-usage',
       'post /features/:featureId/summary',
       'get /features/:featureId/summary',
       'get /features/:featureId/work-summary',

@@ -194,7 +194,10 @@ export function AutomationsView({ live }: { live: LiveState }) {
       {sections.map((section) =>
         section.items.length > 0 ? (
           <section key={section.key} className="automation-section">
-            <h3 className="automation-section-title">
+            <h3
+              className="automation-section-title"
+              data-section={section.key}
+            >
               {section.icon} {section.title}
               <span className="automation-section-count">
                 {section.items.length}
@@ -484,7 +487,7 @@ function AutomationCard({
         {canPause(automation.status) && (
           <button
             type="button"
-            className="ghost-button"
+            className="ghost-button tone-pause"
             disabled={busyKey === `pause:${automation.id}`}
             onClick={() => {
               void onAction(automation.id, 'pause');
@@ -496,7 +499,7 @@ function AutomationCard({
         {canResume(automation.status) && (
           <button
             type="button"
-            className="ghost-button"
+            className="ghost-button tone-resume"
             disabled={busyKey === `resume:${automation.id}`}
             onClick={() => {
               void onAction(automation.id, 'resume');
@@ -509,7 +512,7 @@ function AutomationCard({
         {runnable && (
           <button
             type="button"
-            className="ghost-button"
+            className="ghost-button tone-run"
             disabled={busyKey === `run:${automation.id}`}
             onClick={requestRunNow}
           >
@@ -520,7 +523,7 @@ function AutomationCard({
           <>
             <button
               type="button"
-              className="ghost-button"
+              className="ghost-button tone-stop"
               disabled={busyKey === `cancel:${automation.id}`}
               onClick={() => {
                 void onAction(automation.id, 'cancel');
@@ -540,7 +543,7 @@ function AutomationCard({
         </button>
         <button
           type="button"
-          className="tree-action"
+          className="tree-action tree-action-danger"
           title="Delete automation"
           aria-label={`Delete ${automation.name}`}
           disabled={busyKey === `delete:${automation.id}`}

@@ -44,6 +44,7 @@ function harness(
     withCaptureCleanup?: boolean;
     withMetaUsageCleanup?: boolean;
     withMetaOperationsCleanup?: boolean;
+    withMcpUsageCleanup?: boolean;
     withSessionSummaries?: boolean;
     withOwnedAutomationCleanup?: boolean;
     withOwnedSubagentCleanup?: boolean;
@@ -111,6 +112,12 @@ function harness(
       ? {
           deleteByFeature: (id) => { calls.push(`metaOperations.deleteByFeature:${id}`); },
           deleteBySession: (id) => { calls.push(`metaOperations.deleteBySession:${id}`); },
+        }
+      : undefined,
+    mcpUsage: options.withMcpUsageCleanup
+      ? {
+          deleteByFeature: (id) => { calls.push(`mcpUsage.deleteByFeature:${id}`); },
+          deleteBySession: (id) => { calls.push(`mcpUsage.deleteBySession:${id}`); },
         }
       : undefined,
     transcripts: {
@@ -195,6 +202,17 @@ describe('workspace-admin-service', () => {
     ]));
     expect(calls.indexOf('metaOperations.deleteBySession:s1'))
       .toBeLessThan(calls.indexOf('metaOperations.deleteByFeature:f1'));
+  });
+
+  it('purges proxy-measured MCP usage by session and then feature after quiescence', async () => {
+    const { admin, calls } = harness([session('s1')], { withMcpUsageCleanup: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual(expect.arrayContaining([
+      'mcpUsage.deleteBySession:s1',
+      'mcpUsage.deleteByFeature:f1',
+    ]));
+    expect(calls.indexOf('mcpUsage.deleteBySession:s1'))
+      .toBeLessThan(calls.indexOf('mcpUsage.deleteByFeature:f1'));
   });
 
   it('does not purge a session until its producers and final persistence have drained', async () => {

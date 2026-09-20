@@ -21,9 +21,6 @@ readout.
 4. The session opens as an **editor tab** with an embedded terminal filling the
    pane — chat with the AI exactly as you would in the CLI.
 
-> Tip: the default **Scratchpad** feature lets you start a session without any
-> setup — see [Feature categories](feature-categories.md#the-default-scratchpad).
-
 ## Working in the terminal
 
 - The terminal is a full `xterm.js` terminal wired to the CLI over a WebSocket.

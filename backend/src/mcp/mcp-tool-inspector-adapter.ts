@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { LineAssembler } from '../provider/process-kernel/stream-reader.js';
+import { classifyMcpAuth } from './mcp-auth-detect.js';
 import type { McpToolInspection, McpToolInspector } from './mcp-contract.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -99,7 +100,9 @@ export function createMcpToolInspector(): McpToolInspector {
           windowsHide: true,
         });
 
-        const finish = (result: McpToolInspection): void => {
+        const finish = (
+          result: Omit<McpToolInspection, 'authRequired' | 'authUrl'>,
+        ): void => {
           if (settled) {
             return;
           }
@@ -110,7 +113,13 @@ export function createMcpToolInspector(): McpToolInspector {
           } catch {
             // Best effort: the server may already have exited.
           }
-          resolve(result);
+          // Only a failed probe can indicate an auth need; a successful
+          // tools/list means the server is already connected and authorized.
+          const auth =
+            result.status === 'ok'
+              ? { authRequired: false, authUrl: null }
+              : classifyMcpAuth(result.message, result.output);
+          resolve({ ...result, ...auth });
         };
 
         const request = (method: string, params: unknown): Promise<unknown> => {

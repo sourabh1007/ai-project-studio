@@ -28,6 +28,11 @@ const {
 // manager (and any future feature) can push messages to the renderer.
 let mainWindow = null;
 let lastWindowUrl = null;
+// Detached ("popped out") session windows, keyed by session id, so a second
+// pop-out of the same session focuses the existing window instead of spawning
+// a duplicate. Each entry also retains the session payload needed to re-open
+// its tab in the main window when the pop-out is returned/closed.
+const popoutWindows = new Map();
 let startupSplash = null;
 let startupCancelled = false;
 let startupAbort = new AbortController();
@@ -875,6 +880,109 @@ function createWindow(loadUrl, splash = null) {
 }
 
 /**
+ * Builds the same-origin URL that renders a single detached workspace tab (a
+ * session terminal or an agent board). The renderer reads `?popout=tab` plus
+ * the tab payload from the hash (kept out of the query string, which some
+ * backends log). Returns null when there is no known app origin yet.
+ */
+function buildPopoutUrl(tab, label) {
+  if (!lastWindowUrl) {
+    return null;
+  }
+  try {
+    const url = new URL(lastWindowUrl);
+    url.search = '?popout=tab';
+    url.hash =
+      '#' + encodeURIComponent(JSON.stringify({ tab, label: label ?? '' }));
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opens (or focuses) a detached OS window hosting one workspace tab (a session
+ * terminal or an agent board). The window carries its own taskbar entry and can
+ * move to another monitor. Closing it — or its in-window "return to IDE"
+ * control — re-opens the tab in the main window, so nothing is lost.
+ */
+function openPopoutWindow(tab, label) {
+  const tabId = tab && typeof tab.id === 'string' ? tab.id : null;
+  if (!tabId) {
+    return false;
+  }
+  const existing = popoutWindows.get(tabId);
+  if (existing && !existing.window.isDestroyed()) {
+    if (existing.window.isMinimized()) existing.window.restore();
+    existing.window.focus();
+    return true;
+  }
+  const loadUrl = buildPopoutUrl(tab, label);
+  if (!loadUrl) {
+    return false;
+  }
+  const launchTheme = readPersistedTheme();
+  const icon = appIcon();
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 760,
+    minWidth: 480,
+    minHeight: 360,
+    backgroundColor: THEME_BG[launchTheme],
+    title: label ? `${label} · AI Project Studio` : 'AI Project Studio',
+    ...(icon ? { icon } : {}),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  // Same navigation guards as the main window: external links go to the system
+  // browser, and any cross-origin navigation is denied.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (ipcInput.isExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    let sameOrigin = false;
+    try {
+      sameOrigin = appOrigin !== null && new URL(url).origin === appOrigin;
+    } catch {
+      sameOrigin = false;
+    }
+    if (!sameOrigin) {
+      event.preventDefault();
+      if (ipcInput.isExternalUrl(url)) {
+        void shell.openExternal(url);
+      }
+    }
+  });
+
+  popoutWindows.set(tabId, { window: win, tab, label: label ?? '' });
+  win.on('closed', () => {
+    const tracked = popoutWindows.get(tabId);
+    if (tracked && tracked.window === win) {
+      popoutWindows.delete(tabId);
+    }
+    // Returning a detached tab to the IDE must never lose it: re-open it in the
+    // main window (if one is still alive) when the pop-out closes.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('tab:return', { tab, label: label ?? '' });
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+  void win.loadURL(loadUrl).catch((error) => {
+    safeWrite(process.stderr, `[desktop] Pop-out load failed: ${error}\n`);
+  });
+  return true;
+}
+
+/**
  * Applies a Content-Security-Policy to every document the app loads. Restricts
  * scripts/connections/frames to the app's own origin so injected content cannot
  * pull in remote code or exfiltrate over the network. Skipped in dev, where the
@@ -985,6 +1093,36 @@ function initializeDesktop() {
       return null;
     }
     return result.filePaths[0];
+  });
+
+  // Detachable tab windows. Tear a session terminal or agent board out of the
+  // IDE into its own OS window, and return it. Guarded to our own frame so only
+  // the trusted app can spawn windows.
+  ipcMain.handle('window:popOut', (event, request) => {
+    if (!isTrustedSender(event)) {
+      return false;
+    }
+    const payload = request && typeof request === 'object' ? request : {};
+    const tab = payload.tab;
+    if (!tab || typeof tab !== 'object' || typeof tab.id !== 'string') {
+      return false;
+    }
+    const label = typeof payload.label === 'string' ? payload.label : '';
+    return openPopoutWindow(tab, label);
+  });
+
+  // Return the sender's pop-out window to the IDE by closing it; the window's
+  // own 'closed' handler re-opens the tab in the main window.
+  ipcMain.handle('window:popIn', (event) => {
+    if (!isTrustedSender(event)) {
+      return false;
+    }
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && win !== mainWindow && !win.isDestroyed()) {
+      win.close();
+      return true;
+    }
+    return false;
   });
 
   // Exposes the packaged app version to the renderer's About section.

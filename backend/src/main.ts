@@ -285,6 +285,7 @@ import {
   resolveWarmProviderIdentity,
 } from './meta/warm-route-policy.js';
 import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
+import { createMcpUsageRepo } from './persistence/mcp-usage-repo.js';
 import { createMetaOperationRepo } from './persistence/meta-operation-repo.js';
 import { createMetaOperationOwnership } from './meta/meta-operation-ownership.js';
 import { createMetaOperationPhysicalOwnership } from './meta/meta-operation-physical-ownership.js';
@@ -311,6 +312,7 @@ import {
   type MetaConfig,
 } from './meta/config.js';
 import { createMcpService } from './mcp/mcp-service.js';
+import { wrapServerSpec } from './mcp/mcp-proxy-config.js';
 import { createMcpConfigFileStore } from './mcp/mcp-config-file-adapter.js';
 import { createMcpToolInspector } from './mcp/mcp-tool-inspector-adapter.js';
 import {
@@ -620,6 +622,7 @@ function main(): void {
     logger: { error: (message, data) => logger.error(message, data) },
   });
   const clock = createClock();
+  const STUDIO_MCP_SERVER_NAME = 'ai-project-studio';
   const ids = createIdGenerator();
   const bus = createEventBus<StreamEventMap>();
 
@@ -766,6 +769,7 @@ function main(): void {
   const usageRepo = createUsageRepo(db);
   const usageCaptureRepo = createUsageCaptureRepo(db);
   const metaUsageRepo = createMetaUsageRepo(db);
+  const mcpUsageRepo = createMcpUsageRepo(db);
   const metaOperationRepo = createMetaOperationRepo(db);
   const metaPhysicalOwnership = createMetaOperationPhysicalOwnership({ newOwnerId: () => ids.next() });
   const metaOperationOwnership = createMetaOperationOwnership({ physical: metaPhysicalOwnership });
@@ -1652,9 +1656,6 @@ function main(): void {
     repos: repoService,
     groups: featureGroupsRepo,
   });
-  // Seed a default "Scratchpad" feature on a fresh workspace so a new instance
-  // can start ad-hoc sessions immediately. No-op once any feature exists.
-  featureService.ensureScratchpad();
   // Layered shared-context store: durable, curated instructions injected at
   // launch and live-pushed into running sessions. The broadcaster fans context
   // writes out to affected running terminals; the merge runner curates a
@@ -2407,6 +2408,7 @@ function main(): void {
     retainedUsage: retainedUsageRepo,
     clock,
     metaUsage: metaUsageRepo,
+    mcpUsage: mcpUsageRepo,
     metaOperations: metaOperationRepo,
     quiescence: {
       feature: (id) => requireQuiescence([
@@ -2936,6 +2938,8 @@ function main(): void {
       automationScheduler,
       subagents: subagentService,
       controlToken: studioControlToken,
+      mcpUsage: mcpUsageRepo,
+      clock,
       logger,
     }), applicationWork),
     // `logger` is reassigned once the file sink is configured, so the mount
@@ -3431,29 +3435,60 @@ function main(): void {
       'mcp',
       'studio-mcp-server.js',
     );
-    for (const provider of mcpService.listProviders()) {
-      void mcpService
-        .putServer(provider.id, {
-          name: 'ai-project-studio',
-          spec: {
-            command: process.execPath,
-            args: [script],
-            env: {
-              // When Studio is packaged, execPath is the Electron binary; this
-              // flag makes it behave as plain Node so the stdio server runs.
-              ELECTRON_RUN_AS_NODE: '1',
-              STUDIO_API_BASE: apiBase,
-              STUDIO_CONTROL_TOKEN: studioControlToken,
+    const mcpProxyScript = pathJoin(
+      dirname(fileURLToPath(import.meta.url)),
+      'mcp',
+      'mcp-proxy.js',
+    );
+    void (async () => {
+      for (const provider of mcpService.listProviders()) {
+        try {
+          await mcpService.putServer(provider.id, {
+            name: STUDIO_MCP_SERVER_NAME,
+            spec: {
+              command: process.execPath,
+              args: [script],
+              env: {
+                // When Studio is packaged, execPath is the Electron binary; this
+                // flag makes it behave as plain Node so the stdio server runs.
+                ELECTRON_RUN_AS_NODE: '1',
+                STUDIO_API_BASE: apiBase,
+                STUDIO_CONTROL_TOKEN: studioControlToken,
+              },
             },
-          },
-        })
-        .catch((error: unknown) => {
-          logger.error('Studio MCP auto-registration failed', {
+          });
+          // Front every OTHER configured stdio server with the measuring proxy
+          // so real per-server I/O (bytes/calls/latency) is recorded per feature.
+          // The proxy is a transparent pass-through; the wrap is loss-less and
+          // undone on shutdown (see unwrapConfiguredMcpServers).
+          const current = await mcpService.getServers(provider.id);
+          for (const server of current.servers) {
+            if (server.name === STUDIO_MCP_SERVER_NAME) {
+              continue;
+            }
+            const wrapped = wrapServerSpec(server.spec, {
+              nodePath: process.execPath,
+              proxyScript: mcpProxyScript,
+              provider: provider.id,
+              serverName: server.name,
+              apiBase,
+              controlToken: studioControlToken,
+            });
+            if (wrapped !== server.spec) {
+              await mcpService.putServer(provider.id, {
+                name: server.name,
+                spec: wrapped,
+              });
+            }
+          }
+        } catch (error: unknown) {
+          logger.error('MCP proxy wrapping failed', {
             providerId: provider.id,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
-    }
+        }
+      }
+    })();
   });
 
   let terminalWs: ReturnType<typeof attachTerminalWs> | undefined;
@@ -3469,6 +3504,32 @@ function main(): void {
     });
     logger.info(`Interactive terminal WebSocket at ${terminalConfig.wsPath}`);
   }
+
+  // Restore the user's original MCP config (remove the measuring-proxy wrapper)
+  // so a wrapped server is never left pointing at the proxy after the app stops.
+  // Best-effort: getServers already returns unwrapped specs, so re-persisting
+  // them strips the on-disk wrapper.
+  const restoreMcpServers = async (): Promise<void> => {
+    for (const provider of mcpService.listProviders()) {
+      try {
+        const current = await mcpService.getServers(provider.id);
+        for (const server of current.servers) {
+          if (server.name === STUDIO_MCP_SERVER_NAME) {
+            continue;
+          }
+          await mcpService.putServer(provider.id, {
+            name: server.name,
+            spec: server.spec,
+          });
+        }
+      } catch (error: unknown) {
+        logger.error('MCP proxy unwrap failed', {
+          providerId: provider.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
 
   // Graceful shutdown: stop usage tailers, tear down live PTYs, stop accepting
   // connections and close the database so SQLite is not left mid-write when the
@@ -3528,6 +3589,7 @@ function main(): void {
   });
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down…`);
+    await restoreMcpServers();
     if (!await coordinatedShutdown(signal)) {
       logger.error('Shutdown was not confirmed; the backend remains owned and must not be replaced.');
     }

@@ -18,6 +18,8 @@ import type { PlanUsageService } from '../plan-usage/plan-usage-service.js';
 import type { ModelCatalogService } from '../meta/model-catalog/model-catalog-service.js';
 import type { UsageDetailService } from '../usage-detail/usage-detail-service.js';
 import type { McpService } from '../mcp/mcp-service.js';
+import type { McpUsageRepo } from '../mcp-usage/mcp-usage-contract.js';
+import type { Clock } from '../kernel/clock.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
 import type { SessionConfig } from '../session/config.js';
@@ -56,6 +58,7 @@ import type { RepoInsightsService } from '../repo-insights/repo-insights-service
 import { createRepoRoutes } from './repo-controller.js';
 import { createAggregateRoutes } from './aggregate-controller.js';
 import { createUsageDetailRoutes } from './usage-detail-controller.js';
+import { createMcpUsageRoutes } from './mcp-usage-controller.js';
 import { createConfigRoutes } from './config-controller.js';
 import { createSettingsAssistantRoutes } from './settings-assistant-controller.js';
 import type { SettingsAssistant } from '../config/settings-assistant.js';
@@ -241,6 +244,10 @@ export interface ApiRoutesDeps {
   subagents: SubagentService;
   /** Per-launch token accepted by Studio MCP control routes. */
   controlToken?: string;
+  /** Records proxy-measured per-MCP-server I/O reported by the launch proxy. */
+  mcpUsage: McpUsageRepo;
+  /** Clock used to stamp proxy-reported MCP usage. */
+  clock: Clock;
   logger: Logger;
 }
 
@@ -269,6 +276,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createMcpRoutes({ mcp: deps.mcp }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
+    ...createMcpUsageRoutes({
+      mcpUsage: deps.mcpUsage,
+      clock: deps.clock,
+      controlToken: deps.controlToken,
+    }),
     ...createSummaryRoutes({
       summarizer: deps.summarizer,
       summaries: deps.summaries,

@@ -6,6 +6,7 @@ import type {
   FeatureAnalytics,
   GroupInfo,
   SessionBreakdown,
+  SessionUsage,
   UsageOrigin,
   UsageTotals,
   WorkspaceStats,
@@ -44,6 +45,21 @@ export interface FeatureAnalyticsDeps {
  * interactive user sessions. Tag each so the dashboard can label its origin. */
 function originOf(session: Session): UsageOrigin {
   return session.kind === 'meta' ? 'ide' : 'user';
+}
+
+/** Usage totals for a session row, or an empty (running) placeholder. */
+function totalsFor(usage: SessionUsage | undefined): UsageTotals {
+  return usage
+    ? {
+        sessions: 1,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        reasoningOutputTokens: usage.reasoningOutputTokens,
+        cost: usage.cost,
+        credits: usage.credits,
+        nanoAiu: usage.nanoAiu,
+      }
+    : EMPTY_USAGE;
 }
 
 /**
@@ -101,17 +117,6 @@ export function createFeatureAnalytics(
 
       const bySession: SessionBreakdown[] = members.map((session) => {
         const usage = usageBySession.get(session.id);
-        const totals = usage
-          ? {
-              sessions: 1,
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              reasoningOutputTokens: usage.reasoningOutputTokens,
-              cost: usage.cost,
-              credits: usage.credits,
-              nanoAiu: usage.nanoAiu,
-            }
-          : EMPTY_USAGE;
         return {
           sessionId: session.id,
           provider: session.provider,
@@ -122,9 +127,34 @@ export function createFeatureAnalytics(
           activeMs: sessionActiveMs(session.startedAt, session.endedAt, nowMs),
           groupId: session.groupId ?? null,
           origin: originOf(session),
-          ...totals,
+          ...totalsFor(usage),
         };
       });
+
+      // Warm-ACP agent runs (bug-bash testers, task agents) reuse a pooled
+      // session, so they are never persisted as feature sessions. Surface each
+      // as a session row from its usage snapshot so agent usage is visible and
+      // counted instead of silently dropped. Skip any id already persisted so a
+      // run is never counted twice.
+      const memberIds = new Set(members.map((session) => session.id));
+      for (const agent of reader.warmAgentSessions(featureId)) {
+        if (memberIds.has(agent.sessionId)) {
+          continue;
+        }
+        bySession.push({
+          sessionId: agent.sessionId,
+          provider: agent.provider,
+          kind: 'meta',
+          status: 'completed',
+          startedAt: agent.capturedAt,
+          endedAt: agent.capturedAt,
+          activeMs: 0,
+          groupId: null,
+          origin: 'agent',
+          label: agent.label,
+          ...totalsFor(usageBySession.get(agent.sessionId)),
+        });
+      }
 
       const featureGroups: GroupInfo[] = groups
         .listByFeature(featureId)
@@ -137,7 +167,7 @@ export function createFeatureAnalytics(
 
       const totals: UsageTotals = {
         ...reader.featureTotals(featureId),
-        sessions: members.length,
+        sessions: bySession.length,
       };
       const totalActiveMs = bySession.reduce(
         (sum, session) => sum + session.activeMs,
@@ -150,6 +180,7 @@ export function createFeatureAnalytics(
         byProvider: reader.byProvider(featureId),
         byDay: reader.byDay(featureId),
         bySession,
+        byMcpServer: reader.byMcpServer(featureId),
         groups: featureGroups,
         timing: { totalActiveMs },
       };

@@ -6,7 +6,7 @@ use it step by step**.
 
 | Guide | What it covers |
 | --- | --- |
-| [Feature categories](feature-categories.md) | How work is organized: Repository → Feature → Group → Session, and the default Scratchpad. |
+| [Feature categories](feature-categories.md) | How work is organized: Repository → Feature → Group → Session. |
 | [Sessions](sessions.md) | Starting and running AI CLI sessions in the embedded terminal, summaries, and importing history. |
 | [Skills](skills.md) | Reusable instruction blocks tagged onto features/sessions and auto-seeded into prompts. |
 | [PR reviews](pr-reviews.md) | The "Open a PR" flow: review page, change graph, inline comments, and scoring. |

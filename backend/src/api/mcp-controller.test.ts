@@ -23,6 +23,14 @@ function serviceStub(overrides: Partial<McpService> = {}): McpService {
       tools: [{ name: 'read', description: null, enabled: true }],
       toolDiscovery: { status: 'ok' as const, message: null, output: [] },
     })),
+    serverStatus: vi.fn(async () => ({
+      name: 'a',
+      status: 'connected' as const,
+      toolCount: 1,
+      authRequired: false,
+      authUrl: null,
+      message: null,
+    })),
     putServer: vi.fn(async () => ({
       providerId: 'agency',
       configPath: '/x/mcp-config.json',
@@ -67,6 +75,7 @@ describe('createMcpRoutes', () => {
     expect(routes.map((r) => `${r.method} ${r.path}`)).toEqual([
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
+      'get /mcp/providers/:providerId/servers/:serverName/status',
       'get /mcp/providers/:providerId/servers/:serverName/tools',
       'put /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
@@ -105,6 +114,29 @@ describe('createMcpRoutes', () => {
     );
     expect(mcp.inspectServer).toHaveBeenCalledWith('agency', 'a');
     expect(result.status).toBe(200);
+  });
+
+  it('reports a single server’s live status', async () => {
+    const mcp = serviceStub();
+    const route = routeFor(
+      createMcpRoutes({ mcp }),
+      'get /mcp/providers/:providerId/servers/:serverName/status',
+    );
+    const result = await route.handler(
+      req({ params: { providerId: 'agency', serverName: 'a' } }),
+    );
+    expect(mcp.serverStatus).toHaveBeenCalledWith('agency', 'a');
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        name: 'a',
+        status: 'connected',
+        toolCount: 1,
+        authRequired: false,
+        authUrl: null,
+        message: null,
+      },
+    });
   });
 
   it('adds/updates a server with a valid body', async () => {

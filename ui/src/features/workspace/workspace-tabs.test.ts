@@ -7,6 +7,7 @@ import {
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
   removeFeatureWorkspaceTabs,
+  setWorkspaceSplit,
   type WorkspaceTab,
 } from './workspace-tabs.js';
 
@@ -94,6 +95,7 @@ describe('workspace-tabs', () => {
     const state = normalizeWorkspaceTabsState({
       tabs: [featureTab(f1), sessionTab(s1), featureTab(f2)],
       activeId: 'feature:f2',
+      splitId: null,
     });
 
     expect(
@@ -125,6 +127,7 @@ describe('workspace-tabs', () => {
         { kind: 'repo', id: 'repo:r1', label: r1.name, repo: r1 } as WorkspaceTab,
       ],
       activeId: 'repo:r1',
+      splitId: null,
     };
 
     const next = reconcileWorkspaceTabsState(state, {
@@ -157,8 +160,68 @@ describe('workspace-tabs', () => {
         sessionTab(session({ id: 's1', featureId: 'f1' })),
       ],
       activeId: 'review-board:f1',
+      splitId: null,
     };
     const next = removeFeatureWorkspaceTabs(tabs, 'f1');
-    expect(next).toEqual({ tabs: [], activeId: null });
+    expect(next).toEqual({ tabs: [], activeId: null, splitId: null });
+  });
+
+  it('opens a tab in the split pane and keeps it distinct from the active tab', () => {
+    const s1 = session({ id: 's1' });
+    const s2 = session({ id: 's2' });
+    let state = emptyWorkspaceTabsState();
+    state = openWorkspaceTab(state, sessionTab(s1));
+    state = openWorkspaceTab(state, sessionTab(s2));
+    // s2 is active; split s1 into the side pane.
+    state = setWorkspaceSplit(state, 's1');
+    expect(state.activeId).toBe('s2');
+    expect(state.splitId).toBe('s1');
+
+    // Splitting the active tab against itself collapses to a single pane.
+    expect(setWorkspaceSplit(state, 's2').splitId).toBe(null);
+    // Splitting an unknown tab is ignored.
+    expect(setWorkspaceSplit(state, 'missing').splitId).toBe(null);
+    // Passing null collapses back to a single pane.
+    expect(setWorkspaceSplit(state, null).splitId).toBe(null);
+  });
+
+  it('clears the split when the split tab is closed or promoted to active', () => {
+    const s1 = session({ id: 's1' });
+    const s2 = session({ id: 's2' });
+    let state = openWorkspaceTab(emptyWorkspaceTabsState(), sessionTab(s1));
+    state = openWorkspaceTab(state, sessionTab(s2));
+    state = setWorkspaceSplit(state, 's1');
+    expect(state.splitId).toBe('s1');
+
+    // Closing the side tab collapses the split.
+    const closed = closeWorkspaceTab(state, 's1');
+    expect(closed.splitId).toBe(null);
+    expect(closed.tabs.map((t) => t.id)).toEqual(['s2']);
+
+    // Re-opening the split tab as the active tab also clears the split.
+    const promoted = openWorkspaceTab(state, sessionTab(s1));
+    expect(promoted.activeId).toBe('s1');
+    expect(promoted.splitId).toBe(null);
+  });
+
+  it('drops the split when its feature is removed', () => {
+    const s1 = session({ id: 's1', featureId: 'f1' });
+    const f2 = feature({ id: 'f2', name: 'Two' });
+    let state = openWorkspaceTab(emptyWorkspaceTabsState(), featureTab(f2));
+    state = openWorkspaceTab(state, sessionTab(s1));
+    state = setWorkspaceSplit(state, 'feature:f2');
+    expect(state.splitId).toBe('feature:f2');
+    const removed = removeFeatureWorkspaceTabs(state, 'f2');
+    expect(removed.splitId).toBe(null);
+  });
+
+  it('accepts persisted state that predates the split field', () => {
+    // Legacy persisted payloads have no splitId; they must still validate and
+    // normalize to a single-pane layout.
+    const legacy = { tabs: [], activeId: null };
+    const normalized = normalizeWorkspaceTabsState(
+      legacy as unknown as Parameters<typeof normalizeWorkspaceTabsState>[0],
+    );
+    expect(normalized.splitId).toBe(null);
   });
 });

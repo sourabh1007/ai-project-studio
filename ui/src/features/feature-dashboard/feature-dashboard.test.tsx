@@ -88,6 +88,13 @@ function usage(sessions: number): FeatureUsage {
       credits: 0,
       nanoAiu: 1_000_000_000,
     }] : [],
+    byMcpServer: sessions > 0 ? [{
+      server: 'filesystem',
+      calls: 4,
+      inputBytes: 2048,
+      outputBytes: 8192,
+      durationMs: 120,
+    }] : [],
     timing: { totalActiveMs: sessions * 300000 },
   };
 }

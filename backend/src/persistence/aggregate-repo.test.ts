@@ -152,4 +152,84 @@ describe('aggregate-repo', () => {
     expect(reader.workspaceTotals().credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 5);
     db.close();
   });
+
+  it('folds warm-ACP meta_usage_records into per-feature rollups', () => {
+    const { db, reader } = seed();
+    db.prepare(
+      `INSERT INTO meta_usage_records (
+         session_id, feature_id, provider_id, requested_model, resolved_model,
+         transport, provider_session_id, purpose, label, input_tokens,
+         output_tokens, nano_aiu, credits, captured_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'warm-1', 'f1', 'copilot', 'auto', 'warm-model', 'warm-acp', null,
+      'meta', 'Bug Bash', 10, 5, 2000, 3.5, '2025-01-04T00:00:00.000Z',
+    );
+    const totals = reader.featureTotals('f1');
+    expect(totals.credits).toBeCloseTo(0.33 + 1 + 2 + 99 + 500 + 3.5);
+    expect(totals.inputTokens).toBe(6349 + 10);
+    expect(reader.byModel('f1').some((m) => m.model === 'warm-model')).toBe(true);
+    expect(reader.byProvider('f1').some((p) => p.provider === 'copilot')).toBe(true);
+    expect(reader.byDay('f1').map((d) => d.day)).toContain('2025-01-04');
+    db.close();
+  });
+
+  it('lists warm-ACP agent runs per feature with their labels', () => {
+    const { db, reader } = seed();
+    const insert = db.prepare(
+      `INSERT INTO meta_usage_records (
+         session_id, feature_id, provider_id, requested_model, resolved_model,
+         transport, provider_session_id, purpose, label, input_tokens,
+         output_tokens, nano_aiu, credits, captured_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      'acp-a', 'f1', 'copilot', 'auto', null, 'warm-acp', null, null,
+      'Bug bash · Tester 1', 10, 5, null, null, '2025-01-04T00:00:00.000Z',
+    );
+    insert.run(
+      'acp-b', 'f1', 'copilot', 'auto', null, 'warm-acp', null, null,
+      'Bug bash · lead report', 20, 8, null, null, '2025-01-05T00:00:00.000Z',
+    );
+    insert.run(
+      'acp-c', 'f2', 'copilot', 'auto', null, 'warm-acp', null, null,
+      'Other feature', 1, 1, null, null, '2025-01-04T00:00:00.000Z',
+    );
+
+    const agents = reader.warmAgentSessions('f1');
+    expect(agents).toEqual([
+      { sessionId: 'acp-a', provider: 'copilot', label: 'Bug bash · Tester 1', capturedAt: '2025-01-04T00:00:00.000Z' },
+      { sessionId: 'acp-b', provider: 'copilot', label: 'Bug bash · lead report', capturedAt: '2025-01-05T00:00:00.000Z' },
+    ]);
+    expect(reader.warmAgentSessions('f3')).toEqual([]);
+    db.close();
+  });
+
+  it('rolls up proxy-measured MCP server I/O per feature', () => {
+    const { db, reader } = seed();
+    const insert = db.prepare(
+      `INSERT INTO mcp_server_usage (
+         feature_id, session_id, provider, server, calls,
+         input_bytes, output_bytes, duration_ms, recorded_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run('f1', 's1', 'copilot', 'filesystem', 2, 100, 400, 30, '2025-01-01T00:00:00.000Z');
+    insert.run('f1', 's2', 'copilot', 'filesystem', 3, 50, 200, 20, '2025-01-02T00:00:00.000Z');
+    insert.run('f1', 's1', 'copilot', 'github', 1, 10, 20, 5, '2025-01-01T00:00:00.000Z');
+    insert.run('f2', 's4', 'copilot', 'filesystem', 9, 999, 999, 999, '2025-01-01T00:00:00.000Z');
+
+    const byServer = reader.byMcpServer('f1');
+    expect(byServer.map((s) => s.server)).toEqual(['filesystem', 'github']);
+    const filesystem = byServer.find((s) => s.server === 'filesystem');
+    expect(filesystem).toEqual({
+      server: 'filesystem',
+      calls: 5,
+      inputBytes: 150,
+      outputBytes: 600,
+      durationMs: 50,
+    });
+    // Other features are excluded.
+    expect(reader.byMcpServer('f3')).toEqual([]);
+    db.close();
+  });
 });

@@ -162,7 +162,7 @@ function DefinitionViewer({
     [repoId, entry.path],
   );
   return (
-    <Modal title={entry.name} onClose={onClose}>
+    <Modal title={entry.name} onClose={onClose} size="lg">
       <div className="repo-def-viewer">
         <div className="repo-def-viewer-meta">
           <code className="repo-insights-def-path">{entry.path}</code>

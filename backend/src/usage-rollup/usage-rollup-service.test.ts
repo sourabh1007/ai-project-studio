@@ -176,10 +176,20 @@ describe('parseGranularity', () => {
 });
 
 describe('createUsageRollupService', () => {
+  const mcp = (server: string) => ({
+    server,
+    calls: 1,
+    inputBytes: 10,
+    outputBytes: 20,
+    durationMs: 5,
+  });
   const reader: UsageRollupReader = {
     workspaceDays: () => [row({ credits: 1 })],
     ideDays: () => [row({ credits: 2 })],
     featureDays: (id) => [row({ credits: id === 'f1' ? 3 : 0 })],
+    workspaceMcpServers: () => [mcp('ws-server')],
+    ideMcpServers: () => [mcp('ide-server')],
+    featureMcpServers: (id) => (id === 'f1' ? [mcp('feat-server')] : []),
   };
   const service = createUsageRollupService({ reader });
 
@@ -192,5 +202,17 @@ describe('createUsageRollupService', () => {
     expect(feature.scope).toBe('feature');
     expect(feature.granularity).toBe('year');
     expect(feature.totals.credits).toBe(3);
+  });
+
+  it('attaches each scope’s proxy-measured MCP server I/O', () => {
+    expect(service.workspace('month').byMcpServer.map((s) => s.server)).toEqual([
+      'ws-server',
+    ]);
+    expect(service.ide('week').byMcpServer.map((s) => s.server)).toEqual([
+      'ide-server',
+    ]);
+    expect(service.feature('f1', 'year').byMcpServer.map((s) => s.server)).toEqual(
+      ['feat-server'],
+    );
   });
 });

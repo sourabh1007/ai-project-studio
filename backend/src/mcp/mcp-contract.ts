@@ -45,6 +45,32 @@ export interface McpToolDiscovery {
   status: McpToolDiscoveryStatus;
   message: string | null;
   output: string[];
+  /** True when the probe failed because the server needs the user to sign in. */
+  authRequired?: boolean;
+  /** A login/device-code URL the server printed, when one was detected. */
+  authUrl?: string | null;
+}
+
+export type McpServerConnectionStatus =
+  | 'connected'
+  | 'auth-required'
+  | 'error'
+  | 'disabled'
+  | 'unsupported';
+
+/**
+ * Slim, live connection status for a single server, surfaced on the manager
+ * cards without dumping the full tool list. Producing it still spawns the
+ * server, so it is only requested per-card, on demand.
+ */
+export interface McpServerStatus {
+  name: string;
+  status: McpServerConnectionStatus;
+  /** Number of tools the server advertised when connected. */
+  toolCount: number;
+  authRequired: boolean;
+  authUrl: string | null;
+  message: string | null;
 }
 
 export interface McpToolInspection extends McpToolDiscovery {

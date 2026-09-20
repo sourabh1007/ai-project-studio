@@ -130,6 +130,45 @@ describe('FeatureTree', () => {
     expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/42');
   });
 
+  it('places the group add and overflow actions in the hover trail', () => {
+    renderTree({
+      groups: [group({ id: 'g1', name: 'Docs' })],
+      sessions: [],
+    });
+    const add = screen.getByRole('button', {
+      name: 'Add subcategory in Docs',
+    });
+    const overflow = screen.getByRole('button', { name: 'Actions for Docs' });
+    const trail = add.closest('.tree-branch-trail');
+    expect(trail).not.toBeNull();
+    // Both trailing actions share the one collapsible hover trail so the label
+    // keeps the full row width at rest.
+    expect(trail).toBe(overflow.closest('.tree-branch-trail'));
+    // The label sits outside the trail so it is never collapsed.
+    expect(
+      screen.getByRole('button', { name: 'Docs' }).closest('.tree-branch-trail'),
+    ).toBeNull();
+  });
+
+  it('pins the group trail open while a delete is being confirmed', () => {
+    renderTree({
+      groups: [group({ id: 'g1', name: 'Docs' })],
+      sessions: [],
+    });
+    const header = screen
+      .getByRole('button', { name: 'Docs' })
+      .closest('.tree-group-header') as HTMLElement;
+    expect(header.classList.contains('is-actions-open')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Docs' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete group/ }));
+    expect(header.classList.contains('is-actions-open')).toBe(true);
+    // The confirm affordance is inside the (now-pinned) trail.
+    const confirm = screen.getByRole('button', {
+      name: 'Confirm delete Docs',
+    });
+    expect(confirm.closest('.tree-branch-trail')).not.toBeNull();
+  });
+
   it('moves a dragged session into a target index via drop slots', () => {
     const onMove = vi.fn();
     renderTree({

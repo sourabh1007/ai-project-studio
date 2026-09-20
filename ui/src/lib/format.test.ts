@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatAic,
+  formatBytes,
   formatCompactNumber,
   formatCost,
   formatCredits,
@@ -63,6 +64,19 @@ describe('formatCompactNumber', () => {
 
   it('handles negative values', () => {
     expect(formatCompactNumber(-2500)).toBe('-2.5k');
+  });
+});
+
+describe('formatBytes', () => {
+  it('shows raw bytes below 1 KiB', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(512)).toBe('512 B');
+  });
+
+  it('scales to KB, MB and GB', () => {
+    expect(formatBytes(2048)).toBe('2 KB');
+    expect(formatBytes(1_572_864)).toBe('1.5 MB');
+    expect(formatBytes(1024 * 1024 * 1024 * 3)).toBe('3 GB');
   });
 });
 

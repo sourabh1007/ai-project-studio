@@ -393,6 +393,24 @@ describe('createApiClient', () => {
     );
   });
 
+  it('reads a single MCP server status, encoding path params', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        name: 'Azure MCP',
+        status: 'connected',
+        toolCount: 3,
+        authRequired: false,
+        authUrl: null,
+        message: null,
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await client.getMcpServerStatus('a/b', 'Azure MCP');
+    expect(calls[0][0]).toBe(
+      '/api/mcp/providers/a%2Fb/servers/Azure%20MCP/status',
+    );
+  });
+
   it('adds/updates an MCP server with a JSON PUT body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({

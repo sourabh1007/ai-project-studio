@@ -12,6 +12,7 @@ import type {
   AggregateReader,
   SessionUsage,
   UsageTotals,
+  WarmAgentSession,
 } from './aggregation-contract.js';
 
 const NOW = Date.parse('2025-01-01T01:00:00.000Z');
@@ -79,6 +80,7 @@ function group(overrides: Partial<TreeGroup> = {}): TreeGroup {
 function harness(opts: {
   members: Session[];
   usages: SessionUsage[];
+  agents?: WarmAgentSession[];
   all?: Session[];
   groups?: TreeGroup[];
 }) {
@@ -88,6 +90,8 @@ function harness(opts: {
     byProvider: () => [{ provider: 'github', ...zero }],
     byDay: () => [{ day: '2025-01-01', ...zero }],
     bySession: () => opts.usages,
+    warmAgentSessions: () => opts.agents ?? [],
+    byMcpServer: () => [],
     workspaceTotals: () => ({ ...zero, credits: 77 }),
   };
   const sessions: SessionLister = {
@@ -230,6 +234,48 @@ describe('createFeatureAnalytics', () => {
     const analytics = harness({ members, usages: [] });
     const result = analytics.forFeature('f1');
     expect(result.bySession.map((s) => s.sessionId)).toEqual(['good', 'bad']);
+  });
+
+  it('surfaces warm-ACP agent runs that have no persisted session', () => {
+    const agents: WarmAgentSession[] = [
+      {
+        sessionId: 'acp-1',
+        provider: 'copilot',
+        label: 'Bug bash · Tester 3',
+        capturedAt: '2025-01-01T00:10:00.000Z',
+      },
+    ];
+    const analytics = harness({
+      members: [],
+      usages: [usage('acp-1', { inputTokens: 2000, outputTokens: 300, credits: 0, nanoAiu: 0 })],
+      agents,
+    });
+    const result = analytics.forFeature('f1');
+    expect(result.totals.sessions).toBe(1);
+    const [row] = result.bySession;
+    expect(row.sessionId).toBe('acp-1');
+    expect(row.origin).toBe('agent');
+    expect(row.kind).toBe('meta');
+    expect(row.status).toBe('completed');
+    expect(row.label).toBe('Bug bash · Tester 3');
+    expect(row.inputTokens).toBe(2000);
+    expect(row.outputTokens).toBe(300);
+  });
+
+  it('does not double-count an agent run that is also a persisted session', () => {
+    const members = [session({ id: 'acp-dup', kind: 'meta' })];
+    const agents: WarmAgentSession[] = [
+      {
+        sessionId: 'acp-dup',
+        provider: 'copilot',
+        label: 'Agent run',
+        capturedAt: '2025-01-01T00:10:00.000Z',
+      },
+    ];
+    const analytics = harness({ members, usages: [usage('acp-dup')], agents });
+    const result = analytics.forFeature('f1');
+    expect(result.bySession.map((s) => s.sessionId)).toEqual(['acp-dup']);
+    expect(result.totals.sessions).toBe(1);
   });
 
   it('delegates workspace totals to the reader', () => {

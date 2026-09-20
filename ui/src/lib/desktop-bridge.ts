@@ -47,6 +47,17 @@ export interface DesktopUpdatesBridge {
   onEvent?(cb: (type: string, payload?: UpdateSnapshot) => void): () => void;
 }
 
+export interface PopoutTabRequest {
+  tab: unknown;
+  label?: string;
+}
+
+export interface DesktopWindowsBridge {
+  popOut?(request: PopoutTabRequest): Promise<boolean>;
+  popIn?(): Promise<boolean>;
+  onReturn?(cb: (payload: { tab: unknown; label?: string }) => void): () => void;
+}
+
 export interface DesktopBridge {
   setTheme?(mode: ResolvedTheme): void;
   revealFile?(path: string): void;
@@ -69,6 +80,7 @@ export interface DesktopBridge {
   openDocs?(): void;
   attachments?: AttachmentsBridge;
   updates?: DesktopUpdatesBridge;
+  windows?: DesktopWindowsBridge;
 }
 
 /**
@@ -82,14 +94,15 @@ export const DESKTOP_BRIDGE_CAPABILITIES = {
     'getVersion',
     'onBackendUnavailable',
     'openDocs', 'openExternal', 'readImage', 'readText', 'relaunch', 'revealFile',
-    'runClipboardSmoke', 'setTheme', 'updates',
+    'runClipboardSmoke', 'setTheme', 'updates', 'windows',
   ],
   attachments: ['list', 'remove'],
   updates: ['check', 'download', 'getState', 'install', 'onEvent'],
+  windows: ['onReturn', 'popIn', 'popOut'],
 } as const;
 
 /** The namespaces above that are objects of methods rather than methods. */
-export const DESKTOP_BRIDGE_NAMESPACES = ['attachments', 'updates'] as const;
+export const DESKTOP_BRIDGE_NAMESPACES = ['attachments', 'updates', 'windows'] as const;
 
 function bridgeObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
@@ -133,7 +146,7 @@ export function missingDesktopCapabilities(bridge: unknown): string[] {
       continue;
     }
     if (!isNamespace) continue;
-    const members = DESKTOP_BRIDGE_CAPABILITIES[name as 'attachments' | 'updates'];
+    const members = DESKTOP_BRIDGE_CAPABILITIES[name as 'attachments' | 'updates' | 'windows'];
     const namespace = bridgeObject(value) as Record<string, unknown>;
     for (const member of members) {
       if (typeof namespace[member] !== 'function') missing.push(`${name}.${member}`);

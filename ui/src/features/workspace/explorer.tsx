@@ -919,64 +919,23 @@ function FeatureNode({
             {feature.name}
           </button>
         )}
-        <button
-          type="button"
-          className="tree-action"
-          title="New session"
-          aria-label={`New session in ${feature.name}`}
-          onClick={() => {
-            setExpanded(true);
-            setImporting(false);
-            setCreating(true);
-          }}
-        >
-          <PlusIcon />
-        </button>
-        {confirming ? (
-          <ConfirmDialog
-            title="Delete feature"
-            icon={<WarningIcon />}
-            confirmLabel="Delete feature"
-            busy={deleting}
-            error={deleteError}
-            message={
-              <>
-                <p className="confirm-dialog-lead">
-                  Delete <strong>{feature.name}</strong>?
-                </p>
-                <p className="confirm-dialog-note">
-                  All of its sessions, transcripts and usage history will be
-                  permanently removed. This can&apos;t be undone.
-                </p>
-              </>
-            }
-            onCancel={() => {
-              setConfirming(false);
-              setDeleteError(null);
+        <div className="tree-branch-trail">
+          <button
+            type="button"
+            className="tree-action"
+            title="New session"
+            aria-label={`New session in ${feature.name}`}
+            onClick={() => {
+              setExpanded(true);
+              setImporting(false);
+              setCreating(true);
             }}
-            onConfirm={() => {
-              setDeleting(true);
-              setDeleteError(null);
-              void (async () => {
-                try {
-                  await onDeleteFeature(feature);
-                  setConfirming(false);
-                } catch (error) {
-                  setDeleteError(
-                    error instanceof Error
-                      ? error.message
-                      : 'Could not delete the feature.',
-                  );
-                } finally {
-                  setDeleting(false);
-                }
-              })();
-            }}
-          />
-        ) : null}
-        <OverflowMenu
-          label={`Actions for ${feature.name}`}
-          actions={[
+          >
+            <PlusIcon />
+          </button>
+          <OverflowMenu
+            label={`Actions for ${feature.name}`}
+            actions={[
               {
                 label: 'Rename',
                 icon: <PencilIcon />,
@@ -1034,6 +993,49 @@ function FeatureNode({
               },
             ]}
           />
+        </div>
+        {confirming ? (
+          <ConfirmDialog
+            title="Delete feature"
+            icon={<WarningIcon />}
+            confirmLabel="Delete feature"
+            busy={deleting}
+            error={deleteError}
+            message={
+              <>
+                <p className="confirm-dialog-lead">
+                  Delete <strong>{feature.name}</strong>?
+                </p>
+                <p className="confirm-dialog-note">
+                  All of its sessions, transcripts and usage history will be
+                  permanently removed. This can&apos;t be undone.
+                </p>
+              </>
+            }
+            onCancel={() => {
+              setConfirming(false);
+              setDeleteError(null);
+            }}
+            onConfirm={() => {
+              setDeleting(true);
+              setDeleteError(null);
+              void (async () => {
+                try {
+                  await onDeleteFeature(feature);
+                  setConfirming(false);
+                } catch (error) {
+                  setDeleteError(
+                    error instanceof Error
+                      ? error.message
+                      : 'Could not delete the feature.',
+                  );
+                } finally {
+                  setDeleting(false);
+                }
+              })();
+            }}
+          />
+        ) : null}
       </div>
 
       <div className="feature-tags">
@@ -1490,7 +1492,7 @@ function RepoNode({
       <div
         className={`tree-branch repo-branch ${
           headerDropTarget && canAcceptDrop ? 'is-drop-target' : ''
-        }`.trim()}
+        } ${confirming ? 'is-actions-open' : ''}`.trim()}
         onDragOver={(event) => {
           if (canAcceptDrop) {
             event.preventDefault();
@@ -1539,89 +1541,95 @@ function RepoNode({
             {title}
           </span>
         )}
-        {repo && <span className="repo-provider-chip">{providerLabel}</span>}
         {repo && (
           <RepositoryContextBadge
             context={repositoryContext}
             onClick={() => setViewingContext(true)}
           />
         )}
-        {repo ? (
-          <RepoAddMenu
-            title={title}
-            onNewFeature={() => {
-              setExpanded(true);
-              onAddFeature(repo.id);
-            }}
-            onReviewPr={() => onStartReview(repo)}
-          />
-        ) : (
-          <button
-            type="button"
-            className="tree-action"
-            title="New feature"
-            aria-label={`New feature in ${title}`}
-            onClick={() => {
-              setExpanded(true);
-              onAddFeature(null);
-            }}
-          >
-            <PlusIcon />
-          </button>
-        )}
-        {repo &&
-          (confirming ? (
-            <span className="row-confirm" role="group" aria-label="Confirm delete">
-              <button
-                type="button"
-                className="row-confirm-yes"
-                title="Confirm remove"
-                aria-label={`Confirm remove ${title}`}
-                onClick={() => {
-                  setConfirming(false);
-                  onDeleteRepo(repo);
-                }}
-              >
-                <CheckIcon />
-              </button>
-              <button
-                type="button"
-                className="row-confirm-no"
-                title="Cancel"
-                aria-label="Cancel remove"
-                onClick={() => setConfirming(false)}
-              >
-                <CloseIcon />
-              </button>
-            </span>
-          ) : (
-            <OverflowMenu
-              label={`Actions for ${title}`}
-              actions={[
-                {
-                  label: 'View context',
-                  icon: <FilesIcon />,
-                  onSelect: () => setViewingContext(true),
-                },
-                {
-                  label: 'Usage breakdown',
-                  icon: <UsageIcon />,
-                  onSelect: () => setViewingUsage(true),
-                },
-                {
-                  label: 'Agent readiness',
-                  icon: <SkillsIcon />,
-                  onSelect: () => (repo ? onOpenRepo(repo) : undefined),
-                },
-                {
-                  label: 'Remove repository',
-                  icon: <TrashIcon />,
-                  danger: true,
-                  onSelect: () => setConfirming(true),
-                },
-              ]}
+        <div className="tree-branch-trail">
+          {repo && <span className="repo-provider-chip">{providerLabel}</span>}
+          {repo ? (
+            <RepoAddMenu
+              title={title}
+              onNewFeature={() => {
+                setExpanded(true);
+                onAddFeature(repo.id);
+              }}
+              onReviewPr={() => onStartReview(repo)}
             />
-          ))}
+          ) : (
+            <button
+              type="button"
+              className="tree-action"
+              title="New feature"
+              aria-label={`New feature in ${title}`}
+              onClick={() => {
+                setExpanded(true);
+                onAddFeature(null);
+              }}
+            >
+              <PlusIcon />
+            </button>
+          )}
+          {repo &&
+            (confirming ? (
+              <span
+                className="row-confirm"
+                role="group"
+                aria-label="Confirm delete"
+              >
+                <button
+                  type="button"
+                  className="row-confirm-yes"
+                  title="Confirm remove"
+                  aria-label={`Confirm remove ${title}`}
+                  onClick={() => {
+                    setConfirming(false);
+                    onDeleteRepo(repo);
+                  }}
+                >
+                  <CheckIcon />
+                </button>
+                <button
+                  type="button"
+                  className="row-confirm-no"
+                  title="Cancel"
+                  aria-label="Cancel remove"
+                  onClick={() => setConfirming(false)}
+                >
+                  <CloseIcon />
+                </button>
+              </span>
+            ) : (
+              <OverflowMenu
+                label={`Actions for ${title}`}
+                actions={[
+                  {
+                    label: 'View context',
+                    icon: <FilesIcon />,
+                    onSelect: () => setViewingContext(true),
+                  },
+                  {
+                    label: 'Usage breakdown',
+                    icon: <UsageIcon />,
+                    onSelect: () => setViewingUsage(true),
+                  },
+                  {
+                    label: 'Agent readiness',
+                    icon: <SkillsIcon />,
+                    onSelect: () => (repo ? onOpenRepo(repo) : undefined),
+                  },
+                  {
+                    label: 'Remove repository',
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onSelect: () => setConfirming(true),
+                  },
+                ]}
+              />
+            ))}
+        </div>
       </div>
 
       {repo && viewingContext && repositoryContext && (

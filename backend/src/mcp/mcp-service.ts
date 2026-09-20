@@ -1,4 +1,5 @@
 import { NotFoundError, ValidationError } from '../kernel/error-types.js';
+import { unwrapServerSpec } from './mcp-proxy-config.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { McpSupport } from '../provider/provider-contract.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
@@ -13,6 +14,7 @@ import type {
   McpApplyResult,
   McpServerEntry,
   McpServerInput,
+  McpServerStatus,
   ProviderMcpConfig,
 } from './mcp-contract.js';
 
@@ -48,6 +50,12 @@ export interface McpService {
    * invoked when the user actually opens a server's tools (never on list load).
    */
   inspectServer(providerId: string, serverName: string): Promise<McpServerEntry>;
+  /**
+   * Slim, live connection status for one server (connected / needs-auth / error
+   * / disabled / unsupported) plus its tool count. Spawns the server like
+   * {@link inspectServer}, so it is requested per-card, on demand.
+   */
+  serverStatus(providerId: string, serverName: string): Promise<McpServerStatus>;
   /** Adds or updates a single MCP server entry, returning the new config. */
   putServer(providerId: string, input: McpServerInput): Promise<ProviderMcpConfig>;
   /** Enables/disables one discovered MCP tool in provider config. */
@@ -125,7 +133,9 @@ function serversFromDocument(
     .filter(([, spec]) => isPlainObject(spec))
     .map(([name, spec]) => ({
       name,
-      spec: spec as Record<string, unknown>,
+      // Present the user's real spec, never the proxy wrapper that fronts it on
+      // disk; the launch proxy is an internal measurement detail.
+      spec: unwrapServerSpec(spec as Record<string, unknown>),
       // Tools are discovered lazily (see McpService.inspectServer). Listing the
       // servers must never spawn a child process, so entries start "unprobed".
       toolDiscovery: {
@@ -239,6 +249,8 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         status: inspection.status,
         message: inspection.message,
         output: inspection.output,
+        authRequired: inspection.authRequired ?? false,
+        authUrl: inspection.authUrl ?? null,
       },
     };
   }
@@ -284,7 +296,9 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     if (!isPlainObject(spec)) {
       throw new NotFoundError(`Unknown MCP server: ${serverName}`);
     }
-    return spec;
+    // Callers (tool discovery, restart) operate on the user's real spec, not the
+    // on-disk proxy wrapper.
+    return unwrapServerSpec(spec);
   }
 
   function liveReload(providerId: string, support: McpSupport): {
@@ -351,6 +365,61 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       const { document } = await readConfig(providerId, support);
       const spec = serverSpec(document, serverName);
       return await inspectOne(serverName, spec);
+    },
+
+    async serverStatus(providerId, serverNameInput) {
+      ensureEnabled();
+      const support = requireSupport(providerId);
+      const serverName = serverNameInput.trim();
+      if (!serverName) {
+        throw new ValidationError('MCP server name is required');
+      }
+      const { document } = await readConfig(providerId, support);
+      const spec = serverSpec(document, serverName);
+      if (!isEnabledServer(spec)) {
+        return {
+          name: serverName,
+          status: 'disabled',
+          toolCount: 0,
+          authRequired: false,
+          authUrl: null,
+          message: 'Server is disabled in provider config',
+        };
+      }
+      // Only stdio servers (a spawnable command) can be probed for a live
+      // connection; URL-only entries are proxied by the provider CLI itself.
+      if (typeof spec.command !== 'string' || spec.command.length === 0) {
+        return {
+          name: serverName,
+          status: 'unsupported',
+          toolCount: 0,
+          authRequired: false,
+          authUrl: null,
+          message: 'Live status is only available for stdio MCP servers',
+        };
+      }
+      const entry = await inspectOne(serverName, spec);
+      const discovery = entry.toolDiscovery;
+      const toolCount = entry.tools?.length ?? 0;
+      if (discovery?.status === 'ok') {
+        return {
+          name: serverName,
+          status: 'connected',
+          toolCount,
+          authRequired: false,
+          authUrl: null,
+          message: null,
+        };
+      }
+      const authRequired = discovery?.authRequired ?? false;
+      return {
+        name: serverName,
+        status: authRequired ? 'auth-required' : 'error',
+        toolCount,
+        authRequired,
+        authUrl: discovery?.authUrl ?? null,
+        message: discovery?.message ?? null,
+      };
     },
 
     async putServer(providerId, input) {

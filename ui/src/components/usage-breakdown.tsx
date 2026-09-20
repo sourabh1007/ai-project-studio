@@ -100,7 +100,7 @@ export function UsageBreakdownModal({
   const models = useMemo(() => byModel(events), [events]);
 
   return (
-    <Modal title={`Usage breakdown · ${scope.label}`} onClose={onClose}>
+    <Modal title={`Usage breakdown · ${scope.label}`} onClose={onClose} size="lg">
       <div className="usage-breakdown">
         <p className="usage-breakdown-sub">
           Every AI credit and token recorded for this {SCOPE_NOUN[scope.kind]},

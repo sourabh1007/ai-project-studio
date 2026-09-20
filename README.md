@@ -94,7 +94,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the detailed data flow 
 
 Each feature has a focused how-to guide in **[docs/features/](docs/features/README.md)**.
 
-- **[Feature categories](docs/features/feature-categories.md)** — organize every run as **Repository → Feature → Group → Session**; a default **Scratchpad** lets you start instantly.
+- **[Feature categories](docs/features/feature-categories.md)** — organize every run as **Repository → Feature → Group → Session**.
 - **[Sessions](docs/features/sessions.md)** — run the Copilot/Agency chat TUI in an embedded `xterm.js` terminal, with launch-time context bootstrap, auto summaries, and history import.
 - **[Skills](docs/features/skills.md)** — reusable instruction blocks tagged onto features/sessions and auto-seeded into a session's first prompt.
 - **[PR reviews](docs/features/pr-reviews.md)** — an "Open a PR" flow with a dedicated review page: AI summary, 0–100 scoring, a navigable per-file **change graph** (zoom/pan/scroll/full-screen), inline code diffs, **live PR comments**, and one-click **Approve** (GitHub & Azure DevOps).
@@ -196,7 +196,7 @@ See [docs/development.md → Auto-update](docs/development.md#auto-update) for t
 | Doc | What's inside |
 | --- | --- |
 | [docs/features/](docs/features/README.md) | **Feature guides** — task-focused how-tos with in-app navigation. |
-| ↳ [Feature categories](docs/features/feature-categories.md) | Repository → Feature → Group → Session, and the default Scratchpad. |
+| ↳ [Feature categories](docs/features/feature-categories.md) | Repository → Feature → Group → Session. |
 | ↳ [Sessions](docs/features/sessions.md) | Running the AI CLI, summaries, importing history. |
 | ↳ [Skills](docs/features/skills.md) | Reusable instructions auto-seeded into prompts. |
 | ↳ [PR reviews](docs/features/pr-reviews.md) | Open a PR: review page, change graph, comments, scoring. |

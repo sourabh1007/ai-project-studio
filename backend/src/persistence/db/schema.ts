@@ -390,6 +390,21 @@ const USAGE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'mcp_server_usage',
+    ddl: `CREATE TABLE IF NOT EXISTS mcp_server_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id TEXT NOT NULL,
+    session_id TEXT,
+    provider TEXT NOT NULL,
+    server TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    input_bytes INTEGER NOT NULL,
+    output_bytes INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+  )`,
+  },
+  {
     name: 'meta_usage_records',
     ddl: `CREATE TABLE IF NOT EXISTS meta_usage_records (
     session_id TEXT PRIMARY KEY,

@@ -60,6 +60,10 @@ export default defineConfig({
         'src/automation/http-probe-adapter.ts',
         'src/automation/ci-pipeline-probe-adapter.ts',
         'src/automation/mcp/studio-mcp-server.ts',
+        // IO/process entry: the MCP launch proxy spawns a child and wires stdio;
+        // its pure accounting (meter), config wrap and report builder are unit
+        // tested, but the spawn wiring is exercised e2e like other adapters.
+        'src/mcp/mcp-proxy.ts',
       ],
       thresholds: {
         lines: 100,

@@ -135,4 +135,33 @@ contextBridge.exposeInMainWorld('desktop', {
       };
     },
   },
+  /**
+   * Detachable windows. Lets a workspace tab (a session's live terminal, or an
+   * agent board) be torn out of the IDE into its own OS window, and popped back
+   * in. The main window subscribes to `onReturn` so a closed/returned pop-out
+   * re-appears as a tab.
+   */
+  windows: {
+    /** @param {{ tab: unknown, label?: string }} request */
+    popOut(request) {
+      return ipcRenderer.invoke('window:popOut', request);
+    },
+    /** Closes the current pop-out window (returning its tab to the IDE). */
+    popIn() {
+      return ipcRenderer.invoke('window:popIn');
+    },
+    /**
+     * Main-window subscription: fires with `{ tab, label }` when a pop-out is
+     * returned, so the workspace can re-open its tab. Returns an unsubscribe
+     * function.
+     */
+    onReturn(cb) {
+      if (typeof cb !== 'function') {
+        return () => {};
+      }
+      const handler = (_e, payload) => cb(payload);
+      ipcRenderer.on('tab:return', handler);
+      return () => ipcRenderer.removeListener('tab:return', handler);
+    },
+  },
 });

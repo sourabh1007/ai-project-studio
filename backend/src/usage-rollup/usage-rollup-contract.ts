@@ -1,4 +1,5 @@
 import type {
+  McpServerBreakdown,
   ModelBreakdown,
   ProviderBreakdown,
   UsageTotals,
@@ -41,6 +42,13 @@ export interface UsageRollup {
   periods: UsagePeriod[];
   byModel: ModelBreakdown[];
   byProvider: ProviderBreakdown[];
+  /**
+   * Real per-MCP-server tool-call I/O (calls/bytes/latency) measured by the
+   * launch proxy, scoped to match this rollup: workspace shows billable dev
+   * MCP traffic, IDE shows the app's own metasession MCP traffic, feature shows
+   * everything attributed to the feature.
+   */
+  byMcpServer: McpServerBreakdown[];
 }
 
 /**
@@ -55,4 +63,10 @@ export interface UsageRollupReader {
   ideDays(): UsageDayRow[];
   /** Everything attributed to a feature, including its retained deleted work. */
   featureDays(featureId: string): UsageDayRow[];
+  /** Proxy-measured MCP tool-call I/O for billable dev (non-internal) sessions. */
+  workspaceMcpServers(): McpServerBreakdown[];
+  /** Proxy-measured MCP tool-call I/O for the IDE's own metasessions. */
+  ideMcpServers(): McpServerBreakdown[];
+  /** Proxy-measured MCP tool-call I/O attributed to a feature. */
+  featureMcpServers(featureId: string): McpServerBreakdown[];
 }

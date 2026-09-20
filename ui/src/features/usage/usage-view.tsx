@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type {
   MetaUsageActivity,
+  McpServerBreakdown,
   ModelBreakdown,
   ProviderBreakdown,
   UsageGranularity,
@@ -10,12 +11,15 @@ import type {
 import { useUsageExplorer } from '../../hooks/use-usage-rollups.js';
 import {
   formatAic,
+  formatBytes,
+  formatCompactNumber,
   formatCredits,
   formatDateTime,
+  formatDuration,
   formatTokens,
   nanoAiuToAic,
 } from '../../lib/format.js';
-import { AiIcon, ClockIcon, UsageIcon, WorkspaceContextIcon } from '../../components/icons.js';
+import { AiIcon, ClockIcon, McpIcon, UsageIcon, WorkspaceContextIcon } from '../../components/icons.js';
 
 type Scope = 'workspace' | 'ide';
 
@@ -104,6 +108,7 @@ export function UsageView({ signal }: { signal: number }) {
             <ModelTable rows={rollup.byModel} />
             <ProviderTable rows={rollup.byProvider} />
           </div>
+          <McpServers rows={rollup.byMcpServer} scope={scope} />
         </>
       )}
 
@@ -282,6 +287,66 @@ function ActivityFeed({ records }: { records: MetaUsageActivity[] }) {
                 </td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      )}
+    </Section>
+  );
+}
+
+function McpServers({
+  rows,
+  scope,
+}: {
+  rows: McpServerBreakdown[];
+  scope: Scope;
+}) {
+  const maxBytes = useMemo(
+    () => Math.max(1, ...rows.map((r) => r.inputBytes + r.outputBytes)),
+    [rows],
+  );
+  const hint =
+    scope === 'ide'
+      ? 'Real tool-call I/O from the IDE’s own metasessions.'
+      : 'Real tool-call I/O from your workspace sessions.';
+  return (
+    <Section icon={<McpIcon size={16} />} title="MCP servers" hint={hint}>
+      {rows.length === 0 ? (
+        <p className="muted">No MCP tool-call activity recorded yet.</p>
+      ) : (
+        <table className="usage-table usage-mcp">
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th className="dash-num">Calls</th>
+              <th className="dash-num">In</th>
+              <th className="dash-num">Out</th>
+              <th className="dash-num">Latency</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const pct = Math.round(
+                ((r.inputBytes + r.outputBytes) / maxBytes) * 100,
+              );
+              return (
+                <tr key={r.server}>
+                  <td title={r.server}>
+                    <span className="dash-bar-track usage-mcp-bar" aria-hidden="true">
+                      <span
+                        className="dash-bar-fill"
+                        style={{ width: `${pct}%`, background: 'var(--accent)' }}
+                      />
+                    </span>
+                    <span className="usage-mcp-name">{r.server}</span>
+                  </td>
+                  <td className="dash-num">{formatCompactNumber(r.calls)}</td>
+                  <td className="dash-num">{formatBytes(r.inputBytes)}</td>
+                  <td className="dash-num">{formatBytes(r.outputBytes)}</td>
+                  <td className="dash-num">{formatDuration(r.durationMs)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

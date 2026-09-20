@@ -214,6 +214,37 @@ describe('AutomationsView', () => {
     await waitFor(() => expect(api.resumeAutomation).toHaveBeenCalledWith('a1'));
   });
 
+  it('color-codes lifecycle action buttons by semantic tone', async () => {
+    const api = client([automation({ status: 'active' })]);
+    renderView(api);
+    await screen.findByText('Watch CI');
+    expect(screen.getByRole('button', { name: /pause/i })).toHaveClass(
+      'tone-pause',
+    );
+    expect(screen.getByRole('button', { name: /run now/i })).toHaveClass(
+      'tone-run',
+    );
+    expect(screen.getByRole('button', { name: /stop/i })).toHaveClass(
+      'tone-stop',
+    );
+    expect(screen.getByRole('button', { name: /delete/i })).toHaveClass(
+      'tree-action-danger',
+    );
+  });
+
+  it('tints the running monitor card and section icon green', async () => {
+    const api = client([automation({ status: 'active' })]);
+    const { container } = renderView(api);
+    await screen.findByText('Watch CI');
+    expect(container.querySelector('.automation-card')).toHaveAttribute(
+      'data-motion',
+      'running',
+    );
+    expect(
+      container.querySelector('.automation-section-title'),
+    ).toHaveAttribute('data-section', 'running');
+  });
+
   it('changes the poll frequency', async () => {
     const api = client([automation({ intervalMs: 300_000 })]);
     renderView(api);

@@ -9,7 +9,12 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
-import type { McpApplyResult, McpServerEntry, ProviderMcpConfig } from '../../lib/types.js';
+import type {
+  McpApplyResult,
+  McpServerEntry,
+  McpServerStatus,
+  ProviderMcpConfig,
+} from '../../lib/types.js';
 import { McpManager } from './mcp-manager.js';
 
 interface Deferred<T> {
@@ -49,6 +54,21 @@ function makeConfig(
     configPath: `C:\\Users\\me\\.${providerId}\\mcp-config.json`,
     exists: true,
     servers,
+  };
+}
+
+function makeStatus(
+  name: string,
+  overrides: Partial<McpServerStatus> = {},
+): McpServerStatus {
+  return {
+    name,
+    status: 'connected',
+    toolCount: 2,
+    authRequired: false,
+    authUrl: null,
+    message: null,
+    ...overrides,
   };
 }
 
@@ -109,6 +129,7 @@ function client(overrides: Partial<ApiClient> = {}): ApiClient {
         output: ['device code ABCD'],
       },
     }),
+    getMcpServerStatus: vi.fn().mockResolvedValue(makeStatus('Azure')),
     setMcpToolEnabled: vi.fn().mockResolvedValue(
       makeApplyResult('agency', 'Azure', {
         liveReloadedSessions: 1,
@@ -135,6 +156,50 @@ function renderManager(api: ApiClient) {
 }
 
 describe('McpManager', () => {
+  it('shows a live connection status and tool count on each card', async () => {
+    const api = client();
+    renderManager(api);
+
+    expect(await screen.findByText('Azure')).toBeTruthy();
+    expect(await screen.findByText('Connected · 2 tools')).toBeTruthy();
+    await waitFor(() =>
+      expect(api.getMcpServerStatus).toHaveBeenCalledWith('agency', 'Azure'),
+    );
+  });
+
+  it('surfaces an auth-required badge and one-click sign-in', async () => {
+    const openExternalSpy = vi.fn();
+    (
+      globalThis as unknown as { desktop?: { openExternal: (u: string) => void } }
+    ).desktop = { openExternal: openExternalSpy };
+    const api = client({
+      getMcpServerStatus: vi.fn().mockResolvedValue(
+        makeStatus('Azure', {
+          status: 'auth-required',
+          toolCount: 0,
+          authRequired: true,
+          authUrl: 'https://login.example.com/device',
+          message: 'Please sign in',
+        }),
+      ),
+    });
+    renderManager(api);
+
+    expect(await screen.findByText('Auth required')).toBeTruthy();
+    const authButton = await screen.findByRole('button', {
+      name: 'Authenticate',
+    });
+    fireEvent.click(authButton);
+
+    expect(openExternalSpy).toHaveBeenCalledWith(
+      'https://login.example.com/device',
+    );
+    expect(
+      await screen.findByText(/Opened the sign-in page for Azure/),
+    ).toBeTruthy();
+    delete (globalThis as unknown as { desktop?: unknown }).desktop;
+  });
+
   it('renders discovered tools and toggles tool availability', async () => {
     const api = client();
     renderManager(api);

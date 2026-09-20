@@ -37,6 +37,17 @@ export function createMcpRoutes(deps: McpControllerDeps): Route[] {
     },
     {
       method: 'get',
+      path: '/mcp/providers/:providerId/servers/:serverName/status',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.mcp.serverStatus(
+          req.params.providerId,
+          req.params.serverName,
+        ),
+      }),
+    },
+    {
+      method: 'get',
       path: '/mcp/providers/:providerId/servers/:serverName/tools',
       handler: async (req) => ({
         status: 200,

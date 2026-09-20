@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -101,7 +101,7 @@ describe('Explorer repository context gating', () => {
       cost: 1, credits: 987, nanoAiu: 987000000000,
     };
     await act(async () => resolveUsage({
-      totals, groups: [], byModel: [], byProvider: [], byDay: [], timing: { totalActiveMs: 0 },
+      totals, groups: [], byModel: [], byProvider: [], byDay: [], byMcpServer: [], timing: { totalActiveMs: 0 },
       bySession: [{
         ...totals, sessionId: session.id, groupId: null, origin: 'user',
         provider: session.provider, kind: session.kind, status: session.status,
@@ -211,5 +211,84 @@ describe('Explorer repository context gating', () => {
     // repeated under every feature, and it must not disable session creation.
     expect(newSession).toBeEnabled();
     expect(screen.queryByText(/failed: clone failed/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('Explorer row action trail', () => {
+  function fullClient(status: RepositoryContext['status'] = 'ready'): ApiClient {
+    return {
+      ...api(context(status, 't')),
+      listSessions: vi.fn().mockResolvedValue([]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      listSessionSkills: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+    } as unknown as ApiClient;
+  }
+
+  it('groups the repository row actions in a collapsible hover trail', async () => {
+    render(
+      <ApiProvider value={fullClient()}>
+        <Explorer
+          live={initialLiveState}
+          activeSessionId={null}
+          names={{}}
+          {...callbacks}
+        />
+      </ApiProvider>,
+    );
+    const repoTitle = await screen.findByRole('button', { name: 'acme/app' });
+    const branch = repoTitle.closest('.repo-branch') as HTMLElement;
+    expect(branch).toBeTruthy();
+
+    // The title stays outside the trail so it always gets the full row width.
+    expect(repoTitle.closest('.tree-branch-trail')).toBeNull();
+
+    // Provider chip, add menu and overflow all share the one hover trail.
+    const trail = branch.querySelector('.tree-branch-trail') as HTMLElement;
+    expect(trail).toBeTruthy();
+    expect(within(trail).getByText('GitHub')).toBeInTheDocument();
+    expect(
+      within(trail).getByRole('button', { name: 'Add to acme/app' }),
+    ).toBeInTheDocument();
+    expect(
+      within(trail).getByRole('button', { name: 'Actions for acme/app' }),
+    ).toBeInTheDocument();
+
+    // The status badge stays in-flow (a glanceable dot), never in the trail.
+    const badge = screen.getByRole('button', {
+      name: /View repository context/,
+    });
+    expect(badge.closest('.tree-branch-trail')).toBeNull();
+    // Its label text is present in the DOM (revealed by CSS on hover/focus).
+    expect(within(badge).getByText('Ready')).toBeInTheDocument();
+  });
+
+  it('groups the feature row actions in the hover trail', async () => {
+    render(
+      <ApiProvider value={fullClient()}>
+        <Explorer
+          live={initialLiveState}
+          activeSessionId={null}
+          names={{}}
+          {...callbacks}
+        />
+      </ApiProvider>,
+    );
+    const add = await screen.findByRole('button', {
+      name: 'New session in Context UI',
+    });
+    const overflow = screen.getByRole('button', {
+      name: 'Actions for Context UI',
+    });
+    const trail = add.closest('.tree-branch-trail');
+    expect(trail).not.toBeNull();
+    expect(overflow.closest('.tree-branch-trail')).toBe(trail);
+
+    // The feature label sits outside the trail and is never collapsed.
+    expect(
+      screen
+        .getByRole('button', { name: 'Context UI' })
+        .closest('.tree-branch-trail'),
+    ).toBeNull();
   });
 });

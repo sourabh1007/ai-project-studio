@@ -8,7 +8,9 @@ import { useApi } from '../../app/api-context.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
-import { AiMagicIcon } from '../../components/icons.js';
+import { AiMagicIcon, PopOutIcon } from '../../components/icons.js';
+import { desktopBridge } from '../../lib/desktop-bridge.js';
+import { isPoppableTab, type PoppableTab } from './tab-popout.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
@@ -20,6 +22,7 @@ import {
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
   removeFeatureWorkspaceTabs,
+  setWorkspaceSplit,
   type WorkspaceTab,
 } from './workspace-tabs.js';
 
@@ -70,10 +73,12 @@ export function WorkspaceView({
   live,
   sidebarOpen,
   onToggleSidebar,
+  reopen = null,
 }: {
   live: LiveState;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  reopen?: { tab: PoppableTab; label: string; nonce: number } | null;
 }) {
   const nameStore = useMemo(
     () => createSessionNameStore(window.localStorage),
@@ -264,6 +269,27 @@ export function WorkspaceView({
     setTabState((prev) => closeWorkspaceTab(prev, id));
   }
 
+  // Tear a session terminal or agent board out of the IDE into its own OS
+  // window. The main-process pop-out handler owns the window; we drop the
+  // in-IDE tab so it lives in one place. Closing/returning the window re-opens
+  // the tab via the `tab:return` subscription wired through App.
+  const canPopOut = Boolean(desktopBridge()?.windows?.popOut);
+  function popOutTab(tab: PoppableTab, label: string) {
+    void desktopBridge()?.windows?.popOut?.({ tab, label });
+    closeTab(tab.id);
+  }
+
+  // Re-open a tab when its detached window is returned/closed. Keyed on the
+  // nonce so returning the same tab twice still re-opens it.
+  const reopenNonce = reopen?.nonce ?? null;
+  useEffect(() => {
+    if (!reopen) {
+      return;
+    }
+    openTab(reopen.tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reopenNonce]);
+
   async function renameFeature(feature: Feature, name: string) {
     const updated = await api.renameFeature(feature.id, name);
     setTabState((prev) => ({
@@ -288,6 +314,88 @@ export function WorkspaceView({
 
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeSessionId = active?.kind === 'session' ? active.session.id : null;
+  const splitId = tabState.splitId ?? null;
+  const splitTab = splitId ? tabs.find((t) => t.id === splitId) ?? null : null;
+
+  function tabDisplayLabel(tab: WorkspaceTab): string {
+    if (tab.kind === 'session') {
+      return (
+        tab.session.name?.trim() || names[tab.session.id]?.trim() || tab.label
+      );
+    }
+    return tab.label;
+  }
+
+  function openToSide(id: string) {
+    setTabState((prev) => setWorkspaceSplit(prev, id));
+  }
+
+  function closeSplit() {
+    setTabState((prev) => setWorkspaceSplit(prev, null));
+  }
+
+  function renderTabBody(tab: WorkspaceTab) {
+    if (tab.kind === 'session') {
+      return (
+        <div key={tab.session.id} className="session-editor">
+          <Suspense fallback={<ViewSkeleton label="terminal" />}>
+            <TerminalView sessionId={tab.session.id} />
+          </Suspense>
+        </div>
+      );
+    }
+    if (tab.kind === 'feature') {
+      return (
+        <Suspense fallback={<ViewSkeleton label="dashboard" />}>
+          <FeatureDashboard
+            key={tab.feature.id}
+            featureId={tab.feature.id}
+            featureName={tab.feature.name}
+            featureDescription={tab.feature.description}
+            contextPhase={live.contextStatus[`feature:${tab.feature.id}`]}
+            live={live}
+          />
+        </Suspense>
+      );
+    }
+    if (tab.kind === 'agent') {
+      const agentModule = getAgentModule(tab.agentId);
+      if (!agentModule) {
+        return (
+          <div className="editor-empty">
+            <EmptyState
+              icon={<AiMagicIcon size={28} />}
+              title="Unknown agent"
+              description={`No UI is registered for "${tab.agentId}".`}
+            />
+          </div>
+        );
+      }
+      const AgentComponent = agentModule.component;
+      return (
+        <ErrorBoundary label={agentModule.title}>
+          <Suspense fallback={<ViewSkeleton label={agentModule.title} />}>
+            <AgentComponent
+              key={tab.id}
+              ctx={{
+                feature: tab.feature,
+                attachmentId: tab.attachmentId,
+                agentId: tab.agentId,
+              }}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      );
+    }
+    if (tab.kind === 'repo') {
+      return (
+        <Suspense fallback={<ViewSkeleton label="repository" />}>
+          <RepoDashboard key={tab.repo.id} repo={tab.repo} />
+        </Suspense>
+      );
+    }
+    return null;
+  }
 
   // Owns teardown for the imperative explorer-resize drag listeners so they are
   // removed even if the workspace unmounts while a drag is still in progress.
@@ -376,7 +484,9 @@ export function WorkspaceView({
                   role="tab"
                   aria-selected={tab.id === activeId}
                   onClick={() =>
-                    setTabState((prev) => ({ ...prev, activeId: tab.id }))
+                    setTabState((prev) =>
+                      setWorkspaceSplit({ ...prev, activeId: tab.id }, prev.splitId),
+                    )
                   }
                 >
                   <span
@@ -384,13 +494,43 @@ export function WorkspaceView({
                     aria-hidden="true"
                   />
                   <span className="tab-label-text">
-                    {tab.kind === 'session'
-                      ? tab.session.name?.trim() ||
-                        names[tab.session.id]?.trim() ||
-                        tab.label
-                      : tab.label}
+                    {tabDisplayLabel(tab)}
                   </span>
                 </button>
+                {canPopOut && isPoppableTab(tab) && (
+                  <button
+                    type="button"
+                    className="tab-popout"
+                    aria-label={`Open ${tab.label} in a separate window`}
+                    title="Open in separate window"
+                    onClick={() => popOutTab(tab, tabDisplayLabel(tab))}
+                  >
+                    <PopOutIcon size={13} />
+                  </button>
+                )}
+                {tab.id === splitId ? (
+                  <button
+                    type="button"
+                    className="tab-split tab-split-active"
+                    aria-label={`Close side-by-side view of ${tab.label}`}
+                    title="Showing in side pane · click to close split"
+                    onClick={() => closeSplit()}
+                  >
+                    ⊟
+                  </button>
+                ) : (
+                  tab.id !== activeId && (
+                    <button
+                      type="button"
+                      className="tab-split"
+                      aria-label={`Open ${tab.label} to the side`}
+                      title="Open to the side"
+                      onClick={() => openToSide(tab.id)}
+                    >
+                      ⊞
+                    </button>
+                  )
+                )}
                 <button
                   type="button"
                   className="tab-close"
@@ -403,73 +543,61 @@ export function WorkspaceView({
             ))}
           </div>
         )}
-        <div className="editor-body">
-          {active?.kind === 'session' && (
-            <div key={active.session.id} className="session-editor">
-              <Suspense fallback={<ViewSkeleton label="terminal" />}>
-                <TerminalView sessionId={active.session.id} />
-              </Suspense>
+        <div className={`editor-body${splitTab ? ' is-split' : ''}`}>
+          <div className="editor-pane">
+            {splitTab && active && (
+              <div className="pane-header">
+                <span
+                  className={`tab-dot tab-dot-${active.kind}`}
+                  style={
+                    { '--feature-accent': featureColor(tabFeatureId(active)) } as CSSProperties
+                  }
+                  aria-hidden="true"
+                />
+                <span className="pane-header-label">
+                  {tabDisplayLabel(active)}
+                </span>
+              </div>
+            )}
+            <div className="pane-content">
+              {active ? (
+                renderTabBody(active)
+              ) : (
+                <div className="editor-empty">
+                  <div className="editor-empty-art" aria-hidden="true" />
+                  <EmptyState
+                    icon={<AiMagicIcon size={28} />}
+                    title="Your AI workspace awaits"
+                    description="Open a session to launch its live CLI, or a feature to see usage analytics. Use the ⊞ on any tab to open it side by side."
+                  />
+                </div>
+              )}
             </div>
-          )}
-          {active?.kind === 'feature' && (
-            <Suspense fallback={<ViewSkeleton label="dashboard" />}>
-              <FeatureDashboard
-                key={active.feature.id}
-                featureId={active.feature.id}
-                featureName={active.feature.name}
-                featureDescription={active.feature.description}
-                contextPhase={
-                  live.contextStatus[`feature:${active.feature.id}`]
-                }
-                live={live}
-              />
-            </Suspense>
-          )}
-          {active?.kind === 'agent' &&
-            (() => {
-              const agentModule = getAgentModule(active.agentId);
-              if (!agentModule) {
-                return (
-                  <div className="editor-empty">
-                    <EmptyState
-                      icon={<AiMagicIcon size={28} />}
-                      title="Unknown agent"
-                      description={`No UI is registered for "${active.agentId}".`}
-                    />
-                  </div>
-                );
-              }
-              const AgentComponent = agentModule.component;
-              return (
-                <ErrorBoundary label={agentModule.title}>
-                  <Suspense
-                    fallback={<ViewSkeleton label={agentModule.title} />}
-                  >
-                    <AgentComponent
-                      key={active.id}
-                      ctx={{
-                        feature: active.feature,
-                        attachmentId: active.attachmentId,
-                        agentId: active.agentId,
-                      }}
-                    />
-                  </Suspense>
-                </ErrorBoundary>
-              );
-            })()}
-          {active?.kind === 'repo' && (
-            <Suspense fallback={<ViewSkeleton label="repository" />}>
-              <RepoDashboard key={active.repo.id} repo={active.repo} />
-            </Suspense>
-          )}
-          {!active && (
-            <div className="editor-empty">
-              <div className="editor-empty-art" aria-hidden="true" />
-              <EmptyState
-                icon={<AiMagicIcon size={28} />}
-                title="Your AI workspace awaits"
-                description="Open a session to launch its live CLI, or a feature to see usage analytics."
-              />
+          </div>
+          {splitTab && (
+            <div className="editor-pane editor-pane-secondary">
+              <div className="pane-header">
+                <span
+                  className={`tab-dot tab-dot-${splitTab.kind}`}
+                  style={
+                    { '--feature-accent': featureColor(tabFeatureId(splitTab)) } as CSSProperties
+                  }
+                  aria-hidden="true"
+                />
+                <span className="pane-header-label">
+                  {tabDisplayLabel(splitTab)}
+                </span>
+                <button
+                  type="button"
+                  className="pane-header-close"
+                  aria-label="Close split view"
+                  title="Close split view"
+                  onClick={() => closeSplit()}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="pane-content">{renderTabBody(splitTab)}</div>
             </div>
           )}
         </div>

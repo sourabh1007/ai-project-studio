@@ -24,12 +24,6 @@ export interface FeatureServiceDeps {
 
 export interface FeatureService {
   create(input: CreateFeatureInput): Feature;
-  /**
-   * Seeds a default "Scratchpad" feature when the workspace has no features
-   * yet, so a fresh instance can start ad-hoc sessions without first creating a
-   * feature. A no-op once any feature exists.
-   */
-  ensureScratchpad(): void;
   get(id: string): Feature;
   list(): Feature[];
   attachSummary(id: string, summary: string): Feature;
@@ -73,16 +67,6 @@ export function createFeatureService(deps: FeatureServiceDeps): FeatureService {
   return {
     create(input) {
       return persist(input);
-    },
-    ensureScratchpad() {
-      if (deps.repo.list().length > 0) {
-        return;
-      }
-      persist({
-        name: 'Scratchpad',
-        description:
-          'Quick, ad-hoc CLI runs. Start a session here without setting up a feature first.',
-      });
     },
     get(id) {
       return requireFeature(id);

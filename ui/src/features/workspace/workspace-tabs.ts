@@ -17,6 +17,11 @@ export type WorkspaceTab =
 export interface WorkspaceTabsState {
   tabs: WorkspaceTab[];
   activeId: string | null;
+  /**
+   * Tab shown in the secondary (side-by-side) pane, or null for a single pane.
+   * Always references an existing tab distinct from {@link activeId}.
+   */
+  splitId: string | null;
 }
 
 export interface WorkspaceTabReconcileSources {
@@ -162,12 +167,16 @@ export function isWorkspaceTabsState(value: unknown): value is WorkspaceTabsStat
     hasKeys(value, ['tabs', 'activeId']) &&
     Array.isArray(value.tabs) &&
     value.tabs.every((tab) => isWorkspaceTab(tab)) &&
-    (value.activeId === null || isString(value.activeId))
+    (value.activeId === null || isString(value.activeId)) &&
+    // splitId was added later; tolerate persisted state that predates it.
+    (value.splitId === undefined ||
+      value.splitId === null ||
+      isString(value.splitId))
   );
 }
 
 export function emptyWorkspaceTabsState(): WorkspaceTabsState {
-  return { tabs: [], activeId: null };
+  return { tabs: [], activeId: null, splitId: null };
 }
 
 function withUniqueTabs(tabs: readonly WorkspaceTab[]): WorkspaceTab[] {
@@ -193,15 +202,48 @@ function normalizeActiveId(
   return tabs[tabs.length - 1]?.id ?? null;
 }
 
+/**
+ * The split pane must reference a live tab that is distinct from the active
+ * tab; anything else collapses back to a single pane.
+ */
+function normalizeSplitId(
+  tabs: readonly WorkspaceTab[],
+  activeId: string | null,
+  splitId: string | null | undefined,
+): string | null {
+  if (splitId && splitId !== activeId && tabs.some((tab) => tab.id === splitId)) {
+    return splitId;
+  }
+  return null;
+}
+
+function buildState(
+  tabs: readonly WorkspaceTab[],
+  activeId: string | null,
+  splitId: string | null | undefined,
+): WorkspaceTabsState {
+  const nextActive = normalizeActiveId(tabs, activeId);
+  return {
+    tabs: tabs as WorkspaceTab[],
+    activeId: nextActive,
+    splitId: normalizeSplitId(tabs, nextActive, splitId),
+  };
+}
+
 export function normalizeWorkspaceTabsState(
   state: WorkspaceTabsState,
 ): WorkspaceTabsState {
   const tabs = withUniqueTabs(state.tabs);
   const activeId = normalizeActiveId(tabs, state.activeId);
-  if (tabs === state.tabs && activeId === state.activeId) {
+  const splitId = normalizeSplitId(tabs, activeId, state.splitId);
+  if (
+    tabs === state.tabs &&
+    activeId === state.activeId &&
+    splitId === (state.splitId ?? null)
+  ) {
     return state;
   }
-  return { tabs, activeId };
+  return { tabs, activeId, splitId };
 }
 
 export function openWorkspaceTab(
@@ -215,7 +257,19 @@ export function openWorkspaceTab(
           index === existingIndex ? tab : candidate,
         )
       : [...state.tabs, tab];
-  return { tabs, activeId: tab.id };
+  return buildState(tabs, tab.id, state.splitId);
+}
+
+/**
+ * Show a tab in the secondary pane (side by side with the active tab), or pass
+ * null to collapse back to a single pane. A tab can only be split against a
+ * different active tab.
+ */
+export function setWorkspaceSplit(
+  state: WorkspaceTabsState,
+  splitId: string | null,
+): WorkspaceTabsState {
+  return buildState(state.tabs, state.activeId, splitId);
 }
 
 export function closeWorkspaceTab(
@@ -223,7 +277,11 @@ export function closeWorkspaceTab(
   id: string,
 ): WorkspaceTabsState {
   const tabs = state.tabs.filter((tab) => tab.id !== id);
-  return { tabs, activeId: normalizeActiveId(tabs, state.activeId === id ? null : state.activeId) };
+  return buildState(
+    tabs,
+    state.activeId === id ? null : state.activeId,
+    state.splitId === id ? null : state.splitId,
+  );
 }
 
 export function removeFeatureWorkspaceTabs(
@@ -237,7 +295,7 @@ export function removeFeatureWorkspaceTabs(
       !(tab.kind === 'agent' && tab.feature.id === featureId) &&
       !(tab.kind === 'session' && tab.session.featureId === featureId),
   );
-  return { tabs, activeId: normalizeActiveId(tabs, state.activeId) };
+  return buildState(tabs, state.activeId, state.splitId);
 }
 
 function sameJsonValue(left: unknown, right: unknown): boolean {
@@ -308,12 +366,14 @@ export function reconcileWorkspaceTabsState(
       .filter((tab): tab is WorkspaceTab => tab !== null),
   );
   const activeId = normalizeActiveId(tabs, state.activeId);
+  const splitId = normalizeSplitId(tabs, activeId, state.splitId);
   if (
     state.tabs.length === tabs.length &&
     state.activeId === activeId &&
+    (state.splitId ?? null) === splitId &&
     state.tabs.every((tab, index) => sameJsonValue(tab, tabs[index]))
   ) {
     return state;
   }
-  return { tabs, activeId };
+  return { tabs, activeId, splitId };
 }

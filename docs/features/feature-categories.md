@@ -56,13 +56,6 @@ A **Session** is a single interactive CLI run under a feature (or group). This i
 where you actually chat with the AI in the embedded terminal — see
 [Sessions](sessions.md).
 
-## The default Scratchpad
-
-Every fresh workspace is seeded with a repo-less feature named **Scratchpad** so
-you can start a session immediately without setting up a repository or feature
-first. It is created automatically only when the workspace has no features yet;
-once you add your own features it is left alone. Use it for quick, ad-hoc runs.
-
 ## Two ways to start from a repository
 
 From a repository row you can either:

@@ -13,7 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useApi } from '../../app/api-context.js';
-import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
+import { formatBytes, formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { sessionDisplayName, sessionWorkTitle } from '../../lib/session-names.js';
 import { useAsync } from '../../hooks/use-async.js';
 import {
@@ -27,6 +27,7 @@ import type {
   ContextStatusPhase,
   FeatureUsage,
   Session,
+  UsageOrigin,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText } from '../../components/ui.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
@@ -34,6 +35,7 @@ import { Loader } from '../../components/loading.js';
 import {
   ActivityIcon,
   ChevronIcon,
+  McpIcon,
   OverviewIcon,
   UsageIcon,
 } from '../../components/icons.js';
@@ -273,9 +275,12 @@ function nodeTokens(node: UsageTreeNode): number {
   );
 }
 
-function originLabel(origin: 'ide' | 'user'): string {
+function originLabel(origin: UsageOrigin): string {
   if (origin === 'ide') {
     return 'IDE metasession';
+  }
+  if (origin === 'agent') {
+    return 'Agent';
   }
   return 'User session';
 }
@@ -381,7 +386,7 @@ function TreeRow({
   pct: number;
   depth: number;
   badge?: 'pr';
-  origin?: 'ide' | 'user';
+  origin?: UsageOrigin;
   count?: number;
   open?: boolean;
   onToggle?: () => void;
@@ -691,7 +696,7 @@ function Charts({
 }) {
   const api = useApi();
   const [viewingUsage, setViewingUsage] = useState(false);
-  const { totals, groups, byDay, byModel, bySession, timing } = data;
+  const { totals, groups, byDay, byModel, bySession, byMcpServer, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
 
   // Resolve human session labels: custom name, launch prompt, CLI-history work
@@ -714,12 +719,28 @@ function Charts({
     });
     return map;
   }, [bySession]);
+  // Warm-ACP agent runs have no persisted session record; their display name
+  // comes from the label captured with their usage instead.
+  const agentLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    bySession.forEach((s) => {
+      if (s.label) {
+        map.set(s.sessionId, s.label);
+      }
+    });
+    return map;
+  }, [bySession]);
   const labelFor = (sessionId: string): string => {
     const ordinal = ordinalById.get(sessionId) ?? 1;
     const session = sessionById.get(sessionId);
-    return session
-      ? sessionWorkTitle(session.name, session.prompt, session.workTitle, ordinal)
-      : sessionDisplayName(null, ordinal);
+    if (session) {
+      return sessionWorkTitle(session.name, session.prompt, session.workTitle, ordinal);
+    }
+    const agentLabel = agentLabelById.get(sessionId);
+    if (agentLabel) {
+      return agentLabel;
+    }
+    return sessionDisplayName(null, ordinal);
   };
 
   const dayData = useMemo(
@@ -739,6 +760,21 @@ function Charts({
         .map((m) => ({ name: m.model || 'unknown', aic: nanoAiuToAic(m.nanoAiu) }))
         .sort((a, b) => b.aic - a.aic),
     [byModel],
+  );
+
+  // Real per-MCP-server transport I/O, measured by the launch proxy. Sorted by
+  // total bytes moved so the busiest server leads. Not token/credit usage — MCP
+  // servers don't consume model tokens — so it renders on its own bytes scale.
+  const mcpServerData = useMemo(
+    () =>
+      byMcpServer
+        .map((s) => ({ ...s, totalBytes: s.inputBytes + s.outputBytes }))
+        .sort((a, b) => b.totalBytes - a.totalBytes),
+    [byMcpServer],
+  );
+  const maxMcpBytes = useMemo(
+    () => Math.max(1, ...mcpServerData.map((s) => s.totalBytes)),
+    [mcpServerData],
   );
 
   const usageTree = useMemo(
@@ -964,6 +1000,46 @@ function Charts({
         />
       </div>
       </Section>
+
+      {mcpServerData.length > 0 && (
+        <Section
+          icon={<McpIcon size={15} />}
+          title="MCP servers"
+          hint={`${mcpServerData.length} server${mcpServerData.length === 1 ? '' : 's'} · real tool-call I/O`}
+        >
+          <div className="dash-table" role="table" aria-label="MCP server I/O">
+            <div className="dash-table-head" role="row">
+              <span role="columnheader">Server</span>
+              <span role="columnheader" className="dash-num">Calls</span>
+              <span role="columnheader" className="dash-num">In</span>
+              <span role="columnheader" className="dash-num">Out</span>
+              <span role="columnheader" className="dash-num">Latency</span>
+            </div>
+            {mcpServerData.map((s) => (
+              <div className="dash-table-row" role="row" key={s.server}>
+                <span className="dash-cell-name" role="cell">
+                  <span className="dash-bar-track" aria-hidden="true">
+                    <span
+                      className="dash-bar-fill"
+                      style={{
+                        width: `${(s.totalBytes / maxMcpBytes) * 100}%`,
+                        background: AIC_COLOR,
+                      }}
+                    />
+                  </span>
+                  <span className="dash-tree-label">{s.server}</span>
+                </span>
+                <span className="dash-num" role="cell">
+                  {formatCompactNumber(s.calls)}
+                </span>
+                <span className="dash-num" role="cell">{formatBytes(s.inputBytes)}</span>
+                <span className="dash-num" role="cell">{formatBytes(s.outputBytes)}</span>
+                <span className="dash-num" role="cell">{formatDuration(s.durationMs)}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {viewingUsage && (
         <UsageBreakdownModal

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import type { McpServerEntry } from '../../lib/types.js';
+import type { McpServerEntry, McpServerStatus } from '../../lib/types.js';
+import { desktopBridge } from '../../lib/desktop-bridge.js';
 import {
   Button,
   Card,
@@ -12,11 +13,14 @@ import {
 } from '../../components/ui.js';
 import { SkeletonCards } from '../../components/loading.js';
 import {
+  CheckIcon,
   McpIcon,
   PencilIcon,
   PlusIcon,
-  RefreshIcon,
+  RestartIcon,
+  SignInIcon,
   ToolsIcon,
+  WarningIcon,
 } from '../../components/icons.js';
 import { McpServerForm } from './mcp-server-form.js';
 
@@ -46,6 +50,16 @@ interface ProviderBusyState {
 
 function normalizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Opens a URL in the user's default browser via the desktop bridge. */
+function openExternal(url: string): void {
+  const bridge = desktopBridge();
+  if (bridge?.openExternal) {
+    bridge.openExternal(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function ModalErrorText({ error }: { error: string | null }) {
@@ -451,52 +465,19 @@ export function McpManager() {
 
       <div className="skill-list">
         {list.map((server) => (
-          <div key={server.name} className="skill-card">
-            <div className="skill-card-head">
-              <span className="skill-chip skill-chip-instruction">
-                {specType(server.spec)}
-              </span>
-              <div className="skill-card-actions">
-                <button
-                  type="button"
-                  className="tree-action"
-                  title="Restart server"
-                  aria-label={`Restart ${server.name}`}
-                  disabled={
-                    !canMutateConfig ||
-                    currentBusyKey === `restart:${server.name}`
-                  }
-                  onClick={() => void restart(server)}
-                >
-                  <RefreshIcon />
-                </button>
-                <button
-                  type="button"
-                  className="tree-action"
-                  title="Edit"
-                  aria-label={`Edit ${server.name}`}
-                  disabled={!canMutateConfig}
-                  onClick={() => openEdit(server)}
-                >
-                  <PencilIcon />
-                </button>
-              </div>
-            </div>
-            <span className="skill-card-name" title={server.name}>
-              {server.name}
-            </span>
-            <p className="skill-card-body">{describeSpec(server.spec)}</p>
-            <button
-              type="button"
-              className="mcp-tools-btn"
-              disabled={!canMutateConfig}
-              onClick={() => openTools(server.name)}
-              title="View and toggle this server's tools"
-            >
-              <ToolsIcon size={14} />
-              <span>Tools</span>
-            </button>
-          </div>
+          <McpServerCard
+            key={server.name}
+            providerId={providerId ?? ''}
+            server={server}
+            canMutateConfig={canMutateConfig}
+            restartBusy={currentBusyKey === `restart:${server.name}`}
+            onRestart={() => restart(server)}
+            onEdit={() => openEdit(server)}
+            onOpenTools={() => openTools(server.name)}
+            onNotice={(text) =>
+              setNotice({ providerId: providerId ?? '', text })
+            }
+          />
         ))}
       </div>
 
@@ -532,11 +513,211 @@ export function McpManager() {
   );
 }
 
+type StatusTone = 'ok' | 'auth' | 'error' | 'checking' | 'muted';
+
+interface StatusView {
+  label: string;
+  tone: StatusTone;
+}
+
+/** Maps a live status probe to a card badge label + color tone. */
+function statusView(
+  status: McpServerStatus | null,
+  loading: boolean,
+  failed: boolean,
+): StatusView {
+  if (loading && !status) {
+    return { label: 'Checking…', tone: 'checking' };
+  }
+  if (failed) {
+    return { label: 'Status unavailable', tone: 'error' };
+  }
+  if (!status) {
+    return { label: 'Not checked', tone: 'muted' };
+  }
+  switch (status.status) {
+    case 'connected':
+      return {
+        label: `Connected · ${status.toolCount} tool${
+          status.toolCount === 1 ? '' : 's'
+        }`,
+        tone: 'ok',
+      };
+    case 'auth-required':
+      return { label: 'Auth required', tone: 'auth' };
+    case 'disabled':
+      return { label: 'Disabled', tone: 'muted' };
+    case 'unsupported':
+      return { label: 'Status unavailable', tone: 'muted' };
+    case 'error':
+    default:
+      return { label: 'Connection failed', tone: 'error' };
+  }
+}
+
 /**
- * Discovers one server's tools on demand. Tool discovery spawns the configured
- * MCP server, so it must never run while merely listing servers — it happens
- * here, only once the user opens a server, with a live loading state.
+ * One MCP server card. It probes the server's live connection status on mount
+ * (a real spawn, so it happens per card, once, and again only on an explicit
+ * restart/re-check) and surfaces connected/tool-count, an auth-required badge,
+ * and a one-click sign-in when the server reports it needs authentication.
  */
+function McpServerCard({
+  providerId,
+  server,
+  canMutateConfig,
+  restartBusy,
+  onRestart,
+  onEdit,
+  onOpenTools,
+  onNotice,
+}: {
+  providerId: string;
+  server: McpServerEntry;
+  canMutateConfig: boolean;
+  restartBusy: boolean;
+  onRestart: () => Promise<void>;
+  onEdit: () => void;
+  onOpenTools: () => void;
+  onNotice: (text: string) => void;
+}) {
+  const api = useApi();
+  const [status, setStatus] = useState<McpServerStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const epochRef = useRef(0);
+
+  const probe = useCallback(() => {
+    const epoch = ++epochRef.current;
+    setLoading(true);
+    setFailed(false);
+    api
+      .getMcpServerStatus(providerId, server.name)
+      .then((result) => {
+        if (epochRef.current === epoch) {
+          setStatus(result);
+        }
+      })
+      .catch(() => {
+        if (epochRef.current === epoch) {
+          setFailed(true);
+        }
+      })
+      .finally(() => {
+        if (epochRef.current === epoch) {
+          setLoading(false);
+        }
+      });
+  }, [api, providerId, server.name]);
+
+  useEffect(() => {
+    probe();
+    return () => {
+      epochRef.current += 1;
+    };
+  }, [probe]);
+
+  async function handleRestart() {
+    await onRestart();
+    probe();
+  }
+
+  function authenticate() {
+    if (status?.authUrl) {
+      openExternal(status.authUrl);
+      onNotice(
+        `Opened the sign-in page for ${server.name}. Finish signing in, then re-check.`,
+      );
+      return;
+    }
+    onOpenTools();
+    onNotice(
+      `${server.name} needs authentication. Follow the sign-in steps it prints, then re-check.`,
+    );
+  }
+
+  const view = statusView(status, loading, failed);
+  const needsAuth = status?.status === 'auth-required';
+  const canRecheck = !loading && (failed || status?.status === 'error' || needsAuth);
+
+  return (
+    <div className="skill-card">
+      <div className="skill-card-head">
+        <span className="skill-chip skill-chip-instruction">
+          {specType(server.spec)}
+        </span>
+        <div className="skill-card-actions">
+          <button
+            type="button"
+            className="tree-action"
+            title="Restart server"
+            aria-label={`Restart ${server.name}`}
+            disabled={!canMutateConfig || restartBusy}
+            onClick={() => void handleRestart()}
+          >
+            <RestartIcon />
+          </button>
+          <button
+            type="button"
+            className="tree-action"
+            title="Edit"
+            aria-label={`Edit ${server.name}`}
+            disabled={!canMutateConfig}
+            onClick={onEdit}
+          >
+            <PencilIcon />
+          </button>
+        </div>
+      </div>
+      <span className="skill-card-name" title={server.name}>
+        {server.name}
+      </span>
+      <div className="mcp-status-row">
+        <span
+          className={`mcp-status mcp-status-${view.tone}`}
+          role="status"
+          title={status?.message ?? undefined}
+        >
+          <span className="mcp-status-dot" aria-hidden="true" />
+          {view.label}
+        </span>
+        {canRecheck && (
+          <button
+            type="button"
+            className="mcp-status-recheck"
+            onClick={probe}
+            aria-label={`Re-check ${server.name}`}
+          >
+            Re-check
+          </button>
+        )}
+      </div>
+      <p className="skill-card-body">{describeSpec(server.spec)}</p>
+      {needsAuth && (
+        <button
+          type="button"
+          className="mcp-auth-btn"
+          onClick={authenticate}
+          title="Authenticate this MCP server"
+        >
+          <SignInIcon size={14} />
+          <span>Authenticate</span>
+        </button>
+      )}
+      <button
+        type="button"
+        className="mcp-tools-btn"
+        disabled={!canMutateConfig}
+        onClick={onOpenTools}
+        title="View and toggle this server's tools"
+      >
+        <ToolsIcon size={14} />
+        <span>Tools</span>
+      </button>
+    </div>
+  );
+}
+
+
 function McpToolsModal({
   providerId,
   serverName,
@@ -642,29 +823,57 @@ function McpToolsModal({
       ? discoveryLabel(server)
       : 'Tool discovery did not complete.';
 
+  const tone: 'ok' | 'error' | 'checking' = probe.loading
+    ? 'checking'
+    : probe.error || server?.toolDiscovery?.status === 'failed'
+      ? 'error'
+      : server?.toolDiscovery?.status === 'ok'
+        ? 'ok'
+        : 'checking';
+  const ToneIcon =
+    tone === 'ok' ? CheckIcon : tone === 'error' ? WarningIcon : McpIcon;
+
   return (
-    <Modal title={`${serverName} · tools`} onClose={onClose}>
+    <Modal title={`${serverName} · tools`} onClose={onClose} size="lg">
       <div className="mcp-tools-modal">
         <div className="mcp-tools-modal-head">
-          <p className="mcp-tools-status">{status}</p>
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={restarting || !canMutateTools}
-            onClick={() => void restart()}
-          >
-            <RefreshIcon size={13} />
-            {restarting ? 'Restarting…' : 'Restart'}
-          </button>
-          {showProbeFailure && (
+          <div className="mcp-tools-status-wrap">
+            <span
+              className={`mcp-tools-status-badge tone-${tone}`}
+              aria-hidden="true"
+            >
+              <ToneIcon size={16} />
+            </span>
+            <div className="mcp-tools-status-main">
+              <p className="mcp-tools-status">{status}</p>
+              {!probe.loading && tools.length > 0 && (
+                <span className="mcp-tools-count-chip">
+                  {tools.length} tool{tools.length === 1 ? '' : 's'} ·{' '}
+                  {tools.filter((tool) => tool.enabled).length} enabled
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="mcp-tools-head-actions">
             <button
               type="button"
-              className="ghost-button"
-              onClick={probe.reload}
+              className="ghost-button tone-accent"
+              disabled={restarting || !canMutateTools}
+              onClick={() => void restart()}
             >
-              Retry discovery
+              <RestartIcon size={14} />
+              {restarting ? 'Restarting…' : 'Restart'}
             </button>
-          )}
+            {showProbeFailure && (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={probe.reload}
+              >
+                Retry discovery
+              </button>
+            )}
+          </div>
         </div>
         <ModalErrorText error={error ?? probe.error} />
         {notice && <p className="mcp-notice">{notice}</p>}
@@ -678,21 +887,28 @@ function McpToolsModal({
         {!probe.loading && tools.length > 0 && (
           <div className="mcp-tool-list">
             {tools.map((tool) => (
-              <label key={tool.name} className="mcp-tool-row">
+              <label
+                key={tool.name}
+                className={`mcp-tool-row${tool.enabled ? ' is-on' : ''}`}
+              >
+                <span className="mcp-tool-icon" aria-hidden="true">
+                  <ToolsIcon size={15} />
+                </span>
+                <span className="mcp-tool-text">
+                  <strong className="mcp-tool-name">{tool.name}</strong>
+                  {tool.description && (
+                    <small className="mcp-tool-desc">{tool.description}</small>
+                  )}
+                </span>
                 <input
                   type="checkbox"
+                  className="mcp-tool-toggle"
                   checked={tool.enabled}
                   disabled={!canMutateTools || busyTool === tool.name}
                   onChange={(event) =>
                     void toggle(tool.name, event.target.checked)
                   }
                 />
-                <span className="mcp-tool-text">
-                  <strong>{tool.name}</strong>
-                  {tool.description && (
-                    <small className="mcp-tool-desc">{tool.description}</small>
-                  )}
-                </span>
               </label>
             ))}
           </div>

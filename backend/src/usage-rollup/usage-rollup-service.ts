@@ -161,7 +161,7 @@ export function rollupUsage(
     (provider, sums): ProviderBreakdown => ({ provider, ...sums }),
   ).sort((a, b) => b.nanoAiu - a.nanoAiu || a.provider.localeCompare(b.provider));
 
-  return { scope, granularity, totals, periods, byModel, byProvider };
+  return { scope, granularity, totals, periods, byModel, byProvider, byMcpServer: [] };
 }
 
 const GRANULARITIES: readonly UsageGranularity[] = ['day', 'week', 'month', 'year'];
@@ -192,17 +192,26 @@ export function createUsageRollupService(
 ): UsageRollupService {
   return {
     workspace(granularity) {
-      return rollupUsage(deps.reader.workspaceDays(), granularity, 'workspace');
+      return {
+        ...rollupUsage(deps.reader.workspaceDays(), granularity, 'workspace'),
+        byMcpServer: deps.reader.workspaceMcpServers(),
+      };
     },
     ide(granularity) {
-      return rollupUsage(deps.reader.ideDays(), granularity, 'ide');
+      return {
+        ...rollupUsage(deps.reader.ideDays(), granularity, 'ide'),
+        byMcpServer: deps.reader.ideMcpServers(),
+      };
     },
     feature(featureId, granularity) {
-      return rollupUsage(
-        deps.reader.featureDays(featureId),
-        granularity,
-        'feature',
-      );
+      return {
+        ...rollupUsage(
+          deps.reader.featureDays(featureId),
+          granularity,
+          'feature',
+        ),
+        byMcpServer: deps.reader.featureMcpServers(featureId),
+      };
     },
   };
 }

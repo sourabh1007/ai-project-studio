@@ -35,6 +35,7 @@ import type {
   McpApplyResult,
   McpServerEntry,
   McpServerInput,
+  McpServerStatus,
   ProviderInfo,
   ProviderMcpConfig,
   Repository,
@@ -817,6 +818,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
     inspectMcpServer: (providerId: string, serverName: string) =>
       request<McpServerEntry>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/tools`,
+      ),
+    getMcpServerStatus: (providerId: string, serverName: string) =>
+      request<McpServerStatus>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/status`,
       ),
     putMcpServer: (providerId: string, input: McpServerInput) =>
       request<ProviderMcpConfig>(

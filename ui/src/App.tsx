@@ -69,6 +69,8 @@ import { usePersistentState } from './hooks/use-persistent-state.js';
 import { useApplyUiPreferences } from './hooks/use-ui-preferences.js';
 import { isOneOf } from './lib/persisted-state.js';
 import { hasOpenModalDialog } from './lib/focus-ownership.js';
+import { desktopBridge } from './lib/desktop-bridge.js';
+import type { PoppableTab } from './features/workspace/tab-popout.js';
 import {
   AutomationIcon,
   AiChatIcon,
@@ -108,6 +110,34 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [networkOpen, setNetworkOpen] = useState(false);
+  // A tab returned from a detached ("popped out") window re-opens in the
+  // workspace. The nonce lets the workspace treat repeated returns of the same
+  // tab as distinct events.
+  const [reopenTab, setReopenTab] = useState<{
+    tab: PoppableTab;
+    label: string;
+    nonce: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const windows = desktopBridge()?.windows;
+    if (!windows?.onReturn) {
+      return undefined;
+    }
+    return windows.onReturn((payload) => {
+      const tab = payload?.tab as PoppableTab | undefined;
+      if (!tab || typeof tab.id !== 'string') {
+        return;
+      }
+      setView('workspace');
+      setSidebarOpen(true);
+      setReopenTab({
+        tab,
+        label: typeof payload.label === 'string' ? payload.label : '',
+        nonce: Date.now(),
+      });
+    });
+  }, [setView]);
 
   // App-wide clipboard hardening so Ctrl/Cmd+C on any selected UI text reaches
   // the OS clipboard (the app's non-secure localhost origin disables the web
@@ -419,6 +449,7 @@ export function App() {
                   live={live}
                   sidebarOpen={sidebarOpen}
                   onToggleSidebar={() => setSidebarOpen((v) => !v)}
+                  reopen={reopenTab}
                 />
               ) : view === 'skills' ? (
                 <div className="settings-pane">

@@ -39,12 +39,15 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
+  PictureInPicture,
+  PictureInPicture2,
   Play,
   Plug,
   Plus,
   Pause,
   Radar,
   RefreshCw,
+  RotateCcw,
   Rocket,
   ScanSearch,
   ScrollText,
@@ -110,10 +113,13 @@ export const CheckIcon = makeIcon(Check);
 export const CloseIcon = makeIcon(X);
 export const ExpandIcon = makeIcon(Maximize2);
 export const RestoreIcon = makeIcon(Minimize2);
+export const PopOutIcon = makeIcon(PictureInPicture2);
+export const PopInIcon = makeIcon(PictureInPicture);
 export const CollapseSidebarIcon = makeIcon(PanelLeftClose);
 export const CircleIcon = makeIcon(Circle);
 export const ClockIcon = makeIcon(Clock);
 export const RefreshIcon = makeIcon(RefreshCw);
+export const RestartIcon = makeIcon(RotateCcw);
 export const MoreIcon = makeIcon(MoreHorizontal);
 export const SearchIcon = makeIcon(Search);
 export const PauseIcon = makeIcon(Pause);

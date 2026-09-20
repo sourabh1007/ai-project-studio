@@ -1039,7 +1039,7 @@ export interface UsageTotals {
   nanoAiu: number;
 }
 
-export type UsageOrigin = 'ide' | 'user';
+export type UsageOrigin = 'ide' | 'user' | 'agent';
 
 export interface GroupInfo {
   id: string;
@@ -1060,6 +1060,19 @@ export interface DailyBreakdown extends UsageTotals {
   day: string;
 }
 
+/**
+ * Real per-MCP-server tool-call I/O, measured by the launch proxy that wraps
+ * each configured MCP server. MCP servers do not consume model tokens, so this
+ * breakdown is reported in transport bytes/calls/latency, not {@link UsageTotals}.
+ */
+export interface McpServerBreakdown {
+  server: string;
+  calls: number;
+  inputBytes: number;
+  outputBytes: number;
+  durationMs: number;
+}
+
 export interface SessionBreakdown extends UsageTotals {
   sessionId: string;
   groupId: string | null;
@@ -1071,6 +1084,11 @@ export interface SessionBreakdown extends UsageTotals {
   endedAt: string | null;
   /** Active wall-clock time on this session, in milliseconds. */
   activeMs: number;
+  /**
+   * Human label for a session with no persisted record (a warm-ACP agent run);
+   * null/absent for real sessions, whose name is resolved from the session list.
+   */
+  label?: string | null;
 }
 
 export interface FeatureTiming {
@@ -1084,6 +1102,7 @@ export interface FeatureUsage {
   byProvider: ProviderBreakdown[];
   byDay: DailyBreakdown[];
   bySession: SessionBreakdown[];
+  byMcpServer: McpServerBreakdown[];
   timing: FeatureTiming;
 }
 
@@ -1127,6 +1146,7 @@ export interface UsageRollup {
   periods: UsagePeriod[];
   byModel: ModelBreakdown[];
   byProvider: ProviderBreakdown[];
+  byMcpServer: McpServerBreakdown[];
 }
 
 /**
@@ -1259,6 +1279,24 @@ export interface McpToolDiscovery {
   status: McpToolDiscoveryStatus;
   message: string | null;
   output: string[];
+  authRequired?: boolean;
+  authUrl?: string | null;
+}
+
+export type McpServerConnectionStatus =
+  | 'connected'
+  | 'auth-required'
+  | 'error'
+  | 'disabled'
+  | 'unsupported';
+
+export interface McpServerStatus {
+  name: string;
+  status: McpServerConnectionStatus;
+  toolCount: number;
+  authRequired: boolean;
+  authUrl: string | null;
+  message: string | null;
 }
 
 /** MCP configuration currently seen for a provider. */

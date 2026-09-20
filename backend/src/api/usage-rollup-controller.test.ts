@@ -33,6 +33,7 @@ function rollup(scope: UsageRollup['scope'], granularity: UsageGranularity): Usa
     periods: [],
     byModel: [],
     byProvider: [],
+    byMcpServer: [],
   };
 }
 
