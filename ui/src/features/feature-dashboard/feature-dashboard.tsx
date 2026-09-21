@@ -1001,7 +1001,7 @@ function Charts({
       </div>
       </Section>
 
-      {mcpServerData.length > 0 && (
+      {mcpServerData.length > 0 ? (
         <Section
           icon={<McpIcon size={15} />}
           title="MCP servers"
@@ -1038,6 +1038,18 @@ function Charts({
               </div>
             ))}
           </div>
+        </Section>
+      ) : (
+        <Section
+          icon={<McpIcon size={15} />}
+          title="MCP servers"
+          hint="real tool-call I/O"
+        >
+          <EmptyState
+            icon={<McpIcon size={20} />}
+            title="No MCP activity yet"
+            description="Tool-call traffic from MCP servers is metered per feature. Nothing has been recorded here yet — once a session in this feature makes MCP tool calls, per-server calls, bytes, and latency appear here."
+          />
         </Section>
       )}
 

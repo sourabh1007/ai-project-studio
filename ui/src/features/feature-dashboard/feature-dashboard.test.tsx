@@ -251,6 +251,33 @@ describe('FeatureDashboard usage freshness', () => {
     expect(screen.getByText('Overview')).toBeInTheDocument();
   });
 
+  it('renders per-server MCP tool-call I/O when metered', async () => {
+    const client = {
+      getFeatureUsage: vi.fn().mockResolvedValue(usage(1)),
+      listSessions: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+
+    renderDashboard(client);
+    await act(async () => {});
+
+    expect(screen.getByRole('table', { name: 'MCP server I/O' })).toBeInTheDocument();
+    expect(screen.getByText('filesystem')).toBeInTheDocument();
+    expect(screen.queryByText(/No MCP activity yet/i)).not.toBeInTheDocument();
+  });
+
+  it('shows an MCP empty state when no tool-call I/O has been recorded', async () => {
+    const emptyClient = {
+      getFeatureUsage: vi.fn().mockResolvedValue({ ...usage(1), byMcpServer: [] }),
+      listSessions: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+    renderDashboard(emptyClient);
+    await act(async () => {});
+
+    expect(screen.getByText(/No MCP activity yet/i)).toBeInTheDocument();
+    expect(screen.getByText('MCP servers')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'MCP server I/O' })).not.toBeInTheDocument();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
