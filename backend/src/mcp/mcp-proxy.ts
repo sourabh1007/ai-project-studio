@@ -20,6 +20,13 @@ const meter = createMcpMeter();
 const child = spawn(command, args, {
   stdio: ['pipe', 'pipe', 'inherit'],
   env: process.env,
+  // On Windows, npm-family launchers (npx/npm) are `.cmd` shims that Node's
+  // shell-less spawn cannot resolve, so the raw session launch fails with
+  // `spawn npx ENOENT` even though the MCP manager's probe — which spawns with
+  // a shell — reports the same server as connected. Use a shell here too so the
+  // real launch matches the probe and the two never disagree.
+  shell: process.platform === 'win32',
+  windowsHide: true,
 });
 
 process.stdin.on('data', (chunk: Buffer) => {
