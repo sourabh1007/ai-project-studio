@@ -20,6 +20,15 @@ export const copilotConfigSchema = z.object({
   silent: z.boolean(),
   /** Extra CLI arguments appended verbatim. */
   extraArgs: z.array(z.string()),
+  /** Pass --screen-reader to interactive sessions for plain, unboxed output. */
+  screenReader: z
+    .boolean()
+    .describe(
+      'Plain session layout: launch interactive terminals in the CLI\u2019s ' +
+        'screen-reader mode, which renders output as flat linear text with no ' +
+        'box borders or side rules. Off by default. Also changes streaming/' +
+        'spinner rendering throughout. Applies to sessions started after a restart.',
+    ),
   /** Selectable models exposed to the UI. Fully user-configurable. */
   models: z.array(modelSchema),
 });
@@ -36,6 +45,7 @@ export const copilotDefaults: CopilotConfig = {
   allowAllTools: true,
   silent: true,
   extraArgs: [],
+  screenReader: false,
   models: [
     { id: 'auto', label: 'Auto (Copilot picks)' },
     { id: 'gpt-5.4', label: 'GPT-5.4' },

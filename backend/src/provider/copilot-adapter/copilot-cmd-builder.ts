@@ -9,6 +9,13 @@ export interface CopilotFlagOptions {
   allowAllTools: boolean;
   silent: boolean;
   extraArgs: string[];
+  /**
+   * When true, interactive sessions launch with `--screen-reader`, the CLI's
+   * plain linear-output mode (no box borders/side rules). Only consumed by
+   * {@link buildCopilotInteractiveArgs}; the non-interactive `-p` path ignores
+   * it. Optional so callers that only build non-interactive args need not set it.
+   */
+  screenReader?: boolean;
 }
 
 /**
@@ -82,6 +89,11 @@ export function buildCopilotInteractiveArgs(
   }
   if (config.allowAllTools) {
     args.push('--allow-all-tools');
+  }
+  // Opt-in plain layout: the CLI's screen-reader mode drops the boxed/framed
+  // TUI chrome (the vertical side rules) in favour of flat linear text.
+  if (config.screenReader) {
+    args.push('--screen-reader');
   }
   args.push(...config.extraArgs);
   return args;

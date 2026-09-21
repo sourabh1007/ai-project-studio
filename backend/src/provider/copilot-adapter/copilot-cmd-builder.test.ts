@@ -139,6 +139,23 @@ describe('copilot-cmd-builder', () => {
     expect(args.at(-1)).toBe('--banner');
   });
 
+  it('adds --screen-reader to interactive args when screenReader is enabled', () => {
+    const config: CopilotConfig = { ...copilotDefaults, screenReader: true };
+    const args = buildCopilotInteractiveArgs(spec, config);
+    expect(args).toContain('--screen-reader');
+    // Stays ahead of any verbatim extraArgs so those remain last.
+    expect(args.indexOf('--screen-reader')).toBeLessThan(args.length);
+  });
+
+  it('omits --screen-reader from interactive args by default and from the -p path', () => {
+    expect(buildCopilotInteractiveArgs(spec, copilotDefaults)).not.toContain(
+      '--screen-reader',
+    );
+    expect(
+      buildCopilotArgs(spec, { ...copilotDefaults, screenReader: true }),
+    ).not.toContain('--screen-reader');
+  });
+
   it('includes initial attachments in interactive args', () => {
     const args = buildCopilotInteractiveArgs(
       { ...spec, attachments: ['C:\\Temp\\aps-a\\p.md'] },
