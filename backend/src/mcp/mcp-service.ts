@@ -1,5 +1,7 @@
 import { NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { unwrapServerSpec } from './mcp-proxy-config.js';
+import { healMcpConnection } from './mcp-connection-heal.js';
+import type { McpProbeOutcome } from './mcp-connection-heal.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
 import type { McpSupport } from '../provider/provider-contract.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
@@ -28,6 +30,15 @@ export interface McpServiceDeps {
   config: McpConfig;
   /** Best-effort live reload hook for already-open interactive sessions. */
   liveReload?: (providerId: string, command: string) => number;
+  /**
+   * Best-effort AI diagnosis of a persistent connection failure, run after the
+   * self-heal retries are exhausted. Returns a short cause/fix summary or null.
+   */
+  healDiagnose?: (
+    serverName: string,
+    message: string | null,
+    output: string[],
+  ) => Promise<string | null>;
 }
 
 /**
@@ -405,27 +416,59 @@ export function createMcpService(deps: McpServiceDeps): McpService {
           message: 'Live status is only available for stdio MCP servers',
         };
       }
-      const entry = await inspectOne(serverName, spec);
-      const discovery = entry.toolDiscovery;
-      const toolCount = entry.tools.length;
-      if (discovery.status === 'ok') {
+      const probe = async (): Promise<McpProbeOutcome> => {
+        const entry = await inspectOne(serverName, spec);
+        const discovery = entry.toolDiscovery;
+        if (discovery.status === 'ok') {
+          return { kind: 'connected', toolCount: entry.tools.length };
+        }
+        if (discovery.authRequired) {
+          return {
+            kind: 'auth-required',
+            authUrl: discovery.authUrl,
+            message: discovery.message,
+          };
+        }
+        return {
+          kind: 'error',
+          message: discovery.message,
+          output: discovery.output,
+        };
+      };
+      const { outcome, attempts } = await healMcpConnection({
+        probe,
+        diagnose: deps.healDiagnose
+          ? (message, output) => deps.healDiagnose!(serverName, message, output)
+          : undefined,
+      });
+      if (outcome.kind === 'connected') {
         return {
           name: serverName,
           status: 'connected',
-          toolCount,
+          toolCount: outcome.toolCount,
           authRequired: false,
           authUrl: null,
           message: null,
         };
       }
-      const authRequired = discovery.authRequired;
+      if (outcome.kind === 'auth-required') {
+        return {
+          name: serverName,
+          status: 'auth-required',
+          toolCount: 0,
+          authRequired: true,
+          authUrl: outcome.authUrl,
+          message: outcome.message,
+        };
+      }
       return {
         name: serverName,
-        status: authRequired ? 'auth-required' : 'error',
-        toolCount,
-        authRequired,
-        authUrl: discovery.authUrl,
-        message: discovery.message,
+        status: 'error',
+        toolCount: 0,
+        authRequired: false,
+        authUrl: null,
+        message: outcome.message,
+        healAttempts: attempts,
       };
     },
 

@@ -200,6 +200,50 @@ describe('McpManager', () => {
     delete (globalThis as unknown as { desktop?: unknown }).desktop;
   });
 
+  it('shows what self-healing tried when a connection fails', async () => {
+    const api = client({
+      getMcpServerStatus: vi.fn().mockResolvedValue(
+        makeStatus('Azure', {
+          status: 'error',
+          toolCount: 0,
+          message: 'spawn ENOENT',
+          healAttempts: [
+            {
+              action: 'Probed the live server connection',
+              outcome: 'failed',
+              detail: 'spawn ENOENT',
+            },
+            {
+              action: 'Retried the connection',
+              outcome: 'failed',
+              detail: 'spawn ENOENT',
+            },
+            {
+              action: 'Ran an AI self-healing diagnosis',
+              outcome: 'info',
+              detail: 'The configured command path does not exist.',
+            },
+          ],
+        }),
+      ),
+    });
+    renderManager(api);
+
+    const failure = await screen.findByRole('button', {
+      name: 'Show why Azure failed',
+    });
+    fireEvent.click(failure);
+
+    expect(
+      await screen.findByText("Why Azure couldn't connect"),
+    ).toBeTruthy();
+    expect(screen.getByText('Probed the live server connection')).toBeTruthy();
+    expect(
+      screen.getAllByText('The configured command path does not exist.').length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('AI diagnosis')).toBeTruthy();
+  });
+
   it('renders discovered tools and toggles tool availability', async () => {
     const api = client();
     renderManager(api);

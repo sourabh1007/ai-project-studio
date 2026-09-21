@@ -506,15 +506,78 @@ describe('createMcpService.serverStatus', () => {
     });
   });
 
-  it('reports a non-auth probe failure as an error', async () => {
+  it('reports a non-auth probe failure as an error, recording heal attempts', async () => {
+    const inspect = vi.fn(async (): Promise<McpToolInspection> => ({
+      status: 'failed',
+      message: 'MCP server exited before tool discovery completed',
+      output: ['crashed'],
+      tools: [],
+      authRequired: false,
+      authUrl: null,
+    }));
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({ inspect }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    const status = await service.serverStatus('agency', 's');
+    expect(status.status).toBe('error');
+    expect(status.authRequired).toBe(false);
+    // A failed probe is retried once before giving up.
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(status.healAttempts?.map((a) => a.action)).toEqual([
+      'Probed the live server connection',
+      'Retried the connection',
+      'Ran an AI self-healing diagnosis',
+    ]);
+  });
+
+  it('self-heals a flaky server that connects on retry', async () => {
+    let calls = 0;
+    const inspect = vi.fn(async (): Promise<McpToolInspection> => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          status: 'failed',
+          message: 'cold start',
+          output: [],
+          tools: [],
+          authRequired: false,
+          authUrl: null,
+        };
+      }
+      return {
+        status: 'ok',
+        message: null,
+        output: [],
+        tools: [{ name: 'read', description: null }],
+      };
+    });
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({ inspect }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+    });
+    const status = await service.serverStatus('agency', 's');
+    expect(status.status).toBe('connected');
+    expect(status.toolCount).toBe(1);
+    expect(status).not.toHaveProperty('healAttempts');
+  });
+
+  it('runs an AI diagnosis when a failure persists through the retry', async () => {
+    const healDiagnose = vi.fn(async () => 'The command path does not exist.');
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
       meta: metaOf(async () => ''),
       tools: inspector({
         inspect: vi.fn(async (): Promise<McpToolInspection> => ({
           status: 'failed',
-          message: 'MCP server exited before tool discovery completed',
-          output: [],
+          message: 'spawn ENOENT',
+          output: ['node: not found'],
           tools: [],
           authRequired: false,
           authUrl: null,
@@ -522,10 +585,18 @@ describe('createMcpService.serverStatus', () => {
       }),
       files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
       config: enabled,
+      healDiagnose,
     });
     const status = await service.serverStatus('agency', 's');
     expect(status.status).toBe('error');
-    expect(status.authRequired).toBe(false);
+    expect(healDiagnose).toHaveBeenCalledWith('s', 'spawn ENOENT', [
+      'node: not found',
+    ]);
+    expect(status.healAttempts?.at(-1)).toEqual({
+      action: 'Ran an AI self-healing diagnosis',
+      outcome: 'info',
+      detail: 'The command path does not exist.',
+    });
   });
 
   it('rejects empty names and when disabled', async () => {

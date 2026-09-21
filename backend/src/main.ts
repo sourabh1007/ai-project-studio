@@ -1984,6 +1984,31 @@ function main(): void {
     files: createMcpConfigFileStore(),
     tools: createMcpToolInspector(),
     config: mcpConfig,
+    healDiagnose: async (serverName, message, output) => {
+      try {
+        const detail = [message ?? '', ...output].join('\n').trim();
+        const diagnosis = await metaAi.run({
+          featureId: 'self-heal',
+          scope: 'internal',
+          prompt:
+            `The MCP (Model Context Protocol) server "${serverName}" failed ` +
+            'to start and its tools could not be discovered, even after an ' +
+            'automatic retry. From the failure output below, in 1-2 short ' +
+            'sentences state the most likely cause and the concrete fix (for ' +
+            'example a missing command or script path, a package that failed ' +
+            'to download, a crash on startup, or a permissions problem). Be ' +
+            'concise; do not use tools.\n\n---\n' +
+            (detail.length > 0 ? detail : 'No diagnostic output was captured.'),
+          noTools: true,
+          purpose: 'self-heal',
+          label: 'Self-healing MCP diagnosis',
+        });
+        const trimmed = diagnosis.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      } catch {
+        return null;
+      }
+    },
     liveReload: (providerId, command) => {
       let applied = 0;
       for (const session of sessionRepo.listAll()) {

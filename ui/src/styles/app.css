@@ -7458,6 +7458,132 @@ body.is-resizing {
   text-decoration: underline;
 }
 
+.mcp-status-clickable {
+  border: none;
+  cursor: pointer;
+  gap: 6px;
+}
+
+.mcp-status-clickable:hover {
+  filter: brightness(1.12);
+}
+
+.mcp-heal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mcp-heal-intro {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.mcp-heal-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mcp-heal-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+
+.mcp-heal-step-icon {
+  display: inline-flex;
+  margin-top: 1px;
+}
+
+.mcp-heal-step-ok .mcp-heal-step-icon {
+  color: var(--success, #2f855a);
+}
+
+.mcp-heal-step-info .mcp-heal-step-icon {
+  color: var(--accent);
+}
+
+.mcp-heal-step-error .mcp-heal-step-icon {
+  color: var(--danger, #c53030);
+}
+
+.mcp-heal-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mcp-heal-step-action {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.mcp-heal-step-detail {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.mcp-heal-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.mcp-heal-diagnosis {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.mcp-heal-diagnosis-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.mcp-heal-diagnosis-text {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.mcp-heal-raw > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.mcp-heal-raw-text {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mcp-heal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .mcp-auth-btn {
   margin-top: var(--space-2);
   align-self: flex-start;

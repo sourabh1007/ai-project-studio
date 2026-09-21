@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
-import type { McpServerEntry, McpServerStatus } from '../../lib/types.js';
+import type {
+  McpServerEntry,
+  McpServerStatus,
+  McpHealAttempt,
+} from '../../lib/types.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
 import {
   Button,
@@ -15,6 +19,7 @@ import { SkeletonCards } from '../../components/loading.js';
 import {
   CheckIcon,
   McpIcon,
+  InfoIcon,
   PencilIcon,
   PlusIcon,
   RestartIcon,
@@ -525,7 +530,11 @@ function statusView(
   status: McpServerStatus | null,
   loading: boolean,
   failed: boolean,
+  healing: boolean,
 ): StatusView {
+  if (loading && healing) {
+    return { label: 'Self-healing…', tone: 'checking' };
+  }
   if (loading && !status) {
     return { label: 'Checking…', tone: 'checking' };
   }
@@ -584,6 +593,7 @@ function McpServerCard({
   const [status, setStatus] = useState<McpServerStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const epochRef = useRef(0);
 
   const probe = useCallback(() => {
@@ -635,9 +645,15 @@ function McpServerCard({
     );
   }
 
-  const view = statusView(status, loading, failed);
+  const healing = loading && (failed || status?.status === 'error');
+  const view = statusView(status, loading, failed, healing);
   const needsAuth = status?.status === 'auth-required';
   const canRecheck = !loading && (failed || status?.status === 'error' || needsAuth);
+  const healAttempts =
+    status?.status === 'error' ? (status.healAttempts ?? []) : [];
+  const hasHealDetails =
+    status?.status === 'error' &&
+    (healAttempts.length > 0 || Boolean(status.message));
 
   return (
     <div className="skill-card">
@@ -672,14 +688,28 @@ function McpServerCard({
         {server.name}
       </span>
       <div className="mcp-status-row">
-        <span
-          className={`mcp-status mcp-status-${view.tone}`}
-          role="status"
-          title={status?.message ?? undefined}
-        >
-          <span className="mcp-status-dot" aria-hidden="true" />
-          {view.label}
-        </span>
+        {hasHealDetails ? (
+          <button
+            type="button"
+            className={`mcp-status mcp-status-${view.tone} mcp-status-clickable`}
+            title="Show what self-healing tried"
+            aria-label={`Show why ${server.name} failed`}
+            onClick={() => setDetailsOpen(true)}
+          >
+            <span className="mcp-status-dot" aria-hidden="true" />
+            {view.label}
+            <InfoIcon size={12} />
+          </button>
+        ) : (
+          <span
+            className={`mcp-status mcp-status-${view.tone}`}
+            role="status"
+            title={status?.message ?? undefined}
+          >
+            <span className="mcp-status-dot" aria-hidden="true" />
+            {view.label}
+          </span>
+        )}
         {canRecheck && (
           <button
             type="button"
@@ -713,6 +743,104 @@ function McpServerCard({
         <ToolsIcon size={14} />
         <span>Tools</span>
       </button>
+      {detailsOpen && status && (
+        <Modal
+          title={`Why ${server.name} couldn't connect`}
+          onClose={() => setDetailsOpen(false)}
+        >
+          <McpHealDetails
+            attempts={healAttempts}
+            message={status.message}
+            onClose={() => setDetailsOpen(false)}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Icon + tone for a single self-heal step outcome. */
+function healOutcomeView(outcome: McpHealAttempt['outcome']): {
+  icon: JSX.Element;
+  tone: string;
+} {
+  switch (outcome) {
+    case 'recovered':
+      return { icon: <CheckIcon size={14} />, tone: 'ok' };
+    case 'info':
+      return { icon: <InfoIcon size={14} />, tone: 'info' };
+    case 'failed':
+    default:
+      return { icon: <WarningIcon size={14} />, tone: 'error' };
+  }
+}
+
+/**
+ * Explains, on demand, exactly what self-healing tried before a server was
+ * reported as failed: the ordered probe/retry/diagnosis steps and their
+ * outcomes, plus the raw failure message the server produced.
+ */
+function McpHealDetails({
+  attempts,
+  message,
+  onClose,
+}: {
+  attempts: McpHealAttempt[];
+  message: string | null;
+  onClose: () => void;
+}) {
+  const diagnosis = attempts.find(
+    (attempt) => attempt.action.includes('diagnosis') && attempt.outcome === 'info',
+  )?.detail;
+  return (
+    <div className="mcp-heal">
+      <p className="mcp-heal-intro">
+        Self-healing couldn't restore this connection. Here's what it tried:
+      </p>
+      {attempts.length > 0 ? (
+        <ol className="mcp-heal-steps">
+          {attempts.map((attempt, index) => {
+            const outcome = healOutcomeView(attempt.outcome);
+            return (
+              <li
+                key={index}
+                className={`mcp-heal-step mcp-heal-step-${outcome.tone}`}
+              >
+                <span className="mcp-heal-step-icon" aria-hidden="true">
+                  {outcome.icon}
+                </span>
+                <span className="mcp-heal-step-body">
+                  <span className="mcp-heal-step-action">{attempt.action}</span>
+                  {attempt.detail && (
+                    <span className="mcp-heal-step-detail">{attempt.detail}</span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="mcp-heal-empty">
+          No self-heal steps were recorded for this failure.
+        </p>
+      )}
+      {diagnosis && (
+        <div className="mcp-heal-diagnosis">
+          <span className="mcp-heal-diagnosis-label">AI diagnosis</span>
+          <p className="mcp-heal-diagnosis-text">{diagnosis}</p>
+        </div>
+      )}
+      {message && (
+        <details className="mcp-heal-raw">
+          <summary>Raw server error</summary>
+          <pre className="mcp-heal-raw-text">{message}</pre>
+        </details>
+      )}
+      <div className="mcp-heal-actions">
+        <Button variant="secondary" onClick={onClose}>
+          Close
+        </Button>
+      </div>
     </div>
   );
 }

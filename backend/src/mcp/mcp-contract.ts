@@ -71,6 +71,26 @@ export interface McpServerStatus {
   authRequired: boolean;
   authUrl: string | null;
   message: string | null;
+  /**
+   * When a live probe failed, the ordered self-heal steps that were attempted
+   * (initial probe, retries, then a best-effort AI diagnosis) with each step's
+   * outcome. Surfaced so the UI can explain, on click, exactly what was tried
+   * before giving up. Absent when the server connected on the first probe.
+   */
+  healAttempts?: McpHealAttempt[];
+}
+
+/** The outcome of a single self-heal step attempted on a failing connection. */
+export type McpHealOutcome = 'recovered' | 'failed' | 'info';
+
+/** One recovery step attempted while self-healing a failed MCP connection. */
+export interface McpHealAttempt {
+  /** Human-readable description of the step, e.g. "Retried the connection". */
+  action: string;
+  /** Whether this step fixed the connection, failed, or is informational. */
+  outcome: McpHealOutcome;
+  /** Optional extra detail (error text, AI diagnosis, etc.). */
+  detail: string | null;
 }
 
 export interface McpToolInspection extends McpToolDiscovery {
