@@ -5990,6 +5990,9 @@ body.is-resizing {
   min-height: 0;
   position: relative;
   display: flex;
+  /* Same rationale as .session-editor: the terminal scrolls itself, so clip any
+     horizontal overshoot rather than let it scroll (and flicker) the window. */
+  overflow: hidden;
 }
 
 .session-popout-body .session-editor,
@@ -7059,6 +7062,13 @@ body.is-resizing {
   inset: 0;
   display: flex;
   flex-direction: column;
+  /* The terminal owns its own scrolling (xterm's viewport). Clip here so a
+     sub-pixel horizontal overshoot from xterm can never spill out and make the
+     scrolling ancestor (.pane-content, overflow: auto) toggle a horizontal
+     scrollbar on and off — that toggle changes the pane height, which refits
+     and repaints the terminal, showing up as a flaky viewport flicker during
+     streaming output. */
+  overflow: hidden;
 }
 
 .session-editor .terminal-host {
