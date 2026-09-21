@@ -420,6 +420,20 @@ export function TerminalView({
     };
     repaintRef.current = repaintViewport;
 
+    // A lighter repaint that re-marks the visible rows dirty WITHOUT discarding
+    // the WebGL glyph atlas. Row alignment on scroll only needs the rows
+    // repainted at their new positions; the cached glyph bitmaps are unchanged.
+    // Clearing the atlas here (as a full repaint does) forces every glyph to be
+    // re-rasterized, which shows up as a whole-viewport flicker on each scroll —
+    // and streaming output scrolls continuously, so it flickers the whole time.
+    const refreshViewport = () => {
+      if (replayAwaitingTerminalSettle) {
+        pendingFitNeedsRepaint = true;
+        return;
+      }
+      termRef.current?.refresh(0, term.rows - 1);
+    };
+
     // The FitAddon can only size the terminal once xterm has measured a
     // character cell (which happens asynchronously after `open`). Firing a
     // single fit synchronously leaves the terminal at its default 24 rows, so
@@ -623,10 +637,21 @@ export function TerminalView({
     // scrolls back over reflowed/wrapped output: rows that scroll into view keep
     // pixels from whatever was previously painted at that grid position, so the
     // scrollback looks garbled and horizontally clipped until the next write.
-    // Forcing a full repaint of the visible rows on every scroll keeps what is
-    // shown pixel-aligned with the buffer, whichever direction the user scrolls.
+    // Re-marking the visible rows dirty on scroll keeps what is shown pixel-
+    // aligned with the buffer, whichever direction the user scrolls. Coalesce to
+    // one repaint per frame so continuous streaming output (which scrolls on
+    // every written line) can't flood the renderer and flicker the viewport.
+    let scrollRepaintScheduled = false;
     const scrollSub = term.onScroll(() => {
-      repaintViewport();
+      if (scrollRepaintScheduled) {
+        return;
+      }
+      scrollRepaintScheduled = true;
+      const id = requestAnimationFrame(() => {
+        scrollRepaintScheduled = false;
+        refreshViewport();
+      });
+      rafIds.push(id);
     });
 
     const pasteGuard = createPasteGuard();

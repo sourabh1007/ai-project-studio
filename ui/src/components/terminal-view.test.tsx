@@ -183,7 +183,12 @@ describe('TerminalView scrollback repaint', () => {
     vi.unstubAllGlobals();
   });
 
-  it('repaints the whole viewport on every scroll so scrollback never garbles', () => {
+  it('repaints the visible rows on scroll without clearing the glyph atlas so streaming never flickers', () => {
+    // Run the coalesced rAF repaint synchronously for a deterministic assertion.
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
     render(<TerminalView sessionId="s1" />);
 
     expect(h.term).not.toBeNull();
@@ -192,15 +197,21 @@ describe('TerminalView scrollback repaint', () => {
     expect(term.scrollHandlers.length).toBeGreaterThan(0);
 
     term.refresh.mockClear();
+    (
+      h.webgl?.clearTextureAtlas as unknown as { mockClear?: () => void }
+    )?.mockClear?.();
     // Simulate the user scrolling up/down through scrollback.
     for (const handler of term.scrollHandlers) {
       handler();
     }
 
-    expect(h.webgl?.clearTextureAtlas).toHaveBeenCalledTimes(1);
     // The visible rows (0..rows-1) must be force-repainted so the renderer can't
     // leave stale, shifted rows behind.
     expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
+    // But the WebGL glyph atlas must NOT be discarded on scroll: re-rasterizing
+    // every glyph on each scroll flickers the whole viewport, and streaming
+    // output scrolls on every line, so it would flicker continuously.
+    expect(h.webgl?.clearTextureAtlas).not.toHaveBeenCalled();
   });
 
   it('does not steal focus back from an open modal when the window refocuses', () => {
