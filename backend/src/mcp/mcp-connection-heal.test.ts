@@ -132,4 +132,124 @@ describe('healMcpConnection', () => {
       },
     ]);
   });
+
+  it('follows the error remediation and returns recovered without diagnosing', async () => {
+    const probe = scriptedProbe([errorOutcome('spawn npx ENOENT'), connected]);
+    const remediate = vi.fn(async () => '  Installed the missing package.  ');
+    const diagnose = vi.fn(async () => 'unused');
+    const result = await healMcpConnection({
+      probe,
+      remediate,
+      diagnose,
+      retries: 0,
+    });
+    expect(remediate).toHaveBeenCalledWith('spawn npx ENOENT', [
+      'line one',
+      'line two',
+    ]);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(result.outcome).toEqual(connected);
+    expect(result.attempts).toEqual([
+      {
+        action: 'Probed the live server connection',
+        outcome: 'failed',
+        detail: 'spawn npx ENOENT',
+      },
+      {
+        action: 'Followed the fix the error described',
+        outcome: 'info',
+        detail: 'Installed the missing package.',
+      },
+      {
+        action: 'Re-checked the connection after the fix',
+        outcome: 'recovered',
+        detail: null,
+      },
+    ]);
+  });
+
+  it('records a failed re-check and still diagnoses when remediation does not recover', async () => {
+    const probe = scriptedProbe([
+      errorOutcome('first'),
+      errorOutcome('still down'),
+    ]);
+    const remediate = vi.fn(async () => 'Tried the suggested command.');
+    const diagnose = vi.fn(async () => 'Root cause explained.');
+    const result = await healMcpConnection({
+      probe,
+      remediate,
+      diagnose,
+      retries: 0,
+    });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(diagnose).toHaveBeenCalledWith('still down', ['line one', 'line two']);
+    expect(result.outcome.kind).toBe('error');
+    expect(result.attempts).toEqual([
+      {
+        action: 'Probed the live server connection',
+        outcome: 'failed',
+        detail: 'first',
+      },
+      {
+        action: 'Followed the fix the error described',
+        outcome: 'info',
+        detail: 'Tried the suggested command.',
+      },
+      {
+        action: 'Re-checked the connection after the fix',
+        outcome: 'failed',
+        detail: 'still down',
+      },
+      {
+        action: 'Ran an AI self-healing diagnosis',
+        outcome: 'info',
+        detail: 'Root cause explained.',
+      },
+    ]);
+  });
+
+  it('does not re-probe when remediation reports nothing was done', async () => {
+    const probe = scriptedProbe([errorOutcome('boom')]);
+    const remediate = vi.fn(async () => null);
+    const diagnose = vi.fn(async () => 'Explained.');
+    const result = await healMcpConnection({
+      probe,
+      remediate,
+      diagnose,
+      retries: 0,
+    });
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(result.attempts).toEqual([
+      {
+        action: 'Probed the live server connection',
+        outcome: 'failed',
+        detail: 'boom',
+      },
+      {
+        action: 'Followed the fix the error described',
+        outcome: 'failed',
+        detail: 'The self-healing agent could not act on the error.',
+      },
+      {
+        action: 'Ran an AI self-healing diagnosis',
+        outcome: 'info',
+        detail: 'Explained.',
+      },
+    ]);
+  });
+
+  it('treats a thrown remediation as no action taken', async () => {
+    const probe = scriptedProbe([errorOutcome('boom')]);
+    const remediate = vi.fn(async () => {
+      throw new Error('agent crashed');
+    });
+    const result = await healMcpConnection({ probe, remediate, retries: 0 });
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(result.attempts.at(1)).toEqual({
+      action: 'Followed the fix the error described',
+      outcome: 'failed',
+      detail: 'The self-healing agent could not act on the error.',
+    });
+  });
 });

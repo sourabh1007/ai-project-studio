@@ -2009,6 +2009,39 @@ function main(): void {
         return null;
       }
     },
+    healRemediate: async (serverName, message, output) => {
+      try {
+        const detail = [message ?? '', ...output].join('\n').trim();
+        const report = await metaAi.run({
+          featureId: 'self-heal',
+          scope: 'internal',
+          prompt:
+            `The MCP (Model Context Protocol) server "${serverName}" failed ` +
+            'to start, even after an automatic retry. The failure output below ' +
+            'often states exactly how to fix it (for example "run /mcp show ' +
+            `${serverName}", a missing command such as \`spawn npx ENOENT\`, a ` +
+            'missing package, a missing path, or a permissions problem). Act as ' +
+            'a self-healing agent: read the output, follow the remediation it ' +
+            'prescribes, and apply the fix using your tools. Only take safe, ' +
+            'idempotent actions (for example verifying a command resolves, ' +
+            'creating a missing directory, or installing the named package); do ' +
+            'not delete data, change unrelated configuration, or run long or ' +
+            'destructive operations. When done, reply with one short sentence ' +
+            'stating exactly what you changed, or — if nothing could be safely ' +
+            'done — reply with the single word NONE.\n\n---\n' +
+            (detail.length > 0 ? detail : 'No diagnostic output was captured.'),
+          purpose: 'self-heal',
+          label: 'Self-healing MCP remediation',
+        });
+        const trimmed = report.trim();
+        if (trimmed.length === 0 || /^none\.?$/i.test(trimmed)) {
+          return null;
+        }
+        return trimmed;
+      } catch {
+        return null;
+      }
+    },
     liveReload: (providerId, command) => {
       let applied = 0;
       for (const session of sessionRepo.listAll()) {

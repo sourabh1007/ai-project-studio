@@ -39,6 +39,17 @@ export interface McpServiceDeps {
     message: string | null,
     output: string[],
   ) => Promise<string | null>;
+  /**
+   * Best-effort agentic remediation of a persistent connection failure, run
+   * after the self-heal retries are exhausted and before {@link healDiagnose}.
+   * It follows the fix the error itself prescribes and returns a short report
+   * of what it did, or null when it could not act.
+   */
+  healRemediate?: (
+    serverName: string,
+    message: string | null,
+    output: string[],
+  ) => Promise<string | null>;
 }
 
 /**
@@ -437,6 +448,9 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       };
       const { outcome, attempts } = await healMcpConnection({
         probe,
+        remediate: deps.healRemediate
+          ? (message, output) => deps.healRemediate!(serverName, message, output)
+          : undefined,
         diagnose: deps.healDiagnose
           ? (message, output) => deps.healDiagnose!(serverName, message, output)
           : undefined,

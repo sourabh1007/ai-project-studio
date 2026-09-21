@@ -599,6 +599,47 @@ describe('createMcpService.serverStatus', () => {
     });
   });
 
+  it('follows the error remediation and recovers before diagnosing', async () => {
+    let calls = 0;
+    const inspect = vi.fn(async (): Promise<McpToolInspection> => {
+      calls += 1;
+      if (calls <= 2) {
+        return {
+          status: 'failed',
+          message: 'spawn npx ENOENT',
+          output: ['exit code 1'],
+          tools: [],
+          authRequired: false,
+          authUrl: null,
+        };
+      }
+      return {
+        status: 'ok',
+        message: null,
+        output: [],
+        tools: [{ name: 'read', description: null }],
+      };
+    });
+    const healRemediate = vi.fn(async () => 'Resolved npx on PATH.');
+    const healDiagnose = vi.fn(async () => 'unused');
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector({ inspect }),
+      files: fileStore(async () => ({ mcpServers: { s: { command: 'x' } } })),
+      config: enabled,
+      healRemediate,
+      healDiagnose,
+    });
+    const status = await service.serverStatus('agency', 's');
+    expect(status.status).toBe('connected');
+    expect(status.toolCount).toBe(1);
+    expect(healRemediate).toHaveBeenCalledWith('s', 'spawn npx ENOENT', [
+      'exit code 1',
+    ]);
+    expect(healDiagnose).not.toHaveBeenCalled();
+  });
+
   it('rejects empty names and when disabled', async () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),
