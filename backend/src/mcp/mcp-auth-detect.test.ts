@@ -37,4 +37,22 @@ describe('classifyMcpAuth', () => {
     expect(result.authRequired).toBe(true);
     expect(result.authUrl).toBeNull();
   });
+
+  it('classifies a null message using only the output lines', () => {
+    const result = classifyMcpAuth(null, [
+      'unauthorized',
+      'Visit https://login.example.com/start to authenticate',
+    ]);
+    expect(result.authRequired).toBe(true);
+    expect(result.authUrl).toBe('https://login.example.com/start');
+  });
+
+  it('extracts a login URL printed only in the message', () => {
+    const result = classifyMcpAuth(
+      'Please sign in at https://auth.example.com/login',
+      ['no credentials found'],
+    );
+    expect(result.authRequired).toBe(true);
+    expect(result.authUrl).toBe('https://auth.example.com/login');
+  });
 });

@@ -8,6 +8,7 @@ import type {
   McpConfigDocument,
   McpConfigFileStore,
   McpToolEntry,
+  McpToolDiscovery,
   McpToolInspection,
   McpToolInspector,
   McpToolToggleInput,
@@ -99,6 +100,12 @@ function configuredTools(spec: Record<string, unknown>): Set<string> | null {
   const names = tools.filter((tool): tool is string => typeof tool === 'string');
   return names.includes('*') ? null : new Set(names);
 }
+
+/** An entry produced by a completed probe: tools and discovery are guaranteed. */
+type ProbedEntry = McpServerEntry & {
+  tools: McpToolEntry[];
+  toolDiscovery: McpToolDiscovery & { authRequired: boolean; authUrl: string | null };
+};
 
 function toolEntries(
   spec: Record<string, unknown>,
@@ -240,7 +247,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     name: string,
     spec: Record<string, unknown>,
     inspection: McpToolInspection,
-  ): McpServerEntry {
+  ): ProbedEntry {
     return {
       name,
       spec,
@@ -259,7 +266,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
   async function inspectOne(
     name: string,
     spec: Record<string, unknown>,
-  ): Promise<McpServerEntry> {
+  ): Promise<ProbedEntry> {
     const inspection = isEnabledServer(spec)
       ? await probeTools(name, spec)
       : skippedInspection('Server is disabled in provider config');
@@ -400,8 +407,8 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       }
       const entry = await inspectOne(serverName, spec);
       const discovery = entry.toolDiscovery;
-      const toolCount = entry.tools?.length ?? 0;
-      if (discovery?.status === 'ok') {
+      const toolCount = entry.tools.length;
+      if (discovery.status === 'ok') {
         return {
           name: serverName,
           status: 'connected',
@@ -411,14 +418,14 @@ export function createMcpService(deps: McpServiceDeps): McpService {
           message: null,
         };
       }
-      const authRequired = discovery?.authRequired ?? false;
+      const authRequired = discovery.authRequired;
       return {
         name: serverName,
         status: authRequired ? 'auth-required' : 'error',
         toolCount,
         authRequired,
-        authUrl: discovery?.authUrl ?? null,
-        message: discovery?.message ?? null,
+        authUrl: discovery.authUrl,
+        message: discovery.message,
       };
     },
 

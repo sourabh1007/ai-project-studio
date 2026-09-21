@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { URL } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Logger } from '../kernel/logger.js';
@@ -8,9 +9,46 @@ import type { TerminalManager } from './terminal-manager.js';
 import {
   decodeClientMessage,
   encodeServerMessage,
+  type ServerMessage,
 } from './terminal-protocol.js';
 import { isAllowedTerminalOrigin } from './terminal-origin.js';
 import { createTerminalConnection } from './terminal-connection.js';
+import {
+  launchWithSelfHealing,
+  type HealFsPort,
+  type HealLevel,
+} from './terminal-launch-heal.js';
+
+/** Real filesystem port for self-healing: existence checks + recursive mkdir. */
+const nodeHealFs: HealFsPort = {
+  dirExists: (path) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return existsSync(path);
+    }
+  },
+  ensureDir: (path) => {
+    try {
+      mkdirSync(path, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+/** Renders a self-healing status line as ANSI-coloured terminal output. */
+function formatHealLine(level: HealLevel, message: string): string {
+  const badge =
+    level === 'success'
+      ? '\x1b[32m✔\x1b[0m'
+      : level === 'error'
+        ? '\x1b[31m✖\x1b[0m'
+        : '\x1b[36m🩹 Self-healing\x1b[0m';
+  const body = level === 'error' ? `\x1b[31m${message}\x1b[0m` : message;
+  return `\r\n${badge} ${body}\r\n`;
+}
 
 export interface TerminalWsDeps {
   server: Server;
@@ -26,6 +64,12 @@ export interface TerminalWsDeps {
    * returns a path; falls back to `cwd` for repo-less sessions.
    */
   resolveCwd?: (session: Session) => string | undefined;
+  /**
+   * Optional metasession diagnosis used by self-healing when a launch failure
+   * cannot be repaired automatically: given the session and the failure text,
+   * returns a short human explanation of the likely cause and fix.
+   */
+  diagnose?: (session: Session, errorText: string) => Promise<string | null>;
   logger: Logger;
 }
 
@@ -58,11 +102,24 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
       return;
     }
 
+    const send = (message: ServerMessage) => {
+      if (socket.readyState === socket.OPEN) socket.send(encodeServerMessage(message));
+    };
+
     const connection = createTerminalConnection({
       launch: async () => {
+        const resolvedCwd = deps.resolveCwd?.(session) ?? deps.cwd;
+        const fallbackCwd = deps.cwd ?? process.cwd();
         try {
-          return await deps.manager.getOrLaunch(session, {
-            cwd: deps.resolveCwd?.(session) ?? deps.cwd,
+          return await launchWithSelfHealing({
+            resolvedCwd,
+            fallbackCwd,
+            fs: nodeHealFs,
+            emit: (level, message) => send({ type: 'output', data: formatHealLine(level, message) }),
+            diagnose: deps.diagnose
+              ? (errorText) => deps.diagnose!(session, errorText)
+              : undefined,
+            launch: (cwd) => deps.manager.getOrLaunch(session, { cwd }),
           });
         } catch (error) {
           deps.logger.error('Terminal launch failed', error);
@@ -72,9 +129,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
       subscribe: (listener) => deps.manager.onTerminal(sessionId, listener),
       observeInput: (data) => deps.manager.observeInput(sessionId, data),
       inputLimit: deps.config.bootstrapInputBufferBytes,
-      send: (message) => {
-        if (socket.readyState === socket.OPEN) socket.send(encodeServerMessage(message));
-      },
+      send,
     });
     socket.on('message', (raw: { toString(): string }) => {
       const message = decodeClientMessage(raw.toString());

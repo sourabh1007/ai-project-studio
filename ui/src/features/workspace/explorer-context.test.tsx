@@ -164,6 +164,37 @@ describe('Explorer repository context gating', () => {
     ).toBeInTheDocument();
   });
 
+  it('removes the repository-less Scratchpad group and its orphan features', async () => {
+    const orphan = { ...feature, repoId: null };
+    const client = {
+      ...api(context('pending', '2025-01-01T00:00:01Z')),
+      listRepos: vi.fn().mockResolvedValue([]),
+      listFeatures: vi.fn().mockResolvedValue([orphan]),
+    } as ApiClient;
+    const onDeleteFeature = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ApiProvider value={client}>
+        <Explorer
+          live={initialLiveState}
+          activeSessionId={null}
+          names={{}}
+          {...callbacks}
+          onDeleteFeature={onDeleteFeature}
+        />
+      </ApiProvider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Actions for Scratchpad' }),
+    );
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove Scratchpad' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Confirm remove Scratchpad' }),
+    );
+
+    await waitFor(() => expect(onDeleteFeature).toHaveBeenCalledWith(orphan));
+  });
+
   it('keeps repository-less feature session creation enabled', async () => {
     const client = {
       ...api(context('pending', '2025-01-01T00:00:01Z')),

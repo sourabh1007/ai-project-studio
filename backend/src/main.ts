@@ -3500,6 +3500,32 @@ function main(): void {
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
       resolveCwd: (session) => resolveSessionCwd(session.featureId),
+      // Self-healing diagnosis: when a launch failure cannot be repaired
+      // automatically, a read-only metasession explains the likely cause and
+      // fix, surfaced in the terminal before the final error. Best-effort.
+      diagnose: async (_session, errorText) => {
+        try {
+          const diagnosis = await metaAi.run({
+            featureId: 'self-heal',
+            scope: 'internal',
+            prompt:
+              'An interactive AI coding CLI session failed to start with the ' +
+              'error output below. In 1-2 short sentences, state the most ' +
+              'likely cause and the concrete fix (for example a missing or ' +
+              'deleted working directory, the CLI not being installed, or a ' +
+              'permissions problem). Be concise; do not use tools.\n\n---\n' +
+              errorText,
+            cwd: terminalCwd,
+            noTools: true,
+            purpose: 'self-heal',
+            label: 'Self-healing diagnosis',
+          });
+          const trimmed = diagnosis.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        } catch {
+          return null;
+        }
+      },
       logger,
     });
     logger.info(`Interactive terminal WebSocket at ${terminalConfig.wsPath}`);

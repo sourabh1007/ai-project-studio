@@ -1342,6 +1342,7 @@ function RepoNode({
   onAddFeature,
   onStartReview,
   onDeleteRepo,
+  onRemoveScratchpad,
   onContextUpdated,
   draggingFeature,
   canNestInto,
@@ -1373,6 +1374,7 @@ function RepoNode({
   onAddFeature: (repoId: string | null) => void;
   onStartReview: (repo: Repository, parentFeatureId?: string | null) => void;
   onDeleteRepo: (repo: Repository) => void;
+  onRemoveScratchpad?: () => void | Promise<void>;
   onContextUpdated: (context: RepositoryContext) => void;
   draggingFeature: Feature | null;
   /** Whether the dragged feature may be nested under the given feature id. */
@@ -1572,6 +1574,49 @@ function RepoNode({
               <PlusIcon />
             </button>
           )}
+          {!repo &&
+            onRemoveScratchpad &&
+            (confirming ? (
+              <span
+                className="row-confirm"
+                role="group"
+                aria-label="Confirm remove"
+              >
+                <button
+                  type="button"
+                  className="row-confirm-yes"
+                  title="Confirm remove"
+                  aria-label={`Confirm remove ${title}`}
+                  onClick={() => {
+                    setConfirming(false);
+                    void onRemoveScratchpad();
+                  }}
+                >
+                  <CheckIcon />
+                </button>
+                <button
+                  type="button"
+                  className="row-confirm-no"
+                  title="Cancel"
+                  aria-label="Cancel remove"
+                  onClick={() => setConfirming(false)}
+                >
+                  <CloseIcon />
+                </button>
+              </span>
+            ) : (
+              <OverflowMenu
+                label={`Actions for ${title}`}
+                actions={[
+                  {
+                    label: 'Remove Scratchpad',
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onSelect: () => setConfirming(true),
+                  },
+                ]}
+              />
+            ))}
           {repo &&
             (confirming ? (
               <span
@@ -1801,6 +1846,15 @@ export function Explorer({
     setName('');
     setDescription('');
     setFormError(null);
+  }
+
+  async function removeScratchpad() {
+    const orphans = allFeatures.filter(
+      (f) => !f.repoId || !repoList.some((r) => r.id === f.repoId),
+    );
+    for (const feature of orphans) {
+      await deleteFeature(feature);
+    }
   }
 
   async function createFeatureInGroup(
@@ -2262,6 +2316,7 @@ export function Explorer({
             treeRevision={treeRevision}
             onMoveNode={moveNode}
             onCreateFeatureInGroup={createFeatureInGroup}
+            onRemoveScratchpad={removeScratchpad}
           />
         )}
         </NodeDragStoreProvider>
