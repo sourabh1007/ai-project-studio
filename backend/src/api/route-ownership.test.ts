@@ -193,6 +193,7 @@ describe('route ownership', () => {
     const routes = routeMap(applyRouteOwnership([
       { method: 'delete', path: '/features/:id', handler: () => ({ status: 200, body: null }) },
       { method: 'delete', path: '/sessions/:id', handler: () => ({ status: 200, body: null }) },
+      { method: 'post', path: '/sessions/:id/relaunch', handler: () => ({ status: 200, body: null }) },
       { method: 'post', path: '/tree/move', handler: () => ({ status: 200, body: null }) },
       { method: 'post', path: '/features/:featureId/tasks', handler: () => ({ status: 200, body: null }) },
       { method: 'post', path: '/automations', handler: () => ({ status: 200, body: null }) },
@@ -211,6 +212,9 @@ describe('route ownership', () => {
     })))).resolves.toEqual({ featureId: 'feature-1', sessionId: 'session-1' });
     await expect(Promise.resolve(routes.get('delete /sessions/:id')!.workTrackScope!(request())))
       .resolves.toEqual({});
+    await expect(Promise.resolve(routes.get('post /sessions/:id/relaunch')!.workScope!(request({
+      params: { id: 'session-1' },
+    })))).resolves.toEqual({ featureId: 'feature-1', sessionId: 'session-1' });
     await expect(Promise.resolve(routes.get('post /tree/move')!.workScope!(request({
       body: {
         type: 'session',

@@ -32,6 +32,7 @@ import type {
   ModelInfo,
   MoveFeatureInput,
   MoveNodeInput,
+  FeatureEnvironment,
   McpApplyResult,
   McpServerEntry,
   McpServerInput,
@@ -739,6 +740,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
       })),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),
+    relaunchSession: (id: string) =>
+      request<Session>(`/sessions/${id}/relaunch`, jsonBody({})),
+    getSession: (id: string) => request<Session>(`/sessions/${id}`),
+    getFeatureEnvironment: (featureId: string) =>
+      request<FeatureEnvironment>(`/features/${featureId}/environment`),
     renameSession: (id: string, name: string | null) =>
       request<Session>(`/sessions/${id}`, putBody({ name })),
     listSessions: (

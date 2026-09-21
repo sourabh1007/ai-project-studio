@@ -274,6 +274,33 @@ describe('createApiClient', () => {
     expect(calls[0][1]?.method).toBe('POST');
   });
 
+  it('reads a session by id', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getSession('s1');
+    expect(result).toEqual({ id: 's1' });
+    expect(calls[0][0]).toBe('/api/sessions/s1');
+  });
+
+  it('reads a feature environment (cwd + branch)', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ cwd: 'C:/wt/pr-42', branch: 'pr-42' }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getFeatureEnvironment('f9');
+    expect(result).toEqual({ cwd: 'C:/wt/pr-42', branch: 'pr-42' });
+    expect(calls[0][0]).toBe('/api/features/f9/environment');
+  });
+
+  it('relaunches a session terminal with a POST', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.relaunchSession('s1');
+    expect(result).toEqual({ id: 's1' });
+    expect(calls[0][0]).toBe('/api/sessions/s1/relaunch');
+    expect(calls[0][1]?.method).toBe('POST');
+  });
+
   it('creates an interactive terminal session', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
     const client = createApiClient({ fetchImpl });

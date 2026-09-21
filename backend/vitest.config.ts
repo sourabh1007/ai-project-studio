@@ -53,6 +53,7 @@ export default defineConfig({
         'src/repository-context/filesystem-evidence-adapter.ts',
         'src/repository-context/temporary-prompt-file-adapter.ts',
         'src/repo-insights/repo-insights-git-adapter.ts',
+        'src/feature/feature-branch-git-adapter.ts',
         'src/mcp/mcp-config-file-adapter.ts',
         'src/mcp/mcp-tool-inspector-adapter.ts',
         'src/meta/acp/acp-process-adapter.ts',

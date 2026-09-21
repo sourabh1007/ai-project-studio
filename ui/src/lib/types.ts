@@ -988,6 +988,17 @@ export interface MoveNodeInput {
   targetIndex: number;
 }
 
+/**
+ * The working directory and git branch a feature's sessions run in — the PR
+ * worktree/branch for a PR-review feature, otherwise the repo checkout and its
+ * current branch. Used to warn about the branch a cross-feature move switches a
+ * session to.
+ */
+export interface FeatureEnvironment {
+  cwd: string | null;
+  branch: string | null;
+}
+
 /** How a session touched a file, mirrored from the CLI store. */
 export type SessionFileTool = 'create' | 'edit';
 

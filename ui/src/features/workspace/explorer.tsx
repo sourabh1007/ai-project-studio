@@ -1779,6 +1779,16 @@ export function Explorer({
   const [moveError, setMoveError] = useState<string | null>(null);
   const [movingFeature, setMovingFeature] = useState<Feature | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
+  // A cross-feature session move that would switch the session's git branch is
+  // held here until the user consents, since it relaunches the running CLI in
+  // the new checkout (see confirmPendingMove).
+  const [pendingMove, setPendingMove] = useState<{
+    input: MoveNodeInput;
+    fromBranch: string | null;
+    toBranch: string | null;
+  } | null>(null);
+  const [moveConsentBusy, setMoveConsentBusy] = useState(false);
+  const [moveConsentError, setMoveConsentError] = useState<string | null>(null);
 
   // Subcategory groups across every feature, loaded lazily only while the move
   // dialog is open so the destination picker can offer folders as targets.
@@ -1803,10 +1813,49 @@ export function Explorer({
   }, [movingFeature, treeRevision]);
 
   /** Moves a session or group (possibly to a different feature) and refreshes
-   * every expanded feature so both the source and target reflect the change. */
+   * every expanded feature so both the source and target reflect the change.
+   * A session move that crosses into a feature on a different git branch is
+   * routed through a consent dialog first, since it relaunches the running CLI
+   * in the destination checkout. */
   async function moveNode(input: MoveNodeInput) {
+    if (input.type === 'session') {
+      const session = await api.getSession(input.id);
+      if (session.featureId !== input.targetFeatureId) {
+        const [from, to] = await Promise.all([
+          api.getFeatureEnvironment(session.featureId),
+          api.getFeatureEnvironment(input.targetFeatureId),
+        ]);
+        if ((from.branch ?? null) !== (to.branch ?? null)) {
+          setMoveConsentError(null);
+          setPendingMove({ input, fromBranch: from.branch, toBranch: to.branch });
+          return;
+        }
+      }
+    }
     await api.moveNode(input);
     setTreeRevision((v) => v + 1);
+  }
+
+  /** Applies a branch-changing session move the user consented to, then
+   * relaunches its terminal so the CLI comes up on the destination branch. */
+  async function confirmPendingMove() {
+    if (!pendingMove) {
+      return;
+    }
+    setMoveConsentBusy(true);
+    setMoveConsentError(null);
+    try {
+      await api.moveNode(pendingMove.input);
+      await api.relaunchSession(pendingMove.input.id);
+      setTreeRevision((v) => v + 1);
+      setPendingMove(null);
+    } catch (error) {
+      setMoveConsentError(
+        error instanceof Error ? error.message : 'Could not move the session.',
+      );
+    } finally {
+      setMoveConsentBusy(false);
+    }
   }
 
   function openFeatureForm(repoId: string | null) {
@@ -2116,6 +2165,35 @@ export function Explorer({
             setAddingRepo(false);
             repos.reload();
           }}
+        />
+      )}
+
+      {pendingMove && (
+        <ConfirmDialog
+          title="Switch branch?"
+          icon={<WarningIcon />}
+          confirmLabel="Move and switch branch"
+          busy={moveConsentBusy}
+          error={moveConsentError}
+          message={
+            <>
+              <p className="confirm-dialog-lead">
+                This session runs on{' '}
+                <strong>{pendingMove.fromBranch ?? 'its current branch'}</strong>.
+              </p>
+              <p className="confirm-dialog-note">
+                Moving it here switches it to{' '}
+                <strong>{pendingMove.toBranch ?? 'the destination branch'}</strong>.
+                Its terminal relaunches in the new checkout, ending the current
+                run.
+              </p>
+            </>
+          }
+          onCancel={() => {
+            setPendingMove(null);
+            setMoveConsentError(null);
+          }}
+          onConfirm={() => void confirmPendingMove()}
         />
       )}
 

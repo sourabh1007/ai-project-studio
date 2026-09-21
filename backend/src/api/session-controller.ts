@@ -7,6 +7,7 @@ import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 import type { Session } from '../session/session-contract.js';
 import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
+import type { FeatureEnvironment } from '../feature/feature-environment.js';
 
 const startSessionSchema = z.object({
   providerId: z.string().min(1).optional(),
@@ -33,6 +34,18 @@ export interface SessionControllerDeps {
    * session under a PR feature shares the one PR branch/worktree.
    */
   resolveCwd?: (featureId: string) => string | undefined;
+  /**
+   * Resolves the full working directory + branch a feature's sessions run in,
+   * so the UI can show — and get consent for — the branch a cross-feature move
+   * would switch a session to.
+   */
+  resolveEnvironment: (featureId: string) => Promise<FeatureEnvironment>;
+  /**
+   * Relaunches a session's live terminal in its feature's current working
+   * directory. Called after a consented cross-feature move so the running CLI
+   * comes up on the new branch. No-op when the session has no live terminal.
+   */
+  relaunchSession: (session: Session) => Promise<void>;
 }
 
 function includeInternal(query: string | undefined): boolean {
@@ -121,6 +134,26 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       handler: (req) => {
         const input = parseInput(renameSessionSchema, req.body);
         const session = deps.admin.renameSession(req.params.id, input.name);
+        return { status: 200, body: session };
+      },
+    },
+    {
+      method: 'get',
+      path: '/features/:featureId/environment',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.resolveEnvironment(req.params.featureId),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/sessions/:id/relaunch',
+      handler: async (req) => {
+        const session = deps.sessions.get(req.params.id);
+        if (!session) {
+          return { status: 404, body: { error: { kind: 'not_found', message: 'Unknown session' } } };
+        }
+        await deps.relaunchSession(session);
         return { status: 200, body: session };
       },
     },

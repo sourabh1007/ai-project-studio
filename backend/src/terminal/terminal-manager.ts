@@ -133,6 +133,18 @@ export interface TerminalManager {
    */
   confirmReplaySafeRequest(sessionId: string, exactText: string): void;
   close(sessionId: string): void;
+  /**
+   * Explicitly relaunches a session's terminal in a fresh PTY using the given
+   * options — used when a session moves to a feature whose working directory /
+   * branch differs, so the interactive CLI comes up in the new checkout. Kills
+   * any live PTY without recording a failed snapshot (the swap is deliberate,
+   * like the self-recovery restart) and returns the new terminal, or undefined
+   * when the session had no live terminal to restart.
+   */
+  relaunch(
+    session: Session,
+    options?: LaunchOptions,
+  ): Promise<TerminalSession | undefined>;
   /** Closes admission and requests termination; waitForIdle confirms settlement. */
   shutdown(): void;
 }
@@ -883,8 +895,28 @@ export function createTerminalManager(
     throwTerminationErrors(errors);
   };
 
+  // Deliberate relaunch (not error recovery): kill any live PTY without
+  // recording a failed snapshot, then spawn a fresh one with the given options
+  // so the CLI comes up in a new working directory/branch. No-op (returns
+  // undefined) when the session has no live terminal to restart.
+  const relaunch = async (
+    session: Session,
+    options: LaunchOptions = {},
+  ): Promise<TerminalSession | undefined> => {
+    const existing = sessions.get(session.id);
+    if (!existing) {
+      return undefined;
+    }
+    discarded.add(session.id);
+    const exited = awaitExit(existing);
+    existing.kill();
+    await exited;
+    return getOrLaunch(session, options);
+  };
+
   return {
     getOrLaunch,
+    relaunch,
     get: (sessionId) => sessions.get(sessionId),
     onTerminal(sessionId, listener) {
       let set = listeners.get(sessionId);

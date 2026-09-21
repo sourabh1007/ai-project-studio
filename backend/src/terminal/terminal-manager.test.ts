@@ -351,6 +351,36 @@ describe('createTerminalManager', () => {
     expect(h.env.writes).toEqual([]);
     h.env.emitExit(0);
   });
+
+  it('relaunches a live session into a new cwd without recording a failed exit', async () => {
+    const h = makeManager();
+    const session = sampleSession();
+    await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+    expect(h.env.requests[0].cwd).toBe('C:/old');
+
+    const pending = h.manager.relaunch(session, { cwd: 'C:/new' });
+    // relaunch kills the live PTY and awaits its native exit before respawning.
+    h.env.emitExit(0);
+    const terminal = await pending;
+
+    expect(terminal).toBeDefined();
+    expect(h.env.kills()).toBe(1);
+    expect(h.env.requests[1].cwd).toBe('C:/new');
+    // The swap is deliberate: no failed/ended snapshot, only a discard signal.
+    expect(h.ended).toEqual([]);
+    expect(h.discarded).toEqual(['sess-1']);
+
+    h.env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+  });
+
+  it('does nothing when relaunching a session with no live terminal', async () => {
+    const h = makeManager();
+    const result = await h.manager.relaunch(sampleSession(), { cwd: 'C:/new' });
+    expect(result).toBeUndefined();
+    expect(h.env.requests).toEqual([]);
+    expect(h.env.kills()).toBe(0);
+  });
   it('reserves the launch before synchronous internal-session lifecycle callbacks can reenter', async () => {
     const env = fakePtyEnv();
     const providers = createProviderRegistry();

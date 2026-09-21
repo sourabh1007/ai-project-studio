@@ -147,6 +147,8 @@ import { createSessionReconciler } from './session/session-reconciler.js';
 
 import { createNodePtySpawner } from './terminal/node-pty-spawner.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
+import { createFeatureEnvironmentResolver } from './feature/feature-environment.js';
+import { createGitBranchReader } from './feature/feature-branch-git-adapter.js';
 import { attachTerminalWs } from './terminal/terminal-ws-server.js';
 import { isTransientProviderFailure } from './pr-review/transient-failure.js';
 
@@ -1377,6 +1379,14 @@ function main(): void {
     }
     return repoService.list().find((r) => r.id === repoId)?.localPath;
   };
+
+  // Full environment (cwd + current branch) a feature's sessions run in, used by
+  // the cross-feature move consent dialog to show the branch a session switches
+  // to. The IDE owns this so a session always follows its feature's checkout.
+  const featureEnvironmentResolver = createFeatureEnvironmentResolver({
+    resolveCwd: resolveSessionCwd,
+    branch: createGitBranchReader(),
+  });
 
   const cliStorePath = pathJoin(
     homedir(),
@@ -2859,6 +2869,13 @@ function main(): void {
       sessions: sessionRepo,
       sessionHistory: copilotHistoryReader,
       resolveSessionCwd,
+      resolveSessionEnvironment: (featureId) =>
+        featureEnvironmentResolver.resolve(featureId),
+      relaunchSession: async (session) => {
+        await terminalManager!.relaunch(session, {
+          cwd: resolveSessionCwd(session.featureId),
+        });
+      },
       providers,
       aggregates: featureAnalytics,
       summarizer,

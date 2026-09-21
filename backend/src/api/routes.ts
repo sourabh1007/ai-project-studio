@@ -26,6 +26,8 @@ import type { SessionConfig } from '../session/config.js';
 import type { SessionFactory } from '../session/session-factory.js';
 import type { SessionLauncher } from '../session/session-launcher.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
+import type { Session } from '../session/session-contract.js';
+import type { FeatureEnvironment } from '../feature/feature-environment.js';
 import type { FeatureSummarizer } from '../summarizer/summarizer-contract.js';
 import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
@@ -128,6 +130,17 @@ export interface ApiRoutesDeps {
    * launcher so `/features/:id/sessions` pins the cwd like the terminal path.
    */
   resolveSessionCwd?: (featureId: string) => string | undefined;
+  /**
+   * Resolves a feature's full environment (cwd + current branch) for the
+   * cross-feature move consent dialog.
+   */
+  resolveSessionEnvironment: (featureId: string) => Promise<FeatureEnvironment>;
+  /**
+   * Relaunches a session's live terminal in its feature's current working
+   * directory, so a consented cross-feature move switches the running CLI's
+   * branch immediately.
+   */
+  relaunchSession: (session: Session) => Promise<void>;
   providers: ProviderRegistry;
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
@@ -264,6 +277,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       history: deps.sessionHistory,
       logger: deps.logger,
       resolveCwd: deps.resolveSessionCwd,
+      resolveEnvironment: deps.resolveSessionEnvironment,
+      relaunchSession: deps.relaunchSession,
     }),
     ...createTerminalRoutes({
       resolver: deps.resolver,

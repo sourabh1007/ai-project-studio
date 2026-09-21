@@ -46,9 +46,12 @@ function harness(
     historySummary?: string | null;
     historyFirstUserMessage?: string | null;
     resolveCwd?: (featureId: string) => string | undefined;
+    resolveEnvironment?: (featureId: string) => Promise<{ cwd: string | null; branch: string | null }>;
+    relaunchSession?: (session: Session) => Promise<void>;
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
+  const relaunched: Session[] = [];
   const logs: LogRecord[] = [];
   const logger: Logger = createLogger('error', (r) => logs.push(r));
   const running = { sessionId: 's1' } as unknown as RunningSession;
@@ -111,8 +114,14 @@ function harness(
     history,
     logger,
     resolveCwd: options.resolveCwd,
+    resolveEnvironment:
+      options.resolveEnvironment ??
+      (async (id: string) => ({ cwd: `C:/repo/${id}`, branch: 'main' })),
+    relaunchSession:
+      options.relaunchSession ??
+      (async (session: Session) => void relaunched.push(session)),
   });
-  return { routes, requests, logs, deleted, renamed };
+  return { routes, requests, logs, deleted, renamed, relaunched };
 }
 
 describe('session-controller', () => {
@@ -276,6 +285,34 @@ describe('session-controller', () => {
       req({ params: { id: 'nope' } }),
     );
     expect(result.status).toBe(404);
+  });
+
+  it('resolves a feature environment (cwd + branch) for the move dialog', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      resolveEnvironment: async (id) => ({ cwd: `C:/wt/${id}`, branch: 'pr-42' }),
+    });
+    const result = await pick(h.routes, 'get', '/features/:featureId/environment')(
+      req({ params: { featureId: 'f9' } }),
+    );
+    expect(result).toEqual({ status: 200, body: { cwd: 'C:/wt/f9', branch: 'pr-42' } });
+  });
+
+  it('relaunches a session terminal and echoes the session', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'post', '/sessions/:id/relaunch')(
+      req({ params: { id: 's1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: session });
+    expect(h.relaunched).toEqual([session]);
+  });
+
+  it('returns 404 relaunching an unknown session', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'post', '/sessions/:id/relaunch')(
+      req({ params: { id: 'nope' } }),
+    );
+    expect(result.status).toBe(404);
+    expect(h.relaunched).toEqual([]);
   });
 
   it('deletes a session and returns its id', async () => {
