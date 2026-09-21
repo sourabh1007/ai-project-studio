@@ -61,6 +61,14 @@ export interface StartSessionRequest {
   /** Restrict the run to zero tools (pure prompt→text completion). */
   noTools?: boolean;
   /**
+   * Optional operations-board metadata for background `meta` launches that do
+   * not go through the recording MetaRunner (feature/session summaries, context
+   * merge). The real launcher ignores these; a recording launcher decorator
+   * reads them so every metasession is visible in the operations history.
+   */
+  purpose?: string;
+  label?: string;
+  /**
    * Aborts provider launch or kills the started run when the caller no longer
    * wants the session (for example a cancelled metasession action).
    */

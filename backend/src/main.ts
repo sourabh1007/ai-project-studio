@@ -278,6 +278,7 @@ import {
 } from './skills/config.js';
 import { createMetaRunner } from './meta/meta-runner.js';
 import { createRecordingMetaRunner } from './meta/recording-meta-runner.js';
+import { createRecordingSessionLauncher } from './meta/recording-session-launcher.js';
 import { createOwnedMetaRunner } from './meta/owned-meta-runner.js';
 import { createMetaSettings } from './meta/meta-settings.js';
 import {
@@ -1489,6 +1490,18 @@ function main(): void {
     },
   });
 
+  // Background `meta` launches that bypass the recording MetaRunner (feature and
+  // session summaries, context merge) go through this decorator so every
+  // metasession — and the provider credits it spends — is visible in the
+  // operations history, exactly like the metaAi-routed operations. The raw
+  // `launcher` stays wired to the MetaRunner below to avoid double-recording.
+  const recordingLauncher = createRecordingSessionLauncher({
+    base: launcher,
+    operations: metaOperationRepo,
+    clock,
+    newOperationId: () => ids.next(),
+  });
+
   // Reconciles a session's persisted resolved model with a freshly-observed
   // one (from a usage row or a CLI model-change announcement), persisting and
   // broadcasting only on a real change so the UI's per-session model label
@@ -1681,7 +1694,7 @@ function main(): void {
     sessions: sessionRepo,
     features: featureService,
     transcripts: transcriptRepo,
-    launcher,
+    launcher: recordingLauncher,
     service: contextService,
     summarizerConfig,
     config: contextConfig,
@@ -1730,7 +1743,7 @@ function main(): void {
   });
   const summarizer = createSummaryRunner({
     collector,
-    launcher,
+    launcher: recordingLauncher,
     transcripts: transcriptRepo,
     summaries: summaryRepo,
     features: featureService,
@@ -1741,7 +1754,7 @@ function main(): void {
     sessions: sessionRepo,
     features: featureService,
     transcripts: transcriptRepo,
-    launcher,
+    launcher: recordingLauncher,
     store: sessionSummaryRepo,
     clock,
     config: summarizerConfig,

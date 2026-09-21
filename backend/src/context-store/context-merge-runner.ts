@@ -89,6 +89,8 @@ export function createContextMergeRunner(
         model: deps.summarizerConfig.model,
         prompt,
         kind: 'meta',
+        purpose: 'context-merge',
+        label: 'Workspace context',
         signal,
       });
       const ended = await launched.completion;

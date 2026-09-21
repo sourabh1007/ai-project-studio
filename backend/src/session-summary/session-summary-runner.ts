@@ -55,6 +55,8 @@ export function createSessionSummaryRunner(
         model: deps.config.model,
         prompt,
         kind: 'meta',
+        purpose: 'session-summary',
+        label: 'Session summary',
         signal,
       });
       const ended = await launched.completion;
