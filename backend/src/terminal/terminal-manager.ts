@@ -22,6 +22,11 @@ import {
 } from '../self-recovery/self-recovery-coordinator.js';
 import { stripAnsi } from './ansi.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
+import type { BootstrapInstructionsWriter } from './bootstrap-instructions-port.js';
+import {
+  INJECTING_CONTEXT_NOTICE,
+  withInstructionsDir,
+} from './bootstrap-instructions.js';
 import { createWorkTracker } from '../kernel/work-tracker.js';
 import type { Logger } from '../kernel/logger.js';
 
@@ -37,6 +42,15 @@ export interface TerminalManagerDeps {
   config: TerminalConfig;
   transcriptStore: TranscriptStore;
   bootstrap: Pick<SessionBootstrap, 'composeForSession'>;
+  /**
+   * Delivers the composed bootstrap context to the CLI as a silently discovered
+   * custom-instructions file (via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`) instead of
+   * typing it into the terminal as a wall of prompt text. When provided, the
+   * context is written to a per-session file, the search dir is merged into the
+   * spawn env, and the terminal shows a one-line status; the raw block is never
+   * seeded. Omitted to fall back to seeding the context as an injected prompt.
+   */
+  bootstrapInstructions?: BootstrapInstructionsWriter;
   /** Records files each session creates/edits, parsed from its own output. */
   sessionFiles: Pick<SessionFilesStore, 'record'>;
   /**
@@ -206,6 +220,7 @@ export function createTerminalManager(
     session: Session,
     options: LaunchOptions,
     bootstrap: string,
+    injectionDir?: string | null,
   ): TerminalSession {
     assertLaunchable(session.id);
     const provider = deps.providers.get(session.provider);
@@ -227,6 +242,14 @@ export function createTerminalManager(
       exitCode: null,
     };
     const command = provider.buildInteractiveCommand(spec);
+    // When the bootstrap context is delivered as a discovered instructions
+    // file, add its directory to the CLI's custom-instructions search path so
+    // the context loads silently instead of being typed into the terminal.
+    const injectContext =
+      typeof injectionDir === 'string' && injectionDir.length > 0;
+    const spawnEnv = injectContext
+      ? withInstructionsDir(command.env, injectionDir)
+      : command.env;
     assertLaunchable(session.id);
     const launchedGeneration = ++generation;
     generations.set(session.id, launchedGeneration);
@@ -237,7 +260,7 @@ export function createTerminalManager(
       pty = deps.spawner.spawn({
         command: command.command,
         args: command.args,
-        env: command.env,
+        env: spawnEnv,
         cwd: options.cwd,
         cols: options.cols ?? deps.config.defaultCols,
         rows: options.rows ?? deps.config.defaultRows,
@@ -259,7 +282,9 @@ export function createTerminalManager(
 
     // Blocks to seed once the CLI is ready, in order: repository/feature/skill
     // bootstrap first, then any replay prompt from a self-recovery restart.
-    const seeds = [bootstrap, options.replaySeed ?? ''].filter(
+    // When the context is delivered as an instructions file, it is NOT seeded —
+    // the CLI reads it silently — leaving only any replay prompt.
+    const seeds = [injectContext ? '' : bootstrap, options.replaySeed ?? ''].filter(
       (block) => block.length > 0,
     );
 
@@ -327,6 +352,17 @@ export function createTerminalManager(
         retries.get(session.id)?.dispose();
         retries.delete(session.id);
         const wasDiscarded = discarded.delete(session.id);
+        // Remove the session's context instructions file on a genuine exit. A
+        // discarded exit is a self-recovery restart that keeps the same session
+        // id — its replacement still needs the file, so leave it in place.
+        if (!wasDiscarded && deps.bootstrapInstructions) {
+          void deps.bootstrapInstructions.clear(session.id).catch((error) => {
+            deps.logger.error('Failed to clear bootstrap instructions', {
+              sessionId: session.id,
+              error,
+            });
+          });
+        }
         finishExit({
           code, discarded: wasDiscarded, cancelled: stopped, endedAt: deps.clock.isoNow(),
         });
@@ -339,6 +375,13 @@ export function createTerminalManager(
     });
 
     sessions.set(session.id, terminal);
+
+    // Show a one-line status when context was delivered as a silent
+    // instructions file, so the user sees it is being applied rather than
+    // nothing (the raw block never scrolls past because it is not seeded).
+    if (injectContext) {
+      terminal.notify(INJECTING_CONTEXT_NOTICE);
+    }
 
     // Track files this session creates/edits by parsing the tool's own output.
     // Each PTY is one session, so attribution is unambiguous — unlike watching
@@ -364,6 +407,20 @@ export function createTerminalManager(
     return terminal;
   }
 
+  /**
+   * Writes the composed bootstrap context to a per-session instructions file
+   * when a writer is configured, returning the directory to add to the CLI's
+   * custom-instructions search path. Returns null when file delivery is not
+   * configured or there is no context to inject, so the caller falls back to
+   * seeding the context as a prompt block.
+   */
+  async function prepareContextInjection(
+    session: Session,
+    bootstrap: string,
+  ): Promise<string | null> {
+    return deps.bootstrapInstructions!.write(session.id, bootstrap);
+  }
+
   async function launch(
     session: Session,
     options: LaunchOptions,
@@ -378,7 +435,11 @@ export function createTerminalManager(
       typeof bootstrapOrPromise === 'string'
         ? bootstrapOrPromise
         : await bootstrapOrPromise;
-    return spawnTerminal(session, options, bootstrap);
+    const injectionDir =
+      deps.bootstrapInstructions && bootstrap.length > 0
+        ? await prepareContextInjection(session, bootstrap)
+        : null;
+    return spawnTerminal(session, options, bootstrap, injectionDir);
   }
 
   /**
@@ -536,6 +597,10 @@ export function createTerminalManager(
         if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
         return false;
       }
+      const injectionDir =
+        deps.bootstrapInstructions && bootstrap.length > 0
+          ? await prepareContextInjection(session, bootstrap)
+          : null;
       let resolve!: (terminal: TerminalSession) => void;
       let reject!: (error: unknown) => void;
       const promise = new Promise<TerminalSession>((yes, no) => {
@@ -546,7 +611,7 @@ export function createTerminalManager(
       try {
         try {
           resolve(
-            spawnTerminal(session, { ...options, replaySeed: prompt }, bootstrap),
+            spawnTerminal(session, { ...options, replaySeed: prompt }, bootstrap, injectionDir),
           );
         } catch (error) {
           reject(error);

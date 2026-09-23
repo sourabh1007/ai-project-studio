@@ -35,6 +35,14 @@ export interface Session {
   groupId?: string | null;
   /** Sort position within its container (the feature root or a group). */
   orderIndex?: number;
+  /**
+   * Immutable, workspace-global creation ordinal assigned once when the session
+   * is first persisted. Drives the "Session #N" fallback label so it stays
+   * stable when the session is moved between features or reordered — a move
+   * only changes placement, never identity. Null for legacy rows created before
+   * the column existed (the UI then falls back to positional numbering).
+   */
+  seq?: number | null;
   prompt: string;
   /** Read-side fallback title derived from CLI history when prompt is empty. */
   workTitle?: string | null;

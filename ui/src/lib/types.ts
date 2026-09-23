@@ -154,6 +154,29 @@ export interface RepoDefinitionContent {
   content: string;
 }
 
+/** The four independently-analysed sections of a repository insights scan. */
+export type RepoInsightsSection = 'agents' | 'skills' | 'docs' | 'readiness';
+
+/**
+ * One event from a streaming insights analysis. The server resolves the branch,
+ * fans the four sections out across the warm metasession pool, and emits per
+ * section a `section-analyzing` (again with `healing: true` while it self-heals)
+ * then a terminal `section` or `section-failed`, closing with a `done`.
+ */
+export type RepoInsightsStreamEvent =
+  | { type: 'branch'; branch: string }
+  | { type: 'section-analyzing'; section: RepoInsightsSection; healing: boolean }
+  | {
+      type: 'section';
+      section: RepoInsightsSection;
+      entries?: RepoDefinitionEntry[];
+      readiness?: ReadinessCheck[];
+      analysis: string | null;
+      analysisError?: string;
+    }
+  | { type: 'section-failed'; section: RepoInsightsSection; error: string }
+  | { type: 'done'; insights: RepoInsights };
+
 /** Lifecycle of a single analysis step within a PR review. */
 export type PrReviewStepStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
@@ -949,6 +972,13 @@ export interface Session {
   groupId?: string | null;
   /** Sort position among its siblings (sessions and groups share the space). */
   orderIndex?: number;
+  /**
+   * Immutable, workspace-global creation ordinal. Drives the "Session #N"
+   * fallback label so it stays fixed when a session is moved between features
+   * or reordered. Null for legacy sessions predating the field (the tree then
+   * falls back to positional numbering).
+   */
+  seq?: number | null;
 }
 
 /** What a tree group represents: a plain folder or a pull-request container. */

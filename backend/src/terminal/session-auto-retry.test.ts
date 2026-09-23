@@ -79,6 +79,25 @@ describe('createSessionAutoRetry', () => {
     expect(h.notices).toHaveLength(1);
   });
 
+  it('does not re-show manual guidance on later unconfirmed errors after keystrokes', () => {
+    const h = harness();
+    h.controller.observeOutput('503 first\n');
+    expect(h.notices).toHaveLength(1);
+    h.controller.observeInput('typing more\r');
+    h.controller.observeOutput('503 second\n');
+    expect(h.notices).toHaveLength(1);
+  });
+
+  it('re-arms the manual guidance after a new confirmed request later fails unconfirmed', () => {
+    const h = harness();
+    h.controller.observeOutput('503 first\n');
+    expect(h.notices).toHaveLength(1);
+    h.controller.confirmReplaySafeRequest('go');
+    h.controller.confirmReplaySafeRequest('');
+    h.controller.observeOutput('503 again\n');
+    expect(h.notices).toHaveLength(2);
+  });
+
   it('only scans complete output lines', () => {
     const h = harness();
     h.controller.confirmReplaySafeRequest('go');

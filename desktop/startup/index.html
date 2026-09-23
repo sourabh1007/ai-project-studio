@@ -20,11 +20,78 @@
       </header>
       <section class="identity">
         <div class="emblem">
-          <div class="orbit orbit-three" aria-hidden="true"></div>
-          <div class="orbit orbit-two" aria-hidden="true"></div>
-          <div class="orbit orbit-one" aria-hidden="true"></div>
-          <img class="app-icon" src="../build-resources/icon.png" width="156" height="156" alt="AI Project Studio">
-          <span class="spark" aria-hidden="true"></span>
+          <svg class="app-icon" viewBox="0 0 200 200" width="180" height="180" overflow="visible" role="img" aria-label="AI Project Studio">
+            <defs>
+              <radialGradient id="aura" cx="50%" cy="45%" r="55%">
+                <stop offset="0%" stop-color="#8bbaff" stop-opacity="0.55"/>
+                <stop offset="55%" stop-color="#57e6dc" stop-opacity="0.16"/>
+                <stop offset="100%" stop-color="#57e6dc" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="core" cx="34%" cy="28%" r="80%">
+                <stop offset="0%" stop-color="#f2f7ff"/>
+                <stop offset="42%" stop-color="#7fa8ff"/>
+                <stop offset="100%" stop-color="#3f5ec6"/>
+              </radialGradient>
+              <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#a5d8ff"/>
+                <stop offset="55%" stop-color="#8bbaff"/>
+                <stop offset="100%" stop-color="#86dfdb"/>
+              </linearGradient>
+              <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#ffffff"/>
+                <stop offset="100%" stop-color="#a5f3ed"/>
+              </linearGradient>
+              <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="2.2" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+                <feGaussianBlur stdDeviation="6"/>
+              </filter>
+            </defs>
+
+            <circle cx="100" cy="100" r="70" fill="url(#aura)" filter="url(#softGlow)">
+              <animate attributeName="r" values="66;76;66" dur="4.5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+              <animate attributeName="opacity" values="0.75;1;0.75" dur="4.5s" repeatCount="indefinite"/>
+            </circle>
+
+            <g fill="none">
+              <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="24s" repeatCount="indefinite"/>
+                <circle cx="100" cy="100" r="80" stroke="url(#ring)" stroke-width="1.3" stroke-dasharray="3 11" stroke-linecap="round" opacity="0.6"/>
+                <circle cx="100" cy="20" r="3.6" fill="#eaf5ff" filter="url(#glow)"/>
+                <circle cx="169" cy="140" r="2.4" fill="#c2deff" filter="url(#glow)"/>
+              </g>
+              <g>
+                <animateTransform attributeName="transform" type="rotate" from="360 100 100" to="0 100 100" dur="34s" repeatCount="indefinite"/>
+                <circle cx="100" cy="100" r="62" stroke="#71d7f0" stroke-width="1" stroke-dasharray="2 9" opacity="0.45"/>
+                <circle cx="38" cy="100" r="3.2" fill="#d6fffb" filter="url(#glow)"/>
+              </g>
+              <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="16s" repeatCount="indefinite"/>
+                <circle cx="100" cy="100" r="46" stroke="#9d86ff" stroke-width="0.9" stroke-dasharray="1 8" opacity="0.4"/>
+                <circle cx="100" cy="54" r="3" fill="#efeaff" filter="url(#glow)"/>
+              </g>
+            </g>
+
+            <g transform="translate(100 100)">
+              <rect x="-33" y="-33" width="66" height="66" rx="19" fill="url(#core)" stroke="#bcd8ff" stroke-opacity="0.45" stroke-width="1.2" filter="url(#glow)"/>
+              <g stroke="#dcecff" stroke-opacity="0.5" stroke-width="1">
+                <line x1="0" y1="0" x2="-16" y2="-13"/>
+                <line x1="0" y1="0" x2="17" y2="-11"/>
+                <line x1="0" y1="0" x2="-3" y2="18"/>
+              </g>
+              <g fill="#eaf5ff">
+                <circle cx="-16" cy="-13" r="2.6"><animate attributeName="opacity" values="0.4;1;0.4" dur="2.6s" repeatCount="indefinite"/></circle>
+                <circle cx="17" cy="-11" r="2.6"><animate attributeName="opacity" values="1;0.4;1" dur="3.2s" repeatCount="indefinite"/></circle>
+                <circle cx="-3" cy="18" r="2.6"><animate attributeName="opacity" values="0.5;1;0.5" dur="2.9s" repeatCount="indefinite"/></circle>
+              </g>
+              <path d="M0 -19 C2.5 -6 6 -2.5 19 0 C6 2.5 2.5 6 0 19 C-2.5 6 -6 2.5 -19 0 C-6 -2.5 -2.5 -6 0 -19 Z" fill="url(#spark)" filter="url(#glow)">
+                <animateTransform attributeName="transform" type="scale" values="0.86;1.12;0.86" dur="3s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                <animate attributeName="opacity" values="0.9;1;0.9" dur="3s" repeatCount="indefinite"/>
+              </path>
+            </g>
+          </svg>
         </div>
         <div class="brand">
           <p class="eyebrow">A space for project development using AI</p>

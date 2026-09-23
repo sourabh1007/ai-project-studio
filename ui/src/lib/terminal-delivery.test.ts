@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTerminalDelivery } from './terminal-delivery.js';
+import { createTerminalDelivery, chunkByUtf8Bytes } from './terminal-delivery.js';
 import type { ClientMessage, ServerMessage, TerminalState } from './terminal-protocol.js';
 
 function fixture() {
@@ -36,22 +36,44 @@ describe('terminal input delivery', () => {
     f.delivery.offer('another');
     expect(f.sent).toHaveLength(4);
   });
-  it('rejects oversized paste in full and blocks Enter without replaying any queued prefix', () => {
+  it('streams an oversized paste through the budget window in order instead of failing', () => {
     const f = fixture();
-    f.state('bootstrapping', 1, 4);
-    f.delivery.offer('a'); f.delivery.offer('😀'); f.delivery.offer('\r');
-    f.state('ready');
-    expect(f.sent).toEqual([]);
-    expect(f.statuses.at(-1)).toEqual(expect.objectContaining({ state: 'failed' }));
-    expect(f.statuses.at(-1)?.notice).toContain('Paste rejected in full');
-    expect(f.statuses.at(-1)?.notice).toContain('1 unsent');
+    f.state('ready', 1, 4); // 4-byte outstanding window
+    f.delivery.offer('abcdefghij'); // 10 ASCII bytes — larger than the window
+    // Only the first window-sized frame goes out; the rest wait for acks.
+    expect(f.sent).toEqual([{ type: 'input', data: 'abcd', generation: 1, seq: 1 }]);
+    f.ack(1);
+    expect(f.sent.at(-1)).toEqual({ type: 'input', data: 'efgh', generation: 1, seq: 2 });
+    f.ack(2);
+    expect(f.sent.at(-1)).toEqual({ type: 'input', data: 'ij', generation: 1, seq: 3 });
+    f.ack(3);
+    // The whole paste was delivered in order and the connection never failed.
+    expect(f.sent.map((m) => (m as Extract<ClientMessage, { type: 'input' }>).data).join('')).toBe(
+      'abcdefghij',
+    );
+    expect(f.statuses.some((s) => s.state === 'failed')).toBe(false);
   });
-  it('rejects a queued transaction if the server advertises a smaller limit', () => {
+  it('defers a multi-byte code point that cannot fit the remaining window until acks free space', () => {
     const f = fixture();
-    f.delivery.offer('long text');
-    f.state('ready', 1, 2);
-    expect(f.sent).toEqual([]);
-    expect(f.statuses.at(-1)?.notice).toContain('Server input limit');
+    f.state('ready', 1, 4);
+    f.delivery.offer('a'); // 1 byte — sent, leaving 3 free in the window
+    f.delivery.offer('😀'); // 4 bytes — cannot fit 3, must not be split, waits
+    expect(f.sent).toEqual([{ type: 'input', data: 'a', generation: 1, seq: 1 }]);
+    f.ack(1); // frees the window
+    expect(f.sent.at(-1)).toEqual({ type: 'input', data: '😀', generation: 1, seq: 2 });
+  });
+  it('slices already-queued input to fit a smaller limit the server later advertises', () => {
+    const f = fixture();
+    f.delivery.offer('long text'); // buffered before the limit is known
+    f.state('ready', 1, 2); // server advertises a 2-byte window
+    expect(f.sent).toEqual([{ type: 'input', data: 'lo', generation: 1, seq: 1 }]);
+    expect(f.statuses.some((s) => s.state === 'failed')).toBe(false);
+  });
+  it('still makes progress from an empty window when the server advertises a zero limit', () => {
+    const f = fixture();
+    f.state('ready', 1, 0);
+    f.delivery.offer('X');
+    expect(f.sent).toEqual([{ type: 'input', data: 'X', generation: 1, seq: 1 }]);
   });
   it('discards unsent/uncertain data on loss, and never retransmits into another epoch', () => {
     const f = fixture();
@@ -95,3 +117,26 @@ describe('terminal input delivery', () => {
     f.delivery.receive({ type: 'output', data: '' } as ServerMessage);
   });
 });
+
+describe('chunkByUtf8Bytes', () => {
+  it('returns an empty list for empty input', () => {
+    expect(chunkByUtf8Bytes('', 4)).toEqual([]);
+  });
+  it('returns the whole string when it already fits', () => {
+    expect(chunkByUtf8Bytes('abc', 8)).toEqual(['abc']);
+  });
+  it('splits ASCII on exact byte boundaries', () => {
+    expect(chunkByUtf8Bytes('abcdef', 4)).toEqual(['abcd', 'ef']);
+  });
+  it('never splits a multi-byte code point across a boundary', () => {
+    // 'a' (1 byte) + '😀' (4 bytes) + 'b' (1 byte); a 4-byte window must keep
+    // the emoji intact rather than cutting it into replacement characters.
+    const pieces = chunkByUtf8Bytes('a😀b', 4);
+    expect(pieces).toEqual(['a', '😀', 'b']);
+    for (const piece of pieces) expect(piece).not.toContain('\uFFFD');
+  });
+  it('emits a lone code point wider than the window whole rather than stalling', () => {
+    expect(chunkByUtf8Bytes('😀', 2)).toEqual(['😀']);
+  });
+});
+

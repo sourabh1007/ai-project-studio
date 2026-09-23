@@ -56,6 +56,26 @@ export const repoInsightsConfigSchema = z.object({
   fallbackBranch: z.string().min(1),
   /** The ordered agent-readiness checklist evaluated against the branch. */
   readinessChecks: z.array(readinessCheckSchema).min(1),
+  /** Per-section metasession enrichment (parallel, warm-pool, self-healing). */
+  enrichment: z.object({
+    /** When false the streaming scan is structural-only (no metasessions). */
+    enabled: z.boolean(),
+    /**
+     * Prompt template for a section's analysis. Placeholders: `{section}`,
+     * `{repository}`, `{branch}` and `{evidence}` (the section's scanned items).
+     */
+    promptTemplate: z.string().min(1),
+    /** Hard timeout (ms) for one section's enrichment metasession turn. */
+    timeoutMs: z.number().int().positive(),
+    /** Warm attempts before the final forced-cold self-heal attempt. */
+    retryAttempts: z.number().int().nonnegative(),
+    /** Backoff (ms) between warm self-heal attempts. */
+    retryBackoffMs: z.number().int().nonnegative(),
+    /** Analyses longer than this are truncated. */
+    maxAnalysisChars: z.number().int().positive(),
+    /** Warm sessions kept free for other IDE work while fanning out. */
+    fanOutReserve: z.number().int().nonnegative(),
+  }),
 });
 
 export type RepoInsightsConfig = z.infer<typeof repoInsightsConfigSchema>;
@@ -89,4 +109,23 @@ export const repoInsightsDefaults: RepoInsightsConfig = {
       test: { kind: 'anyDefinitionUnder', directory: '.github/agents' },
     },
   ],
+  enrichment: {
+    enabled: true,
+    promptTemplate: [
+      'You are analysing the "{section}" section of the repository {repository} on branch {branch}.',
+      'Below is the evidence discovered for this section:',
+      '',
+      '{evidence}',
+      '',
+      'In 1-3 short sentences, summarise what this tells a developer about the',
+      "repository's {section} readiness — coverage, notable gaps, and one concrete",
+      'next step if useful. Be specific and do not invent files that are not listed.',
+      'Reply with plain prose only, no headings or markdown.',
+    ].join('\n'),
+    timeoutMs: 60_000,
+    retryAttempts: 2,
+    retryBackoffMs: 500,
+    maxAnalysisChars: 600,
+    fanOutReserve: 1,
+  },
 };

@@ -438,14 +438,17 @@ export class AcpClient {
             const thought = thoughtFromUpdate(message.params);
             if (thought !== null) {
               this.active.thought += thought;
-              let index = this.active.thought.indexOf('\n');
-              while (index !== -1) {
-                const thoughtLine = this.active.thought.slice(0, index).trim();
+              // Split once instead of repeatedly slicing the head (O(n²) in the
+              // number of lines) so a thought-heavy warm turn cannot stall the
+              // event loop. `split` always yields at least one element, so the
+              // trailing partial is the last element and `pop` is defined.
+              const thoughtParts = this.active.thought.split('\n');
+              this.active.thought = thoughtParts.pop()!;
+              for (const part of thoughtParts) {
+                const thoughtLine = part.trim();
                 if (thoughtLine.length > 0) {
                   this.active.onNotice(`🤔 ${thoughtLine}`);
                 }
-                this.active.thought = this.active.thought.slice(index + 1);
-                index = this.active.thought.indexOf('\n');
               }
             }
             const notice = noticeFromUpdate(message.params);

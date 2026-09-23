@@ -201,7 +201,10 @@ test('startup assets are packaged, use the 1024px icon, and respect reduced moti
   assert.equal(icon.readUInt32BE(20), 1024);
   const html = fs.readFileSync(path.join(desktop, 'startup', 'index.html'), 'utf8');
   assert.match(html, /role="status" aria-live="polite"/);
-  assert.match(html, /src="\.\.\/build-resources\/icon\.png"/);
+  // The splash centrepiece is a self-contained animated vector emblem (crisp at
+  // any DPI) rather than a raster image — assert the animated SVG is present.
+  assert.match(html, /<svg class="app-icon"[^>]*role="img"[^>]*aria-label="AI Project Studio"/);
+  assert.match(html, /<animateTransform/);
   assert.match(html, /script-src 'self'/);
   const css = fs.readFileSync(path.join(desktop, 'startup', 'startup.css'), 'utf8');
   assert.match(css, /prefers-reduced-motion: reduce/);

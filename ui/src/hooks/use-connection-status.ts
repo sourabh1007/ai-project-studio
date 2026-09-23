@@ -3,8 +3,10 @@ import { useApi } from '../app/api-context.js';
 import { desktopBridge } from '../lib/desktop-bridge.js';
 import {
   deriveConnectionStatus,
+  trackProbe,
+  INITIAL_PROBE,
   type ConnectionStatus,
-  type ProbeOutcome,
+  type ProbeTracker,
 } from '../lib/connection-status.js';
 
 /** How often to poll the backend `/health` probe while the app is online. */
@@ -23,7 +25,7 @@ function readBrowserOnline(): boolean {
 export function useConnectionStatus(): ConnectionStatus {
   const api = useApi();
   const [browserOnline, setBrowserOnline] = useState(readBrowserOnline);
-  const [lastProbe, setLastProbe] = useState<ProbeOutcome>('unknown');
+  const [probe, setProbe] = useState<ProbeTracker>(INITIAL_PROBE);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
   const cancelled = useRef(false);
 
@@ -52,9 +54,9 @@ export function useConnectionStatus(): ConnectionStatus {
       inFlight = true;
       try {
         await api.checkHealth();
-        if (!cancelled.current) setLastProbe('ok');
+        if (!cancelled.current) setProbe((prev) => trackProbe(prev, 'ok'));
       } catch {
-        if (!cancelled.current) setLastProbe('error');
+        if (!cancelled.current) setProbe((prev) => trackProbe(prev, 'error'));
       } finally {
         inFlight = false;
       }
@@ -67,5 +69,9 @@ export function useConnectionStatus(): ConnectionStatus {
     };
   }, [api]);
 
-  return deriveConnectionStatus({ browserOnline, lastProbe, backendUnavailable });
+  return deriveConnectionStatus({
+    browserOnline,
+    lastProbe: probe.outcome,
+    backendUnavailable,
+  });
 }

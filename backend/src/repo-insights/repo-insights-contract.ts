@@ -47,6 +47,52 @@ export interface RepoInsights {
   generatedAt: string;
 }
 
+/**
+ * The four independent sections of a repository insights scan. Each is analysed
+ * by its own warmed-up metasession in parallel so a slow section never blocks
+ * the others and the whole pass cannot stall a single request past its timeout.
+ */
+export type RepoInsightsSection = 'agents' | 'skills' | 'docs' | 'readiness';
+
+/**
+ * One event from a streaming insights analysis ({@link
+ * RepoInsightsService.analyzeStream}). The server resolves the branch, then fans
+ * the four sections out across the warm metasession pool and emits, per section,
+ * a `section-analyzing` when it starts (again with `healing: true` while a failed
+ * section self-heals on a fresh session), then exactly one terminal `section`
+ * (structural entries plus the metasession's analysis) or `section-failed`.
+ * A final `done` carries the fully assembled snapshot. Streaming each section as
+ * it settles lets the page fill progressively over one long-lived request rather
+ * than a single blocking GET that times out on a large repository.
+ */
+export type RepoInsightsStreamEvent =
+  | { type: 'branch'; branch: string }
+  | {
+      type: 'section-analyzing';
+      section: RepoInsightsSection;
+      /** True when this is a self-heal retry after an earlier attempt failed. */
+      healing: boolean;
+    }
+  | {
+      type: 'section';
+      section: RepoInsightsSection;
+      /** Discovered definitions for agents/skills/docs sections. */
+      entries?: RepoDefinitionEntry[];
+      /** Evaluated checks for the readiness section. */
+      readiness?: ReadinessCheck[];
+      /** The metasession's short analysis of the section, or null when none. */
+      analysis: string | null;
+      /** Set when enrichment ultimately failed but the structural scan is valid. */
+      analysisError?: string;
+    }
+  | { type: 'section-failed'; section: RepoInsightsSection; error: string }
+  | { type: 'done'; insights: RepoInsights };
+
+/** Sink the server-side insights fan-out writes each event to as it settles. */
+export interface RepoInsightsStreamSink {
+  emit(event: RepoInsightsStreamEvent): void;
+}
+
 /** The full, read-only content of a single discovered definition or doc file. */
 export interface RepoDefinitionContent {
   /** Repository-relative path of the file. */

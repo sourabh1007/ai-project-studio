@@ -235,7 +235,7 @@ describe('session-repo', () => {
     const repo = createSessionRepo(db);
     expect(repo.get('missing')).toBeNull();
     repo.save(session());
-    expect(repo.get('s1')).toEqual(session());
+    expect(repo.get('s1')).toEqual(session({ seq: 1 }));
     repo.save(session({ status: 'completed', resolvedModel: 'gpt-5.4-mini', endedAt: '2025-01-01T00:00:05.000Z', exitCode: 0 }));
     expect(repo.get('s1')?.status).toBe('completed');
     expect(repo.get('s1')?.exitCode).toBe(0);
@@ -321,6 +321,28 @@ describe('session-repo', () => {
     const repo = createSessionRepo(db);
     repo.save(session({ id: 'noscope', scope: undefined as unknown as Session['scope'] }));
     expect(repo.get('noscope')?.scope).toBe('feature');
+    db.close();
+  });
+
+  it('assigns an immutable creation sequence and preserves it across updates', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ id: 's1' }));
+    repo.save(session({ id: 's2' }));
+    repo.save(session({ id: 's3', featureId: 'f2' }));
+    expect(repo.get('s1')?.seq).toBe(1);
+    expect(repo.get('s2')?.seq).toBe(2);
+    expect(repo.get('s3')?.seq).toBe(3);
+
+    // A later save (status change / rename / move) must not renumber the seq.
+    repo.save(session({ id: 's1', status: 'completed' }));
+    repo.rename('s1', 'Renamed');
+    repo.updatePlacement('s1', { featureId: 'f2', groupId: null, orderIndex: 5 });
+    expect(repo.get('s1')?.seq).toBe(1);
+
+    // A brand-new session continues the sequence from the current maximum.
+    repo.save(session({ id: 's4' }));
+    expect(repo.get('s4')?.seq).toBe(4);
     db.close();
   });
 

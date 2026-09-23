@@ -2038,6 +2038,31 @@ body.is-resizing {
   outline-offset: 1px;
 }
 
+.repo-section-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 0.82rem;
+  color: var(--text-muted, #9aa4b2);
+}
+
+.repo-section-analysis {
+  display: block;
+  line-height: 1.45;
+  color: var(--text-muted, #9aa4b2);
+  border-left: 2px solid var(--accent);
+  padding-left: var(--space-2);
+}
+
+.repo-section-note-warn {
+  color: #fbbf24;
+}
+
+.repo-section-note-error {
+  color: #f87171;
+}
+
 .repo-def-viewer {
   display: flex;
   flex-direction: column;
@@ -5451,29 +5476,29 @@ body.is-resizing {
   min-width: 0;
 }
 
-.session-meta-row {
+.session-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 16px;
+  min-width: 0;
+}
+
+.session-summary-model {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.66rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-left: 16px;
-}
-
-.session-metrics-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  padding-left: 16px;
 }
 
 .session-metrics-open {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: wrap;
-  width: 100%;
+  flex: 0 0 auto;
   padding: 2px 4px;
   margin: -2px -4px;
   background: transparent;
@@ -5482,6 +5507,7 @@ body.is-resizing {
   color: inherit;
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
 }
 
 .session-metrics-open:hover {

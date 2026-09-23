@@ -153,6 +153,7 @@ function harness() {
         definitionReads.push({ id, path });
         return { path, branch: 'main', content: `content of ${path}` };
       },
+      analyzeStream: async () => undefined,
     },
     provision: async (input) => {
       provisioned.push(input);

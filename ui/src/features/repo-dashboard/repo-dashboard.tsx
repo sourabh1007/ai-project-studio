@@ -7,6 +7,7 @@ import type {
   RepoDefinitionEntry,
   Repository,
   RepoInsights,
+  RepoInsightsSection,
   RepositoryContext,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
@@ -35,6 +36,90 @@ const DOCS_COLOR = '#f472b6';
  * explicit Rescan recomputes them (and refreshes this cache).
  */
 const insightsCache = new Map<string, RepoInsights>();
+
+/** Per-section progress while a streaming scan is in flight. */
+type SectionStatus = 'idle' | 'analyzing' | 'healing' | 'done' | 'failed';
+interface SectionState {
+  status: SectionStatus;
+  /** The metasession's analysis of the section, once it settles. */
+  analysis: string | null;
+  /** Set when enrichment failed but the structural scan is still valid. */
+  analysisError?: string;
+  /** Set when the section's structural scan itself failed. */
+  error?: string;
+}
+type SectionMap = Record<RepoInsightsSection, SectionState>;
+
+function initialSections(status: SectionStatus): SectionMap {
+  return {
+    agents: { status, analysis: null },
+    skills: { status, analysis: null },
+    docs: { status, analysis: null },
+    readiness: { status, analysis: null },
+  };
+}
+
+/** A running accumulator of the structural section results as they stream in. */
+interface InsightsAccumulator {
+  agents: RepoDefinitionEntry[];
+  skills: RepoDefinitionEntry[];
+  docs: RepoDefinitionEntry[];
+  readiness: ReadinessCheck[];
+}
+
+/** Build a (possibly partial) insights snapshot from what has streamed so far. */
+function snapshotOf(
+  repositoryId: string,
+  branch: string,
+  acc: InsightsAccumulator,
+): RepoInsights {
+  return {
+    repositoryId,
+    branch,
+    agents: acc.agents,
+    skills: acc.skills,
+    docs: acc.docs,
+    readiness: acc.readiness,
+    agentReady:
+      acc.readiness.length > 0 &&
+      acc.readiness.every((check) => check.status === 'pass'),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/** A subtle per-section footer showing the metasession's analysis / state. */
+function SectionNote({ state }: { state: SectionState }) {
+  if (state.status === 'analyzing' || state.status === 'healing') {
+    return (
+      <div className="repo-section-note" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        <span>
+          {state.status === 'healing'
+            ? 'Self-healing — retrying on a fresh warm session…'
+            : 'Analyzing with a warm metasession…'}
+        </span>
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className="repo-section-note repo-section-note-error">
+        Section analysis failed: {state.error}
+      </div>
+    );
+  }
+  if (state.analysis) {
+    return <p className="repo-section-note repo-section-analysis">{state.analysis}</p>;
+  }
+  if (state.analysisError) {
+    return (
+      <div className="repo-section-note repo-section-note-warn">
+        Analysis unavailable ({state.analysisError}). Showing scanned results.
+      </div>
+    );
+  }
+  return null;
+}
 
 function Kpi({
   value,
@@ -325,22 +410,79 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
     () => !insightsCache.has(repo.id),
   );
   const [scanError, setScanError] = useState<string | null>(null);
+  const [sections, setSections] = useState<SectionMap>(() =>
+    initialSections('idle'),
+  );
 
   const runScan = useCallback(
-    async (refresh: boolean) => {
+    async (_refresh: boolean) => {
       setScanning(true);
       setScanError(null);
+      setSections(initialSections('idle'));
+      // Accumulate structural results as each section streams in so the page
+      // fills progressively; the terminal `done` replaces it with the
+      // authoritative snapshot and refreshes the cache.
+      const acc: InsightsAccumulator = {
+        agents: [],
+        skills: [],
+        docs: [],
+        readiness: [],
+      };
+      let branch = insightsCache.get(repo.id)?.branch ?? repo.defaultBranch ?? '';
+      const patch = (
+        section: RepoInsightsSection,
+        next: Partial<SectionState>,
+      ): void =>
+        setSections((prev) => ({
+          ...prev,
+          [section]: { ...prev[section], ...next },
+        }));
       try {
-        const result = await api.getRepoInsights(repo.id, refresh);
-        insightsCache.set(repo.id, result);
-        setData(result);
+        await api.analyzeRepoInsights(repo.id, (event) => {
+          switch (event.type) {
+            case 'branch':
+              branch = event.branch;
+              break;
+            case 'section-analyzing':
+              patch(event.section, {
+                status: event.healing ? 'healing' : 'analyzing',
+              });
+              break;
+            case 'section': {
+              if (event.entries && event.section !== 'readiness') {
+                acc[event.section] = event.entries;
+              }
+              if (event.readiness) {
+                acc.readiness = event.readiness;
+              }
+              patch(event.section, {
+                status: 'done',
+                analysis: event.analysis,
+                analysisError: event.analysisError,
+              });
+              setData(snapshotOf(repo.id, branch, acc));
+              break;
+            }
+            case 'section-failed':
+              patch(event.section, {
+                status: 'failed',
+                analysis: null,
+                error: event.error,
+              });
+              break;
+            case 'done':
+              insightsCache.set(repo.id, event.insights);
+              setData(event.insights);
+              break;
+          }
+        });
       } catch (err) {
         setScanError(err instanceof Error ? err.message : String(err));
       } finally {
         setScanning(false);
       }
     },
-    [api, repo.id],
+    [api, repo.id, repo.defaultBranch],
   );
 
   useEffect(() => {
@@ -349,6 +491,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
       // Already scanned this session — surface it instantly, no rescan.
       setData(cached);
       setScanning(false);
+      setSections(initialSections('done'));
       return;
     }
     void runScan(false);
@@ -460,6 +603,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
                 <ReadinessRow key={check.key} check={check} />
               ))}
             </ul>
+            <SectionNote state={sections.readiness} />
           </Section>
 
           {hasDefinitions && (
@@ -490,6 +634,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
                   : 'No repo-native skills found on this branch.'
               }
             />
+            <SectionNote state={sections.skills} />
           </Section>
 
           <Section
@@ -506,6 +651,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
                   : 'No custom agent definitions found on this branch.'
               }
             />
+            <SectionNote state={sections.agents} />
           </Section>
 
           <Section
@@ -522,6 +668,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
                   : 'No documentation or troubleshooting guides found on this branch.'
               }
             />
+            <SectionNote state={sections.docs} />
           </Section>
 
           <Section icon={<UsageIcon size={15} />} title="Usage & cost">

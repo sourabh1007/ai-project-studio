@@ -873,6 +873,11 @@ const ADDED_COLUMNS: readonly {
     ddl: "ALTER TABLE sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'feature'",
   },
   {
+    table: 'sessions',
+    column: 'seq',
+    ddl: 'ALTER TABLE sessions ADD COLUMN seq INTEGER',
+  },
+  {
     table: 'skills',
     column: 'removal_instructions',
     ddl: "ALTER TABLE skills ADD COLUMN removal_instructions TEXT NOT NULL DEFAULT ''",
@@ -1954,6 +1959,31 @@ const MANAGED_MIGRATIONS: readonly ManagedMigration[] = [
   AUTOMATIONS_STATUS_MIGRATION,
 ];
 
+/**
+ * Assigns the immutable creation ordinal (`seq`) to any session rows that
+ * predate the column. Runs once per database: after every legacy row has a
+ * value, `MAX(seq)` covers them all and this becomes a no-op. New rows get
+ * their `seq` at insert time in the session repo, so this only bootstraps the
+ * historical rows in stable creation order (created_at, then id as a tiebreak).
+ */
+function backfillSessionSeq(db: DatabaseSync): void {
+  const pending = db
+    .prepare('SELECT id FROM sessions WHERE seq IS NULL ORDER BY created_at, id')
+    .all() as unknown as { id: string }[];
+  if (pending.length === 0) {
+    return;
+  }
+  const maxRow = db
+    .prepare('SELECT COALESCE(MAX(seq), 0) AS max FROM sessions')
+    .get() as unknown as { max: number };
+  const assign = db.prepare('UPDATE sessions SET seq = ? WHERE id = ?');
+  let next = maxRow.max;
+  for (const { id } of pending) {
+    next += 1;
+    assign.run(next, id);
+  }
+}
+
 /** Applies the schema across the primary and attached databases. */
 export function applySchema(
   db: DatabaseSync,
@@ -1982,6 +2012,7 @@ export function applySchema(
   for (const { table, column, ddl, schema } of ADDED_COLUMNS) {
     addColumnIfMissing(db, table, column, ddl, schema);
   }
+  backfillSessionSeq(db);
   if (indexExistsIn(db, 'usage', LEGACY_USAGE_CAPTURE_ROWS_TURN_INDEX)) {
     db.exec(`DROP INDEX usage.${LEGACY_USAGE_CAPTURE_ROWS_TURN_INDEX}`);
   }

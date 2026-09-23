@@ -30,7 +30,7 @@ import type {
   TreeGroup,
   AttachedAgent,
 } from '../../lib/types.js';
-import { formatAic, formatCompactNumber, formatDuration } from '../../lib/format.js';
+import { formatAic, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
@@ -38,8 +38,6 @@ import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from 
 import { SkeletonList } from '../../components/loading.js';
 import {
   ChevronIcon,
-  ArrowDownIcon,
-  ArrowUpIcon,
   CheckIcon,
   CloseIcon,
   CollapseSidebarIcon,
@@ -249,13 +247,13 @@ function SessionRow({
         </Modal>
       )}
 
-      <div className="session-meta-row" title={`${session.provider} · ${model}`}>
-        {session.provider} · {model}
-      </div>
-
-      <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
-
-      <div className="session-metrics-row">
+      <div className="session-summary-row">
+        <span
+          className="session-summary-model"
+          title={`Provider: ${session.provider} · Model: ${model}`}
+        >
+          {model}
+        </span>
         <button
           type="button"
           className="session-metrics-open"
@@ -269,20 +267,16 @@ function SessionRow({
                 <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
               </span>
               <span className="metric">
-                <ArrowUpIcon size={11} /> {formatCompactNumber(totals.inputTokens)}
-              </span>
-              <span className="metric">
-                <ArrowDownIcon size={11} /> {formatCompactNumber(totals.outputTokens)}
+                <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
               </span>
             </>
           ) : (
             <span className="metric" title="Waiting for authoritative saved usage; live history is incomplete">Usage pending</span>
           )}
-          <span className="metric">
-            <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
-          </span>
         </button>
       </div>
+
+      <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
 
       {viewingUsage && (
         <UsageBreakdownModal
@@ -611,9 +605,11 @@ function FeatureNode({
   );
 
   const rows = (sessions.data ?? []).map((s) => mergeLive(s, live));
-  // Stable per-session ordinals (by fetch order) so fallback names don't jump
-  // around as the tree is rearranged.
-  const ordinals = new Map(rows.map((s, index) => [s.id, index + 1]));
+  // Stable per-session ordinals: prefer the session's immutable creation
+  // sequence so the "Session #N" fallback label never changes when the session
+  // is moved between features or reordered. Legacy sessions without a sequence
+  // fall back to their fetch-order position.
+  const ordinals = new Map(rows.map((s, index) => [s.id, s.seq ?? index + 1]));
   const persistedBySession = new Map(
     (usage.data?.bySession ?? []).map((s) => [s.sessionId, s]),
   );

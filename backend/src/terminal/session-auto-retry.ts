@@ -94,7 +94,10 @@ export function createSessionAutoRetry(
   let authorityVersion = 0;
   let attempts = 0;
   let exhaustedFired = false;
-  let manualNoticeFired = false;
+  // Latched for the whole session so the "replay unavailable, retry manually"
+  // guidance is shown at most once, not re-fired on every recoverable line after
+  // each keystroke. Only a genuinely new provider-confirmed request re-arms it.
+  let unconfirmedNoticeFired = false;
   let cancelPendingRetry: CancelTimer | null = null;
   let outputBuffer = '';
   let disposed = false;
@@ -107,7 +110,6 @@ export function createSessionAutoRetry(
   const resetFlags = (): void => {
     attempts = 0;
     exhaustedFired = false;
-    manualNoticeFired = false;
   };
 
   const invalidateReplayAuthority = (): void => {
@@ -120,12 +122,12 @@ export function createSessionAutoRetry(
   const isCurrentAuthority = (version: number): boolean =>
     !disposed && replayAuthority?.version === version;
 
-  const notifyManualRetry = (text: string): void => {
-    if (manualNoticeFired) {
+  const notifyUnconfirmedManualRetry = (): void => {
+    if (unconfirmedNoticeFired) {
       return;
     }
-    manualNoticeFired = true;
-    deps.notify?.(text);
+    unconfirmedNoticeFired = true;
+    deps.notify?.(MANUAL_RETRY_UNCONFIRMED_NOTICE);
   };
 
   const confirmReplaySafeRequest = (exactText: string): void => {
@@ -135,6 +137,9 @@ export function createSessionAutoRetry(
     authorityVersion += 1;
     clearPendingRetry();
     resetFlags();
+    // A fresh provider-confirmed request is a new context, so allow the manual
+    // guidance to appear once more if this one later fails without confirmation.
+    unconfirmedNoticeFired = false;
     replayAuthority =
       exactText.length === 0
         ? null
@@ -154,7 +159,7 @@ export function createSessionAutoRetry(
     }
     const authority = replayAuthority;
     if (!authority) {
-      notifyManualRetry(MANUAL_RETRY_UNCONFIRMED_NOTICE);
+      notifyUnconfirmedManualRetry();
       return;
     }
     if (cancelPendingRetry) {
@@ -172,7 +177,7 @@ export function createSessionAutoRetry(
           isCurrent: () => isCurrentAuthority(authority.version),
         });
       } else {
-        notifyManualRetry(MANUAL_RETRY_EXHAUSTED_NOTICE);
+        deps.notify?.(MANUAL_RETRY_EXHAUSTED_NOTICE);
       }
       return;
     }

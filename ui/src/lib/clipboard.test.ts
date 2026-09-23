@@ -3,6 +3,7 @@ import {
   classifyCopyCut,
   fieldSelectionText,
   toClipboardText,
+  decodeOsc52,
   createPasteGuard,
   attachmentFailureMessage,
   writeClipboardText,
@@ -134,6 +135,48 @@ describe('toClipboardText', () => {
   it('leaves line endings untouched off Windows', () => {
     expect(toClipboardText('a\nb', false)).toBe('a\nb');
   });
+
+  it('strips decorative Private Use Area glyphs that paste as unknown characters', () => {
+    expect(toClipboardText('\uE0B0 status \uF00C done', false)).toBe(' status  done');
+    expect(toClipboardText('icon \uDB80\uDC00 tail', false)).toBe('icon  tail');
+  });
+
+  it('removes zero-width marks, byte-order marks and replacement characters', () => {
+    expect(toClipboardText('a\u200Bb\uFEFFc\uFFFDd\u200D', false)).toBe('abcd');
+  });
+
+  it('normalizes non-breaking spaces to ordinary spaces', () => {
+    expect(toClipboardText('a\u00A0b\u202Fc\u2007d', false)).toBe('a b c d');
+  });
+
+  it('preserves emoji and box-drawing while stripping artifacts', () => {
+    expect(toClipboardText('😀 ├─ ok\uFFFD', false)).toBe('😀 ├─ ok');
+  });
+});
+
+describe('decodeOsc52', () => {
+  const encode = (text: string): string =>
+    btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
+  it('decodes a base64 clipboard-write payload into UTF-8 text', () => {
+    expect(decodeOsc52(`c;${encode('hello world')}`)).toBe('hello world');
+    expect(decodeOsc52(`c;${encode('café → ≥ 語')}`)).toBe('café → ≥ 語');
+  });
+
+  it('tolerates whitespace wrapping in the base64 data', () => {
+    const wrapped = `${encode('wrapped payload')}`.replace(/(.{4})/g, '$1\n');
+    expect(decodeOsc52(`c;${wrapped}`)).toBe('wrapped payload');
+  });
+
+  it('returns null for read queries, empty/clear payloads and missing separators', () => {
+    expect(decodeOsc52('c;?')).toBeNull();
+    expect(decodeOsc52('c;')).toBeNull();
+    expect(decodeOsc52('no-separator')).toBeNull();
+  });
+
+  it('returns null for undecodable base64 rather than writing garbage', () => {
+    expect(decodeOsc52('c;@@@not-base64@@@')).toBeNull();
+  });
 });
 
 describe('createPasteGuard', () => {
@@ -198,6 +241,14 @@ describe('acknowledged clipboard writes', () => {
     expect(await writeClipboardText('x', {
       native: async () => unavailable, browser, legacy, canFallback: () => false,
     })).toMatchObject({ error: 'target-changed' });
+    expect(browser).toHaveBeenCalledTimes(1);
+  });
+  it('falls back to browser when the native bridge rejects the frame as untrusted', async () => {
+    const untrusted: ClipboardResult = { ok: false, error: 'untrusted', writeState: 'not-written' };
+    const browser = vi.fn(async () => ok);
+    expect(await writeClipboardText('x', {
+      native: async () => untrusted, browser, legacy, canFallback,
+    })).toEqual(ok);
     expect(browser).toHaveBeenCalledTimes(1);
   });
   it('supports browser-only, legacy and exhausted fallback outcomes', async () => {

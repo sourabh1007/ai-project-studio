@@ -1028,6 +1028,49 @@ describe('db schema/connection', () => {
     db.close();
   });
 
+  it('backfills the creation sequence for legacy sessions in creation order', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      feature_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      requested_model TEXT NOT NULL,
+      resolved_model TEXT,
+      status TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      usage_file_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      name TEXT
+    )`);
+    const insert = db.prepare(`INSERT INTO sessions
+      (id, feature_id, provider, requested_model, status, kind, prompt,
+       usage_file_path, created_at)
+      VALUES (?, 'f1', 'copilot', 'auto', 'completed', 'dev', 'p', 'u', ?)`);
+    insert.run('newer', '2025-01-02T00:00:00.000Z');
+    insert.run('older', '2025-01-01T00:00:00.000Z');
+
+    applySchema(db);
+    expect(sessionColumns(db)).toContain('seq');
+    const rows = db
+      .prepare('SELECT id, seq FROM sessions ORDER BY seq')
+      .all();
+    expect(rows).toEqual([
+      { id: 'older', seq: 1 },
+      { id: 'newer', seq: 2 },
+    ]);
+
+    // Idempotent: re-running leaves the assigned sequence untouched.
+    expect(() => applySchema(db)).not.toThrow();
+    expect(
+      db.prepare("SELECT seq FROM sessions WHERE id = 'older'").get(),
+    ).toEqual({ seq: 1 });
+    db.close();
+  });
+
   it('adds tree placement columns to legacy sessions', () => {
     const db = new DatabaseSync(':memory:');
     db.exec(`CREATE TABLE sessions (

@@ -1473,6 +1473,77 @@ describe('analyzeReviewBoardPerspectives (NDJSON stream)', () => {
   });
 });
 
+describe('analyzeRepoInsights (NDJSON stream)', () => {
+  it('delivers each newline-delimited event and ignores blank lines', async () => {
+    const chunks = [
+      '{"type":"section-analyzing","section":"agents"}\n',
+      '\n',
+      '{"type":"section-analyzed","section":"agents"}\n',
+      '{"type":"section-failed","section":"docs","error":"boom"}\n',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeRepoInsights('r1', (e) => events.push(e));
+    expect(calls[0][0]).toBe('/api/repos/r1/insights/analyze');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(events).toEqual([
+      { type: 'section-analyzing', section: 'agents' },
+      { type: 'section-analyzed', section: 'agents' },
+      { type: 'section-failed', section: 'docs', error: 'boom' },
+    ]);
+  });
+
+  it('handles events split across chunk boundaries and a newline-less tail', async () => {
+    const chunks = [
+      '{"type":"section-analyzing","sec',
+      'tion":"a"}\n{"type":"section-analyzing","section":"b"}',
+    ];
+    const fetchImpl: FetchLike = async () => streamResponse(chunks);
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeRepoInsights(
+      'r1',
+      (e) => events.push(e),
+      new AbortController().signal,
+    );
+    expect(events).toEqual([
+      { type: 'section-analyzing', section: 'a' },
+      { type: 'section-analyzing', section: 'b' },
+    ]);
+  });
+
+  it('ignores a blank tail after the final newline', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse(['{"type":"section-analyzing","section":"a"}\n   ']);
+    const client = createApiClient({ fetchImpl });
+    const events: unknown[] = [];
+    await client.analyzeRepoInsights('r1', (e) => events.push(e));
+    expect(events).toEqual([{ type: 'section-analyzing', section: 'a' }]);
+  });
+
+  it('throws an ApiError when the stream request is not ok', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ error: { message: 'nope' } }, 500);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.analyzeRepoInsights('r1', () => {}),
+    ).rejects.toThrow('nope');
+  });
+
+  it('throws an ApiError when the response has no stream body', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({});
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.analyzeRepoInsights('r1', () => {}),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
 describe('agent client', () => {
   it('lists the agent catalog via GET /agents', async () => {
     const catalog = [

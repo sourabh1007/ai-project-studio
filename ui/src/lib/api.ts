@@ -42,6 +42,7 @@ import type {
   Repository,
   RepositoryContext,
   RepoInsights,
+  RepoInsightsStreamEvent,
   RepoDefinitionContent,
   RemoteRepo,
   RemotePullRequest,
@@ -363,6 +364,56 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<RepoInsights>(
         `/repos/${id}/insights${refresh ? '?refresh=true' : ''}`,
       ),
+    // Server-side fan-out: one long-lived POST whose body streams newline-
+    // delimited JSON RepoInsightsStreamEvents. Each of the four sections is
+    // analysed by its own warm metasession in parallel (bounded by the pool),
+    // so the page fills progressively over a single socket and never hits the
+    // GET timeout on a large repository. Events are delivered to `onEvent` as
+    // they arrive; resolves when the stream ends (or the signal aborts).
+    analyzeRepoInsights: async (
+      id: string,
+      onEvent: (event: RepoInsightsStreamEvent) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const path = `/repos/${id}/insights/analyze`;
+      const response = await doFetch(`${baseUrl}${path}`, {
+        ...jsonBody({}),
+        ...(signal ? { signal } : {}),
+      });
+      if (!response.ok) {
+        throw new ApiError(response.status, await errorMessage(response, path));
+      }
+      if (!response.body) {
+        throw new ApiError(
+          0,
+          `Request failed: ${path} returned no stream. The backend may be starting up — please retry.`,
+        );
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const flush = (chunk: string): void => {
+        buffer += chunk;
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line.length > 0) {
+            onEvent(JSON.parse(line) as RepoInsightsStreamEvent);
+          }
+          newline = buffer.indexOf('\n');
+        }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        flush(decoder.decode(value, { stream: true }));
+      }
+      const tail = buffer.trim();
+      if (tail.length > 0) {
+        onEvent(JSON.parse(tail) as RepoInsightsStreamEvent);
+      }
+    },
     getRepoDefinition: (id: string, path: string) =>
       request<RepoDefinitionContent>(
         `/repos/${id}/insights/file?path=${encodeURIComponent(path)}`,

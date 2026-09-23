@@ -5,13 +5,60 @@ interface DeliveryDeps {
   status(state: TerminalState, notice: string): void;
 }
 
+/** Target size for a single input frame. Kept well under a typical input window
+ * so a large paste is pipelined as several in-flight frames rather than one
+ * all-or-nothing block. Clamped to the server's advertised limit per session. */
+const CHUNK_TARGET_BYTES = 16384;
+
+const encoder = new TextEncoder();
+const utf8Len = (text: string): number => encoder.encode(text).length;
+
+/**
+ * Splits `data` into pieces each at most `maxBytes` UTF-8 bytes, never splitting
+ * a multi-byte code point across a boundary. A single code point larger than
+ * `maxBytes` is emitted whole (its own oversized piece) rather than looping, so
+ * progress is always made. Returns `[]` for empty input.
+ */
+export function chunkByUtf8Bytes(data: string, maxBytes: number): string[] {
+  if (data === '') return [];
+  const bytes = encoder.encode(data);
+  if (bytes.length <= maxBytes) return [data];
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < bytes.length) {
+    let end = Math.min(start + maxBytes, bytes.length);
+    if (end < bytes.length) {
+      // Back off a UTF-8 continuation byte (0b10xxxxxx) to the code-point
+      // boundary, so the split never lands mid-character.
+      while (end > start && (bytes[end] & 0xc0) === 0x80) {
+        end -= 1;
+      }
+      if (end === start) {
+        // The window is smaller than a single code point: extend to include the
+        // whole character instead of stalling.
+        end = Math.min(start + maxBytes, bytes.length);
+        while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
+          end += 1;
+        }
+      }
+    }
+    chunks.push(decoder.decode(bytes.subarray(start, end)));
+    start = end;
+  }
+  return chunks;
+}
+
 /** Holds only this connection's input. An acknowledgement means PTY write, not command completion. */
 export function createTerminalDelivery(deps: DeliveryDeps) {
   let state: TerminalState = 'connecting';
   let generation = 0;
   let seq = 0;
   let limit = 65536;
-  let queue: string[] = [];
+  // Offered input awaiting a free budget window, in submission order. Sliced
+  // lazily in pump() against the current window so frame sizes always respect
+  // the limit the server actually advertised.
+  let outbox: string[] = [];
   const pending = new Map<number, number>();
   let bytes = 0;
   let notice = '';
@@ -19,10 +66,10 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   let sentGeometry = '';
   const report = () => deps.status(state, notice);
   const discard = (reason: string) => {
-    if (pending.size || queue.length) {
-      notice = `${reason} ${queue.length} unsent input frame(s) discarded; ${pending.size} unacknowledged frame(s) may have executed. Nothing replayed.`;
+    if (pending.size || outbox.length) {
+      notice = `${reason} ${outbox.length} unsent input frame(s) discarded; ${pending.size} unacknowledged frame(s) may have executed. Nothing replayed.`;
     }
-    queue = [];
+    outbox = [];
     pending.clear();
     bytes = 0;
   };
@@ -32,7 +79,14 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
     state = 'failed';
     report();
   };
-  const flush = () => {
+  // Drains queued input into the socket while the outstanding (unacknowledged)
+  // byte window has room, slicing each offered string into frames no larger than
+  // the remaining window (capped so a big paste pipelines as several in-flight
+  // frames). Whatever does not fit waits and is pumped again as acks free space,
+  // so an arbitrarily large paste streams through instead of being rejected. A
+  // frame is always allowed out of an empty window — even a lone code point
+  // wider than the window — so delivery can never stall.
+  const pump = () => {
     if (state !== 'ready') return;
     try {
       if (geometry) {
@@ -42,11 +96,25 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
           sentGeometry = key;
         }
       }
-      while (queue.length) {
-        const data = queue.shift()!;
+      while (outbox.length) {
+        const room = limit - bytes;
+        let budget = Math.min(Math.max(room, 0), CHUNK_TARGET_BYTES);
+        if (budget === 0) {
+          if (bytes !== 0) break; // window full; wait for acks to free space
+          budget = CHUNK_TARGET_BYTES; // empty window, tiny limit: still progress
+        }
+        const head = outbox[0];
+        const piece = chunkByUtf8Bytes(head, budget)[0];
+        const pieceSize = utf8Len(piece);
+        // A single code point can exceed the window; only force it out when
+        // nothing is outstanding, else wait for acks to widen the window.
+        if (pieceSize > room && bytes !== 0) break;
+        if (piece.length === head.length) outbox.shift();
+        else outbox[0] = head.slice(piece.length);
         const id = ++seq;
-        pending.set(id, new TextEncoder().encode(data).length);
-        deps.send({ type: 'input', data, generation, seq: id });
+        pending.set(id, pieceSize);
+        bytes += pieceSize;
+        deps.send({ type: 'input', data: piece, generation, seq: id });
       }
     } catch {
       fail('Connection write failed. Clear the CLI composer before retrying.');
@@ -60,18 +128,12 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
         report();
         return;
       }
-      const size = new TextEncoder().encode(data).length;
-      if (size > limit - bytes) {
-        fail('Input limit exceeded. Paste rejected in full; queued input and subsequent Enter blocked. Clear the CLI composer before retrying.');
-        return;
-      }
-      bytes += size;
-      queue.push(data);
-      flush();
+      outbox.push(data);
+      pump();
     },
     resize(cols: number, rows: number) {
       geometry = { cols, rows };
-      flush();
+      pump();
     },
     receive(message: ServerMessage) {
       if (message.type === 'state') {
@@ -82,17 +144,15 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
         if (message.state === 'closed' || message.state === 'failed' || message.state === 'reconnecting') {
           discard(`Terminal ${message.state}.`);
         }
-        if (bytes > limit) fail('Server input limit exceeded. Queued input rejected in full.');
-        else {
-          report();
-          flush();
-        }
+        report();
+        pump();
       } else if (message.type === 'ack' && message.generation === generation) {
         const size = pending.get(message.seq);
         if (size === undefined) return;
         pending.delete(message.seq);
         bytes -= size;
         if (message.outcome !== 'written') fail(`${message.outcome}: ${message.reason}`);
+        else pump();
       }
     },
     disconnect(reconnect: boolean) {

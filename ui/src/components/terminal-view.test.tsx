@@ -1078,7 +1078,7 @@ describe('TerminalView scrollback repaint', () => {
       expect(h.ws).toBe(next);
     });
 
-    it('shows an oversized paste rejection and blocks a following Enter', () => {
+    it('streams an oversized paste across frames instead of rejecting it', () => {
       const view = render(<TerminalView sessionId="s1" />);
       const ws = h.ws!;
       act(() => {
@@ -1088,9 +1088,13 @@ describe('TerminalView scrollback repaint', () => {
         ws.readyState = MockWebSocket.OPEN;
         ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536 }) });
       });
-      expect(ws.send).not.toHaveBeenCalled();
-      expect(view.getByRole('status').textContent).toContain('Paste rejected in full');
-      expect(view.getByRole('button').textContent).toContain('not replayed');
+      // The paste is delivered as several in-flight input frames, not rejected.
+      const inputs = ws.send.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('"input"'));
+      expect(inputs.length).toBeGreaterThan(1);
+      expect(inputs[0]).toContain('"data":"prefix"');
+      // No failure surfaced and no reconnect prompt.
+      expect(view.queryByRole('status')?.textContent ?? '').not.toContain('Paste rejected in full');
+      expect(view.queryByText(/not replayed/)).toBeNull();
     });
 
   it('strips OSC color-query replies from terminal input before sending to the PTY', () => {

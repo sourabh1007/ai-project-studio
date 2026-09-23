@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createClock } from '../kernel/clock.js';
+import {
+  MetaAbortError,
+  type MetaRequest,
+  type MetaRunResult,
+  type MetaRunner,
+} from '../meta/meta-runner.js';
 import type { Repository } from '../repo/repo-contract.js';
-import { repoInsightsDefaults } from './config.js';
+import { type RepoInsightsConfig, repoInsightsDefaults } from './config.js';
+import type {
+  RepoInsightsSection,
+  RepoInsightsStreamEvent,
+} from './repo-insights-contract.js';
 import { createRepoInsightsService } from './repo-insights-service.js';
 import type { RepoInsightsGit } from './repo-insights-git-port.js';
 
@@ -288,5 +298,332 @@ describe('createRepoInsightsService', () => {
     const [a, b] = await Promise.all([svc.load('r1'), svc.load('r1')]);
     expect(scans).toBe(1);
     expect(a).toBe(b);
+  });
+});
+
+type AiOutcome = 'ok' | 'fail' | 'timeout' | 'aborted';
+
+function fakeAi(
+  behaviors: Partial<Record<RepoInsightsSection, AiOutcome[]>>,
+  onCall?: (section: RepoInsightsSection, req: MetaRequest) => void,
+): Pick<MetaRunner, 'runDetailed'> & { calls: MetaRequest[] } {
+  const calls: MetaRequest[] = [];
+  const idx: Partial<Record<RepoInsightsSection, number>> = {};
+  return {
+    calls,
+    runDetailed: async (req: MetaRequest): Promise<MetaRunResult> => {
+      const section = (req.label ?? '').split(' · ')[1] as RepoInsightsSection;
+      calls.push(req);
+      onCall?.(section, req);
+      const seq = behaviors[section] ?? ['ok'];
+      const i = idx[section] ?? 0;
+      idx[section] = i + 1;
+      const outcome = seq[Math.min(i, seq.length - 1)];
+      if (outcome === 'fail') {
+        throw new Error(`boom-${section}`);
+      }
+      if (outcome === 'timeout') {
+        throw new MetaAbortError({ kind: 'timed_out', termination: 'confirmed' });
+      }
+      if (outcome === 'aborted') {
+        throw new MetaAbortError({ kind: 'aborted', termination: 'confirmed' });
+      }
+      return { text: `  analysis-${section}  `, sessionId: 's' };
+    },
+  };
+}
+
+function enrichConfig(
+  over: Partial<RepoInsightsConfig['enrichment']>,
+): RepoInsightsConfig {
+  return {
+    ...repoInsightsDefaults,
+    enrichment: { ...repoInsightsDefaults.enrichment, ...over },
+  };
+}
+
+interface StreamOpts {
+  ai?: Pick<MetaRunner, 'runDetailed'>;
+  live?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  config?: RepoInsightsConfig;
+}
+
+function streamWith(
+  git: RepoInsightsGit,
+  repository: Repository,
+  opts: StreamOpts = {},
+) {
+  return createRepoInsightsService({
+    repos: { get: () => repository },
+    git,
+    clock,
+    config: opts.config ?? repoInsightsDefaults,
+    ai: opts.ai,
+    liveMetaSessions: opts.live,
+    sleep: opts.sleep,
+  });
+}
+
+async function collect(
+  svc: ReturnType<typeof streamWith>,
+  signal?: AbortSignal,
+): Promise<RepoInsightsStreamEvent[]> {
+  const events: RepoInsightsStreamEvent[] = [];
+  await svc.analyzeStream('r1', { emit: (event) => events.push(event) }, signal);
+  return events;
+}
+
+function sectionEvent(
+  events: RepoInsightsStreamEvent[],
+  section: RepoInsightsSection,
+): Extract<RepoInsightsStreamEvent, { type: 'section' }> | undefined {
+  return events.find(
+    (event): event is Extract<RepoInsightsStreamEvent, { type: 'section' }> =>
+      event.type === 'section' && event.section === section,
+  );
+}
+
+const readyGit = () =>
+  fakeGit({
+    defaultBranch: 'main',
+    files: {
+      '.github/agents': ['.github/agents/a.md'],
+      '.github/skills': ['.github/skills/s.md'],
+      docs: ['docs/d.md'],
+    },
+    contents: {
+      '.github/agents/a.md': '---\nname: A\ndescription: agent a\n---\n',
+      '.github/skills/s.md': '---\nname: S\ndescription: skill s\n---\n',
+      'docs/d.md': '# Doc\n\ncontent',
+    },
+    exists: ['AGENTS.md'],
+  });
+
+describe('createRepoInsightsService.analyzeStream', () => {
+  it('streams enriched sections in parallel and a final assembled snapshot', async () => {
+    const ai = fakeAi({});
+    const svc = streamWith(readyGit(), repo(), {
+      ai,
+      live: () => 4,
+      sleep: async () => {},
+    });
+
+    const events = await collect(svc);
+
+    expect(events[0]).toEqual({ type: 'branch', branch: 'main' });
+    for (const section of ['agents', 'skills', 'docs', 'readiness'] as const) {
+      expect(
+        events.some(
+          (e) =>
+            e.type === 'section-analyzing' &&
+            e.section === section &&
+            e.healing === false,
+        ),
+      ).toBe(true);
+      expect(sectionEvent(events, section)?.analysis).toBe(`analysis-${section}`);
+    }
+    expect(sectionEvent(events, 'agents')?.entries).toHaveLength(1);
+    expect(sectionEvent(events, 'readiness')?.readiness).toHaveLength(2);
+
+    const done = events.at(-1);
+    expect(done?.type).toBe('done');
+    if (done?.type !== 'done') throw new Error('expected done');
+    expect(done.insights.agentReady).toBe(true);
+    expect(done.insights.branch).toBe('main');
+
+    expect(ai.calls).toHaveLength(4);
+    for (const call of ai.calls) {
+      expect(call.forceCold).toBe(false);
+      expect(call.noTools).toBe(true);
+      expect(call.toolsOptional).toBe(true);
+      expect(call.scope).toBe('internal');
+      expect(call.featureId).toBe('repository:r1');
+      expect(call.cwd).toBe('C:/work/app');
+      expect(call.timeoutMs).toBe(60_000);
+      expect(call.label?.startsWith('Repo insights · ')).toBe(true);
+    }
+
+    expect(await svc.load('r1')).toBe(done.insights);
+  });
+
+  it('runs structural-only with no analysis when no metasession runner is wired', async () => {
+    const svc = streamWith(
+      fakeGit({ defaultBranch: 'main' }),
+      repo({ defaultBranch: null }),
+    );
+    const events = await collect(svc);
+
+    for (const section of ['agents', 'skills', 'docs', 'readiness'] as const) {
+      const evt = sectionEvent(events, section);
+      expect(evt?.analysis).toBeNull();
+      expect(evt?.analysisError).toBeUndefined();
+    }
+    expect(
+      events.some((e) => e.type === 'section-analyzing' && e.healing === true),
+    ).toBe(false);
+    const done = events.at(-1);
+    if (done?.type !== 'done') throw new Error('expected done');
+    expect(done.insights.agentReady).toBe(false);
+  });
+
+  it('skips enrichment when it is disabled by config', async () => {
+    const ai = fakeAi({});
+    const svc = streamWith(readyGit(), repo(), {
+      ai,
+      live: () => 4,
+      config: enrichConfig({ enabled: false }),
+    });
+    const events = await collect(svc);
+
+    expect(sectionEvent(events, 'agents')?.analysis).toBeNull();
+    expect(ai.calls).toHaveLength(0);
+  });
+
+  it('self-heals a failed section by retrying on a warm session', async () => {
+    const ai = fakeAi({ agents: ['fail', 'ok'] });
+    const svc = streamWith(readyGit(), repo(), {
+      ai,
+      config: enrichConfig({ retryBackoffMs: 0 }),
+    });
+    const events = await collect(svc);
+
+    expect(
+      events.some(
+        (e) =>
+          e.type === 'section-analyzing' &&
+          e.section === 'agents' &&
+          e.healing === true,
+      ),
+    ).toBe(true);
+    expect(sectionEvent(events, 'agents')?.analysis).toBe('analysis-agents');
+  });
+
+  it('skips warm retries and forces a cold session after a provider timeout', async () => {
+    const ai = fakeAi({ agents: ['timeout', 'ok'] });
+    const svc = streamWith(readyGit(), repo(), {
+      ai,
+      live: () => 4,
+      sleep: async () => {},
+    });
+    const events = await collect(svc);
+
+    expect(sectionEvent(events, 'agents')?.analysis).toBe('analysis-agents');
+    const agentCalls = ai.calls.filter((c) => c.label === 'Repo insights · agents');
+    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls[1]?.forceCold).toBe(true);
+  });
+
+  it('retries a non-timeout abort error on a warm session', async () => {
+    const ai = fakeAi({ agents: ['aborted', 'ok'] });
+    const svc = streamWith(readyGit(), repo(), {
+      ai,
+      live: () => 4,
+      sleep: async () => {},
+    });
+    const events = await collect(svc);
+
+    expect(sectionEvent(events, 'agents')?.analysis).toBe('analysis-agents');
+    expect(
+      ai.calls.filter((c) => c.label === 'Repo insights · agents'),
+    ).toHaveLength(2);
+  });
+
+  it('degrades to an analysis error when every enrichment attempt fails', async () => {
+    const git = fakeGit({
+      defaultBranch: 'main',
+      files: { '.github/skills': ['.github/skills/s.md'] },
+      contents: { '.github/skills/s.md': '---\nname: S\n---\n' },
+      exists: ['AGENTS.md'],
+    });
+    const ai = fakeAi({ agents: ['fail'] });
+    const svc = streamWith(git, repo(), {
+      ai,
+      live: () => 4,
+      sleep: async () => {},
+    });
+    const events = await collect(svc);
+
+    const agents = sectionEvent(events, 'agents');
+    expect(agents?.analysis).toBeNull();
+    expect(agents?.analysisError).toBe('boom-agents');
+    expect(agents?.entries).toEqual([]);
+    expect(events.some((e) => e.type === 'section-failed')).toBe(false);
+    expect(
+      ai.calls.filter((c) => c.label === 'Repo insights · agents'),
+    ).toHaveLength(3);
+  });
+
+  it('emits section-failed when a structural scan throws', async () => {
+    const base = fakeGit({ defaultBranch: 'main', exists: ['AGENTS.md'] });
+    const git: RepoInsightsGit = {
+      ...base,
+      listFiles: async (path, ref, directory) => {
+        if (repoInsightsDefaults.agentsDirectories.includes(directory)) {
+          throw new Error('git blew up');
+        }
+        return base.listFiles(path, ref, directory);
+      },
+    };
+    const ai = fakeAi({});
+    const events = await collect(streamWith(git, repo(), { ai, live: () => 4 }));
+
+    expect(events).toContainEqual({
+      type: 'section-failed',
+      section: 'agents',
+      error: 'git blew up',
+    });
+    expect(sectionEvent(events, 'agents')).toBeUndefined();
+    expect(
+      ai.calls.some((c) => c.label === 'Repo insights · agents'),
+    ).toBe(false);
+    expect(events.at(-1)?.type).toBe('done');
+  });
+
+  it('stringifies a non-Error structural failure', async () => {
+    const base = fakeGit({ defaultBranch: 'main', exists: ['AGENTS.md'] });
+    const git: RepoInsightsGit = {
+      ...base,
+      listFiles: async (path, ref, directory) => {
+        if (repoInsightsDefaults.skillsDirectories.includes(directory)) {
+          throw 'plain string failure';
+        }
+        return base.listFiles(path, ref, directory);
+      },
+    };
+    const events = await collect(streamWith(git, repo(), { live: () => 4 }));
+
+    expect(events).toContainEqual({
+      type: 'section-failed',
+      section: 'skills',
+      error: 'plain string failure',
+    });
+  });
+
+  it('stops fanning out and emits no done once the request is aborted', async () => {
+    const controller = new AbortController();
+    const ai = fakeAi({ agents: ['aborted'] }, (section) => {
+      if (section === 'agents') {
+        controller.abort();
+      }
+    });
+    const svc = streamWith(readyGit(), repo(), { ai, live: () => 2 });
+    const events = await collect(svc, controller.signal);
+
+    expect(sectionEvent(events, 'agents')?.analysisError).toBeDefined();
+    expect(events.some((e) => e.type === 'done')).toBe(false);
+    expect(
+      events.some((e) => e.type === 'section' && e.section === 'skills'),
+    ).toBe(false);
+  });
+
+  it('emits nothing when the request is aborted before it starts', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const events = await collect(
+      streamWith(readyGit(), repo(), { ai: fakeAi({}), live: () => 4 }),
+      controller.signal,
+    );
+    expect(events).toEqual([]);
   });
 });

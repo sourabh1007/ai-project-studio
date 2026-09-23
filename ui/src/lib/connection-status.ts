@@ -11,6 +11,58 @@ export type ConnectionState = 'online' | 'backend-down' | 'offline' | 'backend-u
 /** Result of a single `/health` poll attempt. */
 export type ProbeOutcome = 'ok' | 'error' | 'unknown';
 
+/** Outcome of one raw `/health` fetch, before hysteresis is applied. */
+export type ProbeResult = 'ok' | 'error';
+
+/**
+ * Debounced view of the probe: the reported {@link ProbeOutcome} plus the run
+ * of consecutive raw failures behind it. Kept separate from the reported
+ * outcome so a single blip is remembered without yet alarming the user.
+ */
+export interface ProbeTracker {
+  outcome: ProbeOutcome;
+  consecutiveFailures: number;
+}
+
+/** Starting tracker: nothing probed yet, so healthy-by-assumption. */
+export const INITIAL_PROBE: ProbeTracker = {
+  outcome: 'unknown',
+  consecutiveFailures: 0,
+};
+
+/**
+ * How many consecutive failed probes it takes to declare the backend down.
+ * The local Studio service briefly stops answering cheap GETs whenever the
+ * event loop is saturated by heavy work (parallel metasession fan-out, a large
+ * repo scan) or its few localhost sockets are all held by long-lived streams.
+ * That is not an outage, so a lone failure must not flash "service
+ * unavailable"; only a sustained run of failures should.
+ */
+export const BACKEND_DOWN_AFTER_FAILURES = 2;
+
+/**
+ * Fold one raw probe result into the tracker with hysteresis. A success clears
+ * the streak and reports `ok` immediately (recovery should never lag). A
+ * failure extends the streak but keeps reporting the previous outcome until the
+ * streak reaches {@link BACKEND_DOWN_AFTER_FAILURES}, at which point it flips to
+ * `error`. Before the first success an early failure stays `unknown`, so the
+ * banner still never flashes on first paint.
+ */
+export function trackProbe(
+  previous: ProbeTracker,
+  result: ProbeResult,
+): ProbeTracker {
+  if (result === 'ok') {
+    return { outcome: 'ok', consecutiveFailures: 0 };
+  }
+  const consecutiveFailures = previous.consecutiveFailures + 1;
+  const outcome: ProbeOutcome =
+    consecutiveFailures >= BACKEND_DOWN_AFTER_FAILURES
+      ? 'error'
+      : previous.outcome;
+  return { outcome, consecutiveFailures };
+}
+
 export interface ConnectionInputs {
   /** The browser's `navigator.onLine` reading. */
   browserOnline: boolean;

@@ -70,14 +70,32 @@ export function fieldSelectionText(field: SelectableField): string {
 }
 
 /**
+ * Terminal decoration that carries no textual meaning and only ever pastes as an
+ * "unknown character" box: Private Use Area glyphs (Nerd Font / Powerline icons,
+ * both the BMP block and the astral planes 15/16), zero-width joiners/spaces,
+ * byte-order marks, and stray U+FFFD replacement characters left by undecodable
+ * output. Astral emoji (plane 1, high surrogates U+D83C-U+D83E) and box-drawing
+ * used in code and tables sit outside these ranges and are deliberately kept.
+ */
+const COPY_ARTIFACTS =
+  /[\u200B-\u200D\u2060\uFEFF\uFFFD\uE000-\uF8FF]|[\uDB80-\uDBFF][\uDC00-\uDFFF]/g;
+
+/** Non-breaking space variants that should paste as ordinary spaces. */
+const NON_BREAKING_SPACES = /[\u00A0\u2007\u202F]/g;
+
+/**
  * Normalises copied terminal text. xterm selections can include frame/seam
  * pipes from the CLI's bordered, wrapped output; strip only those padded edge
- * artifacts while preserving real inline pipes. Then apply the host clipboard's
- * line-ending convention (CRLF on Windows, LF elsewhere) without doubling CRs.
- * Kept DOM-free (the caller passes the platform) so it unit-tests to 100%.
+ * artifacts while preserving real inline pipes. Non-text decoration glyphs and
+ * invisible marks are removed first so AI output pastes as clean text. Then
+ * apply the host clipboard's line-ending convention (CRLF on Windows, LF
+ * elsewhere) without doubling CRs. Kept DOM-free (the caller passes the
+ * platform) so it unit-tests to 100%.
  */
 export function toClipboardText(text: string, isWindows: boolean): string {
   const cleaned = text
+    .replace(COPY_ARTIFACTS, '')
+    .replace(NON_BREAKING_SPACES, ' ')
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => {
@@ -89,6 +107,33 @@ export function toClipboardText(text: string, isWindows: boolean): string {
     })
     .join('\n');
   return isWindows ? cleaned.replace(/\n/g, '\r\n') : cleaned;
+}
+
+/**
+ * Decodes an OSC 52 clipboard-write payload of the form `<selection>;<base64>`
+ * (e.g. `c;SGVsbG8=`) into UTF-8 text. Returns `null` — meaning "do not touch
+ * the clipboard" — for a read query (`?`), an empty/clear payload, a missing
+ * `;` separator, or base64 that cannot be decoded. Whitespace inside the base64
+ * (some terminals wrap long payloads) is tolerated. Kept DOM-free apart from the
+ * standard `atob`/`TextDecoder` globals so it unit-tests to 100%.
+ */
+export function decodeOsc52(payload: string): string | null {
+  const separator = payload.indexOf(';');
+  if (separator === -1) {
+    return null;
+  }
+  const data = payload.slice(separator + 1).replace(/\s+/g, '');
+  if (data === '' || data === '?') {
+    return null;
+  }
+  let binary: string;
+  try {
+    binary = atob(data);
+  } catch {
+    return null;
+  }
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 export type ClipboardResult =
@@ -132,7 +177,17 @@ export interface ClipboardWriters {
   canFallback: () => boolean;
 }
 
-/** Only an explicit, pre-write availability failure permits another writer. */
+/**
+ * Only a pre-write rejection that wrote nothing permits another writer: the
+ * native bridge being unavailable, or refusing the frame as untrusted (e.g. a
+ * null `senderFrame` or an origin mismatch after a reload). Both leave the
+ * user's existing clipboard untouched, so browser/legacy can safely retry.
+ * A `written`/`unknown` writeState, or a deterministic content rejection
+ * (`too-large`, `invalid-text`), is returned as-is — retrying risks clobbering
+ * the clipboard or would fail identically.
+ */
+const PRE_WRITE_RETRYABLE = new Set(['unavailable', 'untrusted']);
+
 export async function writeClipboardText(
   text: string,
   writers: ClipboardWriters,
@@ -152,7 +207,7 @@ export async function writeClipboardText(
   for (const writer of [writers.native, writers.browser]) {
     if (!writer) continue;
     const result = await invoke(writer);
-    if (result.ok || result.writeState !== 'not-written' || result.error !== 'unavailable') {
+    if (result.ok || result.writeState !== 'not-written' || !PRE_WRITE_RETRYABLE.has(result.error)) {
       return result;
     }
     if (!writers.canFallback()) {

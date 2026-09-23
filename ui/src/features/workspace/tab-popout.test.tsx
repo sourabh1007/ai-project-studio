@@ -140,4 +140,42 @@ describe('TabPopout', () => {
     fireEvent.click(screen.getByRole('button', { name: /return to ide/i }));
     expect(popIn).toHaveBeenCalledTimes(1);
   });
+
+  it('owns copy in the detached window and routes it to the native clipboard', async () => {
+    const copyText = vi.fn().mockResolvedValue({ ok: true });
+    (window as unknown as { desktop: unknown }).desktop = { copyText };
+    const selection = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue({ toString: () => 'copied text' } as unknown as Selection);
+    try {
+      render(<TabPopout tab={agentTab} label="Review Board · Feat" />);
+      window.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }));
+      await vi.waitFor(() =>
+        expect(copyText).toHaveBeenCalledWith('copied text'),
+      );
+    } finally {
+      selection.mockRestore();
+    }
+  });
+
+  it('surfaces a copy failure in the detached window', async () => {
+    const copyText = vi.fn().mockResolvedValue({
+      ok: false,
+      error: 'verification-failed',
+      writeState: 'written',
+    });
+    (window as unknown as { desktop: unknown }).desktop = { copyText };
+    const selection = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue({ toString: () => 'copied text' } as unknown as Selection);
+    try {
+      render(<TabPopout tab={agentTab} label="Review Board · Feat" />);
+      window.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /copy failed \(verification-failed\)/i,
+      );
+    } finally {
+      selection.mockRestore();
+    }
+  });
 });

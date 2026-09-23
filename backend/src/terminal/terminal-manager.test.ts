@@ -9,6 +9,8 @@ import type { SessionEventMap } from '../session/session-launcher.js';
 import type { Session } from '../session/session-contract.js';
 import type { Transcript } from '../session/transcript-capture.js';
 import type { PtyProcess, PtySpawnRequest, PtySpawner } from './pty-contract.js';
+import type { BootstrapInstructionsWriter } from './bootstrap-instructions-port.js';
+import { CUSTOM_INSTRUCTIONS_DIRS_ENV } from './bootstrap-instructions.js';
 import { ConflictError } from '../kernel/error-types.js';
 
 function fakePtyEnv() {
@@ -176,6 +178,7 @@ function makeManager(
     compose?: (call: number) => Promise<string>;
     save?: (transcript: Transcript) => Promise<void>;
     spawner?: PtySpawner;
+    bootstrapInstructions?: BootstrapInstructionsWriter;
   } = {},
 ) {
   const env = fakePtyEnv();
@@ -242,6 +245,7 @@ function makeManager(
           },
     isTransientFailure,
     selfRecovery: extra.selfRecovery,
+    bootstrapInstructions: extra.bootstrapInstructions,
     home: '/home/me',
   });
   return {
@@ -563,6 +567,7 @@ describe('createTerminalManager', () => {
         composeFailOnCall?: number;
         instructions?: string;
         compose?: (call: number) => Promise<string>;
+        bootstrapInstructions?: BootstrapInstructionsWriter;
       } = {},
     ) {
       const report = vi.fn<(sessionId: string, message: string) => void>();
@@ -583,6 +588,7 @@ describe('createTerminalManager', () => {
           configOverride: { autoRetryEnabled: false },
           composeFailOnCall: opts.composeFailOnCall,
           compose: opts.compose,
+          bootstrapInstructions: opts.bootstrapInstructions,
         },
       );
       return { ...h, report };
@@ -670,6 +676,37 @@ describe('createTerminalManager', () => {
       expect(h.started).toHaveLength(2);
       expect(h.discarded).toEqual(['sess-1']);
       expect(h.ended).toHaveLength(0);
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('re-prepares the context instructions file when it self-recovers', async () => {
+      const writes: Array<{ sessionId: string; content: string }> = [];
+      const writer: BootstrapInstructionsWriter = {
+        write: async (sessionId, content) => {
+          writes.push({ sessionId, content });
+          return `/ctx/${sessionId}`;
+        },
+        clear: async () => {},
+      };
+      const h = makeSelfRecovering({
+        instructions: 'ctx',
+        bootstrapInstructions: writer,
+      });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.observeInput('sess-1', 'do it\r');
+      h.manager.confirmReplaySafeRequest('sess-1', 'do it');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+
+      // Both the initial spawn and the self-recovery relaunch write the file so
+      // the replacement CLI still discovers the repository context silently.
+      expect(h.env.requests).toHaveLength(2);
+      expect(writes).toEqual([
+        { sessionId: 'sess-1', content: 'ctx' },
+        { sessionId: 'sess-1', content: 'ctx' },
+      ]);
       expect(h.report).not.toHaveBeenCalled();
     });
 
@@ -1688,6 +1725,123 @@ describe('createTerminalManager', () => {
       env.emitExit(0);
       expect(manager.injectInstructions('sess-1', 'Apply this.')).toBe(false);
       expect(env.writes).toEqual([]);
+    });
+  });
+
+  describe('bootstrap context injection', () => {
+    function fakeInstructionsWriter(
+      opts: { dir?: string; failClear?: boolean } = {},
+    ) {
+      const writes: Array<{ sessionId: string; content: string }> = [];
+      const clears: string[] = [];
+      const writer: BootstrapInstructionsWriter = {
+        write: async (sessionId, content) => {
+          writes.push({ sessionId, content });
+          return opts.dir ?? `/ctx/${sessionId}`;
+        },
+        clear: async (sessionId) => {
+          clears.push(sessionId);
+          if (opts.failClear) {
+            throw new Error('clear failed');
+          }
+        },
+      };
+      return { writer, writes, clears };
+    }
+
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it('delivers context as a discovered instructions file instead of seeding it', async () => {
+      vi.useFakeTimers();
+      try {
+        const w = fakeInstructionsWriter({ dir: '/ctx/sess-1' });
+        const { manager, env } = makeManager('bootstrap context', false, undefined, {}, undefined, {
+          bootstrapInstructions: w.writer,
+        });
+        await manager.getOrLaunch(sampleSession());
+        // The context is written to the file, not typed into the PTY.
+        expect(w.writes).toEqual([{ sessionId: 'sess-1', content: 'bootstrap context' }]);
+        // Its directory is added to the CLI's custom-instructions search path.
+        expect(env.requests[0].env[CUSTOM_INSTRUCTIONS_DIRS_ENV]).toBe('/ctx/sess-1');
+        // Even after the seed-ready window, the block was never written to stdin.
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        expect(env.writes).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('still seeds the replay prompt while delivering context as a file', async () => {
+      vi.useFakeTimers();
+      try {
+        const w = fakeInstructionsWriter();
+        const { manager, env } = makeManager('bootstrap context', false, undefined, {}, undefined, {
+          bootstrapInstructions: w.writer,
+        });
+        await manager.getOrLaunch(sampleSession(), { replaySeed: 'resume this' });
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        expect(env.writes).toEqual(['resume this']);
+        expect(env.writes).not.toContain('bootstrap context');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('falls back to seeding when there is no context to inject', async () => {
+      vi.useFakeTimers();
+      try {
+        const w = fakeInstructionsWriter();
+        const { manager, env } = makeManager('', false, undefined, {}, undefined, {
+          bootstrapInstructions: w.writer,
+        });
+        await manager.getOrLaunch(sampleSession());
+        expect(w.writes).toEqual([]);
+        expect(env.requests[0].env[CUSTOM_INSTRUCTIONS_DIRS_ENV]).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('seeds context normally when the writer yields no directory', async () => {
+      vi.useFakeTimers();
+      try {
+        const w = fakeInstructionsWriter({ dir: '' });
+        const { manager, env } = makeManager('bootstrap context', false, undefined, {}, undefined, {
+          bootstrapInstructions: w.writer,
+        });
+        await manager.getOrLaunch(sampleSession());
+        expect(w.writes).toEqual([{ sessionId: 'sess-1', content: 'bootstrap context' }]);
+        expect(env.requests[0].env[CUSTOM_INSTRUCTIONS_DIRS_ENV]).toBeUndefined();
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        expect(env.writes).toEqual(['bootstrap context']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the instructions file when the session exits', async () => {
+      const w = fakeInstructionsWriter();
+      const { manager, env } = makeManager('bootstrap context', false, undefined, {}, undefined, {
+        bootstrapInstructions: w.writer,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      await flush();
+      expect(w.clears).toEqual(['sess-1']);
+    });
+
+    it('logs when clearing the instructions file fails', async () => {
+      const w = fakeInstructionsWriter({ failClear: true });
+      const { manager, env, logger } = makeManager('bootstrap context', false, undefined, {}, undefined, {
+        bootstrapInstructions: w.writer,
+      });
+      await manager.getOrLaunch(sampleSession());
+      env.emitExit(0);
+      await flush();
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to clear bootstrap instructions',
+        expect.objectContaining({ sessionId: 'sess-1' }),
+      );
     });
   });
 });

@@ -147,6 +147,7 @@ import { createSessionReconciler } from './session/session-reconciler.js';
 
 import { createNodePtySpawner } from './terminal/node-pty-spawner.js';
 import { createTerminalManager } from './terminal/terminal-manager.js';
+import { createBootstrapInstructionsWriter } from './terminal/bootstrap-instructions-file-adapter.js';
 import { createFeatureEnvironmentResolver } from './feature/feature-environment.js';
 import { createGitBranchReader } from './feature/feature-branch-git-adapter.js';
 import { attachTerminalWs } from './terminal/terminal-ws-server.js';
@@ -421,6 +422,7 @@ import {
   type RepoInsightsConfig,
 } from './repo-insights/config.js';
 import { createRepoInsightsService } from './repo-insights/repo-insights-service.js';
+import type { RepoInsightsStreamSink } from './repo-insights/repo-insights-contract.js';
 import { createRepoInsightsGitAdapter } from './repo-insights/repo-insights-git-adapter.js';
 import { createSessionBootstrap } from './session-bootstrap/session-bootstrap.js';
 import {
@@ -1545,6 +1547,12 @@ function main(): void {
       composeForSession: (session) =>
         sessionBootstrap.composeForSession(session),
     },
+    // Delivers that composed context to the CLI as a silently-discovered
+    // custom-instructions file (via COPILOT_CUSTOM_INSTRUCTIONS_DIRS) instead of
+    // typing the whole block into the terminal, so the user never watches a wall
+    // of injected prompt text scroll past. Files live under the OS temp dir and
+    // are removed when the session ends.
+    bootstrapInstructions: createBootstrapInstructionsWriter(),
     // Records the files each session creates/edits by parsing the tool's own
     // terminal output (per-session PTY = unambiguous attribution), replacing
     // brittle filesystem watching of a shared working directory.
@@ -2112,6 +2120,18 @@ function main(): void {
     git: createRepoInsightsGitAdapter(),
     clock,
     config: repoInsightsConfig,
+    // Each insights section is enriched by its own warmed metasession; the
+    // fan-out width scales with the live warm pool (reserving one for other IDE
+    // work) and is re-read mid-run so capacity added while scanning is used.
+    ai: metaAi,
+    liveMetaSessions: () => {
+      let live = 0;
+      for (const warm of allWarmPools) {
+        live += warm.stats().live;
+      }
+      return live;
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   // PR review: when a PR review feature is created, generate an AI summary and
   // core analysis from the ready repository context plus the PR's diff, and
@@ -3128,6 +3148,60 @@ function main(): void {
         });
     },
   );
+
+  // Repository insights: fan the four sections (agents, skills, docs, readiness)
+  // out across the warm metasession pool — one warmed session per section — and
+  // stream each as newline-delimited JSON the moment it settles. Running the
+  // whole parallel pass server-side over ONE long-lived request means a large
+  // repository fills the page progressively instead of blowing past the single
+  // GET timeout, and a slow or self-healing section never blocks the others.
+  app.post(`${apiConfig.basePath}/repos/:id/insights/analyze`, (req, res) => {
+    const repositoryId = req.params.id;
+    // Validate the repository exists before committing to a 200 stream, so an
+    // unknown id returns a normal JSON error with the right status.
+    try {
+      repoService.get(repositoryId);
+    } catch (error) {
+      const result = toErrorResult(error);
+      res.status(result.status).json(result.body);
+      return;
+    }
+    const controller = new AbortController();
+    let closed = false;
+    res.on('close', () => {
+      if (!res.writableFinished) {
+        closed = true;
+        controller.abort();
+      }
+    });
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    const sink: RepoInsightsStreamSink = {
+      emit: (event) => {
+        if (!closed) res.write(`${JSON.stringify(event)}\n`);
+      },
+    };
+    repoInsightsService
+      .analyzeStream(repositoryId, sink, controller.signal)
+      .catch((error: unknown) => {
+        if (!closed) {
+          res.write(
+            `${JSON.stringify({
+              type: 'section-failed',
+              section: 'readiness',
+              error: error instanceof Error ? error.message : String(error),
+            })}\n`,
+          );
+        }
+      })
+      .finally(() => {
+        if (!closed) res.end();
+      });
+  });
 
   // New Task: produce the reviewable plan — streamed as newline-delimited JSON
   // over ONE request so the browser sees the meta-session's live planning logs

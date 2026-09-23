@@ -6,6 +6,7 @@ import { AiMagicIcon, PopInIcon } from '../../components/icons.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
+import { useGlobalClipboard } from '../../hooks/use-global-clipboard.js';
 
 const TerminalView = lazy(() =>
   import('../../components/terminal-view.js').then((m) => ({
@@ -82,6 +83,11 @@ export function TabPopout({
   label: string;
 }) {
   const title = tabTitle(tab, label);
+  // A detached window renders only this tab, not the full IDE, so it must own
+  // copy itself: without this the popout falls back to Chromium's default copy
+  // (no native clipboard bridge, no error surface) and copying selected text
+  // from a session/agent window silently does nothing.
+  const clipboardError = useGlobalClipboard();
   function popIn() {
     void desktopBridge()?.windows?.popIn?.();
   }
@@ -105,6 +111,11 @@ export function TabPopout({
           Return to IDE
         </button>
       </header>
+      {clipboardError && (
+        <div className="clipboard-alert" role="alert">
+          {clipboardError}
+        </div>
+      )}
       <div className="session-popout-body">
         <TabBody tab={tab} />
       </div>

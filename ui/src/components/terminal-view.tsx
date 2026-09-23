@@ -14,7 +14,7 @@ import {
 } from '../lib/terminal-protocol.js';
 import { createTerminalDelivery } from '../lib/terminal-delivery.js';
 import {
-  toClipboardText, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
+  toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
   type ClipboardAttachmentResult, type DesktopClipboardBridge,
 } from '../lib/clipboard.js';
 import { copyText, isInternalClipboardFocusTransfer } from '../hooks/clipboard-write.js';
@@ -339,6 +339,21 @@ export function TerminalView({
         suppressOscColor(ident, payload),
       );
     }
+    // The hosted CLI copies via OSC 52 (`ESC ] 52 ; c ; <base64> ST`) and prints
+    // its own "Copied" confirmation. xterm has no built-in OSC 52 handler, so
+    // without this the sequence is silently dropped: the CLI claims success while
+    // the OS clipboard is never written — the user copies, sees "Copied", then
+    // pastes nothing. Decode the payload and route it through the same native
+    // clipboard bridge the manual copy paths use. A read query (`?`) or malformed
+    // payload decodes to null and is swallowed (return true) so the terminal
+    // never leaks clipboard contents back to the CLI.
+    term.parser.registerOscHandler(52, (payload) => {
+      const text = decodeOsc52(payload);
+      if (text) {
+        void copyToClipboard(text);
+      }
+      return true;
+    });
     const focusTerminal = (respectExternalFocus: boolean) => {
       if (hasOpenModalDialog()) {
         return;

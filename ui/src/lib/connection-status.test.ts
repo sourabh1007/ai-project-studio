@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveConnectionStatus,
   connectionChanged,
+  trackProbe,
+  INITIAL_PROBE,
+  BACKEND_DOWN_AFTER_FAILURES,
   type ConnectionState,
+  type ProbeTracker,
 } from './connection-status.js';
 
 describe('deriveConnectionStatus', () => {
@@ -61,6 +65,53 @@ describe('deriveConnectionStatus', () => {
         expect(status.detail).toContain('could not be restarted');
       }
     }
+  });
+});
+
+describe('trackProbe', () => {
+  it('reports ok immediately on success and clears the failure streak', () => {
+    const tracker = trackProbe(
+      { outcome: 'error', consecutiveFailures: 5 },
+      'ok',
+    );
+    expect(tracker).toEqual({ outcome: 'ok', consecutiveFailures: 0 });
+  });
+
+  it('does not alarm on a single failure after a healthy probe', () => {
+    const first = trackProbe({ outcome: 'ok', consecutiveFailures: 0 }, 'error');
+    expect(first.outcome).toBe('ok');
+    expect(first.consecutiveFailures).toBe(1);
+  });
+
+  it('flips to error only once the failure streak reaches the threshold', () => {
+    let tracker: ProbeTracker = INITIAL_PROBE;
+    for (let i = 1; i < BACKEND_DOWN_AFTER_FAILURES; i += 1) {
+      tracker = trackProbe(tracker, 'error');
+      expect(tracker.outcome).toBe('unknown');
+    }
+    tracker = trackProbe(tracker, 'error');
+    expect(tracker.outcome).toBe('error');
+    expect(tracker.consecutiveFailures).toBe(BACKEND_DOWN_AFTER_FAILURES);
+  });
+
+  it('keeps the previous outcome for failures below the threshold', () => {
+    const tracker = trackProbe(
+      { outcome: 'ok', consecutiveFailures: 0 },
+      'error',
+    );
+    // One failure short of the threshold stays optimistic rather than alarming.
+    expect(BACKEND_DOWN_AFTER_FAILURES).toBeGreaterThan(1);
+    expect(tracker.outcome).toBe('ok');
+  });
+
+  it('recovers to ok after a run of failures once a probe succeeds', () => {
+    let tracker: ProbeTracker = INITIAL_PROBE;
+    for (let i = 0; i < BACKEND_DOWN_AFTER_FAILURES; i += 1) {
+      tracker = trackProbe(tracker, 'error');
+    }
+    expect(tracker.outcome).toBe('error');
+    tracker = trackProbe(tracker, 'ok');
+    expect(tracker).toEqual({ outcome: 'ok', consecutiveFailures: 0 });
   });
 });
 

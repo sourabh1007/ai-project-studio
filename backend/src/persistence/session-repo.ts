@@ -25,6 +25,7 @@ interface SessionRow {
   name: string | null;
   group_id: string | null;
   order_index: number;
+  seq: number | null;
 }
 
 function mapSession(row: SessionRow): Session {
@@ -40,6 +41,7 @@ function mapSession(row: SessionRow): Session {
     scope: row.scope as SessionScope,
     groupId: row.group_id,
     orderIndex: row.order_index,
+    seq: row.seq,
     prompt: row.prompt,
     usageFilePath: row.usage_file_path,
     createdAt: row.created_at,
@@ -64,11 +66,29 @@ function intOrNull(value: number | null | undefined): number | null {
 /** SQLite-backed implementation of the SessionRepo port. */
 export function createSessionRepo(db: DatabaseSync): SessionRepo {
   const upsert = db.prepare(
-    `INSERT OR REPLACE INTO sessions
+    `INSERT INTO sessions
       (id, feature_id, provider, requested_model, resolved_model, status, kind,
        scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name,
-       group_id, order_index)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       group_id, order_index, seq)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       (SELECT COALESCE(MAX(seq), 0) + 1 FROM sessions))
+     ON CONFLICT(id) DO UPDATE SET
+       feature_id = excluded.feature_id,
+       provider = excluded.provider,
+       requested_model = excluded.requested_model,
+       resolved_model = excluded.resolved_model,
+       status = excluded.status,
+       kind = excluded.kind,
+       scope = excluded.scope,
+       prompt = excluded.prompt,
+       usage_file_path = excluded.usage_file_path,
+       created_at = excluded.created_at,
+       started_at = excluded.started_at,
+       ended_at = excluded.ended_at,
+       exit_code = excluded.exit_code,
+       name = excluded.name,
+       group_id = excluded.group_id,
+       order_index = excluded.order_index`,
   );
   const selectOne = db.prepare('SELECT * FROM sessions WHERE id = ?');
   const selectByFeature = db.prepare(

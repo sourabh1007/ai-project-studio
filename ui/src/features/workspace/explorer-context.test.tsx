@@ -138,6 +138,39 @@ describe('Explorer repository context gating', () => {
     expect(screen.queryByText(/pending analysis/i)).not.toBeInTheDocument();
   });
 
+  it('labels unnamed sessions by their stable creation sequence, not tree position', async () => {
+    // Two sessions returned in an order that does not match their creation
+    // sequence: positional numbering would render "#1"/"#2", but the stable
+    // seq must drive the fallback label so a move/reorder never renames them.
+    const base = {
+      featureId: feature.id, name: null, provider: 'copilot', requestedModel: 'auto',
+      resolvedModel: null, status: 'completed' as const, kind: 'dev' as const,
+      prompt: '', usageFilePath: '', createdAt: feature.createdAt, startedAt: null,
+      endedAt: null, exitCode: 0, groupId: null,
+    };
+    const sessions: Session[] = [
+      { ...base, id: 'sa', seq: 7 },
+      { ...base, id: 'sb', seq: 3 },
+    ];
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn().mockResolvedValue(sessions),
+      listGroups: vi.fn().mockResolvedValue([]),
+      listSessionSkills: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+    };
+    render(
+      <ApiProvider value={client}>
+        <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+      </ApiProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    expect(await screen.findByText('Session #7')).toBeInTheDocument();
+    expect(screen.getByText('Session #3')).toBeInTheDocument();
+    expect(screen.queryByText('Session #1')).toBeNull();
+    expect(screen.queryByText('Session #2')).toBeNull();
+  });
+
   it('restores expanded features after the Explorer unmounts and remounts', async () => {
     const client = {
       ...api(context('ready', 't')),
