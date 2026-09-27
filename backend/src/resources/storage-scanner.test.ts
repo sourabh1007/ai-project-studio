@@ -207,10 +207,13 @@ describe('bounded storage scanning', () => {
     await expect(assertRealPath(fs, root)).rejects.toThrow('refused');
     expect(errorText('oops')).toBe('oops');
   });
-  it('preserves case on case-sensitive platforms', () => {
+  it.each(['win32', 'linux', 'darwin'])('normalizes path case for %s independently of the host', (platform) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    Object.defineProperty(process, 'platform', { value: 'linux' });
-    try { expect(canonicalPath(at('MixedCase'))).toBe(at('MixedCase')); }
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const path = at('MixedCase');
+      expect(canonicalPath(path)).toBe(platform === 'win32' ? path.toLowerCase() : path);
+    }
     finally { Object.defineProperty(process, 'platform', descriptor); }
   });
 });
