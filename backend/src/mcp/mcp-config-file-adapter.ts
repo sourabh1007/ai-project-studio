@@ -1,6 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, rm, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { McpConfigDocument, McpConfigFileStore } from './mcp-contract.js';
+import { randomUUID } from 'node:crypto';
+import type { McpConfigFileStore } from './mcp-contract.js';
+import { parseMcpConfigDocument } from './mcp-config-document.js';
 
 /**
  * Filesystem adapter for a provider's MCP config JSON file. Thin IO at the edge
@@ -12,7 +14,7 @@ export function createMcpConfigFileStore(): McpConfigFileStore {
     async read(path) {
       try {
         const raw = await readFile(path, 'utf8');
-        return JSON.parse(raw) as McpConfigDocument;
+        return parseMcpConfigDocument(raw, path);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           return null;
@@ -21,8 +23,22 @@ export function createMcpConfigFileStore(): McpConfigFileStore {
       }
     },
     async write(path, document) {
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+      let destination = path;
+      try {
+        destination = await realpath(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      await mkdir(dirname(destination), { recursive: true });
+      const temporary = `${destination}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, {
+          encoding: 'utf8', flag: 'wx', mode: 0o600,
+        });
+        await rename(temporary, destination);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     },
   };
 }

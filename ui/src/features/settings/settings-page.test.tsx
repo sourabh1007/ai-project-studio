@@ -22,6 +22,14 @@ describe('sectionMatches', () => {
 });
 
 describe('CollapsibleCard', () => {
+  it('reveals a deep-linked section once and still allows manual collapse', () => {
+    const view = render(<CollapsibleCard id="reveal-test" title="Worktrees" defaultOpen={false} revealRequest={1}>Tree list</CollapsibleCard>);
+    expect(screen.getByText('Tree list')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Worktrees' }));
+    expect(screen.queryByText('Tree list')).toBeNull();
+    view.rerender(<CollapsibleCard id="reveal-test" title="Worktrees" defaultOpen={false} revealRequest={2}>Tree list</CollapsibleCard>);
+    expect(screen.getByText('Tree list')).toBeTruthy();
+  });
   it('shows the body by default and hides it after collapsing', () => {
     render(
       <CollapsibleCard id="test-open" title="Alpha section">

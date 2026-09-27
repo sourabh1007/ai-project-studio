@@ -7,6 +7,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { useAgentUsage } from '../../hooks/use-agent-usage.js';
+import { refreshAgentCredits } from '../../lib/agent-usage.js';
+import { AgentUsageValue } from '../../components/feature-agent-usage.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
   ActivityIcon,
@@ -1479,7 +1482,11 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
     [run?.report],
   );
 
-  const agentList = useMemo(() => Object.values(agents), [agents]);
+  const agentUsage = useAgentUsage(feature.id, 'Bug bash');
+  const agentList = useMemo(
+    () => refreshAgentCredits(Object.values(agents), agentUsage.snapshots),
+    [agents, agentUsage.snapshots],
+  );
   const analystAgents = useMemo(
     () => agentList.filter((agent) => agent.role === 'analyst'),
     [agentList],
@@ -1494,7 +1501,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
     for (const scenario of scenarios) map[scenario.id] = scenario;
     return map;
   }, [scenarios]);
-  const openAgent = openAgentId ? agents[openAgentId] : undefined;
+  const openAgent = agentList.find((agent) => agent.id === openAgentId);
   const openScenario = openScenarioId ? scenariosById[openScenarioId] : undefined;
 
   if (loading) {
@@ -2096,9 +2103,9 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
                     </div>
                     <div className="new-task-stat">
                       <span className="new-task-stat-num">
-                        {formatCredits(sumCredits(agentList))}
+                        <AgentUsageValue usage={agentUsage} />
                       </span>
-                      <span className="new-task-stat-label">AI credits</span>
+                      <span className="new-task-stat-label">Feature Bug Bash AI credits</span>
                     </div>
                   </div>
 
@@ -2141,7 +2148,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
         <ScenarioDetailModal
           scenario={openScenario}
           tester={
-            openScenario.testerId ? agents[openScenario.testerId] : undefined
+            agentList.find((agent) => agent.id === openScenario.testerId)
           }
           lines={
             openScenario.testerId

@@ -168,11 +168,14 @@ const GRANULARITIES: readonly UsageGranularity[] = ['day', 'week', 'month', 'yea
 
 /**
  * Coerces an untrusted query value to a supported granularity, falling back to
- * `month` (the default landing view) for anything unrecognized.
+ * `month` (the default landing view) for anything unrecognized. Accepts
+ * standard query strings with incidental case/whitespace noise.
  */
 export function parseGranularity(value: unknown): UsageGranularity {
-  return GRANULARITIES.includes(value as UsageGranularity)
-    ? (value as UsageGranularity)
+  const normalized =
+    typeof value === 'string' ? value.trim().toLowerCase() : value;
+  return GRANULARITIES.includes(normalized as UsageGranularity)
+    ? (normalized as UsageGranularity)
     : 'month';
 }
 

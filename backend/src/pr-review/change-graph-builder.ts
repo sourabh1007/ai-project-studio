@@ -34,6 +34,7 @@ export interface BuildChangeGraphInput {
    * `MAX_BOUNDARY_SCAN_READS`; overridable so tests can exercise the cap cheaply.
    */
   maxBoundaryReads?: number;
+  onProgress?: (message: string) => void;
 }
 
 /** The synthetic project box for files under no matching project manifest. */
@@ -70,12 +71,18 @@ async function resolveProject(
   cache: Map<string, ChangeGraphProject>,
 ): Promise<ChangeGraphProject> {
   const segments = dirSegments(filePath);
+  const visited: string[] = [];
+  const remember = (project: ChangeGraphProject) => {
+    for (const dir of visited) cache.set(dir, project);
+    return project;
+  };
   for (let depth = segments.length; depth >= 0; depth -= 1) {
     const dir = segments.slice(0, depth).join('/');
     const cached = cache.get(dir);
     if (cached) {
-      return cached;
+      return remember(cached);
     }
+    visited.push(dir);
     const names = await fs.listDir(worktreePath, dir);
     const manifest = names.find((name) =>
       matchers.some((matcher) => matcher.test(name)),
@@ -87,11 +94,10 @@ async function resolveProject(
         name: projectName(manifestPath),
         path: manifestPath,
       };
-      cache.set(dir, project);
-      return project;
+      return remember(project);
     }
   }
-  return NO_PROJECT;
+  return remember(NO_PROJECT);
 }
 
 interface FileFacts {
@@ -152,7 +158,8 @@ function scopeHitsToChangedCode(
  * `A` statically references a type that a *different* changed file `B` declares.
  * Edges are only drawn between files of the same language and the same category
  * (code↔code, test↔test), so the two rendered graphs stay independent. No AI is
- * involved, so this step is instant and can never hang.
+ * involved. Run this CPU-intensive analysis in an isolated worker; async file
+ * reads do not make synchronous language parsing safe for an API event loop.
  */
 export async function buildChangeGraph(
   input: BuildChangeGraphInput,
@@ -167,6 +174,7 @@ export async function buildChangeGraph(
   const nodes: ChangeGraphNode[] = [];
 
   for (const entry of entries) {
+    input.onProgress?.(`Reading changed file ${nodes.length + 1}/${entries.length}: ${entry.path}`);
     const analyzer = registry.analyzerFor(entry.path);
     const content = analyzer
       ? await fs.readFile(worktreePath, entry.path)
@@ -229,6 +237,7 @@ export async function buildChangeGraph(
   }
 
   const edges = new Map<string, ChangeGraphEdge>();
+  input.onProgress?.('Mapping references between changed files');
   for (const file of facts) {
     if (!file.analyzer || !file.content) {
       continue;
@@ -274,6 +283,7 @@ export async function buildChangeGraph(
     nodes,
     edges,
     maxReads: maxBoundaryReads,
+    onProgress: input.onProgress,
   });
 
   return { projects: [...projectsById.values()], nodes, edges: [...edges.values()] };
@@ -319,6 +329,7 @@ interface BoundaryScanInput {
   nodes: ChangeGraphNode[];
   edges: Map<string, ChangeGraphEdge>;
   maxReads: number;
+  onProgress?: (message: string) => void;
 }
 
 /**
@@ -328,7 +339,8 @@ interface BoundaryScanInput {
  * type a changed file declares, adds it as a blue boundary node with an edge
  * `caller → changed file`. Matches only within the same language and category,
  * never recurses past a single reference hop, and reads at most
- * `MAX_BOUNDARY_SCAN_READS` files so it always terminates fast.
+ * `MAX_BOUNDARY_SCAN_READS` files. The worker deadline separately bounds slow
+ * parsing, filesystem traversal and pathological source files.
  */
 async function addBoundaryCallers(input: BoundaryScanInput): Promise<void> {
   const {
@@ -349,6 +361,7 @@ async function addBoundaryCallers(input: BoundaryScanInput): Promise<void> {
     return;
   }
 
+  input.onProgress?.('Finding unchanged callers in the repository');
   const files = await fs.listFilesRecursive(worktreePath, '');
   let reads = 0;
   for (const filePath of files) {
@@ -368,11 +381,16 @@ async function addBoundaryCallers(input: BoundaryScanInput): Promise<void> {
       break;
     }
     reads += 1;
+    if (reads % 100 === 1) input.onProgress?.(`Scanning callers: ${reads}/${maxReads} file budget`);
     const content = await fs.readFile(worktreePath, filePath);
     if (!content) {
       continue;
     }
-    const hits = analyzer.references(content, [...byType.keys()]);
+    // Most repository files cannot mention any changed type. Avoid expensive
+    // comment stripping/member parsing entirely for those files.
+    const candidates = [...byType.keys()].filter((type) => content.includes(type));
+    if (candidates.length === 0) continue;
+    const hits = analyzer.references(content, candidates);
     let callsChanged = false;
     for (const hit of hits) {
       const declarers = byType.get(hit.type);

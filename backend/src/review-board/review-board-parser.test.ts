@@ -4,10 +4,98 @@ import {
   parseAiFindings,
   parseChatReply,
   parsePerspectiveAnalysis,
+  parseValidatedPerspectiveAnalysis,
 } from './review-board-parser.js';
 import type { ReviewFinding } from './review-board-contract.js';
 
 const IDS = ['security', 'testing'];
+
+describe('evidence exact location', () => {
+  function finding(location: unknown) {
+    return {
+      perspectiveId: 'security', title: 'Fix check', detail: 'Check bounds.',
+      evidence: [{ source: 'src/a.ts — check()', reason: 'No bounds', location }],
+    };
+  }
+
+  it.each(['RIGHT', 'LEFT'] as const)('preserves explicit %s coordinates in both parsers', (side) => {
+    const location = { path: 'src/a.ts', line: 42, side };
+    const raw = finding(location);
+    const legacy = parseAiFindings(JSON.stringify([raw]), IDS);
+    const perspective = parsePerspectiveAnalysis(JSON.stringify({ findings: [raw] }), 'security');
+    for (const parsed of [legacy, perspective.findings]) {
+      expect(parsed[0].evidence[0]).toMatchObject({
+        source: 'src/a.ts — check()', location, direct: false,
+      });
+    }
+  });
+
+  it.each([
+    undefined, null, 4, 'src/a.ts:42', {}, [],
+    { path: '', line: 1, side: 'RIGHT' },
+    { path: '/a.ts', line: 1, side: 'RIGHT' },
+    { path: '../a.ts', line: 1, side: 'RIGHT' },
+    { path: 'a.ts', line: '1', side: 'RIGHT' },
+    { path: 'a.ts', line: 0, side: 'RIGHT' },
+    { path: 'a.ts', line: -1, side: 'RIGHT' },
+    { path: 'a.ts', line: 1.5, side: 'RIGHT' },
+    { path: 'a.ts', line: 1, side: 'right' },
+    { path: 'a.ts', line: 1, side: 'OTHER' },
+    { path: 'a.ts', line: 1 },
+  ])('omits invalid location %j without guessing from source or dropping evidence', (location) => {
+    const raw = finding(location);
+    const parsed = parseAiFindings(JSON.stringify([raw]), IDS);
+    expect(parsed[0].evidence[0]).toEqual({
+      source: 'src/a.ts — check()', reason: 'No bounds', confidence: 0.6, direct: false,
+    });
+  });
+});
+
+describe('parseValidatedPerspectiveAnalysis', () => {
+  it.each([
+    '', '   ', 'I cannot review this change.', '{broken', '```json\n{bad}\n```',
+    'null', 'true', '42', '"hello"', '[]',
+    '[{"summary":"Inspected a.ts.","findings":[]}]', '{}',
+    '{"summary":"Inspected a.ts."}', '{"findings":null}',
+    '{"findings":"none"}', '{"findings":[]}', '{"findings":[],"summary":" "}',
+    '{"findings":[],"summary":42}', '{"skipped":"true","reason":"No change"}',
+    '{"skipped":true}', '{"skipped":true,"reason":" "}',
+    '{"skipped":true,"reason":1}',
+    '{"summary":"Inspected a.ts.","findings":[{}]}',
+    '{"findings":[{"title":"Issue","detail":"Details","evidence":[]}]}',
+    'Refusal followed by {"summary":"Inspected a.ts.","findings":[]}',
+  ])('rejects unusable review output %s', (text) => {
+    expect(() => parseValidatedPerspectiveAnalysis(text, 'security')).toThrow(
+      /Invalid review response for security: .*Retry this perspective/,
+    );
+  });
+
+  it.each([
+    '{"summary":" Inspected a.ts; input is validated. ","findings":[]}',
+    'Here is the review:\n```json\n{"skipped":false,"summary":" Inspected a.ts; input is validated. ","findings":[]}\n```',
+  ])('accepts a clean review with a real summary', (text) => {
+    expect(parseValidatedPerspectiveAnalysis(text, 'security')).toMatchObject({
+      skipped: false,
+      summary: 'Inspected a.ts; input is validated.',
+      findings: [],
+    });
+  });
+
+  it('accepts evidenced findings even when optional detail is absent', () => {
+    const parsed = parseValidatedPerspectiveAnalysis(
+      '{"findings":[{"title":"Issue","detail":"Details","evidence":[{"source":"a.ts","reason":"No bounds"}]}]}',
+      'security',
+    );
+    expect(parsed.findings).toHaveLength(1);
+    expect(parsed.summary).toBeNull();
+  });
+
+  it('accepts a skipped review only with the model reason', () => {
+    expect(parseValidatedPerspectiveAnalysis(
+      '{"skipped":true,"reason":" No API changed. "}', 'api',
+    )).toMatchObject({ skipped: true, skipReason: 'No API changed.' });
+  });
+});
 
 describe('parseAiFindings', () => {
   it('parses a fenced JSON array of findings', () => {

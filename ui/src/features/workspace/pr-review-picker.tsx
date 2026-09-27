@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
-  Feature,
   RemotePullRequest,
   RepoProvider,
   Repository,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader, Spinner } from '../../components/loading.js';
+import { CheckIcon, CloseIcon, PlusIcon } from '../../components/icons.js';
 
 /**
  * Extracts a pull-request number from a pasted value — either a bare number or
@@ -67,23 +67,33 @@ function parsePositiveInteger(value: string): number | null {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
+/** The maximum number of pull requests reviewable together in one batch. */
+export const MAX_BULK_PRS = 10;
+
+/** A pull request the reviewer has staged for the batch. */
+export interface SelectedPull {
+  number: number;
+  title: string;
+}
+
 /**
  * Modal for starting a PR review. Lists the repository's open pull requests
- * (with a paste-a-number/URL fallback); picking one asks the backend to check
- * the branch out into a git worktree and create a feature for it. Multiple PRs
- * can be reviewed concurrently since each lands in its own worktree.
+ * (with a paste-a-number/URL fallback) and lets the reviewer stage between one
+ * and {@link MAX_BULK_PRS} of them. Confirming hands the selection to
+ * `onConfirm`, which creates a "Bulk PR Review" feature, a review worktree per
+ * PR, and opens each Review Board plus a live progress tracker.
  */
 export function PrReviewPicker({
   repo,
-  parentFeatureId,
   onClose,
-  onCreated,
+  onConfirm,
 }: {
   repo: Repository;
-  /** Feature to nest the PR review under; null/omitted for a top-level review. */
-  parentFeatureId?: string | null;
   onClose: () => void;
-  onCreated: (feature: Feature) => void;
+  onConfirm: (
+    pulls: SelectedPull[],
+    reportProgress: (message: string) => void,
+  ) => Promise<void>;
 }) {
   const api = useApi();
   const mine = useAsync<RemotePullRequest[]>(
@@ -99,12 +109,12 @@ export function PrReviewPicker({
     [repo.id],
   );
   const [manual, setManual] = useState('');
-  const [busyNumber, setBusyNumber] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'mine' | 'assigned' | 'all'>('all');
-
-  const busy = busyNumber !== null;
+  const [selected, setSelected] = useState<SelectedPull[]>([]);
 
   const pulls = tab === 'mine' ? mine : tab === 'assigned' ? assigned : everything;
   const list = pulls.data ?? [];
@@ -113,6 +123,12 @@ export function PrReviewPicker({
     assigned: assigned.data?.length ?? 0,
     all: everything.data?.length ?? 0,
   };
+
+  const selectedNumbers = useMemo(
+    () => new Set(selected.map((p) => p.number)),
+    [selected],
+  );
+  const atLimit = selected.length >= MAX_BULK_PRS;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -127,47 +143,113 @@ export function PrReviewPicker({
     );
   }, [list, query]);
 
-  async function review(number: number) {
-    setBusyNumber(number);
+  function addPull(pull: SelectedPull) {
     setError(null);
-    try {
-      const feature = await api.createPrFeature(
-        repo.id,
-        number,
-        parentFeatureId ?? null,
-      );
-      onCreated(feature);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setBusyNumber(null);
+    setSelected((prev) => {
+      if (prev.some((p) => p.number === pull.number)) {
+        return prev;
+      }
+      if (prev.length >= MAX_BULK_PRS) {
+        return prev;
+      }
+      return [...prev, pull];
+    });
+  }
+
+  function togglePull(pr: RemotePullRequest) {
+    if (selectedNumbers.has(pr.number)) {
+      removePull(pr.number);
+    } else if (!atLimit) {
+      addPull({ number: pr.number, title: pr.title });
     }
   }
 
-  function reviewManual() {
+  function removePull(number: number) {
+    setSelected((prev) => prev.filter((p) => p.number !== number));
+  }
+
+  function addManual() {
     const number = parsePullNumber(manual, repo.provider);
     if (!number) {
       setError('Enter a valid pull request number or URL.');
       return;
     }
-    void review(number);
+    if (selectedNumbers.has(number)) {
+      setManual('');
+      return;
+    }
+    if (atLimit) {
+      setError(`You can review at most ${MAX_BULK_PRS} pull requests at once.`);
+      return;
+    }
+    const known = list.find((pr) => pr.number === number);
+    addPull({ number, title: known?.title ?? `PR #${number}` });
+    setManual('');
+  }
+
+  async function confirm() {
+    if (selected.length === 0 || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setProgress(null);
+    try {
+      await onConfirm(selected, (message) => setProgress(message));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+      setProgress(null);
+    }
   }
 
   return (
-    <Modal title={`Open Pull Request · ${repo.name}`} onClose={onClose}>
+    <Modal title={`Open Pull Request · ${repo.name}`} onClose={busy ? () => {} : onClose}>
       <div className="pr-picker">
         {busy && (
           <div className="pr-checkout-overlay" role="status" aria-live="polite">
             <span className="spinner spinner-lg" aria-hidden="true" />
             <div className="pr-checkout-title">
-              Checking out&nbsp;<strong>#{busyNumber}</strong>
+              Preparing&nbsp;<strong>{selected.length}</strong>&nbsp;review
+              {selected.length === 1 ? '' : 's'}
             </div>
             <div className="pr-checkout-sub">
-              Preparing an isolated review worktree. Large repositories can take
-              a minute the first time…
+              {progress ??
+                'Checking out an isolated worktree per pull request. Large ' +
+                  'repositories can take a minute the first time…'}
             </div>
             <span className="pr-checkout-bar" aria-hidden="true" />
           </div>
         )}
+
+        {selected.length > 0 && (
+          <div className="pr-selected">
+            <div className="pr-selected-head">
+              <span>Selected pull requests</span>
+              <span className="pr-selected-count">
+                {selected.length} / {MAX_BULK_PRS}
+              </span>
+            </div>
+            <ul className="pr-chips">
+              {selected.map((p) => (
+                <li key={p.number} className="pr-chip">
+                  <span className="pr-chip-number">#{p.number}</span>
+                  <span className="pr-chip-title">{p.title}</span>
+                  <button
+                    type="button"
+                    className="pr-chip-remove"
+                    aria-label={`Remove #${p.number}`}
+                    onClick={() => removePull(p.number)}
+                    disabled={busy}
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="pr-tabs" role="tablist">
           <button
             type="button"
@@ -244,32 +326,36 @@ export function PrReviewPicker({
             filtered.length === 0 && (
               <EmptyState message="No pull requests match your search." />
             )}
-          {filtered.map((pr) => (
-            <button
-              type="button"
-              key={pr.number}
-              className="pr-list-item"
-              onClick={() => void review(pr.number)}
-              disabled={busy}
-              title={pr.url}
-            >
-              <span className="pr-number">#{pr.number}</span>
-              <span className="pr-list-main">
-                <span className="pr-title">{pr.title}</span>
-                <span className="pr-meta">
-                  {pr.sourceBranch}
-                  {pr.author ? ` · ${pr.author}` : ''}
+          {filtered.map((pr) => {
+            const isSelected = selectedNumbers.has(pr.number);
+            return (
+              <button
+                type="button"
+                key={pr.number}
+                className={`pr-list-item ${isSelected ? 'is-selected' : ''}`.trim()}
+                onClick={() => togglePull(pr)}
+                disabled={busy || (!isSelected && atLimit)}
+                title={pr.url}
+                aria-pressed={isSelected}
+              >
+                <span className={`pr-check ${isSelected ? 'is-on' : ''}`.trim()}>
+                  {isSelected && <CheckIcon size={12} />}
                 </span>
-              </span>
-              {busyNumber === pr.number && (
-                <Spinner size={14} label="Checking out" />
-              )}
-            </button>
-          ))}
+                <span className="pr-number">#{pr.number}</span>
+                <span className="pr-list-main">
+                  <span className="pr-title">{pr.title}</span>
+                  <span className="pr-meta">
+                    {pr.sourceBranch}
+                    {pr.author ? ` · ${pr.author}` : ''}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="pr-manual">
-          <label htmlFor="pr-manual-input">Or paste a PR number or URL</label>
+          <label htmlFor="pr-manual-input">Add by PR number or URL</label>
           <div className="pr-manual-row">
             <input
               id="pr-manual-input"
@@ -278,20 +364,42 @@ export function PrReviewPicker({
               onChange={(e) => setManual(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  reviewManual();
+                  addManual();
                 }
               }}
               placeholder="e.g. 42 or https://github.com/o/r/pull/42"
               spellCheck={false}
-              disabled={busy}
+              disabled={busy || atLimit}
             />
-            <Button onClick={reviewManual} disabled={busy || !manual.trim()}>
-              {busy ? <Spinner size={13} label="Checking out" /> : 'Review'}
+            <Button
+              variant="secondary"
+              onClick={addManual}
+              disabled={busy || atLimit || !manual.trim()}
+            >
+              <PlusIcon size={14} /> Add
             </Button>
           </div>
+          {atLimit && (
+            <p className="pr-limit-hint">
+              Maximum of {MAX_BULK_PRS} pull requests reached.
+            </p>
+          )}
         </div>
 
         <ErrorText error={error} />
+
+        <div className="pr-picker-actions">
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={confirm} disabled={busy || selected.length === 0}>
+            {busy ? (
+              <Spinner size={13} label="Preparing" />
+            ) : (
+              `Start review${selected.length > 0 ? ` (${selected.length})` : ''}`
+            )}
+          </Button>
+        </div>
       </div>
     </Modal>
   );

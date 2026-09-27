@@ -12,6 +12,7 @@ out/
 coverage/
 **/coverage/
 *.lcov
+.validation-artifacts/
 
 # Logs
 logs/

@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
-import type { Feature, Repository, Session, AttachedAgent } from '../../lib/types.js';
+import type { Feature, Repository, Session, AttachedAgent, PrReview } from '../../lib/types.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { createDisposer } from '../../lib/disposer.js';
-import { useApi } from '../../app/api-context.js';
+import { ApiProvider, useApi } from '../../app/api-context.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
@@ -15,13 +15,18 @@ import { ErrorBoundary } from '../../components/error-boundary.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
+import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import {
   closeWorkspaceTab,
   emptyWorkspaceTabsState,
+  featureSubtreeIds,
   isWorkspaceTabsState,
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
   removeFeatureWorkspaceTabs,
+  removeSessionWorkspaceTabs,
+  removeRepoWorkspaceTabs,
+  removeAgentWorkspaceTabs,
   setWorkspaceSplit,
   type WorkspaceTab,
 } from './workspace-tabs.js';
@@ -44,6 +49,11 @@ const FeatureDashboard = lazy(() =>
 const RepoDashboard = lazy(() =>
   import('../repo-dashboard/repo-dashboard.js').then((m) => ({
     default: m.RepoDashboard,
+  })),
+);
+const BulkReviewTracker = lazy(() =>
+  import('./bulk-review-tracker.js').then((m) => ({
+    default: m.BulkReviewTracker,
   })),
 );
 
@@ -104,12 +114,46 @@ export function WorkspaceView({
 
   const tabs = tabState.tabs;
   const activeId = tabState.activeId;
+  const [deletionRevision, setDeletionRevision] = useState(0);
+  const knownFeatures = useRef<Feature[]>([]);
+  const pendingImportedFeatures = useRef(new Map<string, Feature>());
+  const knownAttachments = useRef(new Map<string, AttachedAgent['attachment']>());
+  const trackedReviewSignal = tabs.some((tab) => tab.kind === 'pr-review-tracker')
+    ? JSON.stringify(Object.values(live.prReviews).map((review) => [
+        review.featureId, review.pull.number, review.pull.title,
+      ]))
+    : '';
+
+  // Explorer's nested rows own repo removal and agent detachment. Observe
+  // successful mutations at their API boundary without changing other callers.
+  const explorerApi = useMemo(() => ({
+    ...api,
+    async deleteRepo(id: string) {
+      const result = await api.deleteRepo(id);
+      setTabState((prev) => removeRepoWorkspaceTabs(prev, id));
+      setDeletionRevision((revision) => revision + 1);
+      return result;
+    },
+    async detachAgent(id: string) {
+      const result = await api.detachAgent(id);
+      const attachment = knownAttachments.current.get(id);
+      setTabState((prev) => removeAgentWorkspaceTabs(prev, id, attachment));
+      setDeletionRevision((revision) => revision + 1);
+      return result;
+    },
+    async deleteGroup(id: string) {
+      const result = await api.deleteGroup(id);
+      setDeletionRevision((revision) => revision + 1);
+      return result;
+    },
+  }), [api, setTabState]);
 
   useEffect(() => {
     const featureTabs = tabs.filter(
       (tab) =>
         tab.kind === 'feature' ||
         tab.kind === 'review-board' ||
+        tab.kind === 'pr-review-tracker' ||
         tab.kind === 'agent',
     );
     const sessionFeatureIds = [
@@ -121,6 +165,11 @@ export function WorkspaceView({
       ),
     ];
     const hasRepoTabs = tabs.some((tab) => tab.kind === 'repo');
+    const agentFeatureIds = [...new Set(
+      tabs.flatMap((tab) =>
+        tab.kind === 'agent' || tab.kind === 'review-board' ? [tab.feature.id] : [],
+      ),
+    )];
     if (
       featureTabs.length === 0 &&
       sessionFeatureIds.length === 0 &&
@@ -131,7 +180,7 @@ export function WorkspaceView({
 
     let active = true;
     void (async () => {
-      const [features, repos, sessionsByFeature] = await Promise.all([
+      const [features, repos, sessionsByFeature, agentsByFeature] = await Promise.all([
         featureTabs.length > 0 || sessionFeatureIds.length > 0
           ? api
               .listFeatures()
@@ -161,12 +210,58 @@ export function WorkspaceView({
               }),
             ).then((entries) => new Map(entries))
           : Promise.resolve(new Map<string, Map<string, Session> | null>()),
+        Promise.all(agentFeatureIds.map(async (featureId) => {
+          try {
+            return [featureId, await api.listFeatureAgents(featureId)] as const;
+          } catch {
+            return [featureId, null] as const;
+          }
+        })).then((entries) => new Map(entries)),
       ]);
+      if (!active) return;
+      // Successful checkout responses are newer than an Explorer/list request
+      // already in flight. Keep them until a feature listing confirms them.
+      if (features) {
+        for (const [id, feature] of pendingImportedFeatures.current) {
+          if (features.has(id)) {
+            pendingImportedFeatures.current.delete(id);
+          } else {
+            features.set(id, feature);
+            agentsByFeature.set(id, null);
+          }
+        }
+      }
+      const trackerIds = new Set(tabs.flatMap((tab) =>
+        tab.kind === 'pr-review-tracker' ? [tab.feature.id] : [],
+      ));
+      const prReviews = new Map<string, Pick<PrReview, 'pull'> | null>();
+      await Promise.all([...(features?.values() ?? [])]
+        .filter((feature) => feature.parentFeatureId && trackerIds.has(feature.parentFeatureId))
+        .map(async (feature) => {
+          try {
+            const review = live.prReviews[feature.id] ?? await api.getPrReview(feature.id);
+            prReviews.set(feature.id, review);
+          } catch {
+            // A regular child feature is not necessarily a PR. Keep existing
+            // imported metadata on failure, but never invent a PR identity.
+            prReviews.set(feature.id, null);
+          }
+        }));
       if (!active) {
         return;
       }
+      if (features) knownFeatures.current = [...features.values()];
+      for (const [featureId, agents] of agentsByFeature) {
+        if (!agents) continue;
+        for (const [id, attachment] of knownAttachments.current) {
+          if (attachment.featureId === featureId) knownAttachments.current.delete(id);
+        }
+        for (const { attachment } of agents) {
+          knownAttachments.current.set(attachment.id, attachment);
+        }
+      }
       setTabState((prev) =>
-        reconcileWorkspaceTabsState(prev, { features, repos, sessionsByFeature }),
+        reconcileWorkspaceTabsState(prev, { features, repos, sessionsByFeature, agentsByFeature, prReviews }),
       );
     })();
 
@@ -176,6 +271,8 @@ export function WorkspaceView({
   }, [
     api,
     setTabState,
+    deletionRevision,
+    trackedReviewSignal,
     tabs
       .map((tab) =>
         tab.kind === 'session'
@@ -210,6 +307,42 @@ export function WorkspaceView({
       agentId: 'review-board',
       attachmentId: `review-board:${feature.id}`,
       feature,
+    });
+  }
+
+  /** Activate an already-open Review Board tab for a PR feature, if present. */
+  function focusReviewBoard(featureId: string) {
+    const id = `agent:review-board:${featureId}`;
+    setTabState((prev) =>
+      prev.tabs.some((tab) => tab.id === id)
+        ? setWorkspaceSplit({ ...prev, activeId: id }, prev.splitId)
+        : prev,
+    );
+  }
+
+  /**
+   * Opens a Review Board tab per selected PR, then a single "Bulk PR Review"
+   * tracker tab (made active) that drives and shows each PR's live progress.
+   */
+  function openBulkPrReview(
+    parent: Feature,
+    items: { feature: Feature; number: number; title: string }[],
+  ) {
+    pendingImportedFeatures.current.set(parent.id, parent);
+    for (const item of items) {
+      pendingImportedFeatures.current.set(item.feature.id, item.feature);
+      openReviewBoard(item.feature);
+    }
+    openTab({
+      kind: 'pr-review-tracker',
+      id: `pr-review-tracker:${parent.id}`,
+      label: parent.name,
+      feature: parent,
+      prs: items.map((item) => ({
+        featureId: item.feature.id,
+        number: item.number,
+        title: item.title,
+      })),
     });
   }
 
@@ -303,13 +436,27 @@ export function WorkspaceView({
   }
 
   async function deleteFeature(feature: Feature) {
+    const features = [
+      ...pendingImportedFeatures.current.values(),
+      ...await api.listFeatures().catch(() => knownFeatures.current),
+    ];
     await api.deleteFeature(feature.id);
-    setTabState((prev) => removeFeatureWorkspaceTabs(prev, feature.id));
+    const deletedIds = featureSubtreeIds(feature.id, [
+      ...tabs.flatMap((tab) => 'feature' in tab ? [tab.feature] : []),
+      ...features,
+    ]);
+    for (const id of deletedIds) {
+      pendingImportedFeatures.current.delete(id);
+      reviewBoardRunStore.remove(id);
+    }
+    setTabState((prev) => removeFeatureWorkspaceTabs(prev, feature.id, features));
+    setDeletionRevision((revision) => revision + 1);
   }
 
   async function deleteSession(session: Session) {
     await api.deleteSession(session.id);
-    closeTab(session.id);
+    setTabState((prev) => removeSessionWorkspaceTabs(prev, session.id));
+    setDeletionRevision((revision) => revision + 1);
   }
 
   const active = tabs.find((t) => t.id === activeId) ?? null;
@@ -394,6 +541,21 @@ export function WorkspaceView({
         </Suspense>
       );
     }
+    if (tab.kind === 'pr-review-tracker') {
+      return (
+        <ErrorBoundary label="Bulk PR Review">
+          <Suspense fallback={<ViewSkeleton label="bulk review" />}>
+            <BulkReviewTracker
+              key={tab.feature.id}
+              title={tab.feature.name}
+              prs={tab.prs}
+              live={live}
+              onOpen={focusReviewBoard}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      );
+    }
     return null;
   }
 
@@ -440,21 +602,24 @@ export function WorkspaceView({
     >
       {sidebarOpen && (
         <>
-          <Explorer
-            live={live}
-            activeSessionId={activeSessionId}
-            names={names}
-            onOpenSession={openSession}
-            onOpenFeature={openFeature}
-            onOpenPrReview={openReviewBoard}
-            onOpenAgent={openAgent}
-            onOpenRepo={openRepo}
-            onRenameSession={renameSession}
-            onRenameFeature={renameFeature}
-            onDeleteFeature={deleteFeature}
-            onDeleteSession={deleteSession}
-            onCollapse={onToggleSidebar}
-          />
+          <ApiProvider value={explorerApi}>
+            <Explorer
+              live={live}
+              activeSessionId={activeSessionId}
+              names={names}
+              onOpenSession={openSession}
+              onOpenFeature={openFeature}
+              onOpenPrReview={openReviewBoard}
+              onOpenBulkPrReview={openBulkPrReview}
+              onOpenAgent={openAgent}
+              onOpenRepo={openRepo}
+              onRenameSession={renameSession}
+              onRenameFeature={renameFeature}
+              onDeleteFeature={deleteFeature}
+              onDeleteSession={deleteSession}
+              onCollapse={onToggleSidebar}
+            />
+          </ApiProvider>
           <div
             className="explorer-resizer"
             role="separator"

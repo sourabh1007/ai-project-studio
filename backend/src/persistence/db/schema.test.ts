@@ -675,6 +675,7 @@ describe('db schema/connection', () => {
         'sessions',
         'feature_groups',
         'usage_events',
+        'mcp_observed_calls',
         'transcripts',
         'summaries',
         'session_summaries',
@@ -701,11 +702,57 @@ describe('db schema/connection', () => {
       expect(mainTables).toContain('features');
       expect(mainTables).toContain('repository_contexts');
       expect(mainTables).not.toContain('usage_events');
+      expect(mainTables).not.toContain('mcp_observed_calls');
+      expect(tableExists(db, 'usage', 'mcp_observed_calls')).toBe(true);
       expect(mainTables).not.toContain('feature_tasks');
       db.close();
       expect(existsSync(join(dir, 'usage.db'))).toBe(true);
       expect(existsSync(join(dir, 'content.db'))).toBe(true);
       expect(existsSync(join(dir, 'tasks.db'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('adds observed MCP calls to existing usage databases and preserves them across reopen', () => {
+    const dir = makeWorkspaceDir('mcp-observed');
+    const databasePath = join(dir, 'workspace.db');
+    try {
+      const original = createDatabase({ databasePath });
+      original.exec('DROP TABLE usage.mcp_observed_calls');
+      original.close();
+      const upgraded = createDatabase({ databasePath });
+      try {
+        expect(tableExists(upgraded, 'usage', 'mcp_observed_calls')).toBe(true);
+        const columns = upgraded.prepare('PRAGMA usage.table_info(mcp_observed_calls)').all() as {
+          name: string; notnull: number; pk: number;
+        }[];
+        expect(columns.map(({ name }) => name)).toEqual([
+          'feature_id', 'session_id', 'provider', 'server', 'call_id',
+          'origin', 'scope', 'recorded_at',
+        ]);
+        expect(columns.every((column) => column.notnull === 1)).toBe(true);
+        expect(columns.filter((column) => column.pk > 0)
+          .sort((a, b) => a.pk - b.pk).map(({ name }) => name))
+          .toEqual(['provider', 'session_id', 'call_id']);
+        const insert = upgraded.prepare(`INSERT INTO mcp_observed_calls VALUES (
+          'f1', 'warm-provider-session', 'copilot', 'github', 'c1', ?, ?, '2026-01-01'
+        )`);
+        expect(() => insert.run('other', 'internal')).toThrow();
+        expect(() => insert.run('built-in', 'other')).toThrow();
+        insert.run('built-in', 'internal');
+        expect(() => insert.run('configured', 'feature')).toThrow();
+        applySchema(upgraded);
+      } finally {
+        upgraded.close();
+      }
+      const reopened = createDatabase({ databasePath });
+      try {
+        expect(reopened.prepare('SELECT call_id, origin, scope FROM mcp_observed_calls').all())
+          .toEqual([{ call_id: 'c1', origin: 'built-in', scope: 'internal' }]);
+      } finally {
+        reopened.close();
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -721,6 +768,8 @@ describe('db schema/connection', () => {
         'idx_feature_groups_feature_id',
         'idx_features_repo_id',
         'idx_usage_events_feature_id',
+        'idx_mcp_observed_calls_feature_id',
+        'idx_mcp_observed_calls_session_id',
         'idx_usage_events_session_started_at',
         'idx_usage_capture_rows_turn',
         'idx_skill_attachments_skill_id',

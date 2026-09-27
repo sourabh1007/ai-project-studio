@@ -64,7 +64,7 @@ describe('PrReviewPage approval', () => {
     fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
 
     await waitFor(() =>
-      expect(client.approvePrReview).toHaveBeenCalledWith('f1'),
+      expect(client.approvePrReview).toHaveBeenCalledWith('f1', { expectedHeadSha: review.headSha }),
     );
     expect(
       await screen.findByRole('button', { name: /Approved/ }),

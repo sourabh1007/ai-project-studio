@@ -1,10 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { ResolvedTheme } from '../lib/theme.js';
-import {
-  readPersisted,
-  writePersisted,
-  type KeyValueStore,
-} from '../lib/persisted-state.js';
+import { readAppearance, writeAppearance, subscribeAppearance } from './appearance-storage.js';
 import {
   DEFAULT_UI_PREFERENCES,
   deriveCssVariables,
@@ -14,19 +10,10 @@ import {
 
 const STORAGE_KEY = 'cw-ui-prefs';
 
-function store(): KeyValueStore {
-  return window.localStorage;
-}
-
 function load(): UiPreferences {
-  return normalizeUiPreferences(
-    readPersisted<unknown>(
-      store(),
-      STORAGE_KEY,
-      (v): v is unknown => typeof v === 'object' && v !== null,
-      DEFAULT_UI_PREFERENCES,
-    ),
-  );
+  const raw = readAppearance(STORAGE_KEY);
+  try { return normalizeUiPreferences(raw === null ? null : JSON.parse(raw)); }
+  catch { return { ...DEFAULT_UI_PREFERENCES }; }
 }
 
 // Module-level store so the applier (mounted once at the app root) and the
@@ -43,7 +30,14 @@ function emit(): void {
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  const unsubscribe = subscribeAppearance(() => {
+    const next = load();
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      current = next;
+      emit();
+    }
+  });
+  return () => { listeners.delete(listener); unsubscribe(); };
 }
 
 /** The current preferences plus a persisting setter and a reset. */
@@ -55,12 +49,12 @@ export function useUiPreferences(): {
   const prefs = useSyncExternalStore(subscribe, () => current);
   const setPrefs = (next: Partial<UiPreferences>): void => {
     current = normalizeUiPreferences({ ...current, ...next });
-    writePersisted(store(), STORAGE_KEY, current);
+    writeAppearance(STORAGE_KEY, JSON.stringify(current));
     emit();
   };
   const reset = (): void => {
     current = { ...DEFAULT_UI_PREFERENCES };
-    writePersisted(store(), STORAGE_KEY, current);
+    writeAppearance(STORAGE_KEY, JSON.stringify(current));
     emit();
   };
   return { prefs, setPrefs, reset };

@@ -1,5 +1,6 @@
 import type { GhRunner } from '../github-auth/github-auth-service.js';
-import { ProviderError } from '../kernel/error-types.js';
+import { ProviderError, ValidationError } from '../kernel/error-types.js';
+import { assertExpectedHeadSha } from '../pr-review/pr-comment-location.js';
 import type {
   AddPrCommentInput,
   PrComment,
@@ -118,14 +119,14 @@ export function addThreadArgs(
 }
 
 /** Builds the `gh api graphql` argv fetching the PR's GraphQL node id. */
-export function pullNodeIdArgs(target: GithubPrTarget): string[] {
+export function pullNodeIdArgs(target: GithubPrTarget, includeHead = false): string[] {
   const { owner, name } = splitSlug(target.repo);
   return [
     'api',
     'graphql',
     '-f',
     'query=query($owner:String!,$name:String!,$number:Int!){' +
-      'repository(owner:$owner,name:$name){pullRequest(number:$number){id}}}',
+      `repository(owner:$owner,name:$name){pullRequest(number:$number){id${includeHead ? ' headRefOid' : ''}}}}`,
     '-F',
     `owner=${owner}`,
     '-F',
@@ -209,12 +210,24 @@ export function parsePullNodeId(stdout: string): string | null {
   } catch {
     return null;
   }
+
   const id = (
     parsed as {
       data?: { repository?: { pullRequest?: { id?: unknown } } | null };
     }
   )?.data?.repository?.pullRequest?.id;
   return typeof id === 'string' && id ? id : null;
+}
+
+export function parsePullHeadSha(stdout: string): string | null {
+  let parsed: { data?: { repository?: { pullRequest?: { headRefOid?: unknown } } } };
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const head = parsed?.data?.repository?.pullRequest?.headRefOid;
+  return typeof head === 'string' && head.trim().length > 0 ? head : null;
 }
 
 /** Parses the created thread from {@link ADD_THREAD_MUTATION}'s response. */
@@ -286,9 +299,13 @@ export function createGithubCommentsGateway(
       return parseThreads(await exec(listThreadsArgs(target), 'list comments'));
     },
     async add(input) {
-      const pullNodeId = parsePullNodeId(
-        await exec(pullNodeIdArgs(target), 'resolve pull id'),
-      );
+      const guarded = input.expectedHeadSha !== undefined;
+      if (guarded) assertExpectedHeadSha(input.expectedHeadSha);
+      const pull = await exec(pullNodeIdArgs(target, guarded), 'resolve pull id');
+      if (guarded && parsePullHeadSha(pull) !== input.expectedHeadSha) {
+        throw new ValidationError('The live GitHub PR head has changed or is unavailable. Refresh the Review Board before posting.');
+      }
+      const pullNodeId = parsePullNodeId(pull);
       if (!pullNodeId) {
         throw new ProviderError(
           `Could not resolve GitHub node id for PR #${target.number}`,

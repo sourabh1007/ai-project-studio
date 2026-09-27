@@ -1,4 +1,25 @@
-/** Write-side contracts for proxy-measured MCP server I/O usage. */
+/** Write-side contracts for measured and observed MCP usage. */
+
+export type McpOrigin = 'built-in' | 'configured' | 'unknown';
+
+/** Payload-free identity of a tool call observed in a provider's event stream. */
+export interface McpObservedCall {
+  featureId: string;
+  /** Application session id, or provider session id for warm meta sessions. */
+  sessionId: string;
+  provider: string;
+  server: string;
+  callId: string;
+  origin: McpOrigin;
+  scope: 'feature' | 'internal';
+  recordedAt: string;
+}
+
+/** Separate port so existing proxy-only adapters remain compatible. */
+export interface McpObservedUsageRepo {
+  /** Inserts once per provider/session/call identity; replays do not overwrite. */
+  recordObserved(entry: McpObservedCall): void;
+}
 
 /**
  * One measured slice of a single MCP server's transport I/O, reported by the
@@ -32,8 +53,8 @@ export interface McpServerUsageRecord {
 export interface McpUsageRepo {
   /** Appends one measured slice. */
   record(entry: McpServerUsageRecord): void;
-  /** Removes every slice for a feature (feature-deletion cleanup). */
+  /** Removes every slice and observed call for a feature. */
   deleteByFeature(featureId: string): void;
-  /** Removes every slice for a session (session-deletion cleanup). */
+  /** Removes every slice and observed call for a session. */
   deleteBySession(sessionId: string): void;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AzureHttpResponse } from './azure-repo-lister.js';
 import {
   azureStatusValue,
@@ -48,6 +48,88 @@ const THREAD = {
     },
   ],
 };
+
+describe('guarded Azure comment posts', () => {
+  const input = { path: 'src/exact.cs', line: 42, body: ' edited\ncomment ', expectedHeadSha: 'captured' };
+
+  it('checks the live source commit first and sends the exact right-side coordinates and edited body', async () => {
+    const calls: string[] = [];
+    const httpGet = vi.fn(async () => {
+      calls.push('get');
+      return resp(200, { lastMergeSourceCommit: { commitId: 'captured' } });
+    });
+    const httpPost = vi.fn(async () => { calls.push('post'); return resp(201, THREAD); });
+    await createAzureCommentsGateway(deps({ httpGet, httpPost }), TARGET).add(input);
+    expect(calls).toEqual(['get', 'post']);
+    expect(httpGet).toHaveBeenCalledWith(
+      'https://dev.azure.com/acme/Widgets/_apis/git/repositories/core/pullRequests/42?api-version=7.1', 'tok',
+    );
+    expect(httpPost).toHaveBeenCalledWith(threadsUrl(TARGET), 'tok', {
+      comments: [{ parentCommentId: 0, content: ' edited\ncomment ', commentType: 'text' }],
+      status: 'active',
+      threadContext: {
+        filePath: '/src/exact.cs',
+        rightFileStart: { line: 42, offset: 1 },
+        rightFileEnd: { line: 42, offset: 1 },
+      },
+    });
+  });
+
+  it.each([null, {}, { lastMergeSourceCommit: {} },
+    { lastMergeSourceCommit: null }, { lastMergeSourceCommit: { commitId: 'moved' } },
+    { lastMergeSourceCommit: { commitId: 42 } }])('blocks stale or missing source head %j', async (body) => {
+    const httpPost = vi.fn();
+    const httpGet = vi.fn(async () => resp(200, body));
+    await expect(createAzureCommentsGateway(deps({ httpGet, httpPost }), TARGET).add(input))
+      .rejects.toThrow(/live Azure DevOps PR head/);
+    expect(httpGet).toHaveBeenCalledTimes(1);
+    expect(httpPost).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 42, '', '  '])('rejects invalid expected head %j before provider IO', async (head) => {
+    const token = vi.fn();
+    const httpGet = vi.fn();
+    const httpPost = vi.fn();
+    await expect(createAzureCommentsGateway(deps({ token, httpGet, httpPost }), TARGET).add({
+      ...input, expectedHeadSha: head as string,
+    })).rejects.toThrow(/expectedHeadSha/);
+    expect(token).not.toHaveBeenCalled();
+    expect(httpGet).not.toHaveBeenCalled();
+    expect(httpPost).not.toHaveBeenCalled();
+  });
+
+  it('blocks on preflight HTTP failure and never retries', async () => {
+    const httpGet = vi.fn(async () => resp(503));
+    const httpPost = vi.fn();
+    await expect(createAzureCommentsGateway(deps({ httpGet, httpPost }), TARGET).add(input))
+      .rejects.toThrow(/verify.*HTTP 503/);
+    expect(httpGet).toHaveBeenCalledTimes(1);
+    expect(httpPost).not.toHaveBeenCalled();
+  });
+
+  it('propagates transport and posting failures without retries', async () => {
+    const httpGet = vi.fn(async () => { throw new Error('network'); });
+    const httpPost = vi.fn(async () => resp(500));
+    await expect(createAzureCommentsGateway(deps({ httpGet, httpPost }), TARGET).add(input))
+      .rejects.toThrow('network');
+    expect(httpGet).toHaveBeenCalledTimes(1);
+    expect(httpPost).not.toHaveBeenCalled();
+    const gateway = createAzureCommentsGateway(deps({
+      httpGet: async () => resp(200, { lastMergeSourceCommit: { commitId: 'captured' } }), httpPost,
+    }), TARGET);
+    await expect(gateway.add(input)).rejects.toThrow(/HTTP 500/);
+    expect(httpPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not preflight legacy manual comments', async () => {
+    const httpGet = vi.fn();
+    const httpPost = vi.fn(async () => resp(201, THREAD));
+    await createAzureCommentsGateway(deps({ httpGet, httpPost }), TARGET)
+      .add({ path: 'a.cs', line: 12, body: 'legacy' });
+    expect(httpGet).not.toHaveBeenCalled();
+    expect(httpPost).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('url builders', () => {
   it('builds the threads list url', () => {

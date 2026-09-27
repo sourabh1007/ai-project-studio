@@ -78,6 +78,16 @@ export function createFeatureRoutes(deps: FeatureControllerDeps): Route[] {
       },
     },
     {
+      method: 'get',
+      path: '/features/:id/deletion-preview',
+      handler: async (req) => ({
+        status: 200,
+        body: {
+          worktrees: await deps.admin.previewFeatureDeletion(req.params.id),
+        },
+      }),
+    },
+    {
       method: 'delete',
       path: '/features/:id',
       handler: async (req) => {

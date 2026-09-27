@@ -164,7 +164,7 @@ describe('Settings renderer journeys', () => {
 
     expect(await screen.findByText('worktree is busy')).toBeInTheDocument();
     expect(screen.getByText(/review\/42/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retry removal' })).toBeEnabled();
   });
 
   it('shows crash evidence, copies a complete report, clears renderer failures, and retries restart', async () => {

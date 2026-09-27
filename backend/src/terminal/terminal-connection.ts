@@ -1,12 +1,14 @@
 import type { ClientMessage, ServerMessage, TerminalState } from './terminal-protocol.js';
 import type { TerminalSession } from './terminal-session.js';
+import { terminalDefaults } from './config.js';
 
 interface ConnectionDeps {
-  launch(): Promise<TerminalSession>;
+  launch(report: (message: string) => void, signal: AbortSignal): Promise<TerminalSession>;
   subscribe(listener: (terminal: TerminalSession | null, failed?: boolean) => void): () => void;
   observeInput(data: string): void;
   send(message: ServerMessage): void;
   inputLimit: number;
+  launchTimeoutMs?: number;
 }
 
 type Input = Extract<ClientMessage, { type: 'input' }>;
@@ -14,6 +16,8 @@ type Input = Extract<ClientMessage, { type: 'input' }>;
 /** One socket's ordered input ownership; never replays across a PTY generation. */
 export function createTerminalConnection(deps: ConnectionDeps) {
   let connected = true;
+  const controller = new AbortController();
+  let launchTimer: ReturnType<typeof setTimeout> | undefined;
   let terminal: TerminalSession | undefined;
   let generation = 0;
   let state: TerminalState = 'connecting';
@@ -23,9 +27,9 @@ export function createTerminalConnection(deps: ConnectionDeps) {
   let geometry: Extract<ClientMessage, { type: 'resize' }> | undefined;
   let detach = () => {};
   let detachReadiness = () => {};
-  const setState = (next: TerminalState) => {
+  const setState = (next: TerminalState, detail?: string) => {
     state = next;
-    deps.send({ type: 'state', version: 2, generation, state, inputLimit: deps.inputLimit });
+    deps.send({ type: 'state', version: 2, generation, state, inputLimit: deps.inputLimit, heartbeat: true, ...(detail ? { detail } : {}) });
   };
   const ack = (input: Input, outcome: 'written' | 'rejected' | 'uncertain', reason = '') =>
     deps.send({ type: 'ack', seq: input.seq, generation: input.generation, outcome, reason });
@@ -36,7 +40,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
   };
   const fail = (reason: string) => {
     rejectQueue(reason);
-    setState('failed');
+    setState('failed', reason);
   };
   const write = (input: Input) => {
     try {
@@ -59,7 +63,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
     }
   };
   const bind = (next: TerminalSession | null, failed?: boolean) => {
-    if (!connected || (next && next.generation <= generation)) return;
+    if (!connected || controller.signal.aborted || (next && next.generation <= generation)) return;
     detach();
     detachReadiness();
     if (generation !== 0) {
@@ -103,14 +107,26 @@ export function createTerminalConnection(deps: ConnectionDeps) {
   setState('connecting');
   return {
     async start() {
+      launchTimer = setTimeout(() => {
+        controller.abort();
+        if (connected) fail('Terminal startup timed out. Reconnect to check preparation; no input will be replayed.');
+      }, deps.launchTimeoutMs ?? terminalDefaults.launchTimeoutMs);
       try {
-        bind(await deps.launch());
-      } catch {
-        if (connected) fail('Terminal launch failed.');
+        bind(await deps.launch((message) => {
+          if (connected && !controller.signal.aborted) setState(state, message);
+        }, controller.signal));
+      } catch (error) {
+        if (connected && !controller.signal.aborted) fail(error instanceof Error ? error.message : 'Terminal launch failed.');
+      } finally {
+        clearTimeout(launchTimer);
       }
     },
     receive(message: ClientMessage) {
       if (!connected) return;
+      if (message.type === 'ping') {
+        deps.send({ type: 'pong', generation, seq: message.seq });
+        return;
+      }
       const current = message.generation === generation;
       if (message.type === 'resize') {
         if (!current || state === 'closed' || state === 'failed' || state === 'reconnecting') return;
@@ -142,6 +158,8 @@ export function createTerminalConnection(deps: ConnectionDeps) {
     },
     close() {
       connected = false;
+      clearTimeout(launchTimer);
+      controller.abort();
       queue = [];
       bytes = 0;
       unsubscribe();

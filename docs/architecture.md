@@ -94,6 +94,37 @@ The interactive CLI treats a fast multi-line write as a *paste*. `terminal/termi
 ### Internal AI accounting
 Repository analysis reuses the normal provider-neutral meta runner with the repository checkout as `cwd` and a stable `repository:<id>` attribution key. Automation checks, actions, reports, and subagents also run AI work through the shared meta runner. These sessions have `scope = internal`: they are persisted so usage can be tailed and credited, but are hidden from feature session lists, workspace session counts, feature/workspace development rollups, and session SSE events. Their `kind = meta` usage remains included in the separate **IDE AI** totals. Automation usage is attributed to the originating feature when one is present; otherwise it uses a stable `automation:<id>` key under **IDE AI**.
 
+### Observed MCP usage
+The launch proxy measures configured-server transport bytes and calls. In addition,
+`mcp-usage/mcp-log-capture.ts` incrementally reads existing Copilot-compatible
+`session-state/<id>/events.jsonl` files for app-owned Agency/Copilot sessions,
+including persisted warm ACP operation identities. It counts only
+`tool.execution_start` events carrying the public `mcpConfigServerName` or
+`mcpServerName` field; local shell/file tools and guessed tool-name prefixes do
+not qualify. Failed calls still count as attempted calls. Public
+`mcpConfigSource` provenance identifies built-ins/configured servers when supplied;
+older records remain `unknown`. Arguments, results, and credentials are not stored.
+
+The background reader is single-flight and bounded by the `mcpUsage` configuration:
+eight sources and 256 KiB per source each 1.5-second tick by default. It backfills
+existing app-owned logs and follows subsequent appends; disposable offsets replay
+from the beginning after restart, with durable call-ID deduplication. Large logs
+can take multiple scan cycles. Missing, malformed, oversized, or ambiguously
+attributed records produce sanitized warnings, not invented activity. Warm session
+reuse requires a unique operation time window; removed owners are rechecked after
+file IO. Other CLI formats and logs without explicit MCP metadata are unsupported.
+
+Shared feature/Workspace/IDE rollups group by provider and server, retaining proxy
+bytes/latency and using the larger proxy/transcript call count per session/server
+to avoid double-counting overlapping observations. This is a conservative lower
+bound when two sources cover disjoint partial histories, not exact per-call
+transport correlation. Warm internal calls appear in IDE totals without requiring
+model usage rows. MCP-specific tokens, nano-AIU and credits are `null` with
+`attribution: unavailable`: neither verified source reports per-MCP billing.
+Session model charges and byte estimates are never distributed among MCP servers.
+Existing explicit feature/session deletion removes observed calls alongside proxy
+slices; model-usage retention does not retain deleted MCP activity.
+
 ### New Task agent (a metasession team)
 The **New Task** agent (`new-task/`, surfaced through the [agent platform](agents.md)) turns a problem statement into a merged pull request. It runs the change as a small **team of [metasessions](metasessions.md)** rather than one serial agent:
 

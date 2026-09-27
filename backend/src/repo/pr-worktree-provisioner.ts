@@ -15,7 +15,35 @@ export interface PrWorktreeProvisionerDeps {
   git: GitWorktreeRunner;
   /** Whether a directory already exists on disk. */
   pathExists: (path: string) => boolean;
+  /**
+   * Optional, best-effort: publish/favourite the PR's source branch on the
+   * server before fetching it. Large Azure DevOps repositories don't advertise
+   * every `users/*` topic branch, so favouriting it first lets the primary
+   * `fetch origin <branch>` resolve (yielding a pushable worktree) instead of
+   * falling back to the detached `refs/pull/<n>/merge` ref. Bound per-repo in
+   * `main.ts` for Azure DevOps only. It returns the outcome (never throws for a
+   * server-side "can't favourite" — that resolves to `ok:false`) so the checkout
+   * can surface *why* it failed if the subsequent fetch also fails.
+   */
+  favouriteBranch?: () => Promise<FavouriteBranchOutcome>;
 }
+
+/** The result of the best-effort favourite step, surfaced in status + errors. */
+export interface FavouriteBranchOutcome {
+  ok: boolean;
+  message: string;
+}
+
+/** A coarse phase of the checkout, surfaced to the UI as live status text. */
+export type ProvisionPhase = 'favouriting' | 'fetching' | 'preparing';
+
+export interface ProvisionStatus {
+  phase: ProvisionPhase;
+  message: string;
+}
+
+/** Notified as the checkout advances so the UI can show real-time progress. */
+export type ProvisionStatusListener = (status: ProvisionStatus) => void;
 
 export interface ProvisionPrWorktreeInput {
   /** The repository's primary local checkout (has `origin` configured). */
@@ -88,15 +116,24 @@ export function describeWorktreeFailure(
 export function describeFetchFailure(
   input: ProvisionPrWorktreeInput,
   stderr: string,
+  favouriteNote?: string | null,
 ): string {
   const text = stderr.trim();
   if (input.provider === 'azure-devops' && /couldn't find remote ref/i.test(text)) {
-    return (
+    const base =
       `Couldn't fetch pull request #${input.number}: its source branch ` +
       `"${input.sourceBranch}" isn't published on the server, so Azure DevOps ` +
-      `won't serve it over git. Open the pull request (or the branch) in Azure ` +
-      `DevOps and mark the branch as a favourite / publish it, then try the ` +
-      `review again.`
+      `won't serve it over git.`;
+    if (favouriteNote) {
+      return (
+        `${base} Auto-favourite result: ${favouriteNote}. If the branch still ` +
+        `isn't served, open the pull request (or the branch) in Azure DevOps ` +
+        `and favourite / publish it, then try the review again.`
+      );
+    }
+    return (
+      `${base} Open the pull request (or the branch) in Azure DevOps and mark ` +
+      `the branch as a favourite / publish it, then try the review again.`
     );
   }
   return text || `Failed to fetch pull request #${input.number}`;
@@ -128,7 +165,7 @@ export function checkedOutWorktreePath(stderr: string): string | null {
  * every active PR and is always resolvable, so the review checkout succeeds
  * without the user having to manually favourite/publish the branch first.
  *
- * The PR head is always fetched fresh from `origin` into `FETCH_HEAD`, so a
+ * The PR head is always fetched fresh from `origin` into a PR-specific ref, so a
  * review reflects the latest remote state even when the worktree already exists.
  *
  * The worktree is checked out on the PR's *own* head branch, tracking its
@@ -138,23 +175,50 @@ export function checkedOutWorktreePath(stderr: string): string | null {
  * fall back to a detached `pr-<n>` review branch that still reflects the fetched
  * head for reviewing but is not pushable to the PR.
  *
- * `FETCH_HEAD` is per-worktree, so the ref written by the fetch (run in the main
- * checkout) is invisible to the PR worktree's own git dir — a `reset --hard
- * FETCH_HEAD` there fails with "ambiguous argument 'FETCH_HEAD'". We therefore
- * resolve `FETCH_HEAD` to a concrete commit SHA in the main checkout immediately
- * after fetching and use that SHA everywhere it is checked out.
+ * Parallel PR imports must not read or write the primary checkout's shared
+ * `FETCH_HEAD`. Each fetch targets a PR-specific ref which is resolved to an
+ * immutable SHA before checkout, so another PR's fetch cannot change its base.
  */
 export async function provisionPrWorktree(
   deps: PrWorktreeProvisionerDeps,
   input: ProvisionPrWorktreeInput,
+  onStatus?: ProvisionStatusListener,
 ): Promise<ProvisionedWorktree> {
   const worktreePath = prWorktreePath(input.repoLocalPath, input.number);
+  const headRef = `refs/ai-project-studio/pr/${input.number}`;
+
+  // Best-effort favourite/publish of the source branch first, so the primary
+  // `fetch origin <branch>` below can resolve it. The outcome is captured (not
+  // swallowed) so that, if the fetch still fails, we can explain *why* the
+  // favourite didn't help instead of a generic "please favourite it" message.
+  let favouriteNote: string | null = null;
+  if (deps.favouriteBranch) {
+    onStatus?.({
+      phase: 'favouriting',
+      message: `Marking "${input.sourceBranch}" as a favourite…`,
+    });
+    try {
+      const outcome = await deps.favouriteBranch();
+      favouriteNote = outcome.message;
+      onStatus?.({ phase: 'favouriting', message: outcome.message });
+    } catch (err) {
+      favouriteNote = err instanceof Error ? err.message : String(err);
+      onStatus?.({
+        phase: 'favouriting',
+        message: `Couldn't favourite the branch: ${favouriteNote}`,
+      });
+    }
+  }
 
   const candidateRefs =
     input.provider === 'github'
       ? [`pull/${input.number}/head`]
       : [input.sourceBranch, `refs/pull/${input.number}/merge`];
 
+  onStatus?.({
+    phase: 'fetching',
+    message: `Fetching pull request #${input.number}…`,
+  });
   let fetched = false;
   let lastFetch: GitRunResult = { code: 1, stdout: '', stderr: '' };
   for (const ref of candidateRefs) {
@@ -162,8 +226,10 @@ export async function provisionPrWorktree(
       '-C',
       input.repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
-      ref,
+      `+${ref}:${headRef}`,
     ]);
     if (lastFetch.code === 0) {
       fetched = true;
@@ -171,14 +237,16 @@ export async function provisionPrWorktree(
     }
   }
   if (!fetched) {
-    throw new ValidationError(describeFetchFailure(input, lastFetch.stderr));
+    throw new ValidationError(
+      describeFetchFailure(input, lastFetch.stderr, favouriteNote),
+    );
   }
 
   const revParse = await deps.git([
     '-C',
     input.repoLocalPath,
     'rev-parse',
-    'FETCH_HEAD',
+    headRef,
   ]);
   if (revParse.code !== 0) {
     throw new ValidationError(
@@ -197,6 +265,8 @@ export async function provisionPrWorktree(
         '-C',
         input.repoLocalPath,
         'fetch',
+        '--no-write-fetch-head',
+        '--no-auto-maintenance',
         'origin',
         `+${input.sourceBranch}:refs/remotes/origin/${input.sourceBranch}`,
       ])
@@ -227,6 +297,7 @@ export async function provisionPrWorktree(
   // materialising the worktree is the dominant cost, so this is what makes the
   // review checkout noticeably faster. Unknown to older git, the setting is
   // simply ignored, so it is safe to always pass.
+  onStatus?.({ phase: 'preparing', message: 'Preparing the review worktree…' });
   if (deps.pathExists(worktreePath)) {
     const checkout = await deps.git([
       '-c',

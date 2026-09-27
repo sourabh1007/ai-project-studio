@@ -63,7 +63,7 @@ export interface TerminalWsDeps {
    * repository). Takes precedence over {@link TerminalWsDeps.cwd} when it
    * returns a path; falls back to `cwd` for repo-less sessions.
    */
-  resolveCwd?: (session: Session) => string | undefined;
+  resolveCwd?: (session: Session, report: (message: string) => void, signal: AbortSignal) => string | undefined | Promise<string | undefined>;
   /**
    * Optional metasession diagnosis used by self-healing when a launch failure
    * cannot be repaired automatically: given the session and the failure text,
@@ -107,11 +107,17 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     };
 
     const connection = createTerminalConnection({
-      launch: async () => {
-        const resolvedCwd = deps.resolveCwd?.(session) ?? deps.cwd;
-        const fallbackCwd = deps.cwd ?? process.cwd();
+      launch: async (report, signal) => {
         try {
+          const existing = deps.manager.get(session.id);
+          if (existing && !existing.exited) return existing;
+          const resolvedCwd = (await deps.resolveCwd?.(session, report, signal)) ?? deps.cwd;
+          signal.throwIfAborted();
+          // Never heal an isolated session by silently launching in another cwd.
+          const fallbackCwd = resolvedCwd ?? deps.cwd ?? process.cwd();
+          report('Starting the interactive CLI…');
           return await launchWithSelfHealing({
+            allowCwdRepair: resolvedCwd === undefined,
             resolvedCwd,
             fallbackCwd,
             fs: nodeHealFs,
@@ -129,6 +135,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
       subscribe: (listener) => deps.manager.onTerminal(sessionId, listener),
       observeInput: (data) => deps.manager.observeInput(sessionId, data),
       inputLimit: deps.config.bootstrapInputBufferBytes,
+      launchTimeoutMs: deps.config.launchTimeoutMs,
       send,
     });
     socket.on('message', (raw: { toString(): string }) => {

@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useCallback, useSyncExternalStore } from 'react';
+import { ReviewDuration } from './review-duration.js';
+import { ReviewContextSummary } from './review-context-summary.js';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
-import { Button, ErrorText } from '../../components/ui.js';
+import { Button, ConfirmDialog, ErrorText } from '../../components/ui.js';
 import { useUsageStream } from '../../hooks/use-usage-stream.js';
+import { useAgentUsage } from '../../hooks/use-agent-usage.js';
+import { aggregateAgentUsage } from '../../lib/agent-usage.js';
+import { AgentUsageValue } from '../../components/feature-agent-usage.js';
 import { reviewBoardActivityLines } from '../../lib/stream.js';
 import { parseFindingDetail } from '../../lib/finding-detail.js';
 import { analysisFailureCause } from '../../lib/analysis-failure.js';
@@ -53,6 +58,8 @@ import type {
   ReviewStatus,
 } from '../../lib/types.js';
 import { PerspectivePromptPreview } from './perspective-prompt-preview.js';
+import { FindingCommentDialog } from './finding-comment-dialog.js';
+import { findingCommentAnchors, type FindingCommentAnchor } from '../../lib/finding-comment.js';
 
 const RISK_LABEL: Record<ReviewRisk, string> = {
   low: 'Low',
@@ -88,6 +95,13 @@ const CHECK_STATUS_GLYPH: Record<CheckStatus, string> = {
   concern: '!',
   na: '–',
 };
+
+interface ApprovalTarget {
+  featureId: string;
+  headSha: string;
+  evidenceRevision: string;
+  number: number;
+}
 
 /** A tiny coloured marker for a status/risk, kept text-labelled for a11y. */
 function Marker({
@@ -389,6 +403,8 @@ export function ReviewBoardPage({
       analyzeReviewBoardPerspective: api.analyzeReviewBoardPerspective,
       analyzeReviewBoardPerspectives: api.analyzeReviewBoardPerspectives,
       getPrReview: api.getPrReview,
+      retryPrReviewStep: api.retryPrReviewStep,
+      settleReviewBoardQueue: api.settleReviewBoardQueue,
       pullLatestPrReview: api.pullLatestPrReview,
       getMetaPools: api.getMetaPools,
     }),
@@ -400,8 +416,22 @@ export function ReviewBoardPage({
   );
   const { board, loading, loadError: error, analyzed, progress, signoff, resolutions, prep } =
     state;
+  const [reviewNow, setReviewNow] = useState(Date.now);
+  const hasRunningClock = state.timing?.finishedAt === null || prep.active ||
+    Object.values(progress).some((entry) => entry.timing?.finishedAt === null);
+  useEffect(() => {
+    if (!hasRunningClock) return;
+    setReviewNow(Date.now());
+    const timer = window.setInterval(() => setReviewNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningClock]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<ApprovalTarget | null>(null);
+  const [approvedTarget, setApprovedTarget] = useState<ApprovalTarget | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const approvalLock = useRef(false);
   // A pending "Analyze with AI" click awaiting the take-latest confirmation.
   // `scope` is 'all' (whole board) or a perspective id (single perspective).
   const [pendingAnalyze, setPendingAnalyze] = useState<{ scope: string } | null>(
@@ -462,6 +492,10 @@ export function ReviewBoardPage({
     () => () => reviewBoardRunStore.retryFailed(featureId, runApi),
     [featureId, runApi],
   );
+  const retryIncomplete = useMemo(
+    () => () => reviewBoardRunStore.retryFailed(featureId, runApi, { includeIncomplete: true }),
+    [featureId, runApi],
+  );
   const reset = useMemo(
     () => () => reviewBoardRunStore.reset(featureId, runApi),
     [featureId, runApi],
@@ -514,9 +548,32 @@ export function ReviewBoardPage({
   // review, so fetch it here and refresh whenever the board is (re)generated —
   // e.g. after taking the latest — so the diagram tracks the code under review.
   const [changeGraph, setChangeGraph] = useState<ChangeGraphStep | null>(null);
+  const [graphHeadSha, setGraphHeadSha] = useState<string | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [graphAttempt, setGraphAttempt] = useState(0);
   // Live PR comment threads — lets reviewers comment directly on a line in the
   // focused code-flow diagram, exactly as they can on the PR code review page.
   const comments = usePrComments(featureId);
+  const currentFeature = useRef(featureId);
+  currentFeature.current = featureId;
+  const [postTarget, setPostTarget] = useState<{
+    featureId: string;
+    finding: ReviewFinding;
+    board: ReviewBoard;
+    anchors: FindingCommentAnchor[];
+  } | null>(null);
+  useEffect(() => { setPostTarget(null); }, [featureId]);
+  const postingFindingIsCurrent = () => {
+    if (!postTarget) return false;
+    const live = reviewBoardRunStore.getState(postTarget.featureId);
+    return !live.loading && !live.running && !live.prep.active &&
+      live.board?.pull.headSha === postTarget.board.pull.headSha &&
+      live.board?.reviewUpdatedAt === postTarget.board.reviewUpdatedAt &&
+      live.board?.generatedAt === postTarget.board.generatedAt &&
+      live.board?.perspectives.some((p) => p.findings.some((f) => f === postTarget.finding)) === true &&
+      !live.resolutions[postTarget.finding.id];
+  };
   // Clicking "Open diff" on a finding opens its referenced file diffs *inline*
   // here (focused, commentable, with the problem/fix framing) instead of
   // navigating to the full Code Review page. Per-file diffs come from the change
@@ -526,6 +583,7 @@ export function ReviewBoardPage({
     title: string;
     detail: string | null;
     files: { path: string; diff: string }[];
+    allFiles?: boolean;
   } | null>(null);
   const resolveNodeDiff = useCallback(
     (path: string): { path: string; diff: string } | null => {
@@ -600,18 +658,37 @@ export function ReviewBoardPage({
   );
   useEffect(() => {
     let cancelled = false;
+    if (!board) {
+      setChangeGraph(null);
+      setGraphLoading(false);
+      setGraphError(null);
+      return;
+    }
+    setGraphLoading(true);
+    setGraphError(null);
+    setChangeGraph(null);
+    setGraphHeadSha(null);
     void runApi
       .getPrReview(featureId)
       .then((review) => {
-        if (!cancelled) setChangeGraph(review.changeGraph);
+        if (!cancelled) {
+          setChangeGraph(review.changeGraph);
+          setGraphHeadSha(review.headSha);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setChangeGraph(null);
-      });
+      .catch((error) => {
+        if (!cancelled) setGraphError(error instanceof Error ? error.message : 'Could not load changed files.');
+      })
+      .finally(() => { if (!cancelled) setGraphLoading(false); });
     return () => {
       cancelled = true;
     };
-  }, [featureId, runApi, board?.generatedAt]);
+  }, [featureId, runApi, board?.generatedAt, graphAttempt]);
+  const changedFiles = useMemo(() => (changeGraph?.nodes ?? [])
+    .filter((node) => node.kind === 'changed')
+    .map((node) => ({ path: node.path, diff: node.diff }))
+    .sort((a, b) => a.path.localeCompare(b.path)), [changeGraph]);
+  const visibleDiffFiles = diffTarget?.allFiles ? changedFiles : diffTarget?.files ?? [];
 
   const selected =
     board?.perspectives.find((p) => p.id === selectedId) ?? null;
@@ -633,11 +710,12 @@ export function ReviewBoardPage({
   // Live per-perspective activity streamed from the backend over SSE — shows,
   // in real time, exactly what the AI reviewer is doing for the selected lens.
   const live = useUsageStream();
+  const agentUsage = useAgentUsage(featureId, 'Review board', undefined, live);
   const activityLines = selectedId
     ? reviewBoardActivityLines(live, featureId, selectedId)
     : [];
   const analyzing =
-    prep.active ||
+    state.running || prep.active ||
     progressValues.some(
       (p) =>
         p.status === 'analyzing' ||
@@ -684,6 +762,41 @@ export function ReviewBoardPage({
     return { open, blocking, warnings, suggestions };
   }, [board?.perspectives, resolutions]);
   const allReviewed = allPerspectivesReviewed(signoff, perspectiveIds);
+  const reviewComplete = Boolean(board && analyzed && !analyzing && !state.queued &&
+    perspectiveIds.length > 0 && board.perspectives.every((perspective) =>
+      progress[perspective.id]?.status === 'done' && perspective.status !== 'not-started'));
+  const approved = approvedTarget?.featureId === featureId &&
+    approvedTarget.headSha === board?.pull.headSha;
+  const canApprove = reviewComplete && canSignoff && !loading && !error &&
+    liveSummary.blocking === 0 && !approvalBusy && !approved;
+  const approvalUnavailable = !canSignoff || loading || error
+    ? 'Verify the reviewed commit before approving'
+    : liveSummary.blocking > 0 ? 'Resolve blocking findings before approving'
+      : 'Approve this pull request on its Git provider';
+
+  async function confirmApproval() {
+    const target = pendingApproval;
+    if (!target || approvalLock.current) return;
+    if (!board || !canApprove || target.featureId !== featureId ||
+        target.headSha !== board?.pull.headSha ||
+        target.evidenceRevision !== board.reviewUpdatedAt) {
+      setApprovalError('The review changed. Close this dialog and verify the latest results.');
+      return;
+    }
+    approvalLock.current = true;
+    setApprovalBusy(true);
+    setApprovalError(null);
+    try {
+      await api.approvePrReview(target.featureId, { expectedHeadSha: target.headSha });
+      setApprovedTarget(target);
+      setPendingApproval((current) => current === target ? null : current);
+    } catch (cause) {
+      setApprovalError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      approvalLock.current = false;
+      setApprovalBusy(false);
+    }
+  }
   const prReviewed = signoff.prReviewedAt !== null;
   const selectedReviewed = selectedId
     ? isPerspectiveReviewed(signoff, selectedId)
@@ -717,20 +830,21 @@ export function ReviewBoardPage({
     detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [selectedId]);
 
-  if (loading && !board) {
+  if (!board && (loading || state.queued || prep.active)) {
     return (
       <div className="rb-page rb-state" role="status">
-        Loading review board…
+        <span className="spinner" aria-hidden="true" />
+        {state.queued ? 'Queued for review' : prep.active ? prep.message : 'Loading review board…'}
       </div>
     );
   }
 
-  if (error && !board) {
+  if ((error || prep.error) && !board) {
     return (
       <div className="rb-page rb-state">
-        <ErrorText error={error} />
+        <ErrorText error={error ?? prep.error} />
         <Button variant="ghost" onClick={() => void load()}>
-          Retry
+          Retry loading board
         </Button>
       </div>
     );
@@ -809,19 +923,37 @@ export function ReviewBoardPage({
               <CheckIcon size={15} />
             </button>
           )}
-          <button
+          {reviewComplete ? (
+            <button
+              type="button"
+              className="rb-act rb-act-success"
+              disabled={!canApprove}
+              title={approved ? 'Approval submitted to the Git provider' : approvalUnavailable}
+              onClick={() => {
+                if (!board.pull.headSha) return;
+                setApprovalError(null);
+                setPendingApproval({
+                  featureId, headSha: board.pull.headSha,
+                  evidenceRevision: board.reviewUpdatedAt, number: board.pull.number,
+                });
+              }}
+            >
+              {approvalBusy ? <span className="spinner" aria-hidden="true" /> : <CheckIcon size={15} />}
+              <span className="rb-act-label">{approved ? 'Approved' : approvalBusy ? 'Approving…' : 'Approve PR'}</span>
+            </button>
+          ) : <button
             type="button"
             className="rb-act rb-act-primary"
-            onClick={() => void analyze()}
-            disabled={analyzing}
+            onClick={() => analyzed ? void retryIncomplete() : void analyze()}
+            disabled={analyzing || state.queued}
             title={
               analyzing
                 ? 'Reviewing…'
                 : analyzed
-                  ? 'Start Review again (re-analyze all perspectives)'
+                  ? 'Retry incomplete perspectives; use Reset for a new review'
                   : 'Start Review'
             }
-            aria-label={analyzing ? 'Reviewing' : 'Start Review'}
+            aria-label={analyzing ? 'Reviewing' : analyzed ? 'Retry incomplete review' : 'Start Review'}
           >
             {analyzing ? (
               <span className="spinner" aria-hidden="true" />
@@ -829,9 +961,9 @@ export function ReviewBoardPage({
               <AiMagicIcon size={15} />
             )}
             <span className="rb-act-label">
-              {analyzing ? 'Reviewing…' : analyzed ? 'Start Review again' : 'Start Review'}
+              {state.queued ? 'Queued for review' : analyzing ? 'Reviewing…' : analyzed ? 'Retry incomplete' : 'Start Review'}
             </span>
-          </button>
+          </button>}
           <button
             type="button"
             className="rb-act rb-act-icon"
@@ -844,6 +976,22 @@ export function ReviewBoardPage({
         </div>
       </header>
 
+      {pendingApproval?.featureId === featureId && (
+        <ConfirmDialog
+          title={`Approve PR #${pendingApproval.number}?`}
+          confirmLabel="Submit approval"
+          danger={false}
+          busy={approvalBusy}
+          error={approvalError}
+          message={<>
+            <p>Submit your approval for commit <strong>{pendingApproval.headSha.slice(0, 8)}</strong> to the Git provider.</p>
+            {liveSummary.open > 0 && <p>{liveSummary.open} non-blocking finding(s) remain open.</p>}
+          </>}
+          onCancel={() => { setPendingApproval(null); setApprovalError(null); }}
+          onConfirm={() => void confirmApproval()}
+        />
+      )}
+
       {error && board && (
         <div className="rb-analyze-error" role="alert">
           <ErrorText error={error} />
@@ -855,7 +1003,7 @@ export function ReviewBoardPage({
           <ErrorText
             error={`${failedCount} perspective${
               failedCount === 1 ? '' : 's'
-            } couldn't be analysed after automatic retries.${
+            } couldn't be analysed.${
               failureCause ? ` ${failureCause}` : ''
             }`}
           />
@@ -942,6 +1090,11 @@ export function ReviewBoardPage({
       )}
 
       <div className="rb-summary">
+        <span title="Vendor-reported Review Board AIC across this feature's persisted review history, including retries. Not limited to the latest timed attempt.">
+          Review history: <AgentUsageValue usage={agentUsage} />
+        </span>
+        <ReviewDuration timing={state.timing} now={reviewNow} label="Full review" />
+        <ReviewDuration timing={state.preparationTiming} now={reviewNow} label="Evidence preparation" />
         <span>
           <strong>{liveSummary.open}</strong> open
         </span>
@@ -954,10 +1107,8 @@ export function ReviewBoardPage({
         <span>
           <strong>{liveSummary.suggestions}</strong> suggestions
         </span>
-        <span className="rb-summary-model">
-          {board.model.projectType} · {board.changedFiles} file
-          {board.changedFiles === 1 ? '' : 's'} changed
-        </span>
+        <ReviewContextSummary board={board} graph={changeGraph} loading={graphLoading} error={graphError}
+          onOpenFiles={() => setDiffTarget({ title: 'Changed files', detail: null, files: [], allFiles: true })} />
       </div>
 
       <div className="rb-body" data-focus={focus ?? undefined}>
@@ -995,7 +1146,15 @@ export function ReviewBoardPage({
                 }`.trim()}
                 onClick={() => setSelectedId(p.id)}
               >
-                <span className="rb-nav-name">{p.name}</span>
+                <span className="rb-nav-name">{p.name}
+                  <ReviewDuration timing={progress[p.id]?.timing} now={reviewNow} label="Time" />
+                  <span className="rb-perspective-aic" title="Vendor AIC attributed to this perspective across review history">
+                    <AgentUsageValue usage={{
+                      ...aggregateAgentUsage(agentUsage.snapshots, 'Review board', p.id),
+                      loading: agentUsage.loading, error: agentUsage.error,
+                    }} />
+                  </span>
+                </span>
                 <span className="rb-nav-markers">
                   {state === 'pending' && (
                     <ClockIcon
@@ -1272,7 +1431,7 @@ export function ReviewBoardPage({
                   <strong>Analysis failed.</strong>{' '}
                   {selectedProgress.error ??
                     'This perspective could not be analysed.'}{' '}
-                  Automatic retries were exhausted.{' '}
+                  No completed result was received.{' '}
                   <button
                     type="button"
                     className="rb-linkish"
@@ -1409,12 +1568,15 @@ export function ReviewBoardPage({
                             <button
                               type="button"
                               className="rb-finding-act rb-finding-act-resolve"
-                              onClick={() =>
-                                setFindingResolution(f.id, 'resolved')
-                              }
-                              title="Mark this comment resolved"
+                              disabled={graphLoading || state.running || prep.active}
+                              onClick={() => setPostTarget({
+                                featureId, finding: f, board,
+                                anchors: changeGraph?.status === 'ready' && graphHeadSha === board.pull.headSha
+                                  ? findingCommentAnchors(f, changeGraph.nodes) : [],
+                              })}
+                              title="Edit and confirm an inline PR comment before resolving this finding"
                             >
-                              <CheckIcon size={13} /> Resolve
+                              <SendIcon size={14} /> Post and resolve
                             </button>
                             <button
                               type="button"
@@ -1469,6 +1631,25 @@ export function ReviewBoardPage({
         <ExplainModel board={board} onOpenCodeReview={openEvidence} />
       </div>
 
+      {postTarget && postTarget.featureId === featureId && (
+        <FindingCommentDialog
+          featureId={postTarget.featureId}
+          finding={postTarget.finding}
+          pullNumber={postTarget.board.pull.number}
+          pullUrl={postTarget.board.pull.url}
+          headSha={postTarget.board.pull.headSha ?? null}
+          anchors={postTarget.anchors}
+          isCurrent={postingFindingIsCurrent}
+          onClose={() => setPostTarget(null)}
+          onPosted={() => {
+            if (postingFindingIsCurrent()) {
+              reviewBoardRunStore.setFindingResolution(postTarget.featureId, postTarget.finding.id, 'resolved');
+            }
+            if (currentFeature.current === postTarget.featureId) comments.reload();
+            setPostTarget((current) => current === postTarget ? null : current);
+          }}
+        />
+      )}
       {diffTarget && (
         <div
           className="rb-diff-modal-backdrop"
@@ -1484,8 +1665,8 @@ export function ReviewBoardPage({
             <header className="rb-diff-modal-head">
               <div className="rb-diff-modal-titles">
                 <span className="rb-diff-modal-label">
-                  {diffTarget.files.length > 1
-                    ? `${diffTarget.files.length} files · click a line to comment`
+                  {visibleDiffFiles.length > 1
+                    ? `${visibleDiffFiles.length} files · click a line to comment`
                     : 'Code diff · click a line to comment'}
                 </span>
                 <span className="rb-diff-modal-path">{diffTarget.title}</span>
@@ -1501,18 +1682,24 @@ export function ReviewBoardPage({
               </button>
             </header>
             <div className="rb-diff-modal-body">
+              {diffTarget.allFiles && graphLoading && <p role="status">Loading changed files…</p>}
+              {diffTarget.allFiles && graphError && <div role="alert">
+                {graphError} <button type="button" onClick={() => setGraphAttempt((value) => value + 1)}>Retry loading files</button>
+              </div>}
+              {diffTarget.allFiles && !graphLoading && !graphError && visibleDiffFiles.length !== board.changedFiles &&
+                <p role="status">Showing {visibleDiffFiles.length} of {board.changedFiles} changed files captured in the change graph.</p>}
               {diffTarget.detail && (
                 <div className="rb-diff-modal-detail">
                   <FindingDetail detail={diffTarget.detail} />
                 </div>
               )}
-              {diffTarget.files.length === 0 && (
+              {visibleDiffFiles.length === 0 && !graphLoading && !graphError && (
                 <p className="rb-checked-hint">
                   No file diff was captured for this reference. Run the analysis
                   (or take the latest) to build the change graph, then reopen.
                 </p>
               )}
-              {diffTarget.files.map((file, i) => (
+              {visibleDiffFiles.map((file, i) => (
                 <details
                   key={file.path}
                   className="rb-diff-file"
@@ -1523,11 +1710,11 @@ export function ReviewBoardPage({
                     <span className="rb-diff-file-path">{file.path}</span>
                   </summary>
                   <div className="rb-diff-file-body">
-                    <CommentableDiff
+                    {file.diff ? <CommentableDiff
                       comments={comments}
                       path={file.path}
                       diff={file.diff}
-                    />
+                    /> : <p className="rb-checked-hint">No text diff is available for this file (it may be binary or outside the captured diff limit).</p>}
                   </div>
                 </details>
               ))}

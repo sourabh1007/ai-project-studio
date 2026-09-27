@@ -390,6 +390,20 @@ const USAGE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'mcp_observed_calls',
+    ddl: `CREATE TABLE IF NOT EXISTS mcp_observed_calls (
+    feature_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    server TEXT NOT NULL,
+    call_id TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('built-in', 'configured', 'unknown')),
+    scope TEXT NOT NULL CHECK (scope IN ('feature', 'internal')),
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (provider, session_id, call_id)
+  )`,
+  },
+  {
     name: 'mcp_server_usage',
     ddl: `CREATE TABLE IF NOT EXISTS mcp_server_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -747,6 +761,14 @@ const INDEXES: readonly IndexSchema[] = [
   },
   {
     schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_mcp_observed_calls_feature_id ON mcp_observed_calls (feature_id)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_mcp_observed_calls_session_id ON mcp_observed_calls (session_id)',
+  },
+  {
+    schema: 'usage',
     ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_usage_events_session_started_at ON usage_events (session_id, started_at)',
   },
   {
@@ -876,6 +898,16 @@ const ADDED_COLUMNS: readonly {
     table: 'sessions',
     column: 'seq',
     ddl: 'ALTER TABLE sessions ADD COLUMN seq INTEGER',
+  },
+  {
+    table: 'sessions',
+    column: 'worktree_path',
+    ddl: 'ALTER TABLE sessions ADD COLUMN worktree_path TEXT',
+  },
+  {
+    table: 'sessions',
+    column: 'branch',
+    ddl: 'ALTER TABLE sessions ADD COLUMN branch TEXT',
   },
   {
     table: 'skills',

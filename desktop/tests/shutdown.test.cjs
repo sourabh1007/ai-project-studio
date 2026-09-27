@@ -114,6 +114,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   });
   const processFake = Object.assign(new EventEmitter(), {
     env, platform: 'win32', resourcesPath: 'fixture-resources',
+    execPath: path.join('fixture-app', 'AI Project Studio.exe'),
     stdout: Object.assign(new EventEmitter(), { write() {} }),
     stderr: Object.assign(new EventEmitter(), { write() {} }),
   });

@@ -40,6 +40,7 @@ export type FontChoice = 'system' | 'rounded' | 'reading' | 'mono-ui';
 
 /** Monospace family for the embedded session terminal. */
 export type TerminalFont =
+  | 'consolas'
   | 'jetbrains'
   | 'cascadia'
   | 'fira-code'
@@ -62,13 +63,13 @@ export interface UiPreferences {
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
-  accent: 'indigo',
+  accent: 'blue',
   textSize: 'default',
-  density: 'cozy',
-  radius: 'soft',
+  density: 'compact',
+  radius: 'sharp',
   motion: 'full',
   font: 'system',
-  terminalFont: 'jetbrains',
+  terminalFont: 'consolas',
   terminalTextSize: 'default',
   terminalTextColor: 'theme',
 };
@@ -90,6 +91,7 @@ export const FONTS: readonly FontChoice[] = [
 ];
 
 export const TERMINAL_FONTS: readonly TerminalFont[] = [
+  'consolas',
   'jetbrains',
   'cascadia',
   'fira-code',
@@ -112,8 +114,8 @@ const BASE_TYPE = {
   '--lh-section': 20,
   '--fs-card-title': 13,
   '--lh-card-title': 18,
-  '--fs-body': 13,
-  '--lh-body': 18,
+  '--fs-body': 12,
+  '--lh-body': 16,
   '--fs-secondary': 12,
   '--lh-secondary': 16,
   '--fs-meta': 11,
@@ -166,6 +168,7 @@ const FONT_STACK: Record<FontChoice, string> = {
 
 /** Monospace stacks offered for the session terminal. */
 const TERMINAL_FONT_STACK: Record<TerminalFont, string> = {
+  consolas: "'Consolas', 'Cascadia Mono', 'Courier New', ui-monospace, monospace",
   jetbrains: "'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace",
   cascadia: "'Cascadia Code', Consolas, ui-monospace, monospace",
   'fira-code': "'Fira Code', Consolas, ui-monospace, monospace",
@@ -337,6 +340,7 @@ export function optionLabel(value: string): string {
   const map: Record<string, string> = {
     'x-large': 'Extra large',
     'mono-ui': 'Monospace',
+    consolas: 'Consolas (Notepad style)',
     jetbrains: 'JetBrains Mono',
     cascadia: 'Cascadia Code',
     'fira-code': 'Fira Code',

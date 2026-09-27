@@ -3,10 +3,12 @@ import { createTerminalConnection } from './terminal-connection.js';
 import { createTerminalSession, type TerminalSession } from './terminal-session.js';
 import type { ServerMessage } from './terminal-protocol.js';
 
-function fixture(ready = false, limit = 16, generation = 1) {
+function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: number) {
   let listener!: (terminal: TerminalSession | null, failed?: boolean) => void;
   let resolve!: (terminal: TerminalSession) => void;
-  let reject!: (error: Error) => void;
+  let reject!: (error: unknown) => void;
+  let report!: (message: string) => void;
+  let signal!: AbortSignal;
   let output!: (data: string) => void;
   let exit!: (code: number | null) => void;
   const writes: string[] = [];
@@ -24,7 +26,11 @@ function fixture(ready = false, limit = 16, generation = 1) {
   });
   const unsub = vi.fn();
   const connection = createTerminalConnection({
-    launch: () => new Promise((yes, no) => { resolve = yes; reject = no; }),
+    launch: (notify, abort) => {
+      report = notify; signal = abort;
+      return new Promise((yes, no) => { resolve = yes; reject = no; });
+    },
+    launchTimeoutMs,
     subscribe: (fn) => { listener = fn; return unsub; },
     observeInput: (data) => observed.push(data), send: (frame) => frames.push(frame), inputLimit: limit,
   });
@@ -34,12 +40,66 @@ function fixture(ready = false, limit = 16, generation = 1) {
   return {
     connection, terminal, frames, writes, resizes, observed, unsub, input, started,
     bind: (next: TerminalSession | null, failed?: boolean) => listener(next, failed),
-    launch: () => resolve(terminal), reject: () => reject(new Error('launch failed')),
+    launch: () => resolve(terminal), reject: (error: unknown = new Error('launch failed')) => reject(error),
+    report: (message: string) => report(message), signal,
     output: (data: string) => output(data), exit: () => exit(0),
   };
 }
 
 describe('terminal connection ownership', () => {
+  it('answers health probes while launch or input is waiting without touching the CLI or replay authority', async () => {
+    const f = fixture();
+    f.connection.receive({ type: 'ping', generation: 0, seq: 1 });
+    expect(f.frames.at(-1)).toEqual({ type: 'pong', generation: 0, seq: 1 });
+    f.launch(); await f.started;
+    f.connection.receive({ type: 'ping', generation: 0, seq: 2 });
+    expect(f.frames.at(-1)).toEqual({ type: 'pong', generation: 1, seq: 2 });
+    expect(f.writes).toEqual([]);
+    expect(f.observed).toEqual([]);
+    f.terminal.markInputReady();
+    f.input('hello');
+    expect(f.writes).toEqual(['hello']);
+    f.connection.close();
+    const count = f.frames.length;
+    f.connection.receive({ type: 'ping', generation: 1, seq: 3 });
+    expect(f.frames).toHaveLength(count);
+  });
+  it('surfaces actual preparation progress and errors without accepting late progress after close', async () => {
+    const f = fixture();
+    f.report('Updating files: 25%');
+    expect(f.frames.at(-1)).toEqual(expect.objectContaining({ state: 'connecting', detail: 'Updating files: 25%' }));
+    f.reject(new Error('Git checkout exceeded 600s'));
+    await f.started;
+    expect(f.frames.at(-1)).toEqual(expect.objectContaining({ state: 'failed', detail: 'Git checkout exceeded 600s' }));
+    f.connection.close();
+    const count = f.frames.length;
+    f.report('Late progress');
+    expect(f.frames).toHaveLength(count);
+    const unknown = fixture(); unknown.reject('untyped'); await unknown.started;
+    expect(unknown.frames.at(-1)).toEqual(expect.objectContaining({ detail: 'Terminal launch failed.' }));
+    unknown.connection.close();
+  });
+  it('times out silent launches, aborts the waiter, rejects queued input and ignores late terminals', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(false, 16, 1, 25);
+      f.input('queued', 0);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(f.signal.aborted).toBe(true);
+      expect(f.frames.at(-1)).toEqual(expect.objectContaining({ state: 'failed', detail: expect.stringContaining('timed out') }));
+      const count = f.frames.length;
+      f.report('Late update'); f.bind(f.terminal);
+      f.reject(new Error('aborted')); await f.started;
+      expect(f.frames).toHaveLength(count);
+      expect(f.writes).toEqual([]);
+      f.connection.close();
+      const closed = fixture(false, 16, 1, 25);
+      closed.signal.addEventListener('abort', () => closed.connection.close(), { once: true });
+      await vi.advanceTimersByTimeAsync(25);
+      expect(closed.frames).toHaveLength(1);
+      closed.launch(); await closed.started;
+    } finally { vi.useRealTimers(); }
+  });
   it('queues before launch, applies latest geometry then flushes through write AND observation', async () => {
     const f = fixture();
     f.input('FIRST', 0); f.input('SECOND', 0);

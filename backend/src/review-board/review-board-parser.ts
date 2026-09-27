@@ -2,12 +2,14 @@
  * Pure parser turning the AI findings response into validated
  * {@link ReviewFinding}s. The model is asked for a fenced JSON array, but real
  * responses drift — extra prose, missing fences, unknown perspective ids,
- * out-of-range confidences. Everything here is defensive and total so the
- * board never crashes on a malformed completion and the 100% gate can cover
- * every rejection branch.
+ * out-of-range confidences. Lenient parsers normalize legacy responses; the
+ * validated perspective parser rejects unusable completions at the AI service
+ * boundary so malformed output cannot count as a successful review.
  */
 
 import { statusForSeverity } from './review-board-builder.js';
+import { ProviderError } from '../kernel/error-types.js';
+import { isRepoRelativePath } from '../pr-review/pr-comment-location.js';
 import type {
   CheckStatus,
   FindingSeverity,
@@ -98,12 +100,23 @@ function toEvidence(raw: unknown): ReviewEvidence | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const record = raw as Record<string, unknown>;
   if (!isText(record.source) || !isText(record.reason)) return null;
+  const location = toLocation(record.location);
   return {
     source: record.source.trim(),
     reason: record.reason.trim(),
     confidence: toConfidence(record.confidence),
     direct: false,
+    ...(location ? { location } : {}),
   };
+}
+
+function toLocation(raw: unknown): ReviewEvidence['location'] {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!isRepoRelativePath(value.path) ||
+      typeof value.line !== 'number' || !Number.isInteger(value.line) || value.line < 1 ||
+      (value.side !== 'RIGHT' && value.side !== 'LEFT')) return undefined;
+  return { path: value.path, line: value.line, side: value.side };
 }
 
 /** Coerce an unknown severity into a valid one, defaulting to 'medium'. */
@@ -279,6 +292,54 @@ export function parsePerspectiveAnalysis(
     rationale,
     checks,
   };
+}
+
+/**
+ * Validate a completion before it can count as a successful AI review. Keep
+ * the lenient parser for normalization, but never turn rejected findings or a
+ * missing verdict into a clean review via deterministic evidence.
+ */
+export function parseValidatedPerspectiveAnalysis(
+  text: string,
+  perspectiveId: string,
+): ParsedPerspectiveAnalysis {
+  const invalid = (detail: string): never => {
+    throw new ProviderError(
+      `Invalid review response for ${perspectiveId}: ${detail}. Retry this perspective; the model must return a JSON review object.`,
+    );
+  };
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const candidate = (fenced ? fenced[1] : text).trim();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(candidate);
+  } catch {
+    return invalid('expected valid JSON, not an empty response or prose');
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return invalid('expected an object, not an array or primitive');
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.skipped !== undefined && typeof record.skipped !== 'boolean') {
+    return invalid('"skipped" must be a boolean');
+  }
+  if (record.skipped === true) {
+    if (!isText(record.reason)) {
+      return invalid('a skipped review requires an explicit nonblank reason');
+    }
+  } else if (!Array.isArray(record.findings)) {
+    return invalid('a reviewed perspective requires a findings array');
+  }
+  const parsed = parsePerspectiveAnalysis(candidate, perspectiveId);
+  if (!parsed.skipped) {
+    if (parsed.findings.length !== (record.findings as unknown[]).length) {
+      return invalid('each finding requires a title, detail, and usable evidence');
+    }
+    if (parsed.findings.length === 0 && parsed.summary === null) {
+      return invalid('an empty findings array requires a nonblank review summary');
+    }
+  }
+  return parsed;
 }
 
 /**

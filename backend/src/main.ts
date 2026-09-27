@@ -9,6 +9,12 @@ import {
   rmSync,
 } from 'node:fs';
 import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
+import { access, readdir } from 'node:fs/promises';
+import { createSessionLaunchCwdResolver } from './session-worktree/session-launch-cwd.js';
+import {
+  SESSION_WORKTREE_NAMESPACE, sessionWorktreeConfigSchema, sessionWorktreeDefaults,
+  type SessionWorktreeConfig,
+} from './session-worktree/config.js';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { execFile, spawn } from 'node:child_process';
@@ -155,6 +161,10 @@ import { isTransientProviderFailure } from './pr-review/transient-failure.js';
 
 import { createUsageRecorder } from './usage/usage-recorder.js';
 import { createCliUsageTailer } from './usage/cli-usage-tailer.js';
+import { createMcpLogCapture } from './mcp-usage/mcp-log-capture.js';
+import { createCliMcpLogReader } from './provider/cli-store/cli-mcp-log-reader.js';
+import { createMcpLogOwners } from './persistence/mcp-log-owners.js';
+import { MCP_USAGE_NAMESPACE, mcpUsageConfigSchema, mcpUsageDefaults, type McpUsageConfig } from './mcp-usage/config.js';
 import { createSessionModelResolver } from './usage/session-model-resolver.js';
 
 import { createBuiltinCreditStrategies } from './credit/credit-strategies.js';
@@ -178,6 +188,9 @@ import {
   fetchAzureUser,
 } from './repo/azure-pr-lister.js';
 import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
+import { createSharedCheckoutPreparer } from './session-worktree/shared-session-checkout.js';
+import { createSessionRefResolver } from './session-worktree/session-ref-resolver.js';
+import { favouriteAzureBranch } from './repo/azure-branch-favorites.js';
 import { createPrFeatureService } from './repo/pr-feature-service.js';
 import { createGithubCommentsGateway } from './repo/github-pr-comments.js';
 import { createAzureCommentsGateway } from './repo/azure-pr-comments.js';
@@ -189,6 +202,7 @@ import { createGithubDescriptionGateway } from './repo/github-pr-description.js'
 import { createAzureDescriptionGateway } from './repo/azure-pr-description.js';
 import { createPrDescriptionService } from './pr-review/pr-description-service.js';
 import { createWorktreeService } from './worktrees/worktree-service.js';
+import { createWorktreeActivityGuard } from './worktrees/worktree-activity.js';
 import type { PrDescriptionGatewayResolver } from './pr-review/pr-description-contract.js';
 import type {
   PrCommentsGateway,
@@ -281,6 +295,11 @@ import {
 } from './skills/config.js';
 import { createMetaRunner } from './meta/meta-runner.js';
 import { createRecordingMetaRunner } from './meta/recording-meta-runner.js';
+import { ACTIVE_SESSIONS_NAMESPACE, activeSessionsConfigSchema, activeSessionsDefaults, type ActiveSessionsConfig } from './active-sessions/config.js';
+import { createMetaDebugTracker, observeMetaOperations, observeMetaRunner } from './active-sessions/meta-debug-tracker.js';
+import { createActiveSessionsService } from './active-sessions/active-sessions-service.js';
+import { createActiveSessionsReader } from './persistence/active-sessions-reader-adapter.js';
+import { createMetaUsageCapture } from './meta/meta-usage-capture.js';
 import { createRecordingSessionLauncher } from './meta/recording-session-launcher.js';
 import { createOwnedMetaRunner } from './meta/owned-meta-runner.js';
 import { createMetaSettings } from './meta/meta-settings.js';
@@ -316,7 +335,21 @@ import {
   type MetaConfig,
 } from './meta/config.js';
 import { createMcpService } from './mcp/mcp-service.js';
-import { wrapServerSpec } from './mcp/mcp-proxy-config.js';
+import { createMcpCategoryService } from './mcp/mcp-category-service.js';
+import { createMcpCategories } from './mcp/mcp-categories.js';
+import { createAgencyMcpConfigStore, type AgencyMcpConfigRunner } from './mcp/agency-mcp-config-store.js';
+import { createAgencyMcpCatalog, AGENCY_PUBLIC_MCPS } from './mcp/agency-mcp-catalog.js';
+import { createAgencyMcpBuiltinSetup } from './mcp/agency-mcp-builtin-setup.js';
+import { createAgencyMcpCommandRunner } from './mcp/agency-mcp-command-adapter.js';
+import { createMcpAuthenticationJobs } from './mcp/mcp-authentication-jobs.js';
+import { createAgencyMcpBuiltinRuntime } from './mcp/agency-mcp-builtin-runtime.js';
+import { createAgencyMcpOptions } from './mcp/agency-mcp-options.js';
+import { createStudioMcpHealth } from './mcp/studio-mcp-health.js';
+import { createMcpConfigWrites } from './mcp/mcp-config-writes.js';
+import { resolveExecutable } from './terminal/executable-resolver.js';
+import { registerStudioMcpTools } from './automation/mcp/studio-mcp-tools.js';
+import type { McpToolEntry } from './mcp/mcp-contract.js';
+import { providerLaunchSpec, wrapServerSpec } from './mcp/mcp-proxy-config.js';
 import { createMcpConfigFileStore } from './mcp/mcp-config-file-adapter.js';
 import { createMcpToolInspector } from './mcp/mcp-tool-inspector-adapter.js';
 import {
@@ -438,7 +471,8 @@ import {
   reviewBoardDefaults,
   type ReviewBoardConfig,
 } from './review-board/config.js';
-import { createReviewBoardService } from './review-board/review-board-service.js';
+import { createReviewBoardService, requireReviewEvidence } from './review-board/review-board-service.js';
+import { createReviewBoardQueue } from './review-board/review-board-queue.js';
 import type {
   ReviewBoardEventMap,
   ReviewBoardStreamSink,
@@ -477,13 +511,22 @@ import { createBugBashRunRepo } from './persistence/bug-bash-run-repo.js';
 import type { BugBashEventMap } from './bug-bash/bug-bash-contract.js';
 import { createAgentAttachmentRepo } from './persistence/agent-attachment-repo.js';
 import { createAgentUsageReader } from './persistence/agent-usage-reader.js';
-import { createLanguageAnalyzerRegistry } from './pr-review/language-analyzer.js';
-import { createCSharpAnalyzer } from './pr-review/csharp-analyzer.js';
-import { createJavaScriptAnalyzer } from './pr-review/javascript-analyzer.js';
-import { createJavaAnalyzer } from './pr-review/java-analyzer.js';
-import { createRustAnalyzer } from './pr-review/rust-analyzer.js';
-import { createCppAnalyzer } from './pr-review/cpp-analyzer.js';
-import { createServiceFabricAnalyzer } from './pr-review/service-fabric-analyzer.js';
+import { createBackgroundWorkRunner } from './kernel/background-work-runner.js';
+import {
+  RESOURCE_PRESSURE_NAMESPACE,
+  resourcePressureConfigSchema,
+  resourcePressureDefaults,
+  type ResourcePressureConfig,
+} from './resource-pressure/config.js';
+import { createSystemResourceSampler } from './resource-pressure/system-resource-sampler.js';
+import { RESOURCES_NAMESPACE, resourcesConfigSchema, resourcesDefaults, type ResourcesConfig } from './resources/config.js';
+import { createResourcesService } from './resources/resources-service.js';
+import { createProcessSampler, resourceFileSystem, startResourceSampling } from './resources/resources-node-adapter.js';
+import type { StorageRoot } from './resources/resources-contract.js';
+import { defaultWorkspaceDataDir } from './workspace/workspace-paths.js';
+import { BACKGROUND_WORK_NAMESPACE, backgroundWorkConfigSchema, backgroundWorkDefaults, type BackgroundWorkConfig } from './kernel/background-work-config.js';
+import { spawnChangeGraphWorker, type ChangeGraphWorkInput } from './pr-review/change-graph-worker-adapter.js';
+import type { BuiltChangeGraph } from './pr-review/change-graph-builder.js';
 import { nodeChangeGraphFs } from './pr-review/change-graph-fs.js';
 import { createPrReviewReconciler } from './pr-review/pr-review-reconciler.js';
 import { createMetaUsageReader } from './pr-review/meta-usage-reader.js';
@@ -513,7 +556,9 @@ function main(): void {
   registry.register({ namespace: COPILOT_NAMESPACE, schema: copilotConfigSchema, defaults: copilotDefaults });
   registry.register({ namespace: AGENCY_NAMESPACE, schema: agencyConfigSchema, defaults: agencyDefaults });
   registry.register({ namespace: SESSION_NAMESPACE, schema: sessionConfigSchema, defaults: sessionDefaults });
+  registry.register({ namespace: SESSION_WORKTREE_NAMESPACE, schema: sessionWorktreeConfigSchema, defaults: sessionWorktreeDefaults });
   registry.register({ namespace: USAGE_NAMESPACE, schema: usageConfigSchema, defaults: usageDefaults });
+  registry.register({ namespace: MCP_USAGE_NAMESPACE, schema: mcpUsageConfigSchema, defaults: mcpUsageDefaults });
   registry.register({ namespace: CREDIT_NAMESPACE, schema: creditConfigSchema, defaults: creditDefaults });
   registry.register({ namespace: AGGREGATION_NAMESPACE, schema: aggregationConfigSchema, defaults: aggregationDefaults });
   registry.register({ namespace: PERSISTENCE_NAMESPACE, schema: persistenceConfigSchema, defaults: persistenceDefaults });
@@ -521,6 +566,14 @@ function main(): void {
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
   registry.register({ namespace: SSE_NAMESPACE, schema: sseConfigSchema, defaults: sseDefaults });
+  registry.register({ namespace: BACKGROUND_WORK_NAMESPACE, schema: backgroundWorkConfigSchema, defaults: backgroundWorkDefaults });
+  registry.register({ namespace: RESOURCES_NAMESPACE, schema: resourcesConfigSchema, defaults: resourcesDefaults });
+  registry.register({ namespace: ACTIVE_SESSIONS_NAMESPACE, schema: activeSessionsConfigSchema, defaults: activeSessionsDefaults });
+  registry.register({
+    namespace: RESOURCE_PRESSURE_NAMESPACE,
+    schema: resourcePressureConfigSchema,
+    defaults: resourcePressureDefaults,
+  });
   registry.register({
     namespace: PROCESS_ADMISSION_NAMESPACE,
     schema: processAdmissionConfigSchema,
@@ -730,6 +783,9 @@ function main(): void {
   const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
   const contextConfig = config[CONTEXT_NAMESPACE] as ContextConfig;
   const apiConfig = config[API_NAMESPACE] as ApiConfig;
+  const resourceMonitor = createSystemResourceSampler(
+    config[RESOURCE_PRESSURE_NAMESPACE] as ResourcePressureConfig,
+  );
   const processAdmission = createProcessAdmission(config[PROCESS_ADMISSION_NAMESPACE] as ProcessAdmissionConfig);
   const sse = createBoundedSse({ config: config[SSE_NAMESPACE] as SseConfig, logger });
   const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
@@ -759,7 +815,8 @@ function main(): void {
   const applicationWork = createApplicationWork();
 
   const featureRepo = createFeatureRepo(db);
-  const repoService = createRepoService({ repo: createRepoRepo(db), ids, clock });
+  const repoRepo = createRepoRepo(db);
+  const repoService = createRepoService({ repo: repoRepo, ids, clock });
   const repositoryContextRepo = createRepositoryContextRepo(db);
   const sessionRepo = createSessionRepo(db);
   const reconciledCount = createSessionReconciler({
@@ -775,7 +832,13 @@ function main(): void {
   const usageCaptureRepo = createUsageCaptureRepo(db);
   const metaUsageRepo = createMetaUsageRepo(db);
   const mcpUsageRepo = createMcpUsageRepo(db);
-  const metaOperationRepo = createMetaOperationRepo(db);
+  const activeSessionsConfig = config[ACTIVE_SESSIONS_NAMESPACE] as ActiveSessionsConfig;
+  const metaDebugTracker = createMetaDebugTracker(activeSessionsConfig);
+  const persistedMetaOperations = createMetaOperationRepo(db);
+  const metaOperationRepo = {
+    ...persistedMetaOperations,
+    ...observeMetaOperations(persistedMetaOperations, metaDebugTracker),
+  };
   const metaPhysicalOwnership = createMetaOperationPhysicalOwnership({ newOwnerId: () => ids.next() });
   const metaOperationOwnership = createMetaOperationOwnership({ physical: metaPhysicalOwnership });
   const metaOperationRecovery = createMetaOperationRecovery({ operations: metaOperationRepo, clock });
@@ -1101,7 +1164,7 @@ function main(): void {
   // / *.visualstudio.com with no "Cannot prompt" failure.
   const gitRun = (
     args: string[],
-    opts: { stdin?: string; interactive?: boolean; longRunning?: boolean } = {},
+    opts: { stdin?: string; interactive?: boolean; longRunning?: boolean; timeoutMs?: number; signal?: AbortSignal; onProgress?: (message: string) => void } = {},
   ): Promise<GitRunResult> =>
     new Promise((resolve) => {
       const child = execFile(
@@ -1109,6 +1172,7 @@ function main(): void {
         args,
         {
           windowsHide: true,
+          signal: opts.signal,
           // Quick auth/status checks stay small; a worktree checkout of a large
           // monorepo streams megabytes of "Updating files: X%" progress to
           // stderr, which would blow a 1 MB cap (ENOBUFS kills the process), so
@@ -1123,7 +1187,7 @@ function main(): void {
           // no timeout at all. Without this, a stalled interactive sign-in kept
           // the /azure/signin request (and its "Signing in…" spinner) spinning
           // indefinitely with no way to recover.
-          timeout: opts.interactive ? 300_000 : opts.longRunning ? 900_000 : 20_000,
+          timeout: opts.timeoutMs ?? (opts.interactive ? 300_000 : opts.longRunning ? 900_000 : 20_000),
           env: {
             ...process.env,
             // Sign-in may show the browser prompt; the silent status check must
@@ -1142,9 +1206,24 @@ function main(): void {
               : err
                 ? 1
                 : 0;
-          resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
+          const diagnostic = err && (err as { killed?: boolean }).killed && opts.timeoutMs
+            ? `Git ${args.includes('fetch') ? 'fetch' : 'checkout'} exceeded ${opts.timeoutMs / 1000}s and was stopped. Check repository connectivity and retry.`
+            : stderr ?? '';
+          resolve({ code, stdout: stdout ?? '', stderr: diagnostic });
         },
       );
+      if (opts.onProgress) {
+        let lastProgress = 0;
+        child.stderr?.on('data', (chunk: Buffer) => {
+          const now = Date.now();
+          if (now - lastProgress < 500) return;
+          const message = chunk.toString().split(/[\r\n]+/).filter(Boolean).at(-1);
+          if (message) {
+            lastProgress = now;
+            opts.onProgress!(message.slice(0, 500));
+          }
+        });
+      }
       if (opts.stdin !== undefined) {
         child.stdin?.end(opts.stdin);
       }
@@ -1382,7 +1461,38 @@ function main(): void {
     return repoService.list().find((r) => r.id === repoId)?.localPath;
   };
 
-  // Full environment (cwd + current branch) a feature's sessions run in, used by
+  // Resolves the branch a newly opened session defaults to (a PR feature's PR
+  // branch, otherwise master) and which existing checkout it shares
+  // from. Repo-less legacy features resolve to null and keep the pre-worktree
+  // cwd behaviour.
+  const sessionRefResolver = createSessionRefResolver({
+    isPrFeature: (featureId) => prReviewService.find(featureId) !== null,
+    getPrBranch: (featureId) => prReviewService.find(featureId)?.pull.sourceBranch ?? null,
+    getFeature: (featureId) => featureRepo.get(featureId),
+    getRepo: (repoId) => repoService.list().find((r) => r.id === repoId) ?? null,
+    branch: createGitBranchReader(),
+  });
+
+  const sessionWorktreeConfig = config[SESSION_WORKTREE_NAMESPACE] as SessionWorktreeConfig;
+  const prepareSharedCheckout = createSharedCheckoutPreparer({
+    git: (args, onProgress) => gitRun(args, {
+      longRunning: args.includes('checkout'),
+      timeoutMs: args.includes('checkout') ? sessionWorktreeConfig.checkoutTimeoutMs : sessionWorktreeConfig.gitTimeoutMs,
+      onProgress,
+    }),
+    checkoutWorkers: sessionWorktreeConfig.checkoutWorkers,
+  });
+  const sessionPathExists = async (path: string): Promise<boolean> => {
+    try { await access(path); return true; } catch { return false; }
+  };
+  const resolveSessionLaunchCwd = createSessionLaunchCwdResolver({
+    own: (session, prepare) => applicationWork.own(prepare, { sessionId: session.id, featureId: session.featureId }),
+    getSession: (id) => sessionRepo.get(id),
+    pathExists: sessionPathExists,
+    resolveTarget: (featureId) => sessionRefResolver.resolve(featureId),
+    fallbackCwd: resolveSessionCwd,
+    prepare: (session, target, report) => prepareSharedCheckout(target, report, session.startedAt === null),
+  });
   // the cross-feature move consent dialog to show the branch a session switches
   // to. The IDE owns this so a session always follows its feature's checkout.
   const featureEnvironmentResolver = createFeatureEnvironmentResolver({
@@ -1406,6 +1516,35 @@ function main(): void {
   // own session-store.db (keyed by the same --session-id we launch with), so we
   // tail that instead of the OTel file exporter (which the CLI TUI never emits).
   const cliUsageStore = createCliUsageStore({ databasePath: cliStorePath });
+  const mcpUsageConfig = config[MCP_USAGE_NAMESPACE] as McpUsageConfig;
+  const mcpLogCapture = createMcpLogCapture({
+    ...mcpUsageConfig,
+    owners: createMcpLogOwners(db),
+    reader: createCliMcpLogReader(pathJoin(homedir(), copilotHistoryConfig.subdir, 'session-state')),
+    usage: mcpUsageRepo,
+    logger: { warn: (message, data) => logger.warn(message, data) },
+  });
+  const mcpUsageTimer = setInterval(() => { void mcpLogCapture.tick(); }, mcpUsageConfig.pollIntervalMs);
+  mcpUsageTimer.unref();
+  const metaUsageCapture = createMetaUsageCapture({
+    operations: metaOperationRepo,
+    read: (sessionId, operation, cursor, limit) => cliUsageStore.readUsagePage(sessionId, {
+      featureId: operation.featureId,
+      provider: operation.providerId ?? '',
+      requestedModel: operation.requestedModel ?? '',
+    }, cursor, limit),
+    now: () => clock.isoNow(),
+    onChanged: (operation) => bus.emit('meta.usage.updated', {
+      featureId: operation.featureId, operationId: operation.operationId,
+    }),
+    pageSize: usageConfig.capturePageSize,
+    maxPages: usageConfig.finalDrainPages,
+  });
+  const metaUsageTimer = setInterval(() => {
+    try { metaUsageCapture.tick(); }
+    catch (error) { logger.error('Meta usage reconciliation failed', error); }
+  }, usageConfig.livePollIntervalMs);
+  metaUsageTimer.unref();
   // Headless meta sessions disable MCP so servers never trigger their own
   // interactive browser OAuth (which they can't complete anyway). We read the
   // shared copilot mcp-config.json live so config edits apply without restart.
@@ -1969,9 +2108,22 @@ function main(): void {
       return metaPoolsStatusFn();
     };
   }
+  const activeSessions = createActiveSessionsService({
+    config: activeSessionsConfig,
+    now: () => Date.now(),
+    sessions: createActiveSessionsReader(db),
+    pools: metaPoolsStatusFn,
+    tracker: metaDebugTracker,
+    context: (featureId) => {
+      const feature = featureRepo.get(featureId);
+      const repoId = feature?.repoId ?? (featureId.startsWith('repository:') ? featureId.slice(11) : null);
+      const repo = repoId ? repoRepo.get(repoId) : null;
+      return { featureName: feature?.name ?? null, projectName: repo?.name ?? null };
+    },
+  });
   const metaAi = createOwnedMetaRunner(
     createRecordingMetaRunner({
-      base: rawMetaAi,
+      base: observeMetaRunner(rawMetaAi, metaDebugTracker),
       operations: metaOperationRepo,
       ownership: metaOperationOwnership,
       newOperationId: () => ids.next(),
@@ -2009,7 +2161,7 @@ function main(): void {
   };
   // Provider-agnostic MCP server management. The provider's own CLI reports
   // where its MCP config lives (via a meta-session), so no path is hardcoded.
-  const mcpService = createMcpService({
+  const sessionMcpService = createMcpService({
     registry: providers,
     meta: metaAi,
     files: createMcpConfigFileStore(),
@@ -2091,6 +2243,101 @@ function main(): void {
       return applied;
     },
   });
+  const categoryFiles = createMcpConfigFileStore();
+  const categoryWrites = createMcpConfigWrites();
+  const copilotMcpPath = pathJoin(process.env.COPILOT_HOME || pathJoin(homedir(), '.copilot'), 'mcp-config.json');
+  const studioMcpScript = pathJoin(dirname(fileURLToPath(import.meta.url)), 'automation', 'mcp', 'studio-mcp-server.js');
+  let studioBridgeApiBase: string | null = null;
+  const studioBridgeHealth = createStudioMcpHealth({
+    launch: () => studioBridgeApiBase ? {
+      ...providerLaunchSpec(process.execPath, [studioMcpScript]),
+      env: { ELECTRON_RUN_AS_NODE: '1', STUDIO_API_BASE: studioBridgeApiBase, STUDIO_CONTROL_TOKEN: studioControlToken },
+    } : null,
+    files: categoryFiles,
+    writes: categoryWrites,
+    registrationPaths: [...new Set([copilotMcpPath, pathJoin(homedir(), '.copilot', 'mcp-config.json')])],
+    tools: createMcpToolInspector(),
+    timeoutMs: mcpConfig.studioProbeTimeoutMs ?? mcpDefaults.studioProbeTimeoutMs!,
+    hostGet: async (url, token, timeoutMs) => {
+      const response = await fetch(url, {
+        headers: { 'x-studio-control-token': token },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return { status: response.status, body: await response.json().catch(() => null) };
+    },
+  });
+  const agencyNativeSource = 'agency config get mcps';
+  const agencyConfigRunner = (timeoutMs: number): AgencyMcpConfigRunner => createAgencyMcpCommandRunner({
+    executable: () => resolveExecutable(agencyConfig.executable), cwd: terminalCwd, timeoutMs,
+  });
+  const agencyMcpStore = createAgencyMcpConfigStore({
+    sourcePath: agencyNativeSource,
+    runner: agencyConfigRunner(mcpConfig.discoveryTimeoutMs),
+  });
+  const agencyCatalog = createAgencyMcpCatalog(
+    agencyConfigRunner(mcpConfig.catalogTimeoutMs ?? mcpDefaults.catalogTimeoutMs!), AGENCY_PUBLIC_MCPS,
+  );
+  const agencyGlobalSource = 'agency config get --global mcps';
+  const agencySetupRunner = agencyConfigRunner(mcpConfig.builtinSetupTimeoutMs ?? mcpDefaults.builtinSetupTimeoutMs!);
+  const agencyGlobalStore = createAgencyMcpConfigStore({
+    sourcePath: agencyGlobalSource, scope: 'global', runner: agencySetupRunner,
+  });
+  const agencyBuiltinSetup = createAgencyMcpBuiltinSetup({
+    runner: agencySetupRunner, catalog: agencyCatalog,
+    globalStore: agencyGlobalStore, globalSource: agencyGlobalSource, writes: categoryWrites,
+  });
+  const studioToolInventory: McpToolEntry[] = [];
+  registerStudioMcpTools({
+    registerTool: (name, definition) => {
+      studioToolInventory.push({ name, description: definition.description, enabled: true });
+    },
+  }, { request: async () => { throw new Error('Tool inventory does not execute requests'); } });
+  const nativeAuthenticationJobs = createMcpAuthenticationJobs({
+    id: () => ids.next(), now: () => clock.now().getTime(),
+    timeoutMs: mcpConfig.nativeAuthTimeoutMs ?? mcpDefaults.nativeAuthTimeoutMs!,
+    maxConcurrent: mcpConfig.nativeAuthMaxConcurrent ?? mcpDefaults.nativeAuthMaxConcurrent!,
+    maxRetained: 20,
+  });
+  const mcpService = createMcpCategoryService({
+    categories: createMcpCategories(categoryFiles, agencyMcpStore, {
+      copilot: copilotMcpPath,
+      claude: pathJoin(homedir(), '.claude.json'),
+      workspace: terminalCwd,
+      workspaceMcp: pathJoin(terminalCwd, '.mcp.json'),
+      workspaceGithubMcp: pathJoin(terminalCwd, '.github', 'mcp.json'),
+      claudeManaged: process.platform === 'win32' ? 'C:\\Program Files\\ClaudeCode\\managed-mcp.json' : undefined,
+      claudeUnavailableReason: process.env.CLAUDE_CONFIG_DIR
+        ? 'CLAUDE_CONFIG_DIR is set. The .claude.json relocation has not been verified; use the native Claude configuration instead of editing a guessed path.'
+        : undefined,
+      agencyNative: agencyNativeSource,
+    }, agencyCatalog, { store: agencyGlobalStore, source: agencyGlobalSource, manager: agencyBuiltinSetup },
+    createAgencyMcpBuiltinRuntime({ command: () => resolveExecutable(agencyConfig.executable), cwd: terminalCwd }),
+    createAgencyMcpOptions({
+      runner: agencyConfigRunner(mcpConfig.catalogTimeoutMs ?? mcpDefaults.catalogTimeoutMs!),
+      now: () => clock.now().getTime(),
+      ttlMs: mcpConfig.optionsCacheTtlMs ?? mcpDefaults.optionsCacheTtlMs!,
+      maxConcurrent: 2,
+    })),
+    enabled: () => mcpConfig.enabled,
+    tools: createMcpToolInspector(),
+    probeTimeoutMs: mcpConfig.discoveryTimeoutMs,
+    maxConcurrentProbes: mcpConfig.maxConcurrentProbes ?? mcpDefaults.maxConcurrentProbes!,
+    writes: categoryWrites,
+    authenticationJobs: nativeAuthenticationJobs,
+    authenticationTimeoutMs: mcpConfig.nativeAuthTimeoutMs ?? mcpDefaults.nativeAuthTimeoutMs!,
+    now: () => clock.now(),
+    maxAuthObservations: mcpConfig.authObservationMaxEntries ?? mcpDefaults.authObservationMaxEntries!,
+    studio: {
+      name: STUDIO_MCP_SERVER_NAME,
+      spec: {
+        command: process.execPath,
+        args: [pathJoin(dirname(fileURLToPath(import.meta.url)), 'automation', 'mcp', 'studio-mcp-server.js')],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
+      },
+      tools: studioToolInventory,
+      probe: studioBridgeHealth,
+    },
+  });
   const gitRepository = createGitRepositoryAdapter();
   const repositoryEvidence = createRepositoryEvidenceService({
     revisionLookup: gitRepository,
@@ -2117,7 +2364,7 @@ function main(): void {
   });
   const repoInsightsService = createRepoInsightsService({
     repos: repoService,
-    git: createRepoInsightsGitAdapter(),
+    git: createRepoInsightsGitAdapter(undefined, repoInsightsConfig.gitTimeoutMs),
     clock,
     config: repoInsightsConfig,
     // Each insights section is enriched by its own warmed metasession; the
@@ -2206,17 +2453,15 @@ function main(): void {
     },
     config: prReviewConfig,
   });
+  const backgroundWorkConfig = config[BACKGROUND_WORK_NAMESPACE] as BackgroundWorkConfig;
+  const backgroundRunner = createBackgroundWorkRunner<ChangeGraphWorkInput, BuiltChangeGraph>({
+    config: backgroundWorkConfig,
+    spawn: (input, progress) => spawnChangeGraphWorker(input, progress, backgroundWorkConfig.workerMemoryMb),
+  });
   const prReviewService = createPrReviewService({
     reviews: prReviewRepo,
     diffs: prDiffCollector,
-    analyzers: createLanguageAnalyzerRegistry([
-      createCSharpAnalyzer(),
-      createJavaScriptAnalyzer(),
-      createJavaAnalyzer(),
-      createRustAnalyzer(),
-      createCppAnalyzer(),
-      createServiceFabricAnalyzer(),
-    ]),
+    buildGraph: (input, options) => backgroundRunner.run(input, options),
     changeGraphFs: nodeChangeGraphFs,
     ai: metaAi,
     inlinePrompts: warmInlinePrompts,
@@ -2231,7 +2476,10 @@ function main(): void {
     config: prReviewConfig,
   });
   const reviewBoardService = createReviewBoardService({
-    reviews: { get: (featureId) => prReviewService.get(featureId) },
+    reviews: {
+      get: (featureId) => prReviewService.get(featureId),
+      save: (review) => prReviewRepo.save(review),
+    },
     config: reviewBoardConfig,
     clock,
     ai: metaAi,
@@ -2381,7 +2629,38 @@ function main(): void {
     repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
     gateways: prDescriptionGateways,
   });
+  const listCheckoutDirectories = async (repoLocalPath: string): Promise<string[]> => {
+      const directory = pathJoin(dirname(repoLocalPath), '.ai-worktrees');
+      try {
+        const entries = await readdir(directory, { withFileTypes: true });
+        return entries.filter((entry) => entry.isDirectory()).map((entry) => pathJoin(directory, entry.name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+      }
+  };
   const worktreeService = createWorktreeService({
+    isBusy: createWorktreeActivityGuard({
+      repositories: () => repoService.list(),
+      sessions: () => sessionRepo.listAll(),
+      feature: (id) => featureRepo.get(id),
+      reviewPath: (id) => prReviewService.find(id)?.worktreePath ?? null,
+      liveTerminal: (id) => {
+        const terminal = terminalManager?.get(id);
+        return terminal !== undefined && !terminal.exited;
+      },
+      scopes: () => applicationWork.activeScopes(),
+      metaScopes: () => {
+        const page = metaOperationRepo.listUnfinishedPage(null, 500);
+        const scopes = [...page.items, ...metaOperationOwnership.unconfirmed()];
+        if (page.nextCursor) scopes.push({
+          featureId: '__unknown_worktree_activity__', originSessionId: null,
+          sessionIds: [], operationId: '', automationId: null,
+        });
+        return scopes;
+      },
+    }),
+    listCheckoutDirectories,
     repos: {
       list: () => repoService.list(),
       get: (id) => repoService.list().find((r) => r.id === id) ?? null,
@@ -2394,21 +2673,113 @@ function main(): void {
           : null;
       },
     },
-    git: { run: (args, cwd) => gitRun(['-C', cwd, ...args], { longRunning: true }) },
+    git: { run: (args: string[], cwd: string, signal?: AbortSignal) => gitRun(['-C', cwd, ...args],
+      args[0] === 'worktree' && args[1] === 'remove'
+        ? { signal, longRunning: true, timeoutMs: 900_000 }
+        : { signal, timeoutMs: 5000 }) },
   });
+  const resourcesConfig = config[RESOURCES_NAMESPACE] as ResourcesConfig;
+  const appDataRoots = [...new Set([currentDataDir, defaultWorkspaceDataDir(), resourcesConfig.desktopDataPath].filter(Boolean))];
+  const resourceService = createResourcesService({
+    config: resourcesConfig, now: () => Date.now(), backendPid: process.pid,
+    host: () => resourceMonitor.snapshot(),
+    processes: createProcessSampler(resourcesConfig.processTimeoutMs),
+    fs: resourceFileSystem,
+    forbiddenRoots: [homedir(), process.env.APPDATA, process.env.LOCALAPPDATA, process.env.SystemRoot].filter((path): path is string => Boolean(path)),
+    logs: {
+      directory: effectiveLogging.directory, appDataRoots,
+      isManagedFile: logPaths.isManagedFile,
+      olderThan: Math.min(Date.now() - process.uptime() * 1000, Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)),
+    },
+    roots: async (signal, reportError) => {
+      const roots: StorageRoot[] = appDataRoots.map((path) => ({ category: 'app', path }));
+      roots.push({ category: 'logs', path: effectiveLogging.directory });
+      if (resourcesConfig.applicationPath) roots.push({ category: 'app', path: resourcesConfig.applicationPath });
+      for (const path of resourcesConfig.runtimePaths) roots.push({ category: 'app', path });
+      roots.push({ category: 'app', path: dirname(fileURLToPath(import.meta.url)) });
+      roots.push({ category: 'app', path: process.execPath });
+      if (process.env.CW_UI_DIST) roots.push({ category: 'app', path: process.env.CW_UI_DIST });
+      if (resourcesConfig.desktopDataPath) {
+        for (const name of ['Cache', 'Code Cache', 'GPUCache']) {
+          roots.push({ category: 'cache', path: pathJoin(resourcesConfig.desktopDataPath, name) });
+        }
+      }
+      // These are the install/data locations already used by the Agency bootstrapper,
+      // not a walk of the profile. Provider data is shared and never disposable here.
+      if (agencyConfig.enabled && process.platform === 'win32') {
+        roots.push({ category: 'provider', path: pathJoin(process.env.APPDATA || pathJoin(homedir(), 'AppData', 'Roaming'), 'agency') });
+        roots.push({ category: 'provider', path: pathJoin(process.env.LOCALAPPDATA || pathJoin(homedir(), 'AppData', 'Local'), 'agency') });
+      }
+      try {
+        // Reuse authoritative inventory logic with a read-only, scan-scoped
+        // command port. Removal's long timeout must not leak into a disk scan.
+        const inventory = createWorktreeService({
+          repos: {
+            list: () => repoService.list(),
+            get: (id) => repoService.list().find((repo) => repo.id === id) ?? null,
+          },
+          reviews: { find: () => null },
+          listCheckoutDirectories,
+          git: { run: async (args, cwd) => {
+            signal.throwIfAborted();
+            const result = await gitRun(['-C', cwd, ...args], { signal, timeoutMs: 5000 });
+            if (result.code !== 0) throw new Error(`Worktree inventory failed for ${cwd}: ${result.stderr}`);
+            return result;
+          } },
+        });
+        for (const worktree of await inventory.list(signal)) roots.push({ category: 'worktrees', path: worktree.path });
+      } catch (error) {
+        reportError(`Managed worktree inventory is incomplete: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return roots;
+    },
+  });
+  const stopResourceSampling = startResourceSampling(resourceService, resourcesConfig.sampleIntervalMs);
   const prFeatureService = createPrFeatureService({
     repos: repoService,
     listPulls: listPullsFor,
     getPull: getPullFor,
-    provisionWorktree: (repo, pull) =>
+    provisionWorktree: (repo, pull, onStatus) =>
       provisionPrWorktree(
-        { git: (args) => gitRun(args, { longRunning: true }), pathExists: existsSync },
+        {
+          git: (args) => gitRun(args, { longRunning: true }),
+          pathExists: existsSync,
+          // Azure DevOps only: favourite/publish the source branch first so the
+          // git server advertises its ref and the primary fetch resolves it
+          // (a pushable worktree). Best-effort — the provisioner swallows any
+          // failure and still checks the PR out via its merge ref.
+          favouriteBranch:
+            repo.provider === 'azure-devops'
+              ? async () => {
+                  const outcome = await favouriteAzureBranch(
+                    {
+                      token: azureTokenFor,
+                      httpGet: azureHttpGet,
+                      httpPost: azureHttpPost,
+                    },
+                    { remoteUrl: repo.remoteUrl, branch: pull.sourceBranch },
+                  );
+                  logger.info('Azure DevOps branch favourite attempt', {
+                    branch: pull.sourceBranch,
+                    status: outcome.status,
+                    message: outcome.message,
+                  });
+                  return {
+                    ok:
+                      outcome.status === 'favourited' ||
+                      outcome.status === 'already',
+                    message: outcome.message,
+                  };
+                }
+              : undefined,
+        },
         {
           repoLocalPath: repo.localPath,
           provider: repo.provider,
           number: pull.number,
           sourceBranch: pull.sourceBranch,
         },
+        onStatus,
       ),
     features: featureService,
     reviews: prReviewService,
@@ -2533,6 +2904,8 @@ function main(): void {
     liveUsage: { release: releaseTailer },
     prReviews: prReviewService,
     worktrees: worktreeService,
+    sessionWorktrees: { remove: (path) => worktreeService.remove(path) },
+    readBranch: (path) => createGitBranchReader().read(path),
     sharedContext: contextService,
     ownedAutomations: {
       deleteByFeature: async (featureId) => {
@@ -2560,6 +2933,11 @@ function main(): void {
         newTaskRunRepo.deleteByFeature(featureId);
         bugBashRunRepo.deleteByFeature(featureId);
       },
+    },
+    background: (task) => {
+      void task().catch((error) => {
+        logger.error('Deferred feature worktree teardown failed', { error });
+      });
     },
   });
   const sessionBootstrap = createSessionBootstrap({
@@ -2880,6 +3258,12 @@ function main(): void {
 
   mountRoutes(
     router,    ownApplicationRoutes(createApiRoutes({
+      appResources: resourceService,
+      activeSessions,
+      resources: () => ({
+        ...resourceMonitor.snapshot(),
+        backgroundWork: backgroundRunner.stats(),
+      }),
       features: featureService,
       admin: workspaceAdmin,
       launcher,
@@ -2893,7 +3277,7 @@ function main(): void {
         featureEnvironmentResolver.resolve(featureId),
       relaunchSession: async (session) => {
         await terminalManager!.relaunch(session, {
-          cwd: resolveSessionCwd(session.featureId),
+          cwd: await resolveSessionLaunchCwd(session),
         });
       },
       providers,
@@ -3034,6 +3418,7 @@ function main(): void {
       prFeatures: prFeatureService,
       prReviews: prReviewService,
       reviewBoard: reviewBoardService,
+      reviewQueue: createReviewBoardQueue(prReviewRepo),
       newTask: newTaskService,
       bugBash: bugBashService,
       agents: agentService,
@@ -3098,7 +3483,7 @@ function main(): void {
       // Validate the review exists before committing to a 200 stream, so a
       // missing PR review returns a normal JSON error with the right status.
       try {
-        reviewBoardService.get(featureId);
+        requireReviewEvidence(prReviewService.get(featureId));
       } catch (error) {
         const result = toErrorResult(error);
         res.status(result.status).json(result.body);
@@ -3133,6 +3518,7 @@ function main(): void {
       reviewBoardService
         .analyzeAll(featureId, sink, controller.signal)
         .catch((error: unknown) => {
+          logger.error('Review Board stream failed', { featureId, error: error instanceof Error ? error.message : String(error) });
           if (!closed) {
             res.write(
               `${JSON.stringify({
@@ -3203,9 +3589,64 @@ function main(): void {
       });
   });
 
-  // New Task: produce the reviewable plan — streamed as newline-delimited JSON
-  // over ONE request so the browser sees the meta-session's live planning logs
-  // as they happen. Each line is an {type:'activity'|'done'|'failed'} event,
+  // PR review checkout with live status: create the PR review feature while
+  // streaming coarse checkout phases (favouriting → fetching → preparing) as
+  // newline-delimited JSON over ONE request, so the picker overlay shows
+  // real-time progress instead of a static spinner. The Azure DevOps favourite
+  // step runs first, making an unpublished source branch fetchable. The final
+  // line is `{type:'done', feature}` (or `{type:'error', ...}`), matching the
+  // shape the streamed client resolves on.
+  app.post(`${apiConfig.basePath}/repos/:id/pulls/stream`, (req, res) => {
+    const repositoryId = req.params.id;
+    let number = NaN;
+    let parentFeatureId: string | null = null;
+    let parentGroupId: string | null = null;
+    try {
+      repoService.get(repositoryId);
+      const body = (req.body ?? {}) as {
+        number?: unknown;
+        parentFeatureId?: unknown;
+        parentGroupId?: unknown;
+      };
+      if (typeof body.number !== 'number' || !Number.isFinite(body.number)) {
+        throw new ValidationError('A numeric pull request "number" is required.');
+      }
+      number = body.number;
+      parentFeatureId =
+        typeof body.parentFeatureId === 'string' ? body.parentFeatureId : null;
+      parentGroupId =
+        typeof body.parentGroupId === 'string' ? body.parentGroupId : null;
+    } catch (error) {
+      const result = toErrorResult(error);
+      res.status(result.status).json(result.body);
+      return;
+    }
+    let closed = false;
+    res.on('close', () => {
+      if (!res.writableFinished) closed = true;
+    });
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    const write = (event: unknown) => {
+      if (!closed) res.write(`${JSON.stringify(event)}\n`);
+    };
+    prFeatureService
+      .createFromPull(repositoryId, number, parentFeatureId, parentGroupId, (status) =>
+        write({ type: 'status', phase: status.phase, message: status.message }),
+      )
+      .then((feature) => write({ type: 'done', feature }))
+      .catch((error: unknown) => {
+        const result = toErrorResult(error);
+        write({ type: 'error', status: result.status, error: result.body });
+      })
+      .finally(() => {
+        if (!closed) res.end();
+      });
+  });
   // mirroring the implement stream. The request body may carry an optional
   // { baseBranch, suggestion } to cut the branch from a specific base or feed
   // reviewer feedback into a re-plan.
@@ -3591,6 +4032,7 @@ function main(): void {
         ? address.port
         : apiConfig.port;
     const apiBase = `http://${host}:${port}${apiConfig.basePath}`;
+    studioBridgeApiBase = apiBase;
     const script = pathJoin(
       dirname(fileURLToPath(import.meta.url)),
       'automation',
@@ -3602,14 +4044,15 @@ function main(): void {
       'mcp',
       'mcp-proxy.js',
     );
+    const studioMcpLaunch = providerLaunchSpec(process.execPath, [script]);
     void (async () => {
-      for (const provider of mcpService.listProviders()) {
+      for (const provider of sessionMcpService.listProviders()) {
         try {
-          await mcpService.putServer(provider.id, {
+          await sessionMcpService.putServer(provider.id, {
             name: STUDIO_MCP_SERVER_NAME,
             spec: {
-              command: process.execPath,
-              args: [script],
+              command: studioMcpLaunch.command,
+              args: studioMcpLaunch.args,
               env: {
                 // When Studio is packaged, execPath is the Electron binary; this
                 // flag makes it behave as plain Node so the stdio server runs.
@@ -3623,7 +4066,7 @@ function main(): void {
           // so real per-server I/O (bytes/calls/latency) is recorded per feature.
           // The proxy is a transparent pass-through; the wrap is loss-less and
           // undone on shutdown (see unwrapConfiguredMcpServers).
-          const current = await mcpService.getServers(provider.id);
+          const current = await sessionMcpService.getServers(provider.id);
           for (const server of current.servers) {
             if (server.name === STUDIO_MCP_SERVER_NAME) {
               continue;
@@ -3637,7 +4080,7 @@ function main(): void {
               controlToken: studioControlToken,
             });
             if (wrapped !== server.spec) {
-              await mcpService.putServer(provider.id, {
+              await sessionMcpService.putServer(provider.id, {
                 name: server.name,
                 spec: wrapped,
               });
@@ -3661,7 +4104,7 @@ function main(): void {
       config: terminalConfig,
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
-      resolveCwd: (session) => resolveSessionCwd(session.featureId),
+      resolveCwd: (session, report, signal) => resolveSessionLaunchCwd(session, report, signal),
       // Self-healing diagnosis: when a launch failure cannot be repaired
       // automatically, a read-only metasession explains the likely cause and
       // fix, surfaced in the terminal before the final error. Best-effort.
@@ -3698,14 +4141,14 @@ function main(): void {
   // Best-effort: getServers already returns unwrapped specs, so re-persisting
   // them strips the on-disk wrapper.
   const restoreMcpServers = async (): Promise<void> => {
-    for (const provider of mcpService.listProviders()) {
+    for (const provider of sessionMcpService.listProviders()) {
       try {
-        const current = await mcpService.getServers(provider.id);
+        const current = await sessionMcpService.getServers(provider.id);
         for (const server of current.servers) {
           if (server.name === STUDIO_MCP_SERVER_NAME) {
             continue;
           }
-          await mcpService.putServer(provider.id, {
+          await sessionMcpService.putServer(provider.id, {
             name: server.name,
             spec: server.spec,
           });
@@ -3725,7 +4168,11 @@ function main(): void {
   const shutdownTailers: Iterable<{ stop(): void; finalize?(): unknown }> = {
     *[Symbol.iterator]() {
       yield stoppedCaptureRecovery;
+      yield { stop: () => clearInterval(metaUsageTimer) };
+      yield { stop: () => { mcpLogCapture.stop(); clearInterval(mcpUsageTimer); } };
       yield* tailers.values();
+      yield { stop: () => resourceMonitor.dispose() };
+      yield { stop: stopResourceSampling };
     },
   };
   const shutdownNonce = process.env.CW_DESKTOP_SHUTDOWN_NONCE;
@@ -3742,12 +4189,15 @@ function main(): void {
     headless: launcher,
     owner: {
       abort: () => {
+        nativeAuthenticationJobs.close();
         shutdownOwner.abort();
         metaOperationShutdown.abort();
       },
       waitForIdle: (timeoutMs) => shutdownOwner.waitForIdle(timeoutMs),
     },
-    pools: allWarmPools,
+    pools: [...allWarmPools, {
+      closeAndWait: async () => { await backgroundRunner.close(); return true; },
+    }],
     tailers: shutdownTailers,
     credentialWarmer,
     terminalManager: terminalManager!,

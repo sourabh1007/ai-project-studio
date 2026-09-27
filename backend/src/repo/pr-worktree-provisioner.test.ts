@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { join, dirname, basename } from 'node:path';
 import {
   provisionPrWorktree,
@@ -7,6 +7,7 @@ import {
   describeFetchFailure,
   checkedOutWorktreePath,
   type GitRunResult,
+  type ProvisionStatus,
 } from './pr-worktree-provisioner.js';
 
 const ok: GitRunResult = { code: 0, stdout: '', stderr: '' };
@@ -32,6 +33,40 @@ describe('prWorktreePath', () => {
 });
 
 describe('provisionPrWorktree', () => {
+  it('keeps concurrent PR fetches isolated before checking out their exact commits', async () => {
+    const refs = new Map<string, string>();
+    const calls: string[][] = [];
+    let release!: () => void;
+    const bothFetched = new Promise<void>((resolve) => { release = resolve; });
+    let fetches = 0;
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      calls.push(args);
+      if (args.includes('fetch')) {
+        expect(args).toContain('--no-write-fetch-head');
+        expect(args).toContain('--no-auto-maintenance');
+        const [source, target] = args.at(-1)!.split(':');
+        refs.set(target, source.includes('/12/') ? 'sha12' : 'sha13');
+        if (++fetches === 2) release();
+        await bothFetched;
+        return ok;
+      }
+      if (args.includes('rev-parse')) {
+        return { ...ok, stdout: refs.get(args.at(-1)!)! };
+      }
+      return ok;
+    };
+    const results = await Promise.all([12, 13].map((number) =>
+      provisionPrWorktree({ git, pathExists: () => false }, {
+        repoLocalPath, provider: 'github', number, sourceBranch: '',
+      }),
+    ));
+    expect(results.map((result) => result.headSha)).toEqual(['sha12', 'sha13']);
+    const adds = calls.filter((args) => args.includes('worktree'));
+    expect(adds[0].slice(-2)).toEqual([prWorktreePath(repoLocalPath, 12), 'sha12']);
+    expect(adds[1].slice(-2)).toEqual([prWorktreePath(repoLocalPath, 13), 'sha13']);
+    expect(calls.flat()).not.toContain('FETCH_HEAD');
+  });
+
   it('checks out the GitHub PR head branch tracking origin and adds a forced worktree', async () => {
     const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc123\n', stderr: '' }]);
     const result = await provisionPrWorktree(
@@ -49,14 +84,18 @@ describe('provisionPrWorktree', () => {
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
-      'pull/12/head',
+      '+pull/12/head:refs/ai-project-studio/pr/12',
     ]);
-    expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
+    expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'refs/ai-project-studio/pr/12']);
     expect(calls[2]).toEqual([
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
       '+feature-x:refs/remotes/origin/feature-x',
     ]);
@@ -137,13 +176,17 @@ describe('provisionPrWorktree', () => {
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
-      'topic/x',
+      '+topic/x:refs/ai-project-studio/pr/7',
     ]);
     expect(calls[2]).toEqual([
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
       '+topic/x:refs/remotes/origin/topic/x',
     ]);
@@ -167,19 +210,23 @@ describe('provisionPrWorktree', () => {
       tracksPullRequest: false,
       headSha: 'sha789',
     });
-    expect(calls[0]).toEqual(['-C', repoLocalPath, 'fetch', 'origin', 'topic/x']);
+    expect(calls[0]).toEqual(['-C', repoLocalPath, 'fetch', '--no-write-fetch-head', '--no-auto-maintenance', 'origin', '+topic/x:refs/ai-project-studio/pr/7']);
     expect(calls[1]).toEqual([
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
-      'refs/pull/7/merge',
+      '+refs/pull/7/merge:refs/ai-project-studio/pr/7',
     ]);
-    expect(calls[2]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
+    expect(calls[2]).toEqual(['-C', repoLocalPath, 'rev-parse', 'refs/ai-project-studio/pr/7']);
     expect(calls[3]).toEqual([
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
       '+topic/x:refs/remotes/origin/topic/x',
     ]);
@@ -220,10 +267,12 @@ describe('provisionPrWorktree', () => {
       '-C',
       repoLocalPath,
       'fetch',
+      '--no-write-fetch-head',
+      '--no-auto-maintenance',
       'origin',
-      'pull/3/head',
+      '+pull/3/head:refs/ai-project-studio/pr/3',
     ]);
-    expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'FETCH_HEAD']);
+    expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'refs/ai-project-studio/pr/3']);
     expect(calls[3]).toEqual([
       '-c',
       'core.longpaths=true',
@@ -429,6 +478,82 @@ describe('provisionPrWorktree', () => {
       headSha: 'fetched',
     });
   });
+
+  it('favourites the branch first and reports each phase to the status listener', async () => {
+    const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'abc\n', stderr: '' }]);
+    const favouriteBranch = vi.fn(async () => ({
+      ok: true,
+      message: 'Marked "topic/x" as favourite.',
+    }));
+    const statuses: ProvisionStatus[] = [];
+    await provisionPrWorktree(
+      { git, pathExists: () => false, favouriteBranch },
+      { repoLocalPath, provider: 'azure-devops', number: 7, sourceBranch: 'topic/x' },
+      (status) => statuses.push(status),
+    );
+    expect(favouriteBranch).toHaveBeenCalledTimes(1);
+    expect(statuses.map((s) => s.phase)).toEqual([
+      'favouriting',
+      'favouriting',
+      'fetching',
+      'preparing',
+    ]);
+    // The second favouriting status carries the outcome message.
+    expect(statuses[1].message).toBe('Marked "topic/x" as favourite.');
+    expect(calls[0]).toEqual(['-C', repoLocalPath, 'fetch', '--no-write-fetch-head', '--no-auto-maintenance', 'origin', '+topic/x:refs/ai-project-studio/pr/7']);
+  });
+
+  it('proceeds with the checkout when favouriting throws', async () => {
+    const { git } = gitRecorder([ok, { code: 0, stdout: 'abc\n', stderr: '' }]);
+    const favouriteBranch = vi.fn(async () => {
+      throw new Error('favourite failed');
+    });
+    const statuses: ProvisionStatus[] = [];
+    const result = await provisionPrWorktree(
+      { git, pathExists: () => false, favouriteBranch },
+      { repoLocalPath, provider: 'azure-devops', number: 7, sourceBranch: 'topic/x' },
+      (status) => statuses.push(status),
+    );
+    expect(favouriteBranch).toHaveBeenCalledTimes(1);
+    expect(result.branch).toBe('topic/x');
+    expect(result.headSha).toBe('abc');
+    expect(statuses[1].message).toContain('favourite failed');
+  });
+
+  it('stringifies a non-Error favourite failure', async () => {
+    const { git } = gitRecorder([ok, { code: 0, stdout: 'abc\n', stderr: '' }]);
+    const favouriteBranch = vi.fn(async () => {
+      throw 'plain string failure';
+    });
+    const statuses: ProvisionStatus[] = [];
+    await provisionPrWorktree(
+      { git, pathExists: () => false, favouriteBranch },
+      { repoLocalPath, provider: 'azure-devops', number: 7, sourceBranch: 'topic/x' },
+      (status) => statuses.push(status),
+    );
+    expect(statuses[1].message).toContain('plain string failure');
+  });
+
+  it('explains the favourite outcome when the Azure fetch still fails', async () => {
+    const { git } = gitRecorder([
+      { code: 1, stdout: '', stderr: "fatal: couldn't find remote ref topic/x" },
+      {
+        code: 1,
+        stdout: '',
+        stderr: "fatal: couldn't find remote ref refs/pull/7/merge",
+      },
+    ]);
+    const favouriteBranch = vi.fn(async () => ({
+      ok: false,
+      message: "Couldn't favourite branch (HTTP 403).",
+    }));
+    await expect(
+      provisionPrWorktree(
+        { git, pathExists: () => false, favouriteBranch },
+        { repoLocalPath, provider: 'azure-devops', number: 7, sourceBranch: 'topic/x' },
+      ),
+    ).rejects.toThrow(/Auto-favourite result: Couldn't favourite branch \(HTTP 403\)/);
+  });
 });
 
 describe('checkedOutWorktreePath', () => {
@@ -483,6 +608,16 @@ describe('describeFetchFailure', () => {
     expect(
       describeFetchFailure(base, "fatal: couldn't find remote ref topic/x"),
     ).toMatch(/favourite \/ publish it/i);
+  });
+
+  it('includes the auto-favourite outcome when one is provided', () => {
+    const message = describeFetchFailure(
+      base,
+      "fatal: couldn't find remote ref topic/x",
+      "Couldn't favourite branch (HTTP 403).",
+    );
+    expect(message).toContain('Auto-favourite result:');
+    expect(message).toContain('HTTP 403');
   });
 
   it('passes other Azure fetch errors through unchanged', () => {

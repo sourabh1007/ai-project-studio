@@ -6,9 +6,9 @@ const NAME = '[A-Za-z_]\\w*';
 /**
  * C / C++ analyzer, covering the usual header and source extensions. Declared
  * types are classes, structs, unions and enums (including `enum class`). Members
- * are function definitions — detected by a return type followed by a name, an
- * argument list and an opening brace, which excludes control-flow keywords like
- * `if`/`while`. `#include` directives are blanked before reference matching.
+ * are function definitions, excluding control-flow keywords. Start at the name,
+ * not a permissive return-type prefix: overlapping whitespace quantifiers in
+ * that prefix caused catastrophic backtracking on large comment-heavy headers.
  */
 export function createCppAnalyzer(): LanguageAnalyzer {
   return createRegexLanguageAnalyzer({
@@ -20,7 +20,8 @@ export function createCppAnalyzer(): LanguageAnalyzer {
     ],
     memberPatterns: [
       new RegExp(
-        `\\b[A-Za-z_][\\w:<>*&,\\s]*?\\s+(${NAME})\\s*\\([^;{)]*\\)\\s*` +
+        `\\b(?!(?:if|for|while|switch|catch|sizeof|alignof|decltype|noexcept|static_assert)\\b)` +
+          `(${NAME})\\s*\\([^;{)]*\\)\\s*` +
           `(?:const\\s*)?\\{`,
       ),
     ],

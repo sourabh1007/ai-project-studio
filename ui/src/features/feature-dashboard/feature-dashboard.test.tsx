@@ -261,7 +261,7 @@ describe('FeatureDashboard usage freshness', () => {
     await act(async () => {});
 
     expect(screen.getByRole('table', { name: 'MCP server I/O' })).toBeInTheDocument();
-    expect(screen.getByText('filesystem')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'filesystem' })).toBeInTheDocument();
     expect(screen.queryByText(/No MCP activity yet/i)).not.toBeInTheDocument();
   });
 

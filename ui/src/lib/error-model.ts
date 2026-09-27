@@ -11,6 +11,7 @@
  */
 
 export type AppErrorCategory =
+  | 'asset-load'
   | 'offline'
   | 'network'
   | 'timeout'
@@ -47,6 +48,13 @@ interface CategoryTraits {
 }
 
 const TRAITS: Record<AppErrorCategory, CategoryTraits> = {
+  'asset-load': {
+    title: 'Interface could not load',
+    severity: 'warning',
+    retryable: false,
+    fallbackMessage:
+      'An interface file is unavailable. Save any unsent input in other tabs, then reload the app to load the current interface.',
+  },
   offline: {
     title: 'You are offline',
     severity: 'warning',
@@ -146,6 +154,9 @@ function categoryForStatus(status: number): AppErrorCategory {
 function categoryForNonHttp(shape: ErrorShape): AppErrorCategory {
   const name = shape.name ?? '';
   const message = (shape.message ?? '').toLowerCase();
+  if (/failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|loading (?:css )?chunk .+ failed|unable to preload css/.test(message)) {
+    return 'asset-load';
+  }
   if (
     name === 'AbortError' ||
     message.includes('timeout') ||

@@ -114,10 +114,14 @@ describe('AcpClient', () => {
     const fake = new FakeProcess();
     const client = new AcpClient(fake, config);
     const chunks: string[] = [];
+    const onSession = vi.fn(() => {
+      expect(fake.written.some((request) => request.method === 'session/prompt')).toBe(false);
+    });
     const p = client.runTurn({
       prompt: 'do it',
       cwd: 'C:\\repo',
       onActivity: (t) => chunks.push(t),
+      onSession,
     });
     await flush();
     expect(fake.last('session/new').params).toEqual({ cwd: 'C:\\repo', mcpServers: [] });
@@ -148,6 +152,7 @@ describe('AcpClient', () => {
       usage: { inputTokens: 10, outputTokens: 2 },
     });
     expect(chunks).toEqual(['WA', 'RM']);
+    expect(onSession).toHaveBeenCalledWith('s1');
   });
 
   it('surfaces thoughts and tool calls via onNotice, kept out of the result text', async () => {

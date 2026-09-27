@@ -154,6 +154,10 @@ export function createBugBashGenerateTeam(
         scope: 'internal',
         model: 'auto',
         label: 'Bug bash · Lead analyst',
+        onStart: (id) => {
+          lead.sessionIds = [...new Set([...(lead.sessionIds ?? []), id])];
+          emitLead();
+        },
         timeoutMs: deps.config.generateTimeoutMs,
         signal,
         onActivity: leadActivity,
@@ -219,6 +223,10 @@ export function createBugBashGenerateTeam(
               scope: 'internal',
               model: 'auto',
               label: `Bug bash · ${analyst.title}`,
+              onStart: (id) => {
+                analyst.sessionIds = [...new Set([...(analyst.sessionIds ?? []), id])];
+                sink.agent({ ...analyst });
+              },
               timeoutMs: deps.config.generateTimeoutMs,
               signal,
               onActivity: (line) =>

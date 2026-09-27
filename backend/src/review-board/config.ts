@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import {
-  DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE,
-  DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE,
-} from './review-board-prompt.js';
+  DEFAULT_COMMON_REVIEW_GUIDANCE,
+  DEFAULT_PERSPECTIVE_PROMPTS,
+} from './review-board-perspective-prompts.js';
 
 /** Configuration schema for the Project Review Board module. */
 export const REVIEW_BOARD_NAMESPACE = 'reviewBoard';
@@ -54,21 +54,53 @@ export const reviewBoardConfigSchema = z.object({
    * command-line length limit. Kept safely under the ~32K Windows limit.
    */
   coldInlineMaxChars: z.number().int().positive(),
+
   /**
-   * Prompt template that runs a review through ONE generic perspective/lens.
-   * Editable from Settings → Prompts & Commands. Placeholders (all required for
-   * the run to have full evidence): {{lensName}}, {{lensPurpose}}, {{prNumber}},
-   * {{prTitle}}, {{baseBranch}}, {{filesChanged}}, {{description}},
-   * {{modelDigest}}, {{changedFiles}}.
+   * Section 1 — the shared review guidance every perspective prompt opens with:
+   * how to review (concise, evidence-tied, single-lens) and the language/config
+   * coverage note. Editable from the Review Board agent settings. Placeholders:
+   * {{lensName}}, {{lensPurpose}}, {{prNumber}}, {{prTitle}}, {{baseBranch}},
+   * {{filesChanged}}, {{description}}, {{modelDigest}}, {{changedFiles}}.
    */
-  perspectivePromptTemplate: z.string().min(1),
-  /**
-   * Prompt template for the dedicated Problem ↔ Solution lens — a general,
-   * plain-English "does the solution solve the problem?" judgement. Editable
-   * from Settings → Prompts & Commands. Placeholders: {{prNumber}}, {{prTitle}},
-   * {{filesChanged}}, {{description}}, {{distilledProblem}}, {{solutionDigest}}.
-   */
-  problemSolutionPromptTemplate: z.string().min(1),
+  commonReviewGuidance: z.string().min(1),
+
+  // Section 2 (focus) + Section 3 (issue format) per perspective. Each lens has
+  // its own bespoke pair, editable from the Review Board agent settings, so the
+  // emphasis of each review can be tuned independently. The machine-readable
+  // response envelope is appended by the assembler and is intentionally NOT
+  // configurable, so an edit can never break parsing.
+  problemSolutionFocus: z.string().min(1),
+  problemSolutionIssueFormat: z.string().min(1),
+  architectureFocus: z.string().min(1),
+  architectureIssueFormat: z.string().min(1),
+  impactBlastRadiusFocus: z.string().min(1),
+  impactBlastRadiusIssueFormat: z.string().min(1),
+  codeQualityFocus: z.string().min(1),
+  codeQualityIssueFormat: z.string().min(1),
+  performanceFocus: z.string().min(1),
+  performanceIssueFormat: z.string().min(1),
+  observabilityFocus: z.string().min(1),
+  observabilityIssueFormat: z.string().min(1),
+  configurationFocus: z.string().min(1),
+  configurationIssueFormat: z.string().min(1),
+  apiContractFocus: z.string().min(1),
+  apiContractIssueFormat: z.string().min(1),
+  accessibilityFocus: z.string().min(1),
+  accessibilityIssueFormat: z.string().min(1),
+  backwardCompatibilityFocus: z.string().min(1),
+  backwardCompatibilityIssueFormat: z.string().min(1),
+  dataContractFocus: z.string().min(1),
+  dataContractIssueFormat: z.string().min(1),
+  rollbackSafetyFocus: z.string().min(1),
+  rollbackSafetyIssueFormat: z.string().min(1),
+  deploymentFocus: z.string().min(1),
+  deploymentIssueFormat: z.string().min(1),
+  testingFocus: z.string().min(1),
+  testingIssueFormat: z.string().min(1),
+  securityFocus: z.string().min(1),
+  securityIssueFormat: z.string().min(1),
+  finalDecisionFocus: z.string().min(1),
+  finalDecisionIssueFormat: z.string().min(1),
 });
 
 export type ReviewBoardConfig = z.infer<typeof reviewBoardConfigSchema>;
@@ -83,6 +115,55 @@ export const reviewBoardDefaults: ReviewBoardConfig = {
   transientRetryBackoffMs: 2_000,
   maxFindingsPerPerspective: 6,
   coldInlineMaxChars: 30_000,
-  perspectivePromptTemplate: DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE,
-  problemSolutionPromptTemplate: DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE,
+
+  commonReviewGuidance: DEFAULT_COMMON_REVIEW_GUIDANCE,
+
+  problemSolutionFocus: DEFAULT_PERSPECTIVE_PROMPTS['problem-solution'].focus,
+  problemSolutionIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['problem-solution'].issueFormat,
+  architectureFocus: DEFAULT_PERSPECTIVE_PROMPTS.architecture.focus,
+  architectureIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.architecture.issueFormat,
+  impactBlastRadiusFocus:
+    DEFAULT_PERSPECTIVE_PROMPTS['impact-blast-radius'].focus,
+  impactBlastRadiusIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['impact-blast-radius'].issueFormat,
+  codeQualityFocus: DEFAULT_PERSPECTIVE_PROMPTS['code-quality'].focus,
+  codeQualityIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['code-quality'].issueFormat,
+  performanceFocus: DEFAULT_PERSPECTIVE_PROMPTS.performance.focus,
+  performanceIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.performance.issueFormat,
+  observabilityFocus: DEFAULT_PERSPECTIVE_PROMPTS.observability.focus,
+  observabilityIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.observability.issueFormat,
+  configurationFocus: DEFAULT_PERSPECTIVE_PROMPTS.configuration.focus,
+  configurationIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.configuration.issueFormat,
+  apiContractFocus: DEFAULT_PERSPECTIVE_PROMPTS['api-contract'].focus,
+  apiContractIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['api-contract'].issueFormat,
+  accessibilityFocus: DEFAULT_PERSPECTIVE_PROMPTS.accessibility.focus,
+  accessibilityIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.accessibility.issueFormat,
+  backwardCompatibilityFocus:
+    DEFAULT_PERSPECTIVE_PROMPTS['backward-compatibility'].focus,
+  backwardCompatibilityIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['backward-compatibility'].issueFormat,
+  dataContractFocus: DEFAULT_PERSPECTIVE_PROMPTS['data-contract'].focus,
+  dataContractIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['data-contract'].issueFormat,
+  rollbackSafetyFocus: DEFAULT_PERSPECTIVE_PROMPTS['rollback-safety'].focus,
+  rollbackSafetyIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['rollback-safety'].issueFormat,
+  deploymentFocus: DEFAULT_PERSPECTIVE_PROMPTS.deployment.focus,
+  deploymentIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS.deployment.issueFormat,
+  testingFocus: DEFAULT_PERSPECTIVE_PROMPTS.testing.focus,
+  testingIssueFormat: DEFAULT_PERSPECTIVE_PROMPTS.testing.issueFormat,
+  securityFocus: DEFAULT_PERSPECTIVE_PROMPTS.security.focus,
+  securityIssueFormat: DEFAULT_PERSPECTIVE_PROMPTS.security.issueFormat,
+  finalDecisionFocus: DEFAULT_PERSPECTIVE_PROMPTS['final-decision'].focus,
+  finalDecisionIssueFormat:
+    DEFAULT_PERSPECTIVE_PROMPTS['final-decision'].issueFormat,
 };

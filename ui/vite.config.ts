@@ -15,6 +15,9 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    // Open desktop windows still reference the previous build's hashed chunks.
+    // Preserve those assets when rebuilding the UI while the app is running.
+    emptyOutDir: false,
     rollupOptions: {
       output: {
         // Keep shared React code separate so loading the app does not also

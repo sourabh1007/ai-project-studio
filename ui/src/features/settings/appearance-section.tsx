@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Card, Button } from '../../components/ui.js';
+import { Card, Button, ErrorText } from '../../components/ui.js';
+import { useAppearanceSaveError } from '../../hooks/appearance-storage.js';
 import { useTheme } from '../../hooks/use-theme.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
 import { themeModeLabel, type ThemeMode } from '../../lib/theme.js';
@@ -82,6 +83,7 @@ function Segmented<T extends string>({
 export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
   const { mode, theme, setMode } = useTheme();
   const { prefs, setPrefs, reset } = useUiPreferences();
+  const saveError = useAppearanceSaveError();
   const embeddedHeadingRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
@@ -98,6 +100,7 @@ export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
 
   const body = (
     <>
+      <ErrorText error={saveError ? `Appearance changes could not be saved: ${saveError}` : null} />
       {embedded && <span ref={embeddedHeadingRef} hidden />}
       {embedded && (
         <div className="appearance-embedded-actions">

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import {
   beginActivity,
   clearActivityError,
@@ -6,6 +6,7 @@ import {
   failActivity,
   getActivitySnapshot,
   subscribeActivity,
+  activityDelay,
 } from './activity.js';
 
 // Reset the module-level snapshot before each test by draining it.
@@ -16,6 +17,7 @@ beforeEach(() => {
   }
   clearActivityError();
 });
+afterEach(() => vi.useRealTimers());
 
 describe('activity store', () => {
   it('tracks a begin/end cycle and notifies subscribers', () => {
@@ -25,7 +27,7 @@ describe('activity store', () => {
     });
 
     beginActivity('Loading repos');
-    expect(getActivitySnapshot()).toEqual({
+    expect(getActivitySnapshot()).toMatchObject({
       pending: 1,
       label: 'Loading repos',
       error: null,
@@ -111,5 +113,39 @@ describe('activity store', () => {
     beginActivity('retry');
     expect(getActivitySnapshot().error).toBeNull();
     endActivity();
+  });
+
+  it('tracks the oldest actual pending request across out-of-order completions', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const first = beginActivity('slow read');
+    vi.setSystemTime(2_000);
+    const second = beginActivity('quick read');
+    endActivity(second);
+    expect(getActivitySnapshot()).toMatchObject({
+      pending: 1, label: 'slow read', oldestStartedAt: 1_000,
+    });
+    expect(activityDelay(getActivitySnapshot(), 11_000)).toBe(10);
+    endActivity(first);
+    endActivity(first);
+    expect(activityDelay(getActivitySnapshot(), 21_000)).toBeNull();
+  });
+
+  it('ends failed operations by identity and retains the newer start time', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const first = beginActivity('old');
+    vi.setSystemTime(2_000);
+    const second = beginActivity('new');
+    failActivity('failed', first);
+    expect(getActivitySnapshot().oldestStartedAt).toBe(2_000);
+    endActivity(second);
+  });
+
+  it('does not call fast, clock-shifted, or untimed activity delayed', () => {
+    const activity = { pending: 1, label: 'read', error: null, oldestStartedAt: 1_000 };
+    expect(activityDelay(activity, 10_999)).toBeNull();
+    expect(activityDelay(activity, 500)).toBeNull();
+    expect(activityDelay({ pending: 1, label: 'read', error: null }, 99_000)).toBeNull();
   });
 });

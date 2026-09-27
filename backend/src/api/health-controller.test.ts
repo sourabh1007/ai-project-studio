@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createHealthRoutes } from './health-controller.js';
 import type { HttpRequest, Route } from './http-contract.js';
+import { evaluateResources } from '../resource-pressure/resource-pressure.js';
+import { resourcePressureDefaults } from '../resource-pressure/config.js';
 
 function pick(routes: Route[], method: string, path: string) {
   const route = routes.find((r) => r.method === method && r.path === path);
@@ -15,6 +17,15 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
 }
 
 describe('health-controller', () => {
+  it('adds optional cached resource measurements while preserving liveness', async () => {
+    const resources = evaluateResources(undefined, 1, resourcePressureDefaults);
+    const result = await pick(createHealthRoutes({
+      now: () => 100, startedAt: 0, resources: () => resources,
+    }), 'get', '/health')(req());
+    expect(result).toEqual({
+      status: 200, body: { status: 'ok', uptimeMs: 100, resources },
+    });
+  });
   it('reports ok with computed uptime from injected clock', async () => {
     let clock = 1000;
     const result = await pick(

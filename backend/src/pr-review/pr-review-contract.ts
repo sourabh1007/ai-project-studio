@@ -235,6 +235,10 @@ export interface PrReviewPull {
   number: number;
   title: string;
   url: string;
+  /** Original source branch; absent in reviews saved before this field existed. */
+  sourceBranch?: string;
+  /** Provider-reported author; absent on legacy records, null when unknown. */
+  author?: string | null;
 }
 
 /** Transition timestamps for a review. */
@@ -251,6 +255,14 @@ export interface PrReviewTimestamps {
  * references.
  */
 export interface PrReview {
+  /** Validated AI results, retained independently of browser/view lifetime. */
+  reviewBoardAnalysis?: {
+    headSha: string | null;
+    graphGeneratedAt: string | null;
+    analyses: Record<string, import('../review-board/review-board-contract.js').PerspectiveAnalysis>;
+  };
+  /** Import-triggered Review Board work not yet settled by the app queue. */
+  reviewBoardPending?: boolean;
   /** The PR review feature this artifact belongs to. */
   featureId: string;
   repoId: string;
@@ -268,6 +280,11 @@ export interface PrReview {
   /** Number of files the PR changes versus its base; null until known. */
   changedFiles: number | null;
   timestamps: PrReviewTimestamps;
+}
+
+/** Stable evidence identity; activity and usage timestamps are not revisions. */
+export function reviewEvidenceRevision(review: PrReview): string {
+  return review.changeGraph.generatedAt ?? review.timestamps.updatedAt;
 }
 
 /** A single changed file with its status and isolated per-file patch. */

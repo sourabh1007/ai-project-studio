@@ -5,9 +5,11 @@ import type {
   ReviewBoardService,
 } from '../review-board/review-board-contract.js';
 import type { Route } from './http-contract.js';
+import type { ReviewBoardQueue } from '../review-board/review-board-queue.js';
 
 export interface ReviewBoardControllerDeps {
   reviewBoard: ReviewBoardService;
+  reviewQueue?: ReviewBoardQueue;
 }
 
 /**
@@ -81,6 +83,21 @@ export function createReviewBoardRoutes(
   deps: ReviewBoardControllerDeps,
 ): Route[] {
   return [
+    ...(deps.reviewQueue ? [
+      {
+        method: 'get' as const,
+        path: '/review-board/queue',
+        handler: () => ({ status: 200, body: deps.reviewQueue!.pending() }),
+      },
+      {
+        method: 'post' as const,
+        path: '/features/:featureId/review-board/queue/settle',
+        handler: (req: import('./http-contract.js').HttpRequest) => {
+          deps.reviewQueue!.settle(req.params.featureId);
+          return { status: 200, body: { settled: true } };
+        },
+      },
+    ] : []),
     {
       method: 'get',
       path: '/features/:featureId/review-board',

@@ -72,6 +72,10 @@ export function createApplicationWork() {
   return {
     get accepting(): boolean { return accepting; },
     accepts,
+    /** Read-only producer scopes; deletion callbacks are consumers, not producers. */
+    activeScopes: (): ApplicationWorkScope[] => [...work.keys()]
+      .filter((entry) => !entry.allowBlockedScope)
+      .map((entry) => copyScope(entry.scope)),
     own<T>(
       run: (signal: AbortSignal) => T | Promise<T>,
       scope: ApplicationWorkScope = {},

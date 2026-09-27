@@ -30,9 +30,10 @@ import {
   parseFileExplanation,
   parseProblemStatement,
 } from './pr-review-parser.js';
-import { buildChangeGraph } from './change-graph-builder.js';
+import type { BuiltChangeGraph } from './change-graph-builder.js';
+import type { ChangeGraphWorkInput } from './change-graph-worker-adapter.js';
+import type { BackgroundWorkOptions } from '../kernel/background-work-runner.js';
 import type { ChangeGraphFs } from './change-graph-fs.js';
-import type { LanguageAnalyzerRegistry } from './language-analyzer.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 
 export interface PrReviewServiceDeps {
@@ -48,8 +49,8 @@ export interface PrReviewServiceDeps {
    * an attachment (avoiding `spawn ENAMETOOLONG`) rather than inline argv.
    */
   temporaryPrompts: TemporaryPromptFileFactory;
-  /** The pluggable language analyzers used to build the deterministic change graph. */
-  analyzers: LanguageAnalyzerRegistry;
+  /** Isolated, bounded CPU runner; production must not parse on the API thread. */
+  buildGraph(input: ChangeGraphWorkInput, options: BackgroundWorkOptions): Promise<BuiltChangeGraph>;
   /** Reads worktree files for the deterministic change-graph builder. */
   changeGraphFs: ChangeGraphFs;
   clock: Clock;
@@ -72,11 +73,9 @@ type PrDiffCollectorRun = {
 
 /**
  * Generates and tracks the multi-step AI review of a pull request. When a PR
- * review feature is created the review is started automatically: two
- * independent metasessions distil the problem statement from the PR
- * description, then map the diff into a graph of changed files clustered under
- * the high-level modules they belong to. Each step streams its own progress to
- * the review page.
+ * review feature is created, a metasession distils the problem statement while
+ * an isolated CPU worker maps static references. Each independent step streams
+ * its own progress to the review page.
  */
 export interface PrReviewService {
   /** The review for a feature, or throws when none exists. */
@@ -179,7 +178,7 @@ function appendActivity(activity: string[], line: string): string[] {
 interface NewReviewInput {
   featureId: string;
   repoId: string;
-  pull: { number: number; title: string; url: string; body?: string | null };
+  pull: { number: number; title: string; url: string; sourceBranch?: string; author?: string | null; body?: string | null };
   worktreePath: string;
   headSha: string | null;
   baseBranch: string | null;
@@ -193,6 +192,8 @@ function newReview(input: NewReviewInput, now: string, existingCreatedAt?: strin
       number: input.pull.number,
       title: input.pull.title,
       url: input.pull.url,
+      sourceBranch: input.pull.sourceBranch,
+      author: input.pull.author ?? null,
     },
     worktreePath: input.worktreePath,
     headSha: input.headSha,
@@ -201,6 +202,7 @@ function newReview(input: NewReviewInput, now: string, existingCreatedAt?: strin
     problemStatement: { ...pendingStep(), content: null, sufficient: true },
     changeGraph: { ...pendingStep(), projects: [], nodes: [], edges: [] },
     changedFiles: null,
+    reviewBoardPending: true,
     timestamps: { createdAt: existingCreatedAt ?? now, updatedAt: now },
   };
 }
@@ -219,22 +221,26 @@ const ALL_STEPS: PrReviewStepKey[] = ['problemStatement', 'changeGraph'];
 export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewService {
   const removed = new Set<string>();
   /**
-   * Monotonic generation counter per feature. Every start/refresh/retry bumps it,
-   * and each run captures the value it started with. A run only writes state while
+   * Monotonic generation counter per feature and step. Retries invalidate only
+   * that step, never its independently running sibling.
+   * Each run captures the value it started with and only writes state while
    * its captured generation is still the current one, so a newer "Re-run all" can
    * preempt an older run that has wedged in `generating` — the stale run stops
    * persisting and can never clobber the fresh state or leave the UI stuck.
    */
   const generation = new Map<string, number>();
 
-  const bumpGeneration = (featureId: string): number => {
-    const next = (generation.get(featureId) ?? 0) + 1;
-    generation.set(featureId, next);
+  const graphControllers = new Map<string, AbortController>();
+  const bumpGeneration = (featureId: string, step: PrReviewStepKey): number => {
+    if (step === 'changeGraph') graphControllers.get(featureId)?.abort();
+    const key = `${featureId}:${step}`;
+    const next = (generation.get(key) ?? 0) + 1;
+    generation.set(key, next);
     return next;
   };
 
-  const isCurrentGeneration = (featureId: string, gen: number): boolean =>
-    generation.get(featureId) === gen;
+  const isCurrentGeneration = (featureId: string, step: PrReviewStepKey, gen: number): boolean =>
+    generation.get(`${featureId}:${step}`) === gen;
 
   /** Fills each step's usage from its metasession's recorded telemetry. */
   const enrich = (review: PrReview): PrReview => ({
@@ -264,6 +270,18 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     ...review,
     timestamps: { ...review.timestamps, updatedAt: deps.clock.isoNow() },
   });
+
+  const persistStep = (review: PrReview, step: PrReviewStepKey, gen: number): PrReview => {
+    if (!isCurrentGeneration(review.featureId, step, gen)) return review;
+    const current = deps.reviews.get(review.featureId);
+    if (!current) return review;
+    return persist({
+      ...current,
+      [step]: review[step],
+      changedFiles: step === 'changeGraph' ? review.changedFiles : current.changedFiles,
+      timestamps: review.timestamps,
+    });
+  };
 
   async function runStepAttempt(params: {
     review: PrReview;
@@ -363,9 +381,8 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
   type Live = { review: PrReview };
 
   async function runProblemStatement(live: Live, gen: number): Promise<void> {
-    const { featureId } = live.review;
     const p = (review: PrReview): PrReview =>
-      isCurrentGeneration(featureId, gen) ? persist(review) : review;
+      persistStep(review, 'problemStatement', gen);
     live.review = p(stamp({
       ...live.review,
       problemStatement: {
@@ -445,13 +462,15 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
   /**
    * Builds the change graph deterministically: collect the diff, then run the
    * static reference-graph builder (no metasession, no tools, no AI) and persist
-   * the result. Because there is no model call this step is effectively instant
-   * and can never hang; a filesystem error is the only failure mode.
+   * the result. Parsing runs behind a worker port with a deadline, so even a
+   * pathological source file cannot freeze unrelated API requests.
    */
   async function runChangeGraph(live: Live, gen: number, diff?: PrDiff): Promise<void> {
     const { featureId } = live.review;
+    const controller = new AbortController();
+    graphControllers.set(featureId, controller);
     const p = (review: PrReview): PrReview =>
-      isCurrentGeneration(featureId, gen) ? persist(review) : review;
+      persistStep(review, 'changeGraph', gen);
     live.review = p(stamp({
       ...live.review,
       changeGraph: {
@@ -459,17 +478,36 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
         status: 'generating',
         failure: null,
         metaSessionId: null,
-        activity: [],
+        activity: ['Collecting the pull-request diff'],
       },
     }));
     try {
       const resolved = diff ?? (await collectDiff(live.review));
-      live.review = { ...live.review, changedFiles: resolved.changedFiles };
-      const graph = await buildChangeGraph({
+      controller.signal.throwIfAborted();
+      live.review = p(stamp({ ...live.review, changedFiles: resolved.changedFiles }));
+      let lastProgress = -Infinity;
+      const progress = (message: string, force = false) => {
+        if (!isCurrentGeneration(featureId, 'changeGraph', gen)) return;
+        const now = deps.clock.now().getTime();
+        if (!force && now - lastProgress < 500) return;
+        lastProgress = now;
+        live.review = p(stamp({
+          ...live.review,
+          changeGraph: { ...live.review.changeGraph, activity: [message] },
+        }));
+      };
+      const graph = await deps.buildGraph({
         worktreePath: live.review.worktreePath,
         entries: resolved.entries,
-        registry: deps.analyzers,
-        fs: deps.changeGraphFs,
+      }, {
+        signal: controller.signal,
+        onState: (state) => progress(
+          state === 'queued'
+            ? 'Queued for a background analysis slot; other IDE operations remain available'
+            : 'Building the change graph in a background worker',
+          true,
+        ),
+        onProgress: progress,
       });
       live.review = p(stamp({
         ...live.review,
@@ -494,27 +532,28 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
           failure: { message: errorMessage(error), failedAt: deps.clock.isoNow() },
         },
       }));
+    } finally {
+      if (graphControllers.get(featureId) === controller) graphControllers.delete(featureId);
     }
   }
 
   function runPipeline(review: PrReview): void {
     const featureId = review.featureId;
-    const gen = bumpGeneration(featureId);
+    const problemGen = bumpGeneration(featureId, 'problemStatement');
+    const graphGen = bumpGeneration(featureId, 'changeGraph');
     void (async () => {
       const live: Live = { review };
-      // The two steps are independent metasessions; run them in parallel so
-      // both stream their own live progress at once instead of the change
-      // graph waiting behind the problem statement.
+      // Model work and isolated CPU analysis have independent progress.
       await Promise.all([
-        runProblemStatement(live, gen),
-        runChangeGraph(live, gen),
+        runProblemStatement(live, problemGen),
+        runChangeGraph(live, graphGen),
       ]);
     })();
   }
 
   function runSingle(review: PrReview, step: PrReviewStepKey): void {
     const featureId = review.featureId;
-    const gen = bumpGeneration(featureId);
+    const gen = bumpGeneration(featureId, step);
     void (async () => {
       const live: Live = { review };
       if (step === 'problemStatement') {
@@ -544,7 +583,8 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       removed.delete(input.featureId);
       const now = deps.clock.isoNow();
       const existing = deps.reviews.get(input.featureId);
-      const review = newReview(input, now, existing?.timestamps.createdAt);
+      if (existing) return enrich(existing);
+      const review = newReview(input, now);
       const current = persist(review);
       runPipeline(review);
       return current;
@@ -589,6 +629,9 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       return enrich(existing);
     },
     removeForFeature(featureId) {
+      bumpGeneration(featureId, 'problemStatement');
+      bumpGeneration(featureId, 'changeGraph');
+      graphControllers.delete(featureId);
       removed.add(featureId);
       deps.reviews.delete(featureId);
     },

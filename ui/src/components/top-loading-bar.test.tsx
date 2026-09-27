@@ -19,22 +19,24 @@ describe('TopLoadingBar', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows the current activity label while busy', () => {
-    render(<TopLoadingBar />);
+  it('shows only a decorative progress track while busy', () => {
+    const { container } = render(<TopLoadingBar />);
     act(() => beginActivity('Loading PR review'));
-    const bar = screen.getByRole('status');
+    const bar = container.firstChild;
     expect(bar).toHaveClass('is-busy');
-    expect(screen.getByText('Loading PR review')).toBeInTheDocument();
+    expect(bar).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByText('Loading PR review')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
     act(() => endActivity());
   });
 
-  it('surfaces an error state with the message', () => {
-    render(<TopLoadingBar />);
+  it('shows error color without repeating the bottom status message', () => {
+    const { container } = render(<TopLoadingBar />);
     act(() => beginActivity('Fetching'));
     act(() => failActivity('Network down'));
-    const bar = screen.getByRole('status');
+    const bar = container.firstChild;
     expect(bar).toHaveClass('is-error');
-    expect(screen.getByText('Network down')).toBeInTheDocument();
+    expect(screen.queryByText('Network down')).toBeNull();
     act(() => clearActivityError());
   });
 

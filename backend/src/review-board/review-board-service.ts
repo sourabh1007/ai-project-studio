@@ -17,6 +17,7 @@ import type { EventBus } from '../kernel/event-bus.js';
 import { ProviderError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
+import { reviewEvidenceRevision } from '../pr-review/pr-review-contract.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 import type { ReviewBoardConfig } from './config.js';
 import { discoverProjectModel } from './project-discovery.js';
@@ -26,13 +27,18 @@ import {
   buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
-import { buildAgentChatPrompt, buildFindingsPrompt, buildPerspectivePrompt, buildProblemSolutionPrompt, buildSolutionDigest, PROBLEM_SOLUTION_PERSPECTIVE_ID, type SolutionNode } from './review-board-prompt.js';
+import { buildAgentChatPrompt, buildCommonPromptVars, buildFindingsPrompt, buildSolutionDigest, PROBLEM_SOLUTION_PERSPECTIVE_ID, type SolutionNode } from './review-board-prompt.js';
+import {
+  buildReviewPrompt,
+  PERSPECTIVE_CONFIG_KEYS,
+  type ReviewPerspectiveId,
+} from './review-board-perspective-prompts.js';
 import { buildPerspectiveEvidenceFloor, buildProblemSolutionFloor, buildSolutionSummary, usableProblemStatement } from './review-board-evidence.js';
 import {
   capPerspectiveFindings,
   parseAiFindings,
   parseChatReply,
-  parsePerspectiveAnalysis,
+  parseValidatedPerspectiveAnalysis,
 } from './review-board-parser.js';
 import type {
   DiscoveryInput,
@@ -52,6 +58,7 @@ import type {
 export interface ReviewBoardReviewsPort {
   /** The review for a feature, throwing when none exists. */
   get(featureId: string): PrReview;
+  save?(review: PrReview): void;
 }
 
 /** The instruction paired with the attachment-delivered prompt (cold path). */
@@ -85,6 +92,7 @@ export interface ReviewBoardServiceDeps {
 
 /** Optional live-progress hooks forwarded to the AI runner for a prompt. */
 interface PromptHooks {
+  perspectiveId?: string;
   /** Invoked with the metasession id the moment the run launches. */
   onStart?: (sessionId: string) => void;
   /** Invoked with each concise activity line the run produces. */
@@ -166,9 +174,47 @@ function finalizeAnalyzedPerspective(
   return { ...perspective, status: 'approved', risk: 'low' };
 }
 
+export function requireReviewEvidence(review: PrReview): PrReview {
+  if (review.changeGraph.status !== 'ready') {
+    throw new ValidationError(
+      `Review Board analysis requires a ready change graph (currently ${review.changeGraph.status}). ${review.changeGraph.failure?.message ?? 'Wait for graph generation to finish.'}`,
+      { field: 'changeGraph' },
+    );
+  }
+  return review;
+}
+
 export function createReviewBoardService(
   deps: ReviewBoardServiceDeps,
 ): ReviewBoardService {
+  const pendingAnalyses = new Map<string, Promise<PerspectiveAnalysis>>();
+  function savedAnalyses(review: PrReview): Record<string, PerspectiveAnalysis> {
+    const saved = review.reviewBoardAnalysis;
+    return saved?.headSha === review.headSha &&
+      saved.graphGeneratedAt === review.changeGraph.generatedAt ? saved.analyses : {};
+  }
+
+  function saveAnalysis(review: PrReview, analysis: PerspectiveAnalysis): PerspectiveAnalysis {
+    const current = deps.reviews.get(review.featureId);
+    if (current.headSha !== review.headSha ||
+        current.changeGraph.generatedAt !== review.changeGraph.generatedAt ||
+        current.changeGraph.status !== 'ready') {
+      throw new ValidationError('Review evidence changed during analysis. Reset explicitly to review the latest commit.');
+    }
+    deps.reviews.save?.({
+      ...current,
+      reviewBoardAnalysis: {
+        headSha: current.headSha,
+        graphGeneratedAt: current.changeGraph.generatedAt,
+        analyses: { ...savedAnalyses(current), [analysis.perspectiveId]: analysis },
+      },
+    });
+    return analysis;
+  }
+  function readyReview(featureId: string): PrReview {
+    return requireReviewEvidence(deps.reviews.get(featureId));
+  }
+
   /** Build the deterministic board input from a review (shared by all paths). */
   function toBuildInput(review: PrReview): BuildBoardInput {
     const discovery = toDiscoveryInput(review);
@@ -193,7 +239,7 @@ export function createReviewBoardService(
         blastRadiusMediumThreshold: deps.config.blastRadiusMediumThreshold,
         blastRadiusHighThreshold: deps.config.blastRadiusHighThreshold,
       },
-      reviewUpdatedAt: review.timestamps.updatedAt,
+      reviewUpdatedAt: reviewEvidenceRevision(review),
       generatedAt: deps.clock.isoNow(),
     };
   }
@@ -217,7 +263,7 @@ export function createReviewBoardService(
         noTools: true,
         toolsOptional: true,
         forceCold,
-        label: 'Review board',
+        label: hooks?.perspectiveId ? `Review board · ${hooks.perspectiveId}` : 'Review board',
         timeoutMs: deps.config.stepTimeoutMs,
         signal,
         onStart: hooks?.onStart,
@@ -238,7 +284,8 @@ export function createReviewBoardService(
         scope: 'internal',
         noTools: true,
         toolsOptional: true,
-        label: 'Review board',
+        forceCold,
+        label: hooks?.perspectiveId ? `Review board · ${hooks.perspectiveId}` : 'Review board',
         timeoutMs: deps.config.stepTimeoutMs,
         signal,
         onStart: hooks?.onStart,
@@ -259,7 +306,8 @@ export function createReviewBoardService(
    * fails after dispatch is deliberately not re-routed cold, so one unhealthy
    * warm session failed every perspective of a board pass identically.
    *
-   * Now every failure except a caller abort is retried, and the final attempt
+   * Every failure, including response validation, except a caller abort is
+   * retried, and the final attempt
    * is forced onto the cold path so it cannot land on the same broken shared
    * session. What still fails is raised as a {@link ProviderError} carrying the
    * real provider message, so the UI can say what actually went wrong.
@@ -270,12 +318,13 @@ export function createReviewBoardService(
    * the single forced-cold attempt below — the escape hatch for a broken warm
    * session — instead of amplifying provider load with repeated 120s waits.
    */
-  async function runPrompt(
+  async function runPrompt<T>(
     review: PrReview,
     prompt: string,
+    parse: (text: string) => T,
     hooks?: PromptHooks,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<T> {
     let lastError: unknown;
     for (
       let retry = 0;
@@ -283,7 +332,7 @@ export function createReviewBoardService(
       retry += 1
     ) {
       try {
-        return await runPromptAttempt(review, prompt, hooks, signal);
+        return parse(await runPromptAttempt(review, prompt, hooks, signal));
       } catch (error) {
         if (signal?.aborted) throw error;
         lastError = error;
@@ -294,7 +343,7 @@ export function createReviewBoardService(
       }
     }
     try {
-      return await runPromptAttempt(review, prompt, hooks, signal, true);
+      return parse(await runPromptAttempt(review, prompt, hooks, signal, true));
     } catch (error) {
       if (signal?.aborted) throw error;
       const cause = errorMessage(error) || errorMessage(lastError);
@@ -348,11 +397,22 @@ export function createReviewBoardService(
 
   const service: ReviewBoardService = {
     get(featureId: string): ReviewBoard {
-      return buildEmptyBoard(toBuildInput(deps.reviews.get(featureId)));
+      const review = deps.reviews.get(featureId);
+      const analyses = savedAnalyses(review);
+      const input = toBuildInput(review);
+      const empty = buildEmptyBoard(input);
+      const board = assembleBoard(input,
+        Object.values(analyses).flatMap((analysis) => analysis.perspective.findings));
+      return {
+        ...board,
+        analyses,
+        perspectives: empty.perspectives.map((perspective) =>
+          analyses[perspective.id]?.perspective ?? perspective),
+      };
     },
 
     async analyze(featureId: string, signal?: AbortSignal): Promise<ReviewBoard> {
-      const review = deps.reviews.get(featureId);
+      const review = readyReview(featureId);
       const input = toBuildInput(review);
       const deterministic = buildDeterministicFindings(input);
       const board = assembleBoard(input, deterministic);
@@ -362,7 +422,7 @@ export function createReviewBoardService(
         changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
       });
-      const text = await runPrompt(review, prompt, undefined, signal);
+      const text = await runPrompt(review, prompt, (text) => text, undefined, signal);
       const aiFindings = capPerspectiveFindings(
         parseAiFindings(
           text,
@@ -381,7 +441,13 @@ export function createReviewBoardService(
       perspectiveId: string,
       signal?: AbortSignal,
     ): Promise<PerspectiveAnalysis> {
-      const review = deps.reviews.get(featureId);
+      const review = readyReview(featureId);
+      const saved = savedAnalyses(review);
+      if (Object.hasOwn(saved, perspectiveId)) return saved[perspectiveId];
+      const key = JSON.stringify([featureId, perspectiveId, review.headSha, review.changeGraph.generatedAt]);
+      const pending = pendingAnalyses.get(key);
+      if (pending) return pending;
+      const operation = (async () => {
       const input = toBuildInput(review);
       const deterministic = buildDeterministicFindings(input);
       const board = assembleBoard(input, deterministic);
@@ -395,33 +461,35 @@ export function createReviewBoardService(
         review.problemStatement.content,
         review.problemStatement.sufficient,
       );
-      const prompt = perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID
-        ? buildProblemSolutionPrompt({
-            board,
-            perspective,
-            description: review.description,
-            problemStatement: usableProblem,
-            problemSufficient: usableProblem !== null,
-            solutionDigest: buildSolutionDigest({
-              title: review.pull.title,
-              nodes: toSolutionNodes(review),
-              maxChars: Math.min(deps.config.maxContextChars, 10_000),
-            }),
-            config: {
-              maxContextChars: deps.config.maxContextChars,
-              template: deps.config.problemSolutionPromptTemplate,
-            },
-          })
-        : buildPerspectivePrompt({
-            board,
-            perspective,
-            description: review.description,
-            changedPaths: changedPathsOf(input),
-            config: {
-              maxContextChars: deps.config.maxContextChars,
-              template: deps.config.perspectivePromptTemplate,
-            },
-          });
+      const keys =
+        PERSPECTIVE_CONFIG_KEYS[perspectiveId as ReviewPerspectiveId];
+      const vars = buildCommonPromptVars({
+        board,
+        perspective,
+        description: review.description,
+        changedPaths: changedPathsOf(input),
+        maxContextChars: deps.config.maxContextChars,
+      });
+      if (perspectiveId === PROBLEM_SOLUTION_PERSPECTIVE_ID) {
+        vars.distilledProblem =
+          usableProblem ??
+          '(no self-contained problem statement could be distilled from the ' +
+            'description — derive the problem from the description above and ' +
+            'any linked work item it references)';
+        vars.solutionDigest = buildSolutionDigest({
+          title: review.pull.title,
+          nodes: toSolutionNodes(review),
+          maxChars: Math.min(deps.config.maxContextChars, 10_000),
+        });
+      }
+      const prompt = buildReviewPrompt({
+        common: deps.config.commonReviewGuidance,
+        focus: deps.config[keys.focus as keyof ReviewBoardConfig] as string,
+        issueFormat: deps.config[
+          keys.issueFormat as keyof ReviewBoardConfig
+        ] as string,
+        vars,
+      });
       // Stream what the reviewer is doing for this lens in real time. A fresh
       // metasession id (new run or self-healing attempt) lets the client reset
       // the accumulated activity for this perspective.
@@ -434,14 +502,16 @@ export function createReviewBoardService(
           line,
         });
       };
-      const text = await runPrompt(review, prompt, {
+      const parsed = await runPrompt(review, prompt,
+        (text) => parseValidatedPerspectiveAnalysis(text, perspectiveId), {
+        perspectiveId,
         onStart: (id) => {
           sessionId = id;
           emit('Reviewer session started — reading the change evidence…');
         },
         onActivity: (line) => emit(line),
       }, signal);
-      const parsed = parsePerspectiveAnalysis(text, perspectiveId);
+      signal?.throwIfAborted();
       const aiFindings = capPerspectiveFindings(
         parsed.findings,
         deps.config.maxFindingsPerPerspective,
@@ -457,7 +527,7 @@ export function createReviewBoardService(
       // A skipped lens was judged not applicable, so it carries no
       // investigation floor — return the model's (possibly empty) detail as-is.
       if (parsed.skipped) {
-        return {
+        return saveAnalysis(review, {
           perspectiveId,
           perspective: finalized,
           skipped: true,
@@ -465,9 +535,9 @@ export function createReviewBoardService(
           summary: parsed.summary,
           rationale: parsed.rationale,
           checks: parsed.checks,
-        };
+        });
       }
-      // Guarantee investigation detail for every analysed lens. The headless
+      // Supplement only a validated model review. The headless
       // reviewer sometimes returns a verdict without the rich summary/rationale/
       // checks the UI needs; rather than degrade to a generic "nothing to see"
       // message, layer a deterministic, evidence-grounded floor (built from the
@@ -485,7 +555,7 @@ export function createReviewBoardService(
             changedPaths: changedPathsOf(input),
             model: input.model,
           });
-      return {
+      return saveAnalysis(review, {
         perspectiveId,
         perspective: finalized,
         skipped: false,
@@ -494,7 +564,14 @@ export function createReviewBoardService(
         rationale:
           parsed.rationale.length > 0 ? parsed.rationale : floor.rationale,
         checks: parsed.checks.length > 0 ? parsed.checks : floor.checks,
-      };
+      });
+      })();
+      pendingAnalyses.set(key, operation);
+      try {
+        return await operation;
+      } finally {
+        pendingAnalyses.delete(key);
+      }
     },
 
     async analyzeAll(
@@ -505,8 +582,7 @@ export function createReviewBoardService(
       // Resolve (and validate) the review up front so a missing PR review
       // surfaces as a thrown error before we start streaming, matching
       // analyzePerspective. The board also gives us the canonical lens ids.
-      const perspectiveIds = service
-        .get(featureId)
+      const perspectiveIds = buildEmptyBoard(toBuildInput(readyReview(featureId)))
         .perspectives.map((p) => p.id);
       await runReserved(
         perspectiveIds,
@@ -577,7 +653,8 @@ export function createReviewBoardService(
         messages,
         config: { maxContextChars: deps.config.maxContextChars },
       });
-      const text = await runPrompt(review, prompt, undefined, signal);
+      const text = await runPrompt(review, prompt, (text) => text,
+        { perspectiveId: perspective?.id }, signal);
       return parseChatReply(text, perspective?.id ?? null);
     },
   };

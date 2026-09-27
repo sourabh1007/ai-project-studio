@@ -26,6 +26,8 @@ interface SessionRow {
   group_id: string | null;
   order_index: number;
   seq: number | null;
+  worktree_path: string | null;
+  branch: string | null;
 }
 
 function mapSession(row: SessionRow): Session {
@@ -48,6 +50,8 @@ function mapSession(row: SessionRow): Session {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     exitCode: row.exit_code,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
   };
 }
 
@@ -69,8 +73,8 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
     `INSERT INTO sessions
       (id, feature_id, provider, requested_model, resolved_model, status, kind,
        scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name,
-       group_id, order_index, seq)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       group_id, order_index, worktree_path, branch, seq)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        (SELECT COALESCE(MAX(seq), 0) + 1 FROM sessions))
      ON CONFLICT(id) DO UPDATE SET
        feature_id = excluded.feature_id,
@@ -103,6 +107,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
   );
   const selectAll = db.prepare('SELECT * FROM sessions ORDER BY created_at, id');
   const updateName = db.prepare('UPDATE sessions SET name = ? WHERE id = ?');
+  const updateWorktree = db.prepare(
+    'UPDATE sessions SET worktree_path = ?, branch = ? WHERE id = ?',
+  );
   const updatePlacement = db.prepare(
     'UPDATE sessions SET feature_id = ?, group_id = ?, order_index = ? WHERE id = ?',
   );
@@ -129,6 +136,8 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
         textOrNull(session.name),
         textOrNull(session.groupId),
         intOrNull(session.orderIndex) ?? 0,
+        textOrNull(session.worktreePath),
+        textOrNull(session.branch),
       );
     },
     get(id) {
@@ -146,6 +155,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
     },
     rename(id, name) {
       updateName.run(textOrNull(name), id);
+    },
+    setWorktree(id, worktree) {
+      updateWorktree.run(worktree.path, worktree.branch, id);
     },
     updatePlacement(id, placement) {
       updatePlacement.run(

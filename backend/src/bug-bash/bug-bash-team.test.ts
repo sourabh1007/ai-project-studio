@@ -82,6 +82,8 @@ function makeTeam(handlers: {
     config: { ...bugBashDefaults, maxTesters: handlers.maxTesters ?? 4 },
     ai: {
       runDetailed: async (req: MetaRequest): Promise<MetaRunResult> => {
+        req.onStart?.(`session-${req.label}`);
+        req.onStart?.(`session-${req.label}`);
         req.onActivity?.(`activity for ${req.label}`);
         calls.push(req.label ?? '');
         const label = req.label ?? '';

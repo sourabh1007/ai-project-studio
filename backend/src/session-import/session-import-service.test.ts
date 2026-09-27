@@ -56,6 +56,7 @@ function fakeSessions(seed: Session[] = []) {
         map.set(id, { ...s, name });
       }
     },
+    setWorktree: () => {},
   };
   return { repo, map };
 }

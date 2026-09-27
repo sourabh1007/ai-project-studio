@@ -8,6 +8,7 @@ interface ErrorBoundaryProps {
   fallback?: (error: Error, reset: () => void) => ReactNode;
   /** Human label used in the default fallback (e.g. "PR Review"). */
   label?: string;
+  reloadPage?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -48,15 +49,20 @@ export class ErrorBoundary extends Component<
         return this.props.fallback(error, this.reset);
       }
       const model = classifyError(error);
+      const needsReload = model.category === 'asset-load';
       return (
         <div className="error-boundary" role="alert">
           <h3>
             {model.title}
             {this.props.label ? ` in ${this.props.label}` : ''}
           </h3>
-          <p className="error-boundary-message">{error.message}</p>
-          <button type="button" className="error-boundary-retry" onClick={this.reset}>
-            Try again
+          <p className="error-boundary-message">{needsReload ? model.message : error.message}</p>
+          <button
+            type="button"
+            className="error-boundary-retry"
+            onClick={needsReload ? this.props.reloadPage ?? (() => window.location.reload()) : this.reset}
+          >
+            {needsReload ? 'Reload app' : 'Try again'}
           </button>
         </div>
       );

@@ -1,4 +1,6 @@
-import { ProviderError } from '../kernel/error-types.js';
+import { ProviderError, ValidationError } from '../kernel/error-types.js';
+import { assertExpectedHeadSha } from '../pr-review/pr-comment-location.js';
+import { pullUrl } from './azure-pr-description.js';
 import type {
   AzureHttpGetter,
   AzureHttpPatcher,
@@ -200,7 +202,19 @@ export function createAzureCommentsGateway(
       return parseThreads(res.body);
     },
     async add(input) {
+      if (input.expectedHeadSha !== undefined) assertExpectedHeadSha(input.expectedHeadSha);
       const token = await authorize();
+      if (input.expectedHeadSha !== undefined) {
+        const pull = await deps.httpGet(pullUrl(target), token);
+        if (pull.status !== 200) {
+          throw new ProviderError(`Failed to verify Azure DevOps PR head (HTTP ${pull.status})`);
+        }
+        const head = (pull.body as { lastMergeSourceCommit?: { commitId?: unknown } } | null)
+          ?.lastMergeSourceCommit?.commitId;
+        if (head !== input.expectedHeadSha) {
+          throw new ValidationError('The live Azure DevOps PR head has changed or is unavailable. Refresh the Review Board before posting.');
+        }
+      }
       const res = await deps.httpPost(
         threadsUrl(target),
         token,

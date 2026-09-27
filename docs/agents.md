@@ -39,6 +39,33 @@ An agent:
 4. **Usage roll-up** — every AI turn is tagged with the manifest's `usageLabel`,
    so the Agents view can show average credits per run.
 
+### Live AI credits
+
+Agent AIC comes from the vendor's `assistant_usage_events.total_nano_aiu`,
+divided by 1,000,000,000; tokens and model rates are not substituted for billing.
+Warm ACP publishes its provider session identity before prompting so charges can
+be attributed while it runs, including attempts that fail. A bounded background
+scan repairs late usage and replaces persisted operation snapshots rather than
+adding a repeated capture. Warm usage is also saved for the IDE usage summary.
+`meta.usage.updated` invalidates mounted agent meters; polling and reconnects
+recover missed updates.
+
+Review Board labels retain a perspective ID (`Review board · <perspective>`).
+Older board operations without that attribution remain in the board total, not
+invented per-perspective totals. New Task and Bug Bash windows retain session
+IDs for their agent meters. Their summary meter is explicitly feature-wide
+across attachments; historical windows without identities remain unavailable.
+Unknown AIC is not zero, a partly captured total is marked partial, and charged
+retries are counted once per operation.
+
+UI consumers can call `useAgentUsage(featureIdOrIds, usageLabel, perspectiveId,
+live)` with their existing `LiveState`. This opens no additional SSE connection.
+The hook returns the measured total, `byFeature` totals, operation `snapshots`,
+loading/error flags, and counts of unknown usage. A bulk tracker passes its
+feature IDs once and renders `byFeature` for PR rows and the combined result for
+the batch. Use `aggregateAgentUsage(snapshots, usageLabel, perspectiveId)` for
+perspective meters and `AgentUsageValue` to preserve unavailable/partial labels.
+
 ## Where it lives
 
 | Piece | Path |

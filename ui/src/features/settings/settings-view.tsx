@@ -559,7 +559,7 @@ const TABS: TabDef[] = [
   { id: 'config', label: 'Configuration' },
 ];
 
-export function SettingsView() {
+export function SettingsView({ worktreesRequest }: { worktreesRequest?: number } = {}) {
   const api = useApi();
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
@@ -577,6 +577,15 @@ export function SettingsView() {
   const [restartError, setRestartError] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
+  useEffect(() => {
+    if (worktreesRequest !== undefined) setTab('diagnostics');
+  }, [worktreesRequest]);
+  useEffect(() => {
+    if (worktreesRequest === undefined || tab !== 'diagnostics') return;
+    const timer = requestAnimationFrame(() =>
+      document.getElementById('settings-worktrees-target')?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    return () => cancelAnimationFrame(timer);
+  }, [worktreesRequest, tab]);
 
   // Deep-link into a specific prompt entry: either from a fresh mount (another
   // view stashed the anchor) or from a live event while Settings is open.
@@ -948,7 +957,7 @@ export function SettingsView() {
       )}
 
       {tab === 'diagnostics' && (
-        <SettingsPage searchLabel="Search Diagnostics…">
+        <SettingsPage key={worktreesRequest} searchLabel="Search Diagnostics…">
           <CollapsibleCard
             id="diagnostics-logs"
             title="Logs & diagnostics"
@@ -999,14 +1008,15 @@ export function SettingsView() {
           >
             <RetainedImagesSection bridge={bridge?.attachments} embedded />
           </CollapsibleCard>
-          <CollapsibleCard
+          <div id="settings-worktrees-target"><CollapsibleCard
             id="diagnostics-worktrees"
             title="Review worktrees"
             subtitle="Inspect and clean up Review Board worktrees."
             keywords={['worktree', 'review', 'git', 'cleanup']}
+            revealRequest={worktreesRequest}
           >
             <WorktreesSection embedded />
-          </CollapsibleCard>
+          </CollapsibleCard></div>
           <CollapsibleCard
             id="diagnostics-advanced"
             title="Advanced"

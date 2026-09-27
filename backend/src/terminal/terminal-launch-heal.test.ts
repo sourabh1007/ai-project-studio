@@ -37,6 +37,17 @@ describe('healErrorText', () => {
 });
 
 describe('healTerminalLaunch', () => {
+  it('does not recreate or replace a repository cwd when repair is forbidden', async () => {
+    const fs = { dirExists: vi.fn(() => false), ensureDir: vi.fn(() => true) };
+    const launch = vi.fn(async () => { throw new Error('cwd vanished'); });
+    const { emit, lines } = collector();
+    await expect(launchWithSelfHealing({
+      launch, fs, emit, resolvedCwd: 'C:\\isolated', fallbackCwd: 'C:\\shared', allowCwdRepair: false,
+    })).rejects.toThrow('cwd vanished');
+    expect(launch).toHaveBeenCalledOnce();
+    expect(fs.ensureDir).not.toHaveBeenCalled();
+    expect(lines.at(-1)?.message).toContain('cwd vanished');
+  });
   it('returns null and stays silent when the working directory exists', () => {
     const { lines, emit } = collector();
     const decision = healTerminalLaunch({

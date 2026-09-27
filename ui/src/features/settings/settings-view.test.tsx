@@ -95,6 +95,16 @@ function configWithSchema(
 }
 
 describe('SettingsView drafts', () => {
+  it('deep-links directly into diagnostics and reveals the Worktree list even when previously collapsed', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    window.localStorage.setItem('cw-settings-open:diagnostics-worktrees', 'false');
+    const client = { getConfig: vi.fn().mockResolvedValue(config({})), getEnvironmentSummary: vi.fn().mockResolvedValue({}) };
+    render(<ApiProvider value={client as unknown as ApiClient}><SettingsView worktreesRequest={1} /></ApiProvider>);
+    expect(screen.getByRole('tab', { name: 'Diagnostics' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Review worktrees/ })).toHaveAttribute('aria-expanded', 'true'));
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+  });
   it('mounts manual retained-image management in Diagnostics and refreshes when reopened', async () => {
     const list = vi.fn().mockResolvedValue({
       status: 'ready', items: [], totalBytes: 0,

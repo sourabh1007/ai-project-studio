@@ -33,7 +33,11 @@ import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
-import { createHealthRoutes } from './health-controller.js';
+import { createHealthRoutes, type HealthControllerDeps } from './health-controller.js';
+import { createResourcesRoutes } from './resources-controller.js';
+import type { ResourcesService } from '../resources/resources-contract.js';
+import { createActiveSessionsRoutes } from './active-sessions-controller.js';
+import type { ActiveSessionsService } from '../active-sessions/active-sessions-contract.js';
 import { createIdentityRoutes } from './identity-controller.js';
 import type { GithubAuthStatus } from '../github-auth/github-auth-service.js';
 import type {
@@ -88,6 +92,7 @@ import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import { createReviewBoardRoutes } from './review-board-controller.js';
 import type { ReviewBoardService } from '../review-board/review-board-contract.js';
+import type { ReviewBoardQueue } from '../review-board/review-board-queue.js';
 import { createNewTaskRoutes } from './new-task-controller.js';
 import type { NewTaskService } from '../new-task/new-task-contract.js';
 import { createBugBashRoutes } from './bug-bash-controller.js';
@@ -116,6 +121,10 @@ import type { FeatureTasksRepo } from '../feature-tasks/feature-tasks-repo-port.
 import type { FeatureGroupsRepo } from '../feature-tree/feature-groups-repo-port.js';
 
 export interface ApiRoutesDeps {
+  resources?: HealthControllerDeps['resources'];
+  appResources?: ResourcesService;
+  /** Optional read-only active-session debugger supplied by the composition root. */
+  activeSessions?: ActiveSessionsService;
   features: FeatureService;
   admin: WorkspaceAdmin;
   launcher: SessionLauncher;
@@ -232,6 +241,7 @@ export interface ApiRoutesDeps {
   prReviews: PrReviewService;
   /** Derived, evidence-based Project Review Board for a review feature. */
   reviewBoard: ReviewBoardService;
+  reviewQueue?: ReviewBoardQueue;
   /** The New Task agent: plan → implement → open PR for a feature's repo. */
   newTask: NewTaskService;
   /** The Bug Bash agent: generate → run edge-case scenarios for a feature. */
@@ -267,7 +277,9 @@ export interface ApiRoutesDeps {
 /** Assembles the full route table from every controller. */
 export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
   return applyRouteOwnership([
-    ...createHealthRoutes(),
+    ...createHealthRoutes({ resources: deps.resources }),
+    ...createResourcesRoutes(deps.appResources),
+    ...(deps.activeSessions ? createActiveSessionsRoutes(deps.activeSessions) : []),
     ...createIdentityRoutes(),
     ...createFeatureRoutes({ features: deps.features, admin: deps.admin }),
     ...createSessionRoutes({
@@ -288,7 +300,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       bootstrap: deps.sessionBootstrap,
     }),
     ...createProviderRoutes({ registry: deps.providers }),
-    ...createMcpRoutes({ mcp: deps.mcp }),
+    ...createMcpRoutes({ mcp: deps.mcp, controlToken: deps.controlToken }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
     ...createMcpUsageRoutes({
@@ -320,7 +332,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prDescriptions: deps.prDescriptions,
       prFeatures: deps.prFeatures,
     }),
-    ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard }),
+    ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard, reviewQueue: deps.reviewQueue }),
     ...createNewTaskRoutes({ newTask: deps.newTask }),
     ...createBugBashRoutes({ bugBash: deps.bugBash }),
     ...createAgentRoutes({ agents: deps.agents }),

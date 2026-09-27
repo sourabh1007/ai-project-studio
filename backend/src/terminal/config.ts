@@ -19,6 +19,8 @@ export const terminalConfigSchema = z.object({
    * individual input frame, and browser-side unacknowledged input bytes.
    */
   bootstrapInputBufferBytes: z.number().int().positive(),
+  /** Deadline for checkout preparation and interactive process launch. */
+  launchTimeoutMs: z.number().int().positive(),
   /**
    * Max bytes of the ANSI-stripped transcript retained per session for
    * persistence / summarization. Bounds heap growth for long-lived interactive
@@ -83,6 +85,7 @@ export const terminalDefaults: TerminalConfig = {
   defaultRows: 30,
   scrollbackBytes: 262144,
   bootstrapInputBufferBytes: 65536,
+  launchTimeoutMs: 660_000,
   transcriptBytes: 1048576,
   instructionSeedSuffix: '\r',
   instructionSeedReadyPattern: '\\?\\s*help|\\bcommands\\b',

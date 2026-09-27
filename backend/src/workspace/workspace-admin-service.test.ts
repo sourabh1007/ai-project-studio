@@ -4,17 +4,22 @@ import { NotFoundError } from '../kernel/error-types.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { Session } from '../session/session-contract.js';
 
-function feature(id = 'f1'): Feature {
+function feature(id = 'f1', parentFeatureId: string | null = null): Feature {
   return {
     id,
     name: 'Login',
     description: 'Build login',
     createdAt: '2025-01-01T00:00:00.000Z',
     summary: null,
+    parentFeatureId,
   };
 }
 
-function session(id: string, featureId = 'f1'): Session {
+function session(
+  id: string,
+  featureId = 'f1',
+  extra: Partial<Session> = {},
+): Session {
   return {
     id,
     featureId,
@@ -30,6 +35,7 @@ function session(id: string, featureId = 'f1'): Session {
     startedAt: null,
     endedAt: null,
     exitCode: null,
+    ...extra,
   };
 }
 
@@ -40,6 +46,10 @@ function harness(
     withContext?: boolean;
     withWorktrees?: boolean;
     worktreeFails?: boolean;
+    reviewWorktreePath?: string;
+    withSessionWorktrees?: boolean;
+    sessionWorktreeFails?: boolean;
+    withReadBranch?: boolean;
     withoutLiveUsage?: boolean;
     withCaptureCleanup?: boolean;
     withMetaUsageCleanup?: boolean;
@@ -50,11 +60,15 @@ function harness(
     withOwnedSubagentCleanup?: boolean;
     withOwnedAgentCleanup?: boolean;
     withRetention?: boolean;
+    childFeatures?: Feature[];
+    withoutBackground?: boolean;
+    featureCheckoutPath?: string;
     quiescence?: WorkspaceQuiescence;
   } = {},
 ) {
   const calls: string[] = [];
   const retained: unknown[] = [];
+  const deferred: Array<() => Promise<void>> = [];
   const known = new Map<string, Session>(
     featureSessions.map((s) => [s.id, s]),
   );
@@ -69,8 +83,9 @@ function harness(
           throw new NotFoundError(`Unknown feature: ${id}`);
         }
         calls.push(`feature.get:${id}`);
-        return feature(id);
+        return { ...feature(id), checkoutPath: options.featureCheckoutPath };
       },
+      list: () => [feature('f1'), ...(options.childFeatures ?? [])],
       rename: (id, name) => {
         calls.push(`feature.rename:${id}:${name}`);
         return { ...feature(id), name };
@@ -149,12 +164,29 @@ function harness(
       : undefined,
     worktrees: options.withWorktrees
       ? {
+          pathForFeature: () => options.reviewWorktreePath ?? null,
           removeForFeature: async (id) => {
             calls.push(`worktrees.removeForFeature:${id}`);
             if (options.worktreeFails) {
               throw new Error('worktree gone');
             }
           },
+        }
+      : undefined,
+    sessionWorktrees: options.withSessionWorktrees
+      ? {
+          remove: async (path) => {
+            calls.push(`sessionWorktrees.remove:${path}`);
+            if (options.sessionWorktreeFails) {
+              throw new Error('session worktree gone');
+            }
+          },
+        }
+      : undefined,
+    readBranch: options.withReadBranch
+      ? async (path) => {
+          calls.push(`readBranch:${path}`);
+          return `branch-of:${path}`;
         }
       : undefined,
     sharedContext: options.withContext
@@ -188,8 +220,18 @@ function harness(
     clock: options.withRetention
       ? { isoNow: () => '2026-02-02T00:00:00.000Z' }
       : undefined,
+    background: options.withoutBackground
+      ? undefined
+      : (task) => {
+          deferred.push(task);
+        },
   });
-  return { admin, calls, retained };
+  const flush = async (): Promise<void> => {
+    for (const task of deferred.splice(0)) {
+      await task();
+    }
+  };
+  return { admin, calls, retained, flush };
 }
 
 describe('workspace-admin-service', () => {
@@ -366,42 +408,246 @@ describe('workspace-admin-service', () => {
   });
 
   it('purges a feature PR review when a remover is wired', async () => {
-    const { admin, calls } = harness([], { withPrReviews: true });
+    const { admin, calls, flush } = harness([], { withPrReviews: true });
     await admin.deleteFeature('f1');
+    await flush();
     expect(calls).toEqual([
       'feature.get:f1',
       'sessions.listByFeatureAll:f1',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
-      'prReviews.removeForFeature:f1',
       'feature.remove:f1',
+      'prReviews.removeForFeature:f1',
     ]);
   });
 
   it('removes a feature worktree before purging its review row when wired', async () => {
-    const { admin, calls } = harness([], { withWorktrees: true, withPrReviews: true });
+    const { admin, calls, flush } = harness([], { withWorktrees: true, withPrReviews: true });
     await admin.deleteFeature('f1');
+    await flush();
     expect(calls).toEqual([
       'feature.get:f1',
       'sessions.listByFeatureAll:f1',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
+      'feature.remove:f1',
       'worktrees.removeForFeature:f1',
       'prReviews.removeForFeature:f1',
-      'feature.remove:f1',
     ]);
   });
 
-  it('continues feature deletion when worktree removal fails', async () => {
-    const { admin, calls } = harness([], { withWorktrees: true, worktreeFails: true });
+  it('deletes the feature record before its worktree so the UI is never blocked', async () => {
+    const { admin, calls, flush } = harness([], { withWorktrees: true });
+    await admin.deleteFeature('f1');
+    // Record removal is synchronous; the slow worktree teardown is deferred.
+    expect(calls).toContain('feature.remove:f1');
+    expect(calls).not.toContain('worktrees.removeForFeature:f1');
+    await flush();
+    expect(calls).toContain('worktrees.removeForFeature:f1');
+  });
+
+  it('keeps feature deletion responsive but reports deferred cleanup failure', async () => {
+    const { admin, calls, flush } = harness([], { withWorktrees: true, worktreeFails: true });
+    await admin.deleteFeature('f1');
+    await expect(flush()).rejects.toThrow('worktree cleanup failed');
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeatureAll:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'feature.remove:f1',
+      'worktrees.removeForFeature:f1',
+    ]);
+  });
+
+  it('runs worktree teardown inline when no background scheduler is wired', async () => {
+    const { admin, calls } = harness([], { withWorktrees: true, withoutBackground: true });
     await admin.deleteFeature('f1');
     expect(calls).toEqual([
       'feature.get:f1',
       'sessions.listByFeatureAll:f1',
       'sessions.deleteByFeature:f1',
       'summaries.delete:f1',
-      'worktrees.removeForFeature:f1',
       'feature.remove:f1',
+      'worktrees.removeForFeature:f1',
+    ]);
+  });
+
+  it("removes each descendant session's own worktree when its feature is deleted", async () => {
+    const { admin, calls, flush } = harness(
+      [session('s1', 'f1', { worktreePath: '/wt/s1' })],
+      { withSessionWorktrees: true },
+    );
+    await admin.deleteFeature('f1');
+    await flush();
+    expect(calls).toContain('sessionWorktrees.remove:/wt/s1');
+    // The record is removed synchronously; the worktree teardown is deferred.
+    expect(calls.indexOf('feature.remove:f1')).toBeLessThan(
+      calls.indexOf('sessionWorktrees.remove:/wt/s1'),
+    );
+  });
+
+  it('skips sessions without a worktree and reports removal failure', async () => {
+    const { admin, calls, flush } = harness(
+      [
+        session('s1', 'f1', { worktreePath: '/wt/s1' }),
+        session('s2', 'f1'),
+      ],
+      { withSessionWorktrees: true, sessionWorktreeFails: true },
+    );
+    await admin.deleteFeature('f1');
+    await expect(flush()).rejects.toThrow('worktree cleanup failed');
+    expect(calls).toContain('sessionWorktrees.remove:/wt/s1');
+    expect(calls).not.toContain('sessionWorktrees.remove:undefined');
+    // A failed removal does not abort deletion.
+    expect(calls).toContain('feature.remove:f1');
+  });
+
+  it('removes a shared PR checkout only once and retains recovery data on failure', async () => {
+    const { admin, calls, flush } = harness([
+      session('s1', 'f1', { worktreePath: '/wt/pr-1' }),
+      session('s2', 'f1', { worktreePath: '/wt/pr-1' }),
+      session('s3', 'f1', { worktreePath: '/wt/session-3' }),
+      session('s4', 'f1', { worktreePath: '/wt/session-3' }),
+    ], {
+      withWorktrees: true, withSessionWorktrees: true, withPrReviews: true,
+      reviewWorktreePath: '/wt/pr-1', worktreeFails: true,
+    });
+    await admin.deleteFeature('f1');
+    await expect(flush()).rejects.toThrow('worktree cleanup failed');
+    expect(calls.filter((call) => call === 'worktrees.removeForFeature:f1')).toHaveLength(1);
+    expect(calls).not.toContain('sessionWorktrees.remove:/wt/pr-1');
+    expect(calls.filter((call) => call === 'sessionWorktrees.remove:/wt/session-3')).toHaveLength(1);
+    expect(calls).not.toContain('prReviews.removeForFeature:f1');
+  });
+
+  it('deduplicates identical session checkouts on non-Windows platforms', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      const { admin, calls, flush } = harness([
+        session('s1', 'f1', { worktreePath: '/wt/shared' }),
+        session('s2', 'f1', { worktreePath: '/wt/shared' }),
+      ], { withSessionWorktrees: true });
+      await admin.deleteFeature('f1');
+      await flush();
+      expect(calls.filter((call) => call === 'sessionWorktrees.remove:/wt/shared')).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor);
+    }
+  });
+
+  it('never removes a session worktree when only the session is deleted', async () => {
+    const { admin, calls, flush } = harness(
+      [session('s1', 'f1', { worktreePath: '/wt/s1' })],
+      { withSessionWorktrees: true },
+    );
+    await admin.deleteSession('s1');
+    await flush();
+    expect(calls).toContain('sessions.delete:s1');
+    expect(calls).not.toContain('sessionWorktrees.remove:/wt/s1');
+  });
+
+  it('previews the session and PR-checkout worktrees a deletion would remove', async () => {
+    const { admin } = harness(
+      [
+        session('s1', 'f1', { worktreePath: '/wt/s1', branch: 'feature/x' }),
+        session('s2', 'f1'),
+      ],
+      { withReadBranch: true, featureCheckoutPath: '/repo/.ai-worktrees/pr' },
+    );
+    const worktrees = await admin.previewFeatureDeletion('f1');
+    expect(worktrees).toEqual([
+      {
+        featureId: 'f1',
+        sessionId: null,
+        path: '/repo/.ai-worktrees/pr',
+        branch: 'branch-of:/repo/.ai-worktrees/pr',
+      },
+      {
+        featureId: 'f1',
+        sessionId: 's1',
+        path: '/wt/s1',
+        branch: 'feature/x',
+      },
+    ]);
+  });
+
+  it('previews with a null branch when no branch reader is wired', async () => {
+    const { admin } = harness(
+      [session('s1', 'f1', { worktreePath: '/wt/s1' })],
+      { featureCheckoutPath: '/repo/.ai-worktrees/pr' },
+    );
+    const worktrees = await admin.previewFeatureDeletion('f1');
+    expect(worktrees).toEqual([
+      { featureId: 'f1', sessionId: null, path: '/repo/.ai-worktrees/pr', branch: null },
+      { featureId: 'f1', sessionId: 's1', path: '/wt/s1', branch: null },
+    ]);
+  });
+
+  it("previews descendant worktrees even when a child feature can't be read", async () => {
+    // The child's `get` throws (unknown feature) — the preview must swallow it
+    // and still list the child's own session worktrees, children before parent.
+    const { admin } = harness(
+      [session('c1', 'pr-1', { worktreePath: '/wt/c1', branch: 'pr/x' })],
+      { childFeatures: [feature('pr-1', 'f1')] },
+    );
+    const worktrees = await admin.previewFeatureDeletion('f1');
+    expect(worktrees).toEqual([
+      { featureId: 'pr-1', sessionId: 'c1', path: '/wt/c1', branch: 'pr/x' },
+    ]);
+  });
+
+  it('cascades to child PR features and removes each worktree when a bulk review is deleted', async () => {
+    const { admin, calls, flush } = harness([], {
+      withWorktrees: true,
+      withPrReviews: true,
+      childFeatures: [feature('pr-1', 'f1'), feature('pr-2', 'f1')],
+    });
+    await admin.deleteFeature('f1');
+    await flush();
+    // Child records are removed (children before parent), then every worktree
+    // is torn down in the background.
+    expect(calls).toEqual([
+      'feature.get:f1',
+      'sessions.listByFeatureAll:pr-1',
+      'sessions.deleteByFeature:pr-1',
+      'summaries.delete:pr-1',
+      'feature.remove:pr-1',
+      'sessions.listByFeatureAll:pr-2',
+      'sessions.deleteByFeature:pr-2',
+      'summaries.delete:pr-2',
+      'feature.remove:pr-2',
+      'sessions.listByFeatureAll:f1',
+      'sessions.deleteByFeature:f1',
+      'summaries.delete:f1',
+      'feature.remove:f1',
+      'worktrees.removeForFeature:pr-1',
+      'prReviews.removeForFeature:pr-1',
+      'worktrees.removeForFeature:pr-2',
+      'prReviews.removeForFeature:pr-2',
+      'worktrees.removeForFeature:f1',
+      'prReviews.removeForFeature:f1',
+    ]);
+  });
+
+  it('cascades through nested descendants without revisiting a cycle', async () => {
+    const { admin, calls, flush } = harness([], {
+      withWorktrees: true,
+      // grandchild under pr-1, plus a self-referential cycle that must not loop.
+      childFeatures: [
+        feature('pr-1', 'f1'),
+        feature('grand', 'pr-1'),
+        feature('loop', 'loop'),
+      ],
+    });
+    await admin.deleteFeature('f1');
+    await flush();
+    const removed = calls.filter((c) => c.startsWith('worktrees.removeForFeature:'));
+    expect(removed).toEqual([
+      'worktrees.removeForFeature:grand',
+      'worktrees.removeForFeature:pr-1',
+      'worktrees.removeForFeature:f1',
     ]);
   });
 

@@ -1,9 +1,23 @@
-import type { Feature, Repository, Session } from '../../lib/types.js';
+import type { AgentAttachment, AttachedAgent, Feature, PrReview, Repository, Session } from '../../lib/types.js';
+
+/** One PR tracked inside a bulk review tracker tab. */
+export interface TrackedPr {
+  featureId: string;
+  number: number;
+  title: string;
+}
 
 export type WorkspaceTab =
   | { kind: 'session'; id: string; label: string; session: Session }
   | { kind: 'feature'; id: string; label: string; feature: Feature }
   | { kind: 'review-board'; id: string; label: string; feature: Feature }
+  | {
+      kind: 'pr-review-tracker';
+      id: string;
+      label: string;
+      feature: Feature;
+      prs: TrackedPr[];
+    }
   | {
       kind: 'agent';
       id: string;
@@ -28,6 +42,8 @@ export interface WorkspaceTabReconcileSources {
   features?: Map<string, Feature> | null;
   repos?: Map<string, Repository> | null;
   sessionsByFeature?: Map<string, Map<string, Session> | null>;
+  agentsByFeature?: Map<string, AttachedAgent[] | null>;
+  prReviews?: Map<string, Pick<PrReview, 'pull'> | null>;
 }
 
 type PersistedObject = Record<string, unknown>;
@@ -136,6 +152,15 @@ function isRepository(value: unknown): value is Repository {
   );
 }
 
+function isTrackedPr(value: unknown): value is TrackedPr {
+  return (
+    isObject(value) &&
+    isString(value.featureId) &&
+    typeof value.number === 'number' &&
+    isString(value.title)
+  );
+}
+
 function isWorkspaceTab(value: unknown): value is WorkspaceTab {
   if (!hasKeys(value, ['kind', 'id', 'label'])) {
     return false;
@@ -149,6 +174,12 @@ function isWorkspaceTab(value: unknown): value is WorkspaceTab {
     case 'feature':
     case 'review-board':
       return isFeature(value.feature);
+    case 'pr-review-tracker':
+      return (
+        isFeature(value.feature) &&
+        Array.isArray(value.prs) &&
+        value.prs.every((pr) => isTrackedPr(pr))
+      );
     case 'agent':
       return (
         isString(value.agentId) &&
@@ -284,18 +315,97 @@ export function closeWorkspaceTab(
   );
 }
 
+export function featureSubtreeIds(
+  featureId: string,
+  features: readonly Feature[],
+): Set<string> {
+  const children = new Map<string, string[]>();
+  for (const feature of new Map(features.map((item) => [item.id, item])).values()) {
+    if (!feature.parentFeatureId) continue;
+    const siblings = children.get(feature.parentFeatureId) ?? [];
+    siblings.push(feature.id);
+    children.set(feature.parentFeatureId, siblings);
+  }
+  const deleted = new Set([featureId]);
+  for (const id of deleted) {
+    for (const child of children.get(id) ?? []) {
+      deleted.add(child);
+    }
+  }
+  return deleted;
+}
+
 export function removeFeatureWorkspaceTabs(
   state: WorkspaceTabsState,
   featureId: string,
+  features: readonly Feature[] = [],
 ): WorkspaceTabsState {
-  const tabs = state.tabs.filter(
-    (tab) =>
-      !(tab.kind === 'feature' && tab.feature.id === featureId) &&
-      !(tab.kind === 'review-board' && tab.feature.id === featureId) &&
-      !(tab.kind === 'agent' && tab.feature.id === featureId) &&
-      !(tab.kind === 'session' && tab.session.featureId === featureId),
+  const knownFeatures = new Map(
+    state.tabs.flatMap((tab) =>
+      'feature' in tab ? [[tab.feature.id, tab.feature] as const] : [],
+    ),
   );
+  for (const feature of features) knownFeatures.set(feature.id, feature);
+  const deleted = featureSubtreeIds(featureId, [...knownFeatures.values()]);
+  const tabs = state.tabs
+    .filter((tab) =>
+      tab.kind === 'repo' ||
+      !deleted.has(tab.kind === 'session' ? tab.session.featureId : tab.feature.id),
+    )
+    .map((tab) => tab.kind === 'pr-review-tracker'
+      ? { ...tab, prs: tab.prs.filter((pr) => !deleted.has(pr.featureId)) }
+      : tab);
   return buildState(tabs, state.activeId, state.splitId);
+}
+
+export function removeSessionWorkspaceTabs(
+  state: WorkspaceTabsState,
+  sessionId: string,
+): WorkspaceTabsState {
+  return buildState(
+    state.tabs.filter((tab) => tab.kind !== 'session' || tab.session.id !== sessionId),
+    state.activeId,
+    state.splitId,
+  );
+}
+
+export function removeRepoWorkspaceTabs(
+  state: WorkspaceTabsState,
+  repoId: string,
+): WorkspaceTabsState {
+  return buildState(
+    state.tabs.filter((tab) => tab.kind !== 'repo' || tab.repo.id !== repoId),
+    state.activeId,
+    state.splitId,
+  );
+}
+
+export function removeAgentWorkspaceTabs(
+  state: WorkspaceTabsState,
+  attachmentId: string,
+  attachment?: Pick<AgentAttachment, 'agentId' | 'featureId'>,
+): WorkspaceTabsState {
+  const matching = state.tabs.find(
+    (tab) => tab.kind === 'agent' && tab.attachmentId === attachmentId,
+  );
+  const owner = attachment ?? (matching?.kind === 'agent'
+    ? { agentId: matching.agentId, featureId: matching.feature.id }
+    : undefined);
+  return buildState(
+    state.tabs.filter((tab) => {
+      if (tab.kind === 'review-board') {
+        return owner?.agentId !== 'review-board' || owner.featureId !== tab.feature.id;
+      }
+      if (tab.kind !== 'agent') return true;
+      if (tab.attachmentId === attachmentId) return false;
+      return !owner ||
+        tab.agentId !== owner.agentId ||
+        tab.feature.id !== owner.featureId ||
+        tab.attachmentId !== `${owner.agentId}:${owner.featureId}`;
+    }),
+    state.activeId,
+    state.splitId,
+  );
 }
 
 function sameJsonValue(left: unknown, right: unknown): boolean {
@@ -309,18 +419,63 @@ function reconcileTab(
   if (
     tab.kind === 'feature' ||
     tab.kind === 'review-board' ||
+    tab.kind === 'pr-review-tracker' ||
     tab.kind === 'agent'
   ) {
-    if (!sources.features) {
-      return tab;
-    }
-    const feature = sources.features.get(tab.feature.id);
+    const feature = sources.features ? sources.features.get(tab.feature.id) : tab.feature;
     if (!feature) {
       return null;
     }
+    const agents = sources.agentsByFeature?.get(feature.id);
+    if (
+      tab.kind === 'review-board' &&
+      agents &&
+      !agents.some((entry) => entry.attachment.agentId === 'review-board')
+    ) {
+      return null;
+    }
     if (tab.kind === 'agent') {
+      const attached = agents?.find((entry) =>
+        entry.attachment.id === tab.attachmentId ||
+        // PR shortcuts historically opened a single-instance agent before its
+        // actual attachment ID was loaded. Resolve that alias, not other IDs.
+        (tab.attachmentId === `${tab.agentId}:${feature.id}` &&
+          !entry.manifest.allowMultiplePerFeature &&
+          entry.attachment.agentId === tab.agentId),
+      );
+      if (agents && !attached) return null;
       const prefix = tab.label.split(' · ')[0];
-      return { ...tab, feature, label: `${prefix} · ${feature.name}` };
+      return {
+        ...tab,
+        feature,
+        attachmentId: attached?.attachment.id ?? tab.attachmentId,
+        label: `${prefix} · ${feature.name}`,
+      };
+    }
+    if (tab.kind === 'pr-review-tracker') {
+      const prs = new Map(
+        tab.prs
+          .filter((pr) => !sources.features ||
+            sources.features.get(pr.featureId)?.parentFeatureId === feature.id)
+          .map((pr) => [pr.featureId, pr]),
+      );
+      for (const child of sources.features?.values() ?? []) {
+        if (child.parentFeatureId !== feature.id) continue;
+        const review = sources.prReviews?.get(child.id);
+        if (review) {
+          prs.set(child.id, {
+            featureId: child.id,
+            number: review.pull.number,
+            title: review.pull.title,
+          });
+        }
+      }
+      return {
+        ...tab,
+        feature,
+        label: `Bulk Review · ${feature.name}`,
+        prs: [...prs.values()],
+      };
     }
     const label =
       tab.kind === 'review-board'

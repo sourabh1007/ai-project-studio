@@ -9,7 +9,7 @@ export interface RepoInsightsGit {
    * The repository's default branch (e.g. `main`/`master`), or null when it
    * cannot be resolved so the caller can fall back.
    */
-  resolveDefaultBranch(repositoryPath: string): Promise<string | null>;
+  resolveDefaultBranch(repositoryPath: string, signal?: AbortSignal): Promise<string | null>;
   /**
    * Repository-relative paths of the files under `directory` at `ref`. When
    * `recursive` is true, files in nested subdirectories are included too.
@@ -20,18 +20,21 @@ export interface RepoInsightsGit {
     ref: string,
     directory: string,
     recursive?: boolean,
+    signal?: AbortSignal,
   ): Promise<string[]>;
   /** File text at `ref`, or null when the path does not exist there. */
   readFile(
     repositoryPath: string,
     ref: string,
     filePath: string,
+    signal?: AbortSignal,
   ): Promise<string | null>;
   /** Whether `filePath` exists at `ref`. */
   fileExists(
     repositoryPath: string,
     ref: string,
     filePath: string,
+    signal?: AbortSignal,
   ): Promise<boolean>;
   /**
    * Name of the most recent commit author to touch `filePath` at `ref`, or
@@ -41,5 +44,6 @@ export interface RepoInsightsGit {
     repositoryPath: string,
     ref: string,
     filePath: string,
+    signal?: AbortSignal,
   ): Promise<string | null>;
 }

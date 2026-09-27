@@ -50,6 +50,7 @@ function makeTeam(handlers: {
   worker?: (req: MetaRequest) => Promise<MetaRunResult> | MetaRunResult;
   review?: () => Promise<MetaRunResult> | MetaRunResult;
   maxWorkers?: number;
+  startDecompose?: boolean;
 }) {
   const calls: string[] = [];
   const team = createNewTaskTeam({
@@ -57,6 +58,10 @@ function makeTeam(handlers: {
     config: { ...newTaskDefaults, maxWorkers: handlers.maxWorkers ?? 4 },
     ai: {
       runDetailed: async (req: MetaRequest): Promise<MetaRunResult> => {
+        if (handlers.startDecompose !== false || req.label !== 'New task · manager') {
+          req.onStart?.(`session-${req.label}`);
+          req.onStart?.(`session-${req.label}`);
+        }
         req.onActivity?.(`activity for ${req.label}`);
         calls.push(req.label ?? '');
         const label = req.label ?? '';
@@ -80,6 +85,16 @@ const REQUEST = {
   context: 'C',
   plan: 'PLAN',
 };
+
+it('retains manager review attribution when an earlier provider did not publish onStart', async () => {
+  const { team } = makeTeam({
+    decompose: () => ({ text: '{}', sessionId: 'not-published' }),
+    startDecompose: false,
+  });
+  const result = await team.implement({ ...REQUEST, sink: recordingSink() });
+  expect(result.agents.find((agent) => agent.id === MANAGER_AGENT_ID)?.sessionIds)
+    .toEqual(['session-New task · manager review']);
+});
 
 describe('extractJsonObject', () => {
   it('prefers a fenced json block', () => {

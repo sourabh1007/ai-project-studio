@@ -12,6 +12,7 @@ import type {
   RepoInsightsStreamSink,
 } from './repo-insights-contract.js';
 import type { RepoInsightsGit } from './repo-insights-git-port.js';
+import { createWorkLimiter } from './work-limiter.js';
 import {
   deriveName,
   firstMeaningfulLine,
@@ -83,6 +84,10 @@ export function createRepoInsightsService(
   deps: RepoInsightsServiceDeps,
 ): RepoInsightsService {
   const { git, config } = deps;
+  const runGit = createWorkLimiter(config.gitConcurrency);
+  const runAnalysis = createWorkLimiter(config.enrichment.maxConcurrency);
+  const activeStreams = new Set<string>();
+  let analysisBlocked = false;
 
   const hasDefinitionExtension = (path: string): boolean =>
     path.toLowerCase().endsWith(config.definitionExtension.toLowerCase());
@@ -98,8 +103,12 @@ export function createRepoInsightsService(
     repositoryPath: string,
     ref: string,
     file: string,
+    signal?: AbortSignal,
   ): Promise<RepoDefinitionEntry | null> {
-    const content = await git.readFile(repositoryPath, ref, file);
+    const content = await runGit(
+      () => git.readFile(repositoryPath, ref, file, signal), signal,
+    );
+    signal?.throwIfAborted();
     if (content === null) {
       return null;
     }
@@ -115,7 +124,9 @@ export function createRepoInsightsService(
     );
     const author =
       frontmatterValue(frontmatter, config.authorKey) ??
-      (await git.lastCommitAuthor(repositoryPath, ref, file)) ??
+      (await runGit(
+        () => git.lastCommitAuthor(repositoryPath, ref, file, signal), signal,
+      )) ??
       config.unknownAuthorLabel;
     return { name, description, author, path: file };
   }
@@ -125,12 +136,16 @@ export function createRepoInsightsService(
     repositoryPath: string,
     ref: string,
     directories: string[],
+    signal?: AbortSignal,
   ): Promise<RepoDefinitionEntry[]> {
-    // List every directory concurrently, then dedupe shared files preserving
-    // first-encounter order before building entries in parallel.
+    // Git admission is shared across repositories; file workers also bound the
+    // number of pending promises for large documentation trees.
     const fileLists = await Promise.all(
       directories.map((directory) =>
-        git.listFiles(repositoryPath, ref, directory, config.recursiveScan),
+        runGit(
+          () => git.listFiles(repositoryPath, ref, directory, config.recursiveScan, signal),
+          signal,
+        ),
       ),
     );
     const seen = new Set<string>();
@@ -144,9 +159,18 @@ export function createRepoInsightsService(
         files.push(file);
       }
     }
-    const built = await Promise.all(
-      files.map((file) => buildEntry(repositoryPath, ref, file)),
-    );
+    const built: Array<RepoDefinitionEntry | null> = [];
+    let index = 0;
+    await Promise.all(Array.from(
+      { length: Math.min(config.gitConcurrency, files.length) },
+      async () => {
+        while (index < files.length) {
+          signal?.throwIfAborted();
+          const file = files[index++];
+          built.push(await buildEntry(repositoryPath, ref, file, signal));
+        }
+      },
+    ));
     return built
       .filter((entry): entry is RepoDefinitionEntry => entry !== null)
       .sort((left, right) => left.path.localeCompare(right.path));
@@ -156,11 +180,12 @@ export function createRepoInsightsService(
     repositoryPath: string,
     ref: string,
     requirement: ReadinessRequirement,
+    signal?: AbortSignal,
   ): Promise<{ status: ReadinessCheck['status']; detail: string | null }> {
     if (requirement.kind === 'anyFileExists') {
       const results = await Promise.all(
         requirement.paths.map((path) =>
-          git.fileExists(repositoryPath, ref, path),
+          runGit(() => git.fileExists(repositoryPath, ref, path, signal), signal),
         ),
       );
       const index = results.findIndex(Boolean);
@@ -169,7 +194,10 @@ export function createRepoInsightsService(
         : { status: 'fail', detail: null };
     }
     const matches = (
-      await git.listFiles(repositoryPath, ref, requirement.directory)
+      await runGit(
+        () => git.listFiles(repositoryPath, ref, requirement.directory, false, signal),
+        signal,
+      )
     ).filter(hasDefinitionExtension);
     return matches.length > 0
       ? { status: 'pass', detail: `${matches.length} found` }
@@ -179,6 +207,7 @@ export function createRepoInsightsService(
   async function evaluateReadiness(
     repositoryPath: string,
     ref: string,
+    signal?: AbortSignal,
   ): Promise<ReadinessCheck[]> {
     // All checks are independent, so evaluate them concurrently.
     return Promise.all(
@@ -187,6 +216,7 @@ export function createRepoInsightsService(
           repositoryPath,
           ref,
           definition.test,
+          signal,
         );
         return {
           key: definition.key,
@@ -199,9 +229,11 @@ export function createRepoInsightsService(
     );
   }
 
-  async function resolveBranch(repository: Repository): Promise<string> {
+  async function resolveBranch(repository: Repository, signal?: AbortSignal): Promise<string> {
     return (
-      (await git.resolveDefaultBranch(repository.localPath)) ??
+      (await runGit(
+        () => git.resolveDefaultBranch(repository.localPath, signal), signal,
+      )) ??
       repository.defaultBranch ??
       config.fallbackBranch
     );
@@ -375,29 +407,39 @@ export function createRepoInsightsService(
       .replaceAll('{repository}', deps.repos.get(repositoryId).name)
       .replaceAll('{branch}', branch)
       .replaceAll('{evidence}', evidence);
-    const result = await deps.ai!.runDetailed({
-      featureId: `repository:${repositoryId}`,
-      prompt,
-      cwd: repositoryPath,
-      scope: 'internal',
-      // Pure prompt→text: no tool loops, but kept warm-eligible so the pool
-      // (not a cold spawn per section) serves the fan-out.
-      noTools: true,
-      toolsOptional: true,
-      forceCold,
-      timeoutMs: config.enrichment.timeoutMs,
-      label: `Repo insights · ${section}`,
-      signal,
-    });
+    const result = await runAnalysis(async () => {
+      if (analysisBlocked) {
+        throw new Error('Background analysis paused: provider termination is unconfirmed. Restart the app before retrying analysis.');
+      }
+      try {
+        return await deps.ai!.runDetailed({
+          featureId: `repository:${repositoryId}`,
+          prompt,
+          cwd: repositoryPath,
+          scope: 'internal',
+          // Pure prompt→text, eligible for reuse of a warm session.
+          noTools: true,
+          toolsOptional: true,
+          forceCold,
+          timeoutMs: config.enrichment.timeoutMs,
+          label: `Repo insights · ${section}`,
+          signal,
+        });
+      } catch (error) {
+        if (error instanceof MetaAbortError && error.termination === 'unconfirmed') {
+          analysisBlocked = true;
+        }
+        throw error;
+      }
+    }, signal);
     return result.text.trim().slice(0, config.enrichment.maxAnalysisChars);
   }
 
   /**
    * Enrich a section with self-heal: retry warm sessions with backoff, then a
    * final forced-cold attempt so a broken warm session cannot fail every retry.
-   * A provider timeout skips the warm retries (it already burned the budget) and
-   * goes straight to the cold attempt. `onHeal` fires before each retry so the
-   * UI can show the section self-healing. Throws only when every attempt fails.
+   * A timeout with confirmed termination skips warm retries for a cold attempt.
+   * Unconfirmed termination pauses all dashboard analysis, including retries.
    */
   async function enrichSection(
     repositoryId: string,
@@ -423,7 +465,7 @@ export function createRepoInsightsService(
           signal,
         );
       } catch (error) {
-        if (signal?.aborted) {
+        if (signal?.aborted || analysisBlocked) {
           throw error;
         }
         if (error instanceof MetaAbortError && error.kind === 'timed_out') {
@@ -469,105 +511,118 @@ export function createRepoInsightsService(
     },
 
     async analyzeStream(repositoryId, sink, signal) {
-      const repository = deps.repos.get(repositoryId);
-      const branch = await resolveBranch(repository);
-      if (signal?.aborted) {
-        return;
+      if (signal?.aborted) return;
+      if (activeStreams.has(repositoryId)) {
+        throw new ValidationError('This repository is already being scanned. Cancel it or wait for it to finish.');
       }
-      sink.emit({ type: 'branch', branch });
+      activeStreams.add(repositoryId);
+      try {
+        const repository = deps.repos.get(repositoryId);
+        const branch = await resolveBranch(repository, signal);
+        if (signal?.aborted) {
+          return;
+        }
+        sink.emit({ type: 'branch', branch });
 
-      const structural = {
-        agents: [] as RepoDefinitionEntry[],
-        skills: [] as RepoDefinitionEntry[],
-        docs: [] as RepoDefinitionEntry[],
-        readiness: [] as ReadinessCheck[],
-      };
+        const structural = {
+          agents: [] as RepoDefinitionEntry[],
+          skills: [] as RepoDefinitionEntry[],
+          docs: [] as RepoDefinitionEntry[],
+          readiness: [] as ReadinessCheck[],
+        };
 
-      await runReserved(
-        SECTIONS,
-        fanOutWidth,
-        async (section) => {
-          sink.emit({ type: 'section-analyzing', section, healing: false });
+        await runReserved(
+          SECTIONS,
+          fanOutWidth,
+          async (section) => {
+            sink.emit({ type: 'section-analyzing', section, healing: false });
 
-          let scan: SectionScan;
-          try {
-            if (section === 'readiness') {
-              scan = {
+            let scan: SectionScan;
+            try {
+              if (section === 'readiness') {
+                scan = {
+                  section,
+                  readiness: await evaluateReadiness(repository.localPath, branch, signal),
+                };
+              } else {
+                scan = {
+                  section,
+                  entries: await scanDirectories(
+                    repository.localPath,
+                    branch,
+                    sectionDirectories(section),
+                    signal,
+                  ),
+                };
+              }
+            } catch (error) {
+              if (signal?.aborted) return;
+              sink.emit({
+                type: 'section-failed',
                 section,
-                readiness: await evaluateReadiness(repository.localPath, branch),
-              };
+                error: errorMessage(error),
+              });
+              return;
+            }
+            if (signal?.aborted) return;
+
+            if (scan.section === 'readiness') {
+              structural.readiness = scan.readiness;
             } else {
-              scan = {
-                section,
-                entries: await scanDirectories(
+              structural[scan.section] = scan.entries;
+            }
+
+            let analysis: string | null = null;
+            let analysisError: string | undefined;
+            if (enrichmentActive()) {
+              try {
+                analysis = await enrichSection(
+                  repositoryId,
                   repository.localPath,
                   branch,
-                  sectionDirectories(section),
-                ),
-              };
+                  section,
+                  evidenceText(scan),
+                  signal,
+                  () =>
+                    sink.emit({ type: 'section-analyzing', section, healing: true }),
+                );
+              } catch (error) {
+                analysisError = errorMessage(error);
+              }
             }
-          } catch (error) {
+
+            if (signal?.aborted) return;
             sink.emit({
-              type: 'section-failed',
+              type: 'section',
               section,
-              error: errorMessage(error),
+              ...(scan.section === 'readiness'
+                ? { readiness: scan.readiness }
+                : { entries: scan.entries }),
+              analysis,
+              ...(analysisError !== undefined ? { analysisError } : {}),
             });
-            return;
-          }
+          },
+          signal,
+        );
 
-          if (scan.section === 'readiness') {
-            structural.readiness = scan.readiness;
-          } else {
-            structural[scan.section] = scan.entries;
-          }
-
-          let analysis: string | null = null;
-          let analysisError: string | undefined;
-          if (enrichmentActive()) {
-            try {
-              analysis = await enrichSection(
-                repositoryId,
-                repository.localPath,
-                branch,
-                section,
-                evidenceText(scan),
-                signal,
-                () =>
-                  sink.emit({ type: 'section-analyzing', section, healing: true }),
-              );
-            } catch (error) {
-              analysisError = errorMessage(error);
-            }
-          }
-
-          sink.emit({
-            type: 'section',
-            section,
-            ...(scan.section === 'readiness'
-              ? { readiness: scan.readiness }
-              : { entries: scan.entries }),
-            analysis,
-            ...(analysisError !== undefined ? { analysisError } : {}),
-          });
-        },
-        signal,
-      );
-
-      if (signal?.aborted) {
-        return;
+        if (signal?.aborted) {
+          return;
+        }
+        const insights: RepoInsights = {
+          repositoryId,
+          branch,
+          agents: structural.agents,
+          skills: structural.skills,
+          docs: structural.docs,
+          readiness: structural.readiness,
+          agentReady: structural.readiness.every((check) => check.status === 'pass'),
+          generatedAt: deps.clock.isoNow(),
+        };
+        cache.set(repositoryId, insights);
+        sink.emit({ type: 'done', insights });
+      } finally {
+        activeStreams.delete(repositoryId);
       }
-      const insights: RepoInsights = {
-        repositoryId,
-        branch,
-        agents: structural.agents,
-        skills: structural.skills,
-        docs: structural.docs,
-        readiness: structural.readiness,
-        agentReady: structural.readiness.every((check) => check.status === 'pass'),
-        generatedAt: deps.clock.isoNow(),
-      };
-      cache.set(repositoryId, insights);
-      sink.emit({ type: 'done', insights });
     },
 
     async readDefinition(repositoryId, filePath) {
@@ -578,7 +633,7 @@ export function createRepoInsightsService(
         );
       }
       const branch = await resolveBranch(repository);
-      const content = await git.readFile(repository.localPath, branch, filePath);
+      const content = await runGit(() => git.readFile(repository.localPath, branch, filePath));
       if (content === null) {
         throw new NotFoundError(`File not found on ${branch}: ${filePath}`);
       }

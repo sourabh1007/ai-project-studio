@@ -53,6 +53,17 @@ describe('agent-usage-reader', () => {
     db.close();
   });
 
+  it('includes perspective labels and captured failed attempts, but not token-only snapshots', () => {
+    const { repo, usage } = reader();
+    repo.create(base('failed', { state: 'failed', label: 'Review board · security' }));
+    repo.refreshUsage('failed', { inputTokens: 10, outputTokens: 2, nanoAiu: 2e9, credits: 2 }, 't');
+    repo.create(base('unknown', { label: 'Review board · testing', usageState: 'partial',
+      usage: { inputTokens: 10, outputTokens: 2, nanoAiu: null, credits: null } }));
+    seedCompleted(repo, 'other', 'Review board unrelated', { inputTokens: 1, outputTokens: 1, nanoAiu: 3e9, credits: 3 });
+    expect(usage.aggregateByLabel('Review board')).toEqual({ credits: 2, nanoAiu: 2e9, runs: 1 });
+    db.close();
+  });
+
   it('counts a run but reports null totals when its usage snapshot is absent', () => {
     const { repo, usage } = reader();
     seedCompleted(repo, '1', 'Review board', null);

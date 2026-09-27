@@ -13,7 +13,9 @@ import {
   YAxis,
 } from 'recharts';
 import { useApi } from '../../app/api-context.js';
-import { formatBytes, formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
+import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
+import { McpUsageCharts } from '../../components/mcp-usage-charts.js';
+import { PrFeatureSummary, pullRequestUrl } from './pr-feature-summary.js';
 import { sessionDisplayName, sessionWorkTitle } from '../../lib/session-names.js';
 import { useAsync } from '../../hooks/use-async.js';
 import {
@@ -602,6 +604,7 @@ export function FeatureDashboard({
   );
 
   const description = featureDescription?.trim();
+  const prUrl = description ? pullRequestUrl(description) : null;
   const showInitialLoading = loading && !data;
   const showInitialError = !!error && !data;
   const showEmpty = !!data && data.totals.sessions === 0;
@@ -611,7 +614,8 @@ export function FeatureDashboard({
     <div className="dashboard">
       <header className="dash-header">
         <h2 className="dash-title">{featureName}</h2>
-        <p className="dash-description">{description || 'No description'}</p>
+        {prUrl ? <PrFeatureSummary key={featureId} featureId={featureId} url={prUrl} />
+          : <p className="dash-description">{description || 'No description'}</p>}
         <p className="muted">
           Usage refreshes as work is recorded for this feature. Refresh manually
           to fetch the latest totals at any time.
@@ -760,21 +764,6 @@ function Charts({
         .map((m) => ({ name: m.model || 'unknown', aic: nanoAiuToAic(m.nanoAiu) }))
         .sort((a, b) => b.aic - a.aic),
     [byModel],
-  );
-
-  // Real per-MCP-server transport I/O, measured by the launch proxy. Sorted by
-  // total bytes moved so the busiest server leads. Not token/credit usage — MCP
-  // servers don't consume model tokens — so it renders on its own bytes scale.
-  const mcpServerData = useMemo(
-    () =>
-      byMcpServer
-        .map((s) => ({ ...s, totalBytes: s.inputBytes + s.outputBytes }))
-        .sort((a, b) => b.totalBytes - a.totalBytes),
-    [byMcpServer],
-  );
-  const maxMcpBytes = useMemo(
-    () => Math.max(1, ...mcpServerData.map((s) => s.totalBytes)),
-    [mcpServerData],
   );
 
   const usageTree = useMemo(
@@ -1001,57 +990,9 @@ function Charts({
       </div>
       </Section>
 
-      {mcpServerData.length > 0 ? (
-        <Section
-          icon={<McpIcon size={15} />}
-          title="MCP servers"
-          hint={`${mcpServerData.length} server${mcpServerData.length === 1 ? '' : 's'} · real tool-call I/O`}
-        >
-          <div className="dash-table" role="table" aria-label="MCP server I/O">
-            <div className="dash-table-head" role="row">
-              <span role="columnheader">Server</span>
-              <span role="columnheader" className="dash-num">Calls</span>
-              <span role="columnheader" className="dash-num">In</span>
-              <span role="columnheader" className="dash-num">Out</span>
-              <span role="columnheader" className="dash-num">Latency</span>
-            </div>
-            {mcpServerData.map((s) => (
-              <div className="dash-table-row" role="row" key={s.server}>
-                <span className="dash-cell-name" role="cell">
-                  <span className="dash-bar-track" aria-hidden="true">
-                    <span
-                      className="dash-bar-fill"
-                      style={{
-                        width: `${(s.totalBytes / maxMcpBytes) * 100}%`,
-                        background: AIC_COLOR,
-                      }}
-                    />
-                  </span>
-                  <span className="dash-tree-label">{s.server}</span>
-                </span>
-                <span className="dash-num" role="cell">
-                  {formatCompactNumber(s.calls)}
-                </span>
-                <span className="dash-num" role="cell">{formatBytes(s.inputBytes)}</span>
-                <span className="dash-num" role="cell">{formatBytes(s.outputBytes)}</span>
-                <span className="dash-num" role="cell">{formatDuration(s.durationMs)}</span>
-              </div>
-            ))}
-          </div>
-        </Section>
-      ) : (
-        <Section
-          icon={<McpIcon size={15} />}
-          title="MCP servers"
-          hint="real tool-call I/O"
-        >
-          <EmptyState
-            icon={<McpIcon size={20} />}
-            title="No MCP activity yet"
-            description="Tool-call traffic from MCP servers is metered per feature. Nothing has been recorded here yet — once a session in this feature makes MCP tool calls, per-server calls, bytes, and latency appear here."
-          />
-        </Section>
-      )}
+      <Section icon={<McpIcon size={15} />} title="MCP servers" hint="Feature tool usage">
+        <McpUsageCharts rows={byMcpServer} />
+      </Section>
 
       {viewingUsage && (
         <UsageBreakdownModal

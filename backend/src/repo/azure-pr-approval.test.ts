@@ -110,6 +110,44 @@ describe('findMyReviewer', () => {
 });
 
 describe('createAzureApprovalGateway', () => {
+  const live = { status: 'active', lastMergeSourceCommit: { commitId: 'head' } };
+  it('reads the current head without casting any vote', async () => {
+    const gw = createAzureApprovalGateway(deps({
+      httpGet: router({ detail: resp(200, live) }),
+      httpPut: async () => { throw new Error('must not vote'); },
+    }), TARGET);
+    await expect(gw.getHeadSha()).resolves.toBe('head');
+  });
+
+  it.each([resp(500), resp(200, null), resp(200, {}), resp(200, { status: 'active' }),
+    resp(200, { status: 'active', lastMergeSourceCommit: { commitId: '' } })])(
+    'fails closed when head cannot be verified: %j', async (detail) => {
+      const gw = createAzureApprovalGateway(deps({ httpGet: router({ detail }) }), TARGET);
+      await expect(gw.getHeadSha()).rejects.toThrow('head could not be verified');
+    },
+  );
+
+  it('blocks a changed head even when the old reviewer vote is approved', async () => {
+    const gw = createAzureApprovalGateway(deps({
+      httpGet: router({ detail: resp(200, {
+        ...live, reviewers: [{ id: 'profile-1', vote: 10 }],
+      }) }),
+      httpPut: async () => { throw new Error('must not vote'); },
+    }), TARGET);
+    await expect(gw.approve('old')).rejects.toThrow('head changed');
+    await expect(gw.approve('head')).resolves.toMatchObject({ alreadyApproved: true });
+  });
+  it.each([null, {}, { vote: 0 }, { vote: 10 }])('requires provider vote confirmation: %j', async (body) => {
+    const gw = createAzureApprovalGateway(deps({
+      httpGet: router({ detail: resp(200, live) }),
+      httpPut: async () => resp(200, body),
+    }), TARGET);
+    if (body?.vote === 10) {
+      await expect(gw.approve('head')).resolves.toMatchObject({ approved: true, alreadyApproved: false });
+    } else {
+      await expect(gw.approve('head')).rejects.toThrow('did not confirm');
+    }
+  });
   it('approves using the reviewer-list id and reports the reviewer', async () => {
     let sent: { url: string; token: string; body: unknown } | null = null;
     const gw = createAzureApprovalGateway(

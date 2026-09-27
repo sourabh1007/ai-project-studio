@@ -60,6 +60,7 @@ import {
   Sun,
   Tag,
   Timer,
+  Terminal,
   Trash2,
   Upload,
   WandSparkles,
@@ -130,6 +131,7 @@ export const StopIcon = makeIcon(Square);
 export const FilesIcon = makeIcon(Files);
 export const RepoIcon = makeIcon(FolderGit2);
 export const FolderIcon = makeIcon(Folder);
+export const SessionIcon = makeIcon(Terminal);
 export const MoveIcon = makeIcon(FolderInput);
 export const DragHandleIcon = makeIcon(GripVertical);
 export const PullRequestIcon = makeIcon(GitPullRequest);

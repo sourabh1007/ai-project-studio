@@ -63,6 +63,15 @@ function review(overrides: Partial<PrReview> = {}): PrReview {
 }
 
 describe('pr-review-repo', () => {
+  it('persists queued review intent across repository instances without changing evidence timestamps', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    createPrReviewRepo(db).save(review({ reviewBoardPending: true }));
+    const reopened = createPrReviewRepo(db);
+    expect(reopened.get('f1')!.reviewBoardPending).toBe(true);
+    reopened.save({ ...reopened.get('f1')!, reviewBoardPending: false });
+    expect(createPrReviewRepo(db).get('f1')).toEqual(review({ reviewBoardPending: false }));
+    db.close();
+  });
   it('saves, loads and deletes a ready review', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const reviews = createPrReviewRepo(db);
@@ -73,6 +82,24 @@ describe('pr-review-repo', () => {
 
     reviews.delete('f1');
     expect(reviews.get('f1')).toBeNull();
+  });
+
+  it('round-trips provider author and source metadata without fabricating legacy authors', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    try {
+      const reviews = createPrReviewRepo(db);
+      const current = review();
+      reviews.save(current);
+      expect(reviews.get('f1')?.pull.author).toBeUndefined();
+      for (const author of ['octocat', null]) {
+        reviews.save({ ...current, pull: { ...current.pull, sourceBranch: 'feature/retry', author } });
+        expect(createPrReviewRepo(db).get('f1')?.pull).toEqual({
+          ...current.pull, sourceBranch: 'feature/retry', author,
+        });
+      }
+    } finally {
+      db.close();
+    }
   });
 
   it('finds an existing review feature by repo and pull number', () => {

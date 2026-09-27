@@ -5,13 +5,15 @@
  */
 
 export type ClientMessage =
+  | { type: 'ping'; generation: number; seq: number }
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
 
 export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
-  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number }
+  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number; detail?: string; heartbeat?: boolean }
+  | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
   | { type: 'resize'; cols: number; rows: number }
@@ -41,6 +43,10 @@ export function decodeClientMessage(raw: string): ClientMessage | null {
     return null;
   }
   if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;
+  if (parsed.type === 'ping') {
+    return Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0
+      ? { type: 'ping', generation: parsed.generation as number, seq: parsed.seq as number } : null;
+  }
   if (parsed.type === 'input') {
     return typeof parsed.data === 'string' && Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0
       ? { type: 'input', data: parsed.data, generation: parsed.generation as number, seq: parsed.seq as number }

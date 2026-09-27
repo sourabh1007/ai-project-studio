@@ -6,7 +6,7 @@ import { Card } from '../../components/ui.js';
 import { ErrorState } from '../../components/error-state.js';
 import { Loader } from '../../components/loading.js';
 import { AgentIcon } from '../../agent-host/agent-icon.js';
-import { PromptFieldEditor } from '../settings/prompts-commands-section.js';
+import { AgentPromptTree } from './agent-prompt-tree.js';
 
 function formatCredits(value: number | null): string {
   return value == null ? '—' : value.toFixed(2);
@@ -73,14 +73,15 @@ function AgentDetail({
           <p className="muted">This agent exposes no editable prompts.</p>
         ) : (
           <Card className="agents-prompts">
-            {manifest.promptFields.map((field) => (
-              <PromptFieldEditor
-                key={`${field.namespace}.${field.key}`}
-                field={field}
-                data={data}
-                onSaved={reload}
-              />
-            ))}
+            <p className="agents-prompts-hint">
+              Prompts are grouped by category. Expand a category, then a
+              perspective, and click a prompt to edit and save it.
+            </p>
+            <AgentPromptTree
+              fields={manifest.promptFields}
+              data={data}
+              onSaved={reload}
+            />
           </Card>
         ))}
     </div>

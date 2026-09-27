@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { Feature, Repository, Session } from '../../lib/types.js';
+import type { AttachedAgent, Feature, Repository, Session } from '../../lib/types.js';
 import {
   closeWorkspaceTab,
   emptyWorkspaceTabsState,
+  featureSubtreeIds,
   normalizeWorkspaceTabsState,
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
   removeFeatureWorkspaceTabs,
+  removeSessionWorkspaceTabs,
+  removeRepoWorkspaceTabs,
+  removeAgentWorkspaceTabs,
   setWorkspaceSplit,
   type WorkspaceTab,
 } from './workspace-tabs.js';
@@ -164,6 +168,177 @@ describe('workspace-tabs', () => {
     };
     const next = removeFeatureWorkspaceTabs(tabs, 'f1');
     expect(next).toEqual({ tabs: [], activeId: null, splitId: null });
+  });
+
+  it('removes deep descendants even when their ancestors have no open tabs', () => {
+    const root = feature({ id: 'root' });
+    const child = feature({ id: 'child', parentFeatureId: root.id });
+    const leaf = feature({ id: 'leaf', parentFeatureId: child.id });
+    const other = feature({ id: 'other' });
+    const tabs: WorkspaceTab[] = [
+      featureTab(other),
+      featureTab(leaf),
+      { kind: 'review-board', id: 'board', label: 'Review', feature: child },
+      { kind: 'agent', id: 'agent', label: 'Agent', feature: leaf, agentId: 'a', attachmentId: 'attachment' },
+      { kind: 'pr-review-tracker', id: 'tracker', label: 'Tracker', feature: root, prs: [] },
+      sessionTab(session({ id: 's1', featureId: leaf.id })),
+    ];
+    expect(removeFeatureWorkspaceTabs({
+      tabs, activeId: 's1', splitId: 'agent',
+    }, root.id, [leaf, child, root])).toEqual({
+      tabs: [featureTab(other)], activeId: 'feature:other', splitId: null,
+    });
+  });
+
+  it('prunes deleted PRs from surviving trackers without closing the parent', () => {
+    const parent = feature({ id: 'parent' });
+    const tracker: WorkspaceTab = {
+      kind: 'pr-review-tracker', id: 'tracker', label: 'Bulk Review · Feature',
+      feature: parent,
+      prs: [
+        { featureId: 'removed', number: 1, title: 'One' },
+        { featureId: 'kept', number: 2, title: 'Two' },
+      ],
+    };
+    const state = { tabs: [tracker], activeId: tracker.id, splitId: null };
+    const removed = removeFeatureWorkspaceTabs(state, 'removed');
+    expect(removed.tabs).toEqual([{ ...tracker, prs: [tracker.prs[1]] }]);
+    expect(removed.activeId).toBe(tracker.id);
+    expect(reconcileWorkspaceTabsState(state, {
+      features: new Map([
+        [parent.id, parent],
+        ['kept', feature({ id: 'kept', parentFeatureId: parent.id })],
+      ]),
+    })).toEqual(removed);
+  });
+
+  it('resolves subtree IDs from the newest placements and tolerates malformed cycles', () => {
+    expect([...featureSubtreeIds('root', [
+      feature({ id: 'child', parentFeatureId: 'root' }),
+      feature({ id: 'root', parentFeatureId: 'leaf' }),
+      feature({ id: 'leaf', parentFeatureId: 'root' }),
+      feature({ id: 'child', parentFeatureId: 'elsewhere' }),
+    ])]).toEqual(['root', 'leaf']);
+  });
+
+  it('refreshes tracker membership and titles from feature placement and actual PR metadata', () => {
+    const parent = feature({ id: 'parent' });
+    const existing = feature({ id: 'existing', name: 'PR #999: Not the actual title', parentFeatureId: parent.id });
+    const imported = feature({ id: 'imported', name: 'Another display name', parentFeatureId: parent.id });
+    const ordinary = feature({ id: 'ordinary', name: 'PR #100: Not a PR', parentFeatureId: parent.id });
+    const moved = feature({ id: 'moved', parentFeatureId: 'another-parent' });
+    const tracker: WorkspaceTab = {
+      kind: 'pr-review-tracker', id: 'tracker', label: 'Bulk Review · Feature', feature: parent,
+      prs: [
+        { featureId: 'existing', number: 1, title: 'Old PR title' },
+        { featureId: 'moved', number: 3, title: 'Moved PR' },
+      ],
+    };
+    const state = { tabs: [tracker], activeId: tracker.id, splitId: null };
+    const features = new Map([parent, existing, imported, ordinary, moved].map((f) => [f.id, f]));
+    const next = reconcileWorkspaceTabsState(state, {
+      features,
+      prReviews: new Map([
+        ['existing', { pull: { number: 1, title: 'Actual updated title', url: '' } }],
+        ['imported', { pull: { number: 2, title: 'Actual imported title', url: '' } }],
+        ['ordinary', null],
+      ]),
+    });
+    expect(next.tabs[0]).toMatchObject({
+      prs: [
+        { featureId: 'existing', number: 1, title: 'Actual updated title' },
+        { featureId: 'imported', number: 2, title: 'Actual imported title' },
+      ],
+    });
+    expect(reconcileWorkspaceTabsState(state, { features }).tabs[0]).toMatchObject({
+      prs: [{ featureId: 'existing', number: 1, title: 'Old PR title' }],
+    });
+  });
+
+  it('matches deleted entity payloads, not overlapping tab IDs or kinds', () => {
+    const f = feature({ id: 'same' });
+    const r = repo({ id: 'same' });
+    const featureView = { ...featureTab(f), id: 'same' };
+    const sessionView = sessionTab(session({ id: 'same' }));
+    sessionView.id = 'persisted-session-alias';
+    const repoView: WorkspaceTab = { kind: 'repo', id: 'repo-view', label: r.name, repo: r };
+    const agentView: WorkspaceTab = {
+      kind: 'agent', id: 'agent-view', label: 'Agent', feature: f,
+      agentId: 'a', attachmentId: 'same',
+    };
+    const state = {
+      tabs: [featureView, sessionView, repoView, agentView],
+      activeId: sessionView.id, splitId: repoView.id,
+    };
+    expect(removeSessionWorkspaceTabs(state, 'same').tabs).toEqual([featureView, repoView, agentView]);
+    expect(removeRepoWorkspaceTabs(state, 'same').tabs).toEqual([featureView, sessionView, agentView]);
+    expect(removeRepoWorkspaceTabs(state, 'same').splitId).toBeNull();
+    expect(removeAgentWorkspaceTabs(state, 'same').tabs).toEqual([featureView, sessionView, repoView]);
+  });
+
+  it('closes every alias for a session while retaining unrelated active and split tabs', () => {
+    const active = featureTab(feature({ id: 'active' }));
+    const split = featureTab(feature({ id: 'split' }));
+    const deleted = sessionTab(session({ id: 'deleted' }));
+    const state = {
+      tabs: [active, deleted, split, { ...deleted, id: 'legacy-session' }],
+      activeId: active.id, splitId: split.id,
+    };
+    expect(removeSessionWorkspaceTabs(state, 'deleted')).toEqual({
+      tabs: [active, split], activeId: active.id, splitId: split.id,
+    });
+  });
+
+  it('removes matching agent aliases and legacy boards but preserves other attachments', () => {
+    const f = feature({ id: 'f1' });
+    const agent: WorkspaceTab = {
+      kind: 'agent', id: 'agent', label: 'Review', feature: f,
+      agentId: 'review-board', attachmentId: 'attachment',
+    };
+    const alias = { ...agent, id: 'alias', attachmentId: 'review-board:f1' };
+    const other = { ...agent, id: 'other', attachmentId: 'another-attachment' };
+    const legacy: WorkspaceTab = { kind: 'review-board', id: 'legacy', label: 'Review', feature: f };
+    const state = {
+      tabs: [agent, alias, legacy, other],
+      activeId: agent.id, splitId: alias.id,
+    };
+    expect(removeAgentWorkspaceTabs(state, 'attachment')).toEqual({
+      tabs: [other], activeId: other.id, splitId: null,
+    });
+    expect(removeAgentWorkspaceTabs({
+      tabs: [legacy, featureTab(f)], activeId: legacy.id, splitId: null,
+    }, 'attachment', { featureId: f.id, agentId: 'review-board' }).tabs).toEqual([featureTab(f)]);
+  });
+
+  it('reconciles detached agents and legacy Review Boards only from authoritative attachment lists', () => {
+    const f = feature({ id: 'f1' });
+    const agent: WorkspaceTab = {
+      kind: 'agent', id: 'agent', label: 'Review Board · Feature', feature: f,
+      agentId: 'review-board', attachmentId: 'review-board:f1',
+    };
+    const legacy: WorkspaceTab = { kind: 'review-board', id: 'legacy', label: 'Review Board · Feature', feature: f };
+    const state = { tabs: [agent, legacy, featureTab(f)], activeId: agent.id, splitId: legacy.id };
+    expect(reconcileWorkspaceTabsState(state, {
+      agentsByFeature: new Map([[f.id, null]]),
+    })).toBe(state);
+    const attached = {
+      attachment: { id: 'real-id', featureId: f.id, agentId: 'review-board' },
+      manifest: { allowMultiplePerFeature: false },
+    } as AttachedAgent;
+    const resolved = reconcileWorkspaceTabsState(state, {
+      agentsByFeature: new Map([[f.id, [attached]]]),
+    });
+    expect(resolved.tabs[0]).toMatchObject({ attachmentId: 'real-id' });
+    const removed = reconcileWorkspaceTabsState(resolved, {
+      agentsByFeature: new Map([[f.id, []]]),
+    });
+    expect(removed).toEqual({ tabs: [featureTab(f)], activeId: 'feature:f1', splitId: null });
+    // A newly attached instance must not revive a tab for a deleted attachment.
+    expect(reconcileWorkspaceTabsState(resolved, {
+      agentsByFeature: new Map([[f.id, [{
+        ...attached, attachment: { ...attached.attachment, id: 'replacement' },
+      }]]]),
+    }).tabs.map((tab) => tab.id)).toEqual(['legacy', 'feature:f1']);
   });
 
   it('opens a tab in the split pane and keeps it distinct from the active tab', () => {

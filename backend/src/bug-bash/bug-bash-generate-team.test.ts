@@ -94,6 +94,8 @@ describe('createBugBashGenerateTeam: generate', () => {
       config: { ...bugBashDefaults, maxAnalysts: 2 },
       ai: {
         runDetailed: async (req): Promise<MetaRunResult> => {
+          req.onStart?.(`session-${req.label}`);
+          req.onStart?.(`session-${req.label}`);
           call += 1;
           req.onActivity?.(`activity ${call}`);
           if (call === 1) {

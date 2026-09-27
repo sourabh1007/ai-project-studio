@@ -17,6 +17,7 @@ const STREAM_EVENT_NAMES = [
   'session.file',
   'session.notice',
   'usage.recorded',
+  'meta.usage.updated',
   'repository.context.updated',
   'context.status',
   'automation.updated',

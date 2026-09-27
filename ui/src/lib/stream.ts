@@ -12,6 +12,7 @@ import type {
 
 /** Normalized live events consumed by the reducer. */
 export type StreamEvent =
+  | { type: 'meta.usage.updated'; featureId: string; operationId: string }
   | { type: 'stream.interrupted' | 'stream.reconnected' | 'stream.truncated' }
   | { type: 'session.started'; session: Session }
   | { type: 'session.ended'; session: Session }
@@ -99,6 +100,7 @@ export const MAX_LIVE_CACHE_ENTRIES = 256;
 export const MAX_LIVE_CACHE_CHARACTERS = 256 * 1024;
 export const MAX_LIVE_EVENT_CHARACTERS = 1024 * 1024;
 const STATS_EVENTS = new Set([
+  'meta.usage.updated',
   'session.started', 'session.ended', 'session.updated', 'usage.recorded',
   'stream.interrupted', 'stream.reconnected', 'stream.truncated',
 ]);
@@ -211,6 +213,10 @@ function routeServerEvent(
         message: payload.message,
       };
     }
+    case 'meta.usage.updated':
+      return typeof payload.featureId === 'string' && typeof payload.operationId === 'string'
+        ? { type: 'meta.usage.updated', featureId: payload.featureId, operationId: payload.operationId }
+        : null;
     case 'usage.recorded':
       return { type: 'usage.recorded', usage: payload as unknown as StoredUsage };
     case 'repository.context.updated':
@@ -267,6 +273,8 @@ export function applyStreamEvent(
 
 function reduceStreamEvent(state: LiveState, event: StreamEvent): LiveState {
   switch (event.type) {
+    case 'meta.usage.updated':
+      return { ...state };
     case 'stream.interrupted':
       return { ...state, streamInterrupted: true, usageHistoryTruncated: true };
     case 'stream.reconnected': {

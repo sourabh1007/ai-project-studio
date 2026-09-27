@@ -8,6 +8,7 @@ import {
   type ThemeMode,
 } from '../lib/theme.js';
 import { desktopBridge } from '../lib/desktop-bridge.js';
+import { readAppearance, writeAppearance, useAppearanceRevision } from './appearance-storage.js';
 
 export type { ThemeMode, ResolvedTheme } from '../lib/theme.js';
 
@@ -15,7 +16,7 @@ const STORAGE_KEY = 'cw-theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
 function initialMode(): ThemeMode {
-  return parseThemeMode(window.localStorage.getItem(STORAGE_KEY));
+  return parseThemeMode(readAppearance(STORAGE_KEY));
 }
 
 function systemPrefersDark(): boolean {
@@ -35,7 +36,11 @@ export function useTheme(): {
   toggle: () => void;
   setMode: (mode: ThemeMode) => void;
 } {
-  const [mode, setMode] = useState<ThemeMode>(initialMode);
+  useAppearanceRevision();
+  const mode = initialMode();
+  const setMode = useCallback((next: ThemeMode | ((current: ThemeMode) => ThemeMode)) => {
+    writeAppearance(STORAGE_KEY, typeof next === 'function' ? next(initialMode()) : next);
+  }, []);
   const [prefersDark, setPrefersDark] = useState<boolean>(systemPrefersDark);
 
   useEffect(() => {
@@ -53,7 +58,6 @@ export function useTheme(): {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    window.localStorage.setItem(STORAGE_KEY, mode);
     desktopBridge()?.setTheme?.(theme);
   }, [mode, theme]);
 

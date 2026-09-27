@@ -23,18 +23,19 @@ function parseSnapshot(raw: string | null): UsageSnapshot | null {
 
 /**
  * Reads per-agent usage from the `meta_operations` ledger, aggregating the
- * completed, usage-recorded operations tagged with an agent's `usageLabel`.
+ * usage-recorded attempts tagged with an agent's `usageLabel` or perspective.
  * Each operation is one logical AI run, so counting rows yields the run count
  * and summing the usage snapshot yields the totals to average over.
  */
 export function createAgentUsageReader(db: DatabaseSync): AgentUsageReader {
   const select = db.prepare(
     `SELECT usage_json FROM meta_operations
-     WHERE label = ? AND state = 'completed' AND usage_state = 'recorded'`,
+     WHERE (label = ? OR substr(label, 1, length(?) + 3) = ? || ' · ')
+       AND usage_state = 'recorded'`,
   );
   return {
     aggregateByLabel(label) {
-      const rows = select.all(label) as unknown as UsageRow[];
+      const rows = select.all(label, label, label) as unknown as UsageRow[];
       let runs = 0;
       let credits = 0;
       let creditsSeen = false;

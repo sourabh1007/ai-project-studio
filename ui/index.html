@@ -15,7 +15,9 @@
          a *preference* (light/dark/system); `system` resolves against the OS. */
       (function () {
         try {
-          var stored = window.localStorage.getItem('cw-theme');
+          var desktop = window.desktop;
+          var appearance = desktop && desktop.getAppearance ? desktop.getAppearance() : null;
+          var stored = appearance && appearance.values['cw-theme'] || window.localStorage.getItem('cw-theme');
           var mode =
             stored === 'light' || stored === 'dark' || stored === 'system'
               ? stored

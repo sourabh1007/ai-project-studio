@@ -13,6 +13,7 @@ import {
   type TerminalState,
 } from '../lib/terminal-protocol.js';
 import { createTerminalDelivery } from '../lib/terminal-delivery.js';
+import { createTerminalHealth, type TerminalHealth } from '../lib/terminal-health.js';
 import {
   toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
   type ClipboardAttachmentResult, type DesktopClipboardBridge,
@@ -215,6 +216,20 @@ export function TerminalView({
   appearanceRef.current = appearance;
   const [connectionStatus, setConnectionStatus] = useState<{ state: TerminalState; notice: string }>({ state: 'connecting', notice: '' });
   const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [startupDetail, setStartupDetail] = useState('');
+  const [startupSeconds, setStartupSeconds] = useState(0);
+  const [health, setHealth] = useState<TerminalHealth | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const sendEscapeRef = useRef<(() => void) | null>(null);
+  const healthProblem = health?.connection === 'unresponsive' || (health?.pendingInputSeconds ?? 0) >= 10;
+  const preparing = ['connecting', 'bootstrapping', 'reconnecting'].includes(connectionStatus.state);
+  useEffect(() => {
+    setStartupSeconds(0);
+    if (!preparing) return;
+    const start = Date.now();
+    const timer = window.setInterval(() => setStartupSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [preparing, sessionId, connectionAttempt]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(currentThemeMode);
   const themeModeRef = useRef(themeMode);
@@ -480,14 +495,34 @@ export function TerminalView({
     let disposed = false;
     let reconnects = 0;
     let reconnectTimer: number | undefined;
+    let handshakeTimer: number | undefined;
+    let healthMonitor = createTerminalHealth(Date.now);
     const delivery = createTerminalDelivery({
       send: (message) => {
         if (ws.readyState !== WebSocket.OPEN) throw new Error('Socket is not open');
         ws.send(encodeClientMessage(message));
+        healthMonitor.sent(message);
       },
       status: (state, notice) => setConnectionStatus({ state, notice }),
     });
     setConnectionStatus({ state: 'connecting', notice: '' });
+    setStartupDetail('');
+    setHealth(null);
+    setShowDiagnostics(false);
+    sendEscapeRef.current = () => delivery.offer('\x1b');
+    let lastHealthTick = Date.now();
+    const healthTimer = window.setInterval(() => {
+      const now = Date.now();
+      if (document.visibilityState === 'hidden' || now - lastHealthTick > 15_000) healthMonitor.resume();
+      lastHealthTick = now;
+      if (document.visibilityState === 'hidden' || ws.readyState !== WebSocket.OPEN) return;
+      const probe = healthMonitor.probe();
+      if (probe) {
+        try { ws.send(encodeClientMessage(probe)); }
+        catch { setConnectionStatus((previous) => ({ ...previous, notice: 'Connection health check could not be sent. Reconnect to check the existing CLI.' })); }
+      }
+      setHealth(healthMonitor.snapshot());
+    }, 1000);
 
     const sendResize = () => {
       delivery.resize(term.cols, term.rows);
@@ -881,7 +916,20 @@ export function TerminalView({
     window.addEventListener('focus', refocus);
 
     const connect = () => {
+      let handshakeTimedOut = false;
+      healthMonitor = createTerminalHealth(Date.now);
+      setHealth(null);
       ws = new WebSocket(buildTerminalWsUrl(base, sessionId, window.location));
+      setStartupDetail('');
+      handshakeTimer = window.setTimeout(() => {
+        handshakeTimedOut = true;
+        invalidateClipboardRead();
+        invalidateFocusToken();
+        cancelReplayBarrier();
+        delivery.disconnect(false);
+        setStartupDetail('The backend did not acknowledge the terminal connection within 30 seconds. Reconnect to retry.');
+        ws.close(4408, 'Terminal handshake timed out');
+      }, 30_000);
       ws.onopen = () => {
         requestFit();
       };
@@ -895,7 +943,11 @@ export function TerminalView({
           ws.close(4400, 'Incompatible terminal protocol');
           return;
         }
+        healthMonitor.receive(message);
         if (message.type === 'state') {
+          window.clearTimeout(handshakeTimer);
+          setHealth(healthMonitor.snapshot());
+          setStartupDetail(message.detail ?? '');
           if (
             (terminalGeneration !== 0 && terminalGeneration !== message.generation) ||
             message.state === 'reconnecting' ||
@@ -971,11 +1023,12 @@ export function TerminalView({
         }));
       };
       ws.onclose = (event) => {
+        window.clearTimeout(handshakeTimer);
         if (disposed) return;
         invalidateClipboardRead();
         invalidateFocusToken();
         cancelReplayBarrier();
-        const retry = event.code < 4400 && reconnects++ < 3;
+        const retry = !handshakeTimedOut && event.code < 4400 && reconnects++ < 3;
         delivery.disconnect(retry);
         if (retry) reconnectTimer = window.setTimeout(connect, 1000);
       };
@@ -992,7 +1045,10 @@ export function TerminalView({
     return () => {
       clipboardMounted = false;
       disposed = true;
+      window.clearInterval(healthTimer);
+      sendEscapeRef.current = null;
       window.clearTimeout(reconnectTimer);
+      window.clearTimeout(handshakeTimer);
       window.clearTimeout(webglRetryTimer);
       invalidateClipboardRead();
       invalidateFocusToken();
@@ -1037,11 +1093,41 @@ export function TerminalView({
 
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>
-      Terminal: {connectionStatus.state}
+      {preparing && <span className="spinner" aria-hidden="true" style={{ marginRight: 6 }} />}
+      {startupDetail || (connectionStatus.state === 'ready' && health
+        ? health.connection === 'unresponsive' ? 'Backend heartbeat missing'
+          : (health.pendingInputSeconds ?? 0) >= 10 ? `Input delivery unconfirmed for ${health.pendingInputSeconds}s`
+          : health.quiet ? `No terminal output for ${health.outputAgeSeconds}s`
+          : health.connection === 'live' ? 'Terminal connection live' : 'Terminal connected'
+        : `Terminal: ${connectionStatus.state}`)}
+      {preparing && <span aria-hidden="true"> · {startupSeconds}s</span>}
       {connectionStatus.notice && <span> — {connectionStatus.notice}</span>}
       {(connectionStatus.state === 'failed' || connectionStatus.state === 'closed') &&
         <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect (input is not replayed)</button>}
+      {connectionStatus.state === 'ready' &&
+        <button aria-expanded={showDiagnostics || healthProblem} onClick={() => setShowDiagnostics((value) => !value)}>Session diagnostics</button>}
     </div>
+    {connectionStatus.state === 'ready' && health && (showDiagnostics || healthProblem) &&
+      <section className="terminal-diagnostics" aria-label="Session diagnostics">
+        <dl>
+          <dt>Backend connection</dt><dd>{health.connection === 'live'
+            ? `Responding; heartbeat ${health.heartbeatAgeSeconds}s ago`
+            : health.connection === 'unresponsive' ? 'No heartbeat reply within 20s. The connection or backend may be unavailable.'
+            : health.connection === 'unsupported' ? 'Heartbeat unavailable on this backend; connection health is unconfirmed.'
+            : 'Checking connection...'}</dd>
+          <dt>Terminal output</dt><dd>{health.outputAgeSeconds}s since the last output, or since attaching if none arrived. Redraws and spinners do not prove model progress.</dd>
+          <dt>Input delivery</dt><dd>{health.pendingInputSeconds !== null
+            ? `Waiting ${health.pendingInputSeconds}s for the CLI input-write acknowledgement. Do not submit again; it may already have executed.`
+            : health.inputAgeSeconds === null ? 'No input sent from this view.'
+            : `Last input sent ${health.inputAgeSeconds}s ago; terminal write acknowledged, not command completion.`}</dd>
+          <dt>Provider progress</dt><dd>The CLI does not report structured progress to this connection. It may be thinking, waiting for a tool or permission, idle, or stalled. The IDE cannot confirm which from a spinner alone.</dd>
+        </dl>
+        <p>Check the CLI for a question or error. If it remains stuck, send Esc to request an interrupt. Reconnecting only reattaches to an existing live CLI; input is never replayed. CPU/RAM pressure can be checked in App resources.</p>
+        <div className="terminal-diagnostics-actions">
+          <button disabled={health.connection !== 'live' || health.pendingInputSeconds !== null} onClick={() => sendEscapeRef.current?.()}>Send Esc to CLI</button>
+          <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect terminal</button>
+        </div>
+      </section>}
     {attachmentError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{attachmentError}</div>}
     <div className="terminal-host" style={{ flex: 1, minHeight: 0 }} ref={hostRef} />
   </div>;

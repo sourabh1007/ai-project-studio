@@ -87,6 +87,7 @@ describe('fair retryable native pool shutdown', () => {
       expect(() => pool.resize(0)).toThrow();
       expect(clients.map((client) => client.killed)).toEqual([1, 1]);
       expect(pool.stats()).toMatchObject({ size: 0, live: 2, idle: 0 });
+      expect(pool.stats().sessions.every((session) => session.retiring)).toBe(true);
       expect(budget.stats().processes).toBe(2);
       failKill = false;
       pool.resize(0);

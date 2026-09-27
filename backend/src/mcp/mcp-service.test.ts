@@ -10,6 +10,7 @@ import type {
   McpToolInspector,
 } from './mcp-contract.js';
 import { createMcpService } from './mcp-service.js';
+import { parseMcpConfigDocument } from './mcp-config-document.js';
 
 function support(overrides: Partial<McpSupport> = {}): McpSupport {
   return {
@@ -93,6 +94,29 @@ describe('createMcpService.listProviders', () => {
 });
 
 describe('createMcpService.getServers', () => {
+  it('loads an empty existing file without config discovery or tool launches', async () => {
+    const meta = metaOf(async () => '');
+    const tools = inspector();
+    const files = fileStore(async (path) => parseMcpConfigDocument('', path));
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())), meta, tools, files, config: enabled,
+    });
+    expect(await service.getServers('agency')).toEqual({
+      providerId: 'agency', configPath: '/default/mcp-config.json', exists: true, servers: [],
+    });
+    expect(meta.run).not.toHaveBeenCalled();
+    expect(tools.inspect).not.toHaveBeenCalled();
+    expect(files.write).not.toHaveBeenCalled();
+  });
+  it('does not overwrite malformed existing configuration when adding a server', async () => {
+    const files = fileStore(async (path) => parseMcpConfigDocument('{"incomplete":', path));
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support())), meta: metaOf(async () => ''),
+      tools: inspector(), files, config: enabled,
+    });
+    await expect(service.putServer('agency', { name: 'new', spec: { command: 'server' } })).rejects.toThrow('invalid JSON');
+    expect(files.write).not.toHaveBeenCalled();
+  });
   it('presents a proxy-wrapped spec as the user’s original spec', async () => {
     const original = { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } };
     const doc: McpConfigDocument = {

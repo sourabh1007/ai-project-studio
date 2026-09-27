@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApi } from '../app/api-context.js';
 import { desktopBridge } from '../lib/desktop-bridge.js';
+import type { ResourceSnapshot } from '../lib/types.js';
 import {
   deriveConnectionStatus,
   trackProbe,
@@ -22,12 +23,18 @@ function readBrowserOnline(): boolean {
  * Pure derivation lives in `lib/connection-status`; this hook only supplies the
  * live inputs and timers.
  */
-export function useConnectionStatus(): ConnectionStatus {
+export interface MeasuredConnectionStatus extends ConnectionStatus {
+  resources?: ResourceSnapshot;
+  probeFailed: boolean;
+}
+
+export function useConnectionStatus(): MeasuredConnectionStatus {
   const api = useApi();
   const [browserOnline, setBrowserOnline] = useState(readBrowserOnline);
   const [probe, setProbe] = useState<ProbeTracker>(INITIAL_PROBE);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
-  const cancelled = useRef(false);
+  const [resources, setResources] = useState<ResourceSnapshot>();
+  const [probeFailed, setProbeFailed] = useState(false);
 
   // The shell knows something polling cannot: that the backend is gone for
   // good. Without this the banner would keep implying recovery is under way.
@@ -47,16 +54,24 @@ export function useConnectionStatus(): ConnectionStatus {
   }, []);
 
   useEffect(() => {
-    cancelled.current = false;
+    let cancelled = false;
     let inFlight = false;
     const probe = async () => {
       if (!readBrowserOnline() || inFlight) return;
       inFlight = true;
       try {
-        await api.checkHealth();
-        if (!cancelled.current) setProbe((prev) => trackProbe(prev, 'ok'));
+        const health = await api.checkHealth();
+        if (!cancelled) {
+          setProbe((prev) => trackProbe(prev, 'ok'));
+          setResources(health.resources);
+          setProbeFailed(false);
+        }
       } catch {
-        if (!cancelled.current) setProbe((prev) => trackProbe(prev, 'error'));
+        if (!cancelled) {
+          setProbe((prev) => trackProbe(prev, 'error'));
+          setResources(undefined);
+          setProbeFailed(true);
+        }
       } finally {
         inFlight = false;
       }
@@ -64,14 +79,14 @@ export function useConnectionStatus(): ConnectionStatus {
     void probe();
     const timer = window.setInterval(() => void probe(), POLL_INTERVAL_MS);
     return () => {
-      cancelled.current = true;
+      cancelled = true;
       window.clearInterval(timer);
     };
   }, [api]);
 
-  return deriveConnectionStatus({
+  return { ...deriveConnectionStatus({
     browserOnline,
     lastProbe: probe.outcome,
     backendUnavailable,
-  });
+  }), resources, probeFailed };
 }

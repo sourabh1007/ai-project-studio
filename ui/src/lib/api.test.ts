@@ -19,6 +19,29 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('supports cancellation and safely encodes active-session debug identities', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({}));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    await client.getActiveSessions({ signal: controller.signal });
+    await client.getActiveSessionDebug('meta:one/two');
+    expect(calls[0][0]).toBe('/api/active-sessions');
+    expect(calls[0][1]?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+    expect(calls[1][0]).toBe('/api/active-sessions/meta%3Aone%2Ftwo/debug');
+  });
+  it('uses cached resource reads and explicit storage refresh and cleanup requests', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({}));
+    const client = createApiClient({ fetchImpl });
+    await client.getAppResources();
+    await client.refreshResourceStorage();
+    await client.cleanResourceStorage('logs');
+    expect(calls.map(([path]) => path)).toEqual(['/api/resources', '/api/resources/storage/refresh', '/api/resources/cleanup']);
+    expect(calls[0][1]?.method).toBeUndefined();
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[2][1]?.body).toBe('{"category":"logs"}');
+  });
   it('turns a non-JSON 200 into an honest, retryable backend error', async () => {
     // Mid-upgrade a proxy can answer 200 with an HTML page. Before, this threw
     // a raw SyntaxError that read as a UI crash.
@@ -114,6 +137,18 @@ describe('createApiClient', () => {
     expect(result).toEqual({ id: 'f1' });
     expect(calls[0][0]).toBe('/api/features/f1');
     expect(calls[0][1]?.method).toBe('DELETE');
+  });
+
+  it('fetches the worktrees a feature deletion would remove', async () => {
+    const worktrees = [
+      { featureId: 'f1', sessionId: 's1', path: '/wt/s1', branch: 'main' },
+    ];
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ worktrees }));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.previewFeatureDeletion('f1');
+    expect(result).toEqual({ worktrees });
+    expect(calls[0][0]).toBe('/api/features/f1/deletion-preview');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
   });
 
   it('moves a feature with a JSON POST body', async () => {
@@ -477,6 +512,56 @@ describe('createApiClient', () => {
     );
     expect(init?.method).toBe('PUT');
     expect(init?.body).toBe(JSON.stringify({ enabled: false }));
+  });
+
+  it('removes an MCP server from the selected category with encoded identity', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ providerId: 'a/b', servers: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.removeMcpServer('a/b', 'user:Azure MCP');
+    expect(calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers/user%3AAzure%20MCP');
+    expect(calls[0][1]?.method).toBe('DELETE');
+  });
+
+  it('configures a catalog builtin via the native setup endpoint', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ providerId: 'agency', servers: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.configureMcpBuiltin('agency', 'catalog:ado', { arguments: '--organization example' });
+    expect(calls[0][0]).toBe('/api/mcp/providers/agency/servers/catalog%3Aado/configure');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ arguments: '--organization example' }));
+  });
+
+  it('loads cached native command options using encoded server identity', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ options: [], examples: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.getMcpCommandOptions('a/b', 'catalog:ado');
+    expect(calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers/catalog%3Aado/options');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+
+  it('updates server enablement without treating it as a tool toggle', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ providerId: 'a/b', servers: [] }));
+    const client = createApiClient({ fetchImpl });
+    await client.setMcpServerEnabled('a/b', 'user:Azure MCP', false);
+    expect(calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers/user%3AAzure%20MCP/enabled');
+    expect(calls[0][1]?.method).toBe('PUT');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ enabled: false }));
+  });
+
+  it('starts, polls and cancels an MCP authentication job with encoded identities', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'job/1', status: 'pending' }));
+    const client = createApiClient({ fetchImpl });
+    await client.startMcpAuthentication('a/b', 'global:ado');
+    await client.getMcpAuthentication('a/b', 'global:ado', 'job/1');
+    await client.cancelMcpAuthentication('a/b', 'global:ado', 'job/1');
+    const base = '/api/mcp/providers/a%2Fb/servers/global%3Aado/authentication';
+    expect(calls[0][0]).toBe(base);
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBeUndefined();
+    expect(calls[1][0]).toBe(`${base}/job%2F1`);
+    expect(calls[1][1]?.method ?? 'GET').toBe('GET');
+    expect(calls[2][0]).toBe(`${base}/job%2F1`);
+    expect(calls[2][1]?.method).toBe('DELETE');
   });
 
   it('restarts an MCP server with a JSON POST body', async () => {
@@ -1024,6 +1109,97 @@ describe('createApiClient', () => {
     );
   });
 
+  it('streams checkout status and resolves with the feature on done', async () => {
+    const chunks = [
+      '{"type":"status","phase":"favouriting","message":"Marking as favourite…"}\n',
+      '\n',
+      '{"type":"status","phase":"fetching","message":"Fetching…"}\n',
+      '{"type":"done","feature":{"id":"f9"}}',
+    ];
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchImpl: FetchLike = async (input, init) => {
+      calls.push([input, init]);
+      return streamResponse(chunks);
+    };
+    const client = createApiClient({ fetchImpl });
+    const statuses: Array<{ phase: string; message: string }> = [];
+    const feature = await client.createPrFeatureStreamed(
+      'r1',
+      42,
+      (s) => statuses.push(s),
+      'parent-1',
+    );
+    expect(calls[0][0]).toBe('/api/repos/r1/pulls/stream');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(
+      JSON.stringify({ number: 42, parentFeatureId: 'parent-1', parentGroupId: null }),
+    );
+    expect(statuses).toEqual([
+      { phase: 'favouriting', message: 'Marking as favourite…' },
+      { phase: 'fetching', message: 'Fetching…' },
+    ]);
+    expect(feature).toEqual({ id: 'f9' });
+  });
+
+  it('rejects with the streamed error message when checkout fails', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse([
+        '{"type":"error","status":422,"error":{"error":{"message":"branch gone"}}}\n',
+      ]);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toThrow('branch gone');
+  });
+
+  it('rejects with a fallback message when the error carries a blank message', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse([
+        '{"type":"error","status":500,"error":{"error":{"message":"   "}}}\n',
+      ]);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toThrow('Failed to check out the pull request.');
+  });
+
+  it('rejects with a fallback message when the error carries no body', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse(['{"type":"error","status":500}']);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toThrow('Failed to check out the pull request.');
+  });
+
+  it('rejects when the stream ends without a done event', async () => {
+    const fetchImpl: FetchLike = async () =>
+      streamResponse([
+        '{"type":"status","phase":"fetching","message":"Fetching…"}\n   ',
+      ]);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toThrow('did not complete');
+  });
+
+  it('propagates a non-OK streamed checkout response as an ApiError', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ error: { message: 'nope' } }, 500);
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toThrow('nope');
+  });
+
+  it('raises an ApiError when the streamed checkout has no body', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({});
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.createPrFeatureStreamed('r1', 42, () => {}),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
   it('reads a PR review for a feature', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
     const client = createApiClient({ fetchImpl });
@@ -1040,6 +1216,15 @@ describe('createApiClient', () => {
     expect(result).toEqual({ featureId: 'f1' });
     expect(calls[0][0]).toBe('/api/features/f1/review-board');
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+  it('restores and settles durable import review queue entries', async () => {
+    const pending = mockFetch(jsonResponse(['f1']));
+    expect(await createApiClient({ fetchImpl: pending.fetchImpl }).getPendingReviewBoards()).toEqual(['f1']);
+    expect(pending.calls[0][0]).toBe('/api/review-board/queue');
+    const settled = mockFetch(jsonResponse({ settled: true }));
+    await createApiClient({ fetchImpl: settled.fetchImpl }).settleReviewBoardQueue('f1');
+    expect(settled.calls[0][0]).toBe('/api/features/f1/review-board/queue/settle');
+    expect(settled.calls[0][1]?.method).toBe('POST');
   });
 
   it('analyzes a review board via a JSON POST', async () => {
@@ -1208,12 +1393,12 @@ describe('createApiClient', () => {
       jsonResponse({ approved: true, state: 'approved' }),
     );
     const client = createApiClient({ fetchImpl });
-    const result = await client.approvePrReview('f1');
+    const result = await client.approvePrReview('f1', { expectedHeadSha: 'sha-a' });
     expect(result).toEqual({ approved: true, state: 'approved' });
     const [url, init] = calls[0];
     expect(url).toBe('/api/features/f1/pr-review/approve');
     expect(init?.method).toBe('POST');
-    expect(init?.body).toBe(JSON.stringify({}));
+    expect(init?.body).toBe(JSON.stringify({ expectedHeadSha: 'sha-a' }));
   });
 
   it('exports a PR review into the description via a JSON POST', async () => {
@@ -1227,6 +1412,12 @@ describe('createApiClient', () => {
     expect(url).toBe('/api/features/f1/pr-review/export-description');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe(JSON.stringify({}));
+  });
+
+  it('pins approval to the commit the user reviewed', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ approved: true, state: 'approved' }));
+    await createApiClient({ fetchImpl }).approvePrReview('f1', { expectedHeadSha: 'reviewed-sha' });
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ expectedHeadSha: 'reviewed-sha' }));
   });
 
   it('lists managed worktrees via GET', async () => {
@@ -1474,6 +1665,25 @@ describe('analyzeReviewBoardPerspectives (NDJSON stream)', () => {
 });
 
 describe('analyzeRepoInsights (NDJSON stream)', () => {
+  it('forwards the abort signal to fetch and propagates cancellation', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<FetchLike>((_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('Aborted', 'AbortError')),
+        );
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const onEvent = vi.fn();
+    const scan = client.analyzeRepoInsights('r1', onEvent, controller.signal);
+    const rejection = expect(scan).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchImpl.mock.calls[0][1]?.signal).toBe(controller.signal);
+    controller.abort();
+    await rejection;
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it('delivers each newline-delimited event and ignores blank lines', async () => {
     const chunks = [
       '{"type":"section-analyzing","section":"agents"}\n',

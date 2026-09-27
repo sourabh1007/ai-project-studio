@@ -19,6 +19,7 @@ An Electron desktop app that wraps AI coding CLIs (GitHub Copilot, Agency) in an
 5. **Don't couple the core to a specific CLI.** Copilot/Agency are `provider` adapters behind `IAIProvider`. New tools and user-facing behaviors must go through generic provider/registry hooks — see [docs/adding-a-provider.md](docs/adding-a-provider.md).
 6. **Prefer editing existing files** over adding new ones; match the surrounding style. Comment only where intent is non-obvious.
 7. **Commit trailers**: include the co-author/session trailers already used in this repo's history when committing.
+8. **Keep the API event loop responsive.** CPU-heavy parsing and repository-wide analysis belong in bounded, cancellable workers (`kernel/background-work-runner.ts`), not HTTP handlers. `async` alone does not isolate CPU work. Bound queues, memory and execution time; report queued/running/failure states, and test unrelated API responsiveness under concurrent load. Resource warnings must use measurements, not infer shortages from timeouts.
 
 ## Architecture in one screen
 

@@ -1,12 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { useApi } from './app/api-context.js';
+import { failActivity } from './lib/activity.js';
+import { reviewBoardRunStore } from './features/review-board-page/review-board-run-store.js';
+import { ActiveSessionsStatus } from './features/status-bar/active-sessions-status.js';
+import type { ActiveSessionEntry } from './features/active-sessions/active-session-types.js';
 import { useUsageStream } from './hooks/use-usage-stream.js';
 import { useTheme } from './hooks/use-theme.js';
 import { useGlobalClipboard } from './hooks/use-global-clipboard.js';
 import { themeModeLabel } from './lib/theme.js';
-import { useWorkspaceStats } from './hooks/use-workspace-stats.js';
 import { useIdeUsage } from './hooks/use-ide-usage.js';
 import { usePlanUsage } from './hooks/use-plan-usage.js';
-import { useActivity } from './hooks/use-activity.js';
 import { liveSignal } from './lib/stream.js';
 import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
@@ -60,6 +63,9 @@ import {
 import { ShortcutsSheet } from './components/shortcuts-sheet.js';
 import { NetworkCenter } from './features/network-center/network-center.js';
 import { MetaModelStatus } from './features/status-bar/meta-model-status.js';
+import { ResourceStatus } from './features/status-bar/resource-status.js';
+import { ActivityStatus } from './features/status-bar/activity-status.js';
+import { useConnectionStatus } from './hooks/use-connection-status.js';
 import { PlanUsageIndicator } from './components/plan-usage-indicator.js';
 import {
   matchShortcut,
@@ -74,6 +80,7 @@ import type { PoppableTab } from './features/workspace/tab-popout.js';
 import {
   AutomationIcon,
   AiChatIcon,
+  CollapseSidebarIcon,
   FilesIcon,
   McpIcon,
   MoonIcon,
@@ -100,6 +107,16 @@ const SHORTCUT_BINDINGS: ShortcutBinding[] = [
 ];
 
 export function App() {
+  const api = useApi();
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => api.getPendingReviewBoards()).then((ids) => {
+      if (!cancelled) reviewBoardRunStore.enqueueBulk(ids, api);
+    }).catch((error) => {
+      if (!cancelled) failActivity(error instanceof Error ? error.message : 'Could not restore pending PR reviews.');
+    });
+    return () => { cancelled = true; };
+  }, [api]);
   const live = useUsageStream();
   const { mode, theme, cycle, toggle } = useTheme();
   useApplyUiPreferences(theme);
@@ -107,9 +124,13 @@ export function App() {
     validate: isOneOf(VIEW_ORDER),
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [dockVisible, setDockVisible] = usePersistentState('cw-dock-visible', true, {
+    validate: (value): value is boolean => typeof value === 'boolean',
+  });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [networkOpen, setNetworkOpen] = useState(false);
+  const [worktreesRequest, setWorktreesRequest] = useState<number>();
   // A tab returned from a detached ("popped out") window re-opens in the
   // workspace. The nonce lets the workspace treat repeated returns of the same
   // tab as distinct events.
@@ -118,6 +139,25 @@ export function App() {
     label: string;
     nonce: number;
   } | null>(null);
+  async function openActiveSession(entry: ActiveSessionEntry) {
+    try {
+      if (entry.kind !== 'session' || !entry.sessionId) {
+        throw new Error('IDE sessions can only be opened in the read-only debugger.');
+      }
+      const session = await api.getSession(entry.sessionId);
+      if (session.kind === 'meta' || session.status !== 'running') {
+        throw new Error('This session is no longer an active workspace terminal.');
+      }
+      setView('workspace');
+      setSidebarOpen(true);
+      setReopenTab({
+        tab: { kind: 'session', id: session.id, label: entry.label, session },
+        label: entry.label, nonce: Date.now(),
+      });
+    } catch (error) {
+      failActivity(error instanceof Error ? error.message : 'Could not open active session. Refresh the list and retry.');
+    }
+  }
 
   useEffect(() => {
     const windows = desktopBridge()?.windows;
@@ -292,6 +332,13 @@ export function App() {
         run: () => setSidebarOpen((prev) => !prev),
       },
       {
+        id: 'toggle-dock',
+        title: 'Toggle Icon Dock',
+        section: 'View',
+        keywords: ['activity bar', 'navigation', 'hide', 'show'],
+        run: () => setDockVisible((prev) => !prev),
+      },
+      {
         id: 'show-shortcuts',
         title: 'Show Keyboard Shortcuts',
         section: 'Help',
@@ -305,11 +352,9 @@ export function App() {
   // Authoritative persisted stats, refreshed as live events arrive. The live
   // SSE feed alone is incomplete after reloads, so we never derive the status
   // bar figures from it directly.
-  const stats = useWorkspaceStats(liveSignal(live));
-  const activeSessions = stats?.activeSessions ?? 0;
   const ideUsage = useIdeUsage(liveSignal(live));
   const planUsage = usePlanUsage();
-  const activity = useActivity();
+  const connection = useConnectionStatus();
 
   return (
     <div className="ide-shell">
@@ -325,8 +370,8 @@ export function App() {
         onClose={() => setShortcutsOpen(false)}
       />
       <NetworkCenter open={networkOpen} onClose={() => setNetworkOpen(false)} />
-      <div className="ide-main">
-        <nav className="activitybar" aria-label="Primary">
+      <div className={`ide-main${dockVisible ? '' : ' is-dock-hidden'}`}>
+        <nav id="icon-dock" className="activitybar" aria-label="Primary" hidden={!dockVisible}>
           <div className="activitybar-group">
             <button
               type="button"
@@ -440,7 +485,7 @@ export function App() {
 
         <div className="ide-content">
           <TopLoadingBar />
-          <ConnectionBanner liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
+          <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
@@ -473,7 +518,7 @@ export function App() {
                 </div>
               ) : (
                 <div className="settings-pane">
-                  <SettingsView />
+                  <SettingsView worktreesRequest={worktreesRequest} />
                 </div>
               )}
             </Suspense>
@@ -483,6 +528,17 @@ export function App() {
 
       <footer className="statusbar">
         <div className="statusbar-group">
+          <button
+            type="button"
+            className="statusbar-item dock-toggle"
+            title={dockVisible ? 'Hide icon dock' : 'Show icon dock'}
+            aria-label={dockVisible ? 'Hide icon dock' : 'Show icon dock'}
+            aria-expanded={dockVisible}
+            aria-controls="icon-dock"
+            onClick={() => setDockVisible((prev) => !prev)}
+          >
+            <CollapseSidebarIcon size={14} />
+          </button>
           <span className="statusbar-item statusbar-accent">
             {view === 'workspace'
               ? 'Workspace'
@@ -498,33 +554,14 @@ export function App() {
                       ? 'Agents'
                       : 'Settings'}
           </span>
-          <span className="statusbar-item">{activeSessions} active</span>
-          <span
-            className={`statusbar-activity ${
-              activity.error
-                ? 'is-error'
-                : activity.pending > 0
-                  ? 'is-busy'
-                  : 'is-idle'
-            }`}
-            title={
-              activity.error ?? (activity.pending > 0 ? activity.label ?? '' : 'Ready')
-            }
-            aria-live="polite"
-          >
-            {activity.error ? (
-              <span className="statusbar-activity-dot" aria-hidden="true" />
-            ) : activity.pending > 0 ? (
-              <span className="spinner statusbar-spinner" aria-hidden="true" />
-            ) : (
-              <span className="statusbar-activity-dot" aria-hidden="true" />
-            )}
-            <span className="statusbar-activity-label">
-              {activity.error ?? (activity.pending > 0 ? activity.label : 'Ready')}
-            </span>
-          </span>
+          <ActiveSessionsStatus api={api} live={live} onOpen={openActiveSession} />
+          <ActivityStatus />
         </div>
         <div className="statusbar-group">
+          <ResourceStatus connection={connection} onManageWorktrees={() => {
+            setWorktreesRequest((value) => (value ?? 0) + 1);
+            setView('settings');
+          }} />
           <MetaModelStatus />
           <PlanUsageIndicator state={planUsage} />
           <span

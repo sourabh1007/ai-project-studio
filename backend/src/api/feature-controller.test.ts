@@ -41,6 +41,7 @@ function harness() {
   } as unknown as FeatureService;
   const renamed: { id: string; name: string }[] = [];
   const deleted: string[] = [];
+  const previewed: string[] = [];
   const admin = {
     renameFeature: (id: string, name: string) => {
       renamed.push({ id, name });
@@ -48,6 +49,12 @@ function harness() {
     },
     renameSession: (id: string, name: string | null) =>
       ({ ...feature, id, name } as unknown as Session),
+    previewFeatureDeletion: async (id: string) => {
+      previewed.push(id);
+      return [
+        { featureId: id, sessionId: 's1', path: '/wt/s1', branch: 'main' },
+      ];
+    },
     deleteFeature: async (id: string) => void deleted.push(id),
     deleteSession: async () => undefined,
   };
@@ -57,6 +64,7 @@ function harness() {
     moved,
     renamed,
     deleted,
+    previewed,
   };
 }
 
@@ -138,6 +146,20 @@ describe('feature-controller', () => {
     );
     expect(result).toEqual({ status: 200, body: { id: 'f1' } });
     expect(h.deleted).toEqual(['f1']);
+  });
+
+  it('previews the worktrees a feature deletion would remove', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/features/:id/deletion-preview')(
+      req({ params: { id: 'f1' } }),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      worktrees: [
+        { featureId: 'f1', sessionId: 's1', path: '/wt/s1', branch: 'main' },
+      ],
+    });
+    expect(h.previewed).toEqual(['f1']);
   });
 
   it('moves a feature and returns the updated feature', async () => {

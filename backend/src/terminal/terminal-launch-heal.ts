@@ -91,6 +91,8 @@ export function healErrorText(error: unknown): string {
 }
 
 export interface SelfHealingLaunchDeps<T> {
+  /** Repository-backed sessions must never recreate an empty or shared cwd. */
+  allowCwdRepair?: boolean;
   /** Launches (or reattaches) the terminal in the given working directory. */
   launch: (cwd: string) => Promise<T>;
   /** The session's resolved working directory, if any. */
@@ -141,7 +143,7 @@ export async function launchWithSelfHealing<T>(
   try {
     return await deps.launch(cwd);
   } catch (error) {
-    const decision = healTerminalLaunch({
+    const decision = deps.allowCwdRepair === false ? null : healTerminalLaunch({
       cwd,
       fallbackCwd: deps.fallbackCwd,
       fs: deps.fs,

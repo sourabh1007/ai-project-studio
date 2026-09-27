@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createAcpMetaRunner, type AcpTurnPool } from './acp-meta-runner.js';
 import type { AcpTurnResult } from './acp-client.js';
 
@@ -11,6 +11,7 @@ function fakePool(
     onActivity?: (text: string) => void;
     onNotice?: (line: string) => void;
     onStart?: () => void;
+    onSession?: (sessionId: string) => void;
     signal?: AbortSignal;
   }) => AcpTurnResult,
 ): {
@@ -37,6 +38,7 @@ function fakePool(
   const pool: AcpTurnPool = {
     run(request, context) {
       request.onStart?.();
+      request.onSession?.('acp-internal');
       calls.push({
         prompt: request.prompt,
         cwd: request.cwd,
@@ -73,6 +75,29 @@ function deps(
 }
 
 describe('createAcpMetaRunner', () => {
+  it('does not publish a synthetic warm attempt if bootstrap fails before a provider session exists', async () => {
+    const onStart = vi.fn();
+    const runner = createAcpMetaRunner(deps({
+      run: async () => { throw new Error('bootstrap failed'); },
+    }));
+    await expect(runner.runDetailed({ featureId: 'f', prompt: 'p', onStart })).rejects.toThrow('bootstrap failed');
+    expect(onStart).not.toHaveBeenCalled();
+  });
+  it('publishes the provider identity before a warm turn completes, including failures', async () => {
+    const onStart = vi.fn();
+    const runner = createAcpMetaRunner(deps({
+      run: async (request) => {
+        request.onStart?.();
+        request.onSession?.('vendor');
+        throw new Error('provider failed');
+      },
+    }));
+    await expect(runner.runDetailed({ featureId: 'f', prompt: 'p', onStart })).rejects.toThrow('provider failed');
+    expect(onStart).toHaveBeenLastCalledWith('sess-1', {
+      providerId: 'copilot', providerSessionId: 'vendor', transport: 'warm-acp',
+    });
+    await expect(runner.runDetailed({ featureId: 'f', prompt: 'p' })).rejects.toThrow('provider failed');
+  });
   it('runs a turn inline and reports the minted session id via onStart', async () => {
     const { pool, calls } = fakePool(() => result('answer'));
     const runner = createAcpMetaRunner(deps(pool));

@@ -46,21 +46,21 @@ export function isAbortError(err: unknown): boolean {
  */
 export const activityFetch: FetchLike = async (input, init) => {
   const label = describeRequest(init?.method ?? 'GET', String(input));
-  beginActivity(label);
+  const token = beginActivity(label);
   try {
     const response = await fetch(input, init);
     if (response.ok) {
-      endActivity();
+      endActivity(token);
     } else {
-      failActivity(label);
+      failActivity(label, token);
     }
     return response;
   } catch (err) {
     if (isAbortError(err)) {
       // A cancelled request is not a failure worth alarming the user over.
-      endActivity();
+      endActivity(token);
     } else {
-      failActivity(err instanceof Error ? err.message : label);
+      failActivity(err instanceof Error ? err.message : label, token);
     }
     throw err;
   }

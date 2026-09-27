@@ -1,4 +1,10 @@
-import type { AgentDefinition } from './agent-contract.js';
+import type { AgentDefinition, AgentPromptField } from './agent-contract.js';
+import {
+  COMMON_PROMPT_PLACEHOLDERS,
+  PERSPECTIVE_CONFIG_KEYS,
+  PERSPECTIVE_LABELS,
+  REVIEW_PERSPECTIVE_IDS,
+} from '../review-board/review-board-perspective-prompts.js';
 
 /** Dependencies for the Review Board agent definition. */
 export interface ReviewBoardAgentDeps {
@@ -21,6 +27,35 @@ export const REVIEW_BOARD_AGENT_ID = 'review-board';
 export function createReviewBoardAgent(
   deps: ReviewBoardAgentDeps,
 ): AgentDefinition {
+  const perspectiveFields: AgentPromptField[] = REVIEW_PERSPECTIVE_IDS.flatMap(
+    (id) => {
+      const keys = PERSPECTIVE_CONFIG_KEYS[id];
+      const label = PERSPECTIVE_LABELS[id];
+      const isProblemSolution = id === 'problem-solution';
+      const focusPlaceholders = isProblemSolution
+        ? [...COMMON_PROMPT_PLACEHOLDERS, 'distilledProblem', 'solutionDigest']
+        : [...COMMON_PROMPT_PLACEHOLDERS];
+      return [
+        {
+          namespace: 'reviewBoard',
+          key: keys.focus,
+          label: 'Focus',
+          description: `What the ${label} lens digs into, tied to the change.`,
+          placeholders: focusPlaceholders,
+          group: 'Review perspectives',
+          subgroup: label,
+        },
+        {
+          namespace: 'reviewBoard',
+          key: keys.issueFormat,
+          label: 'Issue format',
+          description: `How the ${label} lens' rationale and findings should read.`,
+          group: 'Review perspectives',
+          subgroup: label,
+        },
+      ];
+    },
+  );
   return {
     manifest: {
       id: REVIEW_BOARD_AGENT_ID,
@@ -35,40 +70,16 @@ export function createReviewBoardAgent(
       promptFields: [
         {
           namespace: 'reviewBoard',
-          key: 'perspectivePromptTemplate',
-          label: 'Perspective lens review',
+          key: 'commonReviewGuidance',
+          label: 'Common review guidance',
           description:
-            'Runs a pull request through one generic lens (Architecture, Code ' +
-            'Quality, Performance, Security, …) and returns evidence-backed ' +
-            'findings.',
-          placeholders: [
-            'lensName',
-            'lensPurpose',
-            'prNumber',
-            'prTitle',
-            'baseBranch',
-            'filesChanged',
-            'description',
-            'modelDigest',
-            'changedFiles',
-          ],
+            'Shared opening every perspective prompt uses — how to review ' +
+            '(concise, evidence-tied, single-lens) and which languages/config ' +
+            'formats to expect.',
+          placeholders: [...COMMON_PROMPT_PLACEHOLDERS],
+          group: 'Foundation',
         },
-        {
-          namespace: 'reviewBoard',
-          key: 'problemSolutionPromptTemplate',
-          label: 'Problem ↔ Solution verdict',
-          description:
-            'The dedicated Problem ↔ Solution lens — a general, plain-English ' +
-            'judgement of whether the change actually solves its stated problem.',
-          placeholders: [
-            'prNumber',
-            'prTitle',
-            'filesChanged',
-            'description',
-            'distilledProblem',
-            'solutionDigest',
-          ],
-        },
+        ...perspectiveFields,
         {
           namespace: 'prReview',
           key: 'problemStatementPromptTemplate',
@@ -83,6 +94,7 @@ export function createReviewBoardAgent(
             'problemHeading',
             'insufficientMarker',
           ],
+          group: 'PR analysis',
         },
         {
           namespace: 'prReview',
@@ -99,6 +111,7 @@ export function createReviewBoardAgent(
             'methodsShape',
             'methodsGuidance',
           ],
+          group: 'PR analysis',
         },
         {
           namespace: 'prReview',
@@ -107,6 +120,7 @@ export function createReviewBoardAgent(
           description:
             'Answers a question about a change-graph category using a bounded ' +
             'graph summary and prior conversation.',
+          group: 'PR analysis',
         },
       ],
     },

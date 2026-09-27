@@ -8,6 +8,7 @@ import type {
   PrCommentsService,
 } from './pr-comments-contract.js';
 import type { PrReview } from './pr-review-contract.js';
+import { assertExpectedHeadSha, hasCapturedRightLine, isRepoRelativePath } from './pr-comment-location.js';
 
 export interface PrCommentsServiceDeps {
   /** Resolves the review (repo id + pull) a feature's comments belong to. */
@@ -36,6 +37,7 @@ export function assertAddCommentInput(body: unknown): AddPrCommentInput {
     path?: unknown;
     line?: unknown;
     body?: unknown;
+    expectedHeadSha?: unknown;
   };
   if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
     throw new ValidationError('A non-empty file "path" is required.');
@@ -50,7 +52,13 @@ export function assertAddCommentInput(body: unknown): AddPrCommentInput {
   if (typeof raw.body !== 'string' || raw.body.trim().length === 0) {
     throw new ValidationError('A non-empty comment "body" is required.');
   }
-  return { path: raw.path, line: raw.line, body: raw.body };
+  if (raw.expectedHeadSha !== undefined) {
+    assertExpectedHeadSha(raw.expectedHeadSha);
+  }
+  return {
+    path: raw.path, line: raw.line, body: raw.body,
+    ...(raw.expectedHeadSha !== undefined ? { expectedHeadSha: raw.expectedHeadSha } : {}),
+  };
 }
 
 /**
@@ -61,10 +69,24 @@ export function assertAddCommentInput(body: unknown): AddPrCommentInput {
 export function createPrCommentsService(
   deps: PrCommentsServiceDeps,
 ): PrCommentsService {
-  const gatewayFor = (featureId: string) => {
+  const gatewayFor = (featureId: string, guardedInput?: AddPrCommentInput) => {
     const review = deps.reviews.get(featureId);
     if (!review) {
       throw new NotFoundError(`No code review for feature ${featureId}`);
+    }
+    if (guardedInput) {
+      if (!review.headSha || review.headSha !== guardedInput.expectedHeadSha) {
+        throw new ValidationError('The captured review head has changed or is missing. Refresh the Review Board before posting.');
+      }
+      if (review.changeGraph.status !== 'ready') {
+        throw new ValidationError('The captured change graph is not ready. Refresh the Review Board before posting.');
+      }
+      const node = review.changeGraph.nodes.find((candidate) =>
+        candidate.path === guardedInput.path && candidate.kind === 'changed');
+      if (!isRepoRelativePath(guardedInput.path) || !node ||
+          node.changeKind === 'deleted' || !hasCapturedRightLine(node.diff, guardedInput.line)) {
+        throw new ValidationError('The exact file and RIGHT-side line are not present in the captured diff. Refresh the Review Board before posting.');
+      }
     }
     const repo = deps.repos.get(review.repoId);
     if (!repo) {
@@ -78,6 +100,10 @@ export function createPrCommentsService(
       return gatewayFor(featureId).list();
     },
     async add(featureId, input): Promise<PrCommentThread> {
+      if (input.expectedHeadSha !== undefined) {
+        const validated = assertAddCommentInput(input);
+        return gatewayFor(featureId, validated).add(validated);
+      }
       return gatewayFor(featureId).add(input);
     },
     async setStatus(featureId, threadId, status): Promise<PrCommentThread> {

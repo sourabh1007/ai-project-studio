@@ -5,13 +5,15 @@
  */
 
 export type ClientMessage =
+  | { type: 'ping'; generation: number; seq: number }
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
 
 export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
-  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number }
+  | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number; detail?: string; heartbeat?: boolean }
+  | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
   | { type: 'resize'; cols: number; rows: number }
@@ -36,12 +38,18 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
   if (!isRecord(parsed)) {
     return null;
   }
-  if (parsed.type === 'state' || parsed.type === 'ack') {
+  if (parsed.type === 'state' || parsed.type === 'ack' || parsed.type === 'pong') {
     if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;
+    if (parsed.type === 'pong') {
+      return Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0
+        ? { type: 'pong', generation: parsed.generation as number, seq: parsed.seq as number } : null;
+    }
     if (parsed.type === 'state') {
       return parsed.version === 2 &&
         ['connecting', 'bootstrapping', 'ready', 'reconnecting', 'closed', 'failed'].includes(parsed.state as string) &&
-        Number.isSafeInteger(parsed.inputLimit) && (parsed.inputLimit as number) > 0
+        Number.isSafeInteger(parsed.inputLimit) && (parsed.inputLimit as number) > 0 &&
+        (parsed.heartbeat === undefined || typeof parsed.heartbeat === 'boolean') &&
+        (parsed.detail === undefined || typeof parsed.detail === 'string')
         ? parsed as ServerMessage : null;
     }
     return Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0 &&

@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { LineAssembler } from '../provider/process-kernel/stream-reader.js';
+import { killProcessTree } from '../provider/process-kernel/process-tree-kill.js';
 import { classifyMcpAuth } from './mcp-auth-detect.js';
+import { mcpInspectorLaunch } from './mcp-inspector-launch.js';
 import type { McpToolInspection, McpToolInspector } from './mcp-contract.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -61,7 +63,10 @@ function toolsFrom(result: unknown): McpToolInspection['tools'] {
  */
 export function createMcpToolInspector(): McpToolInspector {
   return {
-    inspect({ spec, timeoutMs }) {
+    inspect({ spec, timeoutMs, signal, onProgress }) {
+      if (signal?.aborted) return Promise.resolve({
+        status: 'failed', message: 'MCP inspection was cancelled', output: [], tools: [],
+      });
       const command = typeof spec.command === 'string' ? spec.command : '';
       if (!command) {
         return Promise.resolve({
@@ -79,6 +84,7 @@ export function createMcpToolInspector(): McpToolInspector {
         const stderr = new LineAssembler();
         let nextId = 1;
         let settled = false;
+        let exited = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
 
         const append = (line: string): void => {
@@ -90,13 +96,16 @@ export function createMcpToolInspector(): McpToolInspector {
           if (output.length > MAX_OUTPUT_LINES) {
             output.shift();
           }
+          if (!settled && !exited) onProgress?.([...output]);
         };
 
-        const child = spawn(command, stringArray(spec.args), {
+        const launch = mcpInspectorLaunch(command, stringArray(spec.args), process.platform);
+        const child = spawn(launch.command, launch.args, {
           env: envOf(spec),
           cwd: typeof spec.cwd === 'string' ? spec.cwd : undefined,
           stdio: 'pipe',
-          shell: process.platform === 'win32',
+          shell: launch.shell,
+          windowsVerbatimArguments: launch.windowsVerbatimArguments,
           windowsHide: true,
         });
 
@@ -108,25 +117,38 @@ export function createMcpToolInspector(): McpToolInspector {
           }
           settled = true;
           clearTimeout(timer);
+          signal?.removeEventListener('abort', abort);
+          for (const resolveRequest of pending.values()) {
+            resolveRequest({ error: { message: 'Inspection finished' } });
+          }
+          pending.clear();
           try {
-            child.kill();
+            child.stdin.end();
+            killProcessTree(child.pid, () => { child.kill(); });
           } catch {
             // Best effort: the server may already have exited.
           }
-          // Only a failed probe can indicate an auth need; a successful
-          // tools/list means the server is already connected and authorized.
+          // Successful inventory does not prove authorization of individual tools.
           const auth =
             result.status === 'ok'
               ? { authRequired: false, authUrl: null }
               : classifyMcpAuth(result.message, result.output);
           resolve({ ...result, ...auth });
         };
+        const abort = (): void => {
+          finish({ status: 'failed', message: 'MCP inspection was cancelled', output, tools: [] });
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
 
         const request = (method: string, params: unknown): Promise<unknown> => {
           const id = nextId++;
-          child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
           return new Promise((resolveRequest) => {
             pending.set(id, resolveRequest);
+            child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
           });
         };
 
@@ -167,11 +189,20 @@ export function createMcpToolInspector(): McpToolInspector {
         child.on('error', (error) => {
           finish({ status: 'failed', message: error.message, output, tools: [] });
         });
+        child.on('exit', () => {
+          exited = true;
+          onProgress?.([]);
+        });
+        child.stdin.on('error', (error) => {
+          finish({ status: 'failed', message: error.message, output, tools: [] });
+        });
         child.on('close', () => {
           if (!settled) {
+            append(stderr.flush() ?? '');
+            const detail = output.slice(-3).join(' ').slice(0, 800);
             finish({
               status: 'failed',
-              message: 'MCP server exited before tool discovery completed',
+              message: `MCP server exited before tool discovery completed${detail ? `: ${detail}` : ''}`,
               output,
               tools: [],
             });
@@ -184,8 +215,11 @@ export function createMcpToolInspector(): McpToolInspector {
             capabilities: {},
             clientInfo: { name: 'AI Project Studio', version: '0.8.2' },
           });
+          if (settled) return;
           const initRecord = asRecord(initialized);
-          if (initRecord?.error) {
+          if (initRecord?.error || typeof asRecord(initRecord?.result)?.protocolVersion !== 'string') {
+            const errorMessage = asRecord(initRecord?.error)?.message;
+            if (typeof errorMessage === 'string') append(errorMessage);
             finish({
               status: 'failed',
               message: 'MCP initialize failed',
@@ -195,22 +229,35 @@ export function createMcpToolInspector(): McpToolInspector {
             return;
           }
           child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
-          const listed = await request('tools/list', {});
-          const listRecord = asRecord(listed);
-          if (listRecord?.error) {
-            finish({
-              status: 'failed',
-              message: 'MCP tools/list failed',
-              output,
-              tools: [],
-            });
-            return;
+          const tools: McpToolInspection['tools'] = [];
+          const seenCursors = new Set<string>();
+          let cursor: string | undefined;
+          for (let page = 0; page < 20; page += 1) {
+            const listed = await request('tools/list', cursor === undefined ? {} : { cursor });
+            if (settled) return;
+            const listRecord = asRecord(listed);
+            const result = asRecord(listRecord?.result);
+            if (listRecord?.error || !Array.isArray(result?.tools)) {
+              const errorMessage = asRecord(listRecord?.error)?.message;
+              if (typeof errorMessage === 'string') append(errorMessage);
+              finish({ status: 'failed', message: 'MCP tools/list failed', output, tools: [] });
+              return;
+            }
+            tools.push(...toolsFrom(result));
+            if (tools.length > 2000) break;
+            if (result.nextCursor === undefined) {
+              finish({ status: 'ok', message: null, output, tools });
+              return;
+            }
+            if (typeof result.nextCursor !== 'string' || seenCursors.has(result.nextCursor)) break;
+            cursor = result.nextCursor;
+            seenCursors.add(cursor);
           }
           finish({
-            status: 'ok',
-            message: null,
+            status: 'failed',
+            message: 'MCP tool pagination was invalid or exceeded the bounded inventory limit',
             output,
-            tools: toolsFrom(listRecord?.result),
+            tools: [],
           });
         })().catch((error: unknown) => {
           finish({

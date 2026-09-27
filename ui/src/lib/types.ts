@@ -20,6 +20,24 @@ export interface AgencyUpgradeState {
 export interface HealthStatus {
   status: 'ok';
   uptimeMs: number;
+  resources?: ResourceSnapshot;
+}
+
+export interface ResourceSnapshot {
+  status: 'normal' | 'pressure' | 'unknown';
+  reasons: ('high-cpu' | 'low-memory' | 'event-loop-lag')[];
+  measuredAt: number | null;
+  staleAfterMs: number;
+  cpuPercent: number | null;
+  freeMemoryBytes: number | null;
+  totalMemoryBytes: number | null;
+  eventLoopDelayMs: number | null;
+  backgroundWork?: {
+    active: number;
+    queued: number;
+    maxWorkers: number;
+    maxQueued: number;
+  };
 }
 
 export interface GithubStatus {
@@ -365,6 +383,8 @@ export interface PrReviewPull {
   number: number;
   title: string;
   url: string;
+  sourceBranch?: string;
+  author?: string | null;
   /** Commit SHA under review (present on the board's pull); null until known. */
   headSha?: string | null;
 }
@@ -423,6 +443,7 @@ export interface ReviewEvidence {
   reason: string;
   confidence: number;
   direct: boolean;
+  location?: { path: string; line: number; side: 'RIGHT' | 'LEFT' };
 }
 
 /** A named thing the discovery engine detected, with its evidence. */
@@ -487,6 +508,7 @@ export type ReviewRecommendation =
 
 /** The complete Project Review Board for one change. */
 export interface ReviewBoard {
+  analyses?: Record<string, PerspectiveAnalysis>;
   featureId: string;
   repoId: string;
   pull: PrReviewPull;
@@ -618,6 +640,7 @@ export type NewTaskAgentStatus = 'pending' | 'running' | 'done' | 'failed';
 
 /** One agent in a New Task run's hierarchy, with its live metrics. */
 export interface NewTaskAgent {
+  sessionIds?: string[];
   id: string;
   parentId: string | null;
   role: NewTaskAgentRole;
@@ -743,6 +766,7 @@ export type BugBashAgentStatus = 'pending' | 'running' | 'done' | 'failed';
 
 /** One agent in a Bug Bash run's hierarchy, with its live metrics. */
 export interface BugBashAgent {
+  sessionIds?: string[];
   id: string;
   parentId: string | null;
   role: BugBashAgentRole;
@@ -841,6 +865,7 @@ export interface AddPrCommentInput {
   path: string;
   line: number;
   body: string;
+  expectedHeadSha?: string;
 }
 
 /** Result returned after approving the pull request from the review page. */
@@ -857,11 +882,24 @@ export interface PrDescriptionExportResult {
 }
 
 export interface ManagedWorktree {
+  removal?: { status: 'queued' | 'deleting' | 'failed'; message: string };
   path: string;
   branch: string | null;
   repoId: string;
   repoName: string;
   pullNumber: number | null;
+}
+
+/**
+ * One on-disk worktree that deleting a feature (and its descendants) would
+ * remove — a session's own dedicated worktree, or a PR-review checkout —
+ * described by the local branch it holds so the user can consent first.
+ */
+export interface FeatureDeletionWorktree {
+  featureId: string;
+  sessionId: string | null;
+  path: string;
+  branch: string | null;
 }
 
 /** A repository available to pick from a provider before it is added. */
@@ -1108,6 +1146,13 @@ export interface DailyBreakdown extends UsageTotals {
  */
 export interface McpServerBreakdown {
   server: string;
+  provider?: string;
+  origin?: 'built-in' | 'configured' | 'unknown';
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  nanoAiu?: number | null;
+  credits?: number | null;
+  attribution?: 'reported' | 'unavailable' | 'partial';
   calls: number;
   inputBytes: number;
   outputBytes: number;
@@ -1301,17 +1346,80 @@ export interface MetaModelOption {
 }
 
 /** One MCP server entry; `spec` round-trips the provider config verbatim. */
+export type McpOperation = 'add' | 'edit' | 'remove' | 'toggle' | 'tools' | 'toolToggle' | 'restart';
+
+export interface McpCapability {
+  supported: boolean;
+  reason: string | null;
+}
+
+export type McpCapabilities = Record<McpOperation, McpCapability>;
+
+export interface McpProviderInfo {
+  id: string;
+  label?: string;
+  description?: string;
+  kind?: 'cli' | 'app';
+  capabilities?: McpCapabilities;
+  documentationUrl?: string;
+}
+
 export interface McpServerEntry {
   name: string;
+  description?: string;
   spec: Record<string, unknown>;
+  catalog?: boolean;
+  providerLabel?: string;
+  origin?: 'app' | 'agency-built-in' | 'custom';
+  builtinName?: string;
+  authentication?: McpCapability;
+  commandPreview?: string;
+  authState?: {
+    state: 'unknown' | 'required' | 'expired' | 'ready';
+    checkedAt: string | null;
+    message: string;
+  };
+  configurationSources?: Array<{
+    kind: 'resolved' | 'global';
+    source: string;
+    scope: string;
+    spec: Record<string, unknown>;
+    enabled?: boolean;
+  }>;
+  configurationConflict?: boolean;
   tools?: McpToolEntry[];
   toolDiscovery?: McpToolDiscovery;
+  displayName?: string;
+  source?: string;
+  scope?: string;
+  enabled?: boolean;
+  capabilities?: McpCapabilities;
 }
 
 export interface McpToolEntry {
   name: string;
   description: string | null;
   enabled: boolean;
+}
+
+export interface McpAuthenticationJob {
+  id: string;
+  serverName: string;
+  status: 'pending' | 'completed' | 'failed' | 'cancelled';
+  message: string;
+  authUrl: string | null;
+  deviceCode: string | null;
+  expiresAt: string;
+  server?: McpServerEntry;
+}
+
+export interface McpCommandOptionsInfo {
+  command: string;
+  options: Array<{ flag: string; description: string; valueHint?: string; choices?: string[] }>;
+  examples: string[];
+  cachedAt: string | null;
+  stale: boolean;
+  message?: string;
 }
 
 export type McpToolDiscoveryStatus = 'ok' | 'failed' | 'skipped';
@@ -1362,6 +1470,8 @@ export interface ProviderMcpConfig {
   configPath: string;
   exists: boolean;
   servers: McpServerEntry[];
+  notices?: string[];
+  capabilities?: McpCapabilities;
 }
 
 /** Add/update payload for a single MCP server entry (upsert by name). */
@@ -1375,6 +1485,7 @@ export interface McpApplyResult {
   server: McpServerEntry;
   liveReloadedSessions: number;
   liveReloadCommand: string | null;
+  message?: string;
 }
 
 export interface StoredUsage extends UsageTotals {
@@ -1625,6 +1736,10 @@ export interface AgentPromptField {
   label: string;
   description: string;
   placeholders?: string[];
+  /** Optional top-level category for grouping in the agent settings tree. */
+  group?: string;
+  /** Optional second-level group (e.g. a review perspective) within `group`. */
+  subgroup?: string;
 }
 
 /** Static identity and rules of an attachable feature agent (Review Board, …). */

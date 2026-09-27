@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
   type ReactNode,
 } from 'react';
@@ -79,6 +80,8 @@ export interface CollapsibleCardProps {
   keywords?: string[];
   /** Whether the section starts expanded the first time it is seen. */
   defaultOpen?: boolean;
+  /** A changed request reveals this section without overriding later user toggles. */
+  revealRequest?: number;
   children: ReactNode;
 }
 
@@ -97,6 +100,7 @@ export function CollapsibleCard({
   actions,
   keywords,
   defaultOpen = true,
+  revealRequest,
   children,
 }: CollapsibleCardProps) {
   const query = useContext(SettingsSearchContext);
@@ -104,6 +108,9 @@ export function CollapsibleCard({
     `cw-settings-open:${id}`,
     defaultOpen,
   );
+  useEffect(() => {
+    if (revealRequest !== undefined) setOpen(true);
+  }, [revealRequest, setOpen]);
   const haystack = `${title} ${subtitle ?? ''} ${(keywords ?? []).join(' ')}`
     .toLowerCase();
   if (!sectionMatches(query, haystack)) {

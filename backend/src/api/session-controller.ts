@@ -28,10 +28,10 @@ export interface SessionControllerDeps {
   history?: CopilotHistoryReader;
   logger: Logger;
   /**
-   * Resolves the working directory a feature's sessions must run in — the PR
-   * worktree for PR-review features, otherwise the repo checkout. When it
-   * returns a path that path wins over any client-supplied `cwd`, so every
-   * session under a PR feature shares the one PR branch/worktree.
+   * Resolves the feature-level working directory the very first (headless) run
+   * of a session starts in — the PR worktree for PR-review features, otherwise
+   * the repo checkout. New interactive sessions also share these checkouts;
+   * previously recorded session copies are retained by `resolveSessionLaunchCwd`.
    */
   resolveCwd?: (featureId: string) => string | undefined;
   /**

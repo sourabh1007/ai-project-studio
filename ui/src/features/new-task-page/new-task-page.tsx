@@ -7,6 +7,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { useAgentUsage } from '../../hooks/use-agent-usage.js';
+import { refreshAgentCredits } from '../../lib/agent-usage.js';
+import { AgentUsageValue } from '../../components/feature-agent-usage.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
@@ -977,7 +980,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     [run?.plan],
   );
 
-  const agentList = useMemo(() => Object.values(agents), [agents]);
+  const agentUsage = useAgentUsage(feature.id, 'New task');
+  const agentList = useMemo(
+    () => refreshAgentCredits(Object.values(agents), agentUsage.snapshots),
+    [agents, agentUsage.snapshots],
+  );
   const plannerAgents = useMemo(
     () => agentList.filter((agent) => agent.role === 'planner'),
     [agentList],
@@ -997,7 +1004,7 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     }
     return union.size > 0 ? union.size : null;
   }, [changedFiles, teamAgents]);
-  const openAgent = openAgentId ? agents[openAgentId] : undefined;
+  const openAgent = agentList.find((agent) => agent.id === openAgentId);
 
   if (loading) {
     return <div className="agent-page">Loading…</div>;
@@ -1414,9 +1421,9 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                   </div>
                   <div className="new-task-stat">
                     <span className="new-task-stat-num">
-                      {formatCredits(sumCredits(agentList))}
+                      <AgentUsageValue usage={agentUsage} />
                     </span>
-                    <span className="new-task-stat-label">AI credits</span>
+                    <span className="new-task-stat-label">Feature New Task AI credits</span>
                   </div>
                 </div>
 

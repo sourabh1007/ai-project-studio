@@ -45,6 +45,8 @@ export default defineConfig({
         'src/main.ts',
         'src/**/index.ts',
         // IO/native adapters: exercised via e2e, not unit tests (like main.ts).
+        'src/resource-pressure/system-resource-sampler.ts',
+        'src/resources/resources-node-adapter.ts',
         'src/terminal/node-pty-spawner.ts',
         'src/terminal/bootstrap-instructions-file-adapter.ts',
         'src/plan-usage/pty-plan-usage-probe.ts',
@@ -54,6 +56,7 @@ export default defineConfig({
         'src/repository-context/filesystem-evidence-adapter.ts',
         'src/repository-context/temporary-prompt-file-adapter.ts',
         'src/repo-insights/repo-insights-git-adapter.ts',
+        'src/pr-review/change-graph-worker-adapter.ts',
         'src/feature/feature-branch-git-adapter.ts',
         'src/mcp/mcp-config-file-adapter.ts',
         'src/mcp/mcp-tool-inspector-adapter.ts',

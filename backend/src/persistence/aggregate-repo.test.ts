@@ -223,6 +223,13 @@ describe('aggregate-repo', () => {
     const filesystem = byServer.find((s) => s.server === 'filesystem');
     expect(filesystem).toEqual({
       server: 'filesystem',
+      provider: 'copilot',
+      origin: 'configured',
+      inputTokens: null,
+      outputTokens: null,
+      nanoAiu: null,
+      credits: null,
+      attribution: 'unavailable',
       calls: 5,
       inputBytes: 150,
       outputBytes: 600,

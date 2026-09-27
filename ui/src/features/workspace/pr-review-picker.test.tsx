@@ -38,63 +38,93 @@ describe('parsePullNumber', () => {
   });
 });
 
-describe('PrReviewPicker manual review', () => {
-  function renderPicker(client: Partial<ApiClient>, provider = repo.provider) {
+describe('PrReviewPicker selection', () => {
+  function renderPicker(
+    client: Partial<ApiClient>,
+    onConfirm: (
+      pulls: { number: number; title: string }[],
+      reportProgress: (message: string) => void,
+    ) => Promise<void>,
+    provider = repo.provider,
+  ) {
     return render(
       <ApiProvider value={client as ApiClient}>
         <PrReviewPicker
           repo={{ ...repo, provider }}
           onClose={() => {}}
-          onCreated={() => {}}
+          onConfirm={onConfirm}
         />
       </ApiProvider>,
     );
   }
 
-  it('reviews GitHub PR URLs by pathname rather than the last digit group', async () => {
+  it('stages a GitHub PR URL by pathname and confirms the selection', async () => {
     const client: Partial<ApiClient> = {
       listRepoPulls: vi.fn().mockResolvedValue([]),
-      createPrFeature: vi.fn().mockResolvedValue({
-        id: 'f1',
-        name: 'PR 42',
-        description: '',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        summary: null,
-        repoId: 'r1',
-        checkoutPath: null,
-        parentFeatureId: null,
-        orderIndex: 0,
-      }),
     };
-    renderPicker(client);
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    renderPicker(client, onConfirm);
 
-    fireEvent.change(await screen.findByLabelText('Or paste a PR number or URL'), {
+    fireEvent.change(await screen.findByLabelText('Add by PR number or URL'), {
       target: {
         value: 'https://github.com/acme/app/pull/42#discussion_r123456',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Start review/ }));
 
     await waitFor(() =>
-      expect(client.createPrFeature).toHaveBeenCalledWith('r1', 42, null),
+      expect(onConfirm).toHaveBeenCalledWith(
+        [{ number: 42, title: 'PR #42' }],
+        expect.any(Function),
+      ),
     );
   });
 
   it('rejects arbitrary trailing digits that are not valid PR URLs', async () => {
     const client: Partial<ApiClient> = {
       listRepoPulls: vi.fn().mockResolvedValue([]),
-      createPrFeature: vi.fn(),
     };
-    renderPicker(client);
+    const onConfirm = vi.fn();
+    renderPicker(client, onConfirm);
 
-    fireEvent.change(await screen.findByLabelText('Or paste a PR number or URL'), {
+    fireEvent.change(await screen.findByLabelText('Add by PR number or URL'), {
       target: { value: 'release-2026-09' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
 
     expect(
       await screen.findByText('Enter a valid pull request number or URL.'),
     ).toBeInTheDocument();
-    expect(client.createPrFeature).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('stages multiple PRs from the list, caps at ten, and confirms them', async () => {
+    const pulls = Array.from({ length: 12 }, (_, i) => ({
+      number: i + 1,
+      title: `PR ${i + 1}`,
+      url: `https://github.com/acme/app/pull/${i + 1}`,
+      sourceBranch: `feature/${i + 1}`,
+      author: 'octocat',
+    }));
+    const client: Partial<ApiClient> = {
+      listRepoPulls: vi.fn().mockResolvedValue(pulls),
+    };
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    renderPicker(client, onConfirm);
+
+    // Select the first eleven; only ten may be staged.
+    for (let i = 1; i <= 11; i += 1) {
+      fireEvent.click(
+        await screen.findByRole('button', { name: new RegExp(`^#${i}\\D`) }),
+      );
+    }
+
+    expect(screen.getByText('10 / 10')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Start review/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    expect((onConfirm.mock.calls[0][0] as unknown[]).length).toBe(10);
   });
 });

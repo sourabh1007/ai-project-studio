@@ -272,6 +272,8 @@ export type NewTaskAgentStatus = 'pending' | 'running' | 'done' | 'failed';
  * the manager (or planner) is the root and sub-agents hang off it via `parentId`.
  */
 export interface NewTaskAgent {
+  /** Durable physical-attempt identities for late vendor usage reconciliation. */
+  sessionIds?: string[];
   /** Stable id within a run, e.g. `manager`, `sub-1`, `planner`. */
   id: string;
   /** Parent agent id; null for the root (planner/manager). */

@@ -58,6 +58,12 @@ function fakeRepo(initial: Session[]): {
         store.set(id, { ...s, name });
       }
     },
+    setWorktree: (id, worktree) => {
+      const s = store.get(id);
+      if (s) {
+        store.set(id, { ...s, worktreePath: worktree.path, branch: worktree.branch });
+      }
+    },
   };
   return { repo, saved };
 }

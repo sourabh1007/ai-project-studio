@@ -150,6 +150,16 @@ describe('normalizeUiPreferences', () => {
 });
 
 describe('deriveCssVariables', () => {
+  it('uses compact desktop defaults without overriding explicit choices', () => {
+    const defaults = deriveCssVariables(DEFAULT_UI_PREFERENCES, 'light');
+    expect(DEFAULT_UI_PREFERENCES.accent).toBe('blue');
+    expect(defaults['--fs-body']).toBe('12px');
+    expect(defaults['--lh-body']).toBe('16px');
+    expect(defaults['--radius-md']).toBe('3px');
+    expect(defaults['--control-height']).toBe('28px');
+    expect(normalizeUiPreferences({ accent: 'indigo', radius: 'round', textSize: 'large' }))
+      .toMatchObject({ accent: 'indigo', radius: 'round', textSize: 'large' });
+  });
   it('applies the accent + readable contrast per theme', () => {
     const light = deriveCssVariables(
       { ...DEFAULT_UI_PREFERENCES, accent: 'rose' },
@@ -174,8 +184,8 @@ describe('deriveCssVariables', () => {
       { ...DEFAULT_UI_PREFERENCES, textSize: 'x-large' },
       'light',
     );
-    expect(small['--fs-body']).toBe('11.96px');
-    expect(xl['--fs-body']).toBe('15.6px');
+    expect(small['--fs-body']).toBe('11.04px');
+    expect(xl['--fs-body']).toBe('14.4px');
   });
 
   it('scales spacing + control height by density', () => {
@@ -338,7 +348,7 @@ describe('terminal preferences', () => {
 
   it('derives font stack, size and a null theme foreground by default', () => {
     const a = terminalAppearance(DEFAULT_UI_PREFERENCES);
-    expect(a.fontFamily).toContain('JetBrains Mono');
+    expect(a.fontFamily).toContain('Consolas');
     expect(a.fontSize).toBe(13);
     expect(a.foreground).toBeNull();
   });

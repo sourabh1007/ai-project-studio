@@ -33,6 +33,8 @@ export type PerspectiveSource = 'core' | 'detected';
  * *why* the board concluded what it did — and challenge it.
  */
 export interface ReviewEvidence {
+  /** Exact captured-diff coordinates reported by the reviewer; never inferred from source. */
+  location?: { path: string; line: number; side: 'RIGHT' | 'LEFT' };
   /** The file, document, manifest or signal the conclusion was drawn from. */
   source: string;
   /** Plain-language reason this source supports the conclusion. */
@@ -145,6 +147,8 @@ export interface ReviewBoardPull {
  * existing PR review (diff + change graph) and the derived project model.
  */
 export interface ReviewBoard {
+  /** Persisted validated results for this exact reviewed graph/head. */
+  analyses?: Record<string, PerspectiveAnalysis>;
   featureId: string;
   repoId: string;
   pull: ReviewBoardPull;

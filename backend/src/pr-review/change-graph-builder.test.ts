@@ -35,6 +35,43 @@ function entry(path: string, patch = 'patch', status: PrChangeKind = 'modified')
 const csharpRegistry = createLanguageAnalyzerRegistry([createCSharpAnalyzer()]);
 
 describe('buildChangeGraph', () => {
+  it('caches ancestor misses and skips parsing unrelated boundary files', async () => {
+    const fs = fakeFs({
+      'src/a/A.cs': 'class ChangedType {}',
+      'src/a/B.cs': 'class B {}',
+      'src/b/C.cs': 'class C {}',
+      'unrelated.cs': 'class Unrelated {}',
+    }, {}, { '': ['unrelated.cs'] });
+    const reads: string[] = [];
+    fs.listDir = async (_root, path) => { reads.push(path); return []; };
+    const graph = await buildChangeGraph({
+      worktreePath: WORKTREE, registry: csharpRegistry, fs,
+      entries: [entry('src/a/A.cs'), entry('src/a/B.cs'), entry('src/b/C.cs')],
+    });
+    expect(reads).toEqual(['src/a', 'src', '', 'src/b']);
+    expect(graph.nodes).toHaveLength(3);
+    expect(graph.edges).toEqual([]);
+  });
+  it('reports real scan phases and bounded caller progress', async () => {
+    const progress: string[] = [];
+    await buildChangeGraph({
+      worktreePath: WORKTREE,
+      entries: [entry('Store.cs')],
+      registry: csharpRegistry,
+      fs: fakeFs(
+        { 'Store.cs': 'class Store {}', 'Caller.cs': 'class Caller { Store s; }' },
+        {},
+        { '': ['Caller.cs'] },
+      ),
+      onProgress: (message) => progress.push(message),
+    });
+    expect(progress).toEqual([
+      'Reading changed file 1/1: Store.cs',
+      'Mapping references between changed files',
+      'Finding unchanged callers in the repository',
+      'Scanning callers: 1/6000 file budget',
+    ]);
+  });
   it('builds project boxes, orange nodes and a reference edge for C# files', async () => {
     const files = {
       'src/Service.cs': 'namespace App;\nclass Service { Store store; }',
@@ -409,7 +446,7 @@ describe('buildChangeGraph', () => {
       entries: [entry('a.decl.fk')],
       registry,
       fs: fakeFs(
-        { 'a.decl.fk': 'decl body', 'b.fk': 'body' },
+        { 'a.decl.fk': 'decl body', 'b.fk': 'Real body' },
         { '': ['app.fkproj'] },
         { '': ['b.fk'] },
       ),

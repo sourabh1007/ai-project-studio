@@ -53,6 +53,21 @@ describe('classifyError — HTTP statuses', () => {
 });
 
 describe('classifyError — non-HTTP errors', () => {
+  it.each([
+    'Failed to fetch dynamically imported module: http://localhost/assets/page-old.js',
+    'Error loading dynamically imported module',
+    'Importing a module script failed.',
+    'Loading chunk 42 failed.',
+    'Loading CSS chunk 42 failed.',
+    'Unable to preload CSS for /assets/page.css',
+  ])('distinguishes missing interface assets from API outages: %s', (message) => {
+    const result = classifyError(new TypeError(message));
+    expect(result.category).toBe('asset-load');
+    expect(result.message).toContain('reload the app');
+    expect(result.detail).toBe(message);
+    expect(isRetryable(result.category)).toBe(false);
+  });
+
   it('classifies a rejected fetch TypeError as network', () => {
     const err = new TypeError('Failed to fetch');
     const result = classifyError(err);

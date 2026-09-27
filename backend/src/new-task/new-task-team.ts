@@ -230,6 +230,10 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
         scope: 'internal',
         model: 'auto',
         label: 'New task · manager',
+        onStart: (id) => {
+          manager.sessionIds = [...new Set([...(manager.sessionIds ?? []), id])];
+          emitManager();
+        },
         timeoutMs: deps.config.implementTimeoutMs,
         signal,
         onActivity: managerActivity,
@@ -290,6 +294,10 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
               scope: 'internal',
               model: 'auto',
               label: `New task · ${worker.title}`,
+              onStart: (id) => {
+                worker.sessionIds = [...new Set([...(worker.sessionIds ?? []), id])];
+                sink.agent({ ...worker });
+              },
               timeoutMs: deps.config.implementTimeoutMs,
               signal,
               onActivity: (line) =>
@@ -331,6 +339,10 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
         scope: 'internal',
         model: 'auto',
         label: 'New task · manager review',
+        onStart: (id) => {
+          manager.sessionIds = [...new Set([...(manager.sessionIds ?? []), id])];
+          emitManager();
+        },
         timeoutMs: deps.config.implementTimeoutMs,
         signal,
         onActivity: managerActivity,

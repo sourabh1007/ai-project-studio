@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { ApiError } from '../../lib/api.js';
@@ -22,6 +23,7 @@ import {
 } from '../../lib/stream.js';
 import type {
   Feature,
+  FeatureDeletionWorktree,
   MoveNodeInput,
   Repository,
   RepositoryContext,
@@ -49,9 +51,9 @@ import {
   PlusIcon,
   PullRequestIcon,
   RepoIcon,
+  SessionIcon,
   SkillsIcon,
   TagIcon,
-  TimeIcon,
   TrashIcon,
   UsageIcon,
   WarningIcon,
@@ -80,6 +82,7 @@ import {
 import { GroupPrPicker, type PickedPull } from './group-pr-picker.js';
 import { RepoPicker } from './repo-picker.js';
 import { PrReviewPicker } from './pr-review-picker.js';
+import { bulkReviewName, checkoutPulls } from './bulk-pr-checkout.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
 import {
@@ -141,6 +144,9 @@ function SessionRow({
   // the workspace footer. Live totals are only a fallback for brand-new
   // sessions whose first events have not yet been folded into the rollup.
   const totals = resolveSessionMetrics(persisted, liveTotals);
+  const details = `${name}\nStatus: ${session.status}\nProvider: ${session.provider} · Model: ${model}\n${
+    totals ? `${formatAic(totals.nanoAiu)} credits` : 'Usage pending'
+  } · Active: ${formatDuration(persisted?.activeMs ?? 0)}`;
 
   function startEditing() {
     setDraft(session.name ?? customName ?? '');
@@ -180,13 +186,36 @@ function SessionRow({
       <div className="session-card-head">
         <button
           type="button"
+          className="tree-toggle"
+          aria-label={`${filesOpen ? 'Collapse' : 'Expand'} files for ${name}`}
+          title={`${filesOpen ? 'Collapse' : 'Expand'} changed files`}
+          aria-expanded={filesOpen}
+          onClick={() => setFilesOpen((v) => !v)}
+        >
+          <ChevronIcon open={filesOpen} size={14} />
+        </button>
+        <button
+          type="button"
           className="session-open"
           aria-current={active ? 'true' : undefined}
+          title={details}
           onClick={onOpen}
           onDoubleClick={startEditing}
         >
-          <span className={`dot ${dot}`} aria-hidden="true" />
+          <span className="session-tree-icon" aria-hidden="true">
+            <SessionIcon />
+            <span className={`dot ${dot}`} />
+          </span>
           <span className="session-name">{name}</span>
+        </button>
+        <button
+          type="button"
+          className="tree-action session-usage-action"
+          title={details}
+          aria-label={`Usage breakdown for ${name}`}
+          onClick={() => setViewingUsage(true)}
+        >
+          <UsageIcon size={14} />
         </button>
         {confirming ? (
           <span className="row-confirm" role="group" aria-label="Confirm delete">
@@ -247,37 +276,6 @@ function SessionRow({
         </Modal>
       )}
 
-      <div className="session-summary-row">
-        <span
-          className="session-summary-model"
-          title={`Provider: ${session.provider} · Model: ${model}`}
-        >
-          {model}
-        </span>
-        <button
-          type="button"
-          className="session-metrics-open"
-          title="View how this session's credits and tokens were used"
-          aria-label={`Usage breakdown for ${name}`}
-          onClick={() => setViewingUsage(true)}
-        >
-          {totals ? (
-            <>
-              <span className="metric metric-credits">
-                <UsageIcon size={11} /> {formatAic(totals.nanoAiu)}
-              </span>
-              <span className="metric">
-                <TimeIcon size={11} /> {formatDuration(persisted?.activeMs ?? 0)}
-              </span>
-            </>
-          ) : (
-            <span className="metric" title="Waiting for authoritative saved usage; live history is incomplete">Usage pending</span>
-          )}
-        </button>
-      </div>
-
-      <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
-
       {viewingUsage && (
         <UsageBreakdownModal
           scope={{ kind: 'session', id: session.id, label: name }}
@@ -285,26 +283,15 @@ function SessionRow({
         />
       )}
 
-      <div className="session-files">
-        <button
-          type="button"
-          className="session-files-toggle"
-          aria-expanded={filesOpen}
-          onClick={() => setFilesOpen((v) => !v)}
-        >
-          <span className="chevron" aria-hidden="true">
-            <ChevronIcon open={filesOpen} size={12} />
-          </span>
-          <FilesIcon size={12} />
-          <span>Files</span>
-        </button>
-        {filesOpen && (
+      {filesOpen && (
+        <div className="session-files">
+          <SkillChips scope="session" targetId={session.id} reloadSignal={skillSignal} />
           <SessionFiles
             sessionId={session.id}
             reloadSignal={live.fileChangesBySession[session.id] ?? 0}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -359,12 +346,7 @@ function AttachedAgents({
   }
 
   return (
-    <div className="attached-agents">
-      <div className="attached-agents-label">
-        <SkillsIcon size={12} />
-        <span>Agents</span>
-        <span className="attached-agents-count">{attached.length}</span>
-      </div>
+    <div className="attached-agents" role="group" aria-label={`Agents for ${feature.name}`}>
       {attached.map((entry) => (
         <div
           key={entry.attachment.id}
@@ -375,7 +357,7 @@ function AttachedAgents({
               type="button"
               className="session-open"
               onClick={() => onOpenAgent(feature, entry)}
-              title={`${entry.manifest.title} for ${feature.name}`}
+              title={`Agent: ${entry.manifest.title} for ${feature.name}`}
             >
               <span className="pr-review-child-icon" aria-hidden="true">
                 <AgentIcon icon={entry.manifest.icon} size={14} />
@@ -570,6 +552,9 @@ function FeatureNode({
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteWorktrees, setDeleteWorktrees] = useState<
+    FeatureDeletionWorktree[] | null
+  >(null);
   const [viewingUsage, setViewingUsage] = useState(false);
   const [addingAgent, setAddingAgent] = useState(false);
   const [agentRefresh, setAgentRefresh] = useState(0);
@@ -579,6 +564,8 @@ function FeatureNode({
   const [prPickerParent, setPrPickerParent] = useState<string | null | false>(
     false,
   );
+  /** A PR-review feature (its own checkout worktree) must not offer to open another PR inside itself. */
+  const isPrFeature = Boolean(feature.checkoutPath);
   const [subcategoryParent, setSubcategoryParent] = useState<
     string | null | false
   >(false);
@@ -603,6 +590,33 @@ function FeatureNode({
     // which refreshes on the same signal.
     [feature.id, expanded, liveSignal(live)],
   );
+
+  // When the delete confirmation opens, load the exact on-disk worktrees (and
+  // the local branch each holds) the deletion would remove, so the dialog can
+  // name them and the user consents before anything is destroyed.
+  useEffect(() => {
+    if (!confirming) {
+      setDeleteWorktrees(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const preview = await api.previewFeatureDeletion(feature.id);
+        if (!cancelled) {
+          setDeleteWorktrees(preview.worktrees);
+        }
+      } catch {
+        // A failed preview must not block deletion; fall back to no list.
+        if (!cancelled) {
+          setDeleteWorktrees([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [confirming, api, feature.id]);
 
   const rows = (sessions.data ?? []).map((s) => mergeLive(s, live));
   // Stable per-session ordinals: prefer the session's immutable creation
@@ -887,7 +901,9 @@ function FeatureNode({
             <ChevronIcon open={expanded} />
           </span>
         </button>
-        <span className="feature-swatch" aria-hidden="true" />
+        <span className="feature-tree-icon" aria-hidden="true">
+          {isPrFeature ? <PullRequestIcon /> : <FolderIcon />}
+        </span>
         {editing ? (
           <input
             className="feature-name-input"
@@ -950,7 +966,7 @@ function FeatureNode({
                 icon: <MoveIcon size={14} />,
                 onSelect: () => onRequestMove(feature),
               },
-              ...(onStartReview
+              ...(onStartReview && !isPrFeature
                 ? [
                     {
                       label: 'Open Pull Request',
@@ -1006,6 +1022,24 @@ function FeatureNode({
                   All of its sessions, transcripts and usage history will be
                   permanently removed. This can&apos;t be undone.
                 </p>
+                {deleteWorktrees && deleteWorktrees.length > 0 ? (
+                  <div className="confirm-dialog-worktrees">
+                    <p className="confirm-dialog-note">
+                      These local worktree checkouts will also be removed from
+                      disk:
+                    </p>
+                    <ul className="confirm-dialog-worktree-list">
+                      {deleteWorktrees.map((wt) => (
+                        <li key={wt.path}>
+                          <code>{wt.branch ?? 'detached'}</code>
+                          <span className="confirm-dialog-worktree-path">
+                            {wt.path}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </>
             }
             onCancel={() => {
@@ -1732,6 +1766,7 @@ export function Explorer({
   onOpenSession,
   onOpenFeature,
   onOpenPrReview,
+  onOpenBulkPrReview,
   onOpenAgent,
   onOpenRepo,
   onRenameSession,
@@ -1746,6 +1781,10 @@ export function Explorer({
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
   onOpenPrReview: (feature: Feature) => void;
+  onOpenBulkPrReview: (
+    parent: Feature,
+    items: { feature: Feature; number: number; title: string }[],
+  ) => void;
   onOpenAgent: (feature: Feature, attached: AttachedAgent) => void;
   onOpenRepo: (repo: Repository) => void;
   onRenameSession: (sessionId: string, name: string) => void | Promise<void>;
@@ -1763,6 +1802,7 @@ export function Explorer({
     parentFeatureId: string | null;
   } | null>(null);
   const [adding, setAdding] = useState(false);
+  const bulkReviewBatch = useRef<{ repoId: string; parent: Feature } | null>(null);
   const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -2046,6 +2086,40 @@ export function Explorer({
   const repoList = repos.data ?? [];
   const repoIds = repoList.map((repo) => repo.id).join(',');
 
+  // A "Bulk PR Review" parent owns a set of PR features but has no worktree or
+  // sessions of its own, so the generic feature dashboard is empty and useless
+  // for it. Opening such a parent should instead surface the live review
+  // tracker. Detect it by having children that are all PR features and
+  // reconstruct the tracked PRs from their names (`PR #<n>: <title>`).
+  function handleOpenFeature(feature: Feature) {
+    if (!feature.checkoutPath) {
+      const children = allFeatures.filter(
+        (f) => (f.parentFeatureId ?? null) === feature.id,
+      );
+      if (children.length > 0) {
+        const items: { feature: Feature; number: number; title: string }[] = [];
+        let allPr = true;
+        for (const child of children) {
+          const match = /^PR #(\d+): (.*)$/s.exec(child.name);
+          if (!match) {
+            allPr = false;
+            break;
+          }
+          items.push({
+            feature: child,
+            number: Number(match[1]),
+            title: match[2],
+          });
+        }
+        if (allPr && items.length > 0) {
+          onOpenBulkPrReview(feature, items);
+          return;
+        }
+      }
+    }
+    onOpenFeature(feature);
+  }
+
   // A feature cannot be nested inside itself or its own descendants — the
   // backend rejects the cycle. Computing the illegal set here keeps those rows
   // from lighting up as drop targets at all, so a drag never ends in a failure
@@ -2196,12 +2270,50 @@ export function Explorer({
       {reviewRepo && (
         <PrReviewPicker
           repo={reviewRepo.repo}
-          parentFeatureId={reviewRepo.parentFeatureId}
-          onClose={() => setReviewRepo(null)}
-          onCreated={(feature) => {
+          onClose={() => {
+            bulkReviewBatch.current = null;
             setReviewRepo(null);
-            features.reload();
-            onOpenPrReview(feature);
+          }}
+          onConfirm={async (pulls, reportProgress) => {
+            const repoId = reviewRepo.repo.id;
+            if (pulls.length === 1) {
+              const feature = await api.createPrFeatureStreamed(
+                repoId,
+                pulls[0].number,
+                (status) => reportProgress(status.message),
+                reviewRepo.parentFeatureId ?? null,
+              );
+              reviewBoardRunStore.enqueueBulk([feature.id], api);
+              features.reload();
+              setReviewRepo(null);
+              onOpenPrReview(feature);
+              return;
+            }
+            const parent = bulkReviewBatch.current?.repoId === repoId
+              ? bulkReviewBatch.current.parent
+              : await api.createFeature({
+              name: bulkReviewName(),
+              description: `Reviewing ${pulls.length} pull requests from ${reviewRepo.repo.name}.`,
+              repoId,
+            });
+            bulkReviewBatch.current = { repoId, parent };
+            const imported: { feature: Feature; number: number; title: string }[] = [];
+            let items;
+            try {
+              items = await checkoutPulls(api, repoId, parent.id, pulls, reportProgress,
+                (item) => {
+                  imported.push(item);
+                  reviewBoardRunStore.enqueueBulk([item.feature.id], api);
+                  onOpenBulkPrReview(parent, [...imported].sort((a, b) =>
+                    pulls.findIndex((pull) => pull.number === a.number) -
+                    pulls.findIndex((pull) => pull.number === b.number)));
+                });
+            } finally {
+              features.reload();
+            }
+            setReviewRepo(null);
+            bulkReviewBatch.current = null;
+            onOpenBulkPrReview(parent, items);
           }}
         />
       )}
@@ -2330,7 +2442,7 @@ export function Explorer({
             activeSessionId={activeSessionId}
             names={names}
             onOpenSession={onOpenSession}
-            onOpenFeature={onOpenFeature}
+            onOpenFeature={handleOpenFeature}
             onOpenAgent={onOpenAgent}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
@@ -2366,7 +2478,7 @@ export function Explorer({
             activeSessionId={activeSessionId}
             names={names}
             onOpenSession={onOpenSession}
-            onOpenFeature={onOpenFeature}
+            onOpenFeature={handleOpenFeature}
             onOpenAgent={onOpenAgent}
             onOpenRepo={onOpenRepo}
             onRenameSession={onRenameSession}
@@ -2396,10 +2508,13 @@ export function Explorer({
         </NodeDragStoreProvider>
       </div>
 
-      <div className="explorer-footer">
-        <GithubStatusBadge />
-        <AzureStatusBadge />
-      </div>
+      <details className="explorer-footer">
+        <summary>Accounts</summary>
+        <div className="explorer-accounts">
+          <GithubStatusBadge />
+          <AzureStatusBadge />
+        </div>
+      </details>
     </div>
   );
 }

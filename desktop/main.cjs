@@ -11,6 +11,8 @@ const regression = require('./regression-isolation.cjs').configure(app);
 const updateManager = regression?.updater || require('./update-manager.cjs');
 const ipcInput = require('./ipc-input.cjs');
 const { createBackendFailureLog } = require('./backend-failure-log.cjs');
+const { createHttpCacheCleanupHandler } = require('./http-cache-cleanup.cjs');
+const { createAppearanceStore, registerAppearanceIpc } = require('./appearance-store.cjs');
 let clipboardAttachmentStore = null;
 const {
   requestBackendShutdown,
@@ -278,6 +280,13 @@ function startBackend(port) {
     CW__api__basePath: apiBasePath,
     CW__persistence__databasePath: path.join(userData, 'workspace.db'),
     CW__session__usageDir: path.join(userData, 'usage'),
+    CW__resources__desktopPid: String(process.pid),
+    CW__resources__desktopDataPath: userData,
+    CW__resources__applicationPath: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
+    CW__resources__runtimePaths: JSON.stringify([
+      path.dirname(process.execPath), path.dirname(BACKEND_ENTRY), UI_DIST,
+      ...(app.isPackaged ? [] : [path.join(ROOT, 'node_modules')]),
+    ]),
     CW_UI_DIST: UI_DIST,
     CW_LOG_LEVEL: process.env.CW_LOG_LEVEL || 'info',
     CW_DESKTOP_SHUTDOWN_NONCE: shutdownNonce,
@@ -1026,6 +1035,18 @@ function initializeDesktop() {
   // persisted value so the launch chrome matches the window background; the
   // renderer syncs the authoritative value once it mounts.
   nativeTheme.themeSource = readPersistedTheme();
+  registerAppearanceIpc({
+    ipcMain,
+    store: createAppearanceStore(path.join(app.getPath('userData'), 'appearance.json')),
+    isTrustedSender: (event) => isTrustedSender(event) && event.senderFrame === event.sender.mainFrame,
+    changed: (key, value, sender) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed() && window.webContents !== sender) {
+          window.webContents.send('appearance:changed', key, value);
+        }
+      }
+    },
+  });
   ipcMain.on('theme:set', (event, mode) => {
     if (!isTrustedSender(event)) {
       return;
@@ -1132,6 +1153,12 @@ function initializeDesktop() {
     }
     return app.getVersion();
   });
+  ipcMain.handle('resources:clearHttpCache', createHttpCacheCleanupHandler({
+    isTrustedSender,
+    getSession: () => session.defaultSession,
+    now: () => Date.now(),
+    reportError: (message) => safeWrite(process.stderr, `[desktop] HTTP cache cleanup failed: ${message}\n`),
+  }));
 
   // Backend crash evidence, served from the main process so it is still
   // readable when the backend — and therefore its own API — is gone. That is

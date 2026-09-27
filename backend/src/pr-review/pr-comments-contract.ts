@@ -38,6 +38,8 @@ export interface PrCommentThread {
 
 /** A new inline comment the reviewer posts from the file popup. */
 export interface AddPrCommentInput {
+  /** Captured Review Board head; when supplied, fail closed on stale or uncaptured anchors. */
+  expectedHeadSha?: string;
   /** Repo-relative path of the changed file the comment anchors to. */
   path: string;
   /** 1-based line on the new (right) side of the diff. */

@@ -4,6 +4,7 @@ import { createUsageRepo } from './usage-repo.js';
 import { createMetaUsageRepo } from './meta-usage-repo.js';
 import { createSessionRepo } from './session-repo.js';
 import { createUsageRollupRepo } from './usage-rollup-repo.js';
+import { createMcpUsageRepo } from './mcp-usage-repo.js';
 import { ideUsageDefaults } from '../ide-usage/config.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
 import type { Session } from '../session/session-contract.js';
@@ -213,6 +214,35 @@ describe('createUsageRollupRepo', () => {
       'github',
     ]);
     expect(reader.featureMcpServers('other')).toEqual([]);
+    db.close();
+  });
+
+  it('merges observed and proxy calls within workspace and legacy meta scopes', () => {
+    const { db, reader } = seed();
+    const repo = createMcpUsageRepo(db);
+    const base = {
+      featureId: 'f1', provider: 'github', callId: 'call-1',
+      origin: 'configured' as const, recordedAt: '2026-01-01T00:00:00.000Z',
+    };
+    repo.recordObserved({ ...base, sessionId: 's1', server: 'github', scope: 'feature' });
+    repo.recordObserved({ ...base, sessionId: 's5', server: 'azure', scope: 'internal' });
+    repo.recordObserved({
+      ...base, sessionId: 'warm-provider', server: 'azure', scope: 'internal',
+      origin: 'built-in',
+    });
+    expect(reader.workspaceMcpServers().find((row) => row.server === 'github')).toMatchObject({
+      provider: 'github', origin: 'configured', calls: 2,
+      inputBytes: 10, outputBytes: 20, durationMs: 5,
+      inputTokens: null, outputTokens: null, nanoAiu: null, credits: null,
+      attribution: 'unavailable',
+    });
+    expect(reader.ideMcpServers()).toEqual([{
+      provider: 'github', server: 'azure', origin: 'unknown', calls: 6,
+      inputBytes: 10, outputBytes: 20, durationMs: 5,
+      inputTokens: null, outputTokens: null, nanoAiu: null, credits: null,
+      attribution: 'unavailable',
+    }]);
+    expect(reader.featureMcpServers('f1').find((row) => row.server === 'azure')?.calls).toBe(6);
     db.close();
   });
 });

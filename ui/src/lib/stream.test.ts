@@ -16,6 +16,15 @@ import {
   type LiveState,
 } from './stream.js';
 
+it('invalidates persisted summaries for meta usage without adding duplicate session usage', () => {
+  const event = parseServerEvent('meta.usage.updated', '{"featureId":"f","operationId":"op"}');
+  expect(event).toEqual({ type: 'meta.usage.updated', featureId: 'f', operationId: 'op' });
+  const next = applyStreamEvent(initialLiveState, event!);
+  expect(liveSignal(next)).toBe(liveSignal(initialLiveState) + 1);
+  expect(next.usageByKey).toBe(initialLiveState.usageByKey);
+  expect(parseServerEvent('meta.usage.updated', '{"featureId":"f"}')).toBeNull();
+});
+
 function session(id: string): Session {
   return {
     id,

@@ -103,8 +103,12 @@ function harness() {
     ),
   } as unknown as PrCommentsService;
   const prApprovals = {
-    approve: (id: string) => (
-      (calls.approve = [id]),
+    status: async (id: string) => {
+      calls.approvalStatus = [id];
+      return { reviewedHeadSha: 'head', currentHeadSha: 'head', canApprove: true, reason: null };
+    },
+    approve: (id: string, head?: string, revision?: string) => (
+      (calls.approve = revision ? [id, head, revision] : head ? [id, head] : [id]),
       Promise.resolve({ approved: true, state: 'approved' as const })
     ),
   } as unknown as PrApprovalService;
@@ -128,11 +132,34 @@ function harness() {
       prFeatures,
     }),
     calls,
+    prApprovals,
     thread,
   };
 }
 
 describe('pr-review-controller', () => {
+  it('reads lightweight approval status without resetting a review', async () => {
+    const { routes, calls, prApprovals } = harness();
+    const handler = pick(routes, 'get', '/features/:featureId/pr-review/approval-status');
+    expect(await handler(req({ params: { featureId: 'f1' } }))).toEqual({
+      status: 200, body: { reviewedHeadSha: 'head', currentHeadSha: 'head', canApprove: true, reason: null },
+    });
+    expect(calls).toEqual({ approvalStatus: ['f1'] });
+    delete prApprovals.status;
+    await expect(handler(req({ params: { featureId: 'f1' } }))).rejects.toThrow('unavailable');
+  });
+
+  it('forwards the explicitly confirmed expected commit to approval', async () => {
+    const { routes, calls } = harness();
+    await pick(routes, 'post', '/features/:featureId/pr-review/approve')(
+      req({ params: { featureId: 'f1' }, body: { expectedHeadSha: 'head' } }),
+    );
+    expect(calls.approve).toEqual(['f1', 'head']);
+    await pick(routes, 'post', '/features/:featureId/pr-review/approve')(
+      req({ params: { featureId: 'f1' }, body: { expectedHeadSha: 'head', expectedReviewUpdatedAt: 'revision' } }),
+    );
+    expect(calls.approve).toEqual(['f1', 'head', 'revision']);
+  });
   it('reads the review for a feature', () => {
     const { routes, calls } = harness();
     const res = pick(routes, 'get', '/features/:featureId/pr-review')(

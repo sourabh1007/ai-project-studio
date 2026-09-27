@@ -1,12 +1,54 @@
 /** Contracts for the provider-agnostic MCP server management module. */
 
+export type McpOperation = 'add' | 'edit' | 'remove' | 'toggle' | 'tools' | 'toolToggle' | 'restart';
+export interface McpCapability { supported: boolean; reason: string | null }
+export type McpCapabilities = Record<McpOperation, McpCapability>;
+export interface McpProviderInfo {
+  id: string;
+  label?: string;
+  description?: string;
+  kind?: 'cli' | 'app';
+  capabilities?: McpCapabilities;
+  documentationUrl?: string;
+}
+
 /**
- * One MCP server entry. The `spec` is the raw object stored under
- * `mcpServers[name]` in the provider's config file, round-tripped faithfully so
- * the IDE never imposes (or loses) a CLI-specific shape.
+ * One MCP server entry. Specs retain their native source shape (Agency boolean
+ * built-ins are presented as enabled objects). Names may be opaque scoped action
+ * IDs; displayName is the native name. Private app lifecycle credentials are hidden.
  */
 export interface McpServerEntry {
   name: string;
+  displayName?: string;
+  /** Public catalog presentation metadata, never inserted into native configuration. */
+  description?: string;
+  commandPreview?: string;
+  authState?: {
+    state: 'unknown' | 'required' | 'expired' | 'ready';
+    checkedAt: string | null;
+    message: string;
+  };
+  source?: string;
+  scope?: string;
+  enabled?: boolean;
+  /** Installed, publicly documented option; not a configured or connected server. */
+  catalog?: boolean;
+  providerLabel?: string;
+  origin?: 'app' | 'agency-built-in' | 'custom';
+  builtinName?: string;
+  /** Native declarations for one logical built-in, not separate server instances. */
+  configurationSources?: Array<{
+    kind: 'resolved' | 'global';
+    source: string;
+    scope: string;
+    spec: Record<string, unknown>;
+    enabled?: boolean;
+  }>;
+  /** Resolved settings differ from the authored global declaration. */
+  configurationConflict?: boolean;
+  /** Explicit native connection/authentication attempt for unknown or observed-required state. */
+  authentication?: McpCapability;
+  capabilities?: McpCapabilities;
   spec: Record<string, unknown>;
   /** Tools discovered from the live MCP server, annotated with current config. */
   tools?: McpToolEntry[];
@@ -17,17 +59,33 @@ export interface McpServerEntry {
 /** The MCP configuration currently seen for a provider. */
 export interface ProviderMcpConfig {
   providerId: string;
-  /** Absolute path of the provider's MCP config file (discovered at runtime). */
+  /** Primary source: an absolute config path or an explicit native config command. */
   configPath: string;
-  /** Whether that config file currently exists on disk. */
+  /** Whether any represented source was successfully read (not CLI installation/connection state). */
   exists: boolean;
   servers: McpServerEntry[];
+  notices?: string[];
+  capabilities?: McpCapabilities;
 }
 
 /** Input to add or update a single MCP server entry (upsert by name). */
 export interface McpServerInput {
   name: string;
   spec: Record<string, unknown>;
+}
+
+export interface McpCommandOptions {
+  command: string;
+  options: Array<{
+    flag: string;
+    description: string;
+    valueHint?: string;
+    choices?: string[];
+  }>;
+  examples: string[];
+  cachedAt: string | null;
+  stale: boolean;
+  message?: string;
 }
 
 /** One tool exposed by an MCP server. */
@@ -97,11 +155,25 @@ export interface McpToolInspection extends McpToolDiscovery {
   tools: Array<Omit<McpToolEntry, 'enabled'>>;
 }
 
+export interface McpAuthenticationJob {
+  id: string;
+  serverName: string;
+  status: 'pending' | 'completed' | 'failed' | 'cancelled';
+  message: string;
+  authUrl: string | null;
+  deviceCode: string | null;
+  expiresAt: string;
+  server?: McpServerEntry;
+}
+
 export interface McpToolInspector {
   inspect(input: {
     serverName: string;
     spec: Record<string, unknown>;
     timeoutMs: number;
+    signal?: AbortSignal;
+    /** Internal progress for an explicitly retained native authentication process. */
+    onProgress?: (output: readonly string[]) => void;
   }): Promise<McpToolInspection>;
 }
 
@@ -114,6 +186,7 @@ export interface McpToolToggleInput {
 
 /** Result of applying an MCP operation to config and live sessions. */
 export interface McpApplyResult {
+  message?: string;
   config: ProviderMcpConfig;
   server: McpServerEntry;
   liveReloadedSessions: number;

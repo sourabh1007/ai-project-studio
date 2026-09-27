@@ -22,20 +22,6 @@ function clamp(value: string, max: number): string {
   return `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/**
- * Substitute every `{{key}}` placeholder in a template with its value. Keeping
- * the perspective prompts template-driven lets the exact wording be reviewed
- * and tuned from the Settings → Prompts & Commands tab without a code change,
- * while the dynamic PR evidence is injected here at run time.
- */
-function applyTemplate(template: string, vars: Record<string, string>): string {
-  let output = template;
-  for (const [key, value] of Object.entries(vars)) {
-    output = output.split(`{{${key}}}`).join(value);
-  }
-  return output;
-}
-
 /** A compact, evidence-first digest of the derived project model. */
 function modelDigest(model: ProjectModel): string {
   const languages = [...model.primaryLanguages, ...model.secondaryLanguages];
@@ -92,6 +78,11 @@ const EVIDENCE_RULES: readonly string[] = [
   '   thing to verify — not vague advice like "ensure proper error handling".',
   '3. The "reason" in each evidence entry explains how that specific file/symbol',
   '   demonstrates the problem, linking the change to its effect.',
+  'Include evidence "location": { "path": "<repo-relative path>", "line": 1,',
+  '  "side": "RIGHT" | "LEFT" } ONLY when exact coordinates are known from the captured diff.',
+  'Use a positive 1-based line on that side. Keep "source" as the human-readable citation.',
+  'If coordinates are unknown, set "location" to null or omit it. Never invent coordinates',
+  'or derive a line from a symbol name, file ordering, or a summary. Deletions belong on LEFT.',
   'Do not restate best practices, do not speculate about code you were not',
   'shown, and do not raise a finding you cannot pin to a listed file. If you',
   'cannot ground it in the evidence, leave it out.',
@@ -157,105 +148,38 @@ export function buildFindingsPrompt(input: {
   ].join('\n');
 }
 
-/**
- * Build the per-perspective findings prompt. The model reviews the change
- * through exactly one lens and either returns findings for it or explicitly
- * skips it with a reason (e.g. "no public contracts changed"). This drives the
- * board's live, per-perspective progress.
- */
-export const DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE = [
-  'You are a meticulous staff engineer reviewing a pull request through ONE',
-  'specific lens. Produce concrete, evidence-backed findings for this lens —',
-  'never generic advice. If, and only if, this lens genuinely does not apply',
-  'to the change, skip it and say why in one sentence.',
-  '',
-  '## Review lens: {{lensName}}',
-  'Purpose: {{lensPurpose}}',
-  '',
-  '## Pull request',
-  '- Number: #{{prNumber}}',
-  '- Title: {{prTitle}}',
-  '- Base branch: {{baseBranch}}',
-  '- Files changed: {{filesChanged}}',
-  '',
-  '## Description',
-  '{{description}}',
-  '',
-  '## Derived project model',
-  '{{modelDigest}}',
-  '',
-  '## Changed files',
-  '{{changedFiles}}',
-  '',
-  ...EVIDENCE_RULES,
-  '## Response format',
-  'Reply with ONLY a fenced ```json code block containing a single object:',
-  '{',
-  '  "skipped": boolean — true only if this lens does not apply,',
-  '  "reason": string — required when skipped: why it does not apply,',
-  '  "summary": string — REQUIRED whether or not you found issues: one or two',
-  '    sentences stating exactly what you checked to reach this rating. Name the',
-  '    specific files/symbols you inspected and what you verified about them. No',
-  '    generic phrasing — it must be concrete enough that a reader can audit it,',
-  '  "rationale": [ {  — REQUIRED: an ordered, evidence-backed narrative that',
-  '      justifies the rating so a reader never has to assume the verdict.',
-  '      Use labels natural to this lens. For a problem/solution lens use',
-  '      exactly: "Problem", "Solution implemented", "Why they align",',
-  '      "Verdict". Every detail MUST reference concrete code (file/symbol)',
-  '      from the change — never a generic statement.',
-  '    "label": the step label,',
-  '    "detail": the concrete, code-referenced explanation for this step } ],',
-  '  "checks": [ {  — REQUIRED: a line-by-line audit trail of what you actually',
-  '      inspected. One entry per concrete thing you looked at.',
-  '    "item": the specific file/symbol or aspect inspected (e.g. path — symbol),',
-  '    "finding": what you observed there, in one concrete sentence,',
-  '    "status": one of "pass" | "concern" | "na" } ],',
-  '  "findings": [ {',
-  '    "title": short imperative headline naming the affected file/symbol,',
-  '    "detail": problem + exact location (file + symbol) + concrete fix,',
-  '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-  '    "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
-  '      specific code demonstrates the finding, "confidence": 0..1 } ]',
-  '  } ]',
-  '}',
-  'When the lens applies but the change is clean, set skipped=false and return',
-  'an empty findings array — but you MUST still populate a non-empty',
-  '`rationale` and non-empty `checks` that prove, with concrete file/symbol',
-  'references, exactly what you inspected and why the change is sound for this',
-  'lens. An approved/clean verdict with an empty rationale or empty checks is',
-  'INVALID: never assume "green" — always show the evidence you based it on.',
-  'Do not add prose outside the code block.',
-].join('\n');
+/** The id of the Problem ↔ Solution lens, whose focus carries extra context. */
+export const PROBLEM_SOLUTION_PERSPECTIVE_ID = 'problem-solution';
 
-export function buildPerspectivePrompt(input: {
+/**
+ * The common `{{key}}` substitution values every perspective prompt needs —
+ * the PR facts plus this lens' name/purpose and the change evidence. The
+ * problem-solution lens layers two extra vars (`distilledProblem`,
+ * `solutionDigest`) on top of these in the service.
+ */
+export function buildCommonPromptVars(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective;
   description: string | null;
   changedPaths: readonly string[];
-  config: { maxContextChars: number; template?: string };
-}): string {
+  maxContextChars: number;
+}): Record<string, string> {
   const { board, perspective } = input;
-  const description = clamp(
-    (input.description ?? '').trim() || '(no description provided)',
-    input.config.maxContextChars,
-  );
-  return applyTemplate(
-    input.config.template ?? DEFAULT_PERSPECTIVE_PROMPT_TEMPLATE,
-    {
-      lensName: perspective.name,
-      lensPurpose: perspective.why,
-      prNumber: String(board.pull.number),
-      prTitle: board.pull.title,
-      baseBranch: board.baseBranch ?? 'unknown',
-      filesChanged: String(board.changedFiles),
-      description,
-      modelDigest: modelDigest(board.model),
-      changedFiles: changedFilesDigest(input.changedPaths, 80),
-    },
-  );
+  return {
+    lensName: perspective.name,
+    lensPurpose: perspective.why,
+    prNumber: String(board.pull.number),
+    prTitle: board.pull.title,
+    baseBranch: board.baseBranch ?? 'unknown',
+    filesChanged: String(board.changedFiles),
+    description: clamp(
+      (input.description ?? '').trim() || '(no description provided)',
+      input.maxContextChars,
+    ),
+    modelDigest: modelDigest(board.model),
+    changedFiles: changedFilesDigest(input.changedPaths, 80),
+  };
 }
-/** The id of the Problem ↔ Solution lens, which gets a dedicated prompt. */
-export const PROBLEM_SOLUTION_PERSPECTIVE_ID = 'problem-solution';
 
 /**
  * The minimal per-file signal the solution digest needs. Kept structural (no
@@ -320,119 +244,6 @@ export function buildSolutionDigest(input: {
     lines.push(`- …and ${changed.length - shown.length} more changed file(s)`);
   }
   return clamp(lines.join('\n'), input.maxChars);
-}
-
-/**
- * Build the dedicated prompt for the **Problem ↔ Solution** lens. Unlike the
- * generic per-perspective prompt (which demands file/symbol-grounded findings),
- * this asks for a *general*, plain-English judgement: what problem the PR
- * targets (from the description + any linked work item + the distilled problem
- * statement), what the change implements as a solution, and — the crux —
- * whether the solution actually solves that problem. It never grades files one
- * by one; the verdict is about problem/solution alignment as a whole.
- */
-export const DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE = [
-  'You are a staff engineer deciding one thing: does this pull request\'s',
-  'solution actually solve the problem it set out to solve? Judge the change',
-  'as a whole — a general, plain-English assessment. Do NOT evaluate files',
-  'one by one and do NOT produce a file-by-file audit; this lens is about the',
-  'problem and the solution, not individual lines.',
-  '',
-  '## Pull request',
-  '- Number: #{{prNumber}}',
-  '- Title: {{prTitle}}',
-  '- Files changed: {{filesChanged}}',
-  '',
-  '## The problem this PR targets',
-  'Raw PR description (may embed a linked work item):',
-  '{{description}}',
-  '',
-  'Distilled problem statement:',
-  '{{distilledProblem}}',
-  '',
-  '## What the PR implements (the solution)',
-  'Synthesize a GENERAL description of the solution from the change below —',
-  'what capability or behaviour it introduces or fixes. Do not list files.',
-  '{{solutionDigest}}',
-  '',
-  '## What to decide',
-  '1. Problem: state, in plain language, the problem the PR is solving (from',
-  '   the description + linked work item). Be specific about the user-facing',
-  '   or system need — not a summary of the code.',
-  '2. Solution implemented: describe generally what the change does to address',
-  '   it — the approach, not a file list.',
-  '3. Why they align: explain concretely why the solution does (or does not)',
-  '   solve the stated problem. Call out any unaddressed requirement, scope',
-  '   gap, or mismatch. This is the reasoning the reader most needs.',
-  '4. Verdict: rate the alignment. Approve (low risk) only when the solution',
-  '   clearly and fully addresses the problem. Raise the risk / needs-review',
-  '   when there are gaps, and record each gap as a finding.',
-  '',
-  '## Response format',
-  'Reply with ONLY a fenced ```json code block containing a single object:',
-  '{',
-  '  "skipped": false,',
-  '  "summary": string — REQUIRED: one or two plain sentences of the form',
-  '    "The problem is …; the solution …; they align because … (or the gap',
-  '    is …), so it is rated <verdict>." No file names, no jargon dump,',
-  '  "rationale": [  — REQUIRED: exactly these four steps, in this order,',
-  '      each a concrete plain-English explanation (no file-by-file grading):',
-  '    { "label": "Problem", "detail": the problem the PR targets },',
-  '    { "label": "Solution implemented", "detail": what the change does },',
-  '    { "label": "Why they align", "detail": why the solution does or does',
-  '      not solve the problem, naming any gap },',
-  '    { "label": "Verdict", "detail": the rating and the one-line reason } ],',
-  '  "checks": [] — leave empty; this lens is general, not line-by-line,',
-  '  "findings": [ {  — one per real gap where the solution fails to solve the',
-  '      problem; empty when the solution fully solves it:',
-  '    "title": short headline naming the unmet need or mismatch,',
-  '    "detail": what part of the problem is not solved and what is missing,',
-  '    "severity": one of "critical" | "high" | "medium" | "low" | "suggestion",',
-  '    "evidence": [ { "source": the unmet requirement or the change area that',
-  '      leaves it unmet, "reason": why it is unsolved, "confidence": 0..1 } ]',
-  '  } ]',
-  '}',
-  'Never assume the change is fine: your "Why they align" MUST give the',
-  'reasoning, so the reader never has to guess why it was approved. Do not add',
-  'prose outside the code block.',
-].join('\n');
-
-export function buildProblemSolutionPrompt(input: {
-  board: ReviewBoard;
-  perspective: ReviewPerspective;
-  description: string | null;
-  problemStatement: string | null;
-  problemSufficient: boolean;
-  solutionDigest: string;
-  config: { maxContextChars: number; template?: string };
-}): string {
-  const { board } = input;
-  // Keep each section modest so the assembled prompt stays under the cold-path
-  // inline delivery threshold (a large attachment is blocked by some
-  // environments' content-access policies). A general problem/solution
-  // assessment does not need the full context budget.
-  const sectionBudget = Math.min(input.config.maxContextChars, 6_000);
-  const description = clamp(
-    (input.description ?? '').trim() || '(no description provided)',
-    sectionBudget,
-  );
-  const distilled =
-    input.problemStatement && input.problemStatement.trim() && input.problemSufficient
-      ? clamp(input.problemStatement.trim(), sectionBudget)
-      : '(no self-contained problem statement could be distilled from the ' +
-        'description — derive the problem from the description above and any ' +
-        'linked work item it references)';
-  return applyTemplate(
-    input.config.template ?? DEFAULT_PROBLEM_SOLUTION_PROMPT_TEMPLATE,
-    {
-      prNumber: String(board.pull.number),
-      prTitle: board.pull.title,
-      filesChanged: String(board.changedFiles),
-      description,
-      distilledProblem: distilled,
-      solutionDigest: input.solutionDigest,
-    },
-  );
 }
 
 /**

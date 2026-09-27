@@ -7,7 +7,7 @@ import type {
   RemotePullRequest,
   PullFilter,
 } from './remote-pr-contract.js';
-import type { ProvisionedWorktree } from './pr-worktree-provisioner.js';
+import type { ProvisionedWorktree, ProvisionStatusListener } from './pr-worktree-provisioner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 
@@ -27,6 +27,7 @@ export interface PrFeatureServiceDeps {
   provisionWorktree: (
     repo: Repository,
     pull: RemotePullRequest,
+    onStatus?: ProvisionStatusListener,
   ) => Promise<ProvisionedWorktree>;
   features: Pick<FeatureService, 'create' | 'get' | 'setCheckoutPath'>;
   /** Kicks off the automated AI review for the new PR feature. */
@@ -52,6 +53,7 @@ export interface PrFeatureService {
     number: number,
     parentFeatureId?: string | null,
     parentGroupId?: string | null,
+    onStatus?: ProvisionStatusListener,
   ): Promise<Feature>;
   /**
    * Converts an existing (non-PR) feature into a PR feature in place: checks the
@@ -86,7 +88,7 @@ export function createPrFeatureService(
       return deps.listPulls(repo, filter);
     },
 
-    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null) {
+    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus) {
       const repo = deps.repos.get(repoId);
       // Opening a PR that already has a review must not create a duplicate: reuse
       // its existing review feature (and its checked-out worktree) instead.
@@ -100,7 +102,7 @@ export function createPrFeatureService(
           `Pull request #${number} not found in ${repo.name}`,
         );
       }
-      const worktree = await deps.provisionWorktree(repo, pull);
+      const worktree = await deps.provisionWorktree(repo, pull, onStatus);
       const feature = await deps.features.create({
         name: `PR #${pull.number}: ${pull.title}`,
         description: pull.url,

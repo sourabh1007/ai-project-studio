@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildAgentChatPrompt,
+  buildCommonPromptVars,
   buildFindingsPrompt,
-  buildPerspectivePrompt,
-  buildProblemSolutionPrompt,
   buildSolutionDigest,
   type SolutionNode,
 } from './review-board-prompt.js';
@@ -67,6 +66,17 @@ const board: ReviewBoard = {
 };
 
 describe('buildFindingsPrompt', () => {
+  it('requests only known captured-diff coordinates and keeps legacy citations', () => {
+    const prompt = buildFindingsPrompt({
+      board, description: null, changedPaths: [], config: { maxContextChars: 20_000 },
+    });
+    expect(prompt).toContain('"location": { "path": "<repo-relative path>", "line": 1');
+    expect(prompt).toContain('"side": "RIGHT" | "LEFT"');
+    expect(prompt).toContain('ONLY when exact coordinates are known from the captured diff');
+    expect(prompt).toContain('set "location" to null or omit it. Never invent coordinates');
+    expect(prompt).toContain('Deletions belong on LEFT');
+    expect(prompt).toContain('Keep "source" as the human-readable citation');
+  });
   it('includes pull, model digest, changed files and the perspective menu', () => {
     const prompt = buildFindingsPrompt({
       board,
@@ -158,103 +168,70 @@ describe('buildFindingsPrompt', () => {
   });
 });
 
-describe('buildPerspectivePrompt', () => {
-  it('scopes to one lens and requests the skip/findings object', () => {
-    const prompt = buildPerspectivePrompt({
+describe('buildCommonPromptVars', () => {
+  it('maps the lens, PR facts and evidence into substitution values', () => {
+    const vars = buildCommonPromptVars({
       board,
       perspective,
       description: 'Adds a cache layer.',
       changedPaths: ['src/Cache.cs'],
-      config: { maxContextChars: 20_000 },
+      maxContextChars: 20_000,
     });
-    expect(prompt).toContain('Review lens: Security');
-    expect(prompt).toContain(
+    expect(vars.lensName).toBe('Security');
+    expect(vars.lensPurpose).toBe(
       'Every change must be reviewed for security impact.',
     );
-    expect(prompt).toContain('#42');
-    expect(prompt).toContain('"skipped": boolean');
-    expect(prompt).toContain('"summary": string — REQUIRED');
-    expect(prompt).toContain('"rationale": [');
-    expect(prompt).toContain('"checks": [');
-    expect(prompt).toContain('Adds a cache layer.');
-    expect(prompt).toContain('- src/Cache.cs');
-    expect(prompt).toContain('no generic review');
+    expect(vars.prNumber).toBe('42');
+    expect(vars.prTitle).toBe('Add caching');
+    expect(vars.baseBranch).toBe('main');
+    expect(vars.filesChanged).toBe('3');
+    expect(vars.description).toBe('Adds a cache layer.');
+    expect(vars.modelDigest).toContain('Backend service');
+    expect(vars.changedFiles).toContain('- src/Cache.cs');
   });
 
   it('falls back to a placeholder for a null description', () => {
-    const prompt = buildPerspectivePrompt({
+    const vars = buildCommonPromptVars({
       board,
       perspective,
       description: null,
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
+      maxContextChars: 20_000,
     });
-    expect(prompt).toContain('(no description provided)');
+    expect(vars.description).toBe('(no description provided)');
   });
 
   it('reports an unknown base branch', () => {
-    const prompt = buildPerspectivePrompt({
+    const vars = buildCommonPromptVars({
       board: { ...board, baseBranch: null },
       perspective,
       description: 'd',
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
+      maxContextChars: 20_000,
     });
-    expect(prompt).toContain('Base branch: unknown');
+    expect(vars.baseBranch).toBe('unknown');
   });
 
   it('notes when no changed files were resolved', () => {
-    const prompt = buildPerspectivePrompt({
+    const vars = buildCommonPromptVars({
       board,
       perspective,
       description: 'd',
       changedPaths: [],
-      config: { maxContextChars: 20_000 },
+      maxContextChars: 20_000,
     });
-    expect(prompt).toContain('(no changed files were resolved');
-  });
-
-  it('forbids an approved verdict without evidence', () => {
-    const prompt = buildPerspectivePrompt({
-      board,
-      perspective,
-      description: 'd',
-      changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
-    });
-    expect(prompt).toContain('with an empty rationale or empty checks is');
-    expect(prompt).toContain('never assume "green"');
+    expect(vars.changedFiles).toContain('(no changed files were resolved');
   });
 
   it('clamps a very long description', () => {
-    const prompt = buildPerspectivePrompt({
+    const vars = buildCommonPromptVars({
       board,
       perspective,
       description: 'x'.repeat(100),
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 10 },
+      maxContextChars: 10,
     });
-    expect(prompt).toContain('…');
-  });
-
-  it('honours a custom prompt template, substituting evidence placeholders', () => {
-    const prompt = buildPerspectivePrompt({
-      board,
-      perspective,
-      description: 'Adds a cache layer.',
-      changedPaths: ['src/Cache.cs'],
-      config: {
-        maxContextChars: 20_000,
-        template:
-          'Lens {{lensName}} — {{lensPurpose}}\nPR #{{prNumber}}: {{prTitle}}\n' +
-          'Base {{baseBranch}}, files {{filesChanged}}\n{{description}}\n' +
-          '{{modelDigest}}\n{{changedFiles}}',
-      },
-    });
-    expect(prompt).toContain(`Lens ${perspective.name} — ${perspective.why}`);
-    expect(prompt).toContain('Adds a cache layer.');
-    expect(prompt).toContain('src/Cache.cs');
-    expect(prompt).not.toContain('meticulous staff engineer');
+    expect(vars.description).toContain('…');
   });
 });
 
@@ -332,87 +309,6 @@ describe('buildSolutionDigest', () => {
     });
     expect(digest.length).toBeLessThanOrEqual(40);
     expect(digest).toContain('…');
-  });
-});
-
-describe('buildProblemSolutionPrompt', () => {
-  it('asks for a general problem/solution verdict fed the distilled problem', () => {
-    const prompt = buildProblemSolutionPrompt({
-      board,
-      perspective,
-      description: 'Adds a cache layer.',
-      problemStatement: 'Reads are slow.',
-      problemSufficient: true,
-      solutionDigest: 'PR "Add caching" changes 1 file(s).',
-      config: { maxContextChars: 20_000 },
-    });
-    expect(prompt).toContain('does this pull request');
-    expect(prompt).toContain('Do NOT evaluate files');
-    expect(prompt).toContain('Distilled problem statement:');
-    expect(prompt).toContain('Reads are slow.');
-    expect(prompt).toContain('Adds a cache layer.');
-    expect(prompt).toContain('"label": "Problem"');
-    expect(prompt).toContain('"label": "Why they align"');
-    expect(prompt).toContain('"checks": []');
-    expect(prompt).toContain('PR "Add caching" changes 1 file(s).');
-  });
-
-  it('notes when no distilled problem statement is available', () => {
-    const insufficient = buildProblemSolutionPrompt({
-      board,
-      perspective,
-      description: 'd',
-      problemStatement: 'partial',
-      problemSufficient: false,
-      solutionDigest: 's',
-      config: { maxContextChars: 20_000 },
-    });
-    expect(insufficient).toContain('no self-contained problem statement');
-    const missing = buildProblemSolutionPrompt({
-      board,
-      perspective,
-      description: null,
-      problemStatement: null,
-      problemSufficient: true,
-      solutionDigest: 's',
-      config: { maxContextChars: 20_000 },
-    });
-    expect(missing).toContain('no self-contained problem statement');
-    expect(missing).toContain('(no description provided)');
-  });
-
-  it('clamps a very long distilled problem statement', () => {
-    const prompt = buildProblemSolutionPrompt({
-      board,
-      perspective,
-      description: 'd',
-      problemStatement: 'p'.repeat(100),
-      problemSufficient: true,
-      solutionDigest: 's',
-      config: { maxContextChars: 10 },
-    });
-    expect(prompt).toContain('…');
-  });
-
-  it('honours a custom prompt template, substituting evidence placeholders', () => {
-    const prompt = buildProblemSolutionPrompt({
-      board,
-      perspective,
-      description: 'Adds a cache layer.',
-      problemStatement: 'Reads are slow.',
-      problemSufficient: true,
-      solutionDigest: 'Introduces a read-through cache.',
-      config: {
-        maxContextChars: 20_000,
-        template:
-          'PR #{{prNumber}} {{prTitle}} ({{filesChanged}} files)\n' +
-          'Problem: {{description}} / {{distilledProblem}}\n' +
-          'Solution: {{solutionDigest}}',
-      },
-    });
-    expect(prompt).toContain('Reads are slow.');
-    expect(prompt).toContain('Introduces a read-through cache.');
-    expect(prompt).not.toContain('staff engineer deciding one thing');
   });
 });
 

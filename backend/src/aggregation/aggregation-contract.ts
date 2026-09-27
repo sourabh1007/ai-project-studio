@@ -1,5 +1,6 @@
 import type { SessionKind, SessionStatus } from '../session/session-contract.js';
 import type { TreeGroupKind } from '../feature-tree/feature-tree-contract.js';
+import type { McpOrigin } from '../mcp-usage/mcp-usage-contract.js';
 
 /** Read-side aggregation contracts for usage rollups. */
 
@@ -27,14 +28,21 @@ export interface DailyBreakdown extends UsageTotals {
 }
 
 /**
- * Per-MCP-server rollup of tool-call I/O, measured by the launch proxy that
- * wraps each configured MCP server. These are real transport bytes and call
- * counts — not model tokens (MCP servers do not consume model tokens), so this
- * breakdown is reported in bytes/calls/latency rather than {@link UsageTotals}.
+ * Per-provider/server rollup of proxy I/O and observed calls. Call counts use
+ * the larger source total per feature/session/provider/server, then sum across
+ * sessions. Transport metrics come only from the proxy; billing is unavailable
+ * unless a source explicitly attributes it to MCP rather than the whole turn.
  */
 export interface McpServerBreakdown {
   server: string;
-  /** Number of `tools/call` JSON-RPC requests routed to the server. */
+  provider?: string;
+  origin?: McpOrigin;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  nanoAiu?: number | null;
+  credits?: number | null;
+  attribution?: 'reported' | 'unavailable' | 'partial';
+  /** Observed or proxy-measured tool calls, deduplicated across sources. */
   calls: number;
   /** Bytes written to the server's stdin (requests). */
   inputBytes: number;
@@ -128,7 +136,7 @@ export interface FeatureAnalytics {
   byProvider: ProviderBreakdown[];
   byDay: DailyBreakdown[];
   bySession: SessionBreakdown[];
-  /** Real per-MCP-server tool-call I/O measured by the launch proxy. */
+  /** Per-provider/server calls and proxy-measured transport I/O. */
   byMcpServer: McpServerBreakdown[];
   /** Groups in the feature's tree, so sessions can be nested under them. */
   groups: GroupInfo[];
@@ -147,7 +155,7 @@ export interface AggregateReader {
    * analytics can surface agent usage that has no persisted session record.
    */
   warmAgentSessions(featureId: string): WarmAgentSession[];
-  /** Per-MCP-server tool-call I/O rollup for a feature (proxy-measured). */
+  /** Per-provider/server observed calls and proxy I/O for a feature. */
   byMcpServer(featureId: string): McpServerBreakdown[];
   workspaceTotals(): UsageTotals;
 }

@@ -471,14 +471,18 @@ function GroupNode({ group }: { group: TreeGroup }) {
                       },
                     ]
                   : []),
-                {
-                  label: 'Open Pull Request',
-                  icon: <PullRequestIcon size={14} />,
-                  onSelect: () => {
-                    setExpanded(true);
-                    onAttachPr(group.id);
-                  },
-                },
+                ...(!isPr
+                  ? [
+                      {
+                        label: 'Open Pull Request',
+                        icon: <PullRequestIcon size={14} />,
+                        onSelect: () => {
+                          setExpanded(true);
+                          onAttachPr(group.id);
+                        },
+                      },
+                    ]
+                  : []),
                 {
                   label: 'Delete group',
                   icon: <TrashIcon />,

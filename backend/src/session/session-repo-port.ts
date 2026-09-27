@@ -15,6 +15,12 @@ export interface SessionRepo {
   listAll(): Session[];
   /** Updates only the display name; null reverts to the ordinal label. */
   rename(id: string, name: string | null): void;
+  /**
+   * Records the dedicated worktree provisioned for a session (its path and the
+   * branch it started on), set lazily the first time the session's terminal
+   * launches.
+   */
+  setWorktree(id: string, worktree: { path: string; branch: string }): void;
   /** Re-homes a session to a container and sets its sort position. */
   updatePlacement(
     id: string,

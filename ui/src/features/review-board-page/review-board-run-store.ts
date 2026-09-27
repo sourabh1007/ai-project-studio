@@ -67,6 +67,7 @@ const RETRY_BACKOFF_MS = 1_500;
 const PREP_POLL_MS = 1_500;
 /** Give up waiting for the change-graph rebuild after this long. */
 const PREP_TIMEOUT_MS = 600_000;
+const BULK_REVIEW_CONCURRENCY = 3;
 
 /** The subset of the API client the store drives. */
 export interface ReviewBoardRunApi {
@@ -90,6 +91,8 @@ export interface ReviewBoardRunApi {
   ): Promise<void>;
   /** Read the current PR review (used to poll the change-graph rebuild). */
   getPrReview(featureId: string): Promise<PrReview>;
+  retryPrReviewStep?(featureId: string, step: 'changeGraph'): Promise<PrReview>;
+  settleReviewBoardQueue?(featureId: string): Promise<unknown>;
   /** Re-provision the worktree to the latest remote head and rebuild. */
   pullLatestPrReview(featureId: string): Promise<PrReview>;
   /**
@@ -121,11 +124,18 @@ export interface PerspectiveProgress {
   error: string | null;
   /** 1-based attempt currently running (>1 means a self-healing retry). */
   attempt: number;
+  /** Actual analysis time, including retries; excludes time waiting in the queue. */
+  timing?: ReviewTiming | null;
   /**
    * Set when the review agent revised this rating during a discussion. Records
    * why the agent was convinced so the change is auditable in the detail panel.
    */
   agentAdjustment?: { justification: string } | null;
+}
+
+export interface ReviewTiming {
+  startedAt: number;
+  finishedAt: number | null;
 }
 
 export interface ReviewBoardRunState {
@@ -134,6 +144,10 @@ export interface ReviewBoardRunState {
   loadError: string | null;
   analyzed: boolean;
   running: boolean;
+  queued: boolean;
+  /** Latest full review: evidence preparation + analysis, excluding its queue wait. */
+  timing: ReviewTiming | null;
+  preparationTiming: ReviewTiming | null;
   progress: Record<string, PerspectiveProgress>;
   /**
    * "Take latest" preparation phase shown before an analysis pass: re-provision
@@ -162,6 +176,9 @@ const EMPTY_STATE: ReviewBoardRunState = {
   loadError: null,
   analyzed: false,
   running: false,
+  queued: false,
+  timing: null,
+  preparationTiming: null,
   progress: {},
   prep: IDLE_PREP,
   signoff: emptySignoff(),
@@ -176,6 +193,7 @@ interface FeatureRecord {
   loadToken: number;
   loadPromise: Promise<void> | null;
   loadMode: 'refresh' | 'force' | null;
+  timingToken: number;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -196,6 +214,60 @@ function isAbort(error: unknown): boolean {
 export class ReviewBoardRunStore {
   private readonly records = new Map<string, FeatureRecord>();
   private readonly listeners = new Map<string, Set<() => void>>();
+  private bulkQueue: { featureId: string; api: ReviewBoardRunApi; retry: boolean }[] = [];
+  private readonly bulkActive = new Set<string>();
+  private readonly autoScheduled = new Set<string>();
+  private readonly removed = new Set<string>();
+
+  /** Stop queued and active work for a feature removed from the workspace. */
+  remove(featureId: string): void {
+    this.removed.add(featureId);
+    this.bulkQueue = this.bulkQueue.filter((job) => job.featureId !== featureId);
+    const rec = this.records.get(featureId);
+    if (rec) {
+      rec.runToken += 1;
+      rec.loadToken += 1;
+      rec.timingToken += 1;
+      rec.controller?.abort();
+      rec.state = { ...EMPTY_STATE };
+      this.emit(featureId);
+    }
+  }
+
+  /** App-owned queue: importing or viewing a batch never depends on a mounted tracker. */
+  enqueueBulk(featureIds: string[], api: ReviewBoardRunApi, opts: { retry?: boolean } = {}): void {
+    for (const featureId of featureIds) {
+      const state = this.getState(featureId);
+      if (this.removed.has(featureId) || this.bulkActive.has(featureId) || this.bulkQueue.some((job) => job.featureId === featureId) ||
+          state.running || state.prep.active ||
+          (!opts.retry && (this.autoScheduled.has(featureId) || state.analyzed || state.loadError || state.prep.error))) continue;
+      this.autoScheduled.add(featureId);
+      this.bulkQueue.push({ featureId, api, retry: opts.retry === true });
+      this.update(featureId, (prev) => ({ ...prev, queued: true }));
+    }
+    this.pumpBulk();
+  }
+
+  private pumpBulk(): void {
+    while (this.bulkActive.size < BULK_REVIEW_CONCURRENCY && this.bulkQueue.length) {
+      const job = this.bulkQueue.shift()!;
+      const state = this.getState(job.featureId);
+      if (state.running || state.prep.active || (!job.retry && state.analyzed)) {
+        this.update(job.featureId, (prev) => ({ ...prev, queued: false }));
+        continue;
+      }
+      this.bulkActive.add(job.featureId);
+      void this.analyze(job.featureId, job.api, { waitForGraph: true })
+        .catch((error) => this.update(job.featureId, (prev) => ({
+          ...prev, queued: false,
+          prep: { active: false, message: '', error: messageOf(error, 'Failed to start the review.') },
+        })))
+        .finally(() => {
+          this.bulkActive.delete(job.featureId);
+          this.pumpBulk();
+        });
+    }
+  }
 
   private record(featureId: string): FeatureRecord {
     let rec = this.records.get(featureId);
@@ -211,6 +283,7 @@ export class ReviewBoardRunStore {
         loadToken: 0,
         loadPromise: null,
         loadMode: null,
+        timingToken: 0,
       };
       this.records.set(featureId, rec);
     }
@@ -353,6 +426,7 @@ export class ReviewBoardRunStore {
     featureId: string,
     change: (prev: ReviewBoardRunState) => ReviewBoardRunState,
   ): void {
+    if (this.removed.has(featureId)) return;
     const rec = this.record(featureId);
     rec.state = change(rec.state);
     this.emit(featureId);
@@ -363,10 +437,19 @@ export class ReviewBoardRunStore {
     perspectiveId: string,
     progress: PerspectiveProgress,
   ): void {
-    this.update(featureId, (prev) => ({
-      ...prev,
-      progress: { ...prev.progress, [perspectiveId]: progress },
-    }));
+    this.update(featureId, (prev) => {
+      let timing = prev.progress[perspectiveId]?.timing ?? null;
+      if (progress.status === 'pending' || progress.status === 'idle') timing = null;
+      else if (progress.status === 'analyzing' || progress.status === 'retrying') {
+        if (!timing || timing.finishedAt !== null) timing = { startedAt: Date.now(), finishedAt: null };
+      } else if (timing && timing.finishedAt === null) {
+        timing = { ...timing, finishedAt: Date.now() };
+      }
+      return {
+        ...prev,
+        progress: { ...prev.progress, [perspectiveId]: { ...progress, timing } },
+      };
+    });
   }
 
   /**
@@ -378,8 +461,9 @@ export class ReviewBoardRunStore {
     api: ReviewBoardRunApi,
     force = false,
   ): Promise<void> {
+    if (this.removed.has(featureId)) return;
     const rec = this.record(featureId);
-    if (!force && rec.state.running) {
+    if (!force && (rec.state.running || rec.state.prep.active || rec.state.queued)) {
       return rec.loadPromise ?? Promise.resolve();
     }
     if (rec.loadPromise && (!force || rec.loadMode === 'force')) {
@@ -401,6 +485,33 @@ export class ReviewBoardRunStore {
           return;
         }
         this.update(featureId, (prev) => {
+          const keepResults = !force && prev.board !== null &&
+            prev.board.pull.headSha === board.pull.headSha &&
+            prev.board.reviewUpdatedAt === board.reviewUpdatedAt &&
+            prev.board.perspectives.length === board.perspectives.length &&
+            prev.board.perspectives.every((p) => board.perspectives.some((next) => next.id === p.id));
+          let refreshed = board;
+          const restored: Record<string, PerspectiveProgress> = {};
+          if (!force) {
+            for (const perspective of board.perspectives) {
+              const analysis = board.analyses?.[perspective.id];
+              if (!analysis || analysis.perspectiveId !== perspective.id ||
+                  analysis.perspective.id !== perspective.id) continue;
+              restored[perspective.id] = {
+                status: analysis.skipped ? 'skipped' : 'done',
+                skipReason: analysis.skipReason, checked: analysis.summary,
+                rationale: analysis.rationale, checks: analysis.checks, error: null, attempt: 0,
+              };
+            }
+          }
+          if (keepResults) {
+            for (const perspective of prev.board!.perspectives) {
+              const status = prev.progress[perspective.id]?.status;
+              if (status === 'done' || status === 'skipped') {
+                refreshed = mergeAnalyzedPerspective(refreshed, perspective);
+              }
+            }
+          }
           const signoff = syncSignoffIdentity(
             prev.signoff,
             resolveSignoffIdentity(board),
@@ -409,7 +520,11 @@ export class ReviewBoardRunStore {
           this.saveSignoff(featureId, signoff);
           return {
             ...prev,
-            board,
+            board: refreshed,
+            progress: keepResults ? { ...restored, ...prev.progress } : restored,
+            analyzed: (keepResults && prev.analyzed) || Object.keys(restored).length > 0,
+            timing: keepResults || prev.timing?.finishedAt === null ? prev.timing : null,
+            preparationTiming: keepResults || prev.timing?.finishedAt === null ? prev.preparationTiming : null,
             loading: false,
             loadError: null,
             signoff,
@@ -445,8 +560,11 @@ export class ReviewBoardRunStore {
 
   /** Abort any in-flight run and reload the clean board from scratch. */
   reset(featureId: string, api: ReviewBoardRunApi): void {
+    this.autoScheduled.add(featureId);
     const rec = this.record(featureId);
     rec.runToken += 1;
+    rec.timingToken += 1;
+    this.bulkQueue = this.bulkQueue.filter((job) => job.featureId !== featureId);
     rec.controller?.abort();
     rec.controller = null;
     rec.state = {
@@ -460,6 +578,9 @@ export class ReviewBoardRunStore {
     };
     this.emit(featureId);
     void this.load(featureId, api, true);
+    void api.settleReviewBoardQueue?.(featureId).catch((error) => {
+      this.setPrep(featureId, { active: false, message: '', error: messageOf(error, 'Could not cancel the saved review queue entry.') });
+    });
   }
 
   /**
@@ -505,20 +626,22 @@ export class ReviewBoardRunStore {
   private async takeLatest(
     featureId: string,
     api: ReviewBoardRunApi,
+    refreshRemote = true,
   ): Promise<boolean> {
     const rec = this.record(featureId);
     rec.controller?.abort();
     rec.controller = null;
     const token = (rec.runToken += 1);
     const isStale = () => this.record(featureId).runToken !== token;
+    this.update(featureId, (prev) => ({ ...prev, running: false }));
 
     this.setPrep(featureId, {
       active: true,
-      message: 'Fetching the latest from the remote…',
+      message: refreshRemote ? 'Fetching the latest from the remote…' : 'Waiting for change evidence…',
       error: null,
     });
     try {
-      await api.pullLatestPrReview(featureId);
+      if (refreshRemote) await api.pullLatestPrReview(featureId);
       if (isStale()) return false;
       this.setPrep(featureId, {
         active: true,
@@ -527,12 +650,24 @@ export class ReviewBoardRunStore {
       });
       const startedAt = Date.now();
       const deadline = startedAt + PREP_TIMEOUT_MS;
+      let recovered = false;
       for (;;) {
         if (isStale()) return false;
         const review = await api.getPrReview(featureId);
+        if (isStale()) return false;
         const status = review.changeGraph.status;
         if (status === 'ready') break;
         if (status === 'failed') {
+          const message = review.changeGraph.failure?.message;
+          if (!recovered && api.retryPrReviewStep && (
+            message === 'Background analysis cancelled during app shutdown.' ||
+            message === 'Interrupted by a restart before it finished. Retry to regenerate.'
+          )) {
+            recovered = true;
+            this.setPrep(featureId, { active: true, message: 'Resuming change evidence interrupted by app shutdown...', error: null });
+            await api.retryPrReviewStep(featureId, 'changeGraph');
+            continue;
+          }
           throw new Error(
             review.changeGraph.failure?.message ??
               'The change graph failed to rebuild.',
@@ -567,7 +702,13 @@ export class ReviewBoardRunStore {
 
   /** Replace the take-latest prep phase and notify subscribers. */
   private setPrep(featureId: string, prep: PrepPhase): void {
-    this.update(featureId, (prev) => ({ ...prev, prep }));
+    this.update(featureId, (prev) => ({
+      ...prev, prep,
+      preparationTiming: prep.active
+        ? (prev.prep.active ? prev.preparationTiming : { startedAt: Date.now(), finishedAt: null })
+        : (prev.preparationTiming && prev.preparationTiming.finishedAt === null
+          ? { ...prev.preparationTiming, finishedAt: Date.now() } : prev.preparationTiming),
+    }));
   }
 
   /** Clear a lingering take-latest error (e.g. when the reviewer retries). */
@@ -587,15 +728,47 @@ export class ReviewBoardRunStore {
   async analyze(
     featureId: string,
     api: ReviewBoardRunApi,
-    opts: { takeLatest?: boolean } = {},
+    opts: { takeLatest?: boolean; waitForGraph?: boolean } = {},
+  ): Promise<void> {
+    if (this.removed.has(featureId)) return;
+    this.autoScheduled.add(featureId);
+    const rec = this.record(featureId);
+    const token = ++rec.timingToken;
+    this.bulkQueue = this.bulkQueue.filter((job) => job.featureId !== featureId);
+    this.update(featureId, (prev) => ({
+      ...prev, queued: false, preparationTiming: null, timing: { startedAt: Date.now(), finishedAt: null },
+    }));
+    try {
+      await this.runAnalysis(featureId, api, opts, token);
+    } finally {
+      if (rec.timingToken === token) {
+        this.update(featureId, (prev) => ({
+          ...prev, timing: prev.timing ? { ...prev.timing, finishedAt: Date.now() } : null,
+        }));
+        if (!rec.controller?.signal.aborted) {
+          try { await api.settleReviewBoardQueue?.(featureId); }
+          catch (error) { this.setPrep(featureId, { active: false, message: '', error: messageOf(error, 'Could not save review queue status.') }); }
+        }
+      }
+    }
+  }
+
+  private async runAnalysis(
+    featureId: string,
+    api: ReviewBoardRunApi,
+    opts: { takeLatest?: boolean; waitForGraph?: boolean },
+    timingToken: number,
   ): Promise<void> {
     if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
+    if (!opts.takeLatest && opts.waitForGraph !== false && !(await this.takeLatest(featureId, api, false))) return;
+    if (this.record(featureId).timingToken !== timingToken) return;
     // Take the latest board before a full pass, so the analysis reflects the
     // current PR state rather than a stale snapshot from a previous visit.
     await this.load(featureId, api, true);
     const rec = this.record(featureId);
+    if (rec.timingToken !== timingToken) return;
     const board = rec.state.board;
-    if (!board) return;
+    if (!board || rec.state.loadError) return;
     const ids = board.perspectives.map((p) => p.id);
 
     // A fresh full pass re-rates every perspective, so any prior human sign-off
@@ -629,7 +802,8 @@ export class ReviewBoardRunStore {
       ),
     }));
 
-    const isStale = () => this.record(featureId).runToken !== token;
+    const isStale = () => this.record(featureId).runToken !== token ||
+      this.record(featureId).timingToken !== timingToken;
 
     // Server-side fan-out: one streamed request drives the whole parallel pass.
     // The backend reviews every perspective across the warm pool (reserving one
@@ -638,6 +812,11 @@ export class ReviewBoardRunStore {
     // browser's ~6 connections-per-origin. Per-lens retries happen server-side.
     const applyEvent = (event: ReviewBoardPerspectiveEvent): void => {
       if (isStale()) return;
+      if (event.type === 'failed' && !event.perspectiveId) {
+        throw new Error(event.error || 'Review could not start. Check change evidence and retry.');
+      }
+      const eventId = event.type === 'analyzed' ? event.analysis.perspectiveId : event.perspectiveId;
+      if (!ids.includes(eventId)) throw new Error(`Review stream returned an unknown perspective: ${eventId}`);
       if (event.type === 'analyzing') {
         this.setProgress(featureId, event.perspectiveId, {
           status: 'analyzing',
@@ -713,6 +892,17 @@ export class ReviewBoardRunStore {
     }
 
     if (!isStale()) {
+      for (const [id, progress] of Object.entries(this.record(featureId).state.progress)) {
+        if (progress.status === 'pending' || progress.status === 'analyzing') {
+          this.setProgress(featureId, id, {
+            ...progress,
+            status: 'error',
+            error: controller.signal.aborted
+              ? 'Review cancelled before this perspective completed.'
+              : 'The review stream ended without a result for this perspective. Retry the review.',
+          });
+        }
+      }
       this.update(featureId, (prev) => ({ ...prev, running: false }));
     }
   }
@@ -730,8 +920,10 @@ export class ReviewBoardRunStore {
     api: ReviewBoardRunApi,
     opts: { takeLatest?: boolean } = {},
   ): Promise<void> {
+    if (this.removed.has(featureId)) return;
     if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
     const rec = this.record(featureId);
+    if (!opts.takeLatest && !rec.state.running && !(await this.takeLatest(featureId, api, false))) return;
     if (!rec.state.board) return;
 
     // Re-rating this perspective invalidates its human sign-off (and the PR's).
@@ -805,31 +997,45 @@ export class ReviewBoardRunStore {
         });
       }
     } catch (error) {
-      if (!isStale() && !isAbort(error)) {
+      if (!isStale()) {
         this.setProgress(featureId, perspectiveId, {
           status: 'error',
           skipReason: null,
           checked: null,
           rationale: [],
           checks: [],
-          error: messageOf(error, 'This perspective could not be analysed.'),
+          error: isAbort(error) ? 'Review cancelled before this perspective completed.' :
+            messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });
       }
     }
 
     if (!isStale()) {
-      this.update(featureId, (prev) => ({ ...prev, running: false }));
+      this.update(featureId, (prev) => ({
+        ...prev, running: Object.values(prev.progress).some((p) =>
+          p.status === 'pending' || p.status === 'analyzing' || p.status === 'retrying'),
+      }));
     }
   }
 
   /** Re-run only the perspectives that ended in an error (self-heal retry). */
-  async retryFailed(featureId: string, api: ReviewBoardRunApi): Promise<void> {
+  async retryFailed(
+    featureId: string,
+    api: ReviewBoardRunApi,
+    opts: { includeIncomplete?: boolean } = {},
+  ): Promise<void> {
+    if (this.removed.has(featureId)) return;
     const rec = this.record(featureId);
-    const failed = Object.entries(rec.state.progress)
+    const failed = opts.includeIncomplete
+      ? (rec.state.board?.perspectives ?? [])
+        .filter((perspective) => rec.state.progress[perspective.id]?.status !== 'done')
+        .map((perspective) => perspective.id)
+      : Object.entries(rec.state.progress)
       .filter(([, p]) => p.status === 'error')
       .map(([id]) => id);
     if (failed.length === 0) return;
+    if (!rec.state.running && !(await this.takeLatest(featureId, api, false))) return;
 
     const controller = rec.controller?.signal.aborted
       ? new AbortController()
@@ -908,14 +1114,15 @@ export class ReviewBoardRunStore {
           attempt: 0,
         });
       } catch (error) {
-        if (isStale() || isAbort(error)) return;
+        if (isStale()) return;
         this.setProgress(featureId, id, {
           status: 'error',
           skipReason: null,
           checked: null,
           rationale: [],
           checks: [],
-          error: messageOf(error, 'This perspective could not be analysed.'),
+          error: isAbort(error) ? 'Review cancelled before this perspective completed.' :
+            messageOf(error, 'This perspective could not be analysed.'),
           attempt: 0,
         });
       }
@@ -924,7 +1131,10 @@ export class ReviewBoardRunStore {
     );
 
     if (!isStale()) {
-      this.update(featureId, (prev) => ({ ...prev, running: false }));
+      this.update(featureId, (prev) => ({
+        ...prev, running: Object.values(prev.progress).some((p) =>
+          p.status === 'pending' || p.status === 'analyzing' || p.status === 'retrying'),
+      }));
     }
   }
 

@@ -1,4 +1,4 @@
-import { ProviderError } from '../kernel/error-types.js';
+import { ProviderError, ValidationError } from '../kernel/error-types.js';
 import type {
   AzureHttpGetter,
   AzureHttpPutter,
@@ -155,9 +155,20 @@ export function createAzureApprovalGateway(
     }
     return token;
   };
+  function headFromDetail(detail: { status: number; body: unknown }): string {
+    const body = detail.body as { status?: unknown; lastMergeSourceCommit?: { commitId?: unknown } };
+    const head = body?.lastMergeSourceCommit?.commitId;
+    if (detail.status !== 200 || body?.status !== 'active' || typeof head !== 'string' || !head) {
+      throw new ProviderError('Cannot approve: Azure DevOps pull request is inactive or its head could not be verified.');
+    }
+    return head;
+  }
 
   return {
-    async approve(): Promise<PrApprovalResult> {
+    async getHeadSha() {
+      return headFromDetail(await deps.httpGet(pullDetailUrl(target), await authorize()));
+    },
+    async approve(expectedHeadSha): Promise<PrApprovalResult> {
       const token = await authorize();
       const me = await fetchAzureUser(deps, target.org);
 
@@ -165,6 +176,9 @@ export function createAzureApprovalGateway(
       // and, crucially, the reviewer id in the identity namespace the vote
       // endpoint accepts.
       const detail = await deps.httpGet(pullDetailUrl(target), token);
+      if (expectedHeadSha && headFromDetail(detail) !== expectedHeadSha) {
+        throw new ValidationError('Pull request head changed before approval. Reset and review the latest commit.');
+      }
       const mine =
         detail.status === 200 ? findMyReviewer(detail.body, me) : null;
       const reviewer = mine?.uniqueName ?? me?.uniqueName ?? undefined;
@@ -188,6 +202,9 @@ export function createAzureApprovalGateway(
         throw new ProviderError(
           `Failed to approve Azure DevOps pull request (HTTP ${res.status})`,
         );
+      }
+      if (expectedHeadSha && (res.body as { vote?: unknown } | null)?.vote !== APPROVED_VOTE) {
+        throw new ProviderError('Azure DevOps did not confirm the approval vote.');
       }
       return {
         approved: true,

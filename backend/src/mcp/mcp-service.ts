@@ -18,6 +18,7 @@ import type {
   McpServerEntry,
   McpServerInput,
   McpServerStatus,
+  McpProviderInfo,
   ProviderMcpConfig,
 } from './mcp-contract.js';
 
@@ -59,8 +60,15 @@ export interface McpServiceDeps {
  * preserving all other file content.
  */
 export interface McpService {
-  /** Providers that currently expose MCP support, in registration order. */
-  listProviders(): { id: string }[];
+  /** Supported management categories; availability need not imply an installed CLI. */
+  listProviders(): McpProviderInfo[];
+  removeServer?(providerId: string, serverName: string): Promise<ProviderMcpConfig>;
+  setServerEnabled?(providerId: string, serverName: string, enabled: boolean): Promise<ProviderMcpConfig>;
+  configureBuiltin?(providerId: string, serverName: string, input: { arguments: string }): Promise<ProviderMcpConfig>;
+  getServerOptions?(providerId: string, serverName: string): Promise<import('./mcp-contract.js').McpCommandOptions>;
+  startAuthentication?(providerId: string, serverName: string): Promise<import('./mcp-contract.js').McpAuthenticationJob>;
+  authenticationStatus?(providerId: string, serverName: string, jobId: string): Promise<import('./mcp-contract.js').McpAuthenticationJob>;
+  cancelAuthentication?(providerId: string, serverName: string, jobId: string): Promise<import('./mcp-contract.js').McpAuthenticationJob>;
   /**
    * Current MCP config (path + servers) for a provider. This is deliberately
    * cheap: it never spawns a live MCP server, so the surface loads instantly.
@@ -74,9 +82,10 @@ export interface McpService {
    */
   inspectServer(providerId: string, serverName: string): Promise<McpServerEntry>;
   /**
-   * Slim, live connection status for one server (connected / needs-auth / error
-   * / disabled / unsupported) plus its tool count. Spawns the server like
-   * {@link inspectServer}, so it is requested per-card, on demand.
+   * Probe status for one server. Third-party categories report the last explicit
+   * inspection. An explicit app-owned bridge check may run bounded protocol/host
+   * verification and refresh only a recognized stale app registration.
+   * A successful independent probe does not establish a running CLI connection.
    */
   serverStatus(providerId: string, serverName: string): Promise<McpServerStatus>;
   /** Adds or updates a single MCP server entry, returning the new config. */

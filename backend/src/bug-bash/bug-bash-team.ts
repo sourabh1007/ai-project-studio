@@ -243,6 +243,10 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
                 scope: 'internal',
                 model: 'auto',
                 label: `Bug bash · ${tester.title}`,
+                onStart: (id) => {
+                  tester.sessionIds = [...new Set([...(tester.sessionIds ?? []), id])];
+                  sink.agent({ ...tester });
+                },
                 timeoutMs: deps.config.runTimeoutMs,
                 signal,
                 onActivity: (line) =>
@@ -385,6 +389,10 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
         scope: 'internal',
         model: 'auto',
         label: 'Bug bash · lead report',
+        onStart: (id) => {
+          lead.sessionIds = [...new Set([...(lead.sessionIds ?? []), id])];
+          emitLead();
+        },
         timeoutMs: deps.config.runTimeoutMs,
         signal,
         onActivity: leadActivity,

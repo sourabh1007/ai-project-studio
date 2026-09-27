@@ -57,6 +57,8 @@ export interface AcpTurnRequest {
   deadlineAt?: number;
   /** Pool callback fired once the turn really begins running. */
   onStart?: () => void;
+  /** Provider identity becomes available before the first billable prompt. */
+  onSession?: (sessionId: string) => void;
   /** Overall turn timeout budget used to build deadline-based errors. */
   timeoutMs?: number;
   /** Optional cancellation signal observed by the warm-pool wrapper. */
@@ -254,6 +256,7 @@ export class AcpClient {
     };
     this.active = turn;
     try {
+      request.onSession?.(sessionId);
       const result = await this.request(
         'session/prompt',
         {

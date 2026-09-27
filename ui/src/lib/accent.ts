@@ -59,7 +59,7 @@ const ACCENTS: Record<
  */
 export const ACCENT_SURFACE: Record<ResolvedTheme, string> = {
   light: '#ffffff',
-  dark: '#171e33',
+  dark: '#252526',
 };
 
 /** Candidate colours for text drawn on top of the accent. */

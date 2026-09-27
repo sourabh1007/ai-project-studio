@@ -6,13 +6,15 @@ describe('terminal protocol v2', () => {
     for (const frame of [
       { type: 'input', data: 'ls\r', generation: 1, seq: 1 } as const,
       { type: 'resize', cols: 80, rows: 24, generation: 1 } as const,
+      { type: 'ping', seq: 1, generation: 1 } as const,
     ]) expect(JSON.parse(encodeClientMessage(frame))).toEqual(frame);
   });
   const state = { type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 16 };
   const ack = { type: 'ack', generation: 1, seq: 1, outcome: 'written', reason: '' };
   it('decodes all server messages', () => {
     for (const frame of [
-      state, ack, { type: 'output', data: 'hi' }, { type: 'resize', cols: 80, rows: 24 },
+      state, { ...state, heartbeat: true }, { type: 'pong', generation: 1, seq: 1 },
+      { ...state, detail: 'Updating files: 50%' }, ack, { type: 'output', data: 'hi' }, { type: 'resize', cols: 80, rows: 24 },
       { type: 'exit', code: 0 }, { type: 'exit', code: null },
     ]) expect(decodeServerMessage(JSON.stringify(frame))).toEqual(frame);
   });
@@ -22,6 +24,8 @@ describe('terminal protocol v2', () => {
       { ...state, generation: undefined }, { ...state, generation: -1 },
       { ...state, version: 1 }, { ...state, state: 'unknown' },
       { ...state, inputLimit: 1.5 }, { ...state, inputLimit: 0 },
+      { ...state, detail: 42 },
+      { ...state, heartbeat: 'yes' }, { type: 'pong', generation: 1, seq: 0 }, { type: 'pong', generation: 1, seq: 1.5 },
       { ...ack, seq: 1.5 }, { ...ack, seq: 0 }, { ...ack, outcome: 'unknown' }, { ...ack, reason: 0 },
       { type: 'output', data: 1 }, { type: 'resize', cols: 'x', rows: 1 },
       { type: 'resize', cols: 1, rows: 'x' }, { type: 'exit', code: 'x' }, { type: 'other' },

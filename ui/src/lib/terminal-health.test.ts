@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import { createTerminalHealth } from './terminal-health.js';
+
+const state = { type: 'state', state: 'ready', version: 2, generation: 1, inputLimit: 16, heartbeat: true } as const;
+describe('terminal health evidence', () => {
+  it('negotiates probes, coalesces them and never treats output as a heartbeat or progress confirmation', () => {
+    let now = 0;
+    const health = createTerminalHealth(() => now);
+    expect(health.probe()).toBeNull();
+    expect(health.snapshot()).toMatchObject({ connection: 'unsupported', inputAgeSeconds: null });
+    health.receive(state);
+    expect(health.snapshot().connection).toBe('checking');
+    expect(health.probe()).toEqual({ type: 'ping', seq: 1, generation: 1 });
+    expect(health.probe()).toBeNull();
+    health.receive({ type: 'pong', generation: 2, seq: 1 });
+    health.receive({ type: 'pong', generation: 1, seq: 2 });
+    now = 20_000;
+    health.receive({ type: 'output', data: 'Thinking...' });
+    expect(health.snapshot()).toMatchObject({ connection: 'unresponsive', outputAgeSeconds: 0 });
+    health.receive({ type: 'pong', generation: 1, seq: 1 });
+    expect(health.snapshot()).toMatchObject({ connection: 'live', heartbeatAgeSeconds: 0 });
+    expect(health.probe()).toBeNull();
+    now += 5000;
+    expect(health.probe()).toEqual({ type: 'ping', seq: 2, generation: 1 });
+    health.receive({ type: 'pong', generation: 1, seq: 2 });
+    health.receive({ type: 'pong', generation: 1, seq: 2 });
+    expect(health.snapshot().connection).toBe('live');
+  });
+  it('measures quiet and unacknowledged input independently; a quiet idle terminal is not labelled failed', () => {
+    let now = 0;
+    const health = createTerminalHealth(() => now);
+    health.receive(state);
+    health.sent({ type: 'resize', cols: 80, rows: 24, generation: 1 });
+    health.sent({ type: 'input', seq: 1, generation: 1, data: 'hello\r' });
+    now = 10_000;
+    expect(health.snapshot()).toMatchObject({ pendingInputSeconds: 10, inputAgeSeconds: 10 });
+    health.receive({ type: 'ack', seq: 1, generation: 2, outcome: 'written', reason: '' });
+    expect(health.snapshot().pendingInputSeconds).toBe(10);
+    health.receive({ type: 'ack', seq: 1, generation: 1, outcome: 'written', reason: '' });
+    expect(health.snapshot().pendingInputSeconds).toBeNull();
+    now = 30_000;
+    health.receive({ type: 'output', data: '' });
+    expect(health.snapshot()).toMatchObject({ quiet: true, outputAgeSeconds: 30, connection: 'checking' });
+    health.receive(state);
+    expect(health.snapshot().inputAgeSeconds).toBe(30);
+    health.receive({ ...state, generation: 2 });
+    expect(health.snapshot()).toMatchObject({ quiet: false, inputAgeSeconds: null });
+    health.receive({ type: 'exit', code: 0 });
+  });
+  it('rechecks after visibility/sleep without mistaking suspended timers for a broken connection', () => {
+    let now = 0;
+    const health = createTerminalHealth(() => now);
+    health.receive(state);
+    health.probe();
+    now = 100_000;
+    health.resume();
+    expect(health.snapshot()).toMatchObject({ connection: 'checking', quiet: true });
+    expect(health.probe()).toEqual({ type: 'ping', seq: 2, generation: 1 });
+    now = -100;
+    expect(health.snapshot().outputAgeSeconds).toBe(0);
+  });
+});

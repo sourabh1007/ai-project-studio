@@ -65,6 +65,8 @@ function session(overrides: Partial<Session> = {}): Session {
     startedAt: '2025-01-01T00:00:01.000Z',
     endedAt: null,
     exitCode: null,
+    worktreePath: null,
+    branch: null,
     ...overrides,
   };
 }
@@ -355,6 +357,42 @@ describe('session-repo', () => {
     expect(repo.get('s1')?.name).toBe('Login form');
     repo.rename('s1', null);
     expect(repo.get('s1')?.name).toBeNull();
+    db.close();
+  });
+
+  it('records a session worktree and keeps it across later saves', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session());
+    expect(repo.get('s1')?.worktreePath).toBeNull();
+    expect(repo.get('s1')?.branch).toBeNull();
+
+    repo.setWorktree('s1', {
+      path: 'C:\\src\\.ai-worktrees\\app-session-s1',
+      branch: 'users/me/fix',
+    });
+    expect(repo.get('s1')?.worktreePath).toBe(
+      'C:\\src\\.ai-worktrees\\app-session-s1',
+    );
+    expect(repo.get('s1')?.branch).toBe('users/me/fix');
+
+    // A normal save (status change) must not clobber the recorded worktree.
+    repo.save(session({ status: 'completed' }));
+    expect(repo.get('s1')?.worktreePath).toBe(
+      'C:\\src\\.ai-worktrees\\app-session-s1',
+    );
+    expect(repo.get('s1')?.branch).toBe('users/me/fix');
+    db.close();
+  });
+
+  it('persists a worktree provided on the initial save', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(
+      session({ worktreePath: 'C:\\wt\\app-session-s1', branch: 'main' }),
+    );
+    expect(repo.get('s1')?.worktreePath).toBe('C:\\wt\\app-session-s1');
+    expect(repo.get('s1')?.branch).toBe('main');
     db.close();
   });
 

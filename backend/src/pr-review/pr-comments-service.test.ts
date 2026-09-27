@@ -107,6 +107,16 @@ describe('assertThreadStatus', () => {
 });
 
 describe('assertAddCommentInput', () => {
+  it('preserves the optional head without changing the edited text or coordinates', () => {
+    const input = { path: 'src/a.cs', line: 42, body: '  edited\ncomment  ', expectedHeadSha: 'captured' };
+    expect(assertAddCommentInput(input)).toEqual(input);
+  });
+
+  it.each([null, 42, '', '  ', {}])('rejects malformed optional head %j', (expectedHeadSha) => {
+    expect(() => assertAddCommentInput({
+      path: 'a.cs', line: 1, body: 'comment', expectedHeadSha,
+    })).toThrow(/expectedHeadSha/);
+  });
   it('accepts a well-formed payload', () => {
     expect(
       assertAddCommentInput({ path: 'a.cs', line: 4, body: 'nit' }),
@@ -131,6 +141,75 @@ describe('assertAddCommentInput', () => {
 });
 
 describe('createPrCommentsService', () => {
+  const guardedInput = { path: 'a.cs', line: 12, body: ' edited comment\n', expectedHeadSha: 'captured' };
+  function capturedReview(): PrReview {
+    return {
+      ...review('f1', 'r1'), headSha: 'captured',
+      changeGraph: {
+        status: 'ready', nodes: [
+          { path: 'other.cs', kind: 'changed', diff: '@@ -1 +12 @@\n+x' },
+          { path: 'a.cs', kind: 'changed', changeKind: 'modified', diff: '@@ -3,2 +11,2 @@\n context\n-old\n+edited' },
+        ],
+      },
+    } as PrReview;
+  }
+
+  it('posts the exact edited body and captured right-side coordinates with the head guard', async () => {
+    let received: AddPrCommentInput | undefined;
+    const gateway = recordingGateway();
+    gateway.add = async (input) => { received = input; return thread('created'); };
+    const { service } = setup({
+      reviews: new Map([['f1', capturedReview()]]), repos: new Map([['r1', repo('r1')]]), gateway,
+    });
+    expect(await service.add('f1', guardedInput)).toEqual(thread('created'));
+    expect(received).toEqual(guardedInput);
+  });
+
+  it.each([
+    ['missing head', (r: PrReview) => { r.headSha = null; }, /head/],
+    ['changed head', (r: PrReview) => { r.headSha = 'new'; }, /head/],
+    ['pending graph', (r: PrReview) => { r.changeGraph.status = 'pending'; }, /not ready/],
+    ['failed graph', (r: PrReview) => { r.changeGraph.status = 'failed'; }, /not ready/],
+    ['generating graph', (r: PrReview) => { r.changeGraph.status = 'generating'; }, /not ready/],
+    ['missing exact file', (r: PrReview) => { r.changeGraph.nodes[1].path = 'A.cs'; }, /exact file/],
+    ['boundary file', (r: PrReview) => { r.changeGraph.nodes[1].kind = 'boundary'; }, /exact file/],
+    ['deleted file', (r: PrReview) => { r.changeGraph.nodes[1].changeKind = 'deleted'; }, /exact file/],
+    ['missing diff', (r: PrReview) => { r.changeGraph.nodes[1].diff = ''; }, /exact file/],
+    ['uncaptured line', (r: PrReview) => { r.changeGraph.nodes[1].diff = '@@ -3,20 +11,20 @@\n context'; }, /exact file/],
+  ] as const)('blocks %s before gateway resolution', async (_name, change, message) => {
+    const saved = capturedReview();
+    change(saved);
+    let resolved = false;
+    const { service, gateway } = setup({
+      reviews: new Map([['f1', saved]]), repos: new Map([['r1', repo('r1')]]),
+      onResolve: () => { resolved = true; },
+    });
+    await expect(service.add('f1', guardedInput)).rejects.toThrow(message);
+    expect(resolved).toBe(false);
+    expect((gateway as RecordingGateway).calls).toEqual([]);
+  });
+
+  it.each([
+    { expectedHeadSha: '' }, { expectedHeadSha: null }, { path: '../a.cs' },
+    { path: '/a.cs' }, { line: 0 }, { line: 1.2 }, { body: '' },
+  ])('validates guarded direct service calls %j without posting', async (override) => {
+    const { service, gateway } = setup({
+      reviews: new Map([['f1', capturedReview()]]), repos: new Map([['r1', repo('r1')]]),
+    });
+    await expect(service.add('f1', { ...guardedInput, ...override } as AddPrCommentInput)).rejects.toThrow();
+    expect((gateway as RecordingGateway).calls).toEqual([]);
+  });
+
+  it('does not retry or hide a guarded provider failure', async () => {
+    let calls = 0;
+    const gateway = recordingGateway();
+    gateway.add = async () => { calls += 1; throw new Error('live head moved'); };
+    const { service } = setup({
+      reviews: new Map([['f1', capturedReview()]]), repos: new Map([['r1', repo('r1')]]), gateway,
+    });
+    await expect(service.add('f1', guardedInput)).rejects.toThrow('live head moved');
+    expect(calls).toBe(1);
+  });
   it('lists threads via the resolved gateway', async () => {
     const reviews = new Map([['f1', review('f1', 'r1')]]);
     const repos = new Map([['r1', repo('r1')]]);

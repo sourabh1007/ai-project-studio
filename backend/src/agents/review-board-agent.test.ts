@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createReviewBoardAgent, REVIEW_BOARD_AGENT_ID } from './review-board-agent.js';
+import {
+  PERSPECTIVE_CONFIG_KEYS,
+  REVIEW_PERSPECTIVE_IDS,
+} from '../review-board/review-board-perspective-prompts.js';
 
 describe('review-board-agent', () => {
   it('exposes a single-instance manifest with editable review prompts', () => {
@@ -7,9 +11,13 @@ describe('review-board-agent', () => {
     expect(agent.manifest.id).toBe(REVIEW_BOARD_AGENT_ID);
     expect(agent.manifest.allowMultiplePerFeature).toBe(false);
     expect(agent.manifest.usageLabel).toBe('Review board');
+    const perspectiveKeys = REVIEW_PERSPECTIVE_IDS.flatMap((id) => [
+      PERSPECTIVE_CONFIG_KEYS[id].focus,
+      PERSPECTIVE_CONFIG_KEYS[id].issueFormat,
+    ]);
     expect(agent.manifest.promptFields.map((f) => f.key)).toEqual([
-      'perspectivePromptTemplate',
-      'problemSolutionPromptTemplate',
+      'commonReviewGuidance',
+      ...perspectiveKeys,
       'problemStatementPromptTemplate',
       'fileExplanationPromptTemplate',
       'graphChatPromptTemplate',

@@ -7,6 +7,7 @@ import type { TemporaryPromptFileFactory } from '../repository-context/temporary
 import { reviewBoardDefaults } from './config.js';
 import {
   createReviewBoardService,
+  requireReviewEvidence,
   type ReviewBoardServiceDeps,
 } from './review-board-service.js';
 
@@ -20,6 +21,9 @@ function step(status: PrReview['problemStatement']['status']) {
     generatedAt: null,
   };
 }
+
+const cleanReview = '{"skipped":false,"summary":"Inspected svc/cache.cs BuildKey; no issues found.","findings":[]}';
+const evidencedReview = '{"findings":[{"title":"Cache key bounds","detail":"No bound on user input.","evidence":[{"source":"svc/cache.cs","reason":"BuildKey accepts arbitrary keys"}]}]}';
 
 const review: PrReview = {
   featureId: 'f9',
@@ -86,7 +90,7 @@ function baseDeps(
     reviews: { get: () => review },
     config: reviewBoardDefaults,
     clock: createClock(() => Date.parse('2026-02-02T00:00:00.000Z')),
-    ai: { runDetailed: vi.fn(async () => ({ text: '', sessionId: 's0' })) },
+    ai: { runDetailed: vi.fn(async () => ({ text: cleanReview, sessionId: 's0' })) },
     bus: { emit: vi.fn() },
     temporaryPrompts: fakeTemporaryPrompts(),
     sleep: vi.fn(async () => {}),
@@ -103,6 +107,109 @@ function aiReturning(text: string): {
 }
 
 describe('createReviewBoardService.get', () => {
+  it('keeps evidence identity stable when telemetry or step activity updates timestamps', () => {
+    const current = structuredClone(review);
+    current.changeGraph.generatedAt = 'graph-revision';
+    const service = createReviewBoardService(baseDeps({ reviews: { get: () => current } }));
+    expect(service.get('f9').reviewUpdatedAt).toBe('graph-revision');
+    current.timestamps.updatedAt = 'later-activity-update';
+    expect(service.get('f9').reviewUpdatedAt).toBe('graph-revision');
+    current.changeGraph.generatedAt = 'replacement-graph';
+    expect(service.get('f9').reviewUpdatedAt).toBe('replacement-graph');
+  });
+  function persisted() {
+    let current = structuredClone(review);
+    const deps = baseDeps({ reviews: { get: () => current, save: (next) => { current = next; } } });
+    return { deps, current: () => current, service: createReviewBoardService(deps) };
+  }
+
+  it('persists completed analyses across service/view lifetimes without rerunning AI', async () => {
+    const { deps, service, current } = persisted();
+    const analysis = await service.analyzePerspective('f9', 'security');
+    const reopened = createReviewBoardService(deps);
+    const snapshot = reopened.get('f9');
+    expect(snapshot.analyses?.security).toEqual(analysis);
+    expect(snapshot.perspectives.find((p) => p.id === 'security')).toEqual(analysis.perspective);
+    await expect(reopened.analyzePerspective('f9', 'security')).resolves.toEqual(analysis);
+    expect(deps.ai.runDetailed).toHaveBeenCalledTimes(1);
+    current().changeGraph.status = 'failed';
+    current().changeGraph.failure = { message: 'refresh failed', failedAt: 'later' };
+    expect(reopened.get('f9').analyses?.security).toEqual(analysis);
+    await expect(reopened.analyzePerspective('f9', 'security')).rejects.toThrow('refresh failed');
+  });
+
+  it('does not reuse results after the head or graph revision changes', async () => {
+    const { service, current } = persisted();
+    await service.analyzePerspective('f9', 'security');
+    current().headSha = 'new-head';
+    expect(service.get('f9').analyses).toEqual({});
+    current().headSha = review.headSha;
+    current().changeGraph.generatedAt = 'new-graph';
+    expect(service.get('f9').analyses).toEqual({});
+  });
+
+  it('coalesces concurrent requests for a perspective', async () => {
+    const { deps, service } = persisted();
+    let finish!: (result: MetaRunResult) => void;
+    deps.ai.runDetailed = vi.fn(() => new Promise((r) => { finish = r; }));
+    const first = service.analyzePerspective('f9', 'security');
+    const second = service.analyzePerspective('f9', 'security');
+    finish({ text: cleanReview, sessionId: 'same' });
+    expect(await first).toEqual(await second);
+    expect(deps.ai.runDetailed).toHaveBeenCalledTimes(1);
+  });
+  it('does not mistake inherited object properties for cached analyses', async () => {
+    const { service } = persisted();
+    await expect(service.analyzePerspective('f9', 'toString')).rejects.toThrow('Unknown perspective');
+  });
+
+  it.each(['head', 'graph', 'status'])('rejects a result when its %s changes in flight', async (change) => {
+    const { deps, service, current } = persisted();
+    deps.ai.runDetailed = vi.fn(async () => {
+      if (change === 'head') current().headSha = 'new';
+      if (change === 'graph') current().changeGraph.generatedAt = 'new';
+      if (change === 'status') current().changeGraph.status = 'failed';
+      return { text: cleanReview, sessionId: 's' };
+    });
+    // Mimic a JSON repository read: each reader gets an immutable snapshot.
+    const originalGet = deps.reviews.get;
+    deps.reviews.get = () => structuredClone(originalGet('f9'));
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('evidence changed');
+    expect(current().reviewBoardAnalysis).toBeUndefined();
+  });
+
+  it('does not persist analysis after a caller cancellation', async () => {
+    const { deps, service, current } = persisted();
+    const controller = new AbortController();
+    deps.ai.runDetailed = vi.fn(async () => {
+      controller.abort();
+      return { text: cleanReview, sessionId: 's' };
+    });
+    await expect(service.analyzePerspective('f9', 'security', controller.signal)).rejects.toThrow();
+    expect(current().reviewBoardAnalysis).toBeUndefined();
+  });
+
+  it('does not stream a cached result after the caller disconnects', async () => {
+    const { service } = persisted();
+    const analysis = await service.analyzePerspective('f9', 'security');
+    const controller = new AbortController();
+    service.analyzePerspective = async () => {
+      controller.abort();
+      return analysis;
+    };
+    const emit = vi.fn();
+    await service.analyzeAll('f9', { emit }, controller.signal);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'analyzing' }));
+  });
+  it('keeps the recorded prerequisite failure instead of replacing it with a stream error', () => {
+    expect(() => requireReviewEvidence({
+      ...review, changeGraph: {
+        ...review.changeGraph, status: 'failed',
+        failure: { message: 'Background analysis cancelled during app shutdown.', failedAt: '2026-09-26' },
+      },
+    })).toThrow('Background analysis cancelled during app shutdown.');
+  });
   it('derives a clean board from the feature PR review', () => {
     const service = createReviewBoardService(baseDeps());
     const board = service.get('f9');
@@ -421,22 +528,22 @@ describe('createReviewBoardService.analyzePerspective', () => {
   });
 
   it('keeps the deterministic findings when the AI adds nothing', async () => {
-    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const ai = aiReturning(cleanReview);
     const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
     const result = await service.analyzePerspective('f9', 'problem-solution');
     expect(result.perspective.findings.length).toBeGreaterThan(0);
   });
 
   it('uses the problem/solution prompt and floor for the problem-solution lens', async () => {
-    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const ai = aiReturning(evidencedReview);
     const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
     const result = await service.analyzePerspective('f9', 'problem-solution');
     // Dedicated prompt was used (general problem/solution, not file-by-file).
     const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as MetaRequest;
-    expect(request.prompt).toContain('does this pull request');
-    expect(request.prompt).toContain('Do NOT evaluate files');
-    expect(request.prompt).toContain('Distilled problem statement:');
+    expect(request.prompt).toContain('Problem ↔ Solution');
+    expect(request.prompt).toContain('do NOT grade files one by one');
+    expect(request.prompt).toContain('The problem this PR targets');
     // Floor frames the fallback as Problem / Solution / Why they align / Verdict
     // with NO file-level line-by-line checks.
     expect(result.rationale.map((r) => r.label)).toEqual([
@@ -450,6 +557,23 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.summary).toContain('Problem:');
   });
 
+  it('falls back to a placeholder when no problem statement can be distilled', async () => {
+    const noProblem: PrReview = {
+      ...review,
+      problemStatement: { ...review.problemStatement, sufficient: false },
+    };
+    const ai = aiReturning(cleanReview);
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, reviews: { get: () => noProblem } }),
+    );
+    await service.analyzePerspective('f9', 'problem-solution');
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).toContain(
+      'no self-contained problem statement could be distilled',
+    );
+  });
+
   it('reads the solution from the description when nothing changed resolves', async () => {
     const boundaryOnly: PrReview = {
       ...review,
@@ -461,7 +585,7 @@ describe('createReviewBoardService.analyzePerspective', () => {
         })),
       },
     };
-    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const ai = aiReturning(cleanReview);
     const service = createReviewBoardService(
       baseDeps({ ai, inlinePrompts: true, reviews: { get: () => boundaryOnly } }),
     );
@@ -472,7 +596,7 @@ describe('createReviewBoardService.analyzePerspective', () => {
   });
 
   it('marks a reviewed-but-clean perspective Approved / Low', async () => {
-    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+    const ai = aiReturning(cleanReview);
     const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
     const result = await service.analyzePerspective('f9', 'security');
     expect(result.perspective.findings).toHaveLength(0);
@@ -480,10 +604,8 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.perspective.risk).toBe('low');
   });
 
-  it('fills empty detail from the deterministic evidence floor', async () => {
-    // The model returns a clean verdict with no summary/rationale/checks; the
-    // service must never leave the detail panel empty for an analysed lens.
-    const ai = aiReturning('```json\n{"skipped": false, "findings": []}\n```');
+  it('supplements validated evidenced findings from the deterministic floor', async () => {
+    const ai = aiReturning(evidencedReview);
     const service = createReviewBoardService(baseDeps({ ai, inlinePrompts: true }));
     const result = await service.analyzePerspective('f9', 'security');
     expect(result.summary).not.toBeNull();
@@ -492,6 +614,68 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(result.rationale[0].label).toBe('Concern');
     expect(result.checks.length).toBeGreaterThan(0);
   });
+
+  it('retries malformed output and accepts a subsequent valid review', async () => {
+    const runDetailed = vi.fn()
+      .mockResolvedValueOnce({ text: '{}', sessionId: 'invalid' })
+      .mockResolvedValue({ text: cleanReview, sessionId: 'valid' });
+    const sleep = vi.fn(async () => {});
+    const service = createReviewBoardService(baseDeps({ ai: { runDetailed }, sleep }));
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(result.summary).toContain('Inspected svc/cache.cs');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers from invalid output using the final cold attempt', async () => {
+    const runDetailed = vi.fn(async (request: MetaRequest) => ({
+      text: request.forceCold ? cleanReview : 'I cannot review this.',
+      sessionId: 's1',
+    }));
+    const service = createReviewBoardService(baseDeps({
+      ai: { runDetailed },
+      config: { ...reviewBoardDefaults, transientRetryAttempts: 1 },
+    }));
+    expect((await service.analyzePerspective('f9', 'security')).perspective.status)
+      .toBe('approved');
+    expect(runDetailed).toHaveBeenLastCalledWith(expect.objectContaining({ forceCold: true }));
+  });
+
+  it('validates and cleans up each attachment attempt, forcing the last cold', async () => {
+    const temporaryPrompts = fakeTemporaryPrompts();
+    const runDetailed = vi.fn(async (request: MetaRequest) => ({
+      text: request.forceCold ? cleanReview : '{}',
+      sessionId: 's1',
+    }));
+    const service = createReviewBoardService(baseDeps({
+      ai: { runDetailed },
+      temporaryPrompts,
+      config: {
+        ...reviewBoardDefaults, coldInlineMaxChars: 0, transientRetryAttempts: 1,
+      },
+    }));
+    expect((await service.analyzePerspective('f9', 'security')).perspective.status)
+      .toBe('approved');
+    expect(temporaryPrompts.created).toHaveLength(2);
+    expect(temporaryPrompts.cleaned).toBe(2);
+    expect(runDetailed).toHaveBeenLastCalledWith(expect.objectContaining({
+      forceCold: true, attachments: ['C:/tmp/prompt-2.txt'],
+    }));
+  });
+
+  it.each(['', '{}', 'I cannot review this.', '[]', '{"findings":[]}'])(
+    'never returns completed analysis for invalid output %s', async (text) => {
+      const ai = aiReturning(text);
+      const service = createReviewBoardService(baseDeps({
+        ai, config: { ...reviewBoardDefaults, transientRetryAttempts: 1 },
+      }));
+      await expect(service.analyzePerspective('f9', 'security')).rejects.toMatchObject({
+        kind: 'provider',
+        message: expect.stringContaining('Retry this perspective'),
+      });
+      expect(ai.runDetailed).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('keeps the model detail when it is provided (floor not used)', async () => {
     const result = await createReviewBoardService(
@@ -782,6 +966,24 @@ describe('createReviewBoardService.analyzeAll', () => {
     expect(events.some((e) => e.type === 'analyzed')).toBe(false);
   });
 
+  it('streams failures, never analyzed events, for invalid model output', async () => {
+    const service = createReviewBoardService(baseDeps({
+      ai: aiReturning('{}'),
+      config: { ...reviewBoardDefaults, transientRetryAttempts: 0 },
+    }));
+    const { sink, events } = collect();
+    await service.analyzeAll('f9', sink);
+    expect(events.filter((e) => e.type === 'failed')).toHaveLength(
+      service.get('f9').perspectives.length,
+    );
+    expect(events.some((e) => e.type === 'analyzed')).toBe(false);
+    expect(events.filter((e) => e.type === 'failed')).toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        error: expect.stringContaining('Retry this perspective'),
+      })]),
+    );
+  });
+
   it('reserves one session: fans out to (live - 1) perspectives at once', async () => {
     let active = 0;
     let peak = 0;
@@ -791,7 +993,7 @@ describe('createReviewBoardService.analyzeAll', () => {
         peak = Math.max(peak, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active -= 1;
-        return { text: '', sessionId: 's1' };
+        return { text: cleanReview, sessionId: 's1' };
       }),
     };
     const liveMetaSessions = vi.fn(() => 3);
@@ -814,7 +1016,7 @@ describe('createReviewBoardService.analyzeAll', () => {
         peak = Math.max(peak, active);
         await new Promise((resolve) => setTimeout(resolve, 2));
         active -= 1;
-        return { text: '', sessionId: 's1' };
+        return { text: cleanReview, sessionId: 's1' };
       }),
     };
     const service = createReviewBoardService(
@@ -823,6 +1025,34 @@ describe('createReviewBoardService.analyzeAll', () => {
     const { sink } = collect();
     await service.analyzeAll('f9', sink);
     expect(peak).toBe(1);
+  });
+
+  describe('Review Board change graph prerequisite', () => {
+    it.each(['pending', 'generating', 'failed'] as const)(
+      'rejects every analysis entry point while the graph is %s', async (status) => {
+        const ai = aiReturning(cleanReview);
+        const emit = vi.fn();
+        const service = createReviewBoardService(baseDeps({
+          ai,
+          reviews: { get: () => ({
+            ...review, changeGraph: { ...review.changeGraph, status },
+          }) },
+        }));
+        expect(service.get('f9').perspectives.length).toBeGreaterThan(0);
+        for (const analyze of [
+          () => service.analyze('f9'),
+          () => service.analyzePerspective('f9', 'security'),
+          () => service.analyzeAll('f9', { emit }),
+        ]) {
+          await expect(analyze()).rejects.toMatchObject({
+            kind: 'validation',
+            message: expect.stringContaining(`ready change graph (currently ${status})`),
+          });
+        }
+        expect(ai.runDetailed).not.toHaveBeenCalled();
+        expect(emit).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('emits nothing when the signal is already aborted', async () => {

@@ -1,6 +1,7 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { RepoInsightsGit } from './repo-insights-git-port.js';
+import { repoInsightsDefaults } from './config.js';
 
 const execFile = promisify(nodeExecFile);
 
@@ -8,6 +9,7 @@ export interface GitCommandExecutor {
   run(
     executable: string,
     args: readonly string[],
+    options: { signal?: AbortSignal; timeout: number },
   ): Promise<{ stdout: string | Buffer }>;
 }
 
@@ -28,7 +30,7 @@ const ISOLATED_CONFIG_ENV = {
 } as const;
 
 const defaultExecutor: GitCommandExecutor = {
-  async run(executable, args) {
+  async run(executable, args, options) {
     // Global config is bypassed, so also opt out of the ownership check (whose
     // allow-list lives there) to avoid a "dubious ownership" fatal on mapped or
     // differently-owned drives.
@@ -37,6 +39,7 @@ const defaultExecutor: GitCommandExecutor = {
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, ...ISOLATED_CONFIG_ENV },
+      ...options,
     });
   },
 };
@@ -48,26 +51,36 @@ const defaultExecutor: GitCommandExecutor = {
  */
 export function createRepoInsightsGitAdapter(
   executor: GitCommandExecutor = defaultExecutor,
+  timeoutMs = repoInsightsDefaults.gitTimeoutMs,
 ): RepoInsightsGit {
   const run = async (
     repositoryPath: string,
     args: readonly string[],
+    signal?: AbortSignal,
   ): Promise<string | null> => {
     try {
-      const result = await executor.run('git', ['-C', repositoryPath, ...args]);
+      signal?.throwIfAborted();
+      const result = await executor.run('git', ['-C', repositoryPath, ...args], {
+        signal,
+        timeout: timeoutMs,
+      });
       return result.stdout.toString();
-    } catch {
+    } catch (error) {
+      signal?.throwIfAborted();
+      if ((error as { killed?: boolean }).killed) {
+        throw new Error(`Repository scan Git command exceeded ${timeoutMs}ms. Retry the scan.`, { cause: error });
+      }
       return null;
     }
   };
 
   return {
-    async resolveDefaultBranch(repositoryPath) {
+    async resolveDefaultBranch(repositoryPath, signal) {
       const symbolic = await run(repositoryPath, [
         'symbolic-ref',
         '--short',
         'refs/remotes/origin/HEAD',
-      ]);
+      ], signal);
       if (symbolic !== null) {
         const branch = symbolic.trim().replace(/^origin\//, '');
         if (branch.length > 0) {
@@ -78,19 +91,19 @@ export function createRepoInsightsGitAdapter(
         'rev-parse',
         '--abbrev-ref',
         'HEAD',
-      ]);
+      ], signal);
       const name = current?.trim();
       return name && name !== 'HEAD' ? name : null;
     },
 
-    async listFiles(repositoryPath, ref, directory, recursive = false) {
+    async listFiles(repositoryPath, ref, directory, recursive = false, signal) {
       const output = await run(repositoryPath, [
         'ls-tree',
         '--name-only',
         ...(recursive ? ['-r'] : []),
         ref,
         `${directory.replace(/\/+$/, '')}/`,
-      ]);
+      ], signal);
       if (output === null) {
         return [];
       }
@@ -100,20 +113,20 @@ export function createRepoInsightsGitAdapter(
         .filter((line) => line.length > 0);
     },
 
-    async readFile(repositoryPath, ref, filePath) {
-      return run(repositoryPath, ['show', `${ref}:${filePath}`]);
+    async readFile(repositoryPath, ref, filePath, signal) {
+      return run(repositoryPath, ['show', `${ref}:${filePath}`], signal);
     },
 
-    async fileExists(repositoryPath, ref, filePath) {
+    async fileExists(repositoryPath, ref, filePath, signal) {
       const output = await run(repositoryPath, [
         'cat-file',
         '-e',
         `${ref}:${filePath}`,
-      ]);
+      ], signal);
       return output !== null;
     },
 
-    async lastCommitAuthor(repositoryPath, ref, filePath) {
+    async lastCommitAuthor(repositoryPath, ref, filePath, signal) {
       const output = await run(repositoryPath, [
         'log',
         '-1',
@@ -121,7 +134,7 @@ export function createRepoInsightsGitAdapter(
         ref,
         '--',
         filePath,
-      ]);
+      ], signal);
       const author = output?.trim();
       return author && author.length > 0 ? author : null;
     },

@@ -18,6 +18,7 @@ const SKIP_SCAN_DIRS = new Set([
   'packages',
   'TestResults',
 ]);
+const MAX_SCAN_ENTRIES = 50_000;
 
 /**
  * Minimal, injectable filesystem surface the deterministic change-graph builder
@@ -49,6 +50,7 @@ export interface ChangeGraphFs {
   listFilesRecursive(
     worktreePath: string,
     repoRelativeDir: string,
+    maxEntries?: number,
   ): Promise<string[]>;
 }
 
@@ -73,12 +75,14 @@ export const nodeChangeGraphFs: ChangeGraphFs = {
       return [];
     }
   },
-  async listFilesRecursive(worktreePath, repoRelativeDir) {
+  async listFilesRecursive(worktreePath, repoRelativeDir, maxEntries = MAX_SCAN_ENTRIES) {
     const root = repoRelativeDir
       ? join(worktreePath, repoRelativeDir)
       : worktreePath;
     const found: string[] = [];
+    let visited = 0;
     async function walk(absDir: string, relDir: string): Promise<void> {
+      if (visited >= maxEntries) return;
       let entries;
       try {
         entries = await readdir(absDir, { withFileTypes: true });
@@ -86,6 +90,7 @@ export const nodeChangeGraphFs: ChangeGraphFs = {
         return;
       }
       for (const entry of entries) {
+        if (++visited > maxEntries) break;
         const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
           if (SKIP_SCAN_DIRS.has(entry.name)) {

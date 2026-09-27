@@ -13,10 +13,12 @@ import type {
   PrReviewRepo,
   StartPrReviewInput,
 } from './pr-review-contract.js';
-import { createPrReviewService } from './pr-review-service.js';
+import { createPrReviewService, type PrReviewServiceDeps } from './pr-review-service.js';
+import type { BackgroundWorkOptions } from '../kernel/background-work-runner.js';
 import { createLanguageAnalyzerRegistry } from './language-analyzer.js';
 import { createCSharpAnalyzer } from './csharp-analyzer.js';
 import type { ChangeGraphFs } from './change-graph-fs.js';
+import { buildChangeGraph } from './change-graph-builder.js';
 
 function stepClock(): Clock {
   let tick = 0;
@@ -118,6 +120,9 @@ function harness(options: {
   activityLines?: number;
   inlinePrompts?: boolean;
   config?: typeof prReviewDefaults;
+  buildGraph?: PrReviewServiceDeps['buildGraph'];
+  clock?: Clock;
+  ai?: PrReviewServiceDeps['ai'];
 } = {}) {
   const reviews = memoryRepo();
   const bus = createEventBus<PrReviewEventMap>();
@@ -134,13 +139,17 @@ function harness(options: {
   const service = createPrReviewService({
     reviews,
     bus,
-    clock: stepClock(),
+    clock: options.clock ?? stepClock(),
     sleep: async (ms) => {
       sleeps.push(ms);
     },
     config: options.config ?? prReviewDefaults,
     inlinePrompts: options.inlinePrompts,
-    analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+    buildGraph: options.buildGraph ?? ((input) => buildChangeGraph({
+      ...input,
+      registry: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+      fs: options.fs ?? fakeFs(),
+    })),
     changeGraphFs: options.fs ?? fakeFs(),
     diffs: {
       collect: async (request) => {
@@ -173,7 +182,7 @@ function harness(options: {
         };
       },
     },
-    ai: {
+    ai: options.ai ?? {
       runDetailed: async (request: MetaRequest) => {
         // The real step prompt travels as the attachment, not inline argv.
         const attached = request.attachments?.[0] ?? '';
@@ -204,6 +213,149 @@ async function settle(): Promise<void> {
 }
 
 describe('createPrReviewService', () => {
+  it('preserves provider author and source branch through import and explicit refresh', async () => {
+    const { service, reviews } = harness();
+    service.start(startInput);
+    await settle();
+    expect(service.get('f1').pull).toMatchObject({ author: 'octocat', sourceBranch: 'feature/retry' });
+    service.refresh('f1');
+    await settle();
+    expect(service.get('f1').pull).toMatchObject({ author: 'octocat', sourceBranch: 'feature/retry' });
+    const legacy = reviews.get('f1')!;
+    delete legacy.pull.author;
+    reviews.save(legacy);
+    service.refresh('f1');
+    await settle();
+    expect(service.get('f1').pull.author).toBeNull();
+  });
+
+  it('keeps unknown provider authors null', async () => {
+    const { service } = harness();
+    service.start({ ...startInput, pull: { ...pull, author: null } });
+    await settle();
+    expect(service.get('f1').pull.author).toBeNull();
+  });
+  it('opening or starting an existing completed PR is read-only and does not restart its pipeline', async () => {
+    const { service, diffRequests, prompts, events } = harness();
+    service.start(startInput);
+    await settle();
+    const completed = service.get('f1');
+    const counts = [diffRequests.length, prompts.length, events.length];
+    expect(service.start(startInput)).toEqual(completed);
+    expect(service.get('f1')).toEqual(completed);
+    await settle();
+    expect([diffRequests.length, prompts.length, events.length]).toEqual(counts);
+  });
+  it('retrying one step does not cancel or overwrite its independently running sibling', async () => {
+    const ai: Array<(text: string) => void> = [];
+    let graph!: { options: BackgroundWorkOptions; finish(): void };
+    const h = harness({
+      ai: { runDetailed: () => new Promise((resolve) => {
+        ai.push((text) => resolve({ text, sessionId: 's' }));
+      }) },
+      buildGraph: (_input, options) => new Promise((resolve) => {
+        graph = { options, finish: () => resolve({ projects: [], nodes: [], edges: [] }) };
+      }),
+    });
+    h.service.start(startInput);
+    await settle();
+    h.service.retryStep('f1', 'problemStatement');
+    expect(graph.options.signal!.aborted).toBe(false);
+    ai[1]('## Problem Statement\nNew result');
+    await settle();
+    ai[0]('## Problem Statement\nStale result');
+    await settle();
+    graph.finish();
+    await settle();
+    const review = h.service.get('f1');
+    expect(review.problemStatement.content).toBe('New result');
+    expect(review.changeGraph.status).toBe('ready');
+  });
+
+  it('does not recreate a review deleted from storage during a worker run', async () => {
+    let finish!: () => void;
+    const h = harness({
+      buildGraph: () => new Promise((resolve) => {
+        finish = () => resolve({ projects: [], nodes: [], edges: [] });
+      }),
+    });
+    h.service.start(startInput);
+    await settle();
+    h.reviews.delete('f1');
+    finish();
+    await settle();
+    expect(h.service.find('f1')).toBeNull();
+  });
+
+  it('streams queued/running progress, throttles activity, and suppresses cancelled generations', async () => {
+    let time = 0;
+    const jobs: Array<{ options: BackgroundWorkOptions; complete: () => void }> = [];
+    const h = harness({
+      clock: { now: () => new Date(time), isoNow: () => new Date(time).toISOString() },
+      buildGraph: (_input, options) => new Promise((resolve) => {
+        jobs.push({ options, complete: () => resolve({ projects: [], nodes: [], edges: [] }) });
+        options.onState!('queued');
+        options.onState!('running');
+        options.onProgress!('throttled');
+      }),
+    });
+    h.service.start(startInput);
+    await settle();
+    expect(h.events.some((e) => e.changeGraph.activity[0]?.startsWith('Queued'))).toBe(true);
+    expect(h.service.get('f1').changeGraph.activity[0]).toContain('background worker');
+    time = 501;
+    jobs[0].options.onProgress!('Reading changed files');
+    expect(h.service.get('f1').changeGraph.activity).toEqual(['Reading changed files']);
+    h.service.refresh('f1');
+    await settle();
+    expect(jobs[0].options.signal!.aborted).toBe(true);
+    jobs[0].options.onProgress!('stale');
+    jobs[0].complete();
+    await settle();
+    expect(h.service.get('f1').changeGraph.status).toBe('generating');
+    jobs[1].complete();
+    await settle();
+    expect(h.service.get('f1').changeGraph.status).toBe('ready');
+    h.service.retryStep('f1', 'changeGraph');
+    await settle();
+    h.service.removeForFeature('f1');
+    expect(jobs[2].options.signal!.aborted).toBe(true);
+    jobs[2].complete();
+    await settle();
+    expect(h.service.find('f1')).toBeNull();
+  });
+
+  it('surfaces a worker deadline as a retryable step failure', async () => {
+    const h = harness({
+      buildGraph: async () => { throw new Error('Background analysis exceeded its deadline'); },
+    });
+    h.service.start(startInput);
+    await settle();
+    expect(h.service.get('f1').changeGraph.status).toBe('failed');
+    expect(h.service.get('f1').changeGraph.failure?.message).toContain('deadline');
+  });
+
+  it('never recreates a deleted review when an earlier file explanation settles', async () => {
+    let finish!: () => void;
+    let defer = false;
+    const h = harness({
+      ai: {
+        runDetailed: async () => {
+          if (defer) await new Promise<void>((resolve) => { finish = resolve; });
+          return { text: '{"whatItDoes":"A store","whatChanged":"Retry","review":[]}', sessionId: 's' };
+        },
+      },
+    });
+    h.service.start(startInput);
+    await settle();
+    defer = true;
+    const explaining = h.service.explainFile('f1', 'src/Store.cs');
+    h.service.removeForFeature('f1');
+    finish();
+    await explaining;
+    expect(h.service.find('f1')).toBeNull();
+  });
+
   it('runs the problem statement via AI and builds the change graph deterministically', async () => {
     const h = harness({ config: { ...prReviewDefaults, coldInlineMaxChars: 0 } });
     const started = h.service.start(startInput);
@@ -384,7 +536,11 @@ describe('createPrReviewService', () => {
       clock: stepClock(),
       sleep: async () => {},
       config: prReviewDefaults,
-      analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+      buildGraph: (input) => buildChangeGraph({
+        ...input,
+        registry: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+        fs: fakeFs(),
+      }),
       changeGraphFs: fakeFs(),
       diffs: { collect: async () => diff },
       metaUsage: { usageForSession: () => null },
@@ -431,6 +587,7 @@ describe('createPrReviewService', () => {
     const review = h.service.find(startInput.featureId);
     expect(review).not.toBeNull();
     expect(review?.featureId).toBe(startInput.featureId);
+    expect(review?.pull.sourceBranch).toBe(startInput.pull.sourceBranch);
   });
 
   it('findByPull resolves an existing PR review to its feature id', () => {
@@ -450,6 +607,7 @@ describe('createPrReviewService', () => {
     const refreshed = h.service.refresh('f1');
     expect(refreshed.problemStatement.status).toBe('pending');
     expect(refreshed.timestamps.createdAt).toBe(first.timestamps.createdAt);
+    expect(refreshed.pull.sourceBranch).toBe(startInput.pull.sourceBranch);
     await settle();
     expect(h.service.get('f1').changeGraph.status).toBe('ready');
   });

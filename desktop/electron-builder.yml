@@ -21,6 +21,8 @@ files:
   - preload.cjs
   - update-manager.cjs
   - ipc-input.cjs
+  - http-cache-cleanup.cjs
+  - appearance-store.cjs
   - clipboard.cjs
   - backend-control.cjs
   - backend-identity.cjs

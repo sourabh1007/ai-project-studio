@@ -14,9 +14,84 @@ From a **repository** row in the Explorer, choose **Open a PR**. This:
 2. Checks the branch out into a git **worktree** and creates a **PR-review
    feature** for it. You can open multiple PRs at once.
 
+For a bulk selection (up to ten PRs), two checkouts run concurrently while the
+rest queue. The batch is named **Bulk PR Review — <local creation date>**.
+Each PR reports its own live favourite, fetch, and worktree progress,
+with a count of finished checkouts. Imports fetch into separate PR refs rather
+than sharing `FETCH_HEAD`, so concurrent fetches cannot mix up commits.
+Failures do not stop other PRs: all running/queued work finishes before retry is
+enabled, successful reviews remain saved, and retrying in the same dialog
+reuses the bulk parent. Tabs retain the selected PR order.
+
+Each successfully imported PR, including a single-PR import, is automatically queued for Review Board
+analysis immediately, without waiting for the rest of the imports or opening
+its review tab. Up to three automatic PR reviews run concurrently across
+batches. Each waits for its change graph before analyzing perspectives.
+Switching or closing the tracker tab does not stop the shared queue, and
+reopening it does not duplicate a queued, active or finished run. Failed
+reviews require **Retry**; other imports/reviews continue.
+The bulk tracker opens after the first successful import and adds PR rows as
+their checkouts finish, even if another checkout fails. The import dialog
+continues to show queued/importing/failed checkouts; the tracker shows each
+imported PR's preparation phase, active perspectives and latest activity.
+
+The bulk summary shows live **Batch elapsed** time and a final **Batch review
+time**, measured as wall-clock time from the first review start to the last
+finish—not the sum of parallel review durations. Every PR row and its Review
+Board summary also show the latest full **Review time**, including evidence
+preparation and analysis but excluding its queue wait. Timings remain with the
+live run across tab navigation; retries measure a fresh attempt, and changed
+evidence clears obsolete results and timings.
+Each perspective also shows its own live/final analysis time. Its clock starts
+when execution begins, not while it is queued, includes automatic retries and
+freezes on success, skip or failure. Manually reanalyzing a section starts a new
+section timer. Evidence preparation is measured separately. Parallel section
+times are not added together as the full review's wall-clock duration.
+
+The Review Board summary names the changed projects rather than only a generic
+project type. Expand **Project details** for manifest paths, languages,
+components, modules, runtime paths, deployment, base branch and commit.
+Click the **files changed** count to browse captured changed-file diffs and
+add inline comments. Unchanged boundary callers are excluded; binary files or
+files without captured text remain visible with an explanation. Loading
+failures offer a retry, and incomplete graph file coverage is stated explicitly.
+Validated perspective results are persisted with the PR review's head and graph
+revision and restored by the read-only board GET. Reopening a board never resets
+the review or starts graph/AI work. Concurrent requests for the same perspective
+share one analysis, and completed results are reused until an explicit reset.
+Renderer timings survive tab navigation; recorded AIC remains independently
+persisted. A failed graph retry does not delete earlier perspective results,
+but cannot certify them for approval.
+
+Approval uses `POST /features/:featureId/pr-review/approve` with
+`{ expectedHeadSha, expectedReviewUpdatedAt? }`. Pass the board's `pull.headSha`
+and `reviewUpdatedAt` to pin the confirmation to its displayed evidence.
+`reviewUpdatedAt` uses the graph generation timestamp when available, not later
+activity or usage updates. The backend requires completed, persisted analyses for
+every perspective selected for that exact graph/head, checks the live provider
+head, then sends the real provider approval.
+`GET /features/:featureId/pr-review/approval-status` performs only a lightweight
+provider-head read and eligibility check; it never fetches a worktree or
+rebuilds the graph. Changed heads require an explicit reset and new review.
+Concurrent approval clicks share one operation. Existing approvals are detected
+at the provider; GitHub approval requests also name the reviewed `commit_id`.
+Provider failures are reported rather than presented as successful approvals.
+Older reviews without persisted machine results are not automatically certified.
+
+Review Board summaries, perspective entries and bulk PR rows show live
+vendor-reported **AIC**. These totals cover persisted review history, including
+charged retries, rather than only the latest timed attempt. Missing billing is
+shown as unavailable or partial, never estimated from tokens. Older operations
+without a perspective identity contribute only to the board total.
+
 The PR-review feature appears in the Explorer like any other feature. It shows a
 **PR review panel** in its dashboard, and can be opened as a full **PR review
 page** editor tab.
+
+The read-only PR review response includes the imported `pull.sourceBranch` and
+provider-reported `pull.author`. These survive explicit refreshes; authors are
+null when unknown and can be absent on older records. No current-user identity
+is substituted for missing author metadata.
 
 ## What the review contains
 
@@ -31,6 +106,17 @@ The AI review runs in the background and moves through *Analyzing → Ready* (or
 
 The PR review page renders a **change graph**: a reference map of the functions
 the PR modified and how they connect.
+
+Graph analysis runs in an isolated background worker, not on the API thread.
+The activity log shows queueing, changed-file reads and caller scanning. Worker
+capacity, queue size, deadline and heap budget are bounded by `backgroundWork`
+configuration (see [development](../development.md#non-blocking-background-work)).
+A slow graph can fail with a Retry without blocking session lists, settings or
+other requests. Refreshing or deleting the review cancels its old graph work.
+Caller discovery bounds filesystem traversal to 50,000 directory entries and
+source reads to 6,000 files. It caches project-directory lookups and skips
+language parsing for files containing none of the changed type names. These
+bounds do not raise the worker deadline; a timed-out analysis remains failed.
 
 - **Navigate:** zoom, pan, and — for large graphs — scroll inside the box, or
   open it **full screen**.
@@ -78,6 +164,21 @@ the PR modified and how they connect.
 > If a change graph shows empty diffs, it was generated before a diff-collection
 > fix — click **Re-run all** (or a step's **Retry**) on the review page to
 > re-collect and repopulate the per-file diffs.
+
+## Review Board analysis validation
+
+Review Board analysis requires a **Ready** change graph so its perspectives
+and evidence reflect the collected change. If the graph is pending or generating,
+wait for it to finish; if it failed, retry graph generation before analysis.
+
+A perspective completes only after the model returns a usable JSON review
+object. A clean review may return `findings: []`, but must include a nonblank
+summary of what was reviewed. Findings require a title, detail, and usable
+evidence; a skipped perspective requires an explicit nonblank reason.
+Empty, malformed, prose-only, or unusable responses use the normal bounded
+retry flow, including the final cold attempt. If validation still fails, the
+perspective reports an actionable failure rather than an approved result.
+Deterministic evidence detail only supplements an already validated review.
 
 ## Live PR comments
 

@@ -280,13 +280,13 @@ export function PrReviewPage({
   }
 
   async function approve() {
-    if (approving || approved) {
+    if (approving || approved || !review?.headSha) {
       return;
     }
     setApproving(true);
     setError(null);
     try {
-      const result = await api.approvePrReview(featureId);
+      const result = await api.approvePrReview(featureId, { expectedHeadSha: review.headSha });
       setApproved(true);
       setAlreadyApproved(result.alreadyApproved === true);
     } catch (err) {
@@ -375,7 +375,7 @@ export function PrReviewPage({
           </div>
         </div>
         <div className="pr-review-page-actions">
-          <Button onClick={() => void approve()} disabled={approving || approved}>
+          <Button onClick={() => void approve()} disabled={approving || approved || !review?.headSha}>
             <CheckIcon size={13} />{' '}
             {approved
               ? alreadyApproved

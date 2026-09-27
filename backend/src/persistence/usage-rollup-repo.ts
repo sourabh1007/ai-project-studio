@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { IdeUsageConfig } from '../ide-usage/config.js';
-import type { McpServerBreakdown } from '../aggregation/aggregation-contract.js';
+import { mcpRollupSource, toMcpBreakdown, type McpRollupRow } from './mcp-rollup.js';
 import type {
   UsageDayRow,
   UsageRollupReader,
@@ -17,36 +17,6 @@ interface DayRow {
   cost: number;
   credits: number;
   nanoAiu: number | bigint;
-}
-
-interface McpRow {
-  server: string;
-  calls: number | bigint;
-  inputBytes: number | bigint;
-  outputBytes: number | bigint;
-  durationMs: number | bigint;
-}
-
-function toMcpBreakdown(row: McpRow): McpServerBreakdown {
-  return {
-    server: row.server,
-    calls: Number(row.calls),
-    inputBytes: Number(row.inputBytes),
-    outputBytes: Number(row.outputBytes),
-    durationMs: Number(row.durationMs),
-  };
-}
-
-/** Per-server MCP tool-call I/O rollup, filtered to a scope's session set. */
-function mcpSource(filter: string): string {
-  return `SELECT server AS server,
-      COALESCE(SUM(calls), 0) AS calls,
-      COALESCE(SUM(input_bytes), 0) AS inputBytes,
-      COALESCE(SUM(output_bytes), 0) AS outputBytes,
-      COALESCE(SUM(duration_ms), 0) AS durationMs
-    FROM mcp_server_usage
-    WHERE ${filter}
-    GROUP BY server ORDER BY server`;
 }
 
 function toDayRow(row: DayRow): UsageDayRow {
@@ -152,28 +122,23 @@ export function createUsageRollupRepo(
     ),
   );
 
-  // MCP tool-call I/O is measured per server by the launch proxy and tagged
-  // with the driving feature/session. Scope it to match each token rollup:
-  //   • workspace → sessions that are not internal-scoped (billable dev work),
-  //   • ide       → sessions whose usage events are a meta kind (IDE overhead),
-  //   • feature   → everything tagged with the feature id.
-  // NULL session ids stay in the workspace slice (unattributable-but-visible)
-  // and out of the IDE slice (cannot be proven to be metasession traffic).
+  // Preserve legacy proxy scope lookup; observed calls carry scope explicitly,
+  // including warm internal sessions with no row in the sessions table.
   const workspaceMcpStmt = db.prepare(
-    mcpSource(`NOT EXISTS (
+    mcpRollupSource(`NOT EXISTS (
       SELECT 1 FROM sessions
       WHERE sessions.id = mcp_server_usage.session_id
         AND sessions.scope = 'internal'
-    )`),
+    )`, "scope = 'feature'"),
   );
   const ideMcpStmt = db.prepare(
-    mcpSource(`EXISTS (
+    mcpRollupSource(`EXISTS (
       SELECT 1 FROM usage_events
       WHERE usage_events.session_id = mcp_server_usage.session_id
         AND usage_events.kind IN (${metaKindPlaceholders})
-    )`),
+    )`, "scope = 'internal'"),
   );
-  const featureMcpStmt = db.prepare(mcpSource('feature_id = ?'));
+  const featureMcpStmt = db.prepare(mcpRollupSource('feature_id = ?', 'feature_id = ?'));
 
   return {
     workspaceDays() {
@@ -188,15 +153,15 @@ export function createUsageRollupRepo(
       ).map(toDayRow);
     },
     workspaceMcpServers() {
-      return (workspaceMcpStmt.all() as unknown as McpRow[]).map(toMcpBreakdown);
+      return (workspaceMcpStmt.all() as unknown as McpRollupRow[]).map(toMcpBreakdown);
     },
     ideMcpServers() {
-      return (ideMcpStmt.all(...metaKinds) as unknown as McpRow[]).map(
+      return (ideMcpStmt.all(...metaKinds) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
     },
     featureMcpServers(featureId) {
-      return (featureMcpStmt.all(featureId) as unknown as McpRow[]).map(
+      return (featureMcpStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
     },

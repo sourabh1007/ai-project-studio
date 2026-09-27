@@ -40,6 +40,14 @@ function loadPreload() {
   return { bridge: exposed, calls, ipcRenderer };
 }
 
+test('HTTP cache capability exposes only its fixed IPC invocation, not caller options', async () => {
+  const { bridge, calls } = loadPreload();
+  assert.deepEqual(await bridge.clearHttpCache({ path: 'ignored', cookies: true }), {
+    channel: 'resources:clearHttpCache', payload: undefined,
+  });
+  assert.deepEqual(calls, [{ kind: 'invoke', args: ['resources:clearHttpCache'] }]);
+});
+
 test('real preload composes retained-image, diagnostics, clipboard, restart, and update journeys', async () => {
   const { bridge, calls, ipcRenderer } = loadPreload();
 

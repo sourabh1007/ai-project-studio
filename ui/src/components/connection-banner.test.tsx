@@ -20,13 +20,13 @@ describe('connection banner', () => {
   it('keeps missing-event history visible even when the health endpoint is responding', () => {
     render(<ConnectionBanner liveInterrupted />);
     expect(screen.getByRole('status')).toHaveTextContent('Live updates interrupted');
-    expect(screen.getByRole('status')).toHaveTextContent('Saved totals and results are preserved');
+    expect(screen.getByRole('status')).toHaveAttribute('title', expect.stringContaining('Saved totals and results are preserved'));
   });
 
   it('explains bounded live history without implying stored usage was discarded', () => {
     render(<ConnectionBanner liveHistoryLimited />);
     expect(screen.getByRole('status')).toHaveTextContent('Live history limited');
-    expect(screen.getByRole('status')).toHaveTextContent('Totals and full results remain in saved data');
+    expect(screen.getByRole('status')).toHaveAttribute('title', expect.stringContaining('Totals and full results remain in saved data'));
   });
 
   it('prioritizes actual connectivity failures over live cache warnings', () => {
@@ -66,5 +66,9 @@ describe('connection banner', () => {
     probe.mockReturnValue(deriveConnectionStatus({ browserOnline: true, lastProbe: 'error' }));
     render(<ConnectionBanner />);
     expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Service unavailable');
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting…');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Recent data stays visible');
+    expect(screen.getByRole('status')).toHaveAttribute('title', expect.stringContaining('Recent data stays visible'));
   });
 });

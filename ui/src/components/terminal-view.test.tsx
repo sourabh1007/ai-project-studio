@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, act, fireEvent } from '@testing-library/react';
 
 // Shared holder captured across the hoisted vi.mock factory and the test body.
 const h = vi.hoisted(() => ({
@@ -181,6 +181,87 @@ describe('TerminalView scrollback repaint', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('shows checkout progress and elapsed time until ready, then clears the spinner', () => {
+    vi.useFakeTimers();
+    const view = render(<TerminalView sessionId="s1" />);
+    act(() => {
+      h.ws!.readyState = MockWebSocket.OPEN;
+      h.ws!.onopen?.();
+      h.ws!.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, generation: 0, state: 'connecting', inputLimit: 65536,
+        detail: 'Updating files: 25%',
+      }) });
+      vi.advanceTimersByTime(31_000);
+    });
+    expect(view.getByRole('status').textContent).toContain('Updating files: 25%');
+    expect(view.getByRole('status').textContent).toContain('31s');
+    expect(view.container.querySelector('.spinner')).not.toBeNull();
+    act(() => h.ws!.onmessage?.({ data: JSON.stringify({
+      type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 65536,
+    }) }));
+    expect(view.getByRole('status').textContent).toContain('Terminal connected');
+    expect(view.container.querySelector('.spinner')).toBeNull();
+  });
+
+  it('separates a missing heartbeat from CLI silence and never replays input to recover', () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const view = render(<TerminalView sessionId="s1" />);
+    act(() => {
+      h.ws!.readyState = MockWebSocket.OPEN;
+      h.ws!.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 65536, heartbeat: true,
+      }) });
+      vi.advanceTimersByTime(1000);
+    });
+    const sent = () => h.ws!.send.mock.calls.map(([raw]) => JSON.parse(raw));
+    expect(sent().filter((message) => message.type === 'ping')).toHaveLength(1);
+    act(() => {
+      h.ws!.onmessage?.({ data: JSON.stringify({ type: 'output', data: 'Thinking...' }) });
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(view.getByRole('status').textContent).toContain('Backend heartbeat missing');
+    expect(view.getByRole('region', { name: 'Session diagnostics' })).toHaveTextContent('do not prove model progress');
+    expect(view.getByRole('button', { name: 'Send Esc to CLI' })).toBeDisabled();
+    expect(sent().filter((message) => message.type === 'input')).toHaveLength(0);
+    act(() => {
+      h.ws!.onmessage?.({ data: JSON.stringify({ type: 'pong', generation: 1, seq: 1 }) });
+      vi.advanceTimersByTime(1000);
+    });
+    fireEvent.click(view.getByRole('button', { name: 'Session diagnostics' }));
+    expect(view.getByRole('button', { name: 'Send Esc to CLI' })).toBeEnabled();
+    fireEvent.click(view.getByRole('button', { name: 'Send Esc to CLI' }));
+    expect(sent().filter((message) => message.type === 'input')).toEqual([
+      { type: 'input', generation: 1, seq: 1, data: '\x1b' },
+    ]);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(view.getByRole('status').textContent).toContain('Input delivery unconfirmed');
+    expect(view.getByRole('region', { name: 'Session diagnostics' })).toHaveTextContent('Do not submit again');
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('offers retry after an unacknowledged connection and preserves backend failure details', () => {
+    vi.useFakeTimers();
+    const view = render(<TerminalView sessionId="s1" />);
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(view.getByRole('status').textContent).toContain('did not acknowledge');
+    expect(view.getByRole('button', { name: /Reconnect/ })).toBeDefined();
+    act(() => h.ws!.onclose?.({ code: 1006 }));
+    const previous = h.ws;
+    act(() => vi.advanceTimersByTime(2000));
+    expect(h.ws).toBe(previous);
+    act(() => view.getByRole('button', { name: /Reconnect/ }).click());
+    expect(h.ws).not.toBe(previous);
+    act(() => h.ws!.onmessage?.({ data: JSON.stringify({
+      type: 'state', version: 2, generation: 0, state: 'failed', inputLimit: 65536,
+      detail: 'Git checkout exceeded 600s',
+    }) }));
+    expect(view.getByRole('status').textContent).toContain('Git checkout exceeded 600s');
+    expect(view.container.querySelector('.spinner')).toBeNull();
   });
 
   it('repaints the visible rows on scroll without clearing the glyph atlas so streaming never flickers', () => {
@@ -857,7 +938,7 @@ describe('TerminalView scrollback repaint', () => {
 
     expect(fit.fit).toHaveBeenCalledTimes(1);
     expect(h.webgl?.clearTextureAtlas).toHaveBeenCalledTimes(1);
-    expect(view.getByRole('status').textContent).toContain('ready');
+    expect(view.getByRole('status').textContent).toContain('Terminal connected');
   });
 
   it('restores pane geometry immediately for a zero-output replay once ready arrives', () => {
@@ -1047,7 +1128,7 @@ describe('TerminalView scrollback repaint', () => {
       expect(h.term).toBe(term);
       expect(term.write).toHaveBeenCalledWith('REPLACEMENT');
       expect(inputFrames().map((m) => [m.data, m.generation])).toEqual([['FIRST', 1], ['SECOND', 1], ['CURRENT', 2]]);
-      expect(view.getByRole('status').textContent).toContain('ready');
+      expect(view.getByRole('status').textContent).toContain('Terminal connected');
       other.remove();
     });
 

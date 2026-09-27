@@ -21,6 +21,20 @@ describe('durable meta operation repository', () => {
   beforeEach(() => { db = createDatabase({ databasePath: ':memory:' }); repo = createMetaOperationRepo(db); });
   afterEach(() => db.close());
 
+  it.each([
+    { startedAt: 'started', finishedAt: 'finished', expected: 'finished' },
+    { startedAt: 'started', finishedAt: null, expected: 'started' },
+    { startedAt: null, finishedAt: null, expected: 'captured' },
+  ])('preserves the original warm billing timestamp ($expected) across corrections', ({ startedAt, finishedAt, expected }) => {
+    const capturingRepo = createMetaOperationRepo(db);
+    capturingRepo.create(operation('1', { startedAt, finishedAt }));
+    const snapshot = { inputTokens: 10, outputTokens: 2, nanoAiu: 1e9, credits: 1 };
+    expect(capturingRepo.refreshUsage('1', snapshot, 'captured')).toBe(true);
+    expect(createMetaUsageRepo(db).get('last')?.capturedAt).toBe(expected);
+    expect(capturingRepo.refreshUsage('1', { ...snapshot, nanoAiu: 2e9, credits: 2 }, 'later')).toBe(true);
+    expect(createMetaUsageRepo(db).get('last')).toMatchObject({ capturedAt: expected, credits: 2 });
+  });
+
   it('round-trips complete output and explicit usage while metadata pages exclude all result text', () => {
     const first = operation('1'); const second = operation('2', { featureId: 'g' });
     repo.create(first); repo.create(second);

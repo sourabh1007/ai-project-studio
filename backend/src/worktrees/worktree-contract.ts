@@ -2,6 +2,7 @@ import type { GitRunResult } from '../repo/pr-worktree-provisioner.js';
 
 /** A managed PR worktree the application created, surfaced for cleanup. */
 export interface ManagedWorktree {
+  removal?: { status: 'queued' | 'deleting' | 'failed'; message: string };
   /** Absolute checkout path on disk. */
   path: string;
   /** Local branch the worktree is on, or null when detached. */
@@ -16,7 +17,7 @@ export interface ManagedWorktree {
 
 /** Runs a `git` command inside a given working directory. */
 export interface WorktreeGit {
-  run(args: string[], cwd: string): Promise<GitRunResult>;
+  run(args: string[], cwd: string, signal?: AbortSignal): Promise<GitRunResult>;
 }
 
 /**
@@ -24,9 +25,10 @@ export interface WorktreeGit {
  * reviews, so their disk space can be reclaimed without hand-running git.
  */
 export interface WorktreeService {
-  /** All app-managed worktrees across every known repository. */
-  list(): Promise<ManagedWorktree[]>;
-  /** Removes the worktree at `path` (force) and prunes its administrative refs. */
+  pathForFeature?(featureId: string): string | null;
+  /** All managed worktrees; cancellable inventory also surfaces Git inspection failures. */
+  list(signal?: AbortSignal): Promise<ManagedWorktree[]>;
+  /** Bounded, deduplicated removal; refuses busy/primary checkouts and prunes refs. */
   remove(path: string): Promise<void>;
   /** Best-effort removal of the worktree tied to a feature's PR review. */
   removeForFeature(featureId: string): Promise<void>;

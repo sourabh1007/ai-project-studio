@@ -5,11 +5,11 @@ import type {
   ModelBreakdown,
   ProviderBreakdown,
   DailyBreakdown,
-  McpServerBreakdown,
   SessionUsage,
   WarmAgentSession,
 } from '../aggregation/aggregation-contract.js';
 import type { AggregationConfig } from '../aggregation/config.js';
+import { mcpRollupSource, toMcpBreakdown, type McpRollupRow } from './mcp-rollup.js';
 
 const TOTALS_COLUMNS = `
   COUNT(DISTINCT session_id) AS sessions,
@@ -115,18 +115,8 @@ export function createAggregateRepo(
     `SELECT session_id AS sessionId, ${TOTALS_COLUMNS} FROM ${featureUsage('usage')}
      GROUP BY session_id ORDER BY MIN(started_at), session_id`,
   );
-  // Per-MCP-server tool-call I/O for a feature, measured by the launch proxy.
-  // These are transport bytes/calls/latency, not model tokens, so they live in
-  // their own table and rollup rather than the token columns above.
   const byMcpServerStmt = db.prepare(
-    `SELECT server AS server,
-            COALESCE(SUM(calls), 0) AS calls,
-            COALESCE(SUM(input_bytes), 0) AS inputBytes,
-            COALESCE(SUM(output_bytes), 0) AS outputBytes,
-            COALESCE(SUM(duration_ms), 0) AS durationMs
-       FROM mcp_server_usage
-      WHERE feature_id = ?
-      GROUP BY server ORDER BY server`,
+    mcpRollupSource('feature_id = ?', 'feature_id = ?'),
   );
 
   // Warm-ACP agent runs for a feature. These reuse a pooled session so they are
@@ -186,21 +176,8 @@ export function createAggregateRepo(
       );
     },
     byMcpServer(featureId) {
-      interface McpRow {
-        server: string;
-        calls: number | bigint;
-        inputBytes: number | bigint;
-        outputBytes: number | bigint;
-        durationMs: number | bigint;
-      }
-      return (byMcpServerStmt.all(featureId) as unknown as McpRow[]).map(
-        (row): McpServerBreakdown => ({
-          server: row.server,
-          calls: Number(row.calls),
-          inputBytes: Number(row.inputBytes),
-          outputBytes: Number(row.outputBytes),
-          durationMs: Number(row.durationMs),
-        }),
+      return (byMcpServerStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
+        toMcpBreakdown,
       );
     },
   };

@@ -4,12 +4,12 @@ import { useActivity } from '../hooks/use-activity.js';
 /**
  * A slim animated progress bar pinned to the top of the content area. It is
  * driven entirely by the global activity store, so any in-flight API request
- * shows motion and — crucially — a human-readable label telling the user what
- * the app is currently doing ("Loading PR review", "Creating session", …).
+ * shows motion. The bottom status bar owns activity/error text and live
+ * announcements so the same information is never shown twice.
  *
  * The bar is indeterminate (we don't know real percentages), so it uses a
  * travelling sheen while busy and fades out on completion. On error it turns
- * red and shows the error text briefly.
+ * red.
  */
 export function TopLoadingBar() {
   const activity = useActivity();
@@ -43,20 +43,16 @@ export function TopLoadingBar() {
     return null;
   }
 
-  const label = hasError ? activity.error : busy ? activity.label : 'Done';
   const state = hasError ? 'is-error' : busy ? 'is-busy' : 'is-done';
 
   return (
     <div
       className={`top-loading-bar ${state}`}
-      role="status"
-      aria-live="polite"
-      aria-hidden={label ? undefined : true}
+      aria-hidden="true"
     >
       <div className="top-loading-bar-track">
         <div className="top-loading-bar-fill" />
       </div>
-      {label ? <span className="top-loading-bar-label">{label}</span> : null}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { NotFoundError } from '../kernel/error-types.js';
+import { resolve } from 'node:path';
 import type { Feature } from '../feature/feature-contract.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { Session } from '../session/session-contract.js';
@@ -44,6 +45,12 @@ export interface LiveUsageReleaser {
 /** Removes the on-disk git worktree a feature's PR review checked out into. */
 export interface WorktreeRemover {
   removeForFeature(featureId: string): Promise<void>;
+  pathForFeature?(featureId: string): string | null;
+}
+
+/** Removes an individual session's dedicated git worktree by its path. */
+export interface SessionWorktreeRemover {
+  remove(worktreePath: string): Promise<void>;
 }
 
 /** Removes owned monitor work before deleting its feature/session anchor. */
@@ -70,7 +77,7 @@ export interface OwnedAgentRemover {
 }
 
 export interface WorkspaceAdminDeps {
-  features: Pick<FeatureService, 'get' | 'rename' | 'remove'>;
+  features: Pick<FeatureService, 'get' | 'list' | 'rename' | 'remove'>;
   sessions: Pick<SessionRepo, 'get' | 'listByFeatureAll' | 'delete' | 'deleteByFeature' | 'rename'>;
   quiescence: WorkspaceQuiescence;
   usage: Pick<UsageRepo, 'deleteBySession'>;
@@ -97,6 +104,19 @@ export interface WorkspaceAdminDeps {
   prReviews?: PrReviewRemover;
   /** Optional: removes a feature's PR review worktree from disk when deleted. */
   worktrees?: WorktreeRemover;
+  /**
+   * Optional: removes each descendant session's own dedicated worktree from
+   * disk when its FEATURE is deleted. Deliberately unused by single-session
+   * deletion — deleting one session leaves its worktree in place; only removing
+   * the whole feature reclaims its sessions' worktrees.
+   */
+  sessionWorktrees?: SessionWorktreeRemover;
+  /**
+   * Optional: reads the branch checked out at a path, used only to describe the
+   * exact local branch copies a feature deletion would remove (the consent
+   * preview). Never required for the deletion itself.
+   */
+  readBranch?: (path: string) => Promise<string | null>;
   /** Optional: purges a feature's shared-context document when it is deleted. */
   sharedContext?: Pick<ContextService, 'remove'>;
   /** Optional: cancels/removes automations owned by the deleted feature/session. */
@@ -105,6 +125,31 @@ export interface WorkspaceAdminDeps {
   ownedSubagents?: OwnedSubagentRemover;
   /** Optional: removes agent attachments owned by the deleted feature. */
   ownedAgents?: OwnedAgentRemover;
+  /**
+   * Optional: schedules slow, best-effort teardown (the on-disk git worktree
+   * removal and its dependent PR-review row purge) to run detached from the
+   * caller. When omitted the work runs inline. Deletion of the feature records
+   * always completes synchronously so the UI reflects the removal immediately;
+   * only this background work — which touches git and the filesystem — is
+   * deferred so a bulk review with many PR worktrees never blocks the UI.
+   */
+  background?: (task: () => Promise<void>) => void;
+}
+
+/**
+ * One on-disk worktree a feature deletion would remove — a descendant session's
+ * dedicated worktree, or the feature's own PR-review checkout — described by the
+ * exact local branch it holds so the user can consent before it is destroyed.
+ */
+export interface FeatureDeletionWorktree {
+  /** The feature the worktree belongs to. */
+  featureId: string;
+  /** The session that owns the worktree, or null for a feature PR checkout. */
+  sessionId: string | null;
+  /** Absolute path of the worktree that would be removed. */
+  path: string;
+  /** The branch/ref checked out there, when known. */
+  branch: string | null;
 }
 
 /**
@@ -116,6 +161,12 @@ export interface WorkspaceAdminDeps {
 export interface WorkspaceAdmin {
   renameFeature(id: string, name: string): Feature;
   renameSession(id: string, name: string | null): Session;
+  /**
+   * Lists every on-disk worktree deleting `id` (and its descendants) would
+   * remove, so the UI can name the exact local branch copies and get consent
+   * before the destructive delete. Read-only.
+   */
+  previewFeatureDeletion(id: string): Promise<FeatureDeletionWorktree[]>;
   deleteFeature(id: string): Promise<void>;
   deleteSession(id: string): Promise<void>;
 }
@@ -166,6 +217,97 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     await deps.transcripts.delete(sessionId);
   }
 
+  /**
+   * Tears down a single feature: cancels its owned work, purges its sessions
+   * and usage, deletes the record synchronously, then schedules removal of its
+   * on-disk PR worktree in the background. Shared by direct deletion and the
+   * bulk-review cascade below.
+   */
+  async function purgeFeature(id: string): Promise<void> {
+    await Promise.all([
+      deps.quiescence.feature(id),
+      deps.ownedAutomations?.deleteByFeature(id),
+    ]);
+    deps.ownedSubagents?.deleteByFeature(id);
+    deps.ownedAgents?.deleteByFeature(id);
+    // Gather each session's own worktree BEFORE its record is purged so the
+    // background teardown can reclaim them — a feature deletion removes its
+    // sessions' worktrees (a single-session delete never does).
+    const sessionWorktreePaths = new Map<string, string>();
+    const reviewPath = deps.worktrees?.pathForFeature?.(id);
+    const keyOf = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+    for (const session of deps.sessions.listByFeatureAll(id)) {
+      if (session.worktreePath && (!reviewPath || keyOf(session.worktreePath) !== keyOf(reviewPath))) {
+        sessionWorktreePaths.set(keyOf(session.worktreePath), session.worktreePath);
+      }
+      await purgeSession(session, 'feature-deleted');
+    }
+    deps.sessions.deleteByFeature(id);
+    deps.metaUsage?.deleteByFeature(id);
+    deps.metaOperations?.deleteByFeature(id);
+    deps.mcpUsage?.deleteByFeature(id);
+    deps.summaries.delete(id);
+    deps.sharedContext?.remove('feature', id);
+    // Record removal is synchronous so the feature disappears from the UI at
+    // once. The slow git/filesystem worktree teardown — and the PR-review row
+    // it is resolved from — run in the background so deletion never blocks.
+    deps.features.remove(id);
+    const removeWorktree = async (): Promise<void> => {
+      const failures: unknown[] = [];
+      if (deps.worktrees) {
+        try {
+          await deps.worktrees.removeForFeature(id);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      for (const path of sessionWorktreePaths.values()) {
+        try {
+          await deps.sessionWorktrees?.remove(path);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, `Feature ${id} was deleted, but worktree cleanup failed. Retry removal in Settings.`);
+      }
+      deps.prReviews?.removeForFeature(id);
+    };
+    if (deps.background) {
+      deps.background(removeWorktree);
+    } else {
+      await removeWorktree();
+    }
+  }
+
+  /**
+   * Resolves a feature and every descendant (child PR features of a "Bulk PR
+   * Review", and any deeper nesting) in post-order — children before their
+   * parent — so each is torn down, and its worktree removed, before the ancestor
+   * that anchors them. Each feature has a single parent, so descendants form a
+   * tree; a self-parent edge is ignored so a malformed record cannot loop.
+   */
+  function featureSubtreePostOrder(rootId: string): string[] {
+    const childrenByParent = new Map<string, string[]>();
+    for (const feature of deps.features.list()) {
+      const parentId = feature.parentFeatureId;
+      if (parentId && parentId !== feature.id) {
+        const siblings = childrenByParent.get(parentId) ?? [];
+        siblings.push(feature.id);
+        childrenByParent.set(parentId, siblings);
+      }
+    }
+    const order: string[] = [];
+    const visit = (id: string): void => {
+      for (const child of childrenByParent.get(id) ?? []) {
+        visit(child);
+      }
+      order.push(id);
+    };
+    visit(rootId);
+    return order;
+  }
+
   return {
     renameFeature(id, name) {
       return deps.features.rename(id, name);
@@ -182,34 +324,50 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
       return { ...session, name: next };
     },
 
-    async deleteFeature(id) {
+    async previewFeatureDeletion(id) {
       deps.features.get(id);
-      await Promise.all([
-        deps.quiescence.feature(id),
-        deps.ownedAutomations?.deleteByFeature(id),
-      ]);
-      deps.ownedSubagents?.deleteByFeature(id);
-      deps.ownedAgents?.deleteByFeature(id);
-      for (const session of deps.sessions.listByFeatureAll(id)) {
-        await purgeSession(session, 'feature-deleted');
-      }
-      deps.sessions.deleteByFeature(id);
-      deps.metaUsage?.deleteByFeature(id);
-      deps.metaOperations?.deleteByFeature(id);
-      deps.mcpUsage?.deleteByFeature(id);
-      deps.summaries.delete(id);
-      // Remove the on-disk worktree before purging the review row it is
-      // resolved from; a failure here must not block feature deletion.
-      if (deps.worktrees) {
+      const worktrees: FeatureDeletionWorktree[] = [];
+      for (const featureId of featureSubtreePostOrder(id)) {
+        let checkoutPath: string | undefined;
         try {
-          await deps.worktrees.removeForFeature(id);
+          checkoutPath = deps.features.get(featureId).checkoutPath ?? undefined;
         } catch {
-          // Best-effort cleanup: leave an orphaned worktree rather than fail.
+          checkoutPath = undefined;
+        }
+        if (checkoutPath) {
+          const branch = deps.readBranch
+            ? await deps.readBranch(checkoutPath)
+            : null;
+          worktrees.push({
+            featureId,
+            sessionId: null,
+            path: checkoutPath,
+            branch,
+          });
+        }
+        for (const session of deps.sessions.listByFeatureAll(featureId)) {
+          if (session.worktreePath) {
+            worktrees.push({
+              featureId,
+              sessionId: session.id,
+              path: session.worktreePath,
+              branch: session.branch ?? null,
+            });
+          }
         }
       }
-      deps.prReviews?.removeForFeature(id);
-      deps.sharedContext?.remove('feature', id);
-      deps.features.remove(id);
+      return worktrees;
+    },
+
+    async deleteFeature(id) {
+      deps.features.get(id);
+      // A "Bulk PR Review" is a parent feature whose child PR features each own
+      // a git worktree. Deleting the parent (directly) — or an ancestor
+      // (indirectly) — must cascade to every descendant so their worktrees are
+      // torn down, not orphaned on disk. Children are purged before the parent.
+      for (const featureId of featureSubtreePostOrder(id)) {
+        await purgeFeature(featureId);
+      }
     },
 
     async deleteSession(id) {

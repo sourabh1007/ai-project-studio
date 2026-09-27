@@ -13,12 +13,26 @@ export interface ActivitySnapshot {
   label: string | null;
   /** The most recent error message, until cleared or superseded. */
   error: string | null;
+  /** Start time of the oldest request still pending, not a progress estimate. */
+  oldestStartedAt?: number;
 }
 
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
 let snapshot: ActivitySnapshot = { pending: 0, label: null, error: null };
+const operations = new Map<symbol, { label: string; startedAt: number }>();
+
+function update(error: string | null): void {
+  const active = [...operations.values()];
+  snapshot = {
+    pending: active.length,
+    label: active.at(-1)?.label ?? null,
+    error,
+    ...(active.length > 0 ? { oldestStartedAt: active[0].startedAt } : {}),
+  };
+  emit();
+}
 
 function emit(): void {
   for (const listener of listeners) {
@@ -40,31 +54,23 @@ export function getActivitySnapshot(): ActivitySnapshot {
 }
 
 /** Marks an operation as started, clearing any prior error. */
-export function beginActivity(label: string): void {
-  snapshot = { pending: snapshot.pending + 1, label, error: null };
-  emit();
+export function beginActivity(label: string): symbol {
+  const token = Symbol();
+  operations.set(token, { label, startedAt: Date.now() });
+  update(null);
+  return token;
 }
 
 /** Marks an operation as finished successfully. */
-export function endActivity(): void {
-  const pending = Math.max(0, snapshot.pending - 1);
-  snapshot = {
-    pending,
-    label: pending > 0 ? snapshot.label : null,
-    error: snapshot.error,
-  };
-  emit();
+export function endActivity(token?: symbol): void {
+  operations.delete(token ?? operations.keys().next().value!);
+  update(snapshot.error);
 }
 
 /** Marks an operation as finished with an error. */
-export function failActivity(message: string): void {
-  const pending = Math.max(0, snapshot.pending - 1);
-  snapshot = {
-    pending,
-    label: pending > 0 ? snapshot.label : null,
-    error: message,
-  };
-  emit();
+export function failActivity(message: string, token?: symbol): void {
+  operations.delete(token ?? operations.keys().next().value!);
+  update(message);
 }
 
 /** Dismisses the current error (e.g. after the user acknowledges it). */
@@ -74,4 +80,10 @@ export function clearActivityError(): void {
   }
   snapshot = { ...snapshot, error: null };
   emit();
+}
+
+export function activityDelay(activity: ActivitySnapshot, now: number): number | null {
+  if (activity.pending === 0 || activity.oldestStartedAt === undefined) return null;
+  const elapsed = Math.max(0, Math.floor((now - activity.oldestStartedAt) / 1_000));
+  return elapsed >= 10 ? elapsed : null;
 }

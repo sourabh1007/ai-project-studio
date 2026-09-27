@@ -10,6 +10,13 @@ Click the **MCP** icon in the activity bar to open the **MCP Servers** view. It
 reflects the real config file the selected provider's CLI reports, so entries
 match what the CLI actually uses.
 
+An empty or whitespace-only config file loads as unconfigured instead of
+failing the page. UTF-8 BOM-prefixed JSON is supported. Nonempty malformed
+files are not silently reset: the error identifies the file to repair before
+using **Retry load**, without displaying its potentially sensitive contents.
+Saving writes a complete temporary file and atomically replaces the original;
+an interrupted or failed write leaves the previous configuration intact.
+
 ## Manage servers
 
 For the selected provider, each configured server appears as a **card** showing

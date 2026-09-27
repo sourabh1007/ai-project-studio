@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createClock } from '../kernel/clock.js';
 import {
   MetaAbortError,
@@ -610,7 +610,7 @@ describe('createRepoInsightsService.analyzeStream', () => {
     const svc = streamWith(readyGit(), repo(), { ai, live: () => 2 });
     const events = await collect(svc, controller.signal);
 
-    expect(sectionEvent(events, 'agents')?.analysisError).toBeDefined();
+    expect(sectionEvent(events, 'agents')).toBeUndefined();
     expect(events.some((e) => e.type === 'done')).toBe(false);
     expect(
       events.some((e) => e.type === 'section' && e.section === 'skills'),
@@ -625,5 +625,142 @@ describe('createRepoInsightsService.analyzeStream', () => {
       controller.signal,
     );
     expect(events).toEqual([]);
+  });
+
+  it('bounds Git work across repositories and drains large file lists', async () => {
+    const base = readyGit();
+    let active = 0;
+    let peak = 0;
+    let reads = 0;
+    const track = async <T,>(work: () => Promise<T>): Promise<T> => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try { return await work(); } finally { active -= 1; }
+    };
+    const git: RepoInsightsGit = {
+      resolveDefaultBranch: (...args) => track(() => base.resolveDefaultBranch(...args)),
+      listFiles: (...args) => track(async () =>
+        args[2] === 'docs' ? Array.from({ length: 20 }, (_, i) => `docs/${i}.md`) : base.listFiles(...args)),
+      readFile: () => track(async () => { reads += 1; return '# Content'; }),
+      lastCommitAuthor: (...args) => track(() => base.lastCommitAuthor(...args)),
+      fileExists: (...args) => track(() => base.fileExists(...args)),
+    };
+    const svc = streamWith(git, repo());
+    const [a, b] = await Promise.all([
+      svc.load('r1'),
+      svc.load('r2'),
+    ]);
+    expect(peak).toBe(2);
+    expect(reads).toBe(44);
+    expect(a.docs).toHaveLength(20);
+    expect(b.docs).toHaveLength(20);
+  });
+
+  it('serializes background AI across repositories', async () => {
+    let active = 0;
+    let peak = 0;
+    const ai = {
+      runDetailed: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        active -= 1;
+        return { text: 'analysis', sessionId: 's' };
+      },
+    };
+    const svc = streamWith(readyGit(), repo(), { ai, live: () => 20 });
+    await Promise.all([
+      svc.analyzeStream('r1', { emit: () => {} }),
+      svc.analyzeStream('r2', { emit: () => {} }),
+    ]);
+    expect(peak).toBe(1);
+  });
+
+  it('pauses all further analysis after unconfirmed termination, preserving scans', async () => {
+    const ai = {
+      runDetailed: vi.fn(async () => {
+        throw new MetaAbortError({ kind: 'timed_out', termination: 'unconfirmed' });
+      }),
+    };
+    const svc = streamWith(readyGit(), repo(), { ai, live: () => 20 });
+    const events = await collect(svc);
+    expect(ai.runDetailed).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(sectionEvent(events, 'agents')?.entries).toHaveLength(1);
+    expect(events.some((event) => event.type === 'section' &&
+      event.analysisError?.includes('Background analysis paused'))).toBe(true);
+    await collect(svc);
+    expect(ai.runDetailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects duplicate streams and releases admission after cancellation', async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const base = readyGit();
+    const git: RepoInsightsGit = {
+      ...base,
+      resolveDefaultBranch: async (_path, signal) => {
+        entered();
+        return new Promise((_resolve, reject) => {
+          signal!.addEventListener('abort', () => reject(signal!.reason), { once: true });
+        });
+      },
+    };
+    const controller = new AbortController();
+    const svc = streamWith(git, repo());
+    const pending = collect(svc, controller.signal);
+    await started;
+    await expect(collect(svc)).rejects.toThrow('already being scanned');
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    git.resolveDefaultBranch = base.resolveDefaultBranch;
+    expect((await collect(svc)).at(-1)?.type).toBe('done');
+  });
+
+  it('stops queued reads, enrichment, and events when cancelled during structural work', async () => {
+    const controller = new AbortController();
+    const base = readyGit();
+    const signals: Array<AbortSignal | undefined> = [];
+    const ai = fakeAi({});
+    const git: RepoInsightsGit = {
+      ...base,
+      readFile: async (_path, _ref, _file, signal) => {
+        signals.push(signal);
+        controller.abort();
+        throw signal!.reason;
+      },
+    };
+    const svc = streamWith(git, repo(), { ai, live: () => 2 });
+    const events = await collect(svc, controller.signal);
+    expect(signals).toEqual([controller.signal]);
+    expect(ai.calls).toHaveLength(0);
+    expect(events.some((event) => event.type === 'section' || event.type === 'done' ||
+      event.type === 'section-failed')).toBe(false);
+  });
+
+  it('emits nothing if cancelled while resolving the default branch', async () => {
+    const controller = new AbortController();
+    const git = readyGit();
+    git.resolveDefaultBranch = async () => {
+      controller.abort();
+      return 'main';
+    };
+    expect(await collect(streamWith(git, repo()), controller.signal)).toEqual([]);
+  });
+
+  it('does not enrich a structural result that settled after cancellation', async () => {
+    const controller = new AbortController();
+    const base = readyGit();
+    const git: RepoInsightsGit = {
+      ...base,
+      listFiles: async (path, ref, directory, recursive, signal) => {
+        if (recursive === false) controller.abort();
+        return base.listFiles(path, ref, directory, recursive, signal);
+      },
+    };
+    const events = await collect(streamWith(git, repo()), controller.signal);
+    expect(events.some((event) => event.type === 'section' && event.section === 'readiness')).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
   });
 });

@@ -134,12 +134,13 @@ export function createNewTaskService(
 
   /** Build the single-agent "Planner" snapshot from a planning turn's result. */
   function plannerAgent(
-    result: { usage?: Parameters<typeof agentMetricsOf>[0]['usage'] },
+    result: { sessionId: string; usage?: Parameters<typeof agentMetricsOf>[0]['usage'] },
     durationMs: number,
   ): NewTaskAgent {
     const metrics = agentMetricsOf(result as Parameters<typeof agentMetricsOf>[0]);
     return {
       id: 'planner',
+      sessionIds: [result.sessionId],
       parentId: null,
       role: 'planner',
       title: 'Planner',

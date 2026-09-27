@@ -169,6 +169,12 @@ describe('parseGranularity', () => {
     expect(parseGranularity('year')).toBe('year');
   });
 
+  it('normalizes case and surrounding whitespace', () => {
+    expect(parseGranularity('DAY')).toBe('day');
+    expect(parseGranularity('  Month  ')).toBe('month');
+    expect(parseGranularity('YeAr')).toBe('year');
+  });
+
   it('falls back to month for anything unrecognized', () => {
     expect(parseGranularity('decade')).toBe('month');
     expect(parseGranularity(undefined)).toBe('month');

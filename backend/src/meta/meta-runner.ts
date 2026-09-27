@@ -9,7 +9,7 @@ import type { MetaSettings } from './meta-settings.js';
 import { extractResponseText } from './meta-response-extractor.js';
 import { describeMetaActivity } from './meta-activity.js';
 import type { Transcript } from '../session/transcript-capture.js';
-import type { MetaOperationPhysicalRegistration } from './meta-operation-contract.js';
+import type { MetaOperationPhysicalRegistration, MetaOperationStart } from './meta-operation-contract.js';
 import { registerUnstartedMetaAttempt } from './meta-operation-physical-ownership.js';
 
 const MAX_PROVIDER_FAILURE_CHARS = 500;
@@ -215,7 +215,7 @@ export interface MetaRequest {
    * so callers can attribute in-flight progress (e.g. stream live activity) to
    * the session while it runs.
    */
-  onStart?: (sessionId: string) => void;
+  onStart?: (sessionId: string, attribution?: MetaOperationStart) => void;
   /**
    * Invoked with each concise, human-readable activity line the metasession
    * produces as it runs (assistant messages, tool calls, diagnostics). Lets a
@@ -330,7 +330,7 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
         throw error;
       }
       const sessionId = launched.session.id;
-      request.onStart?.(sessionId);
+      request.onStart?.(sessionId, { providerId, requestedModel: model, transport: 'session' });
       let publishActivity = true;
       if (request.onActivity) {
         const emit = request.onActivity;

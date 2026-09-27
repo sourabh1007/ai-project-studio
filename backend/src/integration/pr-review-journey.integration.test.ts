@@ -23,6 +23,7 @@ import type {
   PrReviewRepo,
 } from '../pr-review/pr-review-contract.js';
 import { createPrReviewService } from '../pr-review/pr-review-service.js';
+import { buildChangeGraph } from '../pr-review/change-graph-builder.js';
 import { prReviewDefaults } from '../pr-review/config.js';
 import { createCSharpAnalyzer } from '../pr-review/csharp-analyzer.js';
 import type { ChangeGraphFs } from '../pr-review/change-graph-fs.js';
@@ -180,7 +181,7 @@ function createHarness(options: { boardFailures?: number } = {}): Harness {
   let remainingBoardFailures = options.boardFailures ?? 0;
   const ai = {
     async runDetailed(request: MetaRequest): Promise<MetaRunResult> {
-      if (request.label === 'Review board') {
+      if (request.label?.startsWith('Review board')) {
         boardRequests.push(request);
         if (remainingBoardFailures > 0) {
           remainingBoardFailures -= 1;
@@ -188,7 +189,9 @@ function createHarness(options: { boardFailures?: number } = {}): Harness {
         }
         boardRun += 1;
         return {
-          text: '```json\n[]\n```',
+          text: request.label?.includes(' · ')
+            ? '{"skipped":false,"summary":"Inspected src/Service.cs Load retry handling; no issues found.","findings":[]}'
+            : '```json\n[]\n```',
           sessionId: `board-${boardRun}`,
         };
       }
@@ -232,7 +235,11 @@ function createHarness(options: { boardFailures?: number } = {}): Harness {
         cleanup: async () => {},
       }),
     },
-    analyzers: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+    buildGraph: (input) => buildChangeGraph({
+      ...input,
+      registry: createLanguageAnalyzerRegistry([createCSharpAnalyzer()]),
+      fs: fakeChangeGraphFs(),
+    }),
     changeGraphFs: fakeChangeGraphFs(),
     clock,
     sleep: async () => {},
@@ -262,7 +269,7 @@ function createHarness(options: { boardFailures?: number } = {}): Harness {
   });
 
   const board = createReviewBoardService({
-    reviews: { get: (featureId) => reviews.get(featureId) },
+    reviews: { get: (featureId) => reviews.get(featureId), save: (review) => reviewRepo.save(review) },
     config: reviewBoardDefaults,
     clock,
     ai,
@@ -436,6 +443,7 @@ describe('PR review vertical journey', () => {
       repos: { get: (id) => h.repo.get(id) },
       gateways: {
         resolve: () => ({
+          getHeadSha: async () => 'head-1',
           approve: async () => {
             approvalCalls += 1;
             return { approved: true, state: 'approved', reviewer: 'reviewer' };
@@ -443,7 +451,10 @@ describe('PR review vertical journey', () => {
         }),
       },
     });
-    await expect(approval.approve(feature.id)).resolves.toEqual({
+    await expect(approval.approve(feature.id, 'head-1')).rejects.toThrow('Complete every');
+    await h.board.analyzeAll(feature.id, { emit: () => {} });
+    expect(createPrReviewRepo(h.db).get(feature.id)?.reviewBoardAnalysis?.analyses.security).toBeDefined();
+    await expect(approval.approve(feature.id, 'head-1')).resolves.toEqual({
       approved: true,
       state: 'approved',
       reviewer: 'reviewer',

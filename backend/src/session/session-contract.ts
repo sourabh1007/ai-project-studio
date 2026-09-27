@@ -52,6 +52,18 @@ export interface Session {
   startedAt: string | null;
   endedAt: string | null;
   exitCode: number | null;
+  /**
+   * Previously recorded dedicated session copy, preserved for existing sessions
+   * and feature-deletion cleanup. New sessions share the repository or PR
+   * checkout and leave this null; a shared checkout is never owned by a session.
+   */
+  worktreePath?: string | null;
+  /**
+   * The branch/ref the session's checkout was created on: the PR branch for a
+   * PR feature, otherwise master. Recorded so a
+   * feature-deletion consent prompt can name the exact local copies removed.
+   */
+  branch?: string | null;
 }
 
 /** Request to start a new session under a feature. */

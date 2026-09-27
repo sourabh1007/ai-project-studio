@@ -22,6 +22,17 @@ function isExternalUrl(value) {
  * menu bar) can match instead of staying light in dark mode.
  */
 contextBridge.exposeInMainWorld('desktop', {
+  getAppearance() {
+    return ipcRenderer.sendSync('appearance:get');
+  },
+  saveAppearance(key, value) {
+    return ipcRenderer.sendSync('appearance:save', key, value);
+  },
+  onAppearanceChanged(callback) {
+    const listener = (_event, key, value) => callback(key, value);
+    ipcRenderer.on('appearance:changed', listener);
+    return () => ipcRenderer.removeListener('appearance:changed', listener);
+  },
   setTheme(mode) {
     if (mode === 'light' || mode === 'dark') {
       ipcRenderer.send('theme:set', mode);
@@ -42,6 +53,10 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   clearClipboard() {
     return ipcRenderer.invoke('clipboard:clear');
+  },
+  /** Clears only Electron's HTTP cache; never cookies, auth or session storage. */
+  clearHttpCache() {
+    return ipcRenderer.invoke('resources:clearHttpCache');
   },
   // No handler exists in ordinary launches; only the isolated regression shell.
   runClipboardSmoke() {

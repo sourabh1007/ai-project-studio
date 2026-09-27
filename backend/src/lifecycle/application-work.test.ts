@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { createApplicationWork } from './application-work.js';
 
 describe('application work ownership', () => {
+  it('reports copied producer scopes and excludes deletion owners', async () => {
+    const work = createApplicationWork();
+    let finish!: () => void;
+    let finishDeletion!: () => void;
+    const producer = work.own(() => new Promise<void>((resolve) => { finish = resolve; }), { featureIds: ['f'] });
+    const deletion = work.own(() => new Promise<void>((resolve) => { finishDeletion = resolve; }),
+      { featureId: 'f' }, { allowBlockedScope: true });
+    await Promise.resolve();
+    expect(work.activeScopes()).toEqual([{ featureId: undefined, sessionId: undefined, featureIds: ['f'], sessionIds: [] }]);
+    work.activeScopes()[0]!.featureIds = ['changed'];
+    expect(work.activeScopes()[0]!.featureIds).toEqual(['f']);
+    finish(); finishDeletion();
+    await Promise.all([producer, deletion]);
+    expect(work.activeScopes()).toEqual([]);
+  });
   it('reports scoped admission through accepts', () => {
     const work = createApplicationWork();
     expect(work.accepts({ featureId: 'f1' })).toBe(true);

@@ -12,7 +12,8 @@ export interface PrApprovalResult {
 
 /** Provider port bound to one pull request that can cast the reviewer approval. */
 export interface PrApprovalGateway {
-  approve(): Promise<PrApprovalResult>;
+  getHeadSha(): Promise<string>;
+  approve(expectedHeadSha?: string): Promise<PrApprovalResult>;
 }
 
 /** Resolves the provider-specific approval gateway for a repository + pull. */
@@ -22,5 +23,13 @@ export interface PrApprovalGatewayResolver {
 
 /** Application service backing the PR review page's approve action. */
 export interface PrApprovalService {
-  approve(featureId: string): Promise<PrApprovalResult>;
+  approve(featureId: string, expectedHeadSha?: string, expectedReviewUpdatedAt?: string): Promise<PrApprovalResult>;
+  status?(featureId: string): Promise<PrApprovalStatus>;
+}
+
+export interface PrApprovalStatus {
+  reviewedHeadSha: string | null;
+  currentHeadSha: string;
+  canApprove: boolean;
+  reason: string | null;
 }

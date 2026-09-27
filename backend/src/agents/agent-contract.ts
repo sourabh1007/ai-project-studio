@@ -23,6 +23,17 @@ export interface AgentPromptField {
   description: string;
   /** Placeholders the template supports, shown as editing hints. */
   placeholders?: string[];
+  /**
+   * Optional top-level category used to group this field in the agent
+   * settings tree (e.g. `Review perspectives`). Fields without a group are
+   * rendered ungrouped.
+   */
+  group?: string;
+  /**
+   * Optional second-level group within `group` (e.g. a specific review
+   * perspective) so related fields nest under one expandable node.
+   */
+  subgroup?: string;
 }
 
 /**

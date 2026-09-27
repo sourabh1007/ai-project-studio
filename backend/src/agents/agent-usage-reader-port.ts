@@ -7,8 +7,8 @@
  */
 export interface AgentUsageReader {
   /**
-   * Total credits, total nano-AIU and the number of completed, usage-recorded
-   * operations tagged with `label`.
+   * Total credits, total nano-AIU and the number of usage-recorded attempts
+   * tagged with `label` (including its perspective labels and charged failures).
    */
   aggregateByLabel(label: string): {
     credits: number | null;

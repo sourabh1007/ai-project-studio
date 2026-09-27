@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { MetaOperation, MetaOperationRepo, MetaOperationSummary } from '../meta/meta-operation-contract.js';
 import { createMetaUsageRepo } from './meta-usage-repo.js';
+import type { MetaUsageCaptureRepo } from '../meta/meta-usage-capture.js';
 
 const fields = [
   'feature_id', 'automation_id', 'origin_session_id', 'provider_id', 'requested_model',
@@ -64,7 +65,7 @@ function pageLimit(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError('Invalid meta operation page limit');
 }
 
-export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo {
+export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo & MetaUsageCaptureRepo {
   const usage = createMetaUsageRepo(db);
   const insert = db.prepare(`INSERT INTO meta_operations(operation_id, ${fields.join(',')})
     VALUES (${['operation_id', ...fields].map(() => '?').join(',')})`);
@@ -96,12 +97,35 @@ export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo {
     }
   };
   const updateRow = (operation: MetaOperation): boolean => {
+    const existing = get.get(operation.operationId) as unknown as Row | undefined;
+    const captured = existing?.usage_json ? JSON.parse(existing.usage_json) as MetaOperation['usage'] : null;
+    if (captured?.nanoAiu != null && operation.usage?.nanoAiu == null) {
+      operation = { ...operation, usage: captured, usageState: 'recorded' };
+    }
     if (Number(update.run(...values(operation), operation.operationId).changes) !== 1) return false;
     replaceIdentities(operation);
     return true;
   };
 
   return {
+    refreshUsage(operationId, snapshot, capturedAt) {
+      return write(() => {
+        const row = get.get(operationId) as unknown as Row | undefined;
+        if (!row || row.usage_json === JSON.stringify(snapshot)) return false;
+        db.prepare(`UPDATE meta_operations SET usage_json = ?, usage_state = 'recorded'
+          WHERE operation_id = ?`).run(JSON.stringify(snapshot), operationId);
+        if (row.transport === 'warm-acp' && row.session_id && row.provider_id && row.requested_model) {
+          usage.save({
+            sessionId: row.session_id, featureId: row.feature_id, providerId: row.provider_id,
+            requestedModel: row.requested_model, resolvedModel: row.resolved_model,
+            transport: 'warm-acp', providerSessionId: row.provider_session_id,
+            purpose: row.purpose, label: row.label, ...snapshot,
+            capturedAt: usage.get(row.session_id)?.capturedAt ?? row.finished_at ?? row.started_at ?? capturedAt,
+          });
+        }
+        return true;
+      });
+    },
     create(operation) {
       write(() => {
         insert.run(operation.operationId, ...values(operation));
@@ -119,7 +143,11 @@ export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo {
           throw new Error('Meta operation completion requires the full result');
         }
         if (!updateRow(operation)) return false;
-        if (warmUsage) usage.save(warmUsage);
+        if (warmUsage) {
+          const saved = get.get(operation.operationId) as unknown as Row;
+          const snapshot = saved.usage_json ? JSON.parse(saved.usage_json) as NonNullable<MetaOperation['usage']> : {};
+          usage.save({ ...warmUsage, ...snapshot });
+        }
         return true;
       });
     },

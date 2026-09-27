@@ -62,6 +62,7 @@ const callbacks = {
   onOpenSession: vi.fn(),
   onOpenFeature: vi.fn(),
   onOpenPrReview: vi.fn(),
+  onOpenBulkPrReview: vi.fn(),
   onOpenAgent: vi.fn(),
   onOpenRepo: vi.fn(),
   onRenameSession: vi.fn(),
@@ -72,6 +73,78 @@ const callbacks = {
 };
 
 describe('Explorer repository context gating', () => {
+  it('keeps sessions on one row and loads files only through the session disclosure', async () => {
+    const session: Session = {
+      id: 's1', featureId: feature.id, name: 'Compact session', provider: 'copilot',
+      requestedModel: 'gpt-5', resolvedModel: null, status: 'completed', kind: 'dev',
+      prompt: '', usageFilePath: '', createdAt: feature.createdAt, startedAt: null,
+      endedAt: null, exitCode: 0, groupId: null,
+    };
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn().mockResolvedValue([session]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      listSessionSkills: vi.fn().mockResolvedValue([]),
+      listSessionFiles: vi.fn().mockResolvedValue([
+        { path: 'C:\\repo\\app.ts', name: 'app.ts', dir: 'C:\\repo', tool: 'edit' },
+      ]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+    };
+    const onOpenSession = vi.fn();
+    render(
+      <ApiProvider value={client}>
+        <Explorer live={initialLiveState} activeSessionId={session.id} names={{}}
+          {...callbacks} onOpenSession={onOpenSession} />
+      </ApiProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    const row = await screen.findByRole('button', { name: session.name! });
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(row).toHaveAttribute('title', expect.stringContaining('Model: gpt-5'));
+    expect(row).toHaveAttribute('title', expect.stringContaining('Status: completed'));
+    expect(screen.queryByText('gpt-5')).toBeNull();
+    expect(client.listSessionFiles).not.toHaveBeenCalled();
+    fireEvent.click(row);
+    expect(onOpenSession).toHaveBeenCalledWith(session, 'Session #1');
+    const expand = screen.getByRole('button', { name: 'Expand files for Compact session' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(expand);
+    expect(await screen.findByText('app.ts')).toBeInTheDocument();
+    expect(client.listSessionFiles).toHaveBeenCalledWith(session.id);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse files for Compact session' }));
+    expect(screen.queryByText('app.ts')).toBeNull();
+    expect(screen.getByText('Accounts').parentElement).not.toHaveAttribute('open');
+  });
+
+  it('renders attached agents as ordinary child rows with working open and detach actions', async () => {
+    const entry = {
+      attachment: { id: 'a1', featureId: feature.id, agentId: 'review-board' },
+      manifest: { id: 'review-board', title: 'Review Board', icon: 'scan-search' },
+    };
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn().mockResolvedValue([]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+      listFeatureAgents: vi.fn().mockResolvedValue([entry]),
+      detachAgent: vi.fn().mockResolvedValue(undefined),
+    };
+    const onOpenAgent = vi.fn();
+    render(
+      <ApiProvider value={client}>
+        <Explorer live={initialLiveState} activeSessionId={null} names={{}}
+          {...callbacks} onOpenAgent={onOpenAgent} />
+      </ApiProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    const group = await screen.findByRole('group', { name: `Agents for ${feature.name}` });
+    expect(group.querySelector('.attached-agents-label')).toBeNull();
+    fireEvent.click(within(group).getByRole('button', { name: 'Review Board' }));
+    expect(onOpenAgent).toHaveBeenCalledWith(feature, entry);
+    fireEvent.click(within(group).getByRole('button', { name: 'Detach Review Board' }));
+    await waitFor(() => expect(client.detachAgent).toHaveBeenCalledWith('a1'));
+  });
+
   it('shows unknown live-only usage until the complete persisted rollup arrives', async () => {
     const session: Session = {
       id: 's1', featureId: feature.id, name: 'Quota session', provider: 'copilot',
@@ -95,7 +168,8 @@ describe('Explorer repository context gating', () => {
       </ApiProvider>,
     );
     fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
-    expect(await screen.findByText('Usage pending')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Quota session' }))
+      .toHaveAttribute('title', expect.stringContaining('Usage pending'));
     const totals = {
       sessions: 1, inputTokens: 123, outputTokens: 456, reasoningOutputTokens: 0,
       cost: 1, credits: 987, nanoAiu: 987000000000,
@@ -108,9 +182,11 @@ describe('Explorer repository context gating', () => {
         startedAt: null, endedAt: null, activeMs: 0,
       }],
     }));
-    await waitFor(() => expect(screen.queryByText('Usage pending')).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Quota session' }))
+      .not.toHaveAttribute('title', expect.stringContaining('Usage pending')));
     expect(screen.getByRole('button', { name: 'Usage breakdown for Quota session' }))
-      .toHaveTextContent(formatAic(totals.nanoAiu));
+      .toHaveAttribute('title', expect.stringContaining(formatAic(totals.nanoAiu)));
+    expect(document.querySelector('.session-summary-row')).toBeNull();
   });
 
   it('keeps new sessions enabled while context is still analyzing', async () => {

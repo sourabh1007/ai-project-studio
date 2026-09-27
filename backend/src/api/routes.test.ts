@@ -101,6 +101,18 @@ function deps(): ApiRoutesDeps {
 }
 
 describe('createApiRoutes', () => {
+  it('registers optional composition-owned active session debugger routes', () => {
+    const routes = createApiRoutes({ ...deps(), activeSessions: {} as never });
+    expect(routes.filter((route) => route.path.startsWith('/active-sessions')).map((route) => `${route.method} ${route.path}`)).toEqual([
+      'get /active-sessions', 'get /active-sessions/:id/debug',
+    ]);
+  });
+  it('registers the resource snapshot and explicit storage actions when injected', () => {
+    const routes = createApiRoutes({ ...deps(), appResources: {} as never });
+    expect(routes.filter((r) => r.path.startsWith('/resources')).map((r) => `${r.method} ${r.path}`)).toEqual([
+      'get /resources', 'post /resources/storage/refresh', 'post /resources/cleanup',
+    ]);
+  });
   it('assembles the full route table from every controller', () => {
     const routes = createApiRoutes(deps());
     const signatures = routes.map((r) => `${r.method} ${r.path}`);
@@ -112,6 +124,7 @@ describe('createApiRoutes', () => {
       'get /features/:id',
       'put /features/:id',
       'post /features/:id/move',
+      'get /features/:id/deletion-preview',
       'delete /features/:id',
       'post /features/:featureId/sessions',
       'get /features/:featureId/sessions',
@@ -123,12 +136,20 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/terminal-sessions',
       'get /providers',
       'get /providers/:id/models',
+      'get /mcp/providers/:providerId/servers/:serverName/options',
+      'post /mcp/providers/:providerId/servers/:serverName/authentication',
+      'get /mcp/providers/:providerId/servers/:serverName/authentication/:jobId',
+      'delete /mcp/providers/:providerId/servers/:serverName/authentication/:jobId',
+      'post /mcp/providers/:providerId/servers/:serverName/configure',
+      'get /mcp/bridge-health',
       'get /mcp/providers',
       'get /mcp/providers/:providerId/servers',
       'get /mcp/providers/:providerId/servers/:serverName/status',
       'get /mcp/providers/:providerId/servers/:serverName/tools',
       'put /mcp/providers/:providerId/servers',
       'put /mcp/providers/:providerId/servers/:serverName/tools/:toolName',
+      'delete /mcp/providers/:providerId/servers/:serverName',
+      'put /mcp/providers/:providerId/servers/:serverName/enabled',
       'post /mcp/providers/:providerId/servers/:serverName/restart',
       'get /features/:featureId/usage',
       'get /usage/totals',
@@ -174,6 +195,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/pr-review/files/explain',
       'get /features/:featureId/pr-review/files/content',
       'post /features/:featureId/pr-review/graph-chat',
+      'get /features/:featureId/pr-review/approval-status',
       'post /features/:featureId/pr-review/approve',
       'post /features/:featureId/pr-review/export-description',
       'get /features/:featureId/pr-review/comments',

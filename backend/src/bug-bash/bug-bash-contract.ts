@@ -222,6 +222,8 @@ export type BugBashAgentStatus = 'pending' | 'running' | 'done' | 'failed';
 
 /** One agent in a Bug Bash run's team, carrying the live metrics the UI shows. */
 export interface BugBashAgent {
+  /** Durable physical-attempt identities for late vendor usage reconciliation. */
+  sessionIds?: string[];
   /** Stable id within a run, e.g. `lead`, `tester-1`, `analyst`. */
   id: string;
   /** Parent agent id; null for the root (analyst/lead). */

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { McpServerEntry } from '../../lib/types.js';
 import { Button } from '../../components/ui.js';
 
@@ -21,10 +21,12 @@ function initialSpecText(entry?: McpServerEntry): string {
  */
 export function McpServerForm({
   initial,
+  categoryLabel,
   onSubmit,
   onCancel,
 }: {
   initial?: McpServerEntry;
+  categoryLabel: string;
   onSubmit: (input: { name: string; spec: Record<string, unknown> }) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -32,8 +34,10 @@ export function McpServerForm({
   const [specText, setSpecText] = useState(() => initialSpecText(initial));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const locked = useRef(false);
 
   async function submit() {
+    if (locked.current) return;
     const trimmed = name.trim();
     if (!trimmed) {
       setError('Name is required');
@@ -50,6 +54,7 @@ export function McpServerForm({
       setError('Configuration must be a JSON object');
       return;
     }
+    locked.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -57,20 +62,22 @@ export function McpServerForm({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      locked.current = false;
       setBusy(false);
     }
   }
 
   return (
     <div className="feature-form">
+      <p className="field-hint">Category: <strong>{categoryLabel}</strong>{initial?.source ? ` - ${initial.source}` : ''}</p>
       <div className="field">
         <label htmlFor="mcp-name">Server name</label>
         <input
           id="mcp-name"
           className="input"
           autoFocus={!initial}
-          value={name}
-          disabled={Boolean(initial)}
+          value={initial?.displayName ?? name}
+          disabled={Boolean(initial) || busy}
           onChange={(event) => setName(event.target.value)}
           placeholder="e.g. filesystem"
         />
@@ -81,12 +88,13 @@ export function McpServerForm({
           id="mcp-spec"
           className="textarea textarea-lg mono"
           value={specText}
+          disabled={busy}
           onChange={(event) => setSpecText(event.target.value)}
           spellCheck={false}
         />
         <p className="field-hint">
-          Stored verbatim under <code>mcpServers</code> in the provider’s config
-          file.
+          Saved to this source using its native configuration format.
+          Keep environment-variable references intact; only use fields supported by this CLI.
         </p>
       </div>
       {error && (
@@ -95,10 +103,10 @@ export function McpServerForm({
         </p>
       )}
       <div className="row modal-actions">
-        <Button variant="ghost" onClick={onCancel}>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
-        <Button onClick={submit} disabled={busy}>
+        <Button onClick={submit} loading={busy}>
           {busy ? 'Saving…' : initial ? 'Save changes' : 'Add server'}
         </Button>
       </div>

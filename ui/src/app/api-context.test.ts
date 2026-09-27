@@ -58,6 +58,21 @@ describe('activityFetch', () => {
     await expect(activityFetch('/api/meta/pools')).rejects.toBe(networkError);
     expect(getActivitySnapshot().error).toBe('Failed to fetch');
   });
+
+  it('cancels only its own delayed request when requests finish out of order', async () => {
+    let cancel!: (reason: unknown) => void;
+    const delayed = new Promise<Response>((_resolve, reject) => { cancel = reject; });
+    vi.stubGlobal('fetch', vi.fn()
+      .mockReturnValueOnce(delayed)
+      .mockResolvedValueOnce(new Response(null, { status: 200 })));
+    const pending = activityFetch('/api/pulls');
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await activityFetch('/api/other');
+    expect(getActivitySnapshot()).toMatchObject({ pending: 1, label: 'Loading pull requests…' });
+    cancel(new DOMException('Cancelled', 'AbortError'));
+    await rejected;
+    expect(getActivitySnapshot()).toEqual({ pending: 0, label: null, error: null });
+  });
 });
 
 describe('describeRequest', () => {

@@ -6,6 +6,7 @@ import {
   listThreadsArgs,
   parseAddedThread,
   parsePullNodeId,
+  parsePullHeadSha,
   parseStatusResult,
   parseThreads,
   pullNodeIdArgs,
@@ -14,6 +15,71 @@ import {
 } from './github-pr-comments.js';
 
 const TARGET = { repo: 'acme/widgets', number: 7 };
+
+describe('guarded GitHub comment posts', () => {
+  const input = { path: 'src/exact.cs', line: 42, body: ' edited\ncomment ', expectedHeadSha: 'captured' };
+  const pull = (headRefOid: unknown) => JSON.stringify({
+    data: { repository: { pullRequest: { id: 'PR1', headRefOid } } },
+  });
+
+  it.each(['not json', 'null', '{}', '{"data":{}}', '{"data":{"repository":{}}}',
+    '{"data":{"repository":{"pullRequest":{}}}}', pull(null), pull(42), pull(''), pull('  ')])(
+    'treats an unavailable head as unknown: %s', (stdout) => {
+      expect(parsePullHeadSha(stdout)).toBeNull();
+    },
+  );
+
+  it('preflights the live head in the existing node query and preserves exact RIGHT payload', async () => {
+    const { run, calls } = queuedRunner([
+      ok(pull('captured')),
+      ok(JSON.stringify({ data: { addPullRequestReviewThread: {
+        thread: { id: 'T1', path: input.path, line: input.line },
+      } } })),
+    ]);
+    const result = await createGithubCommentsGateway(run, TARGET).add(input);
+    expect(result.path).toBe(input.path);
+    expect(result.line).toBe(input.line);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain(
+      'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id headRefOid}}}',
+    );
+    expect(calls[1]).toContain('path=src/exact.cs');
+    expect(calls[1]).toContain('line=42');
+    expect(calls[1]).toContain('body= edited\ncomment ');
+    expect(calls[1].join(' ')).toContain('side:RIGHT');
+    expect(calls[1].join(' ')).not.toContain('expectedHeadSha');
+  });
+
+  it.each([undefined, null, '', 'moved'])('blocks missing or stale live head %j without posting', async (head) => {
+    const { run, calls } = queuedRunner([ok(pull(head))]);
+    await expect(createGithubCommentsGateway(run, TARGET).add(input)).rejects.toThrow(/live GitHub PR head/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([null, 42, '', '  '])('rejects invalid expected head %j before provider IO', async (head) => {
+    const { run, calls } = queuedRunner([]);
+    await expect(createGithubCommentsGateway(run, TARGET).add({
+      ...input, expectedHeadSha: head as string,
+    })).rejects.toThrow(/expectedHeadSha/);
+    expect(calls).toEqual([]);
+  });
+
+  it('propagates failed preflight without posting', async () => {
+    const { run, calls } = queuedRunner([fail('head query failed')]);
+    await expect(createGithubCommentsGateway(run, TARGET).add(input)).rejects.toThrow('head query failed');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not retry a failed guarded mutation', async () => {
+    const { run, calls } = queuedRunner([ok(pull('captured')), fail('post failed')]);
+    await expect(createGithubCommentsGateway(run, TARGET).add(input)).rejects.toThrow('post failed');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('keeps legacy node queries head-independent', () => {
+    expect(pullNodeIdArgs(TARGET).join(' ')).not.toContain('headRefOid');
+  });
+});
 
 function ok(stdout: string): GhCommandResult {
   return { code: 0, stdout, stderr: '' };

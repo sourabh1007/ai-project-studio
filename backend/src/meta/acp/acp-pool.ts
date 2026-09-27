@@ -86,6 +86,8 @@ export interface MetaSessionTurn {
  * conversation flowing through the session instead of just a busy indicator.
  */
 export interface MetaSessionLiveTurn {
+  /** Immutable operation, used to join live debug metadata without double-counting. */
+  operationId?: string;
   /** Routing purpose the in-flight turn serves. */
   purpose: string;
   /** Human-readable description of the in-flight work, when the caller set one. */
@@ -100,6 +102,8 @@ export interface MetaSessionLiveTurn {
 
 /** Live status of one warm session, for per-session status surfaces. */
 export interface MetaSessionInfo {
+  /** Native process still exists, but is quarantined and cannot accept work. */
+  retiring?: boolean;
   /** Stable id within the pool's lifetime (e.g. `s1`, `s2`). */
   id: string;
   /** What the session is doing right now. */
@@ -431,6 +435,7 @@ export class MetaSessionPool {
     // the caller's own onActivity runs.
     const record = this.records.get(client)!;
     const live: MetaSessionLiveTurn = {
+      ...(context?.operationId ? { operationId: context.operationId } : {}),
       purpose: context?.purpose ?? 'general',
       ...(context?.label ? { label: context.label } : {}),
       prompt: request.prompt,
@@ -620,6 +625,7 @@ export class MetaSessionPool {
     const sessions = [...this.records.values()]
       .sort((left, right) => left.seq - right.seq)
       .map((record) => ({
+        ...(record.active ? {} : { retiring: true }),
         id: record.id,
         state: record.state,
         served: record.served,

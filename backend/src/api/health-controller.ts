@@ -1,9 +1,11 @@
 import type { Route } from './http-contract.js';
+import type { ResourceSnapshot } from '../resource-pressure/resource-pressure.js';
 
 /** Payload returned by the lightweight liveness probe. */
 export interface HealthStatus {
   status: 'ok';
   uptimeMs: number;
+  resources?: ResourceSnapshot;
 }
 
 export interface HealthControllerDeps {
@@ -11,6 +13,8 @@ export interface HealthControllerDeps {
   now?: () => number;
   /** Process start time in the same clock as {@link HealthControllerDeps.now}. */
   startedAt?: number;
+  /** Cached sampler output only: no sampling or subsystem fan-out during a probe. */
+  resources?: () => ResourceSnapshot;
 }
 
 /**
@@ -27,7 +31,10 @@ export function createHealthRoutes(deps: HealthControllerDeps = {}): Route[] {
       path: '/health',
       handler: () => ({
         status: 200,
-        body: { status: 'ok', uptimeMs: Math.max(0, now() - startedAt) },
+        body: {
+          status: 'ok', uptimeMs: Math.max(0, now() - startedAt),
+          ...(deps.resources ? { resources: deps.resources() } : {}),
+        },
       }),
     },
   ];

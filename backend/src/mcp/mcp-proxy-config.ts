@@ -79,6 +79,66 @@ export interface WrapContext {
   apiBase: string;
   /** Control token authorizing the proxy's usage POST. */
   controlToken: string;
+  /** Platform to target when rendering the provider-facing command. */
+  platform?: NodeJS.Platform;
+  /** Windows command interpreter used when the executable path needs quoting. */
+  windowsShell?: string;
+}
+
+function quoteWindowsCommandArg(arg: string): string {
+  if (arg.length === 0) {
+    return '""';
+  }
+  if (!/[\s"]/u.test(arg)) {
+    return arg;
+  }
+  let quoted = '"';
+  let backslashes = 0;
+  for (const char of arg) {
+    if (char === '\\') {
+      backslashes += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted += '\\'.repeat(backslashes * 2 + 1);
+      quoted += char;
+      backslashes = 0;
+      continue;
+    }
+    quoted += '\\'.repeat(backslashes);
+    quoted += char;
+    backslashes = 0;
+  }
+  quoted += '\\'.repeat(backslashes * 2);
+  quoted += '"';
+  return quoted;
+}
+
+/**
+ * Some Windows MCP clients hand the configured command line to `cmd.exe`
+ * without quoting the executable. If the direct command lives under
+ * `C:\Program Files`, startup fails as `'C:\Program' is not recognized`.
+ * Use a stable shell command only when quoting is required, keeping the
+ * non-Windows and no-space cases unchanged.
+ */
+export function providerLaunchSpec(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  windowsShell: string = process.env.ComSpec ?? 'cmd.exe',
+): { command: string; args: string[] } {
+  if (platform !== 'win32' || ![command, ...args].some((arg) => /\s/u.test(arg))) {
+    return { command, args };
+  }
+  return {
+    command: windowsShell,
+    args: [
+      '/d',
+      '/s',
+      '/c',
+      [command, ...args].map(quoteWindowsCommandArg).join(' '),
+    ],
+  };
 }
 
 /**
@@ -95,10 +155,16 @@ export function wrapServerSpec(spec: Spec, ctx: WrapContext): Spec {
   const originalArgs = Array.isArray(original.args)
     ? original.args.filter((arg): arg is string => typeof arg === 'string')
     : [];
+  const launch = providerLaunchSpec(
+    ctx.nodePath,
+    [ctx.proxyScript, original.command as string, ...originalArgs],
+    ctx.platform,
+    ctx.windowsShell,
+  );
   return {
     ...original,
-    command: ctx.nodePath,
-    args: [ctx.proxyScript, original.command as string, ...originalArgs],
+    command: launch.command,
+    args: launch.args,
     env: {
       ...specEnv(original),
       // execPath may be the Electron binary when packaged; run it as plain Node.

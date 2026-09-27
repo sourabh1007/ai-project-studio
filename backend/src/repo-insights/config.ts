@@ -40,6 +40,10 @@ export const repoInsightsConfigSchema = z.object({
   docsDirectories: z.array(z.string().min(1)).min(1),
   /** When true, directories are scanned recursively (nested files included). */
   recursiveScan: z.boolean(),
+  /** Shared Git command limit across all repository dashboards. */
+  gitConcurrency: z.number().int().positive(),
+  /** Hard deadline for a single read-only Git command. */
+  gitTimeoutMs: z.number().int().positive(),
   /** Extension (with leading dot) a definition file must have. */
   definitionExtension: z.string().min(1),
   /** Frontmatter key read for a definition's display name. */
@@ -60,6 +64,8 @@ export const repoInsightsConfigSchema = z.object({
   enrichment: z.object({
     /** When false the streaming scan is structural-only (no metasessions). */
     enabled: z.boolean(),
+    /** Shared background analysis limit across repository dashboards. */
+    maxConcurrency: z.number().int().positive(),
     /**
      * Prompt template for a section's analysis. Placeholders: `{section}`,
      * `{repository}`, `{branch}` and `{evidence}` (the section's scanned items).
@@ -85,6 +91,8 @@ export const repoInsightsDefaults: RepoInsightsConfig = {
   skillsDirectories: ['.github/skills', 'skills'],
   docsDirectories: ['docs', '.github/docs'],
   recursiveScan: true,
+  gitConcurrency: 2,
+  gitTimeoutMs: 15_000,
   definitionExtension: '.md',
   nameKey: 'name',
   descriptionKey: 'description',
@@ -111,6 +119,7 @@ export const repoInsightsDefaults: RepoInsightsConfig = {
   ],
   enrichment: {
     enabled: true,
+    maxConcurrency: 1,
     promptTemplate: [
       'You are analysing the "{section}" section of the repository {repository} on branch {branch}.',
       'Below is the evidence discovered for this section:',

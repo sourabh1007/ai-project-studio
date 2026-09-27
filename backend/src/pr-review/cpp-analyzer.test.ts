@@ -53,4 +53,22 @@ describe('createCppAnalyzer', () => {
       { type: 'Widget', caller: 'run' },
     ]);
   });
+
+  it('handles large blanked comments without scanning a return-type prefix', () => {
+    const content = `Declaration /* ${' '.repeat(350_000)} */\n` +
+      'void run() { Widget w; }';
+    const start = performance.now();
+    expect(analyzer.references(content, ['Widget'])).toEqual([
+      { type: 'Widget', caller: 'run' },
+    ]);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
+  it('attributes multiline arguments and constructors without control-flow callers', () => {
+    const content = 'Widget::Widget(\n int x,\n int y) {\n' +
+      'while (x) { Store s; }\n switch (y) { Store t; }\n}';
+    expect(analyzer.references(content, ['Store'])).toEqual([
+      { type: 'Store', caller: 'Widget' },
+    ]);
+  });
 });

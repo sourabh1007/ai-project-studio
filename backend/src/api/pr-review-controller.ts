@@ -165,11 +165,21 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
       },
     },
     {
+      method: 'get',
+      path: '/features/:featureId/pr-review/approval-status',
+      handler: async (req) => {
+        if (!deps.prApprovals.status) throw new ValidationError('Approval status is unavailable.');
+        return { status: 200, body: await deps.prApprovals.status(req.params.featureId) };
+      },
+    },
+    {
       method: 'post',
       path: '/features/:featureId/pr-review/approve',
       handler: async (req) => ({
         status: 200,
-        body: await deps.prApprovals.approve(req.params.featureId),
+        body: await deps.prApprovals.approve(req.params.featureId,
+          (req.body as { expectedHeadSha?: string } | undefined)?.expectedHeadSha,
+          (req.body as { expectedReviewUpdatedAt?: string } | undefined)?.expectedReviewUpdatedAt),
       }),
     },
     {

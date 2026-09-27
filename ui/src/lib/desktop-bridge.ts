@@ -59,6 +59,15 @@ export interface DesktopWindowsBridge {
 }
 
 export interface DesktopBridge {
+  getAppearance?(): { values: Record<string, string>; error: string | null };
+  saveAppearance?(key: string, value: string): { saved: boolean; error: string | null };
+  onAppearanceChanged?(callback: (key: string, value: string) => void): () => void;
+  clearHttpCache?(): Promise<{
+    status: 'completed' | 'failed' | 'unavailable';
+    scope: 'electron-http-cache';
+    completedAt: number;
+    error: string | null;
+  }>;
   setTheme?(mode: ResolvedTheme): void;
   revealFile?(path: string): void;
   openExternal?(url: string): void;
@@ -90,11 +99,11 @@ export interface DesktopBridge {
  */
 export const DESKTOP_BRIDGE_CAPABILITIES = {
   root: [
-    'attachments', 'backendDiagnostics', 'chooseDirectory', 'clearClipboard', 'copyText',
-    'getVersion',
-    'onBackendUnavailable',
+    'attachments', 'backendDiagnostics', 'chooseDirectory', 'clearClipboard', 'clearHttpCache', 'copyText',
+    'getAppearance', 'getVersion',
+    'onAppearanceChanged', 'onBackendUnavailable',
     'openDocs', 'openExternal', 'readImage', 'readText', 'relaunch', 'revealFile',
-    'runClipboardSmoke', 'setTheme', 'updates', 'windows',
+    'runClipboardSmoke', 'saveAppearance', 'setTheme', 'updates', 'windows',
   ],
   attachments: ['list', 'remove'],
   updates: ['check', 'download', 'getState', 'install', 'onEvent'],

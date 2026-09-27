@@ -39,6 +39,9 @@ describe('nodeChangeGraphFs', () => {
 
       const fromRoot = await nodeChangeGraphFs.listFilesRecursive(root, '');
       expect(fromRoot.sort()).toEqual(['src/Store.cs', 'src/nested/Caller.cs']);
+      expect(await nodeChangeGraphFs.listFilesRecursive(root, '', 0)).toEqual([]);
+      expect((await nodeChangeGraphFs.listFilesRecursive(root, 'src', 1)).length).toBeLessThanOrEqual(1);
+      expect(await nodeChangeGraphFs.listFilesRecursive(root, '', 2)).toEqual([]);
 
       expect(await nodeChangeGraphFs.listFilesRecursive(root, 'missing')).toEqual(
         [],

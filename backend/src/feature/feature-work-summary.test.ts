@@ -39,6 +39,7 @@ function repoOf(sessions: Session[]): SessionRepo {
     deleteByFeature: () => undefined,
     rename: () => undefined,
     updatePlacement: () => undefined,
+    setWorktree: () => undefined,
   };
 }
 

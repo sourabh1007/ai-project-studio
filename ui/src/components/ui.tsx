@@ -20,11 +20,13 @@ export function Modal({
   onClose,
   children,
   size = 'md',
+  className,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  className?: string;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = useRef<FocusTargetSnapshot | null>(null);
@@ -49,7 +51,7 @@ export function Modal({
     <div className="modal-overlay" onClick={onClose}>
       <div
         ref={dialogRef}
-        className={`modal glass modal-${size}`}
+        className={`modal glass modal-${size}${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

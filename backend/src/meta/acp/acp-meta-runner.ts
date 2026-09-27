@@ -22,6 +22,7 @@ export interface AcpTurnPool {
       onActivity?: (text: string) => void;
       onNotice?: (line: string) => void;
       onStart?: () => void;
+      onSession?: (sessionId: string) => void;
       signal?: AbortSignal;
     },
     context?: { purpose?: string; label?: string; operationId?: string },
@@ -91,7 +92,9 @@ export function createAcpMetaRunner(
           // Discrete tool-call / thinking lines arrive already formatted, so
           // forward them verbatim (no line buffering) straight to the caller.
           onNotice: emit ? (line: string): void => emit(line) : undefined,
-          onStart: () => request.onStart?.(sessionId),
+          onSession: (providerSessionId) => request.onStart?.(sessionId, {
+            providerId: deps.providerId, transport: 'warm-acp', providerSessionId,
+          }),
           signal: request.signal,
         },
         { purpose: request.purpose ?? deps.purpose, label: request.label, operationId: request.operationId },

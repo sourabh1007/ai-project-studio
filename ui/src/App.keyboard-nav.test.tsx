@@ -126,6 +126,24 @@ describe('App keyboard ownership and navigation semantics', () => {
     window.localStorage.clear();
   });
 
+  it('hides and restores the icon dock without removing the workspace and remembers the choice', async () => {
+    const first = renderApp();
+    await screen.findByRole('textbox', { name: 'Terminal shell' });
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide icon dock' }));
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Terminal shell' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show icon dock' })).toHaveAttribute('aria-expanded', 'false');
+    expect(window.localStorage.getItem('cw-dock-visible')).toBe('false');
+    first.unmount();
+    renderApp();
+    await screen.findByRole('textbox', { name: 'Terminal shell' });
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show icon dock' }));
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+    expect(window.localStorage.getItem('cw-dock-visible')).toBe('true');
+  });
+
   it('handles app-owned shortcuts before terminal inputs and leaves Ctrl+C alone', async () => {
     renderApp();
     const shell = await screen.findByRole('textbox', { name: 'Terminal shell' });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
@@ -57,6 +57,16 @@ function initialSections(status: SectionStatus): SectionMap {
     docs: { status, analysis: null },
     readiness: { status, analysis: null },
   };
+}
+
+function stopPendingSections(sections: SectionMap): SectionMap {
+  const next = { ...sections };
+  for (const section of Object.keys(next) as RepoInsightsSection[]) {
+    if (next[section].status === 'analyzing' || next[section].status === 'healing') {
+      next[section] = { ...next[section], status: 'idle' };
+    }
+  }
+  return next;
 }
 
 /** A running accumulator of the structural section results as they stream in. */
@@ -410,25 +420,54 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
     () => !insightsCache.has(repo.id),
   );
   const [scanError, setScanError] = useState<string | null>(null);
+  const [cancelled, setCancelled] = useState(false);
   const [sections, setSections] = useState<SectionMap>(() =>
     initialSections('idle'),
   );
+  const activeScan = useRef<AbortController | null>(null);
+  const latestInsights = useRef(data);
+
+  const abortScan = useCallback(() => {
+    const controller = activeScan.current;
+    activeScan.current = null;
+    controller?.abort();
+  }, []);
+
+  const cancelScan = () => {
+    abortScan();
+    setScanning(false);
+    setCancelled(true);
+    setSections(stopPendingSections);
+  };
 
   const runScan = useCallback(
-    async (_refresh: boolean) => {
+    async () => {
+      abortScan();
+      const controller = new AbortController();
+      activeScan.current = controller;
+      const isCurrent = () =>
+        activeScan.current === controller && !controller.signal.aborted;
       setScanning(true);
+      setCancelled(false);
       setScanError(null);
       setSections(initialSections('idle'));
       // Accumulate structural results as each section streams in so the page
-      // fills progressively; the terminal `done` replaces it with the
-      // authoritative snapshot and refreshes the cache.
+      // fills progressively, retaining previous sections if a rescan is cancelled.
+      // Only the terminal `done` refreshes the completed-scan cache.
+      const previous = latestInsights.current?.repositoryId === repo.id
+        ? latestInsights.current
+        : null;
       const acc: InsightsAccumulator = {
-        agents: [],
-        skills: [],
-        docs: [],
-        readiness: [],
+        agents: previous?.agents ?? [],
+        skills: previous?.skills ?? [],
+        docs: previous?.docs ?? [],
+        readiness: previous?.readiness ?? [],
       };
-      let branch = insightsCache.get(repo.id)?.branch ?? repo.defaultBranch ?? '';
+      let branch = previous?.branch ?? repo.defaultBranch ?? '';
+      const updateInsights = (insights: RepoInsights) => {
+        latestInsights.current = insights;
+        setData(insights);
+      };
       const patch = (
         section: RepoInsightsSection,
         next: Partial<SectionState>,
@@ -439,6 +478,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
         }));
       try {
         await api.analyzeRepoInsights(repo.id, (event) => {
+          if (!isCurrent()) return;
           switch (event.type) {
             case 'branch':
               branch = event.branch;
@@ -460,7 +500,7 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
                 analysis: event.analysis,
                 analysisError: event.analysisError,
               });
-              setData(snapshotOf(repo.id, branch, acc));
+              updateInsights(snapshotOf(repo.id, branch, acc));
               break;
             }
             case 'section-failed':
@@ -472,30 +512,40 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
               break;
             case 'done':
               insightsCache.set(repo.id, event.insights);
-              setData(event.insights);
+              updateInsights(event.insights);
               break;
           }
-        });
+        }, controller.signal);
       } catch (err) {
-        setScanError(err instanceof Error ? err.message : String(err));
+        if (isCurrent()) {
+          setScanError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
-        setScanning(false);
+        if (isCurrent()) {
+          activeScan.current = null;
+          setScanning(false);
+          setSections(stopPendingSections);
+        }
       }
     },
-    [api, repo.id, repo.defaultBranch],
+    [api, repo.id, repo.defaultBranch, abortScan],
   );
 
   useEffect(() => {
-    const cached = insightsCache.get(repo.id);
+    const cached = insightsCache.get(repo.id) ?? null;
+    latestInsights.current = cached;
+    setData(cached);
+    setScanError(null);
+    setCancelled(false);
     if (cached) {
       // Already scanned this session — surface it instantly, no rescan.
-      setData(cached);
       setScanning(false);
       setSections(initialSections('done'));
-      return;
+    } else {
+      void runScan();
     }
-    void runScan(false);
-  }, [repo.id, runScan]);
+    return abortScan;
+  }, [repo.id, runScan, abortScan]);
 
   const [viewingUsage, setViewingUsage] = useState(false);
   const [viewing, setViewing] = useState<RepoDefinitionEntry | null>(null);
@@ -532,17 +582,27 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
           <button
             type="button"
             className="dash-refresh"
-            onClick={() => void runScan(true)}
+            onClick={() => void runScan()}
             disabled={scanning}
             title="Re-scan the default branch"
           >
             <RefreshIcon size={13} />
             {scanning && data ? 'Rescanning…' : 'Rescan'}
           </button>
+          {scanning && (
+            <button type="button" className="dash-refresh" onClick={cancelScan}>
+              Cancel
+            </button>
+          )}
         </div>
       </header>
 
       <ErrorText error={scanError} />
+      {cancelled && (
+        <p role="status">
+          Scan cancelled.{data ? ' Showing available results.' : ''}
+        </p>
+      )}
       <RepoContextBanner repo={repo} />
       {scanning && !data && (
         <BrandedLoader

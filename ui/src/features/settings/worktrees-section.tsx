@@ -11,6 +11,13 @@ import {
 import { RepoIcon, TrashIcon } from '../../components/icons.js';
 import { ErrorState } from '../../components/error-state.js';
 import { Loader } from '../../components/loading.js';
+import type { ManagedWorktree } from '../../lib/types.js';
+
+type Removal = {
+  worktree: ManagedWorktree;
+  status: 'queued' | 'deleting' | 'error' | 'removed';
+  error?: string;
+};
 
 /**
  * Lists the git worktrees the app provisioned for PR reviews and lets the user
@@ -23,9 +30,32 @@ export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
     () => api.listWorktrees(),
     [],
   );
-  const [removing, setRemoving] = useState<string | null>(null);
-  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removals, setRemovals] = useState<Record<string, Removal>>({});
+  const pending = useRef(new Set<string>());
+  const queue = useRef<(() => void)[]>([]);
+  const active = useRef(0);
+  const mounted = useRef(true);
   const embeddedHeadingRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    const timer = window.setInterval(reload, 3000);
+    const refresh = () => reload();
+    window.addEventListener('focus', refresh);
+    return () => {
+      mounted.current = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [reload]);
+
+  useEffect(() => {
+    if (!data) return;
+    const listed = new Set(data.map(({ path }) => path));
+    setRemovals((previous) => Object.fromEntries(Object.entries(previous).filter(
+      ([path, removal]) => removal.status !== 'removed' || listed.has(path),
+    )));
+  }, [data]);
 
   useEffect(() => {
     if (!embedded) return;
@@ -39,17 +69,41 @@ export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
     return () => heading.remove();
   }, [embedded]);
 
-  async function remove(path: string) {
-    setRemoving(path);
-    setRemoveError(null);
-    try {
-      await api.removeWorktree(path);
-      reload();
-    } catch (err) {
-      setRemoveError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRemoving(null);
-    }
+  function remove(worktree: ManagedWorktree) {
+    const { path } = worktree;
+    if (pending.current.has(path)) return;
+    pending.current.add(path);
+    const update = (status: Removal['status'], error?: string) => {
+      if (mounted.current) setRemovals((previous) => ({
+        ...previous, [path]: { worktree, status, error },
+      }));
+    };
+    update('queued');
+    const start = async () => {
+      active.current += 1;
+      update('deleting');
+      try {
+        await api.removeWorktree(path);
+        update('removed');
+        if (mounted.current) reload();
+      } catch (err) {
+        update('error', err instanceof Error ? err.message : String(err));
+      } finally {
+        pending.current.delete(path);
+        active.current -= 1;
+        queue.current.shift()?.();
+      }
+    };
+    if (active.current < 3) void start();
+    else queue.current.push(() => void start());
+  }
+
+  // Keep pending/failed rows visible during refresh; a stale list response must
+  // not resurrect a checkout whose removal already completed.
+  const rows = new Map(data?.map((worktree) => [worktree.path, worktree]));
+  for (const [path, removal] of Object.entries(removals)) {
+    if (removal.status === 'removed') rows.delete(path);
+    else if (!rows.has(path)) rows.set(path, removal.worktree);
   }
 
   const body = (
@@ -67,15 +121,19 @@ export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
           </Button>
         </div>
       )}
-      {loading && <Loader label="Loading worktrees" />}
+      {loading && !data && <Loader label="Loading worktrees" />}
       {error && <ErrorState error={cause ?? error} onRetry={reload} />}
-      {data && data.length === 0 && (
+      {data && rows.size === 0 && (
         <EmptyState message="No review worktrees on disk." />
       )}
-      <ErrorText error={removeError} />
-      {data && data.length > 0 && (
+      {rows.size > 0 && (
         <ul className="worktree-list">
-          {data.map((wt) => {
+          {[...rows.values()].map((wt) => {
+            const removal = removals[wt.path];
+            const remote = wt.removal;
+            const busy = removal?.status === 'queued' || removal?.status === 'deleting' ||
+              remote?.status === 'queued' || remote?.status === 'deleting';
+            const removalError = removal?.error ?? (remote?.status === 'failed' ? remote.message : null);
             const isTask =
               wt.pullNumber === null &&
               (wt.path.includes('-task-') ||
@@ -105,14 +163,17 @@ export function WorktreesSection({ embedded }: { embedded?: boolean } = {}) {
                   <span className="worktree-path" title={wt.path}>
                     {wt.path}
                   </span>
+                  {busy && <span role="status" aria-label="Removal status">{remote?.message ??
+                    (removal?.status === 'queued' ? 'Queued for removal' : 'Deleting worktree…')}</span>}
+                  <ErrorText error={removalError} />
                 </div>
                 <Button
                   variant="danger"
-                  onClick={() => void remove(wt.path)}
-                  disabled={removing !== null}
-                  loading={removing === wt.path}
+                  onClick={() => remove(wt)}
+                  disabled={busy}
+                  loading={removal?.status === 'deleting' || remote?.status === 'deleting'}
                 >
-                  <TrashIcon size={13} /> Remove
+                  <TrashIcon size={13} /> {removalError ? 'Retry removal' : 'Remove'}
                 </Button>
               </li>
             );

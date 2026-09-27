@@ -22,6 +22,92 @@ npm install    # installs all workspaces
 
 ## Testing
 
+### Resource monitoring and safe cleanup
+
+`GET /resources` (under the configured API base path) returns cached app process
+and storage measurements; independent host pressure remains in `GET /health`.
+The wire shape mirrors `ui/src/features/resources/resource-types.ts`.
+App CPU is the sum of process CPU-time
+deltas divided by elapsed time **and the host logical CPU count** (100% means
+the whole host). New processes need two samples; partial app CPU totals are
+reported as null, while measured per-process rows remain available.
+Process identity includes PID and creation time. The desktop
+passes its PID to include main, renderer, GPU/utility and backend/CLI descendants.
+Windows is currently supported for process-tree sampling; other platforms report
+it unavailable without hiding the independent host-pressure measurements.
+Memory is summed working set/RSS, not private committed memory: shared pages can
+appear in multiple processes. Neither metric represents host pressure.
+
+`POST /resources/storage/refresh` starts one coalesced, bounded background scan
+and immediately returns the same snapshot shape with `storage.status: "scanning"`;
+GET requests never walk the filesystem or spawn process probes. The `resources`
+config namespace controls sample interval, stale windows, process timeout, and
+storage inventory deadlines. Directory traversal keeps resumable per-root
+cursors and rotates after at most 64 entries or 25ms of cooperative work, yielding
+the event loop between slices. Large worktrees no longer exhaust a global
+30-second timer or starve later app/provider roots. Refreshes coalesce with the
+ongoing scan rather than resetting its progress. Traversal continues until all
+roots finish or shutdown cancels it; root count (256), depth (128) and the
+hardlink identity index (`maxScanEntries`) bound retained state. Scans expose progress, timestamps, nullable sizes,
+per-path errors, volume capacity/free/available bytes, and incomplete results.
+Sizes are logical file bytes, not allocated blocks. Scoped app data/install,
+managed worktree, provider, cache and log roots are de-duplicated across categories
+and hardlinks; junctions/symlinks are skipped and recorded as expected exclusions,
+not fabricated scan failures. Duplicate normalized roots likewise do not add
+errors. The desktop supplies scoped runtime roots for Electron, backend/UI
+builds and dependencies, without scanning the entire repository or profile.
+Provider files may be shared by
+other apps and are not evidence of exclusive Studio ownership.
+
+`POST /resources/cleanup` accepts **only** `{ "category": "logs" | "cache" }`,
+never caller-supplied paths. Logs cleanup removes only configured managed log
+filenames in a dedicated app-data log directory, older than both backend startup
+and its startup UTC day; links, changed files, current logs, foreign files and
+subdirectories are preserved. Cleanup immediately returns a `ResourceCleanup`
+job; progress and completion are available in `GET /resources`'s `cleanups`
+array. One bounded job waits behind an existing scan, duplicate requests coalesce,
+and busy/unsupported requests return explicit failed jobs. History retains at
+most ten jobs. No HTTP handler waits for deletion or scanning. Live Electron cache cleanup is unsupported:
+its caches may be in use, so no raw recursive deletion is attempted. Worktrees,
+provider installs, sessions, databases, config, prompts and the user's shared
+checkout are never removed by these endpoints. No cleanup runs automatically.
+
+The desktop bridge separately offers `desktopBridge()?.clearHttpCache()` after
+explicit UI confirmation. It invokes Electron `session.defaultSession.clearCache()`
+only, coalesces concurrent requests, and returns `{status, scope:
+"electron-http-cache", completedAt, error}`. It accepts no paths/options and
+requires a trusted top-level sender. This is **Electron HTTP cache only**, not
+provider caches, code caches, cookies, authentication, storage or session history.
+No reclaimed-byte estimate is fabricated. Older desktop shells lack this optional
+capability and must show it as unavailable.
+
+Managed-worktree removal separately checks live terminals/running sessions,
+queued application producer scopes, and unfinished or physically unconfirmed
+metasessions. Primary checkouts are always protected. When a producer has not
+published an exact checkout, removal conservatively protects its repository's
+managed worktree directory; retry after that producer finishes. Deletion
+callbacks do not count as producers, avoiding self-blocking teardown.
+
+### Non-blocking background work
+
+Use `kernel/background-work-runner.ts` for CPU-intensive operations and keep
+native worker creation in an IO adapter. Declaring a handler `async` does not
+prevent synchronous parsing or regular-expression backtracking from blocking
+every API on that process.
+
+The `backgroundWork` config bounds active workers (default **1**), queued work
+(**16**), total queue-plus-execution deadline (**60 seconds**) and per-worker
+old-generation heap (**256 MB**, not a total-process memory cap).
+Cancel replaced/deleted jobs; release slots only after worker termination.
+Queue saturation and deadlines fail the affected job with actionable messages.
+Send real phase/progress events, throttled before persistence, rather than
+invented percentages. Keep interactive requests outside the CPU queue.
+
+Regression tests exercise two deliberately stuck CPU workers while health and
+session endpoints remain responsive. New expensive features should add the same
+isolation/deadline/cancellation checks; never mask stalls by increasing HTTP
+timeouts.
+
 - Framework: **Vitest** in both `backend/` and `ui/`.
 - **Backend coverage is 100%** (lines/branches/functions/statements) — see `backend/vitest.config.ts`. New code must be fully covered or CI fails.
 - Iterate fast with a targeted run, then run the full gate before committing:

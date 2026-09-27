@@ -1,3 +1,5 @@
+import type { AppResourceSnapshot, ResourceCleanup } from '../features/resources/resource-types.js';
+import type { ActiveSessionsSnapshot, ActiveSessionDebug } from '../features/active-sessions/active-session-types.js';
 import type {
   ConfigResponse,
   ConfigUpdateResult,
@@ -34,6 +36,9 @@ import type {
   MoveNodeInput,
   FeatureEnvironment,
   McpApplyResult,
+  McpAuthenticationJob,
+  McpCommandOptionsInfo,
+  McpProviderInfo,
   McpServerEntry,
   McpServerInput,
   McpServerStatus,
@@ -73,6 +78,7 @@ import type {
   BugBashInputs,
   BugBashStreamEvent,
   ManagedWorktree,
+  FeatureDeletionWorktree,
   AddPrCommentInput,
   AddRepositoryInput,
   Session,
@@ -269,7 +275,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
       try {
         response = await doFetch(`${baseUrl}${path}`, {
           ...init,
-          ...(controller ? { signal: controller.signal } : {}),
+          ...(controller ? { signal: init?.signal
+            ? AbortSignal.any([controller.signal, init.signal])
+            : controller.signal } : {}),
         });
       } catch (error) {
         if (controller?.signal.aborted) {
@@ -348,6 +356,14 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMetaOperation: (operationId: string) =>
       request<MetaOperation>(`/meta/operations/${encodeURIComponent(operationId)}`),
     checkHealth: () => request<HealthStatus>('/health'),
+    getActiveSessions: (options?: { signal?: AbortSignal }) =>
+      request<ActiveSessionsSnapshot>('/active-sessions', options),
+    getActiveSessionDebug: (id: string, options?: { signal?: AbortSignal }) =>
+      request<ActiveSessionDebug>(`/active-sessions/${encodeURIComponent(id)}/debug`, options),
+    getAppResources: () => request<AppResourceSnapshot>('/resources'),
+    refreshResourceStorage: () => request<AppResourceSnapshot>('/resources/storage/refresh', jsonBody({})),
+    cleanResourceStorage: (category: 'logs' | 'cache') =>
+      request<ResourceCleanup>('/resources/cleanup', jsonBody({ category })),
     listRepos: () => request<Repository[]>('/repos'),
     addRepo: (input: AddRepositoryInput) =>
       request<Repository>('/repos', jsonBody(input)),
@@ -442,6 +458,88 @@ export function createApiClient(options: ApiClientOptions = {}) {
           parentGroupId: parentGroupId ?? null,
         }),
       ),
+    // Streamed variant of createPrFeature: one long-lived POST whose body is
+    // newline-delimited JSON. `{type:'status'}` lines carry the live checkout
+    // phase (favouriting → fetching → preparing) delivered to `onStatus`; the
+    // final line is `{type:'done', feature}` (resolved) or `{type:'error'}`
+    // (rejected). Used by the interactive PR picker so the overlay shows real
+    // progress instead of a static spinner.
+    createPrFeatureStreamed: async (
+      repoId: string,
+      number: number,
+      onStatus: (status: { phase: string; message: string }) => void,
+      parentFeatureId?: string | null,
+      parentGroupId?: string | null,
+    ): Promise<Feature> => {
+      const path = `/repos/${repoId}/pulls/stream`;
+      const response = await doFetch(
+        `${baseUrl}${path}`,
+        jsonBody({
+          number,
+          parentFeatureId: parentFeatureId ?? null,
+          parentGroupId: parentGroupId ?? null,
+        }),
+      );
+      if (!response.ok) {
+        throw new ApiError(response.status, await errorMessage(response, path));
+      }
+      if (!response.body) {
+        throw new ApiError(
+          0,
+          `Request failed: ${path} returned no stream. The backend may be starting up — please retry.`,
+        );
+      }
+      let feature: Feature | null = null;
+      let failure: ApiError | null = null;
+      const handle = (line: string): void => {
+        const event = JSON.parse(line) as
+          | { type: 'status'; phase: string; message: string }
+          | { type: 'done'; feature: Feature }
+          | {
+              type: 'error';
+              status: number;
+              error?: { error?: { message?: unknown } };
+            };
+        if (event.type === 'status') {
+          onStatus({ phase: event.phase, message: event.message });
+        } else if (event.type === 'done') {
+          feature = event.feature;
+        } else {
+          const message = event.error?.error?.message;
+          failure = new ApiError(
+            event.status,
+            typeof message === 'string' && message.trim().length > 0
+              ? message
+              : 'Failed to check out the pull request.',
+          );
+        }
+      };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const flush = (chunk: string): void => {
+        buffer += chunk;
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line.length > 0) handle(line);
+          newline = buffer.indexOf('\n');
+        }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        flush(decoder.decode(value, { stream: true }));
+      }
+      const tail = buffer.trim();
+      if (tail.length > 0) handle(tail);
+      if (failure) throw failure;
+      if (!feature) {
+        throw new ApiError(0, 'The pull request checkout did not complete.');
+      }
+      return feature;
+    },
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),
     getReviewBoard: (featureId: string) =>
@@ -466,6 +564,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     // session), so the browser holds a single socket for the entire board
     // instead of one per perspective. Each event is delivered to `onEvent` as
     // it arrives; resolves when the stream ends (or the signal aborts).
+    getPendingReviewBoards: () => request<string[]>('/review-board/queue'),
+    settleReviewBoardQueue: (featureId: string) =>
+      request<{ settled: boolean }>(`/features/${featureId}/review-board/queue/settle`, jsonBody({})),
     analyzeReviewBoardPerspectives: async (
       featureId: string,
       onEvent: (event: ReviewBoardPerspectiveEvent) => void,
@@ -761,10 +862,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/pr-review/comments/${threadId}/status`,
         jsonBody({ status }),
       ),
-    approvePrReview: (featureId: string) =>
+    approvePrReview: (featureId: string, input: { expectedHeadSha: string }) =>
       request<PrApprovalResult>(
         `/features/${featureId}/pr-review/approve`,
-        jsonBody({}),
+        jsonBody(input),
       ),
     exportPrReviewDescription: (featureId: string) =>
       request<PrDescriptionExportResult>(
@@ -782,6 +883,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<Feature>(`/features/${id}`, putBody({ name })),
     deleteFeature: (id: string) =>
       request<{ id: string }>(`/features/${id}`, del()),
+    previewFeatureDeletion: (id: string) =>
+      request<{ worktrees: FeatureDeletionWorktree[] }>(
+        `/features/${id}/deletion-preview`,
+      ),
     moveFeature: (input: MoveFeatureInput) =>
       request<Feature>(`/features/${input.id}/move`, jsonBody({
         targetRepoId: input.targetRepoId,
@@ -867,7 +972,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     listModels: (providerId: string) =>
       request<ModelInfo[]>(`/providers/${providerId}/models`),
-    listMcpProviders: () => request<ProviderInfo[]>('/mcp/providers'),
+    listMcpProviders: () => request<McpProviderInfo[]>('/mcp/providers'),
     getMcpServers: (providerId: string) =>
       request<ProviderMcpConfig>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
@@ -884,6 +989,39 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<ProviderMcpConfig>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
         putBody(input),
+      ),
+    removeMcpServer: (providerId: string, serverName: string) =>
+      request<ProviderMcpConfig>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}`,
+        { method: 'DELETE' },
+      ),
+    configureMcpBuiltin: (providerId: string, serverName: string, input: { arguments: string }) =>
+      request<ProviderMcpConfig>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/configure`,
+        jsonBody(input),
+      ),
+    getMcpCommandOptions: (providerId: string, serverName: string) =>
+      request<McpCommandOptionsInfo>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/options`,
+      ),
+    startMcpAuthentication: (providerId: string, serverName: string) =>
+      request<McpAuthenticationJob>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/authentication`,
+        { method: 'POST' },
+      ),
+    getMcpAuthentication: (providerId: string, serverName: string, jobId: string) =>
+      request<McpAuthenticationJob>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/authentication/${encodeURIComponent(jobId)}`,
+      ),
+    cancelMcpAuthentication: (providerId: string, serverName: string, jobId: string) =>
+      request<McpAuthenticationJob>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/authentication/${encodeURIComponent(jobId)}`,
+        { method: 'DELETE' },
+      ),
+    setMcpServerEnabled: (providerId: string, serverName: string, enabled: boolean) =>
+      request<ProviderMcpConfig>(
+        `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/enabled`,
+        putBody({ enabled }),
       ),
     setMcpToolEnabled: (
       providerId: string,
