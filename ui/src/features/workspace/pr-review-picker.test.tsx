@@ -114,17 +114,19 @@ describe('PrReviewPicker selection', () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined);
     renderPicker(client, onConfirm);
 
-    // Select the first eleven; only ten may be staged.
-    for (let i = 1; i <= 11; i += 1) {
-      fireEvent.click(
-        await screen.findByRole('button', { name: new RegExp(`^#${i}\\D`) }),
-      );
-    }
+    const choices = await screen.findAllByRole('button', { name: /^#\d+\D/ });
+    expect(choices).toHaveLength(12);
+    for (const choice of choices.slice(0, 10)) fireEvent.click(choice);
+    expect(choices[10]).toBeDisabled();
+    fireEvent.click(choices[10]);
 
     expect(screen.getByText('10 / 10')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Start review/ }));
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
-    expect((onConfirm.mock.calls[0][0] as unknown[]).length).toBe(10);
+    expect(onConfirm).toHaveBeenCalledWith(
+      pulls.slice(0, 10).map(({ number, title }) => ({ number, title })),
+      expect.any(Function),
+    );
   });
 });

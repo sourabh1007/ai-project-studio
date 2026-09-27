@@ -521,17 +521,22 @@ describe('workspace-admin-service', () => {
     expect(calls).not.toContain('prReviews.removeForFeature:f1');
   });
 
-  it('deduplicates identical session checkouts on non-Windows platforms', async () => {
+  it.each(['win32', 'linux', 'darwin'])('deduplicates session checkouts with %s path casing', async (platform) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
     try {
       const { admin, calls, flush } = harness([
-        session('s1', 'f1', { worktreePath: '/wt/shared' }),
+        session('s1', 'f1', { worktreePath: '/wt/Shared' }),
         session('s2', 'f1', { worktreePath: '/wt/shared' }),
+        session('s3', 'f1', { worktreePath: '/wt/shared' }),
       ], { withSessionWorktrees: true });
       await admin.deleteFeature('f1');
       await flush();
-      expect(calls.filter((call) => call === 'sessionWorktrees.remove:/wt/shared')).toHaveLength(1);
+      expect(calls.filter((call) => call.startsWith('sessionWorktrees.remove:'))).toEqual(
+        platform === 'win32'
+          ? ['sessionWorktrees.remove:/wt/shared']
+          : ['sessionWorktrees.remove:/wt/Shared', 'sessionWorktrees.remove:/wt/shared'],
+      );
     } finally {
       Object.defineProperty(process, 'platform', descriptor);
     }
