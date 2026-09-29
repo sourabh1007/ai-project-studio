@@ -25,6 +25,15 @@ export interface PrReviewReconciler {
 export interface PrReviewReconcilerDeps {
   reviews: PrReviewRepo;
   clock: Clock;
+  /**
+   * Optional: whether a review's feature still exists. A review whose feature
+   * was deleted is an orphan — its on-disk worktree cleanup may have failed (a
+   * Windows-common case) and left the review row behind. Such orphans resurface
+   * the deleted PR review in the pending queue and via findByPull after every
+   * restart, so the reconciler purges them here. Omitted in tests that only
+   * exercise step reconciliation.
+   */
+  featureExists?: (featureId: string) => boolean;
 }
 
 /** A step is settled once it has reached a terminal (ready/failed) state. */
@@ -53,6 +62,14 @@ export function createPrReviewReconciler(
       const failedAt = clock.isoNow();
       let reconciled = 0;
       for (const review of reviews.listAll()) {
+        // Purge reviews whose feature no longer exists: they are orphans left by
+        // a delete whose worktree cleanup failed, and would otherwise resurrect
+        // the deleted PR review after every restart.
+        if (deps.featureExists && !deps.featureExists(review.featureId)) {
+          reviews.delete(review.featureId);
+          reconciled += 1;
+          continue;
+        }
         const problemOrphaned = !isSettled(review.problemStatement);
         const graphOrphaned = !isSettled(review.changeGraph);
         if (!problemOrphaned && !graphOrphaned) {

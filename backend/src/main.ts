@@ -2390,6 +2390,7 @@ function main(): void {
   const prReviewsReconciled = createPrReviewReconciler({
     reviews: prReviewRepo,
     clock,
+    featureExists: (featureId) => featureRepo.get(featureId) !== null,
   }).reconcileOrphans();
   if (prReviewsReconciled > 0) {
     logger.info('Reconciled orphaned PR reviews from previous run', {
@@ -2480,6 +2481,10 @@ function main(): void {
       get: (featureId) => prReviewService.get(featureId),
       save: (review) => prReviewRepo.save(review),
     },
+    // Feed the reviewer the PR's already-posted threads and replies so it skips
+    // concerns already raised and treats answered ones as resolved. Lazy closure
+    // because prCommentsService is composed further below in this root.
+    prComments: { list: (featureId) => prCommentsService.list(featureId) },
     config: reviewBoardConfig,
     clock,
     ai: metaAi,

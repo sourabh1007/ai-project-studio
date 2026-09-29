@@ -4,6 +4,9 @@ import {
   buildCommonPromptVars,
   buildFindingsPrompt,
   buildSolutionDigest,
+  existingDiscussionSection,
+  renderExistingDiscussion,
+  type ExistingCommentThread,
   type SolutionNode,
 } from './review-board-prompt.js';
 import type {
@@ -165,6 +168,113 @@ describe('buildFindingsPrompt', () => {
     expect(prompt).toContain('Changed components (0): none');
     expect(prompt).toContain('Blast-radius dimensions: none');
     expect(prompt).toContain('Base branch: unknown');
+  });
+
+  it('omits the existing-discussion section when there are no threads', () => {
+    const prompt = buildFindingsPrompt({
+      board,
+      description: 'd',
+      changedPaths: ['a.cs'],
+      config: { maxContextChars: 20_000 },
+      existingThreads: [],
+    });
+    expect(prompt).not.toContain('Existing PR discussion');
+  });
+
+  it('renders existing threads and the account-for-them instructions', () => {
+    const existingThreads: ExistingCommentThread[] = [
+      {
+        path: 'src/Cache.cs',
+        line: 12,
+        status: 'active',
+        comments: [
+          { author: 'alice', body: 'Validate the cache key here.' },
+          { author: 'bob', body: 'Good point, will fix.' },
+        ],
+      },
+    ];
+    const prompt = buildFindingsPrompt({
+      board,
+      description: 'd',
+      changedPaths: ['src/Cache.cs'],
+      config: { maxContextChars: 20_000 },
+      existingThreads,
+    });
+    expect(prompt).toContain('## Existing PR discussion');
+    expect(prompt).toContain('[active] src/Cache.cs:12');
+    expect(prompt).toContain('alice: Validate the cache key here.');
+    expect(prompt).toContain('bob: Good point, will fix.');
+    expect(prompt).toContain('do NOT re-raise a concern an existing thread already');
+  });
+});
+
+describe('renderExistingDiscussion', () => {
+  it('returns an empty string when there are no threads', () => {
+    expect(renderExistingDiscussion([], 20_000)).toBe('');
+    expect(existingDiscussionSection([], 20_000)).toBe('');
+  });
+
+  it('labels PR-level threads and falls back to "reviewer" for blank authors', () => {
+    const rendered = renderExistingDiscussion(
+      [
+        {
+          path: null,
+          line: null,
+          status: 'resolved',
+          comments: [{ author: '   ', body: 'General note.' }],
+        },
+      ],
+      20_000,
+    );
+    expect(rendered).toContain('[resolved] PR-level discussion');
+    expect(rendered).toContain('reviewer: General note.');
+  });
+
+  it('anchors on path only when the line is unknown', () => {
+    const rendered = renderExistingDiscussion(
+      [
+        {
+          path: 'src/a.cs',
+          line: null,
+          status: 'active',
+          comments: [{ author: 'ann', body: 'Look here.' }],
+        },
+      ],
+      20_000,
+    );
+    expect(rendered).toContain('[active] src/a.cs');
+    expect(rendered).not.toContain('src/a.cs:');
+  });
+
+  it('clamps a very long comment body and the whole section', () => {
+    const rendered = renderExistingDiscussion(
+      [
+        {
+          path: 'src/a.cs',
+          line: 1,
+          status: 'active',
+          comments: [{ author: 'ann', body: 'x'.repeat(1000) }],
+        },
+      ],
+      50,
+    );
+    expect(rendered).toContain('…');
+    expect(rendered.length).toBeLessThanOrEqual(51);
+  });
+
+  it('caps the number of rendered threads', () => {
+    const threads: ExistingCommentThread[] = Array.from(
+      { length: 55 },
+      (_, i) => ({
+        path: `src/f${i}.cs`,
+        line: 1,
+        status: 'active' as const,
+        comments: [{ author: 'ann', body: `note ${i}` }],
+      }),
+    );
+    const rendered = renderExistingDiscussion(threads, 20_000);
+    expect(rendered).toContain('…and 5 more existing thread(s)');
+    expect(rendered).not.toContain('src/f54.cs');
   });
 });
 

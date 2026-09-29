@@ -64,6 +64,74 @@ function changedFilesDigest(paths: readonly string[], max: number): string {
   return lines.join('\n');
 }
 
+/**
+ * One review thread already present on the pull request, with its full reply
+ * chain, handed to the model as context. Kept structural (no import from the
+ * pr-comments contract) so this pure module stays decoupled.
+ */
+export interface ExistingCommentThread {
+  /** Repo-relative file the thread anchors to; null for PR-level discussion. */
+  path: string | null;
+  /** 1-based right-side line the thread anchors to; null when unanchored. */
+  line: number | null;
+  /** Whether the thread is still open or already resolved. */
+  status: 'active' | 'resolved';
+  /** Every comment in the thread, oldest first — the concern and its answers. */
+  comments: readonly { author: string | null; body: string }[];
+}
+
+/**
+ * Render the pull request's existing review threads (and every reply) so the
+ * model can (a) skip concerns already raised by an open thread and (b) treat a
+ * concern an author already answered/resolved as addressed. Returns an empty
+ * string when there are no threads, so callers add no section at all.
+ */
+export function renderExistingDiscussion(
+  threads: readonly ExistingCommentThread[],
+  maxChars: number,
+): string {
+  if (threads.length === 0) return '';
+  const lines: string[] = [];
+  const shown = threads.slice(0, 50);
+  for (const thread of shown) {
+    const anchor = thread.path
+      ? `${thread.path}${thread.line !== null ? `:${thread.line}` : ''}`
+      : 'PR-level discussion';
+    lines.push(`- [${thread.status}] ${anchor}`);
+    for (const comment of thread.comments) {
+      const author = comment.author?.trim() || 'reviewer';
+      lines.push(`  • ${author}: ${clamp(comment.body.trim(), 400)}`);
+    }
+  }
+  if (threads.length > shown.length) {
+    lines.push(`- …and ${threads.length - shown.length} more existing thread(s)`);
+  }
+  return clamp(lines.join('\n'), maxChars);
+}
+
+/**
+ * The full "existing PR discussion" prompt section — the rendered threads plus
+ * the rules that make the model account for them. Empty when there is nothing
+ * already on the PR, so prompts are unchanged when a review has no comments.
+ */
+export function existingDiscussionSection(
+  threads: readonly ExistingCommentThread[],
+  maxChars: number,
+): string {
+  const rendered = renderExistingDiscussion(threads, maxChars);
+  if (!rendered) return '';
+  return [
+    '## Existing PR discussion (already-posted comments & replies)',
+    'These review threads already exist on the pull request. Each bullet is a',
+    'thread (with its status) followed by its comments and replies, oldest first.',
+    rendered,
+    '',
+    'Account for them: do NOT re-raise a concern an existing thread already',
+    'covers, and when a reply already answers or resolves a concern, treat it as',
+    'addressed and omit that finding.',
+  ].join('\n');
+}
+
 /** The evidence contract both finding prompts share, kept identical. */
 const EVIDENCE_RULES: readonly string[] = [
   '## Rules — grounded, specific, no generic review',
@@ -100,10 +168,15 @@ export function buildFindingsPrompt(input: {
   description: string | null;
   changedPaths: readonly string[];
   config: { maxContextChars: number };
+  existingThreads?: readonly ExistingCommentThread[];
 }): string {
   const { board } = input;
   const description = clamp(
     (input.description ?? '').trim() || '(no description provided)',
+    input.config.maxContextChars,
+  );
+  const discussion = existingDiscussionSection(
+    input.existingThreads ?? [],
     input.config.maxContextChars,
   );
   const ids = board.perspectives.map((p) => p.id).join(', ');
@@ -128,6 +201,7 @@ export function buildFindingsPrompt(input: {
     '## Changed files',
     changedFilesDigest(input.changedPaths, 80),
     '',
+    ...(discussion ? [discussion, ''] : []),
     '## Perspectives you may file findings under',
     perspectiveMenu(board.perspectives),
     '',

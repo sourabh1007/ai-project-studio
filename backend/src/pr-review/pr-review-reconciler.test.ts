@@ -136,8 +136,7 @@ describe('pr-review-reconciler', () => {
     });
   });
 
-  it('leaves fully-settled reviews untouched and reports zero', () => {
-    const repo = memoryRepo([
+  it('leaves fully-settled reviews untouched and reports zero', () => {    const repo = memoryRepo([
       review({ featureId: 'ready', problem: 'ready', graph: 'ready' }),
       review({ featureId: 'failed', problem: 'ready', graph: 'failed' }),
     ]);
@@ -152,5 +151,38 @@ describe('pr-review-reconciler', () => {
       '2026-08-01T00:01:00.000Z',
     );
     expect(repo.get('failed')!.changeGraph.failure?.message).toBe('boom');
+  });
+
+  it('purges an orphaned review whose feature no longer exists', () => {
+    const repo = memoryRepo([
+      review({ featureId: 'alive', problem: 'ready', graph: 'ready' }),
+      review({ featureId: 'orphan', problem: 'ready', graph: 'ready' }),
+    ]);
+
+    const count = createPrReviewReconciler({
+      reviews: repo,
+      clock: fixedClock(NOW),
+      featureExists: (id) => id === 'alive',
+    }).reconcileOrphans();
+
+    expect(count).toBe(1);
+    expect(repo.get('orphan')).toBeNull();
+    expect(repo.get('alive')).not.toBeNull();
+  });
+
+  it('purges an orphaned review before its steps are reconciled', () => {
+    const repo = memoryRepo([
+      review({ featureId: 'orphan', problem: 'generating', graph: 'generating' }),
+    ]);
+
+    const count = createPrReviewReconciler({
+      reviews: repo,
+      clock: fixedClock(NOW),
+      featureExists: () => false,
+    }).reconcileOrphans();
+
+    expect(count).toBe(1);
+    // The row is deleted outright, not resaved as a failed review.
+    expect(repo.get('orphan')).toBeNull();
   });
 });

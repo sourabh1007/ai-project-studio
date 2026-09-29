@@ -268,10 +268,16 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
           failures.push(error);
         }
       }
+      // The PR-review row is only a DB record, so purge it regardless of whether
+      // the on-disk worktree teardown succeeded. The worktree remover resolves
+      // its path FROM this row, so it must run after the removal is attempted —
+      // but leaving the row behind on a (Windows-common) cleanup failure orphans
+      // the review, resurrecting the deleted PR review in the pending queue and
+      // via findByPull after a restart. Always drop it, then surface failures.
+      deps.prReviews?.removeForFeature(id);
       if (failures.length > 0) {
         throw new AggregateError(failures, `Feature ${id} was deleted, but worktree cleanup failed. Retry removal in Settings.`);
       }
-      deps.prReviews?.removeForFeature(id);
     };
     if (deps.background) {
       deps.background(removeWorktree);

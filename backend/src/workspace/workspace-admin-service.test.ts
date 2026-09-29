@@ -518,7 +518,9 @@ describe('workspace-admin-service', () => {
     expect(calls.filter((call) => call === 'worktrees.removeForFeature:f1')).toHaveLength(1);
     expect(calls).not.toContain('sessionWorktrees.remove:/wt/pr-1');
     expect(calls.filter((call) => call === 'sessionWorktrees.remove:/wt/session-3')).toHaveLength(1);
-    expect(calls).not.toContain('prReviews.removeForFeature:f1');
+    // The review row is a DB record, so it is purged even when the worktree
+    // teardown fails — otherwise the deleted review resurrects after a restart.
+    expect(calls).toContain('prReviews.removeForFeature:f1');
   });
 
   it.each(['win32', 'linux', 'darwin'])('deduplicates session checkouts with %s path casing', async (platform) => {

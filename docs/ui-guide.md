@@ -156,8 +156,8 @@ source/target branches, author, reviewed commit and changed-file count.
 without saved branch/author metadata use the matching remote PR when available;
 lookup failures retain the link and offer a retry rather than guessing values.
 
-Finding cards use **Post and resolve** to open an editable confirmation dialog.
-Nothing is posted until **Confirm post and resolve** is clicked. The dialog
+Finding cards use **Leave a comment** to open an editable confirmation dialog.
+Nothing is posted until **Leave comment** is clicked. The dialog
 shows the PR, exact agent-reported file and new/right-side line, and a code
 preview. When a finding cites several commentable lines, choose one explicitly.
 Older `file:line` references require confirmation of the diff side; ambiguous

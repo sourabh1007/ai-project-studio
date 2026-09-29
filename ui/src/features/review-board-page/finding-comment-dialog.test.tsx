@@ -51,11 +51,11 @@ describe('FindingCommentDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('posts edited text exactly once to the reported line and resolves only after success', async () => {
+  it('posts edited text exactly once to the reported line and resolves the finding only after success', async () => {
     const pending = deferred<PrCommentThread>();
     const { post, onPosted, onClose } = setup({ post: vi.fn().mockReturnValue(pending.promise) });
     fireEvent.change(screen.getByLabelText('Comment'), { target: { value: '  Edited suggestion  ' } });
-    const submit = screen.getByRole('button', { name: 'Confirm post and resolve' });
+    const submit = screen.getByRole('button', { name: 'Leave comment' });
     fireEvent.click(submit);
     fireEvent.click(submit);
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
@@ -74,20 +74,20 @@ describe('FindingCommentDialog', () => {
     const post = vi.fn().mockRejectedValueOnce(new Error('Provider timed out')).mockResolvedValueOnce(created);
     const { onPosted } = setup({ post });
     fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'Keep this draft' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
     await screen.findByText('Provider timed out');
     expect(onPosted).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Comment')).toHaveValue('Keep this draft');
-    expect(screen.getByRole('button', { name: 'Confirm post and resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
     fireEvent.click(screen.getByRole('checkbox', { name: /I checked the PR/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
     await waitFor(() => expect(onPosted).toHaveBeenCalledOnce());
     expect(post).toHaveBeenCalledTimes(2);
   });
 
   it('requires explicit selection among reported lines and confirmation of legacy diff side', async () => {
     const { post } = setup({ anchors: [{ ...anchor, line: 20 }, { ...anchor, legacy: true }] });
-    const submit = screen.getByRole('button', { name: 'Confirm post and resolve' });
+    const submit = screen.getByRole('button', { name: 'Leave comment' });
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/Agent-reported location/), { target: { value: '1' } });
     expect(submit).toBeDisabled();
@@ -104,33 +104,33 @@ describe('FindingCommentDialog', () => {
   ])('blocks posting when the anchor or identity is unavailable', (options) => {
     const { post } = setup(options);
     expect(screen.getByText(options.text)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Confirm post and resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
     expect(post).not.toHaveBeenCalled();
   });
 
   it('blocks blank comments', () => {
     setup();
     fireEvent.change(screen.getByLabelText('Comment'), { target: { value: ' \n ' } });
-    expect(screen.getByRole('button', { name: 'Confirm post and resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
   });
 
   it('never resolves or reposts after a successful post against a now-stale finding', async () => {
     const pending = deferred<PrCommentThread>();
     let current = true;
     const { onPosted } = setup({ current: () => current, post: vi.fn().mockReturnValue(pending.promise) });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
     current = false;
     pending.resolve(created);
     await screen.findByText(/Comment posted, but the review changed/);
     expect(onPosted).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Confirm post and resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
   });
 
   it('does not resolve a finding if the provider returns a different line', async () => {
     const { onPosted } = setup({ post: vi.fn().mockResolvedValue({ ...created, line: 20 }) });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
     await screen.findByText(/provider returned a different comment location/);
     expect(onPosted).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Confirm post and resolve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
   });
 });

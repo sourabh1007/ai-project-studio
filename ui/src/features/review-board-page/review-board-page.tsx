@@ -1574,9 +1574,9 @@ export function ReviewBoardPage({
                                 anchors: changeGraph?.status === 'ready' && graphHeadSha === board.pull.headSha
                                   ? findingCommentAnchors(f, changeGraph.nodes) : [],
                               })}
-                              title="Edit and confirm an inline PR comment before resolving this finding"
+                              title="Leave an inline comment on the pull request for this finding"
                             >
-                              <SendIcon size={14} /> Post and resolve
+                              <SendIcon size={14} /> Leave a comment
                             </button>
                             <button
                               type="button"

@@ -154,6 +154,9 @@ describe('createReviewBoardService.get', () => {
     deps.ai.runDetailed = vi.fn(() => new Promise((r) => { finish = r; }));
     const first = service.analyzePerspective('f9', 'security');
     const second = service.analyzePerspective('f9', 'security');
+    // The reviewer awaits the (empty) existing-comment fetch before launching,
+    // so flush microtasks to let runDetailed register the resolver.
+    await new Promise((r) => setTimeout(r, 0));
     finish({ text: cleanReview, sessionId: 'same' });
     expect(await first).toEqual(await second);
     expect(deps.ai.runDetailed).toHaveBeenCalledTimes(1);
@@ -475,6 +478,74 @@ describe('createReviewBoardService.analyze', () => {
     await expect(service.analyze('f9')).rejects.toThrow('HTTP 503 error');
     expect(runDetailed).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createReviewBoardService existing-PR-discussion context', () => {
+  const threads = [
+    {
+      path: 'svc/cache.cs',
+      line: 12,
+      status: 'active' as const,
+      comments: [
+        { author: 'alice', body: 'The cache key needs validation.' },
+        { author: 'bob', body: 'Agreed, fixed in the next push.' },
+      ],
+    },
+  ];
+
+  it('feeds existing threads and replies into the whole-board prompt', async () => {
+    const ai = aiReturning('```json\n[]\n```');
+    const list = vi.fn(async () => threads);
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, prComments: { list } }),
+    );
+    await service.analyze('f9');
+    expect(list).toHaveBeenCalledWith('f9');
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).toContain('## Existing PR discussion');
+    expect(request.prompt).toContain('[active] svc/cache.cs:12');
+    expect(request.prompt).toContain('alice: The cache key needs validation.');
+  });
+
+  it('feeds existing threads into a single-perspective prompt', async () => {
+    const ai = aiReturning(cleanReview);
+    const list = vi.fn(async () => threads);
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, prComments: { list } }),
+    );
+    await service.analyzePerspective('f9', 'security');
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).toContain('## Existing PR discussion');
+    expect(request.prompt).toContain('bob: Agreed, fixed in the next push.');
+  });
+
+  it('runs the review without prior-comment context when the fetch fails', async () => {
+    const ai = aiReturning('```json\n[]\n```');
+    const list = vi.fn(async () => {
+      throw new Error('provider auth failed');
+    });
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, prComments: { list } }),
+    );
+    await expect(service.analyze('f9')).resolves.toBeDefined();
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).not.toContain('## Existing PR discussion');
+  });
+
+  it('omits the discussion section for a perspective when there are no threads', async () => {
+    const ai = aiReturning(cleanReview);
+    const list = vi.fn(async () => []);
+    const service = createReviewBoardService(
+      baseDeps({ ai, inlinePrompts: true, prComments: { list } }),
+    );
+    await service.analyzePerspective('f9', 'security');
+    const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as MetaRequest;
+    expect(request.prompt).not.toContain('## Existing PR discussion');
   });
 });
 

@@ -27,7 +27,7 @@ import {
   buildEmptyBoard,
   type BuildBoardInput,
 } from './review-board-builder.js';
-import { buildAgentChatPrompt, buildCommonPromptVars, buildFindingsPrompt, buildSolutionDigest, PROBLEM_SOLUTION_PERSPECTIVE_ID, type SolutionNode } from './review-board-prompt.js';
+import { buildAgentChatPrompt, buildCommonPromptVars, buildFindingsPrompt, buildSolutionDigest, existingDiscussionSection, PROBLEM_SOLUTION_PERSPECTIVE_ID, type ExistingCommentThread, type SolutionNode } from './review-board-prompt.js';
 import {
   buildReviewPrompt,
   PERSPECTIVE_CONFIG_KEYS,
@@ -61,6 +61,15 @@ export interface ReviewBoardReviewsPort {
   save?(review: PrReview): void;
 }
 
+/**
+ * Read port over the pull request's existing review threads (and every reply),
+ * fed to the reviewer so it accounts for what has already been raised/answered.
+ * Structural on purpose so the pr-comments service satisfies it directly.
+ */
+export interface ReviewBoardCommentsPort {
+  list(featureId: string): Promise<readonly ExistingCommentThread[]>;
+}
+
 /** The instruction paired with the attachment-delivered prompt (cold path). */
 const ATTACHED_PROMPT_INSTRUCTION =
   'Follow the instructions in the attached file and reply exactly as it asks.';
@@ -70,6 +79,12 @@ export interface ReviewBoardServiceDeps {
   reviews: ReviewBoardReviewsPort;
   config: ReviewBoardConfig;
   clock: Clock;
+  /**
+   * Read port over the PR's existing review threads. Optional and best-effort:
+   * when absent (or it throws) the reviewer simply runs without prior-comment
+   * context. Wired to the pr-comments service in the composition root.
+   */
+  prComments?: ReviewBoardCommentsPort;
   /** The reusable "run an AI prompt" primitive. */
   ai: Pick<MetaRunner, 'runDetailed'>;
   /** Publishes live per-perspective activity so the UI can stream it. */
@@ -213,6 +228,22 @@ export function createReviewBoardService(
   }
   function readyReview(featureId: string): PrReview {
     return requireReviewEvidence(deps.reviews.get(featureId));
+  }
+
+  /**
+   * Best-effort fetch of the PR's existing review threads. Existing comments are
+   * pure review context, so a missing port or a provider/auth failure must never
+   * block generating the review — it just runs without prior-comment awareness.
+   */
+  async function existingThreadsFor(
+    featureId: string,
+  ): Promise<readonly ExistingCommentThread[]> {
+    if (!deps.prComments) return [];
+    try {
+      return await deps.prComments.list(featureId);
+    } catch {
+      return [];
+    }
   }
 
   /** Build the deterministic board input from a review (shared by all paths). */
@@ -416,11 +447,13 @@ export function createReviewBoardService(
       const input = toBuildInput(review);
       const deterministic = buildDeterministicFindings(input);
       const board = assembleBoard(input, deterministic);
+      const existingThreads = await existingThreadsFor(featureId);
       const prompt = buildFindingsPrompt({
         board,
         description: review.description,
         changedPaths: changedPathsOf(input),
         config: { maxContextChars: deps.config.maxContextChars },
+        existingThreads,
       });
       const text = await runPrompt(review, prompt, (text) => text, undefined, signal);
       const aiFindings = capPerspectiveFindings(
@@ -490,6 +523,16 @@ export function createReviewBoardService(
         ] as string,
         vars,
       });
+      // Give this lens the same awareness of already-posted threads/replies as
+      // the whole-board pass, so it skips concerns already raised or answered.
+      const existingThreads = await existingThreadsFor(featureId);
+      const discussion = existingDiscussionSection(
+        existingThreads,
+        deps.config.maxContextChars,
+      );
+      const promptWithDiscussion = discussion
+        ? `${prompt}\n\n${discussion}`
+        : prompt;
       // Stream what the reviewer is doing for this lens in real time. A fresh
       // metasession id (new run or self-healing attempt) lets the client reset
       // the accumulated activity for this perspective.
@@ -502,7 +545,7 @@ export function createReviewBoardService(
           line,
         });
       };
-      const parsed = await runPrompt(review, prompt,
+      const parsed = await runPrompt(review, promptWithDiscussion,
         (text) => parseValidatedPerspectiveAnalysis(text, perspectiveId), {
         perspectiveId,
         onStart: (id) => {

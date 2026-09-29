@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AppError } from '../kernel/error-types.js';
+import { AppError, NotFoundError } from '../kernel/error-types.js';
 import { createPrFeatureService } from './pr-feature-service.js';
 import type { Repository } from './repo-contract.js';
 import type { RemotePullRequest } from './remote-pr-contract.js';
@@ -27,12 +27,22 @@ function harness(overrides: {
   getPull?: () => Promise<RemotePullRequest | null>;
   findByPull?: (repoId: string, pullNumber: number) => string | null;
   find?: (featureId: string) => { repoId: string; pull: { number: number } } | null;
+  featureGet?: (id: string) => {
+    id: string;
+    name: string;
+    description: string;
+    createdAt: string;
+    summary: string | null;
+    repoId: string;
+    checkoutPath: string | null;
+  };
 } = {}) {
   const created: unknown[] = [];
   const started: unknown[] = [];
   const provisioned: unknown[] = [];
   const refreshed: string[] = [];
   const attached: string[] = [];
+  const removed: string[] = [];
   const checkoutPaths: Array<{ id: string; path: string | null }> = [];
   const existingFeature = {
     id: 'existing-f',
@@ -76,7 +86,7 @@ function harness(overrides: {
           checkoutPath: input.checkoutPath ?? null,
         };
       },
-      get: () => existingFeature,
+      get: overrides.featureGet ?? (() => existingFeature),
       setCheckoutPath: (id, path) => {
         checkoutPaths.push({ id, path });
         return { ...existingFeature, checkoutPath: path };
@@ -93,10 +103,13 @@ function harness(overrides: {
         refreshed.push(featureId);
         return { featureId } as never;
       },
+      removeForFeature: (featureId) => {
+        removed.push(featureId);
+      },
     },
     onReviewFeatureCreated: (featureId) => attached.push(featureId),
   });
-  return { svc, created, started, provisioned, refreshed, attached, checkoutPaths, existingFeature };
+  return { svc, created, started, provisioned, refreshed, attached, removed, checkoutPaths, existingFeature };
 }
 
 describe('pr-feature-service', () => {
@@ -228,6 +241,7 @@ describe('pr-feature-service', () => {
         findByPull: () => null,
         find: () => null,
         refresh: (featureId) => ({ featureId }) as never,
+        removeForFeature: () => {},
       },
     });
     await noBranch.createFromPull('r1', 12);
@@ -252,6 +266,34 @@ describe('pr-feature-service', () => {
     expect(created).toEqual([]);
     expect(started).toEqual([]);
     expect(provisioned).toEqual([]);
+  });
+
+  it('self-heals a stale review whose feature was deleted, then creates a fresh one', async () => {
+    const { svc, created, started, provisioned, removed, attached } = harness({
+      findByPull: () => 'stale-f',
+      featureGet: () => {
+        throw new NotFoundError('Unknown feature: stale-f');
+      },
+    });
+    const feature = await svc.createFromPull('r1', 12);
+    // The orphaned review is dropped, then the PR is provisioned and created afresh.
+    expect(removed).toEqual(['stale-f']);
+    expect(provisioned).toEqual([true]);
+    expect(created).toHaveLength(1);
+    expect(started).toHaveLength(1);
+    expect(attached).toEqual(['f1']);
+    expect(feature).toMatchObject({ name: 'PR #12: Add login' });
+  });
+
+  it('propagates a non-not-found error from resolving an existing review feature', async () => {
+    const { svc, removed } = harness({
+      findByPull: () => 'existing-f',
+      featureGet: () => {
+        throw new AppError('conflict', 'boom');
+      },
+    });
+    await expect(svc.createFromPull('r1', 12)).rejects.toThrow('boom');
+    expect(removed).toEqual([]);
   });
 
   it('throws NotFound when the pull request does not exist', async () => {
@@ -376,6 +418,7 @@ describe('pr-feature-service', () => {
           findByPull: () => null,
           find: () => null,
           refresh: (featureId) => ({ featureId }) as never,
+          removeForFeature: () => {},
         },
       });
       await svc.convertToPrFeature('r1', 12, 'existing-f');

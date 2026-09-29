@@ -31,7 +31,7 @@ export interface PrFeatureServiceDeps {
   ) => Promise<ProvisionedWorktree>;
   features: Pick<FeatureService, 'create' | 'get' | 'setCheckoutPath'>;
   /** Kicks off the automated AI review for the new PR feature. */
-  reviews: Pick<PrReviewService, 'start' | 'findByPull' | 'find' | 'refresh'>;
+  reviews: Pick<PrReviewService, 'start' | 'findByPull' | 'find' | 'refresh' | 'removeForFeature'>;
   /**
    * Optional: notified once, with the new feature id, right after a PR review
    * feature is created. Wired in `main.ts` to auto-attach the Review Board
@@ -91,10 +91,21 @@ export function createPrFeatureService(
     async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus) {
       const repo = deps.repos.get(repoId);
       // Opening a PR that already has a review must not create a duplicate: reuse
-      // its existing review feature (and its checked-out worktree) instead.
+      // its existing review feature (and its checked-out worktree) instead. If
+      // the review record is stale — its feature was deleted but the row was
+      // left behind (e.g. worktree cleanup failed) — self-heal by dropping the
+      // orphan and creating a fresh review rather than surfacing an opaque
+      // "Unknown feature" error in the PR picker.
       const existingFeatureId = deps.reviews.findByPull(repo.id, number);
       if (existingFeatureId) {
-        return deps.features.get(existingFeatureId);
+        try {
+          return deps.features.get(existingFeatureId);
+        } catch (error) {
+          if (!(error instanceof NotFoundError)) {
+            throw error;
+          }
+          deps.reviews.removeForFeature(existingFeatureId);
+        }
       }
       const pull = await deps.getPull(repo, number);
       if (!pull) {

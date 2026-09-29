@@ -45,11 +45,13 @@ export function FindingCommentDialog({
       setPosted(true);
       if (created.path !== anchor.path || created.line !== anchor.line) {
         setError('The provider returned a different comment location. Check the PR; this finding has not been resolved.');
-      } else if (!isCurrent()) {
-        setError('Comment posted, but the review changed while posting. The current finding has not been resolved.');
-      } else {
-        onPosted();
+        return;
       }
+      if (!isCurrent()) {
+        setError('Comment posted, but the review changed while posting. The current finding has not been resolved.');
+        return;
+      }
+      onPosted();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -59,11 +61,11 @@ export function FindingCommentDialog({
   };
 
   return (
-    <Modal title="Post and resolve" onClose={() => { if (!locked.current) onClose(); }}>
+    <Modal title="Leave a comment" onClose={() => { if (!locked.current) onClose(); }}>
       <form className="rb-post-finding" aria-busy={posting} onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <p>
           Post a comment to <a href={pullUrl} target="_blank" rel="noreferrer">PR #{pullNumber}</a>,
-          then mark this finding resolved in Review Board. The PR discussion stays open.
+          then mark this finding resolved in Review Board. The comment thread stays open on the pull request.
         </p>
         {stale && <ErrorText error="The review changed or is running. Close this dialog and use the latest finding." />}
         {!headSha && <ErrorText error="The reviewed commit is unknown. Refresh the PR and rerun the review before posting." />}
@@ -106,7 +108,7 @@ export function FindingCommentDialog({
         <div className="row modal-actions">
           <Button variant="ghost" disabled={posting} onClick={onClose}>{posted ? 'Close' : 'Cancel'}</Button>
           <Button type="submit" disabled={!canPost} loading={posting}>
-            {posting ? 'Posting comment...' : 'Confirm post and resolve'}
+            {posting ? 'Posting comment...' : 'Leave comment'}
           </Button>
         </div>
       </form>

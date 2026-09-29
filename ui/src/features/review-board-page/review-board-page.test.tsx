@@ -332,15 +332,15 @@ describe('ReviewBoardPage sign-off identity', () => {
       id: 't1', path: 'src/buffer.cpp', line: 20, status: 'active', comments: [],
     });
     render(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={value.featureId} /></ApiProvider>);
-    const action = await screen.findByRole('button', { name: 'Post and resolve' });
+    const action = await screen.findByRole('button', { name: 'Leave a comment' });
     await waitFor(() => expect(action).toBeEnabled());
     fireEvent.click(action);
-    expect(screen.getByRole('dialog', { name: 'Post and resolve' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Leave a comment' })).toBeInTheDocument();
     expect(c.addPrReviewComment).not.toHaveBeenCalled();
     expect(reviewBoardRunStore.getState(value.featureId).resolutions[finding.id]).toBeUndefined();
     fireEvent.change(screen.getByLabelText('Comment'), { target: { value: 'My edited comment' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Post and resolve' })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Leave a comment' })).toBeNull());
     expect(c.addPrReviewComment).toHaveBeenCalledOnce();
     expect(c.addPrReviewComment).toHaveBeenCalledWith(value.featureId, {
       path: 'src/buffer.cpp', line: 20, body: 'My edited comment', expectedHeadSha: 'sha-a',
@@ -371,11 +371,11 @@ describe('ReviewBoardPage sign-off identity', () => {
     c.getPrReview = vi.fn().mockResolvedValue(pr);
     c.addPrReviewComment = vi.fn().mockReturnValue(pending.promise);
     const root = render(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={featureId} /></ApiProvider>);
-    const action = await screen.findByRole('button', { name: 'Post and resolve' });
+    const action = await screen.findByRole('button', { name: 'Leave a comment' });
     await waitFor(() => expect(action).toBeEnabled());
     fireEvent.click(action);
     fireEvent.click(screen.getByRole('checkbox', { name: /This older finding/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm post and resolve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
     if (transition === 'switch') {
       root.rerender(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={replacementId} /></ApiProvider>);
     } else {
