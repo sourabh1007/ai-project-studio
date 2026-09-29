@@ -3167,6 +3167,13 @@ body.is-resizing {
   outline-offset: -1px;
 }
 
+.cg-diff-row > .cg-diff-line.cg-diff-focus {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
+  scroll-margin: 3rem;
+}
+
 .cg-diff-gutter {
   flex: none;
   width: 3.2ch;
@@ -3218,6 +3225,88 @@ body.is-resizing {
 
 .cg-inline-comment .cg-comment-actions {
   gap: 8px;
+}
+
+.md-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.md-composer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.md-composer-tabs {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.md-composer-tab {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.md-composer-tab.is-active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.md-composer-tools {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.md-composer-tool {
+  min-width: 2.2ch;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+
+.md-composer-tool:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.md-composer-tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.md-composer-preview {
+  min-height: 4.5rem;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--panel);
+}
+
+.md-composer-empty {
+  min-height: 4.5rem;
+  padding: 8px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.md-composer-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .cg-filenode-nav {

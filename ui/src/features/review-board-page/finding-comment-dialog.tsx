@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText, Modal } from '../../components/ui.js';
+import { MarkdownComposer } from '../../components/markdown-composer.js';
 import type { FindingCommentAnchor } from '../../lib/finding-comment.js';
 import type { ReviewFinding } from '../../lib/types.js';
 
@@ -94,8 +95,15 @@ export function FindingCommentDialog({
         )}
         <div className="field">
           <label htmlFor="finding-comment-body">Comment</label>
-          <textarea id="finding-comment-body" className="textarea" rows={9} value={body} disabled={posting || posted}
-            onChange={(e) => setBody(e.target.value)} />
+          <MarkdownComposer
+            id="finding-comment-body"
+            value={body}
+            onChange={setBody}
+            ariaLabel="Comment body"
+            rows={9}
+            disabled={posting || posted}
+            onSubmit={() => { if (canPost) void submit(); }}
+          />
         </div>
         <ErrorText error={error} />
         {error && !posted && (

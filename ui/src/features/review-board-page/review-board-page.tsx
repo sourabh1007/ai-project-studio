@@ -571,7 +571,7 @@ export function ReviewBoardPage({
       live.board?.pull.headSha === postTarget.board.pull.headSha &&
       live.board?.reviewUpdatedAt === postTarget.board.reviewUpdatedAt &&
       live.board?.generatedAt === postTarget.board.generatedAt &&
-      live.board?.perspectives.some((p) => p.findings.some((f) => f === postTarget.finding)) === true &&
+      live.board?.perspectives.some((p) => p.findings.some((f) => f.id === postTarget.finding.id)) === true &&
       !live.resolutions[postTarget.finding.id];
   };
   // Clicking "Open diff" on a finding opens its referenced file diffs *inline*
@@ -584,6 +584,7 @@ export function ReviewBoardPage({
     detail: string | null;
     files: { path: string; diff: string }[];
     allFiles?: boolean;
+    focus?: { path: string; line: number } | null;
   } | null>(null);
   const resolveNodeDiff = useCallback(
     (path: string): { path: string; diff: string } | null => {
@@ -645,6 +646,18 @@ export function ReviewBoardPage({
           files.push(file);
         }
       }
+      // Prefer the agent's exact RIGHT-side coordinate so the diff opens scrolled
+      // to (and highlighting) the line the finding is about, not just the top of
+      // the file. Only right-side lines have a position in the rendered diff.
+      let focus: { path: string; line: number } | null = null;
+      for (const e of finding.evidence) {
+        if (!e.location || e.location.side !== 'RIGHT') continue;
+        const file = resolveNodeDiff(e.location.path);
+        if (file) {
+          focus = { path: file.path, line: e.location.line };
+          break;
+        }
+      }
       // Even when no per-file diff is available, open the modal with the
       // finding's problem/fix framing so clicking "Open diff" always surfaces
       // context inline. (The dedicated Code Review page has been retired.)
@@ -652,6 +665,7 @@ export function ReviewBoardPage({
         title: finding.title,
         detail: finding.detail,
         files,
+        focus,
       });
     },
     [resolveNodeDiff],
@@ -1714,6 +1728,7 @@ export function ReviewBoardPage({
                       comments={comments}
                       path={file.path}
                       diff={file.diff}
+                      focusLine={diffTarget.focus?.path === file.path ? diffTarget.focus.line : null}
                     /> : <p className="rb-checked-hint">No text diff is available for this file (it may be binary or outside the captured diff limit).</p>}
                   </div>
                 </details>

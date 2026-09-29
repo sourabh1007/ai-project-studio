@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
@@ -8,6 +8,7 @@ import {
   type DiffDisplayLine,
 } from '../../lib/diff-lines.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
+import { MarkdownComposer } from '../../components/markdown-composer.js';
 import type {
   AddPrCommentInput,
   PrCommentThread,
@@ -252,14 +253,15 @@ function InlineComposer({
   };
   return (
     <div className="cg-inline-comment" role="form" aria-label={`Comment on line ${line}`}>
-      <textarea
-        className="cg-comment-input"
-        placeholder={`Comment on line ${line}…`}
+      <MarkdownComposer
         value={body}
-        onChange={(e) => setBody(e.target.value)}
-        aria-label="Comment body"
+        onChange={setBody}
+        placeholder={`Comment on line ${line}…`}
+        ariaLabel="Comment body"
         rows={3}
         autoFocus
+        disabled={posting}
+        onSubmit={() => void submit()}
       />
       <ErrorText error={comments.error} />
       <div className="cg-comment-actions">
@@ -337,12 +339,21 @@ function CommentableLines({
   comments,
   path,
   prepared,
+  focusLine,
 }: {
   comments: PrCommentsController;
   path: string;
   prepared: PreparedLine[];
+  focusLine?: number | null;
 }) {
   const [activeLine, setActiveLine] = useState<number | null>(null);
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (focusLine != null && focusRef.current) {
+      // jsdom leaves scrollIntoView undefined; guard so tests never throw.
+      focusRef.current.scrollIntoView?.({ block: 'center' });
+    }
+  }, [focusLine]);
 
   const fileThreads = comments.threads.filter((t) => t.path === path);
   const threadsByLine = new Map<number, PrCommentThread[]>();
@@ -362,10 +373,12 @@ function CommentableLines({
         const lineThreads =
           ln.rightLine !== null ? threadsByLine.get(ln.rightLine) ?? [] : [];
         const isActive = activeLine !== null && ln.rightLine === activeLine;
+        const isFocus = ln.rightLine !== null && ln.rightLine === focusLine;
         return (
           <div key={i} className="cg-diff-row">
             <div
-              className={`cg-diff-line ${DIFF_LINE_CLASS[ln.kind]}${commentable ? ' cg-diff-commentable' : ''}`}
+              ref={isFocus ? focusRef : undefined}
+              className={`cg-diff-line ${DIFF_LINE_CLASS[ln.kind]}${commentable ? ' cg-diff-commentable' : ''}${isFocus ? ' cg-diff-focus' : ''}`}
               role={commentable ? 'button' : undefined}
               tabIndex={commentable ? 0 : undefined}
               aria-label={
@@ -445,10 +458,12 @@ export function CommentableDiffLines({
   comments,
   path,
   lines,
+  focusLine,
 }: {
   comments: PrCommentsController;
   path: string;
   lines: DiffDisplayLine[];
+  focusLine?: number | null;
 }) {
   const prepared = useMemo<PreparedLine[]>(
     () =>
@@ -465,7 +480,14 @@ export function CommentableDiffLines({
       })),
     [lines],
   );
-  return <CommentableLines comments={comments} path={path} prepared={prepared} />;
+  return (
+    <CommentableLines
+      comments={comments}
+      path={path}
+      prepared={prepared}
+      focusLine={focusLine}
+    />
+  );
 }
 
 /**
@@ -545,10 +567,12 @@ export function CommentableDiff({
   comments,
   path,
   diff,
+  focusLine,
 }: {
   comments: PrCommentsController;
   path: string;
   diff: string;
+  focusLine?: number | null;
 }) {
   const api = useApi();
   const featureId = comments.featureId;
@@ -637,7 +661,12 @@ export function CommentableDiff({
             path={path}
             presentLines={presentLines}
           />
-          <CommentableDiffLines comments={comments} path={path} lines={lines} />
+          <CommentableDiffLines
+            comments={comments}
+            path={path}
+            lines={lines}
+            focusLine={focusLine}
+          />
         </>
       ) : loadingFull ? (
         <p className="muted">Loading full file…</p>
