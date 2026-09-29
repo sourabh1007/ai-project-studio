@@ -125,7 +125,8 @@ describe('pr-feature-service', () => {
 
   it('creates a feature in the PR worktree', async () => {
     const { svc, created, started, attached } = harness();
-    const feature = await svc.createFromPull('r1', 12);
+    const { feature, alreadyImported } = await svc.createFromPull('r1', 12);
+    expect(alreadyImported).toBe(false);
     expect(attached).toEqual(['f1']);
     expect(feature).toMatchObject({
       name: 'PR #12: Add login',
@@ -261,8 +262,9 @@ describe('pr-feature-service', () => {
     const { svc, created, started, provisioned, existingFeature } = harness({
       findByPull: () => 'existing-f',
     });
-    const feature = await svc.createFromPull('r1', 12);
+    const { feature, alreadyImported } = await svc.createFromPull('r1', 12);
     expect(feature).toBe(existingFeature);
+    expect(alreadyImported).toBe(true);
     expect(created).toEqual([]);
     expect(started).toEqual([]);
     expect(provisioned).toEqual([]);
@@ -275,9 +277,10 @@ describe('pr-feature-service', () => {
         throw new NotFoundError('Unknown feature: stale-f');
       },
     });
-    const feature = await svc.createFromPull('r1', 12);
+    const { feature, alreadyImported } = await svc.createFromPull('r1', 12);
     // The orphaned review is dropped, then the PR is provisioned and created afresh.
     expect(removed).toEqual(['stale-f']);
+    expect(alreadyImported).toBe(false);
     expect(provisioned).toEqual([true]);
     expect(created).toHaveLength(1);
     expect(started).toHaveLength(1);

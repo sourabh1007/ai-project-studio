@@ -8,6 +8,7 @@ const createFeatureSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   repoId: z.string().nullish(),
+  parentFeatureId: z.string().nullish(),
   parentGroupId: z.string().nullish(),
 });
 

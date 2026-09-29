@@ -116,7 +116,7 @@ function harness() {
     },
     createFromPull: async (repoId, number) => {
       reviewed.push({ repoId, number });
-      return reviewFeature;
+      return { feature: reviewFeature, alreadyImported: false };
     },
     pullLatest: async () => {
       throw new Error('not used in repo-controller tests');
@@ -353,7 +353,10 @@ describe('repo-controller', () => {
     const result = await pick(h.routes, 'post', '/repos/:id/pulls')(
       req({ params: { id: 'r1' }, body: { number: 12 } }),
     );
-    expect(result).toEqual({ status: 201, body: reviewFeature });
+    expect(result).toEqual({
+      status: 201,
+      body: { ...reviewFeature, alreadyImported: false },
+    });
     expect(h.reviewed).toContainEqual({ repoId: 'r1', number: 12 });
   });
 

@@ -1803,6 +1803,10 @@ export function Explorer({
   } | null>(null);
   const [adding, setAdding] = useState(false);
   const bulkReviewBatch = useRef<{ repoId: string; parent: Feature } | null>(null);
+  const [alreadyImported, setAlreadyImported] = useState<{
+    feature: Feature;
+    number: number;
+  } | null>(null);
   const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -2277,15 +2281,23 @@ export function Explorer({
           onConfirm={async (pulls, reportProgress) => {
             const repoId = reviewRepo.repo.id;
             if (pulls.length === 1) {
-              const feature = await api.createPrFeatureStreamed(
-                repoId,
-                pulls[0].number,
-                (status) => reportProgress(status.message),
-                reviewRepo.parentFeatureId ?? null,
-              );
-              reviewBoardRunStore.enqueueBulk([feature.id], api);
+              const { feature, alreadyImported: existed } =
+                await api.createPrFeatureStreamed(
+                  repoId,
+                  pulls[0].number,
+                  (status) => reportProgress(status.message),
+                  reviewRepo.parentFeatureId ?? null,
+                );
               features.reload();
               setReviewRepo(null);
+              if (existed) {
+                // The PR was imported before: don't silently reuse it. Surface a
+                // professional notice and let the reviewer open the existing
+                // review rather than creating a confusing duplicate.
+                setAlreadyImported({ feature, number: pulls[0].number });
+                return;
+              }
+              reviewBoardRunStore.enqueueBulk([feature.id], api);
               onOpenPrReview(feature);
               return;
             }
@@ -2295,9 +2307,15 @@ export function Explorer({
               name: bulkReviewName(),
               description: `Reviewing ${pulls.length} pull requests from ${reviewRepo.repo.name}.`,
               repoId,
+              parentFeatureId: reviewRepo.parentFeatureId ?? null,
             });
             bulkReviewBatch.current = { repoId, parent };
-            const imported: { feature: Feature; number: number; title: string }[] = [];
+            const imported: {
+              feature: Feature;
+              number: number;
+              title: string;
+              alreadyImported: boolean;
+            }[] = [];
             let items;
             try {
               items = await checkoutPulls(api, repoId, parent.id, pulls, reportProgress,
@@ -2314,6 +2332,28 @@ export function Explorer({
             setReviewRepo(null);
             bulkReviewBatch.current = null;
             onOpenBulkPrReview(parent, items);
+          }}
+        />
+      )}
+
+      {alreadyImported && (
+        <ConfirmDialog
+          title="Pull request already imported"
+          danger={false}
+          confirmLabel="Open existing review"
+          cancelLabel="Close"
+          message={
+            <p className="confirm-dialog-lead">
+              Pull request <strong>#{alreadyImported.number}</strong> has already
+              been imported. It can't be imported again — opening the existing
+              review instead.
+            </p>
+          }
+          onCancel={() => setAlreadyImported(null)}
+          onConfirm={() => {
+            const feature = alreadyImported.feature;
+            setAlreadyImported(null);
+            onOpenPrReview(feature);
           }}
         />
       )}

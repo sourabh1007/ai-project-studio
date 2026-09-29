@@ -4513,6 +4513,34 @@ body.is-resizing {
   gap: var(--space-1);
 }
 
+.pr-team-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pr-team-group-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-radius: var(--radius-sm, 4px);
+}
+
+.pr-team-group-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.pr-team-group-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .pr-list-item {
   display: flex;
   align-items: center;

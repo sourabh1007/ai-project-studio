@@ -3643,7 +3643,13 @@ function main(): void {
       .createFromPull(repositoryId, number, parentFeatureId, parentGroupId, (status) =>
         write({ type: 'status', phase: status.phase, message: status.message }),
       )
-      .then((feature) => write({ type: 'done', feature }))
+      .then((result) =>
+        write({
+          type: 'done',
+          feature: result.feature,
+          alreadyImported: result.alreadyImported,
+        }),
+      )
       .catch((error: unknown) => {
         const result = toErrorResult(error);
         write({ type: 'error', status: result.status, error: result.body });

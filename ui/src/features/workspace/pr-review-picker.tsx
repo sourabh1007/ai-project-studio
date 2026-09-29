@@ -113,7 +113,7 @@ export function PrReviewPicker({
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<'mine' | 'assigned' | 'all'>('all');
+  const [tab, setTab] = useState<'mine' | 'assigned' | 'all' | 'team'>('all');
   const [selected, setSelected] = useState<SelectedPull[]>([]);
 
   const pulls = tab === 'mine' ? mine : tab === 'assigned' ? assigned : everything;
@@ -123,6 +123,15 @@ export function PrReviewPicker({
     assigned: assigned.data?.length ?? 0,
     all: everything.data?.length ?? 0,
   };
+  // "Team members" are derived from the distinct authors of the repository's
+  // open pull requests — no configuration needed. The Team tab groups every
+  // open PR under its author so a reviewer can scan the team's work at a glance.
+  const teamCount = useMemo(
+    () =>
+      new Set((everything.data ?? []).map((pr) => pr.author ?? 'Unknown author'))
+        .size,
+    [everything.data],
+  );
 
   const selectedNumbers = useMemo(
     () => new Set(selected.map((p) => p.number)),
@@ -142,6 +151,19 @@ export function PrReviewPicker({
         .includes(q),
     );
   }, [list, query]);
+
+  // For the Team tab, cluster the filtered pull requests under their author so
+  // each team member's open work renders as its own group.
+  const teamGroups = useMemo(() => {
+    const map = new Map<string, RemotePullRequest[]>();
+    for (const pr of filtered) {
+      const key = pr.author ?? 'Unknown author';
+      const bucket = map.get(key) ?? [];
+      bucket.push(pr);
+      map.set(key, bucket);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [filtered]);
 
   function addPull(pull: SelectedPull) {
     setError(null);
@@ -202,6 +224,33 @@ export function PrReviewPicker({
       setProgress(null);
     }
   }
+
+  const renderItem = (pr: RemotePullRequest) => {
+    const isSelected = selectedNumbers.has(pr.number);
+    return (
+      <button
+        type="button"
+        key={pr.number}
+        className={`pr-list-item ${isSelected ? 'is-selected' : ''}`.trim()}
+        onClick={() => togglePull(pr)}
+        disabled={busy || (!isSelected && atLimit)}
+        title={pr.url}
+        aria-pressed={isSelected}
+      >
+        <span className={`pr-check ${isSelected ? 'is-on' : ''}`.trim()}>
+          {isSelected && <CheckIcon size={12} />}
+        </span>
+        <span className="pr-number">#{pr.number}</span>
+        <span className="pr-list-main">
+          <span className="pr-title">{pr.title}</span>
+          <span className="pr-meta">
+            {pr.sourceBranch}
+            {pr.author ? ` · ${pr.author}` : ''}
+          </span>
+        </span>
+      </button>
+    );
+  };
 
   return (
     <Modal title={`Open Pull Request · ${repo.name}`} onClose={busy ? () => {} : onClose}>
@@ -293,6 +342,21 @@ export function PrReviewPicker({
               <span className="pr-tab-count">{counts.all}</span>
             )}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'team'}
+            className={`pr-tab ${tab === 'team' ? 'is-active' : ''}`}
+            onClick={() => setTab('team')}
+            title="Open pull requests grouped by team member (author)"
+          >
+            Team
+            {everything.loading ? (
+              <Spinner size={11} label="Loading" />
+            ) : (
+              <span className="pr-tab-count">{teamCount}</span>
+            )}
+          </button>
         </div>
         {!pulls.loading && !pulls.error && (pulls.data?.length ?? 0) > 0 && (
           <input
@@ -326,32 +390,19 @@ export function PrReviewPicker({
             filtered.length === 0 && (
               <EmptyState message="No pull requests match your search." />
             )}
-          {filtered.map((pr) => {
-            const isSelected = selectedNumbers.has(pr.number);
-            return (
-              <button
-                type="button"
-                key={pr.number}
-                className={`pr-list-item ${isSelected ? 'is-selected' : ''}`.trim()}
-                onClick={() => togglePull(pr)}
-                disabled={busy || (!isSelected && atLimit)}
-                title={pr.url}
-                aria-pressed={isSelected}
-              >
-                <span className={`pr-check ${isSelected ? 'is-on' : ''}`.trim()}>
-                  {isSelected && <CheckIcon size={12} />}
-                </span>
-                <span className="pr-number">#{pr.number}</span>
-                <span className="pr-list-main">
-                  <span className="pr-title">{pr.title}</span>
-                  <span className="pr-meta">
-                    {pr.sourceBranch}
-                    {pr.author ? ` · ${pr.author}` : ''}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+          {!pulls.loading && !pulls.error && tab === 'team'
+            ? teamGroups.map(([author, prs]) => (
+                <div key={author} className="pr-team-group">
+                  <div className="pr-team-group-head">
+                    <span className="pr-team-group-name">{author}</span>
+                    <span className="pr-team-group-count">
+                      {prs.length} PR{prs.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  {prs.map(renderItem)}
+                </div>
+              ))
+            : filtered.map(renderItem)}
         </div>
 
         <div className="pr-manual">

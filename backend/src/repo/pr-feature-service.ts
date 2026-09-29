@@ -11,6 +11,18 @@ import type { ProvisionedWorktree, ProvisionStatusListener } from './pr-worktree
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
 
+/**
+ * Outcome of {@link PrFeatureService.createFromPull}. `alreadyImported` is true
+ * when an existing review feature for the pull request was reused instead of a
+ * fresh import — the caller surfaces a professional "already imported" notice
+ * (opening the existing review for a single import, or reporting it as skipped
+ * within a bulk import) rather than silently deduplicating.
+ */
+export interface CreateFromPullResult {
+  feature: Feature;
+  alreadyImported: boolean;
+}
+
 export interface PrFeatureServiceDeps {
   repos: Pick<RepoService, 'get'>;
   /** Lists a subset of a repository's open pull requests (provider-dispatched). */
@@ -54,7 +66,7 @@ export interface PrFeatureService {
     parentFeatureId?: string | null,
     parentGroupId?: string | null,
     onStatus?: ProvisionStatusListener,
-  ): Promise<Feature>;
+  ): Promise<CreateFromPullResult>;
   /**
    * Converts an existing (non-PR) feature into a PR feature in place: checks the
    * pull request out into its own worktree, repoints the feature's sessions
@@ -99,7 +111,7 @@ export function createPrFeatureService(
       const existingFeatureId = deps.reviews.findByPull(repo.id, number);
       if (existingFeatureId) {
         try {
-          return deps.features.get(existingFeatureId);
+          return { feature: deps.features.get(existingFeatureId), alreadyImported: true };
         } catch (error) {
           if (!(error instanceof NotFoundError)) {
             throw error;
@@ -139,7 +151,7 @@ export function createPrFeatureService(
         baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
       });
       deps.onReviewFeatureCreated?.(feature.id);
-      return feature;
+      return { feature, alreadyImported: false };
     },
 
     async convertToPrFeature(repoId, number, featureId) {

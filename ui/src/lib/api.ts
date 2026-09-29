@@ -470,7 +470,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       onStatus: (status: { phase: string; message: string }) => void,
       parentFeatureId?: string | null,
       parentGroupId?: string | null,
-    ): Promise<Feature> => {
+    ): Promise<{ feature: Feature; alreadyImported: boolean }> => {
       const path = `/repos/${repoId}/pulls/stream`;
       const response = await doFetch(
         `${baseUrl}${path}`,
@@ -490,11 +490,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
         );
       }
       let feature: Feature | null = null;
+      let alreadyImported = false;
       let failure: ApiError | null = null;
       const handle = (line: string): void => {
         const event = JSON.parse(line) as
           | { type: 'status'; phase: string; message: string }
-          | { type: 'done'; feature: Feature }
+          | { type: 'done'; feature: Feature; alreadyImported?: boolean }
           | {
               type: 'error';
               status: number;
@@ -504,6 +505,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
           onStatus({ phase: event.phase, message: event.message });
         } else if (event.type === 'done') {
           feature = event.feature;
+          alreadyImported = event.alreadyImported ?? false;
         } else {
           const message = event.error?.error?.message;
           failure = new ApiError(
@@ -538,7 +540,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       if (!feature) {
         throw new ApiError(0, 'The pull request checkout did not complete.');
       }
-      return feature;
+      return { feature, alreadyImported };
     },
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),

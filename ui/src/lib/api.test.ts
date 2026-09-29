@@ -1138,7 +1138,17 @@ describe('createApiClient', () => {
       { phase: 'favouriting', message: 'Marking as favourite…' },
       { phase: 'fetching', message: 'Fetching…' },
     ]);
-    expect(feature).toEqual({ id: 'f9' });
+    expect(feature).toEqual({ feature: { id: 'f9' }, alreadyImported: false });
+  });
+
+  it('reports alreadyImported when the streamed done event flags a reused review', async () => {
+    const chunks = [
+      '{"type":"done","feature":{"id":"f9"},"alreadyImported":true}',
+    ];
+    const fetchImpl: FetchLike = async () => streamResponse(chunks);
+    const client = createApiClient({ fetchImpl });
+    const result = await client.createPrFeatureStreamed('r1', 42, () => {});
+    expect(result).toEqual({ feature: { id: 'f9' }, alreadyImported: true });
   });
 
   it('rejects with the streamed error message when checkout fails', async () => {

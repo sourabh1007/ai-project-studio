@@ -145,13 +145,16 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       path: '/repos/:id/pulls',
       handler: async (req) => {
         const input = parseInput(reviewPullSchema, req.body);
-        const feature = await deps.prFeatures.createFromPull(
+        const result = await deps.prFeatures.createFromPull(
           req.params.id,
           input.number,
           input.parentFeatureId ?? null,
           input.parentGroupId ?? null,
         );
-        return { status: 201, body: feature };
+        return {
+          status: 201,
+          body: { ...result.feature, alreadyImported: result.alreadyImported },
+        };
       },
     },
   ];

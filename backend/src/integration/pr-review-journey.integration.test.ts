@@ -322,7 +322,7 @@ describe('PR review vertical journey', () => {
       defaultBranch: 'main',
     });
 
-    const feature = await h.prFeatures.createFromPull(repository.id, pull.number);
+    const { feature } = await h.prFeatures.createFromPull(repository.id, pull.number);
     expect(feature).toMatchObject({
       id: 'feature-1',
       name: 'PR #7: Make storage loading resilient',
@@ -377,11 +377,10 @@ describe('PR review vertical journey', () => {
       credits: 0.25,
     });
 
-    const sameFeature = await h.prFeatures.createFromPull(
-      repository.id,
-      pull.number,
-    );
+    const { feature: sameFeature, alreadyImported } =
+      await h.prFeatures.createFromPull(repository.id, pull.number);
     expect(sameFeature.id).toBe(feature.id);
+    expect(alreadyImported).toBe(true);
     expect(h.provisioned).toHaveLength(1);
 
     const commentState: { thread: PrCommentThread; body: string } = {
@@ -518,7 +517,7 @@ describe('PR review vertical journey', () => {
       localPath: 'C:\\work\\app',
       defaultBranch: 'main',
     });
-    const feature = await h.prFeatures.createFromPull(repository.id, pull.number);
+    const { feature } = await h.prFeatures.createFromPull(repository.id, pull.number);
     await waitForReview(h.reviews, feature.id);
 
     const initial = h.board.get(feature.id);

@@ -90,6 +90,19 @@ describe('feature-controller', () => {
     ]);
   });
 
+  it('forwards parentFeatureId when nesting a feature under a parent', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/features')(
+      req({
+        body: { name: 'Login', description: 'd', parentFeatureId: 'p1' },
+      }),
+    );
+    expect(result.status).toBe(201);
+    expect(h.created).toEqual([
+      { name: 'Login', description: 'd', parentFeatureId: 'p1' },
+    ]);
+  });
+
   it('rejects invalid create payloads', () => {
     const h = harness();
     let caught: unknown;

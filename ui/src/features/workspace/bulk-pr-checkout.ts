@@ -17,10 +17,17 @@ export async function checkoutPulls(
   parentId: string,
   pulls: SelectedPull[],
   report: (message: string) => void,
-  onImported?: (item: { feature: Feature; number: number; title: string }) => void,
-): Promise<{ feature: Feature; number: number; title: string }[]> {
+  onImported?: (item: {
+    feature: Feature;
+    number: number;
+    title: string;
+    alreadyImported: boolean;
+  }) => void,
+): Promise<
+  { feature: Feature; number: number; title: string; alreadyImported: boolean }[]
+> {
   const states = pulls.map(() => 'Queued');
-  const results = new Map<number, Feature>();
+  const results = new Map<number, { feature: Feature; alreadyImported: boolean }>();
   const failures: string[] = [];
   let finished = 0;
   const publish = () => report([
@@ -32,13 +39,15 @@ export async function checkoutPulls(
     states[index] = 'Starting checkout…';
     publish();
     try {
-      const feature = await api.createPrFeatureStreamed(repoId, pull.number, (status) => {
+      const { feature, alreadyImported } = await api.createPrFeatureStreamed(repoId, pull.number, (status) => {
         states[index] = status.message;
         publish();
       }, parentId);
-      results.set(pull.number, feature);
-      onImported?.({ feature, ...pull });
-      states[index] = onImported ? 'Imported · review queued' : 'Ready';
+      results.set(pull.number, { feature, alreadyImported });
+      onImported?.({ feature, ...pull, alreadyImported });
+      states[index] = alreadyImported
+        ? 'Already imported — skipped'
+        : onImported ? 'Imported · review queued' : 'Ready';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       states[index] = `Failed: ${message}`;
@@ -52,5 +61,8 @@ export async function checkoutPulls(
   if (failures.length) {
     throw new Error(`Some checkouts failed. Successful reviews are saved; retry to finish.\n${failures.join('\n')}`);
   }
-  return pulls.map((pull) => ({ ...pull, feature: results.get(pull.number)! }));
+  return pulls.map((pull) => {
+    const result = results.get(pull.number)!;
+    return { ...pull, feature: result.feature, alreadyImported: result.alreadyImported };
+  });
 }

@@ -129,4 +129,30 @@ describe('PrReviewPicker selection', () => {
       expect.any(Function),
     );
   });
+
+  it('groups open PRs by author in the Team tab', async () => {
+    const pulls = [
+      { number: 1, title: 'Add cache', url: 'https://github.com/acme/app/pull/1', sourceBranch: 'f/1', author: 'bianca' },
+      { number: 2, title: 'Fix retry', url: 'https://github.com/acme/app/pull/2', sourceBranch: 'f/2', author: 'aaron' },
+      { number: 3, title: 'Docs pass', url: 'https://github.com/acme/app/pull/3', sourceBranch: 'f/3', author: 'bianca' },
+      { number: 4, title: 'Chore', url: 'https://github.com/acme/app/pull/4', sourceBranch: 'f/4', author: null },
+    ];
+    const client: Partial<ApiClient> = {
+      listRepoPulls: vi.fn().mockResolvedValue(pulls),
+    };
+    renderPicker(client, vi.fn());
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Team/ }));
+
+    // Three distinct authors: aaron, bianca, and the null-author bucket.
+    const groupNames = screen
+      .getAllByText(/PRs?$/)
+      .map((el) => el.previousSibling?.textContent);
+    expect(screen.getByText('aaron')).toBeInTheDocument();
+    expect(screen.getByText('bianca')).toBeInTheDocument();
+    expect(screen.getByText('Unknown author')).toBeInTheDocument();
+    // bianca has two PRs grouped together.
+    expect(screen.getByText('2 PRs')).toBeInTheDocument();
+    expect(groupNames).toContain('aaron');
+  });
 });

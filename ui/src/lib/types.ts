@@ -1684,6 +1684,8 @@ export interface CreateFeatureInput {
   name: string;
   description: string;
   repoId?: string | null;
+  /** When set, nest the feature under this parent feature. */
+  parentFeatureId?: string | null;
   /** When set, create the feature inside this subcategory group. */
   parentGroupId?: string | null;
 }
