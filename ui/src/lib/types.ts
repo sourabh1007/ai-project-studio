@@ -849,6 +849,7 @@ export interface ReviewBoardActivity {
 export interface PrComment {
   id: string;
   author: string | null;
+  authorAvatarUrl: string | null;
   body: string;
   createdAt: string | null;
 }

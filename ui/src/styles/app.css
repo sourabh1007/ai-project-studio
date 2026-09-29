@@ -3951,9 +3951,54 @@ body.is-resizing {
 }
 
 .pr-comment-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+/* Minimized inline comment: a small round author avatar pinned at the line. */
+.pr-comment-bubble {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  margin: 2px 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.pr-comment-bubble:hover,
+.pr-comment-bubble:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  outline: none;
+}
+
+.pr-comment-bubble-resolved {
+  opacity: 0.6;
+}
+
+.pr-comment-bubble-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
 }
 
 .pr-comment-body {

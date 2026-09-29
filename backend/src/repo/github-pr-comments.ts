@@ -143,6 +143,9 @@ function mapComment(node: GhThreadCommentNode): PrComment | null {
   return {
     id: node.id,
     author: node.author?.login ?? null,
+    authorAvatarUrl: node.author?.login
+      ? `https://github.com/${node.author.login}.png`
+      : null,
     body: typeof node.body === 'string' ? node.body : '',
     createdAt:
       typeof node.createdAt === 'string' && node.createdAt

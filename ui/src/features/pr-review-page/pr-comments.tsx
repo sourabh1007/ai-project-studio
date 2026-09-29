@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
+import { Avatar } from '../../components/avatar.js';
 import {
   annotateDiffLines,
   rightSideLines,
@@ -129,11 +130,15 @@ function CommentBody({ body }: { body: string }) {
 function ThreadCard({
   thread,
   onSetStatus,
+  collapsible = false,
 }: {
   thread: PrCommentThread;
   onSetStatus: (status: PrCommentThreadStatus) => void;
+  /** When true, the thread can be minimized to a small author avatar bubble. */
+  collapsible?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const resolved = thread.status === 'resolved';
   const toggle = async () => {
     setBusy(true);
@@ -143,6 +148,31 @@ function ThreadCard({
       setBusy(false);
     }
   };
+  const lead = thread.comments[0];
+  const leadAuthor = lead?.author ?? 'Someone';
+  if (collapsible && collapsed) {
+    const preview = lead?.body ? `: ${lead.body}` : '';
+    return (
+      <button
+        type="button"
+        className={`pr-comment-bubble pr-comment-bubble-${thread.status}`}
+        onClick={() => setCollapsed(false)}
+        aria-label={`Expand comment from ${leadAuthor}`}
+        title={`${leadAuthor}${preview}`}
+      >
+        <Avatar
+          name={leadAuthor}
+          avatarUrl={lead?.authorAvatarUrl}
+          size={22}
+        />
+        {thread.comments.length > 1 ? (
+          <span className="pr-comment-bubble-count">
+            {thread.comments.length}
+          </span>
+        ) : null}
+      </button>
+    );
+  }
   return (
     <div className={`pr-comment-thread pr-comment-thread-${thread.status}`}>
       <div className="pr-comment-thread-head">
@@ -157,11 +187,28 @@ function ThreadCard({
         >
           {resolved ? 'Reopen' : 'Resolve'}
         </Button>
+        {collapsible ? (
+          <Button
+            variant="ghost"
+            onClick={() => setCollapsed(true)}
+            ariaLabel="Minimize comment"
+            title="Minimize comment"
+          >
+            Minimize
+          </Button>
+        ) : null}
       </div>
       <ul className="pr-comment-list">
         {thread.comments.map((c) => (
           <li key={c.id} className="pr-comment">
-            <span className="pr-comment-author">{c.author ?? 'Someone'}</span>
+            <span className="pr-comment-author">
+              <Avatar
+                name={c.author ?? 'Someone'}
+                avatarUrl={c.authorAvatarUrl}
+                size={18}
+              />
+              {c.author ?? 'Someone'}
+            </span>
             <CommentBody body={c.body} />
           </li>
         ))}
@@ -424,6 +471,7 @@ function CommentableLines({
                   <ThreadCard
                     key={thread.id}
                     thread={thread}
+                    collapsible
                     onSetStatus={(status) =>
                       void comments.setStatus(thread.id, status)
                     }

@@ -15,6 +15,8 @@ export interface PrComment {
   id: string;
   /** Author's display name or login; null when the provider omits it. */
   author: string | null;
+  /** URL to the author's avatar image; null when the provider omits it. */
+  authorAvatarUrl: string | null;
   body: string;
   /** ISO timestamp the comment was posted; null when unknown. */
   createdAt: string | null;

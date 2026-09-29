@@ -193,6 +193,7 @@ describe('parseThreads', () => {
         {
           id: 'C1',
           author: 'alice',
+          authorAvatarUrl: 'https://github.com/alice.png',
           body: 'nit',
           createdAt: '2026-01-01T00:00:00Z',
         },
@@ -226,6 +227,7 @@ describe('parseThreads', () => {
     expect(t.status).toBe('resolved');
     expect(t.comments[0].body).toBe('');
     expect(t.comments[0].author).toBeNull();
+    expect(t.comments[0].authorAvatarUrl).toBeNull();
     expect(t.comments[0].createdAt).toBeNull();
   });
 

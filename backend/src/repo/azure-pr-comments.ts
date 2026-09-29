@@ -70,6 +70,7 @@ export function azureStatusValue(status: PrCommentThreadStatus): string {
 interface AdoCommentAuthor {
   displayName?: string;
   uniqueName?: string;
+  imageUrl?: string;
 }
 
 interface AdoComment {
@@ -105,6 +106,7 @@ function mapComment(comment: AdoComment): PrComment | null {
     id: String(comment.id),
     author:
       comment.author?.displayName ?? comment.author?.uniqueName ?? null,
+    authorAvatarUrl: comment.author?.imageUrl ?? null,
     body: typeof comment.content === 'string' ? comment.content : '',
     createdAt:
       typeof comment.publishedDate === 'string' && comment.publishedDate

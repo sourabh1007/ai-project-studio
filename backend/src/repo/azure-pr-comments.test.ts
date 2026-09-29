@@ -43,7 +43,7 @@ const THREAD = {
       id: 1,
       content: 'nit',
       publishedDate: '2026-01-01T00:00:00Z',
-      author: { displayName: 'Alice' },
+      author: { displayName: 'Alice', imageUrl: 'https://ado/alice.png' },
       commentType: 'text',
     },
   ],
@@ -167,6 +167,7 @@ describe('mapThread', () => {
         {
           id: '1',
           author: 'Alice',
+          authorAvatarUrl: 'https://ado/alice.png',
           body: 'nit',
           createdAt: '2026-01-01T00:00:00Z',
         },
@@ -181,6 +182,7 @@ describe('mapThread', () => {
       comments: [{ id: 2, author: { uniqueName: 'a@b.com' } }],
     });
     expect(t?.comments[0].author).toBe('a@b.com');
+    expect(t?.comments[0].authorAvatarUrl).toBeNull();
     expect(t?.comments[0].body).toBe('');
     expect(t?.comments[0].createdAt).toBeNull();
     expect(t?.path).toBeNull();

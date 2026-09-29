@@ -15,7 +15,7 @@ function thread(overrides: Partial<PrCommentThread> & { id: string }): PrComment
     path: 'src/a.cs',
     line: 3,
     status: 'active',
-    comments: [{ id: `${overrides.id}-c`, author: 'alice', body: 'nit', createdAt: null }],
+    comments: [{ id: `${overrides.id}-c`, author: 'alice', authorAvatarUrl: null, body: 'nit', createdAt: null }],
     ...overrides,
   };
 }
@@ -69,6 +69,7 @@ describe('PrCommentsPanel', () => {
             {
               id: 'c1',
               author: 'alice',
+              authorAvatarUrl: null,
               body: [
                 '## Violation',
                 '',
@@ -217,6 +218,31 @@ describe('CommentableDiff', () => {
     expect(await screen.findByText('a.cs:2')).toBeInTheDocument();
     expect(screen.getByText('a.cs:99')).toBeInTheDocument();
     expect(screen.queryByText('other.cs:2')).not.toBeInTheDocument();
+  });
+
+  it('minimizes an inline thread to an author avatar bubble and expands it back', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi
+        .fn()
+        .mockResolvedValue([thread({ id: 't1', path: 'src/a.cs', line: 2 })]),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={DIFF} />}
+      </Harness>,
+    );
+    // The inline thread renders expanded with a Minimize control.
+    const minimize = await screen.findByRole('button', {
+      name: 'Minimize comment',
+    });
+    fireEvent.click(minimize);
+    // Collapsed: the anchor label is gone, replaced by an avatar bubble.
+    expect(screen.queryByText('a.cs:2')).not.toBeInTheDocument();
+    const bubble = screen.getByRole('button', {
+      name: 'Expand comment from alice',
+    });
+    fireEvent.click(bubble);
+    expect(screen.getByText('a.cs:2')).toBeInTheDocument();
   });
 
   it('reports when there is no diff to comment on', async () => {
