@@ -140,6 +140,10 @@ export interface ReviewBoardPull {
   url: string;
   /** Commit SHA under review, so the board can confirm it reflects the latest. */
   headSha: string | null;
+  /** PR author's display name or login, when known. */
+  author?: string | null;
+  /** PR author's avatar image URL, when known. */
+  authorAvatarUrl?: string | null;
 }
 
 /**

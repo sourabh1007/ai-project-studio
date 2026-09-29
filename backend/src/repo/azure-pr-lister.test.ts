@@ -49,7 +49,7 @@ const pullBody = {
       title: 'Add feature',
       sourceRefName: 'refs/heads/topic/x',
       targetRefName: 'refs/heads/main',
-      createdBy: { displayName: 'Ada' },
+      createdBy: { displayName: 'Ada', imageUrl: 'https://ado.example/ada.png' },
     },
     { pullRequestId: 7 }, // missing ref -> skipped
   ],
@@ -130,6 +130,7 @@ describe('listAzurePulls', () => {
         sourceBranch: 'topic/x',
         targetBranch: 'main',
         author: 'Ada',
+        authorAvatarUrl: 'https://ado.example/ada.png',
         isAuthor: false,
         isReviewer: false,
       },

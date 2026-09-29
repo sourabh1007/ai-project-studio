@@ -4523,8 +4523,7 @@ body.is-resizing {
   position: sticky;
   top: 0;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--space-2);
   padding: 4px 6px;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
@@ -4534,6 +4533,48 @@ body.is-resizing {
 .pr-team-group-name {
   font-weight: 600;
   font-size: 12px;
+  flex: 1;
+}
+
+/* Round avatar for PR/comment authors: image when available, initials fallback. */
+.cg-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.cg-avatar-img {
+  object-fit: cover;
+  background: var(--panel-2, var(--panel));
+}
+
+.cg-avatar-fallback {
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 70%, #3a7),
+    color-mix(in srgb, var(--accent) 40%, #37a));
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.rb-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rb-author-name {
+  font-weight: 600;
+  color: var(--text, inherit);
 }
 
 .pr-team-group-count {

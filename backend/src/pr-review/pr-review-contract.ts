@@ -239,6 +239,8 @@ export interface PrReviewPull {
   sourceBranch?: string;
   /** Provider-reported author; absent on legacy records, null when unknown. */
   author?: string | null;
+  /** Author's avatar image URL; absent on legacy records, null when unknown. */
+  authorAvatarUrl?: string | null;
 }
 
 /** Transition timestamps for a review. */

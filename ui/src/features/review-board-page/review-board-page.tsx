@@ -4,6 +4,7 @@ import { ReviewContextSummary } from './review-context-summary.js';
 import { useApi } from '../../app/api-context.js';
 import { ApiError } from '../../lib/api.js';
 import { Button, ConfirmDialog, ErrorText } from '../../components/ui.js';
+import { Avatar } from '../../components/avatar.js';
 import { useUsageStream } from '../../hooks/use-usage-stream.js';
 import { useAgentUsage } from '../../hooks/use-agent-usage.js';
 import { aggregateAgentUsage } from '../../lib/agent-usage.js';
@@ -884,6 +885,16 @@ export function ReviewBoardPage({
               </span>
             ) : null}
           </p>
+          {board.pull.author ? (
+            <p className="rb-author" title={`Opened by ${board.pull.author}`}>
+              <Avatar
+                name={board.pull.author}
+                avatarUrl={board.pull.authorAvatarUrl}
+                size={20}
+              />
+              <span className="rb-author-name">{board.pull.author}</span>
+            </p>
+          ) : null}
           {signoffNotice && (
             <p className="rb-subtitle" role="alert">
               {signoffNotice}

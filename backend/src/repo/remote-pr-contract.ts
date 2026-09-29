@@ -29,6 +29,12 @@ export interface RemotePullRequest {
   targetBranch?: string | null;
   /** Author's display name or login, when known. */
   author: string | null;
+  /**
+   * URL of the author's avatar image, when the provider exposes one. For GitHub
+   * this is derived from the author's login (`https://github.com/<login>.png`);
+   * for Azure DevOps it is the identity `imageUrl`. Null when unknown.
+   */
+  authorAvatarUrl?: string | null;
   /** True when the authenticated IDE user opened this pull request. */
   isAuthor?: boolean;
   /** True when the authenticated IDE user is a requested reviewer. */

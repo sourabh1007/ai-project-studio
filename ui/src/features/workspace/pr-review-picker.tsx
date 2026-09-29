@@ -7,6 +7,7 @@ import type {
   Repository,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
+import { Avatar } from '../../components/avatar.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { CheckIcon, CloseIcon, PlusIcon } from '../../components/icons.js';
 
@@ -241,6 +242,7 @@ export function PrReviewPicker({
           {isSelected && <CheckIcon size={12} />}
         </span>
         <span className="pr-number">#{pr.number}</span>
+        <Avatar name={pr.author} avatarUrl={pr.authorAvatarUrl} size={22} />
         <span className="pr-list-main">
           <span className="pr-title">{pr.title}</span>
           <span className="pr-meta">
@@ -394,6 +396,11 @@ export function PrReviewPicker({
             ? teamGroups.map(([author, prs]) => (
                 <div key={author} className="pr-team-group">
                   <div className="pr-team-group-head">
+                    <Avatar
+                      name={author}
+                      avatarUrl={prs[0]?.authorAvatarUrl}
+                      size={24}
+                    />
                     <span className="pr-team-group-name">{author}</span>
                     <span className="pr-team-group-count">
                       {prs.length} PR{prs.length === 1 ? '' : 's'}

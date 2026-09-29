@@ -50,6 +50,7 @@ function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | nu
     sourceBranch,
     targetBranch: item.baseRefName ?? null,
     author,
+    authorAvatarUrl: login ? `https://github.com/${login}.png` : null,
     isAuthor,
     isReviewer,
     // Only present on single-PR fetches (list requests omit the body field).

@@ -258,6 +258,8 @@ export function createReviewBoardService(
         title: review.pull.title,
         url: review.pull.url,
         headSha: review.headSha,
+        author: review.pull.author ?? null,
+        authorAvatarUrl: review.pull.authorAvatarUrl ?? null,
       },
       worktreePath: review.worktreePath,
       baseBranch: review.baseBranch,

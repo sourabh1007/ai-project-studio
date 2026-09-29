@@ -178,7 +178,7 @@ function appendActivity(activity: string[], line: string): string[] {
 interface NewReviewInput {
   featureId: string;
   repoId: string;
-  pull: { number: number; title: string; url: string; sourceBranch?: string; author?: string | null; body?: string | null };
+  pull: { number: number; title: string; url: string; sourceBranch?: string; author?: string | null; authorAvatarUrl?: string | null; body?: string | null };
   worktreePath: string;
   headSha: string | null;
   baseBranch: string | null;
@@ -194,6 +194,7 @@ function newReview(input: NewReviewInput, now: string, existingCreatedAt?: strin
       url: input.pull.url,
       sourceBranch: input.pull.sourceBranch,
       author: input.pull.author ?? null,
+      authorAvatarUrl: input.pull.authorAvatarUrl ?? null,
     },
     worktreePath: input.worktreePath,
     headSha: input.headSha,

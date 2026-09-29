@@ -385,6 +385,8 @@ export interface PrReviewPull {
   url: string;
   sourceBranch?: string;
   author?: string | null;
+  /** Author's avatar image URL; null/absent when unknown. */
+  authorAvatarUrl?: string | null;
   /** Commit SHA under review (present on the board's pull); null until known. */
   headSha?: string | null;
 }
@@ -925,6 +927,8 @@ export interface RemotePullRequest {
   sourceBranch: string;
   /** Author's display name or login, when known. */
   author: string | null;
+  /** Author's avatar image URL; null/absent when unknown. */
+  authorAvatarUrl?: string | null;
   /** True when the signed-in user opened this pull request. */
   isAuthor?: boolean;
   /** True when the signed-in user is a requested reviewer. */

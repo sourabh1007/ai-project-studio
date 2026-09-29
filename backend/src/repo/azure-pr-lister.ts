@@ -102,6 +102,7 @@ interface AdoIdentity {
   id?: string;
   uniqueName?: string;
   displayName?: string;
+  imageUrl?: string;
 }
 
 /** The signed-in Azure DevOps user, used to flag their own / assigned PRs. */
@@ -173,6 +174,7 @@ function mapPull(
     sourceBranch: stripRefsHeads(ref),
     targetBranch: pull.targetRefName ? stripRefsHeads(pull.targetRefName) : null,
     author: pull.createdBy?.displayName ?? null,
+    authorAvatarUrl: pull.createdBy?.imageUrl ?? null,
     isAuthor,
     isReviewer,
     ...(pull.description === undefined
