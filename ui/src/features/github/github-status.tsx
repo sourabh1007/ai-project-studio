@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { Spinner } from '../../components/loading.js';
+import { Avatar } from '../../components/avatar.js';
 import type { GithubStatus } from '../../lib/types.js';
 import { GithubSignInModal } from './github-signin.js';
 
@@ -66,7 +67,15 @@ export function GithubStatusBadge() {
             : 'Not signed in. Click “Sign in” to authorize this device, or re-check if you signed in elsewhere.'
         }
       >
-        <span className="gh-status-dot" aria-hidden="true" />
+        {authenticated && data?.login ? (
+          <Avatar
+            name={data.login}
+            avatarUrl={`https://github.com/${data.login}.png`}
+            size={18}
+          />
+        ) : (
+          <span className="gh-status-dot" aria-hidden="true" />
+        )}
         <span className="gh-status-label">{label}</span>
       </button>
       {authenticated && (

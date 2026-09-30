@@ -4,6 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { AzureDevOpsStatus } from '../../lib/types.js';
 import { describeAzureConnection } from '../../lib/azure.js';
 import { Spinner } from '../../components/loading.js';
+import { Avatar } from '../../components/avatar.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
 const ACCOUNT_STORAGE_KEY = 'azureDevOpsAccount';
@@ -186,7 +187,11 @@ export function AzureStatusBadge() {
           disabled={loading}
           title={tooltip}
         >
-          <span className="gh-status-dot" aria-hidden="true" />
+          {username ? (
+            <Avatar name={username} size={18} />
+          ) : (
+            <span className="gh-status-dot" aria-hidden="true" />
+          )}
           <span className="gh-status-label">
             Azure DevOps · {connectedLabel}
           </span>
