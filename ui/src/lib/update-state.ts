@@ -12,6 +12,8 @@ export type UpdateStatus =
   | 'not-available'
   | 'downloading'
   | 'downloaded'
+  | 'installing'
+  | 'restarting'
   | 'error';
 
 /** A state snapshot as sent by the main process (all fields optional/partial). */
@@ -113,8 +115,13 @@ export interface UpdateUi {
   headline: string;
   detail: string | null;
   tone: UpdateTone;
+  /** Determinate progress (a known percent, e.g. during download). */
   showProgress: boolean;
   progressPercent: number;
+  /** Indeterminate activity (checking/installing/restarting) — animate, no %. */
+  showActivity: boolean;
+  /** The download appears stalled (bytes are arriving at 0 B/s). */
+  stalled: boolean;
   /** Action availability. */
   canCheck: boolean;
   canDownload: boolean;
@@ -123,21 +130,40 @@ export interface UpdateUi {
   autoInstall: boolean;
   /** True while an update operation is in flight (for spinners). */
   busy: boolean;
+  /** Whether the user may dismiss the banner (not during in-flight work). */
+  dismissible: boolean;
+}
+
+/** True while a download is receiving no bytes despite being in progress. */
+function isStalled(state: UpdateState): boolean {
+  return (
+    state.status === 'downloading' &&
+    state.bytesPerSecond === 0 &&
+    state.transferred > 0 &&
+    (state.total === 0 || state.transferred < state.total)
+  );
 }
 
 /** Derives all UI-facing flags/labels from the raw update state. */
 export function deriveUpdateUi(state: UpdateState): UpdateUi {
   const { status } = state;
-  const busy = status === 'checking' || status === 'downloading';
+  const inFlight = status === 'downloading' || status === 'installing' || status === 'restarting';
+  const busy = status === 'checking' || inFlight;
   const hadUpdate = state.availableVersion !== null;
   const showBanner =
     status === 'available' ||
     status === 'downloading' ||
     status === 'downloaded' ||
+    status === 'installing' ||
+    status === 'restarting' ||
     (status === 'error' && hadUpdate);
 
   const tone: UpdateTone =
-    status === 'error' || state.error ? 'danger' : status === 'downloaded' ? 'success' : 'info';
+    status === 'error' || state.error
+      ? 'danger'
+      : status === 'downloaded' || status === 'installing' || status === 'restarting'
+        ? 'success'
+        : 'info';
 
   const headline = headlineFor(state);
   const detail = detailFor(state);
@@ -149,11 +175,14 @@ export function deriveUpdateUi(state: UpdateState): UpdateUi {
     tone,
     showProgress: status === 'downloading',
     progressPercent: Math.round(state.percent),
-    canCheck: status !== 'checking' && status !== 'downloading',
+    showActivity: status === 'checking' || status === 'installing' || status === 'restarting',
+    stalled: isStalled(state),
+    canCheck: status !== 'checking' && !inFlight,
     canDownload: status === 'available',
     canInstall: status === 'downloaded' || (status === 'available' && !state.canAutoInstall),
     autoInstall: state.canAutoInstall,
     busy,
+    dismissible: !inFlight,
   };
 }
 
@@ -171,6 +200,10 @@ function headlineFor(state: UpdateState): string {
       return state.availableVersion
         ? `Update ready — v${state.availableVersion}`
         : 'Update ready to install';
+    case 'installing':
+      return 'Installing update…';
+    case 'restarting':
+      return 'Restarting to finish update…';
     case 'not-available':
       return "You're up to date";
     case 'error':
@@ -186,6 +219,15 @@ function detailFor(state: UpdateState): string | null {
   }
   if (state.status === 'error') {
     return state.error ?? 'Something went wrong while updating.';
+  }
+  if (state.status === 'installing') {
+    return 'Applying the update in the background. AI Project Studio will restart on its own — no action needed.';
+  }
+  if (state.status === 'restarting') {
+    return 'Reopening AI Project Studio to finish the update…';
+  }
+  if (isStalled(state)) {
+    return 'Connection paused — waiting to resume the download…';
   }
   if (state.status === 'downloading' && state.total > 0) {
     return `${formatBytes(state.transferred)} of ${formatBytes(state.total)} · ${formatSpeed(

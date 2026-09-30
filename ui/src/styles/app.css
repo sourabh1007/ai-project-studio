@@ -11256,6 +11256,67 @@ body.is-resizing {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--success));
   transition: width 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+/* A moving sheen so an in-progress download never looks frozen, even at 0 B/s. */
+.update-banner-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: update-progress-sheen 1.4s ease-in-out infinite;
+}
+/* Stalled download: keep the bar visibly "waiting" with a gentle pulse. */
+.update-banner-progress.is-stalled .update-banner-progress-fill {
+  background: linear-gradient(90deg, var(--warning, #d29922), var(--accent));
+  animation: update-progress-pulse 1.2s ease-in-out infinite;
+}
+/* Indeterminate activity (checking / installing / restarting). */
+.update-banner-progress-indeterminate {
+  overflow: hidden;
+}
+.update-banner-progress-indeterminate .update-banner-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--success));
+  animation: update-progress-indeterminate 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes update-progress-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes update-progress-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes update-progress-indeterminate {
+  from {
+    transform: translateX(-45%);
+  }
+  to {
+    transform: translateX(260%);
+  }
 }
 
 @keyframes update-banner-in {
@@ -11326,6 +11387,14 @@ body.is-resizing {
   }
   .update-banner-progress-fill {
     transition: none;
+  }
+  .update-banner-progress-fill::after,
+  .update-banner-progress.is-stalled .update-banner-progress-fill,
+  .update-banner-progress-indeterminate .update-banner-progress-bar {
+    animation: none;
+  }
+  .update-banner-progress-indeterminate .update-banner-progress-bar {
+    width: 100%;
   }
 }
 

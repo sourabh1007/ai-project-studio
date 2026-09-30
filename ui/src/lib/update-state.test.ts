@@ -194,6 +194,62 @@ describe('deriveUpdateUi', () => {
     expect(ui.detail).toBe('v0.9.0');
   });
 
+  it('flags a stalled download and keeps it non-dismissible', () => {
+    const ui = deriveUpdateUi(
+      state({
+        status: 'downloading',
+        percent: 85,
+        transferred: 80 * 1024 * 1024,
+        total: 94 * 1024 * 1024,
+        bytesPerSecond: 0,
+      }),
+    );
+    expect(ui.stalled).toBe(true);
+    expect(ui.showProgress).toBe(true);
+    expect(ui.dismissible).toBe(false);
+    expect(ui.detail).toBe('Connection paused — waiting to resume the download…');
+  });
+
+  it('is not stalled once the whole file has transferred', () => {
+    const ui = deriveUpdateUi(
+      state({ status: 'downloading', transferred: 100, total: 100, bytesPerSecond: 0 }),
+    );
+    expect(ui.stalled).toBe(false);
+    expect(ui.detail).toBe('100 B of 100 B · 0 B/s');
+  });
+
+  it('treats zero-total downloads with received bytes as stalled', () => {
+    const ui = deriveUpdateUi(
+      state({ status: 'downloading', transferred: 50, total: 0, bytesPerSecond: 0 }),
+    );
+    expect(ui.stalled).toBe(true);
+    expect(ui.detail).toBe('Connection paused — waiting to resume the download…');
+  });
+
+  it('describes the installing phase with an indeterminate activity indicator', () => {
+    const ui = deriveUpdateUi(state({ status: 'installing', availableVersion: '0.9.0' }));
+    expect(ui.headline).toBe('Installing update…');
+    expect(ui.showActivity).toBe(true);
+    expect(ui.showProgress).toBe(false);
+    expect(ui.tone).toBe('success');
+    expect(ui.busy).toBe(true);
+    expect(ui.canCheck).toBe(false);
+    expect(ui.dismissible).toBe(false);
+    expect(ui.showBanner).toBe(true);
+    expect(ui.detail).toContain('restart on its own');
+  });
+
+  it('describes the restarting phase and hides all actions', () => {
+    const ui = deriveUpdateUi(state({ status: 'restarting', availableVersion: '0.9.0' }));
+    expect(ui.headline).toBe('Restarting to finish update…');
+    expect(ui.showActivity).toBe(true);
+    expect(ui.tone).toBe('success');
+    expect(ui.canDownload).toBe(false);
+    expect(ui.canInstall).toBe(false);
+    expect(ui.dismissible).toBe(false);
+    expect(ui.detail).toBe('Reopening AI Project Studio to finish the update…');
+  });
+
   it('marks a downloaded update ready to install', () => {
     const ui = deriveUpdateUi(
       state({ status: 'downloaded', availableVersion: '0.9.0', canAutoInstall: true }),

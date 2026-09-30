@@ -67,7 +67,7 @@ export function SoftwareUpdateSection({ embedded }: { embedded?: boolean } = {})
       {ui.showProgress && (
         <div className="update-section-progress">
           <div
-            className="update-banner-progress"
+            className={`update-banner-progress${ui.stalled ? ' is-stalled' : ''}`}
             role="progressbar"
             aria-valuenow={ui.progressPercent}
             aria-valuemin={0}
@@ -77,6 +77,19 @@ export function SoftwareUpdateSection({ embedded }: { embedded?: boolean } = {})
               className="update-banner-progress-fill"
               style={{ width: `${ui.progressPercent}%` }}
             />
+          </div>
+          {ui.detail && <p className="page-subtitle">{ui.detail}</p>}
+        </div>
+      )}
+
+      {ui.showActivity && (
+        <div className="update-section-progress">
+          <div
+            className="update-banner-progress update-banner-progress-indeterminate"
+            role="progressbar"
+            aria-label={ui.headline}
+          >
+            <div className="update-banner-progress-bar" />
           </div>
           {ui.detail && <p className="page-subtitle">{ui.detail}</p>}
         </div>

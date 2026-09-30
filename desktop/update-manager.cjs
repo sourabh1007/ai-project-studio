@@ -38,6 +38,8 @@ const Status = {
   NOT_AVAILABLE: 'not-available',
   DOWNLOADING: 'downloading',
   DOWNLOADED: 'downloaded',
+  INSTALLING: 'installing',
+  RESTARTING: 'restarting',
   ERROR: 'error',
 };
 
@@ -538,6 +540,9 @@ function runSilentInstall() {
     return false;
   }
   try {
+    // Surface the install phase so the banner animates an honest "Installing…"
+    // state instead of a frozen 100% bar while NSIS swaps the binaries.
+    setState({ status: Status.INSTALLING, percent: 100, error: null });
     const child = spawn(installerPath, ['/S', '--force-run'], {
       detached: true,
       stdio: 'ignore',
@@ -550,6 +555,9 @@ function runSilentInstall() {
       });
     });
     child.unref();
+    // The installer is attaching; tell the UI we're about to relaunch so it can
+    // show a calm "Restarting…" message with a spinner right up to the quit.
+    setState({ status: Status.RESTARTING, percent: 100, error: null });
     // Give the installer a moment to attach, then quit so it can replace files.
     setTimeout(() => {
       try {

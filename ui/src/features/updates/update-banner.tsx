@@ -29,7 +29,7 @@ export function UpdateBanner() {
         )}
         {ui.showProgress && (
           <div
-            className="update-banner-progress"
+            className={`update-banner-progress${ui.stalled ? ' is-stalled' : ''}`}
             role="progressbar"
             aria-valuenow={ui.progressPercent}
             aria-valuemin={0}
@@ -39,6 +39,15 @@ export function UpdateBanner() {
               className="update-banner-progress-fill"
               style={{ width: `${ui.progressPercent}%` }}
             />
+          </div>
+        )}
+        {ui.showActivity && (
+          <div
+            className="update-banner-progress update-banner-progress-indeterminate"
+            role="progressbar"
+            aria-label={ui.headline}
+          >
+            <div className="update-banner-progress-bar" />
           </div>
         )}
       </div>
@@ -53,7 +62,7 @@ export function UpdateBanner() {
             {ui.autoInstall ? 'Restart & install' : 'Open release page'}
           </Button>
         )}
-        {!ui.showProgress && (
+        {ui.dismissible && (
           <Button
             variant="ghost"
             onClick={() => setDismissed(true)}

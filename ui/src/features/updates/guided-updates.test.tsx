@@ -29,3 +29,23 @@ it.each([
   expect(open).toBeEnabled();
   expect(install).toHaveBeenCalledTimes(1);
 });
+
+it.each([
+  ['settings', SoftwareUpdateSection],
+  ['banner', UpdateBanner],
+] as const)('shows an animated installing phase with no dismiss/actions in %s', async (_name, Component) => {
+  (window as unknown as { desktop: unknown }).desktop = { updates: {
+    getState: async () => ({
+      status: 'installing', availableVersion: '1.0.0', canAutoInstall: true, platform: 'win32',
+    }),
+    install: vi.fn(),
+    download: vi.fn(),
+    onEvent: () => () => {},
+  } };
+  render(<Component />);
+  expect(await screen.findByText('Installing update…')).toBeInTheDocument();
+  expect(screen.getByRole('progressbar', { name: 'Installing update…' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Later' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Restart & install' })).toBeNull();
+  expect(screen.getByText(/restart on its own/)).toBeInTheDocument();
+});
