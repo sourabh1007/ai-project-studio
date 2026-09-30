@@ -7102,6 +7102,49 @@ body.is-resizing {
   color: var(--danger);
 }
 
+.tab-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  box-shadow: var(--shadow-dialog);
+  animation: modal-rise 0.1s ease-out;
+}
+
+.tab-context-item {
+  appearance: none;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.tab-context-item:hover:not(:disabled) {
+  background: var(--surface-strong);
+}
+
+.tab-context-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.tab-context-item-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
 .tab-split {
   appearance: none;
   border: none;

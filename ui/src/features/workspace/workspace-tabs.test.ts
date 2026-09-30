@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { AttachedAgent, Feature, Repository, Session } from '../../lib/types.js';
 import {
   closeWorkspaceTab,
+  closeAllWorkspaceTabs,
+  closeWorkspaceTabsToLeft,
+  closeWorkspaceTabsToRight,
   emptyWorkspaceTabsState,
   featureSubtreeIds,
   normalizeWorkspaceTabsState,
@@ -398,5 +401,60 @@ describe('workspace-tabs', () => {
       legacy as unknown as Parameters<typeof normalizeWorkspaceTabsState>[0],
     );
     expect(normalized.splitId).toBe(null);
+  });
+
+  describe('bulk close', () => {
+    const a = session({ id: 'a', featureId: 'f1' });
+    const b = session({ id: 'b', featureId: 'f1' });
+    const c = session({ id: 'c', featureId: 'f1' });
+    function threeTabs(): ReturnType<typeof emptyWorkspaceTabsState> {
+      let state = openWorkspaceTab(emptyWorkspaceTabsState(), sessionTab(a));
+      state = openWorkspaceTab(state, sessionTab(b));
+      state = openWorkspaceTab(state, sessionTab(c));
+      return state;
+    }
+
+    it('closes every tab', () => {
+      const closed = closeAllWorkspaceTabs(threeTabs());
+      expect(closed.tabs).toEqual([]);
+      expect(closed.activeId).toBe(null);
+      expect(closed.splitId).toBe(null);
+    });
+
+    it('closes tabs to the left of the target, keeping it and the right', () => {
+      const closed = closeWorkspaceTabsToLeft(threeTabs(), 'b');
+      expect(closed.tabs.map((t) => t.id)).toEqual(['b', 'c']);
+    });
+
+    it('closes tabs to the right of the target, keeping it and the left', () => {
+      const closed = closeWorkspaceTabsToRight(threeTabs(), 'b');
+      expect(closed.tabs.map((t) => t.id)).toEqual(['a', 'b']);
+    });
+
+    it('is a no-op closing left of the first tab or an unknown tab', () => {
+      const state = threeTabs();
+      expect(closeWorkspaceTabsToLeft(state, 'a')).toBe(state);
+      expect(closeWorkspaceTabsToLeft(state, 'missing')).toBe(state);
+    });
+
+    it('is a no-op closing right of the last tab or an unknown tab', () => {
+      const state = threeTabs();
+      expect(closeWorkspaceTabsToRight(state, 'c')).toBe(state);
+      expect(closeWorkspaceTabsToRight(state, 'missing')).toBe(state);
+    });
+
+    it('re-points the active tab when the active one is closed', () => {
+      let state = threeTabs();
+      state = setWorkspaceSplit(state, 'a');
+      // Active is 'c' (last opened); closing tabs to its left keeps 'c' active.
+      const closedLeft = closeWorkspaceTabsToLeft(state, 'c');
+      expect(closedLeft.activeId).toBe('c');
+      // Closing to the right of 'a' drops the active 'c'; active falls back to
+      // the last surviving tab.
+      const closedRight = closeWorkspaceTabsToRight(state, 'a');
+      expect(closedRight.tabs.map((t) => t.id)).toEqual(['a']);
+      expect(closedRight.activeId).toBe('a');
+      expect(closedRight.splitId).toBe(null);
+    });
   });
 });

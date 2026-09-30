@@ -18,6 +18,9 @@ import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import {
   closeWorkspaceTab,
+  closeAllWorkspaceTabs,
+  closeWorkspaceTabsToLeft,
+  closeWorkspaceTabsToRight,
   emptyWorkspaceTabsState,
   featureSubtreeIds,
   isWorkspaceTabsState,
@@ -29,6 +32,7 @@ import {
   removeAgentWorkspaceTabs,
   setWorkspaceSplit,
   type WorkspaceTab,
+  type WorkspaceTabsState,
 } from './workspace-tabs.js';
 
 // Heavy, view-specific bundles (xterm for terminals, recharts for the feature
@@ -402,6 +406,40 @@ export function WorkspaceView({
     setTabState((prev) => closeWorkspaceTab(prev, id));
   }
 
+  // Right-click tab menu: bulk-close actions anchored at the cursor. `tabId` is
+  // the tab that was right-clicked; the disabled state of each action depends on
+  // its position in the strip.
+  const [tabMenu, setTabMenu] = useState<{
+    tabId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  function openTabMenu(event: ReactMouseEvent, tabId: string) {
+    event.preventDefault();
+    setTabMenu({ tabId, x: event.clientX, y: event.clientY });
+  }
+  useEffect(() => {
+    if (!tabMenu) {
+      return undefined;
+    }
+    const dismiss = () => setTabMenu(null);
+    window.addEventListener('click', dismiss);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('blur', dismiss);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTabMenu(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', dismiss);
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('blur', dismiss);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [tabMenu]);
+
   // Tear a session terminal or agent board out of the IDE into its own OS
   // window. The main-process pop-out handler owns the window; we drop the
   // in-IDE tab so it lives in one place. Closing/returning the window re-opens
@@ -642,6 +680,7 @@ export function WorkspaceView({
                 style={
                   { '--feature-accent': featureColor(tabFeatureId(tab)) } as CSSProperties
                 }
+                onContextMenu={(event) => openTabMenu(event, tab.id)}
               >
                 <button
                   type="button"
@@ -708,6 +747,66 @@ export function WorkspaceView({
             ))}
           </div>
         )}
+        {tabMenu &&
+          (() => {
+            const index = tabs.findIndex((tab) => tab.id === tabMenu.tabId);
+            if (index < 0) {
+              return null;
+            }
+            const hasLeft = index > 0;
+            const hasRight = index < tabs.length - 1;
+            const menuTabId = tabMenu.tabId;
+            const runAction = (
+              action: (state: WorkspaceTabsState, id: string) => WorkspaceTabsState,
+            ) => {
+              setTabState((prev) => action(prev, menuTabId));
+              setTabMenu(null);
+            };
+            return (
+              <div
+                className="tab-context-menu"
+                role="menu"
+                style={{ left: tabMenu.x, top: tabMenu.y }}
+                onClick={(event) => event.stopPropagation()}
+                onContextMenu={(event) => event.preventDefault()}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="tab-context-item"
+                  onClick={() => runAction(closeWorkspaceTab)}
+                >
+                  Close this
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="tab-context-item"
+                  disabled={!hasLeft}
+                  onClick={() => runAction(closeWorkspaceTabsToLeft)}
+                >
+                  Close tabs to the left
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="tab-context-item"
+                  disabled={!hasRight}
+                  onClick={() => runAction(closeWorkspaceTabsToRight)}
+                >
+                  Close tabs to the right
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="tab-context-item tab-context-item-danger"
+                  onClick={() => runAction(closeAllWorkspaceTabs)}
+                >
+                  Close all
+                </button>
+              </div>
+            );
+          })()}
         <div className={`editor-body${splitTab ? ' is-split' : ''}`}>
           <div className="editor-pane">
             {splitTab && active && (

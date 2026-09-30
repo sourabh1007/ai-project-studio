@@ -315,6 +315,45 @@ export function closeWorkspaceTab(
   );
 }
 
+/** Closes every workspace tab, returning the empty state. */
+export function closeAllWorkspaceTabs(
+  _state: WorkspaceTabsState,
+): WorkspaceTabsState {
+  return emptyWorkspaceTabsState();
+}
+
+/**
+ * Closes the tabs positioned to the left of `id` (lower index), keeping the
+ * target tab and everything to its right. A no-op when `id` is unknown or
+ * already the leftmost tab.
+ */
+export function closeWorkspaceTabsToLeft(
+  state: WorkspaceTabsState,
+  id: string,
+): WorkspaceTabsState {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index <= 0) {
+    return state;
+  }
+  return buildState(state.tabs.slice(index), state.activeId, state.splitId);
+}
+
+/**
+ * Closes the tabs positioned to the right of `id` (higher index), keeping the
+ * target tab and everything to its left. A no-op when `id` is unknown or
+ * already the rightmost tab.
+ */
+export function closeWorkspaceTabsToRight(
+  state: WorkspaceTabsState,
+  id: string,
+): WorkspaceTabsState {
+  const index = state.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0 || index === state.tabs.length - 1) {
+    return state;
+  }
+  return buildState(state.tabs.slice(0, index + 1), state.activeId, state.splitId);
+}
+
 export function featureSubtreeIds(
   featureId: string,
   features: readonly Feature[],

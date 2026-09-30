@@ -389,3 +389,64 @@ describe('WorkspaceView deletion reconciliation', () => {
     expect(client.getPrReview).not.toHaveBeenCalledWith(imported.id);
   });
 });
+
+describe('WorkspaceView tab context menu', () => {
+  it('bulk-closes tabs from the right-click menu', async () => {
+    mount({
+      tabs: [featureTab(root), featureTab(child), featureTab(other)],
+      activeId: 'feature:other',
+      splitId: null,
+    });
+    await screen.findByRole('tab', { name: /Root/ });
+
+    // Right-clicking the middle tab opens the bulk-close menu.
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /Child/ }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    // Close everything to the right of Child — Other disappears.
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: 'Close tabs to the right' }),
+    );
+    await waitFor(() =>
+      expect(stored().tabs.map((tab) => tab.id)).toEqual([
+        'feature:root',
+        'feature:child',
+      ]),
+    );
+    // The menu closes after acting.
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('disables edge actions and closes all tabs', async () => {
+    mount({
+      tabs: [featureTab(root), featureTab(other)],
+      activeId: 'feature:root',
+      splitId: null,
+    });
+    await screen.findByRole('tab', { name: /Root/ });
+
+    // On the leftmost tab, "Close tabs to the left" is disabled.
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /Root/ }));
+    expect(
+      screen.getByRole('menuitem', { name: 'Close tabs to the left' }),
+    ).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close all' }));
+    await waitFor(() => expect(stored().tabs).toEqual([]));
+  });
+
+  it('dismisses the menu on Escape without closing tabs', async () => {
+    mount({
+      tabs: [featureTab(root), featureTab(other)],
+      activeId: 'feature:root',
+      splitId: null,
+    });
+    await screen.findByRole('tab', { name: /Root/ });
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: /Other/ }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    expect(stored().tabs).toHaveLength(2);
+  });
+});
