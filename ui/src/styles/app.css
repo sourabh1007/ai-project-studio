@@ -4581,6 +4581,112 @@ body.is-resizing {
   flex: 1;
 }
 
+/* Team roster editor shown at the top of the Team tab. */
+.pr-team-config {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
+.pr-team-config-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pr-team-config-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.pr-team-config-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pr-team-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pr-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 11px;
+}
+
+.pr-team-chip-name {
+  font-weight: 600;
+}
+
+.pr-team-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pr-team-chip-remove:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.pr-team-add-row {
+  display: flex;
+  gap: 6px;
+}
+
+.pr-team-add-row .input {
+  flex: 1;
+}
+
+/* Add/remove-from-team toggle on each Team-tab author group. */
+.pr-team-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pr-team-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pr-team-toggle.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
 /* Round avatar for PR/comment authors: image when available, initials fallback. */
 .cg-avatar {
   flex: 0 0 auto;

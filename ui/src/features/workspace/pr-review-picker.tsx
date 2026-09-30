@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
@@ -10,6 +10,13 @@ import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Avatar } from '../../components/avatar.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { CheckIcon, CloseIcon, PlusIcon } from '../../components/icons.js';
+import {
+  addTeamMember,
+  isTeamMember,
+  loadTeamRoster,
+  removeTeamMember,
+  saveTeamRoster,
+} from '../../lib/team-roster.js';
 
 /**
  * Extracts a pull-request number from a pasted value — either a bare number or
@@ -116,6 +123,21 @@ export function PrReviewPicker({
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'mine' | 'assigned' | 'all' | 'team'>('all');
   const [selected, setSelected] = useState<SelectedPull[]>([]);
+  // The user's saved "team" — an explicit roster of teammate names, loaded from
+  // localStorage so it persists across restarts. When set, the Team tab shows
+  // only these people's PRs; when empty, it shows everyone so the reviewer can
+  // build their team by adding authors they see.
+  const [roster, setRoster] = useState<string[]>(() =>
+    loadTeamRoster(window.localStorage),
+  );
+  const [memberDraft, setMemberDraft] = useState('');
+  useEffect(() => {
+    saveTeamRoster(window.localStorage, roster);
+  }, [roster]);
+  const addMember = (name: string) =>
+    setRoster((prev) => addTeamMember(prev, name));
+  const removeMember = (name: string) =>
+    setRoster((prev) => removeTeamMember(prev, name));
 
   const pulls = tab === 'mine' ? mine : tab === 'assigned' ? assigned : everything;
   const list = pulls.data ?? [];
@@ -124,15 +146,21 @@ export function PrReviewPicker({
     assigned: assigned.data?.length ?? 0,
     all: everything.data?.length ?? 0,
   };
-  // "Team members" are derived from the distinct authors of the repository's
-  // open pull requests — no configuration needed. The Team tab groups every
-  // open PR under its author so a reviewer can scan the team's work at a glance.
-  const teamCount = useMemo(
+  // Distinct PR authors across the repo's open pull requests, sorted — the
+  // suggestion pool for adding teammates, and the fallback grouping when no
+  // roster has been configured yet.
+  const knownAuthors = useMemo(
     () =>
-      new Set((everything.data ?? []).map((pr) => pr.author ?? 'Unknown author'))
-        .size,
+      [
+        ...new Set(
+          (everything.data ?? []).map((pr) => pr.author ?? 'Unknown author'),
+        ),
+      ].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())),
     [everything.data],
   );
+  // The Team tab shows the configured roster's members; until one is set it
+  // falls back to every distinct author so the tab is useful out of the box.
+  const teamCount = roster.length > 0 ? roster.length : knownAuthors.length;
 
   const selectedNumbers = useMemo(
     () => new Set(selected.map((p) => p.number)),
@@ -154,17 +182,24 @@ export function PrReviewPicker({
   }, [list, query]);
 
   // For the Team tab, cluster the filtered pull requests under their author so
-  // each team member's open work renders as its own group.
+  // each team member's open work renders as its own group. When a roster is
+  // configured, only rostered members' groups are shown; otherwise every author
+  // is shown so the reviewer can pick teammates to save.
   const teamGroups = useMemo(() => {
     const map = new Map<string, RemotePullRequest[]>();
     for (const pr of filtered) {
       const key = pr.author ?? 'Unknown author';
+      if (roster.length > 0 && !isTeamMember(roster, key)) {
+        continue;
+      }
       const bucket = map.get(key) ?? [];
       bucket.push(pr);
       map.set(key, bucket);
     }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered]);
+    return [...map.entries()].sort((a, b) =>
+      a[0].toLowerCase().localeCompare(b[0].toLowerCase()),
+    );
+  }, [filtered, roster]);
 
   function addPull(pull: SelectedPull) {
     setError(null);
@@ -370,6 +405,70 @@ export function PrReviewPicker({
             aria-label="Search pull requests"
           />
         )}
+        {tab === 'team' && !pulls.loading && !pulls.error && (
+          <div className="pr-team-config">
+            <div className="pr-team-config-head">
+              <span className="pr-team-config-title">My team</span>
+              <span className="pr-team-config-hint">
+                {roster.length > 0
+                  ? 'The Team tab shows only these teammates’ open PRs. Saved for next time.'
+                  : 'Add teammates to save your team and see only their PRs. Showing everyone until you do.'}
+              </span>
+            </div>
+            {roster.length > 0 && (
+              <ul className="pr-team-chips">
+                {roster.map((member) => (
+                  <li key={member} className="pr-team-chip">
+                    <Avatar name={member} size={16} />
+                    <span className="pr-team-chip-name">{member}</span>
+                    <button
+                      type="button"
+                      className="pr-team-chip-remove"
+                      aria-label={`Remove ${member} from my team`}
+                      onClick={() => removeMember(member)}
+                    >
+                      <CloseIcon size={11} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="pr-team-add-row">
+              <input
+                className="input"
+                list="pr-team-author-suggestions"
+                value={memberDraft}
+                onChange={(e) => setMemberDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && memberDraft.trim()) {
+                    addMember(memberDraft);
+                    setMemberDraft('');
+                  }
+                }}
+                placeholder="Add a teammate by name"
+                spellCheck={false}
+                aria-label="Add a teammate by name"
+              />
+              <datalist id="pr-team-author-suggestions">
+                {knownAuthors.map((author) => (
+                  <option key={author} value={author} />
+                ))}
+              </datalist>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (memberDraft.trim()) {
+                    addMember(memberDraft);
+                    setMemberDraft('');
+                  }
+                }}
+                disabled={!memberDraft.trim()}
+              >
+                <PlusIcon size={14} /> Add
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="pr-list">
           {pulls.loading && <Loader label="Loading pull requests" />}
           <ErrorText error={pulls.error} />
@@ -393,22 +492,59 @@ export function PrReviewPicker({
               <EmptyState message="No pull requests match your search." />
             )}
           {!pulls.loading && !pulls.error && tab === 'team'
-            ? teamGroups.map(([author, prs]) => (
-                <div key={author} className="pr-team-group">
-                  <div className="pr-team-group-head">
-                    <Avatar
-                      name={author}
-                      avatarUrl={prs[0]?.authorAvatarUrl}
-                      size={24}
-                    />
-                    <span className="pr-team-group-name">{author}</span>
-                    <span className="pr-team-group-count">
-                      {prs.length} PR{prs.length === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  {prs.map(renderItem)}
-                </div>
-              ))
+            ? teamGroups.length === 0
+              ? (
+                filtered.length > 0 && (
+                  <EmptyState
+                    message={
+                      roster.length > 0
+                        ? 'None of your teammates have matching open pull requests.'
+                        : 'No open pull requests found.'
+                    }
+                  />
+                )
+              )
+              : teamGroups.map(([author, prs]) => {
+                  const onTeam = isTeamMember(roster, author);
+                  return (
+                    <div key={author} className="pr-team-group">
+                      <div className="pr-team-group-head">
+                        <Avatar
+                          name={author}
+                          avatarUrl={prs[0]?.authorAvatarUrl}
+                          size={24}
+                        />
+                        <span className="pr-team-group-name">{author}</span>
+                        <span className="pr-team-group-count">
+                          {prs.length} PR{prs.length === 1 ? '' : 's'}
+                        </span>
+                        <button
+                          type="button"
+                          className={`pr-team-toggle ${onTeam ? 'is-on' : ''}`.trim()}
+                          onClick={() =>
+                            onTeam ? removeMember(author) : addMember(author)
+                          }
+                          title={
+                            onTeam
+                              ? `Remove ${author} from my team`
+                              : `Add ${author} to my team`
+                          }
+                        >
+                          {onTeam ? (
+                            <>
+                              <CheckIcon size={12} /> On team
+                            </>
+                          ) : (
+                            <>
+                              <PlusIcon size={12} /> Add
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {prs.map(renderItem)}
+                    </div>
+                  );
+                })
             : filtered.map(renderItem)}
         </div>
 

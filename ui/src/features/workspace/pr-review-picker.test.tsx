@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import { PrReviewPicker, parsePullNumber } from './pr-review-picker.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { Repository } from '../../lib/types.js';
+import { TEAM_ROSTER_STORAGE_KEY } from '../../lib/team-roster.js';
 
 const repo: Repository = {
   id: 'r1',
@@ -39,6 +40,9 @@ describe('parsePullNumber', () => {
 });
 
 describe('PrReviewPicker selection', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
   function renderPicker(
     client: Partial<ApiClient>,
     onConfirm: (
@@ -154,5 +158,40 @@ describe('PrReviewPicker selection', () => {
     // bianca has two PRs grouped together.
     expect(screen.getByText('2 PRs')).toBeInTheDocument();
     expect(groupNames).toContain('aaron');
+  });
+
+  it('saves a team roster that filters the Team tab and persists to storage', async () => {
+    const pulls = [
+      { number: 1, title: 'Add cache', url: 'https://github.com/acme/app/pull/1', sourceBranch: 'f/1', author: 'bianca' },
+      { number: 2, title: 'Fix retry', url: 'https://github.com/acme/app/pull/2', sourceBranch: 'f/2', author: 'aaron' },
+      { number: 3, title: 'Docs pass', url: 'https://github.com/acme/app/pull/3', sourceBranch: 'f/3', author: 'bianca' },
+    ];
+    const client: Partial<ApiClient> = {
+      listRepoPulls: vi.fn().mockResolvedValue(pulls),
+    };
+    renderPicker(client, vi.fn());
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Team/ }));
+    // Both authors show before a roster is configured.
+    expect(screen.getByText('aaron')).toBeInTheDocument();
+    expect(screen.getByText('bianca')).toBeInTheDocument();
+
+    // Add aaron to the team from his group header.
+    fireEvent.click(screen.getByTitle('Add aaron to my team'));
+
+    // The Team tab now shows only aaron; bianca is filtered out.
+    expect(screen.getAllByText('aaron').length).toBeGreaterThan(0);
+    expect(screen.queryByText('bianca')).not.toBeInTheDocument();
+    // The roster persisted to localStorage for next time.
+    expect(
+      JSON.parse(window.localStorage.getItem(TEAM_ROSTER_STORAGE_KEY) ?? '[]'),
+    ).toEqual(['aaron']);
+
+    // Removing aaron via the roster chip restores the everyone view.
+    fireEvent.click(screen.getByLabelText('Remove aaron from my team'));
+    expect(screen.getByText('bianca')).toBeInTheDocument();
+    expect(
+      JSON.parse(window.localStorage.getItem(TEAM_ROSTER_STORAGE_KEY) ?? '[]'),
+    ).toEqual([]);
   });
 });
