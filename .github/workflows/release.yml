@@ -119,14 +119,15 @@ jobs:
           AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
           AZURE_CODE_SIGNING_PROFILE: ${{ secrets.AZURE_CODE_SIGNING_PROFILE }}
 
-      - name: Build macOS installer (unsigned)
+      - name: Build macOS installer (ad-hoc signed, unnotarized)
         if: runner.os == 'macOS'
         working-directory: desktop
         run: npm run dist:mac
-        env:
-          # No Apple Developer Program membership yet; skip signing-cert
-          # auto-discovery so the build doesn't fail hunting for an identity.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        # electron-builder `mac.identity: '-'` (electron-builder.yml) forces an
+        # ad-hoc signature with no Developer-ID keychain lookup, so no
+        # CSC_IDENTITY_AUTO_DISCOVERY override is needed. Ad-hoc signing keeps
+        # Apple Silicon from rejecting the download as "damaged"; the build stays
+        # unnotarized and behind the quarantine prompt until real signing lands.
 
       - name: Record internal candidate provenance
         run: node desktop/scripts/release-candidate.cjs

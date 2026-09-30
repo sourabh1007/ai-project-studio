@@ -83,8 +83,19 @@ mac:
     - dmg
   category: public.app-category.developer-tools
   artifactName: AI-Project-Studio-${version}-mac-${arch}.${ext}
+  # These prereleases have no Apple Developer ID, so they can't be notarized.
+  # A *fully unsigned* app is rejected by Gatekeeper on Apple Silicon with the
+  # misleading "app is damaged and can't be opened" error (arm64 requires every
+  # executable to carry at least an ad-hoc signature to run at all). Ad-hoc
+  # signing (identity "-") produces a valid signature with no developer identity:
+  # the download instead shows the ordinary "unidentified developer" prompt and
+  # opens after the quarantine flag is cleared (see docs/releases notes). Hardened
+  # Runtime must be off for an ad-hoc/unsigned build or the app may fail to launch.
+  identity: '-'
+  hardenedRuntime: false
 
-# macOS candidates are unsigned and cannot be promoted to production until
-# signing, notarization, and exact-artifact verification are configured.
+# macOS candidates are ad-hoc signed only (no Developer ID / notarization) and
+# cannot be promoted to production until real signing, notarization, and
+# exact-artifact verification are configured.
 dmg:
   sign: false

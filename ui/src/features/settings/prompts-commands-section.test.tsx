@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -50,7 +50,14 @@ it('renders prompt editors without the heading when embedded and saves edits', a
   expect(screen.getByText(/Every prompt and command the IDE sends/)).toBeInTheDocument();
   const editor = screen.getByLabelText('Feature task-plan generation prompt template');
   fireEvent.change(editor, { target: { value: 'custom prompt' } });
-  fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0]);
+  // Scope the Save click to this field's own entry (not a positional [0], which
+  // is order-fragile) and wait until the edit has marked it dirty/enabled before
+  // clicking — otherwise a slow render can click a still-disabled button, which
+  // is a no-op and never calls updateConfig.
+  const entry = editor.closest('.prompt-entry') as HTMLElement;
+  const save = within(entry).getByRole('button', { name: 'Save' });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
   await waitFor(() => expect(client.updateConfig).toHaveBeenCalledWith('featureTasks', { promptTemplate: 'custom prompt' }));
 });
 
