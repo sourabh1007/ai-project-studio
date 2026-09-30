@@ -309,6 +309,7 @@ import {
 } from './meta/warm-route-policy.js';
 import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
 import { createMcpUsageRepo } from './persistence/mcp-usage-repo.js';
+import { createMcpAuthObservationRepo } from './persistence/mcp-auth-observation-repo.js';
 import { createMetaOperationRepo } from './persistence/meta-operation-repo.js';
 import { createMetaOperationOwnership } from './meta/meta-operation-ownership.js';
 import { createMetaOperationPhysicalOwnership } from './meta/meta-operation-physical-ownership.js';
@@ -832,6 +833,7 @@ function main(): void {
   const usageCaptureRepo = createUsageCaptureRepo(db);
   const metaUsageRepo = createMetaUsageRepo(db);
   const mcpUsageRepo = createMcpUsageRepo(db);
+  const mcpAuthObservationRepo = createMcpAuthObservationRepo(db);
   const activeSessionsConfig = config[ACTIVE_SESSIONS_NAMESPACE] as ActiveSessionsConfig;
   const metaDebugTracker = createMetaDebugTracker(activeSessionsConfig);
   const persistedMetaOperations = createMetaOperationRepo(db);
@@ -2327,6 +2329,7 @@ function main(): void {
     authenticationTimeoutMs: mcpConfig.nativeAuthTimeoutMs ?? mcpDefaults.nativeAuthTimeoutMs!,
     now: () => clock.now(),
     maxAuthObservations: mcpConfig.authObservationMaxEntries ?? mcpDefaults.authObservationMaxEntries!,
+    authObservationStore: mcpAuthObservationRepo,
     studio: {
       name: STUDIO_MCP_SERVER_NAME,
       spec: {

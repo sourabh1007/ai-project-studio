@@ -15,7 +15,7 @@ import type {
   McpApplyResult, McpCapabilities, McpConfigDocument, McpConfigFileStore,
   McpOperation, McpProviderInfo, McpServerEntry, McpServerInput,
   McpToolEntry, McpToolInspector, ProviderMcpConfig,
-  McpServerStatus, McpToolInspection,
+  McpServerStatus, McpToolInspection, McpAuthObservationStore,
 } from './mcp-contract.js';
 
 export interface McpCategorySource {
@@ -63,6 +63,7 @@ export interface McpCategoryServiceDeps {
   authenticationTimeoutMs?: number;
   now: () => Date;
   maxAuthObservations: number;
+  authObservationStore?: McpAuthObservationStore;
   studio: { name: string; spec: Record<string, unknown>; tools: McpToolEntry[]; probe?: () => Promise<McpServerStatus> };
 }
 
@@ -172,6 +173,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
   const writes = deps.writes ?? createMcpConfigWrites();
   const inspections = new Map<string, McpServerEntry>();
   const authObservations = new Map<string, NonNullable<McpServerEntry['authState']>>();
+  for (const { key, state } of deps.authObservationStore?.load() ?? []) authObservations.set(key, state);
   let activeProbes = 0;
 
   function nativeConfiguration(entry: McpServerEntry): Record<string, unknown> {
@@ -441,7 +443,12 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
         const key = authKey(id, entry, canonical ?? entry.builtinName!, launch!);
         authObservations.delete(key);
         authObservations.set(key, structuredClone(state));
-        if (authObservations.size > deps.maxAuthObservations) authObservations.delete(authObservations.keys().next().value!);
+        deps.authObservationStore?.put(key, structuredClone(state));
+        if (authObservations.size > deps.maxAuthObservations) {
+          const evicted = authObservations.keys().next().value!;
+          authObservations.delete(evicted);
+          deps.authObservationStore?.delete(evicted);
+        }
         entry = { ...entry, authState: state, commandPreview: mcpCommandPreview(launch!) };
       }
       const allow = !native && source.supportsToolAllowList ? entry.spec.tools : undefined;

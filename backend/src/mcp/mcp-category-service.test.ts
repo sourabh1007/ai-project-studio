@@ -164,6 +164,45 @@ describe('MCP categories and observational reads', () => {
     expect(config.servers.find((entry) => entry.builtinName === 'kusto')!.authState!.state).toBe('ready');
   });
 
+  function fakeStore() {
+    const map = new Map<string, import('./mcp-contract.js').McpAuthObservation>();
+    return {
+      map,
+      load: vi.fn(() => [...map.entries()].map(([key, state]) => ({ key, state }))),
+      put: vi.fn((key: string, state: import('./mcp-contract.js').McpAuthObservation) => { map.delete(key); map.set(key, state); }),
+      delete: vi.fn((key: string) => { map.delete(key); }),
+    };
+  }
+
+  it('persists observations through the store and reloads them on a fresh service', async () => {
+    const store = fakeStore();
+    const runtime = { resolve: (name: string) => ({ supported: true as const, launch: { command: 'agency.exe', args: ['mcp', name] } }) };
+    const first = withSetup({ 'agency-native': { mcps: { builtins: { ado: {} } } } }, { authObservationStore: store });
+    first.categories[0].builtinRuntime = runtime;
+    await first.service.inspectServer('agency', 'native-builtins:ado');
+    expect(store.put).toHaveBeenCalledTimes(1);
+    expect(store.map.size).toBe(1);
+
+    const second = withSetup({ 'agency-native': { mcps: { builtins: { ado: {} } } } }, { authObservationStore: store });
+    second.categories[0].builtinRuntime = runtime;
+    const config = await second.service.getServers('agency');
+    expect(store.load).toHaveBeenCalled();
+    expect(config.servers.find((entry) => entry.builtinName === 'ado')!.authState!.state).toBe('ready');
+  });
+
+  it('evicts the oldest observation from the store when the cache is bounded', async () => {
+    const store = fakeStore();
+    const s = withSetup({ 'agency-native': { mcps: { builtins: { ado: {}, kusto: {} } } } }, { maxAuthObservations: 1, authObservationStore: store });
+    s.categories[0].builtinRuntime = { resolve: (name) => ({ supported: true, launch: { command: 'agency.exe', args: ['mcp', name] } }) };
+    await s.service.inspectServer('agency', 'native-builtins:ado');
+    await s.service.inspectServer('agency', 'native-builtins:kusto');
+    expect(store.delete).toHaveBeenCalledTimes(1);
+    expect(store.map.size).toBe(1);
+    const config = await s.service.getServers('agency');
+    expect(config.servers.find((entry) => entry.builtinName === 'ado')!.authState!.state).toBe('unknown');
+    expect(config.servers.find((entry) => entry.builtinName === 'kusto')!.authState!.state).toBe('ready');
+  });
+
   it('enriches configured builtins from installed public catalog descriptions without rewriting native specs or custom aliases', async () => {
     const declaration = {
       mcps: {

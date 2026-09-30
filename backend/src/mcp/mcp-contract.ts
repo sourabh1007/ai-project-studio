@@ -155,6 +155,15 @@ export interface McpToolInspection extends McpToolDiscovery {
   tools: Array<Omit<McpToolEntry, 'enabled'>>;
 }
 
+export type McpAuthObservation = NonNullable<McpServerEntry['authState']>;
+
+/** Durable store for the last-known native auth observation per server fingerprint. */
+export interface McpAuthObservationStore {
+  load(): ReadonlyArray<{ key: string; state: McpAuthObservation }>;
+  put(key: string, state: McpAuthObservation): void;
+  delete(key: string): void;
+}
+
 export interface McpAuthenticationJob {
   id: string;
   serverName: string;

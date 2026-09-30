@@ -419,6 +419,16 @@ const USAGE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'mcp_auth_observations',
+    ddl: `CREATE TABLE IF NOT EXISTS mcp_auth_observations (
+    key TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('unknown', 'required', 'expired', 'ready')),
+    checked_at TEXT,
+    message TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+  )`,
+  },
+  {
     name: 'meta_usage_records',
     ddl: `CREATE TABLE IF NOT EXISTS meta_usage_records (
     session_id TEXT PRIMARY KEY,
