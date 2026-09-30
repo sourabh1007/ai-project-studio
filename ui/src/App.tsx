@@ -15,6 +15,7 @@ import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
+import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
 import { ViewSkeleton } from './components/view-skeleton.js';
 
@@ -487,6 +488,7 @@ export function App() {
           <TopLoadingBar />
           <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
+          <AgencyUpdatePopup />
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
               {view === 'workspace' ? (

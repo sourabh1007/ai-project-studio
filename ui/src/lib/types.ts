@@ -14,6 +14,12 @@ export type AgencyUpgradePhase = 'idle' | 'upgrading' | 'done' | 'error';
 export interface AgencyUpgradeState {
   phase: AgencyUpgradePhase;
   message?: string;
+  /** True when the last successful upgrade applied a different version. */
+  updated?: boolean;
+  /** Agency version after the upgrade, when the backend could read one. */
+  version?: string | null;
+  /** Agency version before the upgrade, when the backend could read one. */
+  previousVersion?: string | null;
 }
 
 /** Lightweight backend liveness probe payload (`GET /health`). */

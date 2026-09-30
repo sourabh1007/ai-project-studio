@@ -11472,6 +11472,44 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
+.agency-update-popup {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-2) var(--space-3);
+  padding: 8px var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  animation: update-banner-in 0.28s ease both;
+}
+.agency-update-popup-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.agency-update-popup-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.agency-update-popup-detail {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .update-banner {
     animation: none;

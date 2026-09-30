@@ -215,6 +215,7 @@ function apiClient(): ApiClient {
         orderIndex: 0,
       },
     ]),
+    getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
   } as unknown as ApiClient;
 }
 

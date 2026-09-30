@@ -14,6 +14,17 @@ export interface AgencyUpgradeState {
   phase: AgencyUpgradePhase;
   /** Populated on `error`; a short human-readable reason. */
   message?: string;
+  /**
+   * True when the most recent successful upgrade installed a *different*
+   * version than was present before it ran — i.e. an update was actually
+   * applied. Drives the "Agency was updated" popup shown on app open. Only set
+   * when a {@link AgencyBootstrapDeps.readVersion} probe is wired.
+   */
+  updated?: boolean;
+  /** Agency version after a successful upgrade, when the probe resolved one. */
+  version?: string | null;
+  /** Agency version before the upgrade ran, when the probe resolved one. */
+  previousVersion?: string | null;
 }
 
 /** Whether the agency CLI is currently installed (+ optional upgrade state). */
@@ -35,6 +46,13 @@ export interface AgencyBootstrapDeps {
   spawner: ProcessSpawner;
   /** Environment handed to the install process (inherits the app's PATH etc.). */
   env: Record<string, string>;
+  /**
+   * Optional probe for the installed agency version (e.g. runs
+   * `agency --version`). When provided, {@link AgencyBootstrapper.upgradeToLatest}
+   * captures the version before and after the run so it can report whether an
+   * update was actually applied. Resolves null when the version can't be read.
+   */
+  readVersion?: () => Promise<string | null>;
 }
 
 export interface AgencyBootstrapper {
@@ -106,11 +124,21 @@ export function createAgencyBootstrapper(
     },
 
     async upgradeToLatest(onEvent) {
+      const previousVersion = deps.readVersion ? await deps.readVersion() : null;
       upgrade = { phase: 'upgrading' };
       const code = await runInstall(onEvent);
       const installed = deps.detect();
       if (code === 0) {
-        upgrade = { phase: 'done' };
+        if (deps.readVersion) {
+          const version = await deps.readVersion();
+          const updated =
+            version != null &&
+            previousVersion != null &&
+            version !== previousVersion;
+          upgrade = { phase: 'done', updated, version, previousVersion };
+        } else {
+          upgrade = { phase: 'done' };
+        }
         onEvent({ kind: 'done' });
       } else {
         const message = `agency upgrade failed (exit code ${code ?? 'null'})`;

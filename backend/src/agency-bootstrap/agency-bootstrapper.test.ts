@@ -210,4 +210,59 @@ describe('createAgencyBootstrapper', () => {
       message: 'agency upgrade failed (exit code null)',
     });
   });
+
+  it('reports updated=true with versions when the probe sees a new version', async () => {
+    const { spawner } = scriptedSpawner({ code: 0 });
+    const versions = ['1.0.0', '1.1.0'];
+    const boot = createAgencyBootstrapper({
+      platform: 'linux',
+      detect: () => true,
+      spawner,
+      env: {},
+      readVersion: () => Promise.resolve(versions.shift() ?? null),
+    });
+    const status = await boot.upgradeToLatest(() => {});
+    expect(status.upgrade).toEqual({
+      phase: 'done',
+      updated: true,
+      version: '1.1.0',
+      previousVersion: '1.0.0',
+    });
+  });
+
+  it('reports updated=false when the probe sees the same version', async () => {
+    const { spawner } = scriptedSpawner({ code: 0 });
+    const boot = createAgencyBootstrapper({
+      platform: 'linux',
+      detect: () => true,
+      spawner,
+      env: {},
+      readVersion: () => Promise.resolve('2.0.0'),
+    });
+    const status = await boot.upgradeToLatest(() => {});
+    expect(status.upgrade).toEqual({
+      phase: 'done',
+      updated: false,
+      version: '2.0.0',
+      previousVersion: '2.0.0',
+    });
+  });
+
+  it('reports updated=false when the version probe cannot resolve a version', async () => {
+    const { spawner } = scriptedSpawner({ code: 0 });
+    const boot = createAgencyBootstrapper({
+      platform: 'linux',
+      detect: () => true,
+      spawner,
+      env: {},
+      readVersion: () => Promise.resolve(null),
+    });
+    const status = await boot.upgradeToLatest(() => {});
+    expect(status.upgrade).toEqual({
+      phase: 'done',
+      updated: false,
+      version: null,
+      previousVersion: null,
+    });
+  });
 });

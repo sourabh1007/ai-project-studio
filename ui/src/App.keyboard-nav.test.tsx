@@ -109,6 +109,7 @@ function apiClient(): ApiClient {
     listFeatures: vi.fn().mockResolvedValue([]),
     listRepos: vi.fn().mockResolvedValue([]),
     listSessions: vi.fn().mockResolvedValue([]),
+    getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
   } as unknown as ApiClient;
 }
 

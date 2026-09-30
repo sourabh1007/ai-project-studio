@@ -76,7 +76,9 @@ vi.mock('../features/automations/automations-view.js', () => ({
 }));
 
 function api(): ApiClient {
-  return {} as ApiClient;
+  return {
+    getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
+  } as unknown as ApiClient;
 }
 
 function renderApp() {

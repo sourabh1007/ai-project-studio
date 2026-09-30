@@ -118,6 +118,7 @@ import {
 
 import { createProcessSpawner } from './provider/process-kernel/process-spawner.js';
 import { createAgencyBootstrapper } from './agency-bootstrap/agency-bootstrapper.js';
+import { parseAgencyVersion } from './agency-bootstrap/agency-version.js';
 import { createAgencyDetector } from './agency-bootstrap/agency-detector.js';
 import {
   agencyInstallPaths,
@@ -902,6 +903,29 @@ function main(): void {
     existsSync(dir) ? readdirSync(dir) : [];
   const currentAgencyPaths = (): string[] =>
     agencyInstallPaths(process.platform, process.env, homedir(), listDir);
+  // Reads the installed agency version by spawning `agency --version` off the
+  // event loop (never execFileSync — AGENTS rule #8). Resolves null when agency
+  // isn't resolvable or prints nothing parseable, so a failed probe simply
+  // suppresses the "was updated" popup rather than blocking the upgrade.
+  const readAgencyVersion = async (): Promise<string | null> => {
+    const exe = resolveAgencyExecutable(currentAgencyPaths(), existsSync);
+    if (!exe) {
+      return null;
+    }
+    const handle = spawner.spawn({
+      command: exe,
+      args: ['--version'],
+      env: process.env as Record<string, string>,
+    });
+    const lines: string[] = [];
+    handle.onStdoutLine((line) => lines.push(line));
+    handle.onStderrLine((line) => lines.push(line));
+    const code = await handle.done;
+    if (code !== 0) {
+      return null;
+    }
+    return parseAgencyVersion(lines.join('\n'));
+  };
   const agencyBootstrapper = createAgencyBootstrapper({
     platform: process.platform,
     detect: createAgencyDetector({
@@ -910,6 +934,7 @@ function main(): void {
     }),
     spawner,
     env: process.env as Record<string, string>,
+    readVersion: readAgencyVersion,
   });
 
   // Prepends the installed agency executable's directory to this process's PATH.
