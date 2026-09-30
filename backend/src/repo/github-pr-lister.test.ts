@@ -24,6 +24,7 @@ const listJson = JSON.stringify([
     url: 'https://github.com/acme/app/pull/12',
     headRefName: 'feature/login',
     baseRefName: 'main',
+    createdAt: '2024-01-01T00:00:00Z',
     author: { login: 'octocat', name: 'Mona' },
   },
   {
@@ -48,6 +49,7 @@ describe('parseGithubPulls', () => {
         sourceBranch: 'feature/login',
         targetBranch: 'main',
         author: 'Mona',
+        createdAt: '2024-01-01T00:00:00Z',
         authorAvatarUrl: 'https://github.com/octocat.png',
         isAuthor: false,
         isReviewer: false,
@@ -60,6 +62,7 @@ describe('parseGithubPulls', () => {
         sourceBranch: 'fix/bug',
         targetBranch: 'develop',
         author: 'hubot',
+        createdAt: null,
         authorAvatarUrl: 'https://github.com/hubot.png',
         isAuthor: false,
         isReviewer: false,
@@ -124,6 +127,7 @@ describe('parseGithubPulls', () => {
         sourceBranch: 'a',
         targetBranch: null,
         author: null,
+        createdAt: null,
         authorAvatarUrl: null,
         isAuthor: false,
         isReviewer: false,
@@ -178,7 +182,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
     ]);
   });
 
@@ -211,7 +215,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
     ]);
   });
 
@@ -232,7 +236,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
     ]);
   });
 
@@ -272,7 +276,7 @@ describe('getGithubPull', () => {
       '--repo',
       'acme/app',
       '--json',
-      'number,title,url,headRefName,baseRefName,author,reviewRequests,body',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests,body',
     ]);
   });
 

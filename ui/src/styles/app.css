@@ -4788,6 +4788,54 @@ body.is-resizing {
   white-space: nowrap;
 }
 
+.pr-review-age {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  padding: 2px 7px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pr-team-sort {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.pr-team-sort-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pr-team-sort-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.pr-team-sort-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.pr-team-sort-btn.is-active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .pr-busy {
   flex: none;
   font-size: 0.68rem;

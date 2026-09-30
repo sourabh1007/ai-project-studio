@@ -160,6 +160,36 @@ describe('PrReviewPicker selection', () => {
     expect(groupNames).toContain('aaron');
   });
 
+  it('shows time-in-review badges and reorders by the sort control in the Team tab', async () => {
+    const iso = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const DAY = 24 * 60 * 60 * 1000;
+    const pulls = [
+      { number: 1, title: 'Old one', url: 'https://github.com/acme/app/pull/1', sourceBranch: 'f/1', author: 'aaron', createdAt: iso(5 * DAY) },
+      { number: 2, title: 'New one', url: 'https://github.com/acme/app/pull/2', sourceBranch: 'f/2', author: 'aaron', createdAt: iso(1 * DAY) },
+    ];
+    const client: Partial<ApiClient> = {
+      listRepoPulls: vi.fn().mockResolvedValue(pulls),
+    };
+    renderPicker(client, vi.fn());
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Team/ }));
+
+    // Both PRs render a compact age badge (default: longest-in-review first).
+    expect(await screen.findByText('5d')).toBeInTheDocument();
+    expect(screen.getByText('1d')).toBeInTheDocument();
+    const longestOrder = screen
+      .getAllByText(/^\dd$/)
+      .map((el) => el.textContent);
+    expect(longestOrder).toEqual(['5d', '1d']);
+
+    // Switching to "Newest" reverses the order.
+    fireEvent.click(screen.getByRole('button', { name: 'Newest' }));
+    const newestOrder = screen
+      .getAllByText(/^\dd$/)
+      .map((el) => el.textContent);
+    expect(newestOrder).toEqual(['1d', '5d']);
+  });
+
   it('saves a team roster that filters the Team tab and persists to storage', async () => {
     const pulls = [
       { number: 1, title: 'Add cache', url: 'https://github.com/acme/app/pull/1', sourceBranch: 'f/1', author: 'bianca' },

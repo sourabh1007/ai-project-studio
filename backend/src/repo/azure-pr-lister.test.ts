@@ -47,6 +47,7 @@ const pullBody = {
     {
       pullRequestId: 42,
       title: 'Add feature',
+      creationDate: '2024-02-03T10:00:00Z',
       sourceRefName: 'refs/heads/topic/x',
       targetRefName: 'refs/heads/main',
       createdBy: { displayName: 'Ada', imageUrl: 'https://ado.example/ada.png' },
@@ -130,6 +131,7 @@ describe('listAzurePulls', () => {
         sourceBranch: 'topic/x',
         targetBranch: 'main',
         author: 'Ada',
+        createdAt: '2024-02-03T10:00:00Z',
         authorAvatarUrl: 'https://ado.example/ada.png',
         isAuthor: false,
         isReviewer: false,

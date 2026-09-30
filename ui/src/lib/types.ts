@@ -928,6 +928,12 @@ export interface RemotePullRequest {
   sourceBranch: string;
   /** Author's display name or login, when known. */
   author: string | null;
+  /**
+   * ISO-8601 timestamp of when the PR was opened (GitHub `createdAt`, Azure
+   * `creationDate`); null/absent when the provider did not report it. Used to
+   * show how long a PR has been in review.
+   */
+  createdAt?: string | null;
   /** Author's avatar image URL; null/absent when unknown. */
   authorAvatarUrl?: string | null;
   /** True when the signed-in user opened this pull request. */

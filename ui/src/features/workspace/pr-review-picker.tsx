@@ -17,6 +17,12 @@ import {
   removeTeamMember,
   saveTeamRoster,
 } from '../../lib/team-roster.js';
+import {
+  compareByReviewAge,
+  formatReviewAge,
+  oldestCreatedAt,
+  type ReviewAgeOrder,
+} from '../../lib/pr-review-age.js';
 
 /**
  * Extracts a pull-request number from a pasted value — either a bare number or
@@ -131,6 +137,16 @@ export function PrReviewPicker({
     loadTeamRoster(window.localStorage),
   );
   const [memberDraft, setMemberDraft] = useState('');
+  // How the Team tab orders each teammate's PRs — longest-in-review first by
+  // default so the most stale reviews surface at the top.
+  const [teamOrder, setTeamOrder] = useState<ReviewAgeOrder>('longest');
+  // A coarse clock that advances once a minute so the "in review for" labels
+  // stay fresh while the picker is open, without re-rendering constantly.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
   useEffect(() => {
     saveTeamRoster(window.localStorage, roster);
   }, [roster]);
@@ -196,10 +212,22 @@ export function PrReviewPicker({
       bucket.push(pr);
       map.set(key, bucket);
     }
+    // Order each member's PRs by time in review, then order members by their
+    // longest-waiting PR so the most stale review work floats to the top.
+    for (const bucket of map.values()) {
+      bucket.sort((a, b) =>
+        compareByReviewAge(a.createdAt, b.createdAt, teamOrder, now),
+      );
+    }
     return [...map.entries()].sort((a, b) =>
-      a[0].toLowerCase().localeCompare(b[0].toLowerCase()),
+      compareByReviewAge(
+        oldestCreatedAt(a[1]),
+        oldestCreatedAt(b[1]),
+        teamOrder,
+        now,
+      ),
     );
-  }, [filtered, roster]);
+  }, [filtered, roster, teamOrder, now]);
 
   function addPull(pull: SelectedPull) {
     setError(null);
@@ -261,8 +289,9 @@ export function PrReviewPicker({
     }
   }
 
-  const renderItem = (pr: RemotePullRequest) => {
+  const renderItem = (pr: RemotePullRequest, showAge = false) => {
     const isSelected = selectedNumbers.has(pr.number);
+    const age = showAge ? formatReviewAge(pr.createdAt, now) : null;
     return (
       <button
         type="button"
@@ -285,12 +314,26 @@ export function PrReviewPicker({
             {pr.author ? ` · ${pr.author}` : ''}
           </span>
         </span>
+        {age && (
+          <span
+            className="pr-review-age"
+            title={`In review for ${age}${
+              pr.createdAt ? ` · opened ${new Date(pr.createdAt).toLocaleString()}` : ''
+            }`}
+          >
+            {age}
+          </span>
+        )}
       </button>
     );
   };
 
   return (
-    <Modal title={`Open Pull Request · ${repo.name}`} onClose={busy ? () => {} : onClose}>
+    <Modal
+      title={`Open Pull Request · ${repo.name}`}
+      size={tab === 'team' ? 'xl' : 'md'}
+      onClose={busy ? () => {} : onClose}
+    >
       <div className="pr-picker">
         {busy && (
           <div className="pr-checkout-overlay" role="status" aria-live="polite">
@@ -414,6 +457,31 @@ export function PrReviewPicker({
                   ? 'The Team tab shows only these teammates’ open PRs. Saved for next time.'
                   : 'Add teammates to save your team and see only their PRs. Showing everyone until you do.'}
               </span>
+              <div
+                className="pr-team-sort"
+                role="group"
+                aria-label="Order pull requests by time in review"
+              >
+                <span className="pr-team-sort-label">Sort</span>
+                <button
+                  type="button"
+                  className={`pr-team-sort-btn ${teamOrder === 'longest' ? 'is-active' : ''}`.trim()}
+                  aria-pressed={teamOrder === 'longest'}
+                  onClick={() => setTeamOrder('longest')}
+                  title="Show the longest-waiting pull requests first"
+                >
+                  Longest in review
+                </button>
+                <button
+                  type="button"
+                  className={`pr-team-sort-btn ${teamOrder === 'newest' ? 'is-active' : ''}`.trim()}
+                  aria-pressed={teamOrder === 'newest'}
+                  onClick={() => setTeamOrder('newest')}
+                  title="Show the most recently opened pull requests first"
+                >
+                  Newest
+                </button>
+              </div>
             </div>
             {roster.length > 0 && (
               <ul className="pr-team-chips">
@@ -541,11 +609,11 @@ export function PrReviewPicker({
                           )}
                         </button>
                       </div>
-                      {prs.map(renderItem)}
+                      {prs.map((pr) => renderItem(pr, true))}
                     </div>
                   );
                 })
-            : filtered.map(renderItem)}
+            : filtered.map((pr) => renderItem(pr))}
         </div>
 
         <div className="pr-manual">

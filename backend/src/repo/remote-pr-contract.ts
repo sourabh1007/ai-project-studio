@@ -30,6 +30,12 @@ export interface RemotePullRequest {
   /** Author's display name or login, when known. */
   author: string | null;
   /**
+   * ISO-8601 timestamp of when the pull request was opened, when the provider
+   * reports it (GitHub `createdAt`, Azure `creationDate`). Null when unknown.
+   * The UI uses this to show how long a PR has been in review.
+   */
+  createdAt?: string | null;
+  /**
    * URL of the author's avatar image, when the provider exposes one. For GitHub
    * this is derived from the author's login (`https://github.com/<login>.png`);
    * for Azure DevOps it is the identity `imageUrl`. Null when unknown.

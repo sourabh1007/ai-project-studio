@@ -115,6 +115,7 @@ interface AdoPull {
   pullRequestId?: number;
   title?: string;
   description?: string;
+  creationDate?: string;
   sourceRefName?: string;
   targetRefName?: string;
   createdBy?: AdoIdentity | null;
@@ -174,6 +175,7 @@ function mapPull(
     sourceBranch: stripRefsHeads(ref),
     targetBranch: pull.targetRefName ? stripRefsHeads(pull.targetRefName) : null,
     author: pull.createdBy?.displayName ?? null,
+    createdAt: pull.creationDate ?? null,
     authorAvatarUrl: pull.createdBy?.imageUrl ?? null,
     isAuthor,
     isReviewer,

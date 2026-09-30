@@ -16,13 +16,14 @@ interface GhPullJson {
   headRefName?: string;
   baseRefName?: string;
   body?: string;
+  createdAt?: string;
   author?: { login?: string; name?: string } | null;
   reviewRequests?: GhReviewRequest[] | null;
 }
 
 /** The `--json` fields requested from `gh` for a pull request. */
 const PULL_JSON_FIELDS =
-  'number,title,url,headRefName,baseRefName,author,reviewRequests';
+  'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests';
 
 /** Single-PR fetch also pulls the description body for the problem statement. */
 const PULL_VIEW_JSON_FIELDS = `${PULL_JSON_FIELDS},body`;
@@ -50,6 +51,7 @@ function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | nu
     sourceBranch,
     targetBranch: item.baseRefName ?? null,
     author,
+    createdAt: item.createdAt ?? null,
     authorAvatarUrl: login ? `https://github.com/${login}.png` : null,
     isAuthor,
     isReviewer,
