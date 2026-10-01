@@ -20,7 +20,7 @@ function fakeTool(results) {
 test('provisions Node and collects bin dirs for Node plus resolvable tools', async () => {
   const events = [];
   const result = await provisionDependencies({
-    platform: 'win32', arch: 'x64', env: {}, runtimeDir: 'C:\\data\\runtime',
+    platform: 'win32', arch: 'x64', env: {}, runtimeDir: 'C:\\data\\runtime', pathImpl: path.win32,
     makeNodeProvisioner: fakeNode('C:\\data\\runtime\\node-v24.20.0\\node.exe'),
     makeToolProvisioner: fakeTool({
       git: { binary: 'C:\\data\\runtime\\git-v2.56.0\\cmd\\git.exe', binDir: 'C:\\data\\runtime\\git-v2.56.0\\cmd' },
@@ -41,7 +41,7 @@ test('provisions Node and collects bin dirs for Node plus resolvable tools', asy
 test('a failing best-effort tool never blocks startup', async () => {
   const logs = [];
   const result = await provisionDependencies({
-    platform: 'darwin', arch: 'arm64', env: {}, runtimeDir: '/data/runtime',
+    platform: 'darwin', arch: 'arm64', env: {}, runtimeDir: '/data/runtime', pathImpl: path.posix,
     makeNodeProvisioner: fakeNode('/data/runtime/node-v24.20.0/bin/node'),
     makeToolProvisioner: fakeTool({ git: null, gh: new Error('network down') }),
     log: (m) => logs.push(m),
@@ -53,7 +53,7 @@ test('a failing best-effort tool never blocks startup', async () => {
 
 test('a system Node (bare command) contributes no bin dir', async () => {
   const result = await provisionDependencies({
-    platform: 'linux', arch: 'x64', env: {}, runtimeDir: '/data/runtime',
+    platform: 'linux', arch: 'x64', env: {}, runtimeDir: '/data/runtime', pathImpl: path.posix,
     makeNodeProvisioner: fakeNode('node'),
     makeToolProvisioner: fakeTool({ git: null, gh: null }),
   });
