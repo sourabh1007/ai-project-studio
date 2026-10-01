@@ -114,8 +114,8 @@ See **[docs/vs-copilot-app.md](docs/vs-copilot-app.md)** for the full side-by-si
 ## Getting Started
 
 ### Prerequisites
-- **Node.js ≥ 22.5** (the backend uses the built-in `node:sqlite` module). _For development/building from source._ The **packaged desktop app auto-provisions** a compatible Node runtime on first launch, so end users don't need Node pre-installed.
-- **GitHub Copilot CLI** and/or **Agency CLI** installed and on your `PATH`
+- **Node.js ≥ 22.5** (the backend uses the built-in `node:sqlite` module). _For development/building from source._ The **packaged desktop app auto-provisions** a compatible Node runtime, the **GitHub CLI** (`gh`), and portable **Git** (Windows) on first launch, so end users don't need them pre-installed.
+- **GitHub Copilot CLI** and/or **Agency CLI** — auto-installed via the provisioned Node's `npm` when first needed
 
 ### Install
 ```bash

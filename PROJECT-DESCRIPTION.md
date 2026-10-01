@@ -116,13 +116,16 @@ page and run it — no cloning, no `npm install`, no build step.
 > block it).
 
 **Prerequisites**
-- **Node.js is set up automatically.** On first launch the app provisions a
-  pinned, checksum-verified Node.js runtime into its application-data folder if a
-  compatible one isn't already on your `PATH` (the backend uses the built-in
-  `node:sqlite` module and a native `node-pty` addon, so a matching Node major is
-  required). No manual install is needed; a short one-time download may appear on
-  the splash screen. Set `CW_NODE_BIN` to override with your own Node 24.
-- **GitHub Copilot CLI** and/or **Agency CLI** installed and on your `PATH`.
+- **Dependencies are set up automatically.** On first launch the app provisions
+  the tools the backend needs into its application-data folder when they aren't
+  already available: a pinned, checksum-verified **Node.js** runtime (the backend
+  uses `node:sqlite` and a native `node-pty` addon, so a matching Node major is
+  required), the **GitHub CLI** (`gh`), and — on Windows — portable **Git**
+  (macOS/Linux use the system Git, which ships with the OS/Xcode CLT). A short
+  one-time download is shown on the splash screen. No manual install is needed.
+  Override any of them with `CW_NODE_BIN`, `CW_GH_BIN`, or `CW_GIT_BIN`.
+- The **Agency CLI** (and the optional **GitHub Copilot CLI**) install themselves
+  via the provisioned Node's `npm` the first time a session needs them.
 
 Once installed, the app **checks GitHub Releases for updates** on launch and in
 the background, and notifies you in-app when a newer version is available.

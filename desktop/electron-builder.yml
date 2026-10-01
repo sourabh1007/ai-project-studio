@@ -29,6 +29,9 @@ files:
   - backend-failure-log.cjs
   - startup-splash.cjs
   - node-provision.cjs
+  - provision-io.cjs
+  - tool-provision.cjs
+  - dependency-provision.cjs
   - startup/**/*
   - owned-attachments.cjs
   - regression-isolation.cjs

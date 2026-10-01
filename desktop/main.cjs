@@ -38,6 +38,9 @@ const popoutWindows = new Map();
 let startupSplash = null;
 let startupCancelled = false;
 let startupAbort = new AbortController();
+// Bin directories of tools provisioned at startup (Node/npm, Git, GitHub CLI).
+// Prepended to the backend's PATH so it resolves the managed copies.
+let provisionedBinDirs = [];
 let desktopInitialized = false;
 
 const ROOT = app.isPackaged
@@ -275,6 +278,7 @@ function startBackend(port) {
   const launchId = randomUUID();
   const env = {
     ...process.env,
+    PATH: require('./dependency-provision.cjs').prependToPath(provisionedBinDirs, process.env.PATH),
     CW__api__port: String(port),
     CW__api__host: HOST,
     CW__api__basePath: apiBasePath,
@@ -1264,31 +1268,32 @@ function initializeDesktop() {
 }
 
 /**
- * Ensures a Node.js runtime matching the native ABI the backend was built
- * against is available, provisioning it into the app's data directory on first
- * run if the machine has no suitable Node. Sets CW_NODE_BIN so startBackend
- * spawns the backend with it. Surfaces progress on the splash screen.
+ * Ensures the external tools the backend depends on are available, provisioning
+ * them into the app's data directory on first run when the machine lacks them.
+ * Node.js is required (sets CW_NODE_BIN); Git and the GitHub CLI are best-effort.
+ * The provisioned bin directories are stashed so startBackend can prepend them
+ * to the backend's PATH. Surfaces clearly-labelled progress on the splash.
  */
-async function ensureBackendNode(splash) {
-  const { createNodeProvisioner } = require('./node-provision.cjs');
+async function ensureBackendDependencies(splash) {
+  const { provisionDependencies } = require('./dependency-provision.cjs');
   splash.update('provisioning');
-  const provisioner = createNodeProvisioner({
+  const result = await provisionDependencies({
     platform: process.platform,
     arch: process.arch,
     env: process.env,
-    runtimeDir: path.join(app.getPath('userData'), 'node-runtime'),
+    runtimeDir: path.join(app.getPath('userData'), 'runtime'),
     signal: startupAbort.signal,
-    log: (message) => safeWrite(process.stderr, `[desktop] node-provision: ${message}\n`),
-    onProgress: ({ message }) => { if (message) splash.progress(message); },
-  });
-  const nodeBin = await provisioner.ensureNode().catch((error) => {
+    log: (message) => safeWrite(process.stderr, `[desktop] provision: ${message}\n`),
+    onProgress: ({ label, message }) => { if (message) splash.progress(label ? `${label}: ${message}` : message); },
+  }).catch((error) => {
     throw new Error(
       `Could not set up the Node.js runtime for the local backend (${error.message}). ` +
       'The first launch downloads a small runtime — check your internet connection and reopen the app.',
     );
   });
-  process.env.CW_NODE_BIN = nodeBin;
-  return nodeBin;
+  process.env.CW_NODE_BIN = result.nodeBin;
+  provisionedBinDirs = result.binDirs;
+  return result;
 }
 
 async function bootstrap() {
@@ -1318,7 +1323,7 @@ async function bootstrap() {
         `Backend build not found at ${BACKEND_ENTRY}. Run "npm run build" first.`,
       );
     }
-    await ensureBackendNode(splash);
+    await ensureBackendDependencies(splash);
     if (startupCancelled) return;
     const port = await getFreePort();
     if (startupCancelled) return;
