@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const STAGES = {
   preparing: { step: 0, title: 'Preparing your workspace', detail: 'Loading desktop settings and application preferences.' },
+  provisioning: { step: 1, title: 'Setting up the runtime', detail: 'Preparing the Node.js runtime for the local backend.' },
   starting: { step: 1, title: 'Starting local services', detail: 'Loading backend modules and preparing your workspace database.' },
   connecting: { step: 1, title: 'Connecting to your workspace', detail: 'Waiting for the local API and provider registry to respond.' },
   development: { step: 1, title: 'Connecting to development services', detail: 'Using the existing development server; no new backend is started.' },
@@ -63,6 +64,13 @@ function createStartupSplash({ BrowserWindow, ipcMain, icon, theme, version, can
     update(phase) {
       if (!Object.hasOwn(STAGES, phase)) throw new Error(`Unknown startup phase: ${phase}`);
       state = { ...state, ...STAGES[phase], phase, failed: false };
+      publish();
+    },
+    progress(detail) {
+      // Updates only the detail line while keeping the current phase/step, so
+      // long-running work (e.g. downloading the Node runtime) can report live
+      // progress without advancing the milestone list.
+      state = { ...state, detail: String(detail), failed: false };
       publish();
     },
     fail(error) {

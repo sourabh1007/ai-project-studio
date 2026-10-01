@@ -251,7 +251,7 @@ function waitForBackend(port) {
 function backendStartupError(owner) {
   if (owner.spawnError) {
     const hint = owner.spawnError.code === 'ENOENT'
-      ? 'Node.js was not found. Install Node.js 24 LTS and reopen the app, or configure CW_NODE_BIN.'
+      ? 'The Node.js runtime for the backend could not be located. Reopen the app to re-provision it, or set CW_NODE_BIN to a Node 24 executable.'
       : `Unable to start Node.js (${owner.spawnError.code || 'process error'}). Check the executable and its permissions.`;
     return new Error(hint);
   }
@@ -1263,6 +1263,34 @@ function initializeDesktop() {
   applyContentSecurityPolicy();
 }
 
+/**
+ * Ensures a Node.js runtime matching the native ABI the backend was built
+ * against is available, provisioning it into the app's data directory on first
+ * run if the machine has no suitable Node. Sets CW_NODE_BIN so startBackend
+ * spawns the backend with it. Surfaces progress on the splash screen.
+ */
+async function ensureBackendNode(splash) {
+  const { createNodeProvisioner } = require('./node-provision.cjs');
+  splash.update('provisioning');
+  const provisioner = createNodeProvisioner({
+    platform: process.platform,
+    arch: process.arch,
+    env: process.env,
+    runtimeDir: path.join(app.getPath('userData'), 'node-runtime'),
+    signal: startupAbort.signal,
+    log: (message) => safeWrite(process.stderr, `[desktop] node-provision: ${message}\n`),
+    onProgress: ({ message }) => { if (message) splash.progress(message); },
+  });
+  const nodeBin = await provisioner.ensureNode().catch((error) => {
+    throw new Error(
+      `Could not set up the Node.js runtime for the local backend (${error.message}). ` +
+      'The first launch downloads a small runtime — check your internet connection and reopen the app.',
+    );
+  });
+  process.env.CW_NODE_BIN = nodeBin;
+  return nodeBin;
+}
+
 async function bootstrap() {
   startupCancelled = false;
   startupAbort = new AbortController();
@@ -1290,6 +1318,8 @@ async function bootstrap() {
         `Backend build not found at ${BACKEND_ENTRY}. Run "npm run build" first.`,
       );
     }
+    await ensureBackendNode(splash);
+    if (startupCancelled) return;
     const port = await getFreePort();
     if (startupCancelled) return;
     startBackend(port);

@@ -66,6 +66,12 @@ test('splash uses isolated local assets and publishes the latest real stage afte
   assert.equal(f.states.at(-1).version, '0.11.0');
   f.splash.update('interface');
   assert.equal(f.states.at(-1).step, 2);
+  f.splash.progress('Downloading Node.js runtime… 42%');
+  assert.equal(f.states.at(-1).detail, 'Downloading Node.js runtime… 42%');
+  assert.equal(f.states.at(-1).step, 2);
+  f.splash.update('provisioning');
+  assert.equal(f.states.at(-1).phase, 'provisioning');
+  assert.equal(f.states.at(-1).step, 1);
   assert.throws(() => f.splash.update('invented-file'), /Unknown startup phase/);
 });
 
@@ -132,6 +138,7 @@ function bootstrapFixture({ dev = false, exists = true, port = Promise.resolve(4
     initializeDesktop: () => calls.push('initialize'),
     IS_DEV: dev, DEV_URL: 'http://localhost:5173', HOST: '127.0.0.1', BACKEND_ENTRY: 'backend/dist/main.js',
     fs: { existsSync: () => exists }, isBackendShutdownConfirmed: () => true,
+    ensureBackendNode: () => calls.push('provision'),
     getFreePort: () => port, startBackend: () => calls.push('spawn'),
     waitForBackend: () => backendReady, setAppOrigin: (url) => calls.push(url),
     createWindow: (_url, actualSplash) => { assert.equal(actualSplash, splash); calls.push('window'); },
@@ -151,7 +158,7 @@ test('production shows the splash before starting services and waits for actual 
   assert.deepEqual(f.calls, ['splash']);
   f.ready();
   await tick();
-  assert.deepEqual(f.calls, ['splash', 'initialize', 'starting', 'spawn', 'connecting']);
+  assert.deepEqual(f.calls, ['splash', 'initialize', 'starting', 'provision', 'spawn', 'connecting']);
   backendReady();
   await boot;
   assert.deepEqual(f.calls.slice(-4), ['interface', 'http://127.0.0.1:4319/', 'window', 'updater']);

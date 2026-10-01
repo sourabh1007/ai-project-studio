@@ -260,7 +260,7 @@ test('a failed spawn reports a missing Node runtime immediately and can quit wit
   const f = fixture();
   const child = f.spawn();
   const ready = f.owner.waitForBackend(1234);
-  const rejected = assert.rejects(ready, /Node.js was not found.*Node.js 24 LTS/);
+  const rejected = assert.rejects(ready, /Node\.js runtime for the backend could not be located.*CW_NODE_BIN/);
   delete child.pid;
   child.emit('error', Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }));
   await rejected;

@@ -28,6 +28,7 @@ files:
   - backend-identity.cjs
   - backend-failure-log.cjs
   - startup-splash.cjs
+  - node-provision.cjs
   - startup/**/*
   - owned-attachments.cjs
   - regression-isolation.cjs
