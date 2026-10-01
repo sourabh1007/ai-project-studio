@@ -41,7 +41,7 @@ function childProcess() {
   return child;
 }
 
-function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise, closeResponse = 0, env = {} } = {}) {
+function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise, closeResponse = 0, env = {}, platform = 'win32' } = {}) {
   const app = new EventEmitter();
   const notifications = [];
   const messages = [];
@@ -113,7 +113,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     },
   });
   const processFake = Object.assign(new EventEmitter(), {
-    env, platform: 'win32', resourcesPath: 'fixture-resources',
+    env, platform, resourcesPath: 'fixture-resources',
     execPath: path.join('fixture-app', 'AI Project Studio.exe'),
     stdout: Object.assign(new EventEmitter(), { write() {} }),
     stderr: Object.assign(new EventEmitter(), { write() {} }),
@@ -893,6 +893,24 @@ test('last-window close remains visible through timeout and second-instance, the
   assert.equal(f.counts().requests, 1);
   assert.equal(win.close().prevented, true);
   await tick();
+  child.finish();
+  await tick();
+  assert.equal(win.isDestroyed(), true);
+  assert.equal(f.counts().quits, 1);
+});
+
+test('on macOS, closing the last window cooperatively stops the backend and quits the app (parity with Windows)', async () => {
+  // Regression guard: macOS used to keep the process resident in the dock after
+  // the window closed, leaving a stopped backend behind and feeling like the
+  // app "never closed". It must now quit through the same cooperative path as
+  // Windows/Linux.
+  const f = fixture({ platform: 'darwin' });
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://127.0.0.1:1234/');
+  assert.equal(win.close().prevented, true);
+  await tick();
+  // A cooperative shutdown request went out rather than the window just hiding.
+  assert.equal(f.counts().requests, 1);
   child.finish();
   await tick();
   assert.equal(win.isDestroyed(), true);

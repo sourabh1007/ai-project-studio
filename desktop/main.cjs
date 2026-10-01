@@ -877,11 +877,12 @@ function createWindow(loadUrl, splash = null) {
     if (shutdownAction) {
       return;
     }
-    if (process.platform === 'darwin' && !(backendOwner?.outcome && !backend)) {
-      void runAfterBackendStop('close window', () => win.close(), false);
-    } else {
-      app.quit();
-    }
+    // Every platform quits the whole app when the last main window closes.
+    // macOS used to only stop the backend and keep the process alive in the
+    // dock, which left the app in a headless limbo and felt like it "didn't
+    // close". Routing through app.quit() runs the same cooperative shutdown in
+    // `before-quit`, so Windows, Linux and macOS behave identically.
+    app.quit();
   });
   win.on('closed', () => {
     if (startupTimer) clearTimeout(startupTimer);
@@ -1392,11 +1393,10 @@ if (!gotLock) {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-      return;
-    }
-    void runAfterBackendStop('stop backend', () => {}, false);
+    // Quit on all platforms — including macOS — so closing the window fully
+    // shuts the app down instead of leaving it resident in the dock with a
+    // stopped backend. `before-quit` performs the cooperative backend stop.
+    app.quit();
   });
 
   app.on('before-quit', (event) => {

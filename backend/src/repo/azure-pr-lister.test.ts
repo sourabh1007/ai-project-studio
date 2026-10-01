@@ -131,6 +131,7 @@ describe('listAzurePulls', () => {
         sourceBranch: 'topic/x',
         targetBranch: 'main',
         author: 'Ada',
+        authorLogin: null,
         createdAt: '2024-02-03T10:00:00Z',
         authorAvatarUrl: 'https://ado.example/ada.png',
         isAuthor: false,

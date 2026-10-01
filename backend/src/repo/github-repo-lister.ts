@@ -2,13 +2,20 @@ import type { GhRunner } from '../github-auth/github-auth-service.js';
 import { AuthRequiredError, ProviderError } from '../kernel/error-types.js';
 import type { RemoteRepo } from './remote-repo-contract.js';
 
-interface GhRepoJson {
-  nameWithOwner?: string;
-  url?: string;
-  defaultBranchRef?: { name?: string } | null;
+/** Shape of one repository object from the GitHub REST `/user/repos` endpoint. */
+interface GhRestRepoJson {
+  full_name?: string;
+  clone_url?: string;
+  html_url?: string;
+  default_branch?: string | null;
+  archived?: boolean;
 }
 
-/** Parses the JSON array `gh repo list --json ...` writes to stdout. */
+/**
+ * Parses the JSON array that `gh api --paginate /user/repos` writes to stdout.
+ * `--paginate` merges every page into a single JSON array, so a plain
+ * `JSON.parse` yields all accessible repositories across the pages.
+ */
 export function parseGithubRepos(stdout: string): RemoteRepo[] {
   let parsed: unknown;
   try {
@@ -20,9 +27,14 @@ export function parseGithubRepos(stdout: string): RemoteRepo[] {
     return [];
   }
   const repos: RemoteRepo[] = [];
-  for (const item of parsed as GhRepoJson[]) {
-    const name = item?.nameWithOwner;
-    const url = item?.url;
+  for (const item of parsed as GhRestRepoJson[]) {
+    // Preserve the previous `--no-archived` behaviour now that the REST
+    // endpoint returns archived repositories too.
+    if (item?.archived) {
+      continue;
+    }
+    const name = item?.full_name;
+    const url = item?.clone_url ?? item?.html_url;
     if (!name || !url) {
       continue;
     }
@@ -30,29 +42,32 @@ export function parseGithubRepos(stdout: string): RemoteRepo[] {
       provider: 'github',
       name,
       remoteUrl: url.endsWith('.git') ? url : `${url}.git`,
-      defaultBranch: item.defaultBranchRef?.name ?? null,
+      defaultBranch: item.default_branch ?? null,
     });
   }
   return repos;
 }
 
 /**
- * Lists the authenticated user's GitHub repositories via the `gh` CLI (the same
- * login the IDE already uses). The runner is injected so this stays testable.
+ * Lists every GitHub repository the authenticated user can access — repos they
+ * own, repos they collaborate on, and repos from organizations they belong to —
+ * via the `gh` CLI (the same login the IDE already uses).
+ *
+ * `gh repo list` only returns repositories the user *owns*, so it hides org and
+ * collaborator repos. The REST `/user/repos` endpoint with the full affiliation
+ * set is the surface that reports the user's complete access. `--paginate`
+ * walks every page and merges them into one JSON array. The runner is injected
+ * so this stays testable.
  */
 export async function listGithubRepos(
   run: GhRunner,
-  opts: { limit?: number } = {},
+  opts: { perPage?: number } = {},
 ): Promise<RemoteRepo[]> {
-  const limit = opts.limit ?? 100;
+  const perPage = opts.perPage ?? 100;
   const res = await run([
-    'repo',
-    'list',
-    '--no-archived',
-    '--limit',
-    String(limit),
-    '--json',
-    'nameWithOwner,url,defaultBranchRef',
+    'api',
+    '--paginate',
+    `user/repos?per_page=${perPage}&affiliation=owner,collaborator,organization_member&sort=full_name`,
   ]);
   if (res.code !== 0) {
     const stderr = res.stderr.trim();

@@ -8,6 +8,7 @@ import {
   loadTeamRoster,
   normalizeTeamRoster,
   removeTeamMember,
+  removeTeamMemberByIdentity,
   saveTeamRoster,
 } from './team-roster.js';
 import type { KeyValueStore } from './persisted-state.js';
@@ -83,16 +84,49 @@ describe('removeTeamMember', () => {
   });
 });
 
+describe('removeTeamMemberByIdentity', () => {
+  it('removes an entry matching the display name or the git username', () => {
+    expect(
+      removeTeamMemberByIdentity(['octocat', 'Bob'], {
+        author: 'Mona',
+        login: 'octocat',
+      }),
+    ).toEqual(['Bob']);
+    expect(
+      removeTeamMemberByIdentity(['Mona', 'Bob'], {
+        author: 'Mona',
+        login: 'octocat',
+      }),
+    ).toEqual(['Bob']);
+  });
+
+  it('is a safe no-op when neither identity is present or matches', () => {
+    expect(
+      removeTeamMemberByIdentity(['Ada'], { author: null, login: null }),
+    ).toEqual(['Ada']);
+    expect(
+      removeTeamMemberByIdentity(['Ada'], { author: 'Zed', login: 'zed99' }),
+    ).toEqual(['Ada']);
+  });
+});
+
 describe('isTeamMember', () => {
   it('matches authors case-insensitively', () => {
     expect(isTeamMember(['Ada Lovelace'], 'ada lovelace')).toBe(true);
     expect(isTeamMember(['Ada'], 'Bob')).toBe(false);
   });
 
+  it('matches the git username (login) when the display name differs', () => {
+    expect(isTeamMember(['octocat'], 'Mona', 'octocat')).toBe(true);
+    expect(isTeamMember(['octocat'], 'Mona', 'OCTOCAT')).toBe(true);
+    expect(isTeamMember(['octocat'], 'Mona', 'hubot')).toBe(false);
+  });
+
   it('returns false for empty or missing authors', () => {
     expect(isTeamMember(['Ada'], null)).toBe(false);
     expect(isTeamMember(['Ada'], undefined)).toBe(false);
     expect(isTeamMember(['Ada'], '   ')).toBe(false);
+    expect(isTeamMember(['Ada'], null, null)).toBe(false);
   });
 });
 

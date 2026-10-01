@@ -36,10 +36,11 @@ export const copilotConfigSchema = z.object({
 export type CopilotConfig = z.infer<typeof copilotConfigSchema>;
 
 export const copilotDefaults: CopilotConfig = {
-  // Disabled by default: only the Agency provider is active. Flip to `true`
-  // (or set COPILOT_ENABLED=true) to re-enable the Copilot provider — the
-  // adapter code is kept intact so re-enabling is purely a config change.
-  enabled: false,
+  // Enabled by default alongside Agency so the IDE can run either CLI. Which one
+  // is the *default* for new sessions is chosen at startup by the network
+  // environment (Microsoft corpnet prefers Agency; elsewhere prefers Copilot).
+  // Set COPILOT_ENABLED=false to unregister the Copilot provider entirely.
+  enabled: true,
   executable: 'copilot',
   defaultModel: 'auto',
   allowAllTools: true,

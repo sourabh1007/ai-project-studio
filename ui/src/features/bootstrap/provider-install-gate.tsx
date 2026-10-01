@@ -16,13 +16,23 @@ interface InstallEvent {
   message?: string;
 }
 
+/** Human label for a provider id; falls back to the raw id for unknown ones. */
+function providerLabel(id: string): string {
+  if (id === 'copilot') return 'GitHub Copilot CLI';
+  if (id === 'agency') return 'Agency';
+  return id;
+}
+
 /**
- * First-run setup with bounded status/progress waits and an always-available
- * deferral. Unknown installation state never authorizes another installer.
+ * First-run setup that installs whichever AI CLI is the environment's default
+ * provider (GitHub Copilot CLI off the Microsoft network, Agency on it). Bounded
+ * status/progress waits with an always-available deferral; an unknown
+ * installation state never authorizes another installer.
  */
-export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
+export function ProviderInstallGate({ children }: { children: React.ReactNode }) {
   const api = useApi();
   const [phase, setPhase] = useState<Phase>('checking');
+  const [target, setTarget] = useState<string | null>(null);
   const [lines, setLines] = useState<{ id: number; text: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [bypassed, setBypassed] = useState(false);
@@ -30,11 +40,10 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
   const [stalled, setStalled] = useState(false);
   const installMayBeRunning = useRef(false);
   const logRef = useRef<HTMLDivElement | null>(null);
-  // Monotonic id for log lines so React keys stay stable and unique even across
-  // resets and duplicate line text (array index keys are an anti-pattern).
   const nextLineId = useRef(0);
+  const label = target ? providerLabel(target) : 'the AI CLI';
 
-  // Probe status first; only start an install when agency is actually missing.
+  // Probe bootstrap info first; only install when the default provider is missing.
   useEffect(() => {
     if (bypassed) return;
     let cancelled = false;
@@ -42,20 +51,22 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
     setError(null);
     const timer = setTimeout(() => {
       cancelled = true;
-      setError('Could not confirm whether Agency is installed: the status check timed out.');
+      setError('Could not confirm whether the AI CLI is installed: the status check timed out.');
       setPhase('error');
     }, STATUS_TIMEOUT_MS);
     api
-      .getAgencyStatus()
-      .then((status) => {
+      .getProviderBootstrap()
+      .then((info) => {
         if (cancelled) {
           return;
         }
         clearTimeout(timer);
-        if (typeof status.installed !== 'boolean') {
+        const entry = info.providers.find((p) => p.id === info.defaultProvider);
+        if (!entry || typeof entry.installed !== 'boolean') {
           throw new Error('The status response did not confirm installation availability.');
         }
-        if (status.installed) {
+        setTarget(info.defaultProvider);
+        if (entry.installed) {
           setPhase('done');
         } else if (installMayBeRunning.current) {
           setError('The previous installer may still be running. Check again later; another installation will not be started.');
@@ -67,7 +78,7 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
       .catch((failure: unknown) => {
         if (!cancelled) {
           clearTimeout(timer);
-          setError(`Could not confirm whether Agency is installed: ${failure instanceof Error ? failure.message : String(failure)}`);
+          setError(`Could not confirm whether the AI CLI is installed: ${failure instanceof Error ? failure.message : String(failure)}`);
           setPhase('error');
         }
       });
@@ -77,9 +88,9 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
     };
   }, [api, attempt, bypassed]);
 
-  // Drive the SSE install stream while in the installing phase.
+  // Drive the SSE install stream for the target provider while installing.
   useEffect(() => {
-    if (phase !== 'installing' || bypassed) {
+    if (phase !== 'installing' || bypassed || !target) {
       return;
     }
     setLines([]);
@@ -97,7 +108,7 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
       typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
       import.meta.env.VITE_API_BASE,
     );
-    const source = new EventSource(`${base}/agency/install`);
+    const source = new EventSource(`${base}/${target}/install`);
     armWatchdog();
     source.onmessage = (raw: MessageEvent<string>) => {
       if (!active) return;
@@ -146,9 +157,8 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
       clearTimeout(watchdog);
       source.close();
     };
-  }, [phase, bypassed]);
+  }, [phase, bypassed, target]);
 
-  // Keep the log scrolled to the latest line.
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -171,17 +181,17 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
               {phase === 'checking'
                 ? 'Preparing AI Project Studio'
                 : phase === 'error'
-                  ? 'Agency setup needs attention'
+                  ? `${label} setup needs attention`
                   : phase === 'uncertain'
                     ? 'Installation status unknown'
-                    : 'Installing Agency'}
+                    : `Installing ${label}`}
             </h1>
             <p className="bootstrap-subtitle" role={phase === 'error' || phase === 'uncertain' ? 'alert' : undefined}>
               {phase === 'checking'
-                ? 'Checking for the Agency CLI…'
+                ? 'Checking your AI CLI setup…'
                 : phase === 'error' || phase === 'uncertain'
                   ? (error ?? 'Something went wrong.')
-                  : 'Setting up the Microsoft Agency CLI. This runs once.'}
+                  : `Setting up the ${label}. This runs once.`}
             </p>
           </div>
         </div>
@@ -214,7 +224,7 @@ export function AgencyInstallGate({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
         <p className="field-hint">
-          Agency-dependent features may be unavailable until setup completes.
+          AI CLI features may be unavailable until setup completes.
           Continuing does not cancel an installer already running.
         </p>
       </div>

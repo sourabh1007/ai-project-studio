@@ -77,7 +77,7 @@ import {
 } from './meta-settings-controller.js';
 import type { MetaPoolsStatus } from '../meta/pooled-meta-runner.js';
 import { createFeatureRoutes } from './feature-controller.js';
-import { createProviderRoutes } from './provider-controller.js';
+import { createProviderRoutes, type ProviderBootstrapInfo } from './provider-controller.js';
 import { createMcpRoutes } from './mcp-controller.js';
 import { createSessionRoutes } from './session-controller.js';
 import { createTerminalRoutes } from './terminal-controller.js';
@@ -151,6 +151,8 @@ export interface ApiRoutesDeps {
    */
   relaunchSession: (session: Session) => Promise<void>;
   providers: ProviderRegistry;
+  /** Default provider + each provider's install state for the first-run UI. */
+  providerBootstrapInfo: () => ProviderBootstrapInfo;
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
   summaries: SummaryStore;
@@ -299,7 +301,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       config: deps.sessionConfig,
       bootstrap: deps.sessionBootstrap,
     }),
-    ...createProviderRoutes({ registry: deps.providers }),
+    ...createProviderRoutes({ registry: deps.providers, bootstrapInfo: deps.providerBootstrapInfo }),
     ...createMcpRoutes({ mcp: deps.mcp, controlToken: deps.controlToken }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),

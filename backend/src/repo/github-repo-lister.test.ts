@@ -5,12 +5,12 @@ import type { GhCommandResult } from '../github-auth/github-auth-service.js';
 const ok = (stdout: string): GhCommandResult => ({ code: 0, stdout, stderr: '' });
 
 describe('parseGithubRepos', () => {
-  it('maps nameWithOwner/url/defaultBranch and appends .git', () => {
+  it('maps full_name/clone_url/default_branch from the REST payload', () => {
     const json = JSON.stringify([
       {
-        nameWithOwner: 'acme/app',
-        url: 'https://github.com/acme/app',
-        defaultBranchRef: { name: 'main' },
+        full_name: 'acme/app',
+        clone_url: 'https://github.com/acme/app.git',
+        default_branch: 'main',
       },
     ]);
     expect(parseGithubRepos(json)).toEqual([
@@ -23,12 +23,12 @@ describe('parseGithubRepos', () => {
     ]);
   });
 
-  it('keeps a url that already ends with .git and null default branch', () => {
+  it('falls back to html_url (appending .git) and a null default branch', () => {
     const json = JSON.stringify([
       {
-        nameWithOwner: 'acme/lib',
-        url: 'https://github.com/acme/lib.git',
-        defaultBranchRef: null,
+        full_name: 'acme/lib',
+        html_url: 'https://github.com/acme/lib',
+        default_branch: null,
       },
     ]);
     expect(parseGithubRepos(json)).toEqual([
@@ -41,11 +41,36 @@ describe('parseGithubRepos', () => {
     ]);
   });
 
+  it('includes org and collaborator repos, skipping archived ones', () => {
+    const json = JSON.stringify([
+      {
+        full_name: 'me/owned',
+        clone_url: 'https://github.com/me/owned.git',
+        default_branch: 'main',
+      },
+      {
+        full_name: 'some-org/shared',
+        clone_url: 'https://github.com/some-org/shared.git',
+        default_branch: 'develop',
+      },
+      {
+        full_name: 'me/old',
+        clone_url: 'https://github.com/me/old.git',
+        default_branch: 'main',
+        archived: true,
+      },
+    ]);
+    expect(parseGithubRepos(json).map((r) => r.name)).toEqual([
+      'me/owned',
+      'some-org/shared',
+    ]);
+  });
+
   it('skips entries missing a name or url', () => {
     const json = JSON.stringify([
-      { url: 'https://github.com/acme/x' },
-      { nameWithOwner: 'acme/y' },
-      { nameWithOwner: 'acme/z', url: 'https://github.com/acme/z' },
+      { clone_url: 'https://github.com/acme/x.git' },
+      { full_name: 'acme/y' },
+      { full_name: 'acme/z', clone_url: 'https://github.com/acme/z.git' },
     ]);
     expect(parseGithubRepos(json).map((r) => r.name)).toEqual(['acme/z']);
   });
@@ -57,34 +82,32 @@ describe('parseGithubRepos', () => {
 });
 
 describe('listGithubRepos', () => {
-  it('runs gh repo list with the requested limit and json fields', async () => {
+  it('queries /user/repos for every affiliation, paginated', async () => {
     let args: string[] = [];
     const repos = await listGithubRepos(
       async (a) => {
         args = a;
-        return ok('[{"nameWithOwner":"a/b","url":"https://github.com/a/b"}]');
+        return ok(
+          '[{"full_name":"a/b","clone_url":"https://github.com/a/b.git"}]',
+        );
       },
-      { limit: 25 },
+      { perPage: 25 },
     );
     expect(args).toEqual([
-      'repo',
-      'list',
-      '--no-archived',
-      '--limit',
-      '25',
-      '--json',
-      'nameWithOwner,url,defaultBranchRef',
+      'api',
+      '--paginate',
+      'user/repos?per_page=25&affiliation=owner,collaborator,organization_member&sort=full_name',
     ]);
     expect(repos.map((r) => r.name)).toEqual(['a/b']);
   });
 
-  it('defaults the limit to 100', async () => {
+  it('defaults the page size to 100', async () => {
     let args: string[] = [];
     await listGithubRepos(async (a) => {
       args = a;
       return ok('[]');
     });
-    expect(args).toContain('100');
+    expect(args.some((a) => a.includes('per_page=100'))).toBe(true);
   });
 
   it('throws a provider error with the stderr message when gh fails', async () => {

@@ -30,6 +30,14 @@ export interface RemotePullRequest {
   /** Author's display name or login, when known. */
   author: string | null;
   /**
+   * Author's provider-native handle — the GitHub login (git username) or the
+   * Azure DevOps unique name (email). Null when the provider doesn't expose it.
+   * This is the stable identity the "team" roster is configured against, since
+   * users know teammates by their git username rather than a mutable display
+   * name.
+   */
+  authorLogin?: string | null;
+  /**
    * ISO-8601 timestamp of when the pull request was opened, when the provider
    * reports it (GitHub `createdAt`, Azure `creationDate`). Null when unknown.
    * The UI uses this to show how long a PR has been in review.

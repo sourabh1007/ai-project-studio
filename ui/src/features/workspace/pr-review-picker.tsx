@@ -15,6 +15,7 @@ import {
   isTeamMember,
   loadTeamRoster,
   removeTeamMember,
+  removeTeamMemberByIdentity,
   saveTeamRoster,
 } from '../../lib/team-roster.js';
 import {
@@ -154,6 +155,10 @@ export function PrReviewPicker({
     setRoster((prev) => addTeamMember(prev, name));
   const removeMember = (name: string) =>
     setRoster((prev) => removeTeamMember(prev, name));
+  const removeMemberIdentity = (
+    author: string | null | undefined,
+    login: string | null | undefined,
+  ) => setRoster((prev) => removeTeamMemberByIdentity(prev, { author, login }));
 
   const pulls = tab === 'mine' ? mine : tab === 'assigned' ? assigned : everything;
   const list = pulls.data ?? [];
@@ -162,14 +167,17 @@ export function PrReviewPicker({
     assigned: assigned.data?.length ?? 0,
     all: everything.data?.length ?? 0,
   };
-  // Distinct PR authors across the repo's open pull requests, sorted — the
-  // suggestion pool for adding teammates, and the fallback grouping when no
-  // roster has been configured yet.
+  // Distinct teammate handles across the repo's open pull requests, sorted — the
+  // suggestion pool for adding teammates. Prefer the git username (login) when
+  // the provider exposes it so the roster is configured against the stable
+  // handle GitHub users know, falling back to the display name otherwise.
   const knownAuthors = useMemo(
     () =>
       [
         ...new Set(
-          (everything.data ?? []).map((pr) => pr.author ?? 'Unknown author'),
+          (everything.data ?? []).map(
+            (pr) => pr.authorLogin ?? pr.author ?? 'Unknown author',
+          ),
         ),
       ].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())),
     [everything.data],
@@ -205,7 +213,7 @@ export function PrReviewPicker({
     const map = new Map<string, RemotePullRequest[]>();
     for (const pr of filtered) {
       const key = pr.author ?? 'Unknown author';
-      if (roster.length > 0 && !isTeamMember(roster, key)) {
+      if (roster.length > 0 && !isTeamMember(roster, key, pr.authorLogin)) {
         continue;
       }
       const bucket = map.get(key) ?? [];
@@ -513,9 +521,9 @@ export function PrReviewPicker({
                     setMemberDraft('');
                   }
                 }}
-                placeholder="Add a teammate by name"
+                placeholder="Add a teammate by git username or name"
                 spellCheck={false}
-                aria-label="Add a teammate by name"
+                aria-label="Add a teammate by git username or name"
               />
               <datalist id="pr-team-author-suggestions">
                 {knownAuthors.map((author) => (
@@ -573,7 +581,11 @@ export function PrReviewPicker({
                 )
               )
               : teamGroups.map(([author, prs]) => {
-                  const onTeam = isTeamMember(roster, author);
+                  const login = prs[0]?.authorLogin ?? null;
+                  const onTeam = isTeamMember(roster, author, login);
+                  // Save the git username when available so the roster holds the
+                  // stable handle rather than a mutable display name.
+                  const handle = login ?? author;
                   return (
                     <div key={author} className="pr-team-group">
                       <div className="pr-team-group-head">
@@ -590,7 +602,9 @@ export function PrReviewPicker({
                           type="button"
                           className={`pr-team-toggle ${onTeam ? 'is-on' : ''}`.trim()}
                           onClick={() =>
-                            onTeam ? removeMember(author) : addMember(author)
+                            onTeam
+                              ? removeMemberIdentity(author, login)
+                              : addMember(handle)
                           }
                           title={
                             onTeam

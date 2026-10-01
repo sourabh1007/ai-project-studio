@@ -15,6 +15,7 @@ import type {
   CreateSkillInput,
   AddFeatureTaskInput,
   AgencyStatus,
+  ProviderBootstrapInfo,
   AzureDevOpsStatus,
   DeviceCodeStart,
   DevicePollResult,
@@ -1140,6 +1141,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
     }) =>
       request<{ answer: string }>('/config/assistant', jsonBody(input)),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
+    getProviderBootstrap: () =>
+      request<ProviderBootstrapInfo>('/providers/bootstrap'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>
       request<DeviceCodeStart>('/github/signin/start', jsonBody({})),

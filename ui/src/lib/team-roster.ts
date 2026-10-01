@@ -70,19 +70,48 @@ export function removeTeamMember(
   );
 }
 
-/** Whether an author (PR author display name) is on the roster. */
+/**
+ * Remove any roster entry matching a teammate's identity — either their display
+ * name or their git username (login). Toggling a teammate off from the Team tab
+ * must clear them regardless of which spelling was originally saved, so a roster
+ * built from display names still clears when the UI toggles by login (and vice
+ * versa).
+ */
+export function removeTeamMemberByIdentity(
+  roster: readonly string[],
+  identity: { author?: string | null; login?: string | null },
+): string[] {
+  const targets = new Set(
+    [identity.author, identity.login]
+      .map((value) => value?.trim().toLowerCase())
+      .filter((value): value is string => !!value),
+  );
+  if (targets.size === 0) {
+    return normalizeTeamRoster(roster as string[]);
+  }
+  return normalizeTeamRoster(
+    roster.filter((member) => !targets.has(member.toLowerCase())),
+  );
+}
+
+/**
+ * Whether a pull request's author is on the roster. Matches the roster against
+ * both the author's display name and their git username (login) so a teammate
+ * can be configured by either — GitHub users naturally configure by git
+ * username, while the display name keeps older rosters working.
+ */
 export function isTeamMember(
   roster: readonly string[],
   author: string | null | undefined,
+  login?: string | null | undefined,
 ): boolean {
-  if (!author) {
+  const targets = [author, login]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => !!value);
+  if (targets.length === 0) {
     return false;
   }
-  const target = author.trim().toLowerCase();
-  if (!target) {
-    return false;
-  }
-  return roster.some((member) => member.toLowerCase() === target);
+  return roster.some((member) => targets.includes(member.toLowerCase()));
 }
 
 /** Read and normalize the saved roster, falling back to an empty roster. */

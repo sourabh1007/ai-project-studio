@@ -175,6 +175,7 @@ function mapPull(
     sourceBranch: stripRefsHeads(ref),
     targetBranch: pull.targetRefName ? stripRefsHeads(pull.targetRefName) : null,
     author: pull.createdBy?.displayName ?? null,
+    authorLogin: pull.createdBy?.uniqueName ?? null,
     createdAt: pull.creationDate ?? null,
     authorAvatarUrl: pull.createdBy?.imageUrl ?? null,
     isAuthor,

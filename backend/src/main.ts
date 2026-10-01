@@ -124,6 +124,15 @@ import {
   agencyInstallPaths,
   resolveAgencyExecutable,
 } from './agency-bootstrap/agency-install-paths.js';
+import { createCopilotBootstrapper } from './copilot-bootstrap/copilot-bootstrapper.js';
+import { createCopilotDetector } from './copilot-bootstrap/copilot-detector.js';
+import {
+  explicitNetworkOverride,
+  envIndicatesMicrosoftNetwork,
+  resolveMicrosoftNetwork,
+} from './provider/network-environment.js';
+import { selectDefaultProvider } from './provider/default-provider-selection.js';
+import { probeMicrosoftInstallEndpoint } from './provider/microsoft-network-probe.js';
 import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
 import {
   createGithubAuth,
@@ -983,7 +992,101 @@ function main(): void {
       });
   }
 
-  // Force the Copilot CLI's home-screen tab bar off for every session. The CLI
+  // GitHub Copilot CLI bootstrapper — mirrors the agency path so the IDE can
+  // auto-install and keep the `copilot` CLI current. Detection resolves the
+  // configured executable against the live PATH (the npm-global `copilot` lands
+  // next to the provisioned Node, which the desktop shell already adds to PATH).
+  const resolveCopilotPath = (command: string): string | null => {
+    const resolved = resolveExecutable(command);
+    return existsSync(resolved) ? resolved : null;
+  };
+  const copilotDetector = createCopilotDetector({
+    executable: copilotConfig.executable,
+    resolve: resolveCopilotPath,
+  });
+  const readCopilotVersion = async (): Promise<string | null> => {
+    const exe = resolveCopilotPath(copilotConfig.executable);
+    if (!exe) {
+      return null;
+    }
+    const handle = spawner.spawn({
+      command: exe,
+      args: ['--version'],
+      env: process.env as Record<string, string>,
+    });
+    const lines: string[] = [];
+    handle.onStdoutLine((line) => lines.push(line));
+    handle.onStderrLine((line) => lines.push(line));
+    const code = await handle.done;
+    if (code !== 0) {
+      return null;
+    }
+    return parseAgencyVersion(lines.join('\n'));
+  };
+  const copilotBootstrapper = createCopilotBootstrapper({
+    platform: process.platform,
+    detect: copilotDetector,
+    spawner,
+    env: process.env as Record<string, string>,
+    readVersion: readCopilotVersion,
+  });
+  // Prepend the installed copilot executable's directory to PATH so node-pty can
+  // resolve a bare `copilot` without an app restart after a first-run install.
+  const refreshCopilotPath = (): void => {
+    const exe = resolveCopilotPath(copilotConfig.executable);
+    if (!exe) {
+      return;
+    }
+    const dir = dirname(exe);
+    const current = process.env.PATH ?? '';
+    const alreadyOnPath = current
+      .split(pathDelimiter)
+      .some((entry) => entry === dir);
+    if (!alreadyOnPath) {
+      process.env.PATH = current ? `${dir}${pathDelimiter}${current}` : dir;
+    }
+  };
+  refreshCopilotPath();
+  // Keep copilot current in the background when it is already installed, mirroring
+  // the agency auto-upgrade. A not-installed copilot is handled by the first-run
+  // install gate (which installs whichever provider is the network default).
+  if (copilotConfig.enabled && copilotBootstrapper.status().installed) {
+    void copilotBootstrapper
+      .upgradeToLatest((event) => {
+        if (event.kind === 'line') {
+          logger.debug('copilot upgrade', { line: event.line });
+        } else if (event.kind === 'error') {
+          logger.warn('copilot upgrade failed', { message: event.message });
+        }
+      })
+      .then((status) => {
+        if (status.installed) {
+          refreshCopilotPath();
+        }
+      })
+      .catch((error) => {
+        logger.error('copilot auto-upgrade crashed', error);
+      });
+  }
+
+  // Decide the default AI provider by environment. Microsoft corpnet defaults to
+  // Agency; everywhere else defaults to the GitHub Copilot CLI. Strong signals
+  // (explicit override, corp-domain env vars) resolve synchronously; a weak,
+  // best-effort endpoint-reachability probe refines the decision shortly after
+  // startup without blocking it. Both providers stay registered so the user can
+  // switch (or run across) CLIs at any time.
+  const networkOverride = explicitNetworkOverride(process.env);
+  const envMicrosoft = envIndicatesMicrosoftNetwork(process.env);
+  const installedProviderIds = (): Set<string> => {
+    const ids = new Set<string>();
+    if (copilotConfig.enabled && copilotBootstrapper.status().installed) {
+      ids.add('copilot');
+    }
+    if (agencyConfig.enabled && agencyBootstrapper.status().installed) {
+      ids.add('agency');
+    }
+    return ids;
+  };
   // reads ~/.copilot/settings.json at launch and has no flag/env for this, so we
   // merge-write the setting on startup (before any session spawns), preserving
   // any other user settings and tolerating a missing/malformed file.
@@ -1631,9 +1734,44 @@ function main(): void {
     throw new Error('No providers are enabled; enable at least one provider in config.');
   }
 
-  const resolver = createProviderResolver(providers, {
-    defaultProvider: enabledProviders[0].id,
+  // Initial default from the synchronous (strong) signals; the async endpoint
+  // probe below refines it in place if the environment is still ambiguous.
+  const enabledProviderIds = enabledProviders.map((provider) => provider.id);
+  const computeDefaultProvider = (endpointReachable: boolean | null): string =>
+    selectDefaultProvider({
+      microsoftNetwork: resolveMicrosoftNetwork({
+        override: networkOverride,
+        envMicrosoft,
+        endpointReachable,
+      }),
+      enabled: enabledProviderIds,
+      installed: installedProviderIds(),
+    });
+  const resolverConfig = {
+    defaultProvider: computeDefaultProvider(null),
     defaultModelByProvider,
+  };
+  const resolver = createProviderResolver(providers, resolverConfig);
+
+  // When the environment is ambiguous (no override, env not Microsoft), run the
+  // best-effort reachability probe and refine the default in place. The resolver
+  // reads `defaultProvider` live, so later sessions pick up the refined default
+  // without a restart. Skipped when a strong signal already decided it.
+  if (networkOverride === null && !envMicrosoft) {
+    void probeMicrosoftInstallEndpoint()
+      .then((reachable) => {
+        if (reachable) {
+          resolverConfig.defaultProvider = computeDefaultProvider(true);
+        }
+      })
+      .catch((error) => {
+        logger.debug('microsoft network probe failed', { error });
+      });
+  }
+  logger.info('default AI provider selected', {
+    defaultProvider: resolverConfig.defaultProvider,
+    envMicrosoft,
+    override: networkOverride,
   });
 
   // Credit engine.
@@ -3314,6 +3452,16 @@ function main(): void {
         });
       },
       providers,
+      providerBootstrapInfo: () => {
+        const installed = installedProviderIds();
+        return {
+          defaultProvider: resolverConfig.defaultProvider,
+          providers: enabledProviderIds.map((id) => ({
+            id,
+            installed: installed.has(id),
+          })),
+        };
+      },
       aggregates: featureAnalytics,
       summarizer,
       summaries: summaryRepo,
@@ -4011,6 +4159,48 @@ function main(): void {
       // late subscriber is not left hanging on a stream with no terminal event.
       stream.send(null,
         agencyBootstrapper.status().installed
+          ? { kind: 'done' }
+          : { kind: 'line', line: 'Installation already in progress…' },
+      );
+    }
+  });
+
+  // First-run copilot install, streamed as SSE — mirrors `/agency/install` so the
+  // first-run gate can install whichever CLI is the network default (and install
+  // the other on-demand when the user switches to it).
+  let copilotInstall: Promise<void> | null = null;
+  const copilotInstallSubscribers = new Map<express.Response, NonNullable<ReturnType<typeof openSse>>>();
+  app.get(`${apiConfig.basePath}/copilot/install`, (_req, res) => {
+    if (!applicationWork.accepting) {
+      res.status(409).json({ error: { kind: 'conflict', message: 'Application shutdown is in progress' } });
+      return;
+    }
+    const stream = openSse(res, () => { copilotInstallSubscribers.delete(res); });
+    if (!stream) return;
+    copilotInstallSubscribers.set(res, stream);
+    stream.comment('connected');
+    const send = (data: unknown): void => {
+      for (const subscriber of copilotInstallSubscribers.values()) subscriber.send(null, data);
+    };
+    if (!copilotInstall) {
+      copilotInstall = applicationWork.own(() => copilotBootstrapper
+        .install((event) => send(event))
+        .then((status) => {
+          if (status.installed) {
+            refreshCopilotPath();
+          }
+        }))
+        .catch((error) => {
+          logger.error('Copilot install failed', error);
+          send({ kind: 'error', line: 'Installation failed. Please retry.' });
+        })
+        .finally(() => {
+          copilotInstall = null;
+          for (const subscriber of copilotInstallSubscribers.values()) subscriber.end();
+        });
+    } else {
+      stream.send(null,
+        copilotBootstrapper.status().installed
           ? { kind: 'done' }
           : { kind: 'line', line: 'Installation already in progress…' },
       );

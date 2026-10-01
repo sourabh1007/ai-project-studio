@@ -33,7 +33,16 @@ function harness() {
   const registry = createProviderRegistry();
   registry.register(provider('copilot', [{ id: 'gpt-5.4-mini', label: 'GPT' }]));
   registry.register(provider('agency', []));
-  return createProviderRoutes({ registry });
+  return createProviderRoutes({
+    registry,
+    bootstrapInfo: () => ({
+      defaultProvider: 'copilot',
+      providers: [
+        { id: 'copilot', installed: true },
+        { id: 'agency', installed: false },
+      ],
+    }),
+  });
 }
 
 describe('provider-controller', () => {
@@ -41,6 +50,18 @@ describe('provider-controller', () => {
     const result = await pick(harness(), 'get', '/providers')(req());
     expect(result.status).toBe(200);
     expect(result.body).toEqual([{ id: 'copilot' }, { id: 'agency' }]);
+  });
+
+  it('reports bootstrap info (default provider + install state)', async () => {
+    const result = await pick(harness(), 'get', '/providers/bootstrap')(req());
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      defaultProvider: 'copilot',
+      providers: [
+        { id: 'copilot', installed: true },
+        { id: 'agency', installed: false },
+      ],
+    });
   });
 
   it('lists models for a provider', async () => {

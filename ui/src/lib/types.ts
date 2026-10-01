@@ -22,6 +22,14 @@ export interface AgencyUpgradeState {
   previousVersion?: string | null;
 }
 
+/** Install state + default selection for the first-run provider gate. */
+export interface ProviderBootstrapInfo {
+  /** Provider id chosen as the default for new sessions (network-based). */
+  defaultProvider: string;
+  /** Each registered provider with whether its CLI is installed. */
+  providers: Array<{ id: string; installed: boolean }>;
+}
+
 /** Lightweight backend liveness probe payload (`GET /health`). */
 export interface HealthStatus {
   status: 'ok';
@@ -934,6 +942,12 @@ export interface RemotePullRequest {
   sourceBranch: string;
   /** Author's display name or login, when known. */
   author: string | null;
+  /**
+   * Author's provider-native handle — the GitHub login (git username) or the
+   * Azure DevOps unique name. Null/absent when the provider doesn't expose it.
+   * The "team" roster is configured against this stable handle.
+   */
+  authorLogin?: string | null;
   /**
    * ISO-8601 timestamp of when the PR was opened (GitHub `createdAt`, Azure
    * `creationDate`); null/absent when the provider did not report it. Used to

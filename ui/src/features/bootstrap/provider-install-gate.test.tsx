@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import { createApiClient } from '../../lib/api.js';
-import type { AgencyStatus } from '../../lib/types.js';
-import { AgencyInstallGate } from './agency-install-gate.js';
+import type { ProviderBootstrapInfo } from '../../lib/types.js';
+import { ProviderInstallGate } from './provider-install-gate.js';
 
 class InstallerStream {
   static instances: InstallerStream[] = [];
@@ -21,20 +21,31 @@ class InstallerStream {
   }
 }
 
-function mount(probe: () => Promise<AgencyStatus> = async () => ({ installed: false })) {
+const bootstrap = (
+  defaultProvider: string,
+  installed: boolean,
+): ProviderBootstrapInfo => ({
+  defaultProvider,
+  providers: [
+    { id: 'copilot', installed: defaultProvider === 'copilot' ? installed : false },
+    { id: 'agency', installed: defaultProvider === 'agency' ? installed : false },
+  ],
+});
+
+function mount(
+  probe: () => Promise<ProviderBootstrapInfo> = async () => bootstrap('copilot', false),
+) {
   const api = createApiClient();
-  const status = vi.spyOn(api, 'getAgencyStatus').mockImplementation(probe);
+  const status = vi.spyOn(api, 'getProviderBootstrap').mockImplementation(probe);
   const view = render(
     <ApiProvider value={api}>
-      <AgencyInstallGate><p>Application ready</p></AgencyInstallGate>
+      <ProviderInstallGate><p>Application ready</p></ProviderInstallGate>
     </ApiProvider>,
   );
   return { status, ...view };
 }
 
 const flush = () => act(async () => {});
-const missing = { installed: false };
-const installed = { installed: true };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -47,20 +58,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('AgencyInstallGate', () => {
-  it('opens the application without installing when status confirms availability', async () => {
-    mount(async () => installed);
+describe('ProviderInstallGate', () => {
+  it('opens the application without installing when the default provider is present', async () => {
+    mount(async () => bootstrap('copilot', true));
     await flush();
     expect(screen.getByText('Application ready')).toBeTruthy();
     expect(InstallerStream.instances).toHaveLength(0);
   });
 
+  it('installs the network default provider (Agency) via its own stream', async () => {
+    mount(async () => bootstrap('agency', false));
+    await flush();
+    expect(screen.getByRole('heading', { name: 'Installing Agency' })).toBeTruthy();
+    expect(InstallerStream.instances).toHaveLength(1);
+    expect(InstallerStream.instances[0].url).toContain('/agency/install');
+  });
+
+  it('installs GitHub Copilot CLI when it is the default', async () => {
+    mount(async () => bootstrap('copilot', false));
+    await flush();
+    expect(screen.getByRole('heading', { name: 'Installing GitHub Copilot CLI' })).toBeTruthy();
+    expect(InstallerStream.instances[0].url).toContain('/copilot/install');
+  });
+
   it('does not interpret a failed status read as missing, and supports a safe retry', async () => {
     const h = mount(async () => { throw new Error('offline'); });
     await flush();
-    expect(screen.getByText(/Could not confirm whether Agency is installed: offline/)).toBeTruthy();
+    expect(screen.getByText(/Could not confirm whether the AI CLI is installed: offline/)).toBeTruthy();
     expect(InstallerStream.instances).toHaveLength(0);
-    h.status.mockResolvedValue(installed);
+    h.status.mockResolvedValue(bootstrap('copilot', true));
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await flush();
     expect(screen.getByText('Application ready')).toBeTruthy();
@@ -68,20 +94,24 @@ describe('AgencyInstallGate', () => {
   });
 
   it('bounds an unresponsive status probe and ignores a late missing result', async () => {
-    let resolve!: (status: AgencyStatus) => void;
+    let resolve!: (info: ProviderBootstrapInfo) => void;
     mount(() => new Promise((yes) => { resolve = yes; }));
     await act(async () => { vi.advanceTimersByTime(15_000); });
     expect(screen.getByText(/status check timed out/)).toBeTruthy();
-    await act(async () => { resolve(missing); });
+    await act(async () => { resolve(bootstrap('copilot', false)); });
     expect(InstallerStream.instances).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Continue without waiting' }));
     expect(screen.getByText('Application ready')).toBeTruthy();
   });
-  it('does not install when the status endpoint returns an incomplete response', async () => {
-    const api = createApiClient({ fetchImpl: async () => new Response('{}') });
+
+  it('does not install when the bootstrap response omits the default provider', async () => {
+    const api = createApiClient({
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ defaultProvider: 'copilot', providers: [] })),
+    });
     render(
       <ApiProvider value={api}>
-        <AgencyInstallGate><p>Application ready</p></AgencyInstallGate>
+        <ProviderInstallGate><p>Application ready</p></ProviderInstallGate>
       </ApiProvider>,
     );
     await flush();
@@ -90,10 +120,10 @@ describe('AgencyInstallGate', () => {
   });
 
   it('allows deferral during checking without starting an installer when the probe finishes', async () => {
-    let resolve!: (status: AgencyStatus) => void;
+    let resolve!: (info: ProviderBootstrapInfo) => void;
     mount(() => new Promise((yes) => { resolve = yes; }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue without waiting' }));
-    await act(async () => { resolve(missing); vi.advanceTimersByTime(30_000); });
+    await act(async () => { resolve(bootstrap('copilot', false)); vi.advanceTimersByTime(30_000); });
     expect(screen.getByText('Application ready')).toBeTruthy();
     expect(InstallerStream.instances).toHaveLength(0);
   });
@@ -139,7 +169,7 @@ describe('AgencyInstallGate', () => {
     await flush();
     expect(screen.getByText(/previous installer may still be running/)).toBeTruthy();
     expect(InstallerStream.instances).toHaveLength(1);
-    h.status.mockResolvedValue(installed);
+    h.status.mockResolvedValue(bootstrap('copilot', true));
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await flush();
     expect(screen.getByText('Application ready')).toBeTruthy();

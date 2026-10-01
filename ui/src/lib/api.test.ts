@@ -699,6 +699,21 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/agency/status');
   });
 
+  it('gets the provider bootstrap info', async () => {
+    const info = {
+      defaultProvider: 'copilot',
+      providers: [
+        { id: 'copilot', installed: true },
+        { id: 'agency', installed: false },
+      ],
+    };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(info));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getProviderBootstrap();
+    expect(result).toEqual(info);
+    expect(calls[0][0]).toBe('/api/providers/bootstrap');
+  });
+
   it('gets the GitHub auth status', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ authenticated: true, login: 'octocat' }),

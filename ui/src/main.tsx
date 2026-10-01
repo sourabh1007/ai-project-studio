@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ApiProvider, apiClient } from './app/api-context.js';
 import { App } from './App.js';
 import { ErrorBoundary } from './components/error-boundary.js';
-import { AgencyInstallGate } from './features/bootstrap/agency-install-gate.js';
+import { ProviderInstallGate } from './features/bootstrap/provider-install-gate.js';
 import {
   TabPopout,
   readTabPopoutFromLocation,
@@ -31,9 +31,9 @@ createRoot(container).render(
         {popout ? (
           <TabPopout tab={popout.tab} label={popout.label} />
         ) : (
-          <AgencyInstallGate>
+          <ProviderInstallGate>
             <App />
-          </AgencyInstallGate>
+          </ProviderInstallGate>
         )}
       </ApiProvider>
     </ErrorBoundary>

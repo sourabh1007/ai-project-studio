@@ -63,6 +63,7 @@ export default defineConfig({
         'src/meta/acp/acp-process-adapter.ts',
         'src/automation/shell-executor-adapter.ts',
         'src/automation/http-probe-adapter.ts',
+        'src/provider/microsoft-network-probe.ts',
         'src/automation/ci-pipeline-probe-adapter.ts',
         'src/automation/mcp/studio-mcp-server.ts',
         // IO/process entry: the MCP launch proxy spawns a child and wires stdio;
