@@ -46,6 +46,17 @@ jobs:
     needs: verify
     name: Build ${{ matrix.label }} installer
     runs-on: ${{ matrix.os }}
+    # Signing is opt-in and fail-closed: each platform signs only when ALL of its
+    # credentials are present, otherwise it falls back to the free default
+    # (Windows → unsigned internal candidate; macOS → ad-hoc signature). These
+    # job-level flags turn the secret presence into a plain string the step `if:`
+    # conditions can read (secrets can't be referenced directly in `if:`).
+    env:
+      # Free OSS signing via the SignPath Foundation. Set both repo secrets to
+      # enable; see docs/development.md (Code signing) for the application + project setup.
+      SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+      # Paid Apple Developer ID + notarization. All five secrets must be set.
+      APPLE_SIGNING_ENABLED: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_CSC_LINK != '' && secrets.APPLE_CSC_KEY_PASSWORD != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,7 +131,7 @@ jobs:
           AZURE_CODE_SIGNING_PROFILE: ${{ secrets.AZURE_CODE_SIGNING_PROFILE }}
 
       - name: Build macOS installer (ad-hoc signed, unnotarized)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true'
         working-directory: desktop
         run: npm run dist:mac
         # electron-builder `mac.identity: '-'` (electron-builder.yml) forces an
@@ -128,6 +139,61 @@ jobs:
         # CSC_IDENTITY_AUTO_DISCOVERY override is needed. Ad-hoc signing keeps
         # Apple Silicon from rejecting the download as "damaged"; the build stays
         # unnotarized and behind the quarantine prompt until real signing lands.
+        # This is the free default; the notarized step below replaces it when an
+        # Apple Developer ID is configured.
+
+      - name: Build macOS installer (Developer ID signed + notarized)
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
+        working-directory: desktop
+        # Overrides the committed ad-hoc `mac.identity: '-'` with a real Developer
+        # ID (auto-discovered from the CSC_LINK .p12 electron-builder imports),
+        # turns Hardened Runtime on (required for notarization), and submits the
+        # app to Apple's notary service via notarytool. Produces a fully signed,
+        # notarized, staple-ready DMG with no Gatekeeper prompt. Requires a paid
+        # Apple Developer Program membership — see docs/development.md (Code signing).
+        run: >
+          npm run dist:mac --
+          -c.mac.identity="Developer ID Application"
+          -c.mac.hardenedRuntime=true
+          -c.mac.notarize=true
+          -c.dmg.sign=true
+        env:
+          # Base64-encoded Developer ID Application .p12 and its password.
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          # Apple ID + app-specific password + team for notarytool.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload unsigned Windows installer for SignPath
+        id: unsigned-win
+        if: runner.os == 'Windows' && env.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: unsigned-windows-installer
+          path: desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Sign Windows installer via SignPath Foundation (free OSS)
+        if: runner.os == 'Windows' && env.SIGNPATH_ORGANIZATION_ID != ''
+        # Free, Windows-trusted code signing for open-source projects. SignPath
+        # pulls the unsigned .exe uploaded above, signs it in their managed
+        # workflow (the private key never touches CI), and writes the signed .exe
+        # back into desktop/release, overwriting the unsigned one BEFORE the
+        # provenance hash is recorded below. The project/policy/artifact slugs
+        # must match the SignPath project — see docs/development.md (Code signing). The first signing
+        # request may require a one-time manual approval in the SignPath UI.
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ai-project-studio
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: windows-exe
+          github-artifact-id: ${{ steps.unsigned-win.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: desktop/release
 
       - name: Record internal candidate provenance
         run: node desktop/scripts/release-candidate.cjs

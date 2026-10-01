@@ -196,8 +196,43 @@ The first three authenticate via `azure.identity` `EnvironmentCredential`; the l
 
 > SmartScreen reputation for Trusted Signing certs builds over time/downloads; a brand-new certificate profile may still warn on the first few installs even though the publisher is now shown as verified.
 
-### macOS — unsigned (for now)
-The current `.dmg` candidate is unsigned and un-notarized (`dmg.sign: false`, `CSC_IDENTITY_AUTO_DISCOVERY=false`) and is **not eligible for production promotion**. Gatekeeper may block first launch. Production requires Apple Developer Program enrollment, a **Developer ID Application** certificate, signing/notarization configuration, and verification of the resulting artifact; bypassing Gatekeeper is not qualification.
+### Windows — SignPath Foundation (free, open source)
+A **free**, Windows-trusted alternative to Azure Trusted Signing for public open-source projects, via the [SignPath Foundation](https://signpath.org/). The private key never touches CI: the workflow uploads the unsigned `.exe`, SignPath signs it in a managed cloud workflow, and the signed `.exe` is written back into `desktop/release/` **before** the provenance hash is recorded — so the published, hash-verified artifact is the signed one. Enabled automatically when the SignPath secrets are present; absent, Windows falls back to the Azure path (or an unsigned internal candidate). Don't configure both Azure and SignPath — pick one.
+
+One-time setup:
+1. Apply to the **SignPath Foundation** open-source program and have them create (or link) a SignPath organization for this repo. The certificate is issued to *"SignPath Foundation"*, so that's the publisher Windows shows — a real OV signature that clears the "Unknown Publisher" block.
+2. In SignPath, create a **project** and configure its slugs to match the workflow:
+
+   | Workflow input | Value (must match SignPath project) |
+   | --- | --- |
+   | `project-slug` | `ai-project-studio` |
+   | `signing-policy-slug` | `release-signing` |
+   | `artifact-configuration-slug` | `windows-exe` |
+
+   (Adjust the three literals in `release.yml` if your SignPath project uses different slugs.)
+3. Add these **GitHub Actions secrets**:
+
+   | Secret | Meaning |
+   | --- | --- |
+   | `SIGNPATH_ORGANIZATION_ID` | SignPath organization GUID (also the enable flag) |
+   | `SIGNPATH_API_TOKEN` | SignPath CI user API token |
+
+> The **first** signing request for a new policy may require a one-time manual approval in the SignPath UI; with `wait-for-completion: true` the job blocks until it's approved (or times out). Approve it once and subsequent releases are automatic.
+
+### macOS — ad-hoc (free, default) or Developer ID + notarization (paid)
+The free default remains an **ad-hoc signature** (`mac.identity: '-'`): valid enough that Apple Silicon no longer reports the download as "damaged", but un-notarized, so Gatekeeper still shows the "unidentified developer" prompt that clearing the quarantine flag (`xattr -dr com.apple.quarantine …`) resolves. This path is **not eligible for production promotion**.
+
+The workflow now **also** supports full **Developer ID signing + Apple notarization**, which removes the Gatekeeper prompt entirely. This requires a **paid Apple Developer Program** membership ($99/yr) — there is no free notarization path. It activates automatically when all five Apple secrets are set (partial configuration leaves the free ad-hoc default in place):
+
+   | Secret | Meaning |
+   | --- | --- |
+   | `APPLE_CSC_LINK` | Base64 of the **Developer ID Application** `.p12` (`base64 -i cert.p12`) |
+   | `APPLE_CSC_KEY_PASSWORD` | Password for that `.p12` |
+   | `APPLE_ID` | Apple ID email used for notarization |
+   | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for that Apple ID |
+   | `APPLE_TEAM_ID` | Apple Developer Team ID |
+
+When set, the macOS build overrides the ad-hoc identity with the imported Developer ID, enables Hardened Runtime, signs the DMG, and submits to Apple's notary service via `notarytool`. Production promotion still requires verifying the resulting notarized artifact — bypassing Gatekeeper is not qualification.
 
 ## Auto-update
 The desktop app self-updates from **GitHub Releases** using [`electron-updater`](https://www.electron.build/auto-update). The main-process wrapper is `desktop/update-manager.cjs`; the renderer talks to it through the `window.desktop.updates` preload bridge and the `ui/src/hooks/use-app-updates.ts` hook (all update-view logic lives in the fully-tested `ui/src/lib/update-state.ts` reducer).
