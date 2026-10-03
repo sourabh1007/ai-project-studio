@@ -965,9 +965,24 @@ function McpServerCard({
     return (
       <div className="skill-card mcp-server-card mcp-builtin-card">
         <strong className="skill-card-name">{displayName}</strong>
+        {!server.catalog && (
+          <span className={`mcp-status mcp-status-${enabled ? 'ok' : 'muted'}`} role="status">
+            <span className="mcp-status-dot" aria-hidden="true" />
+            {enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        )}
         <p className="skill-card-body">{server.description
           ?? (typeof server.spec.description === 'string' ? server.spec.description : 'Agency built-in MCP server.')}</p>
         <div className="row mcp-builtin-actions">
+              {!server.catalog && (
+                <Button variant="ghost" loading={updating}
+                  onClick={() => void toggleEnabled()}
+                  ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
+                  title={capability('toggle', capabilities).reason ?? 'Applies to all sessions that use global built-ins'}
+                  disabled={!canMutateConfig || !capability('toggle', capabilities).supported}>
+                  {enabled ? 'Disable' : 'Enable'}
+                </Button>
+              )}
               <Button onClick={onOpenTools} ariaLabel={`Tools for ${displayName}`}
                 disabled={!canMutateConfig || !capability('tools', capabilities).supported}
                 title={capability('tools', capabilities).reason ?? 'List available tools'}>

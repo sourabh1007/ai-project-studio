@@ -14,9 +14,20 @@ function setup(initial: McpConfigDocument | null = null) {
     run: async () => ({ code: 0, stdout: 'Available MCPs:\n  ado\n  kusto' }),
   }, ['ado', 'kusto'].map((name) => ({ name, description: name, instruction: name })));
   const runner = { run: vi.fn(async (args: string[]) => {
-    const name = args[4].split(' ')[0];
     const prior = document?.mcps as Record<string, unknown> | undefined;
-    document = { ...document, mcps: { ...prior, builtins: { ...(prior?.builtins as object), [name]: { enabled: false, nativeArguments: args[4] } } } };
+    if (args[3] === '--mcp') {
+      const name = args[4].split(' ')[0];
+      document = { ...document, mcps: { ...prior, builtins: { ...(prior?.builtins as object), [name]: { enabled: false, nativeArguments: args[4] } } } };
+    } else {
+      const segments = args[3].split('.');
+      const name = segments[2];
+      const enabled = args[4] === 'true';
+      const builtins = { ...(prior?.builtins as Record<string, unknown>) };
+      builtins[name] = segments.length === 4
+        ? { ...(builtins[name] as Record<string, unknown>), enabled }
+        : enabled;
+      document = { ...document, mcps: { ...prior, builtins } };
+    }
     return { code: 0, stdout: 'private output', stderr: 'private error' };
   }) };
   const manager = createAgencyMcpBuiltinSetup({
@@ -165,5 +176,110 @@ describe('native Agency global built-in setup', () => {
     await first;
     await expect(second).rejects.toThrow(/already exists/);
     expect(s.runner.run).toHaveBeenCalledOnce();
+  });
+
+  describe('native enable/disable', () => {
+    it('toggles an argument-configured object entry via its enabled subpath, preserving arguments', async () => {
+      const s = setup({ mcps: { builtins: { ado: { enabled: true, organization: 'org' } }, servers: { other: { command: 'x' } } } });
+      await s.manager.setEnabled('ado', false);
+      expect(s.runner.run).toHaveBeenCalledOnce();
+      expect(s.runner.run).toHaveBeenCalledWith(['config', 'set', '--global', 'mcps.builtins.ado.enabled', 'false']);
+      expect(s.globalStore.write).not.toHaveBeenCalled();
+      expect(s.getDocument()).toMatchObject({
+        mcps: { builtins: { ado: { enabled: false, organization: 'org' } }, servers: { other: { command: 'x' } } },
+      });
+    });
+
+    it.each([true, false])('toggles a bare-boolean entry by replacing the whole scalar to %s', async (enabled) => {
+      const s = setup({ mcps: { builtins: { ado: !enabled } } });
+      await s.manager.setEnabled('ado', enabled);
+      expect(s.runner.run).toHaveBeenCalledWith(['config', 'set', '--global', 'mcps.builtins.ado', String(enabled)]);
+      expect(s.getDocument()).toMatchObject({ mcps: { builtins: { ado: enabled } } });
+    });
+
+    it.each(['ado --evil', '../ado', '', 'UNLISTED'])('rejects unsafe names before any read %j', async (name) => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      await expect(s.manager.setEnabled(name, true)).rejects.toThrow(/Invalid Agency/);
+      expect(s.globalStore.read).not.toHaveBeenCalled();
+      expect(s.runner.run).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-boolean enabled flag before any read', async () => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      await expect(s.manager.setEnabled('ado', 'yes' as unknown as boolean)).rejects.toThrow(/must be a boolean/);
+      expect(s.globalStore.read).not.toHaveBeenCalled();
+    });
+
+    it.each([null, { mcps: {} }, { mcps: { builtins: {} } }])('pins a default-on catalog built-in by writing an explicit scalar override %j', async (document) => {
+      const s = setup(document as McpConfigDocument);
+      await s.manager.setEnabled('ado', false);
+      expect(s.runner.run).toHaveBeenCalledWith(['config', 'set', '--global', 'mcps.builtins.ado', 'false']);
+      expect(s.globalStore.write).not.toHaveBeenCalled();
+      expect(s.getDocument()).toMatchObject({ mcps: { builtins: { ado: false } } });
+    });
+
+    it('rejects pinning a name that is not an installed catalog built-in', async () => {
+      const s = setup({ mcps: { builtins: {} } });
+      await expect(s.manager.setEnabled('watson', false)).rejects.toThrow(/not in the installed, public Agency catalog/);
+      expect(s.runner.run).not.toHaveBeenCalled();
+    });
+
+    it('rejects pinning an unconfigured built-in that clashes with a custom global server', async () => {
+      const s = setup({ mcps: { servers: { ado: { command: 'x' } } } });
+      await expect(s.manager.setEnabled('ado', true)).rejects.toThrow(/name conflict/);
+      expect(s.runner.run).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed existing entry without issuing a setter', async () => {
+      const s = setup({ mcps: { builtins: { ado: 42 } } });
+      await expect(s.manager.setEnabled('ado', false)).rejects.toThrow(/malformed/);
+      expect(s.runner.run).not.toHaveBeenCalled();
+    });
+
+    it('never retries or leaks diagnostics on a nonzero exit', async () => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      s.runner.run.mockResolvedValue({ code: 2, stdout: 'private token', stderr: 'credential' });
+      await expect(s.manager.setEnabled('ado', false)).rejects.toThrow(/Agency rejected/);
+      expect(s.runner.run).toHaveBeenCalledOnce();
+    });
+
+    it('reports a timed-out setter as unknown persistence without retry', async () => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      s.runner.run.mockRejectedValue(new Error('private timeout token'));
+      await expect(s.manager.setEnabled('ado', false)).rejects.toThrow(/persistence is unknown/);
+      expect(s.runner.run).toHaveBeenCalledOnce();
+    });
+
+    it('fails when the persisted state cannot be re-read', async () => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      vi.mocked(s.globalStore.read).mockResolvedValueOnce({ mcps: { builtins: { ado: true } } }).mockRejectedValueOnce(new Error('secret'));
+      await expect(s.manager.setEnabled('ado', false)).rejects.toThrow(/could not be re-read/);
+      expect(s.runner.run).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      { mcps: { builtins: { ado: true } } },
+      { mcps: { builtins: { ado: 42 } } },
+    ])('fails when the read-back does not reflect the requested state %j', async (after) => {
+      const s = setup({ mcps: { builtins: { ado: true } } });
+      vi.mocked(s.globalStore.read)
+        .mockResolvedValueOnce({ mcps: { builtins: { ado: true } } })
+        .mockResolvedValueOnce(after as McpConfigDocument);
+      await expect(s.manager.setEnabled('ado', false)).rejects.toThrow(/could not be verified/);
+    });
+
+    it('rejects concurrent toggles beyond the bounded queue', async () => {
+      const s = setup({ mcps: { builtins: { ado: true, kusto: true } } });
+      let finish!: () => void;
+      const held = new Promise<void>((resolve) => { finish = resolve; });
+      const original = s.runner.run.getMockImplementation()!;
+      s.runner.run.mockImplementationOnce(async (args) => { await held; return original(args); });
+      const first = s.manager.setEnabled('ado', false);
+      const second = s.manager.setEnabled('kusto', false);
+      await expect(s.manager.setEnabled('ado', true)).rejects.toThrow(/busy/);
+      finish();
+      await Promise.all([first, second]);
+      expect(s.runner.run).toHaveBeenCalledTimes(2);
+    });
   });
 });

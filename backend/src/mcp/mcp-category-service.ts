@@ -37,6 +37,13 @@ export interface McpCategorySource {
   restartReason?: string;
   allowBareMap?: boolean;
   missingNotice?: string;
+  /**
+   * When present, toggling an entry is delegated to a native provider command
+   * (e.g. Agency's scalar config setter) instead of a document rewrite through
+   * `store.write`. This makes `toggle` a supported capability even when the
+   * source is otherwise read-only, because the native command owns persistence.
+   */
+  supportsNativeToggle?: boolean;
 }
 
 export interface McpCategory {
@@ -65,6 +72,19 @@ export interface McpCategoryServiceDeps {
   maxAuthObservations: number;
   authObservationStore?: McpAuthObservationStore;
   studio: { name: string; spec: Record<string, unknown>; tools: McpToolEntry[]; probe?: () => Promise<McpServerStatus> };
+  /**
+   * Applies a persisted global built-in change to already-running sessions by
+   * recycling the provider's live terminals and warm metasession pool so the new
+   * configuration takes effect immediately instead of only on the next launch.
+   * IO-bound and wired in the composition root; absent in pure unit setups.
+   */
+  applyGlobalBuiltinChange?: (providerId: string) => Promise<McpBuiltinApplyResult>;
+}
+
+/** Outcome of applying a global built-in change to running sessions. */
+export interface McpBuiltinApplyResult {
+  restartedSessions: number;
+  recycledPool: boolean;
 }
 
 const OPERATIONS: McpOperation[] = ['add', 'edit', 'remove', 'toggle', 'tools', 'toolToggle', 'restart'];
@@ -89,7 +109,9 @@ function sourceCapabilities(source: McpCategorySource): McpCapabilities {
     add: readOnly ?? (source.builtin ? 'Built-ins are provided by Agency, not created here.' : null),
     edit: readOnly ?? null,
     remove: readOnly ?? (source.builtin ? 'Disable built-ins instead of deleting them.' : null),
-    toggle: readOnly ?? source.toggleReason ?? (source.supportsEnabled ? null : 'This source has no supported enabled field. Use the native CLI controls.'),
+    toggle: source.supportsNativeToggle
+      ? null
+      : readOnly ?? source.toggleReason ?? (source.supportsEnabled ? null : 'This source has no supported enabled field. Use the native CLI controls.'),
     toolToggle: readOnly ?? source.toolToggleReason ?? (source.supportsToolAllowList ? null : 'This provider does not support a tools allow-list in server configuration. Use native tool permissions.'),
     tools: null,
     restart: source.restartReason ?? null,
@@ -205,6 +227,28 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     const found = deps.categories.find((item) => item.info.id === id);
     if (!found) throw new NotFoundError(`Unknown MCP category '${id}'`);
     return found;
+  }
+
+  // After a global built-in change persists, recycle running sessions and the
+  // warm pool so it takes effect now. A failure here never undoes the saved
+  // change; it is surfaced as an actionable notice instead.
+  async function applyToSessions(id: string, config: ProviderMcpConfig): Promise<ProviderMcpConfig> {
+    if (!deps.applyGlobalBuiltinChange) return config;
+    const notices = config.notices!;
+    let applied: McpBuiltinApplyResult;
+    try {
+      applied = await deps.applyGlobalBuiltinChange(id);
+    } catch (error) {
+      config.notices = [...notices, `The change was saved, but applying it to running sessions failed: ${error instanceof Error ? error.message : String(error)}. Restart the affected sessions to pick it up.`];
+      return config;
+    }
+    const parts: string[] = [];
+    if (applied.restartedSessions > 0) parts.push(`restarted ${applied.restartedSessions} running session${applied.restartedSessions === 1 ? '' : 's'}`);
+    if (applied.recycledPool) parts.push('recycled the warm metasession pool');
+    config.notices = [...notices, parts.length > 0
+      ? `Saved the change and ${parts.join(' and ')} so it takes effect right away.`
+      : 'Saved the change. No running sessions needed restarting.'];
+    return config;
   }
 
   function studioEntry(): McpServerEntry {
@@ -324,6 +368,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
       if (globalAvailable) {
         for (const entry of available.servers) {
           entry.capabilities!.add = { supported: true, reason: 'Configure this built-in in Agency global configuration using the app. Optional arguments are passed to the native --mcp setter. Existing sessions are not reloaded or authenticated; workspace overrides may still take precedence.' };
+          entry.capabilities!.toggle = { supported: true, reason: 'Agency enables installed built-ins by default. Pin this built-in on or off by writing an explicit global override; enabling an argument-requiring built-in uses the setup form.' };
         }
         for (const entry of servers) {
           if (entry.name.startsWith(`${def.builtinSetup!.source.id}:`) &&
@@ -531,8 +576,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
       requireCapability(entry, entry.catalog ? 'add' : 'edit');
       await def.builtinSetup.manager.configure(entry.builtinName, input.arguments, entry.catalog ? 'add' : 'edit');
       const config = await getServers(id);
-      config.notices = [...config.notices!, 'Agency global built-in persistence was verified after setup. Existing sessions were not reloaded or authenticated. Resolved/workspace overrides may differ from this global declaration.'];
-      return config;
+      return applyToSessions(id, config);
     },
     async putServer(id, input) {
       const def = category(id);
@@ -560,6 +604,19 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     removeServer: (id, name) => mutate(id, name, 'remove'),
     setServerEnabled: async (id, name, enabled) => {
       if (typeof enabled !== 'boolean') throw new ValidationError('enabled must be a boolean.');
+      const target = await locate(id, name);
+      requireCapability(target.entry, 'toggle');
+      const def = category(id);
+      // Global built-ins and installed catalog built-ins both pin their enabled
+      // state through the native global setter, which owns persistence. The
+      // toggle capability check above already rejects read-only resolved
+      // built-ins, so any remaining built-in-named entry here is a catalog or
+      // explicitly scoped global built-in routed by name rather than mutate.
+      if (def.builtinSetup && target.entry.builtinName) {
+        await def.builtinSetup.manager.setEnabled(target.entry.builtinName, enabled);
+        inspections.clear();
+        return applyToSessions(id, await getServers(id));
+      }
       return mutate(id, name, 'toggle', (raw) => ({ ...(object(raw) ? raw : {}), enabled }));
     },
     inspectServer,

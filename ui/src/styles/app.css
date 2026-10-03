@@ -1820,6 +1820,7 @@ body.is-resizing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px 12px;
 }
 
@@ -1843,6 +1844,8 @@ body.is-resizing {
   flex-direction: column;
   gap: 4px;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   text-align: left;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -1885,6 +1888,8 @@ body.is-resizing {
 
 .history-pane-response {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12px;
   color: var(--success, #3fb950);
   white-space: nowrap;
@@ -1971,8 +1976,8 @@ body.is-resizing {
 .history-detail-block {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
 }
 .history-detail-block--prompt {
   border-left: 3px solid var(--accent, #58a6ff);
@@ -1986,20 +1991,30 @@ body.is-resizing {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
-.history-detail-role { font-size: 12px; font-weight: 600; color: var(--text); }
+.history-detail-role {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .history-detail-block header time { font-size: 11px; color: var(--text-muted); }
-.history-detail-text {
+.history-detail-md {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.6;
   color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 40vh;
+  max-height: 46vh;
   overflow: auto;
+  word-break: break-word;
 }
+.history-detail-md > :first-child { margin-top: 0; }
+.history-detail-md > :last-child { margin-bottom: 0; }
 .history-detail-pending { margin: 0; font-size: 13px; color: var(--text-muted); font-style: italic; }
 
 /* ── Explorer ──────────────────────────────────────────────────────────── */
@@ -5822,28 +5837,34 @@ body.is-resizing {
 }
 
 .explorer .session-provider-badge {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  font-size: 0.56rem;
-  font-weight: 700;
-  line-height: 1;
-  color: #fff;
-  background: var(--explorer-accent);
-  text-transform: uppercase;
-  user-select: none;
+ position: absolute;
+ top: -6px;
+ right: -6px;
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ font-size: 0.6rem;
+ font-weight: 800;
+ line-height: 1;
+ text-align: center;
+ text-transform: uppercase;
+ color: var(--explorer-accent);
+ /* Bare monogram (no chip): a background-colored outline keeps the single
+    letter legible over the icon and any row background. */
+ text-shadow:
+   0 0 2px var(--explorer-bg),
+   0 0 2px var(--explorer-bg),
+   0 1px 1px var(--explorer-bg);
+ user-select: none;
+ pointer-events: none;
 }
 
 .explorer .session-provider-badge[data-provider='copilot'] {
-  background: #6e40c9;
+ color: #a371f7;
 }
 
 .explorer .session-provider-badge[data-provider='agency'] {
-  background: #0a7ea4;
+ color: #3bb4e8;
 }
 
 .explorer .session-files {
@@ -6143,8 +6164,9 @@ body.is-resizing {
   align-items: center;
   justify-content: center;
   padding: var(--space-5);
-  background: rgba(0, 0, 0, 0.35);
-  animation: modal-fade 0.15s ease-out;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  animation: modal-fade 0.18s ease-out;
 }
 
 .modal {
@@ -6162,7 +6184,7 @@ body.is-resizing {
   background: var(--surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-dialog);
-  animation: modal-rise 0.15s ease-out;
+  animation: modal-rise 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .modal-sm {
@@ -6405,7 +6427,7 @@ body.is-resizing {
 @keyframes modal-rise {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
+    transform: translateY(14px) scale(0.96);
   }
 }
 
@@ -7691,11 +7713,37 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
-.editor-empty-art {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-lg);
-  background: var(--accent);
+.editor-empty-tips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 320px;
+  text-align: left;
+}
+
+.editor-empty-tips li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-secondary);
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.editor-empty-tip-key {
+  flex: none;
+  min-width: 78px;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--fs-meta);
+  text-align: center;
+  white-space: nowrap;
 }
 
 @keyframes float-art {

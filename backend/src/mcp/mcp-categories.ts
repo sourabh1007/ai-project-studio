@@ -49,10 +49,11 @@ export function createMcpCategories(
   };
   const globalBuiltins: McpCategorySource | undefined = builtinSetup ? {
     ...agencyNative, id: 'global-builtins', path: builtinSetup.source, store: builtinSetup.store,
-    scope: 'Agency global built-ins (not effective session state)', segments: ['mcps', 'builtins'],
+    scope: 'Agency global built-ins (apply to all sessions unless a workspace overrides them)', segments: ['mcps', 'builtins'],
     builtin: true, builtinScope: 'global', supportsEnabled: true,
+    supportsNativeToggle: true,
     missingNotice: 'No global Agency mcps configuration exists yet. Use a catalog card to configure a built-in globally.',
-    readOnlyReason: 'Use the dedicated built-in setup form for global changes. Raw JSON editing, removal and toggles are not supported here.',
+    readOnlyReason: 'Use the dedicated built-in setup form to add or reconfigure global built-ins. Raw JSON editing and removal are not supported here; disable a built-in instead of removing it.',
   } : undefined;
   return [
     {

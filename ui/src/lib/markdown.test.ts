@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdownComment } from './markdown.js';
+import { markdownPreviewText, renderMarkdownComment } from './markdown.js';
 
 function renderFragment(markdown: string): HTMLElement {
   const host = document.createElement('div');
@@ -77,5 +77,27 @@ describe('renderMarkdownComment', () => {
 
   it('returns empty HTML for whitespace-only input', () => {
     expect(renderMarkdownComment(' \n\t ')).toBe('');
+  });
+});
+
+describe('markdownPreviewText', () => {
+  it('flattens Markdown syntax to a single line of plain text', () => {
+    const text = markdownPreviewText(
+      ['## Heading', '', 'It is a **stress test** for *SQL* views.', '', '- one', '- two'].join('\n'),
+    );
+
+    expect(text).toBe('Heading It is a stress test for SQL views. one two');
+    expect(text).not.toContain('*');
+    expect(text).not.toContain('#');
+  });
+
+  it('keeps link text while dropping the URL markup', () => {
+    expect(markdownPreviewText('See [the docs](https://example.test/path).')).toBe(
+      'See the docs.',
+    );
+  });
+
+  it('returns an empty string for whitespace-only input', () => {
+    expect(markdownPreviewText(' \n\t ')).toBe('');
   });
 });

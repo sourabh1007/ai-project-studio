@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createStudioMcpHealth } from './studio-mcp-health.js';
+import { createStudioMcpHealth, reconcileStudioMcpRegistrations } from './studio-mcp-health.js';
 import { createMcpConfigWrites } from './mcp-config-writes.js';
 import type { McpConfigDocument, McpToolInspection } from './mcp-contract.js';
 import { mcpDefaults } from './config.js';
@@ -26,6 +26,59 @@ function setup(document: McpConfigDocument | null = null) {
 }
 
 describe('explicit Studio MCP health and safe bounded self-healing', () => {
+  it('startup reconciliation rewrites stale cmd-wrapper registrations with the current direct argv and port', async () => {
+    const canonical = {
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\app\\backend\\dist\\automation\\mcp\\studio-mcp-server.js'],
+      env: { ELECTRON_RUN_AS_NODE: '1', STUDIO_API_BASE: 'http://127.0.0.1:49677/api', STUDIO_CONTROL_TOKEN: 'fresh' },
+    };
+    const stale = {
+      command: 'C:\\Windows\\system32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Program Files\\nodejs\\node.exe" C:\\app\\backend\\dist\\automation\\mcp\\studio-mcp-server.js'],
+      env: { ELECTRON_RUN_AS_NODE: '1', STUDIO_API_BASE: 'http://127.0.0.1:63043/api', STUDIO_CONTROL_TOKEN: 'stale' },
+    };
+    const document = { otherSetting: true, mcpServers: { azure: { command: 'azmcp' }, 'ai-project-studio': stale } };
+    const read = vi.fn(async () => structuredClone(document));
+    const write = vi.fn(async (_path: string, _doc: McpConfigDocument) => undefined);
+
+    const attempts = await reconcileStudioMcpRegistrations({
+      files: { read, write }, writes: createMcpConfigWrites(), registrationPaths: ['C:\\Users\\me\\.copilot\\mcp-config.json'],
+    }, canonical);
+
+    expect(attempts).toHaveLength(1);
+    expect(write).toHaveBeenCalledWith('C:\\Users\\me\\.copilot\\mcp-config.json', {
+      otherSetting: true,
+      mcpServers: { azure: { command: 'azmcp' }, 'ai-project-studio': canonical },
+    });
+  });
+
+  it('startup reconciliation creates missing app-owned registrations and skips already-current entries', async () => {
+    const canonical = { command: 'node', args: ['studio-mcp-server.js'], env: { STUDIO_API_BASE: 'http://new', STUDIO_CONTROL_TOKEN: 'token' } };
+    const firstWrite = vi.fn(async (_path: string, _doc: McpConfigDocument) => undefined);
+    expect(await reconcileStudioMcpRegistrations({
+      files: { read: vi.fn(async () => null), write: firstWrite },
+      writes: createMcpConfigWrites(),
+      registrationPaths: ['missing.json'],
+    }, canonical)).toHaveLength(1);
+    expect(firstWrite).toHaveBeenCalledWith('missing.json', { mcpServers: { 'ai-project-studio': canonical } });
+
+    const currentWrite = vi.fn(async (_path: string, _doc: McpConfigDocument) => undefined);
+    expect(await reconcileStudioMcpRegistrations({
+      files: { read: vi.fn(async () => ({ mcpServers: { 'ai-project-studio': canonical } })), write: currentWrite },
+      writes: createMcpConfigWrites(),
+      registrationPaths: ['current.json'],
+    }, canonical)).toEqual([]);
+    expect(currentWrite).not.toHaveBeenCalled();
+  });
+
+  it('startup reconciliation refuses malformed mcpServers maps rather than deleting user data', async () => {
+    await expect(reconcileStudioMcpRegistrations({
+      files: { read: vi.fn(async () => ({ mcpServers: 'broken' }) as unknown as McpConfigDocument), write: vi.fn() },
+      writes: createMcpConfigWrites(),
+      registrationPaths: ['broken.json'],
+    }, { command: 'node', args: [], env: {} })).rejects.toThrow('malformed');
+  });
+
   it('gives cold startup three seconds per protocol attempt but aborts retained work at the eight-second total cap', async () => {
     vi.useFakeTimers();
     try {

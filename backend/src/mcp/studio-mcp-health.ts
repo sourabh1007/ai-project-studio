@@ -14,6 +14,12 @@ export interface StudioMcpHealthDeps {
   hostGet: (url: string, token: string, timeoutMs: number) => Promise<{ status: number; body: unknown }>;
 }
 
+export interface StudioMcpRegistrationDeps {
+  files: McpConfigFileStore;
+  writes: McpConfigWrites;
+  registrationPaths: string[];
+}
+
 function object(value: unknown): value is Spec {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -35,6 +41,45 @@ function sameLaunch(stored: Spec, canonical: Spec): boolean {
 
 function failure(message: string, attempts: McpHealAttempt[]): McpServerStatus {
   return { name: SERVER, status: 'error', toolCount: 0, authRequired: false, authUrl: null, message, healAttempts: attempts };
+}
+
+/**
+ * Startup reconciliation for the app-owned Studio bridge registration. Unlike
+ * the on-demand health probe below, this intentionally creates/replaces the
+ * fixed `ai-project-studio` entry so each app lifecycle publishes its current
+ * API port, token and launch argv before any standalone CLI reads the file.
+ */
+export async function reconcileStudioMcpRegistrations(
+  deps: StudioMcpRegistrationDeps,
+  canonical: Spec,
+): Promise<McpHealAttempt[]> {
+  const attempts: McpHealAttempt[] = [];
+  for (const path of deps.registrationPaths) {
+    await deps.writes.run(path, async () => {
+      const document = (await deps.files.read(path)) ?? {};
+      if (document.mcpServers !== undefined && !object(document.mcpServers)) {
+        throw new Error('MCP servers map is malformed.');
+      }
+      const servers = object(document.mcpServers) ? document.mcpServers : {};
+      const stored = servers[SERVER];
+      if (JSON.stringify(stored) === JSON.stringify(canonical)) {
+        return;
+      }
+      await deps.files.write(path, {
+        ...document,
+        mcpServers: {
+          ...servers,
+          [SERVER]: canonical,
+        },
+      });
+      attempts.push({
+        action: 'Reconciled app-owned Studio MCP launch configuration',
+        outcome: 'info',
+        detail: 'The global Studio bridge entry was rewritten with this app lifecycle\'s current launch command, API port and control token.',
+      });
+    });
+  }
+  return attempts;
 }
 
 /** Explicit app-owned check only: repair recognized stale registration, then bounded protocol/host verification. */

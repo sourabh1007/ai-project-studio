@@ -217,13 +217,32 @@ export async function writeClipboardText(
   return invoke(writers.legacy);
 }
 
-/** Event identity, never text or timing, defines a paste operation. */
-export function createPasteGuard() {
+/**
+ * Event identity defines the primary paste operation. Some hosts can also
+ * deliver the same native paste as two trusted ClipboardEvent objects, so an
+ * optional short signature window collapses that duplicate without affecting
+ * non-DOM fixture calls or ordinary repeated pastes.
+ */
+export function createPasteGuard(windowMs = 50) {
   const seen = new WeakSet<object>();
+  let recent: { signature: string; timeStamp: number } | null = null;
   return {
-    shouldPaste(event: object) {
+    shouldPaste(event: object, signature?: string, timeStamp?: number) {
       if (seen.has(event)) return false;
       seen.add(event);
+      if (
+        signature &&
+        timeStamp !== undefined &&
+        Number.isFinite(timeStamp) &&
+        recent?.signature === signature &&
+        timeStamp >= recent.timeStamp &&
+        timeStamp - recent.timeStamp <= windowMs
+      ) {
+        return false;
+      }
+      if (signature && timeStamp !== undefined && Number.isFinite(timeStamp)) {
+        recent = { signature, timeStamp };
+      }
       return true;
     },
   };

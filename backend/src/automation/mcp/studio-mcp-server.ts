@@ -5,12 +5,25 @@ import {
   registerStudioMcpTools,
 } from './studio-mcp-tools.js';
 import { watchForParentExit } from './studio-mcp-lifecycle.js';
+import { checkStudioApiAvailability, studioMcpMissingConfigMessage } from './studio-mcp-startup.js';
 
 const apiBase = process.env.STUDIO_API_BASE;
 const controlToken = process.env.STUDIO_CONTROL_TOKEN;
 
 if (!apiBase || !controlToken) {
-  throw new Error('STUDIO_API_BASE and STUDIO_CONTROL_TOKEN are required');
+  process.stderr.write(`${studioMcpMissingConfigMessage()}\n`);
+  process.exit(0);
+}
+
+const availability = await checkStudioApiAvailability({
+  apiBase,
+  controlToken,
+  fetch,
+  timeoutMs: 1_000,
+});
+if (!availability.ok) {
+  process.stderr.write(`${availability.message}\n`);
+  process.exit(0);
 }
 
 // Exit the moment the owning CLI session's stdio pipe closes; otherwise this
@@ -33,4 +46,3 @@ registerStudioMcpTools(
 );
 
 await server.connect(new StdioServerTransport());
-

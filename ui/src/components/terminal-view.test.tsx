@@ -527,6 +527,42 @@ describe('TerminalView scrollback repaint', () => {
     registrations.mockRestore();
   });
 
+  it('collapses duplicate native text paste events before they can send input twice', () => {
+    const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    term.paste.mockImplementation((text: string) => {
+      for (const handler of term.dataHandlers) handler(text);
+    });
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+      }) });
+    });
+    ws.send.mockClear();
+    const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
+      (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
+    const event = (timeStamp: number) => ({
+      preventDefault: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+      isTrusted: true,
+      timeStamp,
+      clipboardData: { getData: () => 'paste-once', files: [], items: [] },
+    }) as unknown as ClipboardEvent;
+
+    onPaste(event(1000));
+    onPaste(event(1010));
+
+    expect(term.paste).toHaveBeenCalledTimes(1);
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw as string))
+      .filter((message) => message.type === 'input')).toEqual([
+        { type: 'input', data: 'paste-once', generation: 1, seq: 1 },
+      ]);
+    registrations.mockRestore();
+  });
+
   it.each(['focus', 'blur', 'unmount', 'session'] as const)(
     'cancels delayed right-click paste after %s, even when focus returns', async (change) => {
       let resolve!: (text: string) => void;

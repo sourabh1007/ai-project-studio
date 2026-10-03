@@ -4,6 +4,7 @@ import { CheckIcon, ChevronIcon, CircleIcon, ClockIcon, RefreshIcon } from '../.
 import { Spinner } from '../../components/loading.js';
 import { Modal } from '../../components/ui.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
+import { renderMarkdownComment, markdownPreviewText } from '../../lib/markdown.js';
 import { formatDateTime, formatDuration } from '../../lib/format.js';
 import type { PromptStatus, SessionPrompt } from '../../lib/types.js';
 
@@ -63,7 +64,10 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
           <time>{formatDateTime(prompt.at || null)}</time>
         </header>
         {prompt.text ? (
-          <pre className="history-detail-text">{prompt.text}</pre>
+          <div
+            className="history-detail-md pr-comment-body"
+            dangerouslySetInnerHTML={{ __html: renderMarkdownComment(prompt.text) }}
+          />
         ) : (
           <p className="history-detail-pending">The prompt is still being saved…</p>
         )}
@@ -74,7 +78,10 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
           <time>{prompt.answeredAt ? formatDateTime(prompt.answeredAt) : '—'}</time>
         </header>
         {prompt.response ? (
-          <pre className="history-detail-text">{prompt.response}</pre>
+          <div
+            className="history-detail-md pr-comment-body"
+            dangerouslySetInnerHTML={{ __html: renderMarkdownComment(prompt.response) }}
+          />
         ) : (
           <p className="history-detail-pending">
             {prompt.status === 'answering'
@@ -112,7 +119,7 @@ function PromptRow({
           </span>
         </span>
         {prompt.response && (
-          <span className="history-pane-response">{prompt.response}</span>
+          <span className="history-pane-response">{markdownPreviewText(prompt.response)}</span>
         )}
         <span className="history-pane-meta">
           <time>{formatDateTime(prompt.at || null)}</time>

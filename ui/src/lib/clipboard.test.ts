@@ -187,6 +187,17 @@ describe('createPasteGuard', () => {
     expect(guard.shouldPaste(first)).toBe(false);
     expect(guard.shouldPaste({ text: 'same', time: 0 })).toBe(true);
   });
+
+  it('collapses separate event objects only inside a short matching signature window', () => {
+    const guard = createPasteGuard(50);
+
+    expect(guard.shouldPaste({ id: 1 }, 'text:same', 100)).toBe(true);
+    expect(guard.shouldPaste({ id: 2 }, 'text:same', 120)).toBe(false);
+    expect(guard.shouldPaste({ id: 3 }, 'text:other', 130)).toBe(true);
+    expect(guard.shouldPaste({ id: 4 }, 'text:other', 181)).toBe(true);
+    expect(guard.shouldPaste({ id: 5 }, 'text:other', Number.NaN)).toBe(true);
+    expect(guard.shouldPaste({ id: 6 }, 'text:other')).toBe(true);
+  });
 });
 
 describe('acknowledged clipboard writes', () => {

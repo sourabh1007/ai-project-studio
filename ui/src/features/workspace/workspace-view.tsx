@@ -829,12 +829,25 @@ export function WorkspaceView({
                 renderTabBody(active)
               ) : (
                 <div className="editor-empty">
-                  <div className="editor-empty-art" aria-hidden="true" />
                   <EmptyState
                     icon={<AiMagicIcon size={28} />}
                     title="Your AI workspace awaits"
-                    description="Open a session to launch its live CLI, or a feature to see usage analytics. Use the ⊞ on any tab to open it side by side."
+                    description="Pick a feature in the sidebar to launch a live CLI session, then watch usage and cost update in real time."
                   />
+                  <ul className="editor-empty-tips">
+                    <li>
+                      <span className="editor-empty-tip-key">New session</span>
+                      opens a live CLI terminal for the selected feature
+                    </li>
+                    <li>
+                      <span className="editor-empty-tip-key">Usage</span>
+                      tracks tokens, cost, and quota across your CLIs
+                    </li>
+                    <li>
+                      <span className="editor-empty-tip-key">⊞</span>
+                      on any tab opens it side by side
+                    </li>
+                  </ul>
                 </div>
               )}
             </div>

@@ -62,10 +62,18 @@ describe('MCP categories and observational reads', () => {
       s.data.set('global', { mcps: { builtins: { [name]: { enabled: false, organization: args } } } });
       s.data.set('agency-native', { mcps: { builtins: { [name]: { enabled: false, organization: args } } } });
     });
+    const setEnabled = vi.fn(async (name: string, enabled: boolean) => {
+      const doc = s.data.get('global') ?? { mcps: { builtins: {} } };
+      const builtins = (doc.mcps as { builtins: Record<string, unknown> }).builtins;
+      const current = builtins[name];
+      builtins[name] = typeof current === 'object' && current !== null && !Array.isArray(current)
+        ? { ...(current as Record<string, unknown>), enabled } : enabled;
+      s.data.set('global', doc);
+    });
     s.categories[0] = createMcpCategories(s.files, s.files, paths, catalog, {
-      source: 'global', store: s.files, manager: { configure },
+      source: 'global', store: s.files, manager: { configure, setEnabled },
     })[0];
-    return { ...s, configure };
+    return { ...s, configure, setEnabled };
   }
 
   function nativeSetup(withJobs = true, timeout = true) {
@@ -405,15 +413,93 @@ describe('MCP categories and observational reads', () => {
     expect(s.configure).toHaveBeenCalledWith('ado', '--organization mine', 'add');
     expect(saved.servers.find((entry) => entry.name === 'global-builtins:ado')).toMatchObject({
       enabled: false, origin: 'agency-built-in', providerLabel: 'Agency', builtinName: 'ado',
-      spec: { organization: '--organization mine' }, capabilities: { edit: { supported: true }, toggle: { supported: false } },
+      spec: { organization: '--organization mine' }, capabilities: { edit: { supported: true }, toggle: { supported: true } },
     });
     expect(saved.servers.some((entry) => entry.name === 'catalog:ado')).toBe(false);
-    expect(saved.notices!.join(' ')).toContain('Existing sessions were not reloaded');
     await s.service.configureBuiltin!('agency', 'global-builtins:ado', { arguments: '--organization changed' });
     expect(s.configure).toHaveBeenLastCalledWith('ado', '--organization changed', 'edit');
     await expect(s.service.putServer('agency', { name: 'global-builtins:ado', spec: {} })).rejects.toThrow(/dedicated built-in setup/);
     expect(s.files.write).not.toHaveBeenCalled();
     expect(s.inspect).not.toHaveBeenCalled();
+  });
+
+  it('enables and disables global built-ins through the native toggle without rewriting the config file', async () => {
+    const s = withSetup({ global: { mcps: { builtins: { ado: { enabled: false, organization: 'org' } } } } });
+    const enabled = await s.service.setServerEnabled('agency', 'global-builtins:ado', true);
+    expect(s.setEnabled).toHaveBeenCalledWith('ado', true);
+    expect(s.files.write).not.toHaveBeenCalled();
+    expect(enabled.servers.find((entry) => entry.name === 'global-builtins:ado')).toMatchObject({
+      enabled: true, spec: { organization: 'org' },
+    });
+    const disabled = await s.service.setServerEnabled('agency', 'global-builtins:ado', false);
+    expect(s.setEnabled).toHaveBeenLastCalledWith('ado', false);
+    expect(disabled.servers.find((entry) => entry.name === 'global-builtins:ado')!.enabled).toBe(false);
+    await expect(s.service.setServerEnabled('agency', 'global-builtins:ado', 'nope' as unknown as boolean))
+      .rejects.toThrow(/enabled must be a boolean/);
+  });
+
+  it('blocks native toggle on read-only resolved built-ins that have no native setter', async () => {
+    const s = withSetup({ 'agency-native': { mcps: { builtins: { ado: true } } } });
+    await expect(s.service.setServerEnabled('agency', 'native-builtins:ado', false)).rejects.toThrow();
+    expect(s.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it('disables a default-on catalog built-in by routing its builtin name to the native setter', async () => {
+    const s = withSetup();
+    const servers = (await s.service.getServers('agency')).servers;
+    const catalog = servers.find((entry) => entry.name === 'catalog:kusto')!;
+    expect(catalog.capabilities!.toggle.supported).toBe(true);
+    await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+    expect(s.setEnabled).toHaveBeenCalledWith('kusto', false);
+    expect(s.files.write).not.toHaveBeenCalled();
+  });
+
+  describe('applies global built-in changes to running sessions', () => {
+    it('reports restarted sessions and a recycled pool after a toggle', async () => {
+      const apply = vi.fn(async () => ({ restartedSessions: 2, recycledPool: true }));
+      const s = withSetup({}, { applyGlobalBuiltinChange: apply });
+      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      expect(apply).toHaveBeenCalledWith('agency');
+      expect(config.notices!.join(' ')).toContain('restarted 2 running sessions and recycled the warm metasession pool');
+      expect(config.notices!.join(' ')).toContain('takes effect right away');
+    });
+
+    it('uses singular wording for a single restarted session without a pool', async () => {
+      const s = withSetup({}, { applyGlobalBuiltinChange: async () => ({ restartedSessions: 1, recycledPool: false }) });
+      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const text = config.notices!.join(' ');
+      expect(text).toContain('restarted 1 running session ');
+      expect(text).not.toContain('recycled the warm metasession pool');
+    });
+
+    it('reports only a recycled pool when no sessions needed restarting', async () => {
+      const s = withSetup({}, { applyGlobalBuiltinChange: async () => ({ restartedSessions: 0, recycledPool: true }) });
+      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const text = config.notices!.join(' ');
+      expect(text).toContain('recycled the warm metasession pool');
+      expect(text).not.toContain('restarted');
+    });
+
+    it('states that nothing needed restarting when no work was affected', async () => {
+      const s = withSetup({}, { applyGlobalBuiltinChange: async () => ({ restartedSessions: 0, recycledPool: false }) });
+      const config = await s.service.configureBuiltin!('agency', 'catalog:ado', { arguments: '--organization mine' });
+      expect(config.notices!.join(' ')).toContain('No running sessions needed restarting');
+    });
+
+    it('surfaces an actionable notice when applying the change to sessions fails', async () => {
+      const s = withSetup({}, { applyGlobalBuiltinChange: async () => { throw new Error('boom'); } });
+      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const text = config.notices!.join(' ');
+      expect(text).toContain('applying it to running sessions failed: boom');
+      expect(text).toContain('Restart the affected sessions');
+    });
+
+    it('stringifies a non-Error failure in the actionable notice', async () => {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      const s = withSetup({}, { applyGlobalBuiltinChange: async () => { throw 'plain failure'; } });
+      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      expect(config.notices!.join(' ')).toContain('applying it to running sessions failed: plain failure');
+    });
   });
 
   it('fails closed for invalid global sources and unsupported installed builtin edits', async () => {

@@ -820,23 +820,30 @@ export function TerminalView({
     const onPaste = (event: ClipboardEvent) => {
       event.preventDefault();
       event.stopImmediatePropagation();
+      const data = event.clipboardData;
+      const text = data?.getData('text/plain') ?? '';
+      const hasImageOrFile =
+        !!data &&
+        ((data.files?.length ?? 0) > 0 ||
+          Array.from(data.items ?? []).some((it) => it.kind === 'file'));
+      const pasteSignature = text
+        ? `text:${text}`
+        : hasImageOrFile
+          ? `attachment:${data.files?.length ?? 0}:${Array.from(data.items ?? [])
+            .map((it) => `${it.kind}:${it.type}`)
+            .join(',')}`
+          : undefined;
       // JS-dispatched events are not native clipboard evidence. Browser/menu
       // editing events may be trusted; the menu must not create a second path.
-      if (!event.isTrusted || !pasteGuard.shouldPaste(event)) {
+      if (!event.isTrusted || !pasteGuard.shouldPaste(event, pasteSignature, event.timeStamp)) {
         return;
       }
       const ownsInput = captureInput();
       if (!ownsInput()) return;
-      const data = event.clipboardData;
-      const text = data?.getData('text/plain') ?? '';
       if (text) {
         paste(text);
         return;
       }
-      const hasImageOrFile =
-        !!data &&
-        (data.files.length > 0 ||
-          Array.from(data.items).some((it) => it.kind === 'file'));
       if (hasImageOrFile) {
         setAttachmentError(null);
         void readClipboardAttachment(sessionId).then((result) => {

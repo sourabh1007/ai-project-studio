@@ -21,61 +21,41 @@ const ctx: WrapContext = {
 };
 
 describe('providerLaunchSpec', () => {
-  it('uses the cmd.exe fallback when ComSpec is unavailable', () => {
+  it('does not depend on ComSpec for Windows launch rendering', () => {
     vi.stubEnv('ComSpec', undefined);
     try {
-      expect(providerLaunchSpec('C:\\Program Files\\nodejs\\node.exe', [], 'win32').command).toBe('cmd.exe');
+      expect(providerLaunchSpec('C:\\Program Files\\nodejs\\node.exe', [])).toEqual({
+        command: 'C:\\Program Files\\nodejs\\node.exe',
+        args: [],
+      });
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it('leaves commands unchanged when Windows quoting is not required', () => {
-    expect(providerLaunchSpec('node', ['server.js'], 'win32')).toEqual({
+  it('leaves commands unchanged when rendering provider argv', () => {
+    expect(providerLaunchSpec('node', ['server.js'])).toEqual({
       command: 'node',
       args: ['server.js'],
     });
     expect(
-      providerLaunchSpec('/Applications/App.app/Contents/MacOS/App', ['server.js'], 'darwin'),
+      providerLaunchSpec('/Applications/App.app/Contents/MacOS/App', ['server.js']),
     ).toEqual({
       command: '/Applications/App.app/Contents/MacOS/App',
       args: ['server.js'],
     });
   });
 
-  it('uses cmd.exe on Windows when the executable path contains spaces', () => {
+  it('preserves paths with spaces as command plus args instead of shell quoting them', () => {
     expect(
       providerLaunchSpec(
         'C:\\Program Files\\AI Project Studio\\AI Project Studio.exe',
         ['C:\\Program Files\\AI Project Studio\\resources\\server.js'],
-        'win32',
-        'C:\\Windows\\System32\\cmd.exe',
       ),
     ).toEqual({
-      command: 'C:\\Windows\\System32\\cmd.exe',
-      args: [
-        '/d',
-        '/s',
-        '/c',
-        '"C:\\Program Files\\AI Project Studio\\AI Project Studio.exe" "C:\\Program Files\\AI Project Studio\\resources\\server.js"',
-      ],
+      command: 'C:\\Program Files\\AI Project Studio\\AI Project Studio.exe',
+      args: ['C:\\Program Files\\AI Project Studio\\resources\\server.js'],
     });
-  });
-
-  it('quotes empty args and embedded quotes in the Windows command line', () => {
-    expect(
-      providerLaunchSpec(
-        'C:\\Program Files\\nodejs\\node.exe',
-        ['', 'say "hello"'],
-        'win32',
-        'cmd.exe',
-      ).args,
-    ).toEqual([
-      '/d',
-      '/s',
-      '/c',
-      '"C:\\Program Files\\nodejs\\node.exe" "" "say \\"hello\\""',
-    ]);
   });
 });
 
@@ -142,23 +122,21 @@ describe('wrapServerSpec', () => {
     expect(wrapped.args).toEqual(['/app/mcp/mcp-proxy.js', 'my-server']);
   });
 
-  it('wraps through cmd.exe on Windows when the node path contains spaces', () => {
+  it('wraps with provider argv even when the node path contains spaces', () => {
     const wrapped = wrapServerSpec(
       { command: 'npx', args: ['-y', 'server-filesystem'] },
       {
         ...ctx,
         nodePath: 'C:\\Program Files\\AI Project Studio\\AI Project Studio.exe',
         proxyScript: 'C:\\Program Files\\AI Project Studio\\resources\\mcp-proxy.js',
-        platform: 'win32',
-        windowsShell: 'C:\\Windows\\System32\\cmd.exe',
       },
     );
-    expect(wrapped.command).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(wrapped.command).toBe('C:\\Program Files\\AI Project Studio\\AI Project Studio.exe');
     expect(wrapped.args).toEqual([
-      '/d',
-      '/s',
-      '/c',
-      '"C:\\Program Files\\AI Project Studio\\AI Project Studio.exe" "C:\\Program Files\\AI Project Studio\\resources\\mcp-proxy.js" npx -y server-filesystem',
+      'C:\\Program Files\\AI Project Studio\\resources\\mcp-proxy.js',
+      'npx',
+      '-y',
+      'server-filesystem',
     ]);
     expect(unwrapServerSpec(wrapped)).toEqual({
       command: 'npx',

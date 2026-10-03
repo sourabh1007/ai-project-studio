@@ -365,7 +365,7 @@ import { createAgencyMcpCommandRunner } from './mcp/agency-mcp-command-adapter.j
 import { createMcpAuthenticationJobs } from './mcp/mcp-authentication-jobs.js';
 import { createAgencyMcpBuiltinRuntime } from './mcp/agency-mcp-builtin-runtime.js';
 import { createAgencyMcpOptions } from './mcp/agency-mcp-options.js';
-import { createStudioMcpHealth } from './mcp/studio-mcp-health.js';
+import { createStudioMcpHealth, reconcileStudioMcpRegistrations } from './mcp/studio-mcp-health.js';
 import { createMcpConfigWrites } from './mcp/mcp-config-writes.js';
 import { resolveExecutable } from './terminal/executable-resolver.js';
 import { registerStudioMcpTools } from './automation/mcp/studio-mcp-tools.js';
@@ -2540,6 +2540,40 @@ function main(): void {
     now: () => clock.now(),
     maxAuthObservations: mcpConfig.authObservationMaxEntries ?? mcpDefaults.authObservationMaxEntries!,
     authObservationStore: mcpAuthObservationRepo,
+    // Agency global built-in changes only take effect at launch, so after one is
+    // saved we recycle the live Agency terminals and the warm pool (when it runs
+    // Agency) so the new configuration applies to running work right away.
+    applyGlobalBuiltinChange: async () => {
+      let restartedSessions = 0;
+      for (const session of sessionRepo.listAll()) {
+        if (session.provider !== AGENCY_NAMESPACE) continue;
+        if (!terminalManager?.get(session.id)) continue;
+        try {
+          await terminalManager.relaunch(session, { cwd: await resolveSessionLaunchCwd(session) });
+          restartedSessions += 1;
+        } catch (error) {
+          logger.warn('Failed to restart session after Agency built-in change', {
+            sessionId: session.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      let recycledPool = false;
+      if (warmProviderIdentity === AGENCY_NAMESPACE) {
+        for (const pool of allWarmPools) {
+          try {
+            pool.resize(0);
+            pool.resize(warmPoolCfg.size);
+            recycledPool = true;
+          } catch (error) {
+            logger.warn('Failed to recycle warm pool after Agency built-in change', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+      return { restartedSessions, recycledPool };
+    },
     studio: {
       name: STUDIO_MCP_SERVER_NAME,
       spec: {
@@ -4395,22 +4429,34 @@ function main(): void {
       'mcp-proxy.js',
     );
     const studioMcpLaunch = providerLaunchSpec(process.execPath, [script]);
+    const studioMcpSpec = {
+      command: studioMcpLaunch.command,
+      args: studioMcpLaunch.args,
+      env: {
+        // When Studio is packaged, execPath is the Electron binary; this
+        // flag makes it behave as plain Node so the stdio server runs.
+        ELECTRON_RUN_AS_NODE: '1',
+        STUDIO_API_BASE: apiBase,
+        STUDIO_CONTROL_TOKEN: studioControlToken,
+      },
+    };
     void (async () => {
+      try {
+        await reconcileStudioMcpRegistrations({
+          files: categoryFiles,
+          writes: categoryWrites,
+          registrationPaths: [...new Set([copilotMcpPath, pathJoin(homedir(), '.copilot', 'mcp-config.json')])],
+        }, studioMcpSpec);
+      } catch (error: unknown) {
+        logger.error('Studio MCP registration reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       for (const provider of sessionMcpService.listProviders()) {
         try {
           await sessionMcpService.putServer(provider.id, {
             name: STUDIO_MCP_SERVER_NAME,
-            spec: {
-              command: studioMcpLaunch.command,
-              args: studioMcpLaunch.args,
-              env: {
-                // When Studio is packaged, execPath is the Electron binary; this
-                // flag makes it behave as plain Node so the stdio server runs.
-                ELECTRON_RUN_AS_NODE: '1',
-                STUDIO_API_BASE: apiBase,
-                STUDIO_CONTROL_TOKEN: studioControlToken,
-              },
-            },
+            spec: studioMcpSpec,
           });
           // Front every OTHER configured stdio server with the measuring proxy
           // so real per-server I/O (bytes/calls/latency) is recorded per feature.

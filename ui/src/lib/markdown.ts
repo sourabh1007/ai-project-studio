@@ -86,3 +86,22 @@ export function renderMarkdownComment(body: string): string {
 
   return template.innerHTML;
 }
+
+/**
+ * Flattens Markdown to a single line of plain text for compact previews (e.g.
+ * history row summaries). Reuses the same parser so syntax like `**bold**`,
+ * headings, links and lists render as readable text instead of raw markers,
+ * then collapses all whitespace so it fits one truncated line.
+ */
+export function markdownPreviewText(body: string): string {
+  if (body.trim().length === 0) {
+    return '';
+  }
+
+  const html = marked.parse(body, markdownOptions);
+  const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+  const template = document.createElement('template');
+  template.innerHTML = sanitized;
+
+  return template.content.textContent!.replace(/\s+/gu, ' ').trim();
+}

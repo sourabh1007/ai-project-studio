@@ -211,14 +211,13 @@ function SessionRow({
           <span className="session-tree-icon" aria-hidden="true">
             <SessionIcon />
             <span className={`dot ${dot}`} />
-          </span>
-          <span
-            className="session-provider-badge"
-            data-provider={session.provider}
-            title={`${providerName} CLI`}
-            aria-hidden="true"
-          >
-            {providerMonogram}
+            <span
+              className="session-provider-badge"
+              data-provider={session.provider}
+              title={`${providerName} CLI`}
+            >
+              {providerMonogram}
+            </span>
           </span>
           <span className="session-name">{name}</span>
         </button>

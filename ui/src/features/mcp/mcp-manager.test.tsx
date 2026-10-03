@@ -208,14 +208,15 @@ describe('McpManager', () => {
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
   });
 
-  it('shows three separate controls and a red Reauth action only for an observed expiry', async () => {
+  it('shows a disable toggle plus three controls and a red Reauth action only for an observed expiry', async () => {
     const entry: McpServerEntry = { ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado',
       displayName: 'ado', origin: 'agency-built-in', capabilities,
       authState: { state: 'expired', checkedAt: '2026-09-27T01:00:00Z', message: 'Credential expired' } };
     const api = client({ getMcpServers: vi.fn().mockResolvedValue(makeConfig('agency', [entry])) });
     renderManager(api);
     const card = (await screen.findByText('ado')).closest<HTMLElement>('.mcp-server-card')!;
-    expect(within(card).getAllByRole('button')).toHaveLength(3);
+    expect(within(card).getAllByRole('button')).toHaveLength(4);
+    expect(within(card).getByRole('button', { name: 'Disable ado' })).toBeEnabled();
     expect(within(card).getByRole('button', { name: 'Tools for ado' })).toBeEnabled();
     expect(within(card).getByRole('button', { name: 'Reauth ado' })).toHaveClass('btn-danger');
     expect(within(card).getByRole('button', { name: 'Edit ado' })).toBeEnabled();
@@ -223,6 +224,22 @@ describe('McpManager', () => {
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
   });
 
+  it('disables a configured global built-in from its card through the native toggle', async () => {
+    const entry: McpServerEntry = { ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado',
+      displayName: 'ado', origin: 'agency-built-in', enabled: true, capabilities };
+    const api = client({
+      getMcpServers: vi.fn()
+        .mockResolvedValueOnce(makeConfig('agency', [entry]))
+        .mockResolvedValue(makeConfig('agency', [{ ...entry, enabled: false }])),
+      setMcpServerEnabled: vi.fn().mockResolvedValue(makeConfig('agency', [{ ...entry, enabled: false }])),
+    });
+    renderManager(api);
+    const card = (await screen.findByText('ado')).closest<HTMLElement>('.mcp-server-card')!;
+    fireEvent.click(within(card).getByRole('button', { name: 'Disable ado' }));
+    await waitFor(() => expect(api.setMcpServerEnabled).toHaveBeenCalledWith('agency', 'global-builtins:ado', false));
+    expect(await within(card).findByRole('button', { name: 'Enable ado' })).toBeInTheDocument();
+    expect(within(card).getByText('Disabled')).toBeInTheDocument();
+  });
   it('shows an animated spinner and the supplied launch command while discovering tools', async () => {
     const pending = deferred<McpServerEntry>();
     const entry: McpServerEntry = { ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado',
@@ -450,7 +467,7 @@ describe('McpManager', () => {
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
     expect(screen.queryByText('Available · not configured')).toBeNull();
     expect(screen.getByRole('button', { name: 'Tools for ado' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Disable ado' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Disable ado' })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
