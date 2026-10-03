@@ -63,10 +63,10 @@ export interface SessionAutoRetry {
 }
 
 const MANUAL_RETRY_UNCONFIRMED_NOTICE =
-  '\r\n[auto-retry] recoverable session error detected. Automatic replay is unavailable unless the provider confirms an exact replay-safe request, so review the CLI state and retry manually if needed.\r\n';
+  '\r\n⚠️  The AI service hit a temporary glitch. Your last request couldn\'t be resent automatically — if it didn\'t finish, please send it again.\r\n';
 
 const MANUAL_RETRY_EXHAUSTED_NOTICE =
-  '\r\n[auto-retry] recoverable session error detected again after the automatic retry budget was spent. Review the CLI state and retry manually if needed.\r\n';
+  '\r\n⚠️  The AI service is still unavailable after a few automatic retries. Please try your last request again in a moment.\r\n';
 
 interface ReplayAuthority {
   prompt: string;
@@ -184,7 +184,7 @@ export function createSessionAutoRetry(
     attempts += 1;
     const attempt = attempts;
     deps.notify?.(
-      `\r\n[auto-retry] recoverable session error — retrying (attempt ${attempt}/${deps.maxAttempts})…\r\n`,
+      `\r\n↻ The AI service had a hiccup — retrying automatically (attempt ${attempt}/${deps.maxAttempts})…\r\n`,
     );
     cancelPendingRetry = scheduleTimer(() => {
       cancelPendingRetry = null;

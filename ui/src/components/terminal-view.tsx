@@ -14,6 +14,7 @@ import {
 } from '../lib/terminal-protocol.js';
 import { createTerminalDelivery } from '../lib/terminal-delivery.js';
 import { createTerminalHealth, type TerminalHealth } from '../lib/terminal-health.js';
+import { ActivityIcon } from './icons.js';
 import {
   toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
   type ClipboardAttachmentResult, type DesktopClipboardBridge,
@@ -223,6 +224,19 @@ export function TerminalView({
   const sendEscapeRef = useRef<(() => void) | null>(null);
   const healthProblem = health?.connection === 'unresponsive' || (health?.pendingInputSeconds ?? 0) >= 10;
   const preparing = ['connecting', 'bootstrapping', 'reconnecting'].includes(connectionStatus.state);
+  // The steady "Terminal connection live" state is pure noise, so hide the
+  // status strip (and its diagnostics toggle) by default when everything is
+  // healthy. It reappears automatically for startup, connecting, notices and
+  // any health problem, and stays visible while diagnostics are open.
+  const healthyIdle = !startupDetail
+    && connectionStatus.state === 'ready'
+    && !!health
+    && health.connection === 'live'
+    && !healthProblem
+    && !health.quiet
+    && !preparing
+    && !connectionStatus.notice;
+  const statusHidden = healthyIdle && !showDiagnostics;
   useEffect(() => {
     setStartupSeconds(0);
     if (!preparing) return;
@@ -1092,20 +1106,30 @@ export function TerminalView({
   }, [sessionId, connectionAttempt]);
 
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-    <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>
+    <div role="status" aria-live="polite" className={statusHidden ? 'terminal-status terminal-status--idle' : 'terminal-status'} style={{ flexShrink: 0, fontSize: 12 }}>
       {preparing && <span className="spinner" aria-hidden="true" style={{ marginRight: 6 }} />}
       {startupDetail || (connectionStatus.state === 'ready' && health
         ? health.connection === 'unresponsive' ? 'Backend heartbeat missing'
           : (health.pendingInputSeconds ?? 0) >= 10 ? `Input delivery unconfirmed for ${health.pendingInputSeconds}s`
           : health.quiet ? `No terminal output for ${health.outputAgeSeconds}s`
-          : health.connection === 'live' ? 'Terminal connection live' : 'Terminal connected'
+          : health.connection === 'live' ? (
+            <span
+              className="terminal-live-badge"
+              role="img"
+              aria-label="Terminal connection live"
+              title="Terminal connection live"
+            >
+              <span className="terminal-live-dot" aria-hidden="true" />
+              <ActivityIcon size={13} />
+            </span>
+          ) : 'Terminal connected'
         : `Terminal: ${connectionStatus.state}`)}
       {preparing && <span aria-hidden="true"> · {startupSeconds}s</span>}
       {connectionStatus.notice && <span> — {connectionStatus.notice}</span>}
       {(connectionStatus.state === 'failed' || connectionStatus.state === 'closed') &&
         <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect (input is not replayed)</button>}
       {connectionStatus.state === 'ready' &&
-        <button aria-expanded={showDiagnostics || healthProblem} onClick={() => setShowDiagnostics((value) => !value)}>Session diagnostics</button>}
+        <button type="button" className="terminal-diagnostics-toggle" aria-label="Session diagnostics" title="Session diagnostics" aria-expanded={showDiagnostics || healthProblem} onClick={() => setShowDiagnostics((value) => !value)}><ActivityIcon size={14} /></button>}
     </div>
     {connectionStatus.state === 'ready' && health && (showDiagnostics || healthProblem) &&
       <section className="terminal-diagnostics" aria-label="Session diagnostics">

@@ -359,6 +359,15 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/sessions/s1/usage');
   });
 
+  it('lists a session prompt history', async () => {
+    const prompts = [{ index: 0, text: 'first ask', at: '2025-01-01T00:00:00.000Z', response: 'a reply', status: 'answered' as const, answeredAt: '2025-01-01T00:00:20.000Z', durationMs: 20000 }];
+    const { fetchImpl, calls } = mockFetch(jsonResponse(prompts));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listSessionPrompts('s1');
+    expect(result).toEqual(prompts);
+    expect(calls[0][0]).toBe('/api/sessions/s1/prompts');
+  });
+
   it('reads per-turn feature usage events', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
@@ -697,6 +706,20 @@ describe('createApiClient', () => {
     const result = await client.getAgencyStatus();
     expect(result).toEqual({ installed: true });
     expect(calls[0][0]).toBe('/api/agency/status');
+  });
+
+  it('gets the system-health report', async () => {
+    const report = {
+      generatedAt: '2024-01-01T00:00:00.000Z',
+      overall: 'ok',
+      checks: [{ id: 'api', title: 'Backend API', state: 'ok', latencyMs: 1 }],
+      providers: [{ id: 'copilot', title: 'GitHub Copilot CLI', installed: true }],
+    };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(report));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.getSystemHealth();
+    expect(result).toEqual(report);
+    expect(calls[0][0]).toBe('/api/system-health');
   });
 
   it('gets the provider bootstrap info', async () => {

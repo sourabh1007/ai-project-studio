@@ -34,6 +34,8 @@ import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
 import { createHealthRoutes, type HealthControllerDeps } from './health-controller.js';
+import { createSystemHealthRoutes } from './system-health-controller.js';
+import type { HealthReportService } from '../health/health-contract.js';
 import { createResourcesRoutes } from './resources-controller.js';
 import type { ResourcesService } from '../resources/resources-contract.js';
 import { createActiveSessionsRoutes } from './active-sessions-controller.js';
@@ -153,6 +155,8 @@ export interface ApiRoutesDeps {
   providers: ProviderRegistry;
   /** Default provider + each provider's install state for the first-run UI. */
   providerBootstrapInfo: () => ProviderBootstrapInfo;
+  /** True when signed in with a Microsoft identity (gates Agency exposure). */
+  microsoftSignedIn: () => boolean;
   aggregates: FeatureAnalyticsService;
   summarizer: FeatureSummarizer;
   summaries: SummaryStore;
@@ -177,6 +181,8 @@ export interface ApiRoutesDeps {
   planUsage: PlanUsageService;
   /** Self-healing service for environment problems (missing CLI, config). */
   selfHeal: SelfHealService;
+  /** Aggregated system-health report (subsystem probes + provider health). */
+  systemHealth: HealthReportService;
   /** Selectable AI model catalog (ids, names, pricing hints) for metasessions. */
   metaModels: ModelCatalogService;
   usageDetail: UsageDetailService;
@@ -280,6 +286,7 @@ export interface ApiRoutesDeps {
 export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
   return applyRouteOwnership([
     ...createHealthRoutes({ resources: deps.resources }),
+    ...createSystemHealthRoutes({ health: deps.systemHealth }),
     ...createResourcesRoutes(deps.appResources),
     ...(deps.activeSessions ? createActiveSessionsRoutes(deps.activeSessions) : []),
     ...createIdentityRoutes(),
@@ -301,7 +308,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       config: deps.sessionConfig,
       bootstrap: deps.sessionBootstrap,
     }),
-    ...createProviderRoutes({ registry: deps.providers, bootstrapInfo: deps.providerBootstrapInfo }),
+    ...createProviderRoutes({ registry: deps.providers, bootstrapInfo: deps.providerBootstrapInfo, microsoftSignedIn: deps.microsoftSignedIn }),
     ...createMcpRoutes({ mcp: deps.mcp, controlToken: deps.controlToken }),
     ...createAggregateRoutes({ analytics: deps.aggregates }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
@@ -344,6 +351,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       rollups: deps.usageRollups,
       metaUsage: deps.metaUsageLookup,
       activityLimit: deps.usageActivityLimit,
+      microsoftSignedIn: deps.microsoftSignedIn,
     }),
     ...createPlanUsageRoutes({ planUsage: deps.planUsage }),
     ...createSelfHealRoutes({ selfHeal: deps.selfHeal }),

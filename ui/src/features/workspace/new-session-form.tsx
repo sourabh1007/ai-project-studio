@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Session } from '../../lib/types.js';
+import { installedProviders } from '../../lib/providers.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { ProviderPicker } from '../../components/provider-picker.js';
 
@@ -22,15 +23,25 @@ export function NewSessionForm({
 }) {
   const api = useApi();
   const providers = useAsync(() => api.listProviders(), []);
+  const bootstrap = useAsync(() => api.getProviderBootstrap(), []);
+  const available = useMemo(
+    () => installedProviders(providers.data ?? []),
+    [providers.data],
+  );
   const [providerId, setProviderId] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!providerId && providers.data && providers.data.length > 0) {
-      setProviderId(providers.data[0].id);
+    if (providerId || available.length === 0 || bootstrap.loading) {
+      return;
     }
-  }, [providers.data, providerId]);
+    const preferred = bootstrap.data?.defaultProvider;
+    const match = preferred
+      ? available.find((provider) => provider.id === preferred)
+      : undefined;
+    setProviderId((match ?? available[0]).id);
+  }, [available, bootstrap.loading, bootstrap.data, providerId]);
 
   async function create() {
     setStarting(true);
@@ -52,7 +63,7 @@ export function NewSessionForm({
     <div className="new-session glass">
       <div className="new-session-title">New session</div>
       <ProviderPicker
-        providers={providers.data ?? []}
+        providers={available}
         value={providerId}
         onChange={setProviderId}
       />

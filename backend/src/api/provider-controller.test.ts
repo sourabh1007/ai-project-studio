@@ -29,14 +29,15 @@ function provider(id: string, models: ModelInfo[]): IAIProvider {
   };
 }
 
-function harness() {
+function harness(signedIn = true) {
   const registry = createProviderRegistry();
   registry.register(provider('copilot', [{ id: 'gpt-5.4-mini', label: 'GPT' }]));
   registry.register(provider('agency', []));
   return createProviderRoutes({
     registry,
+    microsoftSignedIn: () => signedIn,
     bootstrapInfo: () => ({
-      defaultProvider: 'copilot',
+      defaultProvider: signedIn ? 'agency' : 'copilot',
       providers: [
         { id: 'copilot', installed: true },
         { id: 'agency', installed: false },
@@ -46,21 +47,93 @@ function harness() {
 }
 
 describe('provider-controller', () => {
-  it('lists provider ids', async () => {
+  it('lists provider ids with install state', async () => {
     const result = await pick(harness(), 'get', '/providers')(req());
     expect(result.status).toBe(200);
-    expect(result.body).toEqual([{ id: 'copilot' }, { id: 'agency' }]);
+    expect(result.body).toEqual([
+      { id: 'copilot', installed: true },
+      { id: 'agency', installed: false },
+    ]);
   });
 
-  it('reports bootstrap info (default provider + install state)', async () => {
+  it('hides Agency entirely when not signed in with a Microsoft identity', async () => {
+    const list = await pick(harness(false), 'get', '/providers')(req());
+    expect(list.body).toEqual([{ id: 'copilot', installed: true }]);
+    const boot = await pick(harness(false), 'get', '/providers/bootstrap')(req());
+    expect(boot.body).toEqual({
+      defaultProvider: 'copilot',
+      providers: [{ id: 'copilot', installed: true }],
+      microsoftSignedIn: false,
+    });
+  });
+
+  it('falls back the default to an exposed provider when bootstrap still names a hidden one', async () => {
+    const registry = createProviderRegistry();
+    registry.register(provider('copilot', []));
+    registry.register(provider('agency', []));
+    const routes = createProviderRoutes({
+      registry,
+      microsoftSignedIn: () => false,
+      bootstrapInfo: () => ({
+        defaultProvider: 'agency',
+        providers: [
+          { id: 'copilot', installed: true },
+          { id: 'agency', installed: true },
+        ],
+      }),
+    });
+    const boot = await pick(routes, 'get', '/providers/bootstrap')(req());
+    expect(boot.body).toMatchObject({ defaultProvider: 'copilot', microsoftSignedIn: false });
+  });
+
+  it('keeps an unexposed default only when no provider is exposed', async () => {
+    const registry = createProviderRegistry();
+    registry.register(provider('agency', []));
+    const routes = createProviderRoutes({
+      registry,
+      microsoftSignedIn: () => false,
+      bootstrapInfo: () => ({
+        defaultProvider: 'agency',
+        providers: [{ id: 'agency', installed: true }],
+      }),
+    });
+    const boot = await pick(routes, 'get', '/providers/bootstrap')(req());
+    expect(boot.body).toEqual({
+      defaultProvider: 'agency',
+      providers: [],
+      microsoftSignedIn: false,
+    });
+  });
+
+  it('defaults install state to false for providers missing from bootstrap', async () => {
+    const registry = createProviderRegistry();
+    registry.register(provider('copilot', []));
+    registry.register(provider('ghost', []));
+    const routes = createProviderRoutes({
+      registry,
+      microsoftSignedIn: () => true,
+      bootstrapInfo: () => ({
+        defaultProvider: 'copilot',
+        providers: [{ id: 'copilot', installed: true }],
+      }),
+    });
+    const result = await pick(routes, 'get', '/providers')(req());
+    expect(result.body).toEqual([
+      { id: 'copilot', installed: true },
+      { id: 'ghost', installed: false },
+    ]);
+  });
+
+  it('reports bootstrap info (default provider + install state + identity)', async () => {
     const result = await pick(harness(), 'get', '/providers/bootstrap')(req());
     expect(result.status).toBe(200);
     expect(result.body).toEqual({
-      defaultProvider: 'copilot',
+      defaultProvider: 'agency',
       providers: [
         { id: 'copilot', installed: true },
         { id: 'agency', installed: false },
       ],
+      microsoftSignedIn: true,
     });
   });
 

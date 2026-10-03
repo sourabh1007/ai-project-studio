@@ -32,6 +32,14 @@ export {
   type AccentValue,
 } from './accent.js';
 
+/**
+ * The overall look of the IDE. `desktop` is the established compact,
+ * enterprise appearance; `futuristic` is a "quiet sci-fi" surface treatment
+ * (layered graphite in dark, crisp neutral in light) layered purely on the
+ * colour/surface tokens via `data-appearance` on `<html>`. It is orthogonal to
+ * density, radius and typography, which remain independently user-controlled.
+ */
+export type Appearance = 'desktop' | 'futuristic';
 export type TextSize = 'small' | 'default' | 'large' | 'x-large';
 export type Density = 'compact' | 'cozy' | 'comfortable';
 export type Radius = 'sharp' | 'soft' | 'round';
@@ -50,6 +58,7 @@ export type TerminalFont =
 export type TerminalTextSize = 'small' | 'default' | 'large' | 'x-large';
 
 export interface UiPreferences {
+  appearance: Appearance;
   accent: AccentValue;
   textSize: TextSize;
   density: Density;
@@ -63,6 +72,7 @@ export interface UiPreferences {
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  appearance: 'desktop',
   accent: 'blue',
   textSize: 'default',
   density: 'compact',
@@ -74,6 +84,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   terminalTextColor: 'theme',
 };
 
+export const APPEARANCES: readonly Appearance[] = ['desktop', 'futuristic'];
 export const TEXT_SIZES: readonly TextSize[] = [
   'small',
   'default',
@@ -241,6 +252,11 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
     fallback: T,
   ): T => (isOneOf(allowed)(v) ? v : fallback);
   return {
+    appearance: pick(
+      raw.appearance,
+      APPEARANCES,
+      DEFAULT_UI_PREFERENCES.appearance,
+    ),
     accent:
       parseAccentValue(raw.accent) ?? DEFAULT_UI_PREFERENCES.accent,
     textSize: pick(raw.textSize, TEXT_SIZES, DEFAULT_UI_PREFERENCES.textSize),
@@ -338,6 +354,8 @@ export function deriveCssVariables(
 /** Short human labels for the preference options (for the settings UI). */
 export function optionLabel(value: string): string {
   const map: Record<string, string> = {
+    desktop: 'Compact desktop',
+    futuristic: 'Futuristic',
     'x-large': 'Extra large',
     'mono-ui': 'Monospace',
     consolas: 'Consolas (Notepad style)',

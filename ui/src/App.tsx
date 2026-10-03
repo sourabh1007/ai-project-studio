@@ -18,6 +18,8 @@ import { UpdateBanner } from './features/updates/update-banner.js';
 import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
 import { ViewSkeleton } from './components/view-skeleton.js';
+import { useMicrosoftIdentitySync, useMicrosoftSignedIn } from './hooks/use-microsoft-identity.js';
+import { isAgencyHidden } from './lib/microsoft-identity.js';
 
 // Heavy views are code-split so the initial bundle stays small and non-active
 // views never load until first navigated to. Each import maps a named export to
@@ -119,6 +121,8 @@ export function App() {
     return () => { cancelled = true; };
   }, [api]);
   const live = useUsageStream();
+  useMicrosoftIdentitySync();
+  const microsoftSignedIn = useMicrosoftSignedIn();
   const { mode, theme, cycle, toggle } = useTheme();
   useApplyUiPreferences(theme);
   const [view, setView] = usePersistentState<View>('cw-active-view', 'workspace', {
@@ -488,7 +492,7 @@ export function App() {
           <TopLoadingBar />
           <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
-          <AgencyUpdatePopup />
+          {!isAgencyHidden(microsoftSignedIn) && <AgencyUpdatePopup />}
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
               {view === 'workspace' ? (

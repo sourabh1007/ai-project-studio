@@ -9,6 +9,7 @@ import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
 import { AiMagicIcon, PopOutIcon } from '../../components/icons.js';
+import { SessionHistoryPane } from './session-history-pane.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
 import { isPoppableTab, type PoppableTab } from './tab-popout.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
@@ -866,6 +867,7 @@ export function WorkspaceView({
           )}
         </div>
       </section>
+      <SessionHistoryPane sessionId={activeSessionId} />
     </div>
   );
 }

@@ -20,6 +20,9 @@ vi.mock('./network-activity-section.js', () => ({
 vi.mock('./diagnostics-section.js', () => ({
   DiagnosticsSection: () => null,
 }));
+vi.mock('./health-section.js', () => ({
+  HealthSection: () => null,
+}));
 vi.mock('./worktrees-section.js', () => ({
   WorktreesSection: () => null,
 }));
@@ -101,11 +104,11 @@ describe('SettingsView drafts', () => {
     window.localStorage.setItem('cw-settings-open:diagnostics-worktrees', 'false');
     const client = { getConfig: vi.fn().mockResolvedValue(config({})), getEnvironmentSummary: vi.fn().mockResolvedValue({}) };
     render(<ApiProvider value={client as unknown as ApiClient}><SettingsView worktreesRequest={1} /></ApiProvider>);
-    expect(screen.getByRole('tab', { name: 'Diagnostics' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'System' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(screen.getByRole('button', { name: /Review worktrees/ })).toHaveAttribute('aria-expanded', 'true'));
     await waitFor(() => expect(scroll).toHaveBeenCalled());
   });
-  it('mounts manual retained-image management in Diagnostics and refreshes when reopened', async () => {
+  it('mounts manual retained-image management in System and refreshes when reopened', async () => {
     const list = vi.fn().mockResolvedValue({
       status: 'ready', items: [], totalBytes: 0,
       limits: { files: 64, totalBytes: 67108864, fileBytes: 8388608 },
@@ -115,12 +118,12 @@ describe('SettingsView drafts', () => {
     } };
     openSections('diagnostics-images');
     renderSettings({ getConfig: vi.fn().mockResolvedValue(config({ meta: { mode: 'warm' } })) });
-    fireEvent.click(await screen.findByRole('tab', { name: 'Diagnostics' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'System' }));
     expect(await screen.findByRole('region', { name: 'Retained clipboard images' })).toBeInTheDocument();
     expect(await screen.findByText('No retained clipboard images.')).toBeInTheDocument();
     expect(list).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'System' }));
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 

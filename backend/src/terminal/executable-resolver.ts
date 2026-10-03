@@ -35,10 +35,15 @@ export function resolveExecutable(
         .filter((ext) => ext.length > 0)
     : [];
 
-  const withExts = (base: string): string[] => [
-    base,
-    ...exts.map((ext) => base + ext),
-  ];
+  // On Windows a bare command is launched through PATHEXT, so an executable
+  // variant (`copilot.CMD`, `copilot.EXE`) must win over a same-named
+  // extensionless file. npm global installs drop a POSIX shell script named
+  // `copilot` next to `copilot.cmd`; ConPTY/node-pty cannot spawn the
+  // extensionless script, so trying the extension variants first is what makes
+  // the CLI actually open. The bare base stays as a last resort. Off Windows
+  // `exts` is empty, so this is just `[base]`.
+  const withExts = (base: string): string[] =>
+    isWindows ? [...exts.map((ext) => base + ext), base] : [base];
 
   if (isAbsolute(command) || command.includes(sep) || command.includes('/')) {
     return withExts(command).find(fileExists) ?? command;

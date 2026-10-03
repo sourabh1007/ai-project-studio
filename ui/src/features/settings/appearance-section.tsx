@@ -6,6 +6,7 @@ import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
 import { themeModeLabel, type ThemeMode } from '../../lib/theme.js';
 import {
   ACCENT_KEYS,
+  APPEARANCES,
   DENSITIES,
   FONTS,
   MOTIONS,
@@ -113,6 +114,14 @@ export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
           </Button>
         </div>
       )}
+
+      <Segmented<(typeof APPEARANCES)[number]>
+        label="Appearance"
+        hint="Compact desktop or a futuristic mission-control look"
+        value={prefs.appearance}
+        options={APPEARANCES}
+        onChange={(appearance) => setPrefs({ appearance })}
+      />
 
       <Segmented<ThemeMode>
         label="Theme"

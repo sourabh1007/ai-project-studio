@@ -93,7 +93,7 @@ describe('createSessionRefResolver', () => {
     });
     expect((await plain.resolve('f1'))?.ref).toBe('master');
   });
-  it('ignores non-PR feature checkout branches and refuses unknown PR sources', async () => {
+  it('ignores non-PR feature checkout branches and falls back for unknown PR sources', async () => {
     const deps: SessionRefResolverDeps = {
       getFeature: () => feature({ checkoutPath: 'C:\\task-copy' }), getRepo: () => repo(),
       getPrBranch: () => null, isPrFeature: () => false,
@@ -102,7 +102,7 @@ describe('createSessionRefResolver', () => {
     expect((await createSessionRefResolver(deps).resolve('f1'))?.ref).toBe('master');
     await expect(createSessionRefResolver({
       ...deps, isPrFeature: () => true, getFeature: () => feature(),
-    }).resolve('f1')).rejects.toThrow('Cannot determine the PR source branch');
+    }).resolve('f1')).rejects.toThrow('PR checkout is unavailable');
     await expect(createSessionRefResolver({
       ...deps, isPrFeature: () => true, getFeature: () => feature(), getPrBranch: () => 'users/me/pr',
     }).resolve('f1')).rejects.toThrow('PR checkout is unavailable');
@@ -116,11 +116,15 @@ describe('createSessionRefResolver', () => {
     expect((await resolver.resolve('f1'))?.ref).toBe('users/me/fix');
   });
 
-  it('does not substitute master when a legacy PR source branch is unknown', async () => {
+  it('falls back to master when a legacy PR source branch is unknown', async () => {
     const resolver = harness({
       feature: feature({ checkoutPath: 'C:\\wt\\pr-7' }),
       branch: null,
     });
-    await expect(resolver.resolve('f1')).rejects.toThrow('Cannot determine the PR source branch');
+    expect(await resolver.resolve('f1')).toEqual({
+      repoLocalPath: 'C:\\src\\app',
+      ref: FALLBACK_DEFAULT_BRANCH,
+      checkoutPath: 'C:\\wt\\pr-7',
+    });
   });
 });

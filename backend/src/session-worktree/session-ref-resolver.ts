@@ -40,8 +40,11 @@ export const FALLBACK_DEFAULT_BRANCH = 'master';
 /**
  * Decides the branch a newly opened session defaults to. A PR feature's
  * sessions default to the PR branch — the branch checked out in the feature's
- * dedicated review worktree — so reviewing a PR starts on its code. Every other
- * feature's new sessions start on master in the shared repository checkout.
+ * dedicated review worktree — so reviewing a PR starts on its code. When that
+ * source branch can't be determined (e.g. a stale/legacy PR), the session
+ * degrades gracefully to the fallback branch instead of blocking the user.
+ * Every other feature's new sessions start on master in the shared repository
+ * checkout.
  */
 export function createSessionRefResolver(
   deps: SessionRefResolverDeps,
@@ -59,9 +62,6 @@ export function createSessionRefResolver(
       const isPr = deps.isPrFeature?.(featureId) ?? Boolean(feature.checkoutPath);
       const source = deps.getPrBranch?.(featureId) ?? (isPr && feature.checkoutPath
         ? await deps.branch.read(feature.checkoutPath) : null);
-      if (isPr && !source) {
-        throw new ValidationError('Cannot determine the PR source branch. Refresh the PR before opening a new session.');
-      }
       if (isPr && !feature.checkoutPath) {
         throw new ValidationError('The PR checkout is unavailable. Refresh the PR before opening a session.');
       }

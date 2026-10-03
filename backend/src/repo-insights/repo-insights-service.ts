@@ -12,6 +12,7 @@ import type {
   RepoInsightsStreamSink,
 } from './repo-insights-contract.js';
 import type { RepoInsightsGit } from './repo-insights-git-port.js';
+import type { RepoInsightsStore } from './repo-insights-store-port.js';
 import { createWorkLimiter } from './work-limiter.js';
 import {
   deriveName,
@@ -27,6 +28,12 @@ export interface RepoInsightsServiceDeps {
   git: RepoInsightsGit;
   clock: Clock;
   config: RepoInsightsConfig;
+  /**
+   * Durable store for the last completed snapshot. Lets a scanned repository
+   * restore instantly on a later open — even after an app/backend restart —
+   * and seeds the in-memory cache lazily on first access.
+   */
+  store: RepoInsightsStore;
   /**
    * Warm metasession runner used to enrich each section in parallel. Optional:
    * when absent (or `config.enrichment.enabled` is false) the streaming scan is
@@ -287,6 +294,30 @@ export function createRepoInsightsService(
   const cache = new Map<string, RepoInsights>();
   const inflight = new Map<string, Promise<RepoInsights>>();
 
+  /**
+   * The newest snapshot for a repository, preferring the in-memory cache and
+   * falling back to the durable store (seeding the cache) so a snapshot persisted
+   * on an earlier run is restored without a rescan.
+   */
+  const snapshotFor = (repositoryId: string): RepoInsights | undefined => {
+    const cached = cache.get(repositoryId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const stored = deps.store.get(repositoryId);
+    if (stored !== null) {
+      cache.set(repositoryId, stored);
+      return stored;
+    }
+    return undefined;
+  };
+
+  /** Records a completed snapshot in both the cache and the durable store. */
+  const remember = (insights: RepoInsights): void => {
+    cache.set(insights.repositoryId, insights);
+    deps.store.save(insights);
+  };
+
   const errorMessage = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
 
@@ -489,7 +520,7 @@ export function createRepoInsightsService(
   return {
     async load(repositoryId, options) {
       const refresh = options?.refresh ?? false;
-      const cached = cache.get(repositoryId);
+      const cached = snapshotFor(repositoryId);
       if (!refresh && cached !== undefined) {
         return cached;
       }
@@ -500,7 +531,7 @@ export function createRepoInsightsService(
       const run = (async () => {
         try {
           const result = await compute(repositoryId);
-          cache.set(repositoryId, result);
+          remember(result);
           return result;
         } finally {
           inflight.delete(repositoryId);
@@ -517,6 +548,10 @@ export function createRepoInsightsService(
       }
       activeStreams.add(repositoryId);
       try {
+        const restored = snapshotFor(repositoryId);
+        if (restored !== undefined) {
+          sink.emit({ type: 'restored', insights: restored });
+        }
         const repository = deps.repos.get(repositoryId);
         const branch = await resolveBranch(repository, signal);
         if (signal?.aborted) {
@@ -618,7 +653,7 @@ export function createRepoInsightsService(
           agentReady: structural.readiness.every((check) => check.status === 'pass'),
           generatedAt: deps.clock.isoNow(),
         };
-        cache.set(repositoryId, insights);
+        remember(insights);
         sink.emit({ type: 'done', insights });
       } finally {
         activeStreams.delete(repositoryId);

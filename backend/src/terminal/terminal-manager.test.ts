@@ -476,7 +476,7 @@ describe('createTerminalManager', () => {
     manager.observeInput('sess-1', 'fix it\r');
     env.emitData('Execution failed: 503 Service Unavailable\n');
     expect(env.writes).not.toContain('fix it');
-    expect(output.join('')).toContain('retry manually if needed');
+    expect(output.join('')).toContain('send it again');
   });
   it('does not send a delayed retry Enter after Ctrl-C or new user input', async () => {
     vi.useFakeTimers();
@@ -823,7 +823,7 @@ describe('createTerminalManager', () => {
       await flush();
       expect(h.env.requests).toHaveLength(1);
       expect(h.report).not.toHaveBeenCalled();
-      expect(output.join('')).toContain('retry manually if needed');
+      expect(output.join('')).toContain('send it again');
     });
 
     it('reports to the status bar when the restart cannot be carried out', async () => {
@@ -1641,7 +1641,7 @@ describe('createTerminalManager', () => {
           'Apply this.',
           terminalDefaults.instructionSeedSuffix,
         ]);
-        expect(output.join('')).toContain('retry manually if needed');
+        expect(output.join('')).toContain('send it again');
       } finally {
         vi.useRealTimers();
       }

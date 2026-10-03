@@ -15,6 +15,7 @@ import type {
   CreateSkillInput,
   AddFeatureTaskInput,
   AgencyStatus,
+  SystemHealthReport,
   ProviderBootstrapInfo,
   AzureDevOpsStatus,
   DeviceCodeStart,
@@ -83,6 +84,7 @@ import type {
   AddPrCommentInput,
   AddRepositoryInput,
   Session,
+  SessionPrompt,
   SessionFile,
   ContextScope,
   SharedContextDoc,
@@ -939,6 +941,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<FeatureUsage>(`/features/${featureId}/usage`),
     getSessionUsageEvents: (sessionId: string) =>
       request<StoredUsage[]>(`/sessions/${sessionId}/usage`),
+    listSessionPrompts: (sessionId: string) =>
+      request<SessionPrompt[]>(`/sessions/${sessionId}/prompts`),
     getFeatureUsageEvents: (featureId: string) =>
       request<StoredUsage[]>(`/features/${featureId}/usage/events`),
     getRepoUsageEvents: (repoId: string) =>
@@ -1141,6 +1145,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     }) =>
       request<{ answer: string }>('/config/assistant', jsonBody(input)),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
+    getSystemHealth: () => request<SystemHealthReport>('/system-health'),
     getProviderBootstrap: () =>
       request<ProviderBootstrapInfo>('/providers/bootstrap'),
     getGithubStatus: () => request<GithubStatus>('/github/status'),

@@ -109,6 +109,7 @@ function createClient() {
     listFeatures: vi.fn(async () => features),
     listRepos: vi.fn(async () => repos),
     listSessions: vi.fn(async (featureId: string) => sessions.filter((s) => s.featureId === featureId)),
+    listSessionPrompts: vi.fn(async () => []),
     listFeatureAgents: vi.fn(async (featureId: string) => agents.filter((a) => a.attachment.featureId === featureId)),
     getPrReview: vi.fn(async (featureId: string) => ({
       featureId, pull: { number: 1, title: 'Actual PR title', url: '' },

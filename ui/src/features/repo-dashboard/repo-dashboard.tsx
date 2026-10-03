@@ -480,6 +480,20 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
         await api.analyzeRepoInsights(repo.id, (event) => {
           if (!isCurrent()) return;
           switch (event.type) {
+            case 'restored': {
+              // A persisted snapshot from a previous run (survives restarts).
+              // Surface it instantly so the page never blocks on a full-screen
+              // loader, then let the background rescan refresh it in place.
+              insightsCache.set(repo.id, event.insights);
+              branch = event.insights.branch;
+              acc.agents = event.insights.agents;
+              acc.skills = event.insights.skills;
+              acc.docs = event.insights.docs;
+              acc.readiness = event.insights.readiness;
+              setSections(initialSections('done'));
+              updateInsights(event.insights);
+              break;
+            }
             case 'branch':
               branch = event.branch;
               break;
@@ -537,13 +551,12 @@ export function RepoDashboard({ repo }: { repo: Repository }) {
     setData(cached);
     setScanError(null);
     setCancelled(false);
-    if (cached) {
-      // Already scanned this session — surface it instantly, no rescan.
-      setScanning(false);
-      setSections(initialSections('done'));
-    } else {
-      void runScan();
-    }
+    // Surface whatever we already have instantly, then always kick off a
+    // background refresh. The server replays a persisted `restored` snapshot
+    // first, so even a fresh open after an app restart fills immediately
+    // instead of blocking on the full-screen loader.
+    setSections(cached ? initialSections('done') : initialSections('idle'));
+    void runScan();
     return abortScan;
   }, [repo.id, runScan, abortScan]);
 

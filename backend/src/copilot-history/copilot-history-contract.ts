@@ -12,6 +12,34 @@ export interface CheckpointSummary {
   createdAt: string;
 }
 
+/** Lifecycle of a prompt, derived from the recorded response and liveness. */
+export type PromptStatus = 'answered' | 'answering' | 'unanswered';
+
+/** One prompt the user sent during a session, with its answer and timing. */
+export interface SessionPrompt {
+  /** Zero-based turn order, ascending (oldest first). */
+  index: number;
+  /** The user's message text for this turn. */
+  text: string;
+  /** ISO timestamp the prompt was entered, or '' when unknown. */
+  at: string;
+  /** The assistant's recorded reply, or null when none is stored yet. */
+  response: string | null;
+  /** Lifecycle status for the status icon: answered / answering / unanswered. */
+  status: PromptStatus;
+  /** ISO timestamp the answer completed, or null when not derivable. */
+  answeredAt: string | null;
+  /** Wall-clock milliseconds from prompt to answer, or null when unknown. */
+  durationMs: number | null;
+  /**
+   * True for a synthetic, live "answering" row representing an in-flight turn
+   * whose prompt/response text the CLI store has not persisted yet. Such a row
+   * carries no `text`/`response` and exists only to show the assistant is
+   * actively responding right now.
+   */
+  pending?: boolean;
+}
+
 /** The CLI's recorded history for one session. */
 export interface SessionHistory {
   sessionId: string;
@@ -38,6 +66,14 @@ export interface HistoryCheckpointRow {
   created_at: string;
 }
 
+/** Raw user-message (turn) row from the CLI store. */
+export interface HistoryUserMessageRow {
+  turn_index: number;
+  user_message: string | null;
+  assistant_response: string | null;
+  timestamp: string | null;
+}
+
 /**
  * Low-level access to the CLI store. Isolated behind a port so the aggregation
  * logic stays pure and the node:sqlite adapter is the only DB-aware piece.
@@ -49,9 +85,27 @@ export interface CopilotHistorySource {
   sessionSummaries(sessionIds: string[]): HistorySessionRow[];
   /** Checkpoint rows for the given session ids. */
   checkpoints(sessionIds: string[]): HistoryCheckpointRow[];
+  /** User-message rows for one session, ascending by turn index. */
+  userMessages(sessionId: string): HistoryUserMessageRow[];
+  /**
+   * ISO timestamps of the assistant usage events recorded for one session,
+   * ascending. Used to derive per-prompt answer completion time by bucketing
+   * each event into the prompt window it falls in (the usage events' own
+   * turn_index is unreliable, so timing is matched by wall-clock instead).
+   */
+  usageEventTimes(sessionId: string): string[];
+  /**
+   * The highest turn index the CLI has recorded a usage event for, or null when
+   * none exist. Usage events are written live as the assistant responds, so a
+   * value beyond the last persisted turn reveals an in-flight turn whose
+   * prompt/response text the store has not finalised yet.
+   */
+  latestActivityTurn(sessionId: string): number | null;
 }
 
 /** Aggregates raw CLI rows into per-session history. */
 export interface CopilotHistoryReader {
   read(sessionIds: string[]): SessionHistory[];
+  /** Every prompt the user sent in a session, oldest first, with timestamps. */
+  prompts(sessionId: string): SessionPrompt[];
 }

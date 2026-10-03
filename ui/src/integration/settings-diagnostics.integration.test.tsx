@@ -127,20 +127,20 @@ describe('Settings renderer journeys', () => {
     expect(await screen.findByRole('heading', { name: 'Network activity' })).toBeInTheDocument();
     expect(screen.getByText(/integrations/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'System' }));
     expect(await screen.findByRole('heading', { name: 'Diagnostics & recovery' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Retained clipboard images' })).toBeInTheDocument();
     expect(await screen.findByText('No retained clipboard images.')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Review worktrees' })).toBeInTheDocument();
     expect(await screen.findByText(/review\/42/)).toBeInTheDocument();
-    expect(retainedList).toHaveBeenCalledTimes(1);
+    expect(retainedList).toHaveBeenCalledTimes(2);
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(screen.getByText('No review worktrees on disk.')).toBeInTheDocument());
     expect(api.removeWorktree).toHaveBeenCalledWith(worktrees.length === 0
       ? 'C:\\repo\\.ai-worktrees\\review-42'
       : worktrees[0].path);
-    expect(api.listWorktrees).toHaveBeenCalledTimes(2);
+    expect(api.listWorktrees).toHaveBeenCalledTimes(3);
 
     first.unmount();
     renderSettings(api);
@@ -159,7 +159,7 @@ describe('Settings renderer journeys', () => {
     });
     renderSettings(api);
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Diagnostics' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'System' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
 
     expect(await screen.findByText('worktree is busy')).toBeInTheDocument();
@@ -204,7 +204,7 @@ describe('Settings renderer journeys', () => {
     };
 
     renderSettings(api);
-    fireEvent.click(await screen.findByRole('tab', { name: 'Diagnostics' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'System' }));
     expect(await screen.findByText('Backend exited with code 1')).toBeInTheDocument();
     expect(screen.getByText('Error: backend crashed')).toBeInTheDocument();
     expect(screen.getByText('Renderer journey')).toBeInTheDocument();
@@ -223,9 +223,9 @@ describe('Settings renderer journeys', () => {
     expect(screen.getByText('Backend exited with code 1')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Restart not confirmed');
+    expect(await screen.findByText(/Restart not confirmed/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Restart app' }));
     await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Restart not confirmed/)).toBeNull();
   });
 });

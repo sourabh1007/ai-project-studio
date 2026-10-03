@@ -224,29 +224,58 @@ function ModelTable({ rows }: { rows: ModelBreakdown[] }) {
 }
 
 function ProviderTable({ rows }: { rows: ProviderBreakdown[] }) {
+  const maxNanoAiu = useMemo(
+    () => rows.reduce((max, r) => Math.max(max, r.nanoAiu), 0),
+    [rows],
+  );
   return (
     <Section icon={<WorkspaceContextIcon size={16} />} title="By provider">
       {rows.length === 0 ? (
         <p className="muted">No provider usage yet.</p>
       ) : (
-        <table className="usage-table">
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th className="dash-num">AIC</th>
-              <th className="dash-num">Sessions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.provider}>
-                <td>{r.provider}</td>
-                <td className="dash-num">{formatAic(r.nanoAiu)}</td>
-                <td className="dash-num">{r.sessions}</td>
+        <>
+          <div className="usage-provider-graph">
+            {rows.map((r) => {
+              const pct =
+                maxNanoAiu > 0 ? Math.round((r.nanoAiu / maxNanoAiu) * 100) : 0;
+              return (
+                <div className="usage-provider-row" key={r.provider}>
+                  <span className="usage-provider-label">{r.provider}</span>
+                  <span
+                    className="dash-bar-track usage-provider-bar"
+                    aria-hidden="true"
+                  >
+                    <span
+                      className="dash-bar-fill"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </span>
+                  <span className="usage-provider-value dash-num">
+                    {formatAic(r.nanoAiu)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <table className="usage-table">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th className="dash-num">AIC</th>
+                <th className="dash-num">Sessions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.provider}>
+                  <td>{r.provider}</td>
+                  <td className="dash-num">{formatAic(r.nanoAiu)}</td>
+                  <td className="dash-num">{r.sessions}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </Section>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { metaModelLabel } from '../../lib/meta-model.js';
+import { installedProviders } from '../../lib/providers.js';
 import { Button } from '../../components/ui.js';
 import type {
   MetaModelOption,
@@ -62,7 +63,7 @@ export function MetaModelStatus(): JSX.Element | null {
     loadModels(settings.providerId);
     void api
       .listProviders()
-      .then((list) => setProviders(list))
+      .then((list) => setProviders(installedProviders(list)))
       .catch(() => setProviders([]));
     // Live model catalog (with premium-request cost) from Agency, plus the warm
     // pool snapshot so the picker can show how many metasessions are running.

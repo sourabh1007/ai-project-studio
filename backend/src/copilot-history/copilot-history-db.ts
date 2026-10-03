@@ -4,6 +4,7 @@ import type {
   CopilotHistorySource,
   HistoryCheckpointRow,
   HistorySessionRow,
+  HistoryUserMessageRow,
 } from './copilot-history-contract.js';
 
 export interface CopilotHistoryDbDeps {
@@ -65,6 +66,31 @@ export function createCopilotHistoryDb(
          FROM checkpoints WHERE session_id IN (${placeholders(sessionIds.length)})`,
         sessionIds,
       );
+    },
+    userMessages(sessionId) {
+      return query<HistoryUserMessageRow>(
+        `SELECT turn_index, user_message, assistant_response, timestamp FROM turns
+           WHERE session_id = ? AND user_message IS NOT NULL
+           ORDER BY turn_index ASC`,
+        [sessionId],
+      );
+    },
+    usageEventTimes(sessionId) {
+      return query<{ created_at: string }>(
+        `SELECT created_at FROM assistant_usage_events
+           WHERE session_id = ? AND created_at IS NOT NULL
+           ORDER BY created_at ASC`,
+        [sessionId],
+      ).map((row) => row.created_at);
+    },
+    latestActivityTurn(sessionId) {
+      const rows = query<{ max_turn: number | null }>(
+        `SELECT MAX(turn_index) AS max_turn FROM assistant_usage_events
+           WHERE session_id = ? AND turn_index IS NOT NULL`,
+        [sessionId],
+      );
+      const value = rows[0]?.max_turn;
+      return typeof value === 'number' ? value : null;
     },
   };
 }

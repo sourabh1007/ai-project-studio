@@ -15,7 +15,10 @@ function client(overrides: Partial<ApiClient> = {}): ApiClient {
     getMetaSettings: vi.fn().mockResolvedValue(settings),
     listProviders: vi
       .fn()
-      .mockResolvedValue([{ id: 'agency' }, { id: 'copilot' }]),
+      .mockResolvedValue([
+        { id: 'agency', installed: true },
+        { id: 'copilot', installed: true },
+      ]),
     listModels: vi
       .fn()
       .mockResolvedValue([{ id: 'gpt-5', label: 'GPT-5' }]),

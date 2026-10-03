@@ -45,4 +45,13 @@ describe('copilot-history config', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects a non-positive active-answer window', () => {
+    expect(() =>
+      copilotHistoryConfigSchema.parse({
+        ...copilotHistoryDefaults,
+        activeAnswerWindowMs: 0,
+      }),
+    ).toThrow();
+  });
 });

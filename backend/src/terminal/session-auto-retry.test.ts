@@ -48,7 +48,7 @@ describe('createSessionAutoRetry', () => {
     expect(h.hasTimer()).toBe(false);
     expect(h.resends).toEqual([]);
     expect(h.notices).toEqual([
-      expect.stringContaining('retry manually if needed'),
+      expect.stringContaining('send it again'),
     ]);
   });
 
@@ -61,7 +61,7 @@ describe('createSessionAutoRetry', () => {
     h.fireTimer();
     expect(h.resends).toEqual([]);
     expect(h.notices).toEqual([
-      expect.stringContaining('provider confirms an exact replay-safe request'),
+      expect.stringContaining('send it again'),
     ]);
   });
 
@@ -157,7 +157,7 @@ describe('createSessionAutoRetry', () => {
     h.controller.observeOutput('503\n');
     expect(h.resends).toEqual([]);
     expect(h.notices).toEqual([
-      expect.stringContaining('retry manually if needed'),
+      expect.stringContaining('send it again'),
     ]);
   });
 
@@ -197,7 +197,7 @@ describe('createSessionAutoRetry', () => {
     h.controller.observeOutput('503 straight away\n');
     expect(h.resends).toHaveLength(0);
     expect(h.notices).toEqual([
-      expect.stringContaining('automatic retry budget was spent'),
+      expect.stringContaining('automatic retries'),
     ]);
   });
 

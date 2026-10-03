@@ -81,6 +81,30 @@ describe('createMcpService.listProviders', () => {
     expect(service.listProviders()).toEqual([{ id: 'agency' }]);
   });
 
+  it('hides Microsoft-only providers (Agency) when not signed in with a Microsoft identity', () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support()), provider('copilot', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => null),
+      config: enabled,
+      microsoftSignedIn: () => false,
+    });
+    expect(service.listProviders()).toEqual([{ id: 'copilot' }]);
+  });
+
+  it('shows Agency when signed in with a Microsoft identity', () => {
+    const service = createMcpService({
+      registry: registryOf(provider('agency', support()), provider('copilot', support())),
+      meta: metaOf(async () => ''),
+      tools: inspector(),
+      files: fileStore(async () => null),
+      config: enabled,
+      microsoftSignedIn: () => true,
+    });
+    expect(service.listProviders()).toEqual([{ id: 'agency' }, { id: 'copilot' }]);
+  });
+
   it('returns nothing when disabled', () => {
     const service = createMcpService({
       registry: registryOf(provider('agency', support())),

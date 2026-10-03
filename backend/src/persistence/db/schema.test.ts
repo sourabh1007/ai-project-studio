@@ -684,6 +684,7 @@ describe('db schema/connection', () => {
         'feature_tasks',
         'repositories',
         'repository_contexts',
+        'repo_insights',
         'context_documents',
         'config_overrides',
       ]),

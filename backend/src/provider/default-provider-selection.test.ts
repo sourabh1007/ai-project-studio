@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   selectDefaultProvider,
+  isProviderExposed,
+  MICROSOFT_ONLY_PROVIDER_IDS,
   COPILOT_PROVIDER_ID,
   AGENCY_PROVIDER_ID,
 } from './default-provider-selection.js';
@@ -46,12 +48,23 @@ describe('selectDefaultProvider', () => {
     ).toBe(AGENCY_PROVIDER_ID);
   });
 
-  it('prefers Copilot (installed) off the Microsoft network', () => {
+  it('prefers Agency whenever signed in, even off the Microsoft network', () => {
     expect(
       selectDefaultProvider({
         microsoftNetwork: false,
         enabled: both,
         installed: new Set(both),
+      }),
+    ).toBe(AGENCY_PROVIDER_ID);
+  });
+
+  it('prefers Copilot off the Microsoft network when not signed in', () => {
+    expect(
+      selectDefaultProvider({
+        microsoftNetwork: false,
+        enabled: both,
+        installed: new Set(both),
+        microsoftSignedIn: false,
       }),
     ).toBe(COPILOT_PROVIDER_ID);
   });
@@ -66,7 +79,7 @@ describe('selectDefaultProvider', () => {
     ).toBe(COPILOT_PROVIDER_ID);
   });
 
-  it('returns the network-preferred provider when neither is installed yet', () => {
+  it('returns the preferred provider when neither is installed yet', () => {
     expect(
       selectDefaultProvider({
         microsoftNetwork: true,
@@ -79,6 +92,7 @@ describe('selectDefaultProvider', () => {
         microsoftNetwork: false,
         enabled: both,
         installed: new Set(),
+        microsoftSignedIn: false,
       }),
     ).toBe(COPILOT_PROVIDER_ID);
   });
@@ -91,5 +105,46 @@ describe('selectDefaultProvider', () => {
         installed: new Set(),
       }),
     ).toBe('custom-llm');
+  });
+
+  it('exposes Agency only to a Microsoft identity', () => {
+    expect(MICROSOFT_ONLY_PROVIDER_IDS.has(AGENCY_PROVIDER_ID)).toBe(true);
+    expect(isProviderExposed(AGENCY_PROVIDER_ID, true)).toBe(true);
+    expect(isProviderExposed(AGENCY_PROVIDER_ID, false)).toBe(false);
+    expect(isProviderExposed(COPILOT_PROVIDER_ID, false)).toBe(true);
+  });
+
+  it('never defaults to Agency when not signed in with a Microsoft identity, even on the Microsoft network', () => {
+    expect(
+      selectDefaultProvider({
+        microsoftNetwork: true,
+        enabled: both,
+        installed: new Set(both),
+        microsoftSignedIn: false,
+      }),
+    ).toBe(COPILOT_PROVIDER_ID);
+  });
+
+  it('ignores an Agency override when not signed in with a Microsoft identity', () => {
+    expect(
+      selectDefaultProvider({
+        microsoftNetwork: true,
+        enabled: both,
+        installed: new Set(both),
+        override: AGENCY_PROVIDER_ID,
+        microsoftSignedIn: false,
+      }),
+    ).toBe(COPILOT_PROVIDER_ID);
+  });
+
+  it('throws when the only enabled provider is Microsoft-only and not signed in', () => {
+    expect(() =>
+      selectDefaultProvider({
+        microsoftNetwork: true,
+        enabled: [AGENCY_PROVIDER_ID],
+        installed: new Set([AGENCY_PROVIDER_ID]),
+        microsoftSignedIn: false,
+      }),
+    ).toThrow(/at least one exposed provider/);
   });
 });

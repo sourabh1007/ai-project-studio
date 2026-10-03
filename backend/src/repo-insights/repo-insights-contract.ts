@@ -68,6 +68,15 @@ export type RepoInsightsSection = 'agents' | 'skills' | 'docs' | 'readiness';
 export type RepoInsightsStreamEvent =
   | { type: 'branch'; branch: string }
   | {
+      /**
+       * A previously persisted snapshot replayed immediately at the start of a
+       * scan so the page fills instantly (even after a restart) before the fresh
+       * background scan begins. Absent on a repository's very first scan.
+       */
+      type: 'restored';
+      insights: RepoInsights;
+    }
+  | {
       type: 'section-analyzing';
       section: RepoInsightsSection;
       /** True when this is a self-heal retry after an earlier attempt failed. */

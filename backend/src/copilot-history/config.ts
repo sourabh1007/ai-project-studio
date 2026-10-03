@@ -16,6 +16,14 @@ export const copilotHistoryConfigSchema = z.object({
   maxCheckpointsPerSession: z.number().int().positive(),
   /** Hard cap on characters of each checkpoint overview. */
   maxOverviewChars: z.number().int().positive(),
+  /**
+   * How recently the CLI must have recorded a usage event for an in-flight turn
+   * (one the store hasn't persisted the prompt/response text for yet) to be
+   * surfaced as a live "answering" row. Bounds the indicator so it self-clears
+   * shortly after generation stops instead of sticking when the CLI never
+   * finalises the turn.
+   */
+  activeAnswerWindowMs: z.number().int().positive(),
 });
 
 export type CopilotHistoryConfig = z.infer<typeof copilotHistoryConfigSchema>;
@@ -25,4 +33,5 @@ export const copilotHistoryDefaults: CopilotHistoryConfig = {
   databaseFile: 'session-store.db',
   maxCheckpointsPerSession: 20,
   maxOverviewChars: 600,
+  activeAnswerWindowMs: 45000,
 };

@@ -3,6 +3,7 @@ import { unwrapServerSpec } from './mcp-proxy-config.js';
 import { healMcpConnection } from './mcp-connection-heal.js';
 import type { McpProbeOutcome } from './mcp-connection-heal.js';
 import type { ProviderRegistry } from '../provider/provider-registry.js';
+import { isProviderExposed } from '../provider/default-provider-selection.js';
 import type { McpSupport } from '../provider/provider-contract.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
 import type { McpConfig } from './config.js';
@@ -51,6 +52,13 @@ export interface McpServiceDeps {
     message: string | null,
     output: string[],
   ) => Promise<string | null>;
+  /**
+   * Whether the user is signed in with a Microsoft identity (Azure DevOps).
+   * Microsoft-only providers (Agency) are hidden from {@link McpService.listProviders}
+   * when false, so non-Microsoft users see no trace of Agency MCP management.
+   * Defaults to always-exposed when omitted.
+   */
+  microsoftSignedIn?: () => boolean;
 }
 
 /**
@@ -380,9 +388,11 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       if (!deps.config.enabled) {
         return [];
       }
+      const signedIn = deps.microsoftSignedIn?.() ?? true;
       return deps.registry
         .list()
         .filter((provider) => provider.mcp)
+        .filter((provider) => isProviderExposed(provider.id, signedIn))
         .map((provider) => ({ id: provider.id }));
     },
 

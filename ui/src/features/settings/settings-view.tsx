@@ -34,9 +34,12 @@ import { SelfHealButton } from '../../components/self-heal-button.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 import { SoftwareUpdateSection } from '../updates/software-update-section.js';
 import { AgencyCliSection } from './agency-cli-section.js';
+import { useMicrosoftSignedIn } from '../../hooks/use-microsoft-identity.js';
+import { isAgencyHidden } from '../../lib/microsoft-identity.js';
 import { AppearanceSection } from './appearance-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
+import { HealthSection } from './health-section.js';
 import { RetainedImagesSection } from './retained-images-section.js';
 import { WorktreesSection } from './worktrees-section.js';
 import { MetasessionPoolsSection } from './metasession-pools-section.js';
@@ -534,14 +537,13 @@ function NamespaceEditor({
 }
 
 type TabId =
-  | 'general'
   | 'appearance'
   | 'config'
   | 'prompts'
   | 'metasession'
   | 'network'
   | 'context'
-  | 'diagnostics';
+  | 'health';
 
 interface TabDef {
   id: TabId;
@@ -549,18 +551,18 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { id: 'general', label: 'General' },
+  { id: 'health', label: 'System' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'prompts', label: 'Prompts & Commands' },
   { id: 'metasession', label: 'Metasession' },
   { id: 'network', label: 'Network' },
   { id: 'context', label: 'Workspace context' },
-  { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'config', label: 'Configuration' },
 ];
 
 export function SettingsView({ worktreesRequest }: { worktreesRequest?: number } = {}) {
   const api = useApi();
+  const microsoftSignedIn = useMicrosoftSignedIn();
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
     [],
@@ -568,7 +570,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   const [drafts, setDrafts] = usePersistentState('cw-settings-drafts', {}, {
     validate: isSettingsDraftStore,
   });
-  const [tab, setTab] = useState<TabId>('general');
+  const [tab, setTab] = useState<TabId>('health');
   const [promptAnchor, setPromptAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [subTab, setSubTab] = useState<string | null>(null);
@@ -578,10 +580,10 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
   useEffect(() => {
-    if (worktreesRequest !== undefined) setTab('diagnostics');
+    if (worktreesRequest !== undefined) setTab('health');
   }, [worktreesRequest]);
   useEffect(() => {
-    if (worktreesRequest === undefined || tab !== 'diagnostics') return;
+    if (worktreesRequest === undefined || tab !== 'health') return;
     const timer = requestAnimationFrame(() =>
       document.getElementById('settings-worktrees-target')?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
     return () => cancelAnimationFrame(timer);
@@ -717,49 +719,6 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
           </button>
         ))}
       </div>
-
-      {tab === 'general' && (
-        <SettingsPage searchLabel="Search General settings…">
-          <CollapsibleCard
-            id="general-about"
-            title="About"
-            subtitle="AI Project Studio — an IDE-style workspace for AI coding CLIs."
-            icon={<InfoIcon size={22} />}
-            tone="accent"
-            keywords={['version', 'documentation']}
-            actions={
-              bridge?.openDocs && (
-                <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
-                  Open documentation
-                </Button>
-              )
-            }
-          >
-            <dl className="kv">
-              <div style={{ display: 'contents' }}>
-                <dt>Version</dt>
-                <dd>{version ?? '—'}</dd>
-              </div>
-            </dl>
-          </CollapsibleCard>
-          <CollapsibleCard
-            id="general-updates"
-            title="Software updates"
-            subtitle="Check for and install new versions of the app."
-            keywords={['update', 'version', 'release']}
-          >
-            <SoftwareUpdateSection embedded />
-          </CollapsibleCard>
-          <CollapsibleCard
-            id="general-agency"
-            title="Agency CLI"
-            subtitle="The bundled Microsoft Agency CLI is kept current automatically."
-            keywords={['agency', 'cli', 'upgrade']}
-          >
-            <AgencyCliSection embedded />
-          </CollapsibleCard>
-        </SettingsPage>
-      )}
 
       {tab === 'appearance' && (
         <SettingsPage searchLabel="Search Appearance settings…">
@@ -956,11 +915,51 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
         </SettingsPage>
       )}
 
-      {tab === 'diagnostics' && (
-        <SettingsPage key={worktreesRequest} searchLabel="Search Diagnostics…">
+      {tab === 'health' && (
+        <SettingsPage key={worktreesRequest} searchLabel="Search System…">
+          <CollapsibleCard
+            id="health-overview"
+            title="System &amp; health"
+            subtitle="App info, live backend endpoint latency, subsystem health, and each configured AI provider — all in one place. Restart the app to recover if something is down."
+            icon={<InfoIcon size={22} />}
+            tone="neutral"
+            keywords={['health', 'system', 'status', 'backend', 'provider', 'endpoint', 'latency', 'down', 'degraded', 'restart', 'version', 'uptime']}
+            actions={
+              bridge?.openDocs && (
+                <Button variant="ghost" onClick={() => bridge.openDocs?.()}>
+                  Open documentation
+                </Button>
+              )
+            }
+          >
+            <HealthSection
+              embedded
+              bridge={bridge}
+              version={version}
+              logDirectory={logDirectory ?? null}
+            />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="general-updates"
+            title="Software updates"
+            subtitle="Check for and install new versions of the app."
+            keywords={['update', 'version', 'release']}
+          >
+            <SoftwareUpdateSection embedded />
+          </CollapsibleCard>
+          {!isAgencyHidden(microsoftSignedIn) && (
+            <CollapsibleCard
+              id="general-agency"
+              title="Agency CLI"
+              subtitle="The bundled Microsoft Agency CLI is kept current automatically."
+              keywords={['agency', 'cli', 'upgrade']}
+            >
+              <AgencyCliSection embedded />
+            </CollapsibleCard>
+          )}
           <CollapsibleCard
             id="diagnostics-logs"
-            title="Logs & diagnostics"
+            title="Logs"
             subtitle="The app writes structured logs to a daily file. Open the folder to inspect or share them when reporting an issue."
             icon={<LogsIcon size={22} />}
             tone="neutral"
@@ -980,10 +979,6 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
               <div style={{ display: 'contents' }}>
                 <dt>Log level</dt>
                 <dd>{logLevel ?? '—'}</dd>
-              </div>
-              <div style={{ display: 'contents' }}>
-                <dt>Log directory</dt>
-                <dd className="config-path">{logDirectory ?? '—'}</dd>
               </div>
             </dl>
           </CollapsibleCard>

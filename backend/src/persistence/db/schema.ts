@@ -251,6 +251,16 @@ const CORE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    // Kept alongside `repositories` so the ON DELETE CASCADE foreign key drops a
+    // repo's persisted insights snapshot when the repository itself is removed.
+    name: 'repo_insights',
+    ddl: `CREATE TABLE IF NOT EXISTS repo_insights (
+    repo_id TEXT PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+    snapshot TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+  )`,
+  },
+  {
     name: 'skills',
     ddl: `CREATE TABLE IF NOT EXISTS skills (
     id TEXT PRIMARY KEY,

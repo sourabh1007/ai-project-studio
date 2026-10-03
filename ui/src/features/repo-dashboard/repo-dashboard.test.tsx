@@ -119,9 +119,30 @@ describe('repository dashboard scan cancellation', () => {
     expect(screen.getByText('Completed doc')).toBeInTheDocument();
     first.unmount();
     render(dashboard());
-    expect(scans).toHaveLength(2);
+    expect(scans).toHaveLength(3);
     expect(screen.getByText('Completed skill')).toBeInTheDocument();
     expect(screen.queryByText('Updated skill')).not.toBeInTheDocument();
+  });
+
+  it('replays a persisted restored snapshot instantly then refreshes in the background', async () => {
+    const { dashboard, scans, repo } = setup();
+    render(dashboard());
+    // The server replays the persisted snapshot first (survives restarts), so
+    // the page fills immediately without waiting for a fresh full scan.
+    act(() => scans[0].emit({ type: 'restored', insights: insights(repo.id, 'Restored skill') }));
+    expect(screen.getByText('Restored skill')).toBeInTheDocument();
+    expect(screen.queryByText('Scanning repository')).not.toBeInTheDocument();
+    // The same scan then streams fresh results that replace the snapshot in place.
+    act(() => scans[0].emit({
+      type: 'section', section: 'skills',
+      entries: [entry('Fresh skill')], analysis: null,
+    }));
+    expect(screen.getByText('Fresh skill')).toBeInTheDocument();
+    await act(async () => {
+      scans[0].emit({ type: 'done', insights: insights(repo.id, 'Fresh skill') });
+      scans[0].resolve();
+    });
+    expect(scans).toHaveLength(1);
   });
 
   it.each(['resolve', 'reject'] as const)(

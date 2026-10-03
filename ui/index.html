@@ -28,6 +28,18 @@
           var resolved =
             mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
           document.documentElement.setAttribute('data-theme', resolved);
+
+          /* Apply the persisted appearance (compact desktop vs. futuristic)
+             before first paint so the surface treatment never flashes. */
+          var prefsRaw =
+            (appearance && appearance.values['cw-ui-prefs']) ||
+            window.localStorage.getItem('cw-ui-prefs');
+          var look = 'desktop';
+          if (prefsRaw) {
+            var parsed = JSON.parse(prefsRaw);
+            if (parsed && parsed.appearance === 'futuristic') look = 'futuristic';
+          }
+          document.documentElement.setAttribute('data-appearance', look);
         } catch (_) {
           /* localStorage may be unavailable; fall back to CSS defaults. */
         }

@@ -28,6 +28,13 @@ export interface ProviderBootstrapInfo {
   defaultProvider: string;
   /** Each registered provider with whether its CLI is installed. */
   providers: Array<{ id: string; installed: boolean }>;
+  /**
+   * True when signed in with a Microsoft identity (Azure DevOps). Agency — an
+   * internal Microsoft tool — is exposed only when this is true; when false the
+   * UI hides every trace of Agency. Absent on older backends (treated as
+   * "unknown", i.e. shown).
+   */
+  microsoftSignedIn?: boolean;
 }
 
 /** Lightweight backend liveness probe payload (`GET /health`). */
@@ -35,6 +42,39 @@ export interface HealthStatus {
   status: 'ok';
   uptimeMs: number;
   resources?: ResourceSnapshot;
+}
+
+/** Health of a single backend subsystem or an AI provider. */
+export type HealthState = 'ok' | 'degraded' | 'down';
+
+/** A subsystem probe result in the system-health report (`GET /system-health`). */
+export interface HealthCheckResult {
+  id: string;
+  title: string;
+  state: HealthState;
+  /** Short human-readable context, when the probe provides one. */
+  detail?: string;
+  /** Wall-clock time the probe took, in milliseconds. */
+  latencyMs: number;
+}
+
+/** Install/upgrade health of one AI provider in the system-health report. */
+export interface ProviderHealth {
+  id: string;
+  title: string;
+  installed: boolean;
+  version?: string;
+  upgradePhase?: string;
+  detail?: string;
+}
+
+/** Aggregated backend + provider health (`GET /system-health`). */
+export interface SystemHealthReport {
+  generatedAt: string;
+  /** Worst state across the subsystem checks (providers are informational). */
+  overall: HealthState;
+  checks: HealthCheckResult[];
+  providers: ProviderHealth[];
 }
 
 export interface ResourceSnapshot {
@@ -196,6 +236,7 @@ export type RepoInsightsSection = 'agents' | 'skills' | 'docs' | 'readiness';
  * then a terminal `section` or `section-failed`, closing with a `done`.
  */
 export type RepoInsightsStreamEvent =
+  | { type: 'restored'; insights: RepoInsights }
   | { type: 'branch'; branch: string }
   | { type: 'section-analyzing'; section: RepoInsightsSection; healing: boolean }
   | {
@@ -1020,6 +1061,33 @@ export type SessionStatus =
 
 export type SessionKind = 'dev' | 'meta';
 
+/** Lifecycle of a prompt, used to pick its status icon. */
+export type PromptStatus = 'answered' | 'answering' | 'unanswered';
+
+/** One user prompt from a CLI session's recorded history, with its answer. */
+export interface SessionPrompt {
+  /** Zero-based turn index within the session, oldest first. */
+  index: number;
+  /** The text the user asked on this turn. */
+  text: string;
+  /** ISO timestamp when the prompt was recorded (empty when unknown). */
+  at: string;
+  /** The assistant's recorded reply, or null when none is stored yet. */
+  response: string | null;
+  /** Lifecycle status for the status icon. */
+  status: PromptStatus;
+  /** ISO timestamp the answer completed, or null when not derivable. */
+  answeredAt: string | null;
+  /** Wall-clock milliseconds from prompt to answer, or null when unknown. */
+  durationMs: number | null;
+  /**
+   * True for a synthetic live row representing an in-flight turn the CLI store
+   * has not saved yet. Such a row has no `text`/`response` and only indicates
+   * the assistant is actively responding right now.
+   */
+  pending?: boolean;
+}
+
 export interface Session {
   id: string;
   featureId: string;
@@ -1350,6 +1418,8 @@ export interface FeatureWorkSummary {
 
 export interface ProviderInfo {
   id: string;
+  /** Whether this provider's CLI is installed and enabled on this machine. */
+  installed: boolean;
 }
 
 export interface ModelInfo {

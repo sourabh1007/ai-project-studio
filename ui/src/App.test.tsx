@@ -216,6 +216,12 @@ function apiClient(): ApiClient {
       },
     ]),
     getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
+    getProviderBootstrap: vi.fn().mockResolvedValue({
+      defaultProvider: 'copilot',
+      providers: [],
+      microsoftSignedIn: false,
+    }),
+    listSessionPrompts: vi.fn().mockResolvedValue([]),
   } as unknown as ApiClient;
 }
 

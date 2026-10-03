@@ -132,6 +132,8 @@ import {
   resolveMicrosoftNetwork,
 } from './provider/network-environment.js';
 import { selectDefaultProvider } from './provider/default-provider-selection.js';
+import { isProviderExposed } from './provider/default-provider-selection.js';
+import { createMicrosoftIdentity } from './provider/microsoft-identity.js';
 import { probeMicrosoftInstallEndpoint } from './provider/microsoft-network-probe.js';
 import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
 import {
@@ -282,6 +284,14 @@ import { createSelfHealService } from './self-heal/self-heal-service.js';
 import { buildGhInstallPlan } from './self-heal/gh-install.js';
 import type { Healer } from './self-heal/self-heal-contract.js';
 import { describeNamespaces } from './config/config-schema-describe.js';
+import {
+  HEALTH_NAMESPACE,
+  healthConfigSchema,
+  healthDefaults,
+  type HealthConfig,
+} from './health/config.js';
+import { createHealthReportService } from './health/health-report-service.js';
+import type { ProviderHealth } from './health/health-contract.js';
 import { overridesToConfig } from './config/config-override-store.js';
 import { createCliSessionStore } from './provider/cli-store/cli-session-store.js';
 import {
@@ -466,6 +476,7 @@ import {
   type RepoInsightsConfig,
 } from './repo-insights/config.js';
 import { createRepoInsightsService } from './repo-insights/repo-insights-service.js';
+import { createRepoInsightsRepo } from './persistence/repo-insights-repo.js';
 import type { RepoInsightsStreamSink } from './repo-insights/repo-insights-contract.js';
 import { createRepoInsightsGitAdapter } from './repo-insights/repo-insights-git-adapter.js';
 import { createSessionBootstrap } from './session-bootstrap/session-bootstrap.js';
@@ -594,6 +605,7 @@ function main(): void {
   registry.register({ namespace: COPILOT_HISTORY_NAMESPACE, schema: copilotHistoryConfigSchema, defaults: copilotHistoryDefaults });
   registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
   registry.register({ namespace: SKILLS_NAMESPACE, schema: skillsConfigSchema, defaults: skillsDefaults });
+  registry.register({ namespace: HEALTH_NAMESPACE, schema: healthConfigSchema, defaults: healthDefaults });
   registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
   registry.register({ namespace: MCP_NAMESPACE, schema: mcpConfigSchema, defaults: mcpDefaults });
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
@@ -1736,7 +1748,13 @@ function main(): void {
 
   // Initial default from the synchronous (strong) signals; the async endpoint
   // probe below refines it in place if the environment is still ambiguous.
+  // Agency is an internal Microsoft tool, so it is only ever exposed/selected
+  // when the user is signed in with a Microsoft identity (Azure DevOps). The
+  // identity store flips live on sign-in/sign-out, and the default is recomputed
+  // in place so Agency appears/disappears everywhere with no restart.
+  const microsoftIdentity = createMicrosoftIdentity(false);
   const enabledProviderIds = enabledProviders.map((provider) => provider.id);
+  let lastEndpointReachable: boolean | null = null;
   const computeDefaultProvider = (endpointReachable: boolean | null): string =>
     selectDefaultProvider({
       microsoftNetwork: resolveMicrosoftNetwork({
@@ -1746,12 +1764,23 @@ function main(): void {
       }),
       enabled: enabledProviderIds,
       installed: installedProviderIds(),
+      microsoftSignedIn: microsoftIdentity.isSignedIn(),
     });
   const resolverConfig = {
     defaultProvider: computeDefaultProvider(null),
     defaultModelByProvider,
   };
   const resolver = createProviderResolver(providers, resolverConfig);
+  // Recompute the default live whenever the Microsoft identity flips so new
+  // sessions and the first-run UI immediately reflect Agency becoming available
+  // (sign-in) or hidden (sign-out).
+  microsoftIdentity.onChange(() => {
+    resolverConfig.defaultProvider = computeDefaultProvider(lastEndpointReachable);
+    logger.info('provider exposure changed', {
+      microsoftSignedIn: microsoftIdentity.isSignedIn(),
+      defaultProvider: resolverConfig.defaultProvider,
+    });
+  });
 
   // When the environment is ambiguous (no override, env not Microsoft), run the
   // best-effort reachability probe and refine the default in place. The resolver
@@ -1761,6 +1790,7 @@ function main(): void {
     void probeMicrosoftInstallEndpoint()
       .then((reachable) => {
         if (reachable) {
+          lastEndpointReachable = true;
           resolverConfig.defaultProvider = computeDefaultProvider(true);
         }
       })
@@ -2124,7 +2154,23 @@ function main(): void {
     providerId: metaConfig.providerId,
     model: metaConfig.model,
   });
-
+  // Agency is only exposed to a Microsoft identity, so a persisted Agency
+  // metasession default must degrade to the exposed default (Copilot) for a
+  // signed-out user. The plan-usage probe, meta runner and the settings view
+  // all read through this identity-aware view so no Agency metasession ever runs
+  // — and none is ever displayed — without a Microsoft identity. Writes pass
+  // through unchanged (persistence keeps the user's real choice).
+  const exposedMetaSettings = {
+    get: () => {
+      const value = metaSettings.get();
+      return isProviderExposed(value.providerId, microsoftIdentity.isSignedIn())
+        ? value
+        : { ...value, providerId: resolverConfig.defaultProvider };
+    },
+    set: (patch: Partial<ReturnType<typeof metaSettings.get>>) => metaSettings.set(patch),
+    onChange: (listener: (value: ReturnType<typeof metaSettings.get>) => void) =>
+      metaSettings.onChange(listener),
+  };
   // Signed-in plan AI-credit budget. The probe boots a throwaway TUI for the
   // *active* provider (Agency wraps the same Copilot CLI, so its `/usage` panel
   // is the same underlying budget) and reuses one long-lived, admission-gated
@@ -2135,7 +2181,7 @@ function main(): void {
     probe: createPtyPlanUsageProbe({
       spawner: createNodePtySpawner(),
       resolveCommand: () => {
-        const active = metaSettings.get();
+        const active = exposedMetaSettings.get();
         return buildPlanUsageProbeCommand({
           providerId: active.providerId,
           model: active.model || copilotConfig.defaultModel,
@@ -2163,7 +2209,7 @@ function main(): void {
     launcher,
     transcripts: transcriptRepo,
     config: metaConfig,
-    settings: metaSettings,
+    settings: exposedMetaSettings,
   });
   // Warm ACP metasession pools. When enabled they keep several live
   // `copilot --acp` sessions ready — one pool per configured purpose — so every
@@ -2293,7 +2339,7 @@ function main(): void {
       ownership: metaOperationOwnership,
       newOperationId: () => ids.next(),
       resolveIdentity: (request) => {
-        const defaults = metaSettings.get();
+        const defaults = exposedMetaSettings.get();
         return {
           providerId: request.providerId ?? defaults.providerId,
           requestedModel: request.model ?? defaults.model,
@@ -2332,6 +2378,7 @@ function main(): void {
     files: createMcpConfigFileStore(),
     tools: createMcpToolInspector(),
     config: mcpConfig,
+    microsoftSignedIn: () => microsoftIdentity.isSignedIn(),
     healDiagnose: async (serverName, message, output) => {
       try {
         const detail = [message ?? '', ...output].join('\n').trim();
@@ -2533,6 +2580,7 @@ function main(): void {
     git: createRepoInsightsGitAdapter(undefined, repoInsightsConfig.gitTimeoutMs),
     clock,
     config: repoInsightsConfig,
+    store: createRepoInsightsRepo(db),
     // Each insights section is enriched by its own warmed metasession; the
     // fan-out width scales with the live warm pool (reserving one for other IDE
     // work) and is re-read mid-run so capacity added while scanning is used.
@@ -3414,6 +3462,74 @@ function main(): void {
     healers: [ghInstallHealer, assistantModelHealer],
   });
 
+  // System-health: a representative, bounded set of probes over the backend
+  // subsystems the UI depends on, plus each AI provider's install/upgrade state.
+  // Every probe is cheap and side-effect-free; a throw or a timeout is reported
+  // as `down` so one stuck subsystem never hangs the report. Extend by adding a
+  // probe here. Provider health avoids spawning `--version` (which could hang the
+  // endpoint) and reuses the version the bootstrapper already resolved, if any.
+  const healthConfig = config[HEALTH_NAMESPACE] as HealthConfig;
+  const providerHealthSnapshot = (): ProviderHealth[] => {
+    const describe = (
+      id: string,
+      title: string,
+      status: { installed: boolean; upgrade?: { phase?: string; version?: string | null } },
+    ): ProviderHealth => ({
+      id,
+      title,
+      installed: status.installed,
+      ...(status.upgrade?.version ? { version: status.upgrade.version } : {}),
+      ...(status.upgrade?.phase ? { upgradePhase: status.upgrade.phase } : {}),
+      ...(status.installed
+        ? {}
+        : { detail: 'Not installed — installs automatically on first use.' }),
+    });
+    return [
+      describe('copilot', 'GitHub Copilot CLI', copilotBootstrapper.status()),
+      describe('agency', 'Agency', agencyBootstrapper.status()),
+    ];
+  };
+  const healthReportService = createHealthReportService({
+    timeoutMs: healthConfig.probeTimeoutMs,
+    providerHealth: providerHealthSnapshot,
+    probes: [
+      {
+        id: 'api',
+        title: 'Backend API',
+        // Reaching this probe at all proves the HTTP API is serving requests.
+        check: () => ({ state: 'ok' }),
+      },
+      {
+        id: 'persistence',
+        title: 'Persistence (database)',
+        check: () => {
+          db.prepare('SELECT 1 AS ok').get();
+          return { state: 'ok' };
+        },
+      },
+      {
+        id: 'configuration',
+        title: 'Configuration',
+        check: () => {
+          const count = Object.keys(describeNamespaces(registry)).length;
+          return count > 0
+            ? { state: 'ok', detail: `${count} modules registered` }
+            : { state: 'degraded', detail: 'No configuration namespaces registered' };
+        },
+      },
+      {
+        id: 'providers',
+        title: 'AI providers',
+        check: () => {
+          const count = providers.list().length;
+          return count > 0
+            ? { state: 'ok', detail: `${count} registered` }
+            : { state: 'down', detail: 'No AI providers registered' };
+        },
+      },
+    ],
+  });
+
   /**
    * Human-readable name for a skill, used as the status line shown while its
    * instruction block is injected. Falls back to a generic label rather than
@@ -3462,6 +3578,7 @@ function main(): void {
           })),
         };
       },
+      microsoftSignedIn: () => microsoftIdentity.isSignedIn(),
       aggregates: featureAnalytics,
       summarizer,
       summaries: summaryRepo,
@@ -3514,6 +3631,7 @@ function main(): void {
       configOverrides: configOverrideService,
       settingsAssistant,
       selfHeal: selfHealService,
+      systemHealth: healthReportService,
       configSchema: () => describeNamespaces(registry),
       metaPools: metaPoolsStatusFn,
       metaOperations: { operations: metaOperationRepo, config: metaOperationsConfig },
@@ -3523,7 +3641,7 @@ function main(): void {
       }),
       resizeMetaPool: (size) => resizeMetaPoolFn(size),
       metaSettings: () => ({
-        ...metaSettings.get(),
+        ...exposedMetaSettings.get(),
         warmPoolEnabled: warmPoolCfg.enabled,
       }),
       updateMetaSettings: async (patch) => {
@@ -3572,6 +3690,7 @@ function main(): void {
       azureStatus: async (target) => {
         rememberAzureTarget(target);
         const status = await azureAuth.status(target);
+        microsoftIdentity.set(status.authenticated);
         if (status.authenticated) {
           await refreshAzureDevOpsCredentialEnv();
         }
@@ -3580,6 +3699,7 @@ function main(): void {
       azureSignIn: async (target) => {
         rememberAzureTarget(target);
         const status = await azureAuth.signIn(target);
+        microsoftIdentity.set(status.authenticated);
         if (status.authenticated) {
           await refreshAzureDevOpsCredentialEnv();
         }
@@ -3587,6 +3707,7 @@ function main(): void {
       },
       azureSignOut: async (target) => {
         const status = await azureAuth.signOut(target);
+        microsoftIdentity.set(false);
         applyAzureCredentialEnv(null);
         return status;
       },

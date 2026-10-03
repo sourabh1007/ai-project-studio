@@ -44,7 +44,7 @@ function repoOf(sessions: Session[]): SessionRepo {
 }
 
 function readerOf(histories: SessionHistory[]): CopilotHistoryReader {
-  return { read: () => histories };
+  return { read: () => histories, prompts: () => [] };
 }
 
 function storeOf(

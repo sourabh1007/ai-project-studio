@@ -13,6 +13,34 @@ describe('resolveExecutable', () => {
     expect(result).toBe('C:\\bin\\copilot.EXE');
   });
 
+  it('prefers a PATHEXT executable over a same-named extensionless script on Windows', () => {
+    // npm global installs drop a POSIX shell script named `copilot` alongside
+    // `copilot.cmd`. ConPTY cannot spawn the extensionless script, so the `.CMD`
+    // variant must win even though the bare file also exists.
+    const existing = new Set([
+      'Q:\\npm-global\\copilot',
+      'Q:\\npm-global\\copilot.CMD',
+    ]);
+    const result = resolveExecutable('copilot', {
+      isWindows: true,
+      pathEnv: 'Q:\\npm-global',
+      pathExt: '.COM;.EXE;.BAT;.CMD',
+      fileExists: (p) => existing.has(p),
+    });
+    expect(result).toBe('Q:\\npm-global\\copilot.CMD');
+  });
+
+  it('falls back to a bare extensionless executable on Windows when no PATHEXT variant exists', () => {
+    const existing = new Set(['C:\\bin\\tool']);
+    const result = resolveExecutable('tool', {
+      isWindows: true,
+      pathEnv: 'C:\\bin',
+      pathExt: '.EXE;.CMD',
+      fileExists: (p) => existing.has(p),
+    });
+    expect(result).toBe('C:\\bin\\tool');
+  });
+
   it('prefers a name that already carries its extension', () => {
     const existing = new Set(['C:\\bin\\copilot.exe']);
     const result = resolveExecutable('copilot.exe', {

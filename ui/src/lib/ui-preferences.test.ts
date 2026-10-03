@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { contrastRatio, type ResolvedTheme } from './theme.js';
 import {
   ACCENT_KEYS,
+  APPEARANCES,
   DEFAULT_UI_PREFERENCES,
   DENSITIES,
   FONTS,
@@ -146,6 +147,18 @@ describe('normalizeUiPreferences', () => {
     expect(p.accent).toBe('teal');
     expect(p.motion).toBe('off');
     expect(p.density).toBe(DEFAULT_UI_PREFERENCES.density);
+  });
+
+  it('keeps a valid appearance and falls back for an invalid one', () => {
+    expect(APPEARANCES).toContain('desktop');
+    expect(APPEARANCES).toContain('futuristic');
+    expect(DEFAULT_UI_PREFERENCES.appearance).toBe('desktop');
+    expect(normalizeUiPreferences({ appearance: 'futuristic' }).appearance).toBe(
+      'futuristic',
+    );
+    expect(normalizeUiPreferences({ appearance: 'nope' }).appearance).toBe(
+      'desktop',
+    );
   });
 });
 
@@ -298,6 +311,53 @@ describe('deriveCssVariables', () => {
   );
 });
 
+describe('futuristic appearance tokens', () => {
+  function appearanceBlock(theme: ResolvedTheme): string {
+    const pattern = new RegExp(
+      `\\[data-appearance='futuristic'\\]\\[data-theme='${theme}'\\]\\s*\\{([\\s\\S]*?)\\n\\}`,
+    );
+    const match = DESIGN_TOKENS_CSS.match(pattern);
+    if (!match) {
+      throw new Error(`Could not find futuristic ${theme} block`);
+    }
+    return match[1];
+  }
+
+  it.each(['light', 'dark'] as const)(
+    'defines layered surface + depth tokens for the %s futuristic appearance',
+    (theme) => {
+      const block = appearanceBlock(theme);
+      for (const token of [
+        '--bg',
+        '--panel',
+        '--panel-editor',
+        '--border',
+        '--text',
+        '--shadow-soft',
+        '--shadow-dialog',
+        '--surface-overlay',
+      ]) {
+        expect(block, `${theme} ${token}`).toContain(`${token}:`);
+      }
+      // The editor/terminal surface stays opaque (a solid hex, never rgba).
+      expect(block).toMatch(/--panel-editor:\s*#[0-9a-fA-F]{6}/);
+    },
+  );
+
+  it('reserves translucency for floating palette + dialog surfaces only', () => {
+    expect(DESIGN_TOKENS_CSS).toContain(
+      "[data-appearance='futuristic'] .cmdk-panel",
+    );
+    expect(DESIGN_TOKENS_CSS).toContain(
+      "[data-appearance='futuristic'] .modal",
+    );
+    // The explicit "off" motion preference cancels the indicator animation.
+    expect(DESIGN_TOKENS_CSS).toContain(
+      ":root[data-motion='off'][data-appearance='futuristic'] .tab-active::after",
+    );
+  });
+});
+
 describe('accentColor + optionLabel', () => {
   it('returns the themed swatch', () => {
     expect(accentColor('emerald', 'light')).toBe('#047857');
@@ -307,6 +367,8 @@ describe('accentColor + optionLabel', () => {
   it('formats option labels, including special cases', () => {
     expect(optionLabel('x-large')).toBe('Extra large');
     expect(optionLabel('mono-ui')).toBe('Monospace');
+    expect(optionLabel('desktop')).toBe('Compact desktop');
+    expect(optionLabel('futuristic')).toBe('Futuristic');
     expect(optionLabel('compact')).toBe('Compact');
     expect(optionLabel('cozy')).toBe('Cozy');
     expect(optionLabel('jetbrains')).toBe('JetBrains Mono');

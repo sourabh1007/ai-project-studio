@@ -106,6 +106,13 @@ function harness(
             : null,
         checkpoints: [],
       })),
+    prompts: (id: string) =>
+      id === 's1'
+        ? [
+            { index: 0, text: 'first ask', at: '2025-01-01T00:00:00.000Z', response: 'first reply', status: 'answered' as const, answeredAt: '2025-01-01T00:00:30.000Z', durationMs: 30000 },
+            { index: 1, text: 'second ask', at: '2025-01-01T00:05:00.000Z', response: null, status: 'answering' as const, answeredAt: null, durationMs: null },
+          ]
+        : [],
   };
   const routes = createSessionRoutes({
     launcher,
@@ -285,6 +292,38 @@ describe('session-controller', () => {
       req({ params: { id: 'nope' } }),
     );
     expect(result.status).toBe(404);
+  });
+
+  it('returns a session prompt history with timestamps', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(
+      req({ params: { id: 's1' } }),
+    );
+    expect(result).toEqual({
+      status: 200,
+      body: [
+        { index: 0, text: 'first ask', at: '2025-01-01T00:00:00.000Z', response: 'first reply', status: 'answered', answeredAt: '2025-01-01T00:00:30.000Z', durationMs: 30000 },
+        { index: 1, text: 'second ask', at: '2025-01-01T00:05:00.000Z', response: null, status: 'answering', answeredAt: null, durationMs: null },
+      ],
+    });
+  });
+
+  it('returns 404 for prompts of an unknown session', async () => {
+    const h = harness(Promise.resolve(session));
+    const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(
+      req({ params: { id: 'nope' } }),
+    );
+    expect(result.status).toBe(404);
+  });
+
+  it('returns an empty prompt history when history is unavailable', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      withHistory: false,
+    });
+    const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(
+      req({ params: { id: 's1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: [] });
   });
 
   it('resolves a feature environment (cwd + branch) for the move dialog', async () => {

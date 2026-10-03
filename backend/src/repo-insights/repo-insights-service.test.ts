@@ -14,6 +14,22 @@ import type {
 } from './repo-insights-contract.js';
 import { createRepoInsightsService } from './repo-insights-service.js';
 import type { RepoInsightsGit } from './repo-insights-git-port.js';
+import type { RepoInsightsStore } from './repo-insights-store-port.js';
+import type { RepoInsights } from './repo-insights-contract.js';
+
+/** In-memory {@link RepoInsightsStore} so tests can assert persistence. */
+function fakeStore(seed: Record<string, RepoInsights> = {}): RepoInsightsStore {
+  const map = new Map<string, RepoInsights>(Object.entries(seed));
+  return {
+    get: (id) => map.get(id) ?? null,
+    save: (insights) => {
+      map.set(insights.repositoryId, insights);
+    },
+    delete: (id) => {
+      map.delete(id);
+    },
+  };
+}
 
 interface FakeGitData {
   defaultBranch?: string | null;
@@ -50,12 +66,17 @@ function repo(overrides: Partial<Repository> = {}): Repository {
 
 const clock = createClock(() => Date.parse('2026-02-01T00:00:00.000Z'));
 
-function serviceWith(git: RepoInsightsGit, repository: Repository) {
+function serviceWith(
+  git: RepoInsightsGit,
+  repository: Repository,
+  store: RepoInsightsStore = fakeStore(),
+) {
   return createRepoInsightsService({
     repos: { get: () => repository },
     git,
     clock,
     config: repoInsightsDefaults,
+    store,
   });
 }
 
@@ -299,6 +320,42 @@ describe('createRepoInsightsService', () => {
     expect(scans).toBe(1);
     expect(a).toBe(b);
   });
+
+  it('persists a completed load to the durable store', async () => {
+    const store = fakeStore();
+    const insights = await serviceWith(
+      fakeGit({ defaultBranch: 'main' }),
+      repo(),
+      store,
+    ).load('r1');
+    expect(store.get('r1')).toEqual(insights);
+  });
+
+  it('restores a stored snapshot without rescanning', async () => {
+    let scans = 0;
+    const git = fakeGit({ defaultBranch: 'main' });
+    const counting: RepoInsightsGit = {
+      ...git,
+      resolveDefaultBranch: async (path) => {
+        scans += 1;
+        return git.resolveDefaultBranch(path);
+      },
+    };
+    const stored: RepoInsights = {
+      repositoryId: 'r1',
+      branch: 'from-store',
+      agents: [],
+      skills: [],
+      docs: [],
+      readiness: [],
+      agentReady: false,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const loaded = await serviceWith(counting, repo(), fakeStore({ r1: stored }))
+      .load('r1');
+    expect(loaded).toEqual(stored);
+    expect(scans).toBe(0);
+  });
 });
 
 type AiOutcome = 'ok' | 'fail' | 'timeout' | 'aborted';
@@ -347,6 +404,7 @@ interface StreamOpts {
   live?: () => number;
   sleep?: (ms: number) => Promise<void>;
   config?: RepoInsightsConfig;
+  store?: RepoInsightsStore;
 }
 
 function streamWith(
@@ -359,6 +417,7 @@ function streamWith(
     git,
     clock,
     config: opts.config ?? repoInsightsDefaults,
+    store: opts.store ?? fakeStore(),
     ai: opts.ai,
     liveMetaSessions: opts.live,
     sleep: opts.sleep,
@@ -465,6 +524,40 @@ describe('createRepoInsightsService.analyzeStream', () => {
     const done = events.at(-1);
     if (done?.type !== 'done') throw new Error('expected done');
     expect(done.insights.agentReady).toBe(false);
+  });
+
+  it('persists the completed snapshot to the durable store', async () => {
+    const store = fakeStore();
+    const svc = streamWith(fakeGit({ defaultBranch: 'main' }), repo(), { store });
+    const events = await collect(svc);
+    const done = events.at(-1);
+    if (done?.type !== 'done') throw new Error('expected done');
+    expect(store.get('r1')).toEqual(done.insights);
+  });
+
+  it('does not emit a restored event on a first-time scan', async () => {
+    const svc = streamWith(fakeGit({ defaultBranch: 'main' }), repo());
+    const events = await collect(svc);
+    expect(events.some((e) => e.type === 'restored')).toBe(false);
+  });
+
+  it('replays a stored snapshot as a restored event before rescanning', async () => {
+    const stored: RepoInsights = {
+      repositoryId: 'r1',
+      branch: 'from-store',
+      agents: [],
+      skills: [],
+      docs: [],
+      readiness: [],
+      agentReady: false,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const svc = streamWith(fakeGit({ defaultBranch: 'main' }), repo(), {
+      store: fakeStore({ r1: stored }),
+    });
+    const events = await collect(svc);
+    expect(events[0]).toEqual({ type: 'restored', insights: stored });
+    expect(events.at(-1)?.type).toBe('done');
   });
 
   it('skips enrichment when it is disabled by config', async () => {

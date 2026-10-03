@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSharedCheckoutPreparer, type GitRunResult } from './shared-session-checkout.js';
+import { createSharedCheckoutPreparer, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
 import { sessionWorktreeConfigSchema, sessionWorktreeDefaults, SESSION_WORKTREE_NAMESPACE } from './config.js';
 
 const target = { repoLocalPath: 'C:\\repo', ref: 'master' };
@@ -32,6 +32,18 @@ describe('shared session checkout', () => {
     expect(await prepare(pr)).toBe('C:\\pr');
     expect(await prepare(target, undefined, false)).toBe('C:\\repo');
     expect(git).toHaveBeenCalledOnce();
+  });
+  it('opens the session as-is when the shared checkout is not a Git repository', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }));
+    const report = vi.fn();
+    const prepare = createSharedCheckoutPreparer({ git });
+    expect(await prepare(target, report)).toBe(target.repoLocalPath);
+    expect(git).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('not a Git repository'));
+  });
+  it('exposes a not-a-git-repository detector', () => {
+    expect(isNotGitRepository('fatal: not a git repository (or any of the parent directories): .git')).toBe(true);
+    expect(isNotGitRepository('Local changes would be overwritten')).toBe(false);
   });
   it.each(['Local changes would be overwritten', ''])('surfaces unsafe/failed branch switches without recovery resets (%s)', async (stderr) => {
     const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')

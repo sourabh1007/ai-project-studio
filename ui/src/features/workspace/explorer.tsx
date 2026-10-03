@@ -36,6 +36,7 @@ import { formatAic, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionDisplayName } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
+import { providerLabel } from '../../lib/meta-model.js';
 import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { SkeletonList } from '../../components/loading.js';
 import {
@@ -135,6 +136,11 @@ function SessionRow({
   // name (pre-persistence installs) and finally the ordinal label.
   const name = sessionDisplayName(session.name ?? customName, ordinal);
   const model = session.resolvedModel ?? session.requestedModel;
+  // Industry-standard per-session CLI indicator: a compact monogram badge
+  // (e.g. Copilot → "C", Agency → "A") so the provider is scannable at a
+  // glance, with the full name surfaced via the tooltip/title.
+  const providerName = providerLabel(session.provider);
+  const providerMonogram = providerName.charAt(0).toUpperCase();
   const liveTotals = sessionLiveTotals(live, session.id);
   // The persisted rollup is the authoritative source of truth: every usage
   // event is persisted and emitted together on the backend, so the rollup is
@@ -205,6 +211,14 @@ function SessionRow({
           <span className="session-tree-icon" aria-hidden="true">
             <SessionIcon />
             <span className={`dot ${dot}`} />
+          </span>
+          <span
+            className="session-provider-badge"
+            data-provider={session.provider}
+            title={`${providerName} CLI`}
+            aria-hidden="true"
+          >
+            {providerMonogram}
           </span>
           <span className="session-name">{name}</span>
         </button>

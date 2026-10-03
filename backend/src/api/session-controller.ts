@@ -129,6 +129,17 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       },
     },
     {
+      method: 'get',
+      path: '/sessions/:id/prompts',
+      handler: (req) => {
+        const session = deps.sessions.get(req.params.id);
+        if (!session) {
+          return { status: 404, body: { error: { kind: 'not_found', message: 'Unknown session' } } };
+        }
+        return { status: 200, body: deps.history?.prompts(req.params.id) ?? [] };
+      },
+    },
+    {
       method: 'put',
       path: '/sessions/:id',
       handler: (req) => {

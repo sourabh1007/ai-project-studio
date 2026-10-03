@@ -8,6 +8,7 @@ const hooks = vi.hoisted(() => ({
   resetCalls: [] as boolean[],
   theme: { mode: 'system' as const, theme: 'dark' as const },
   prefs: {
+    appearance: 'desktop',
     accent: 'indigo',
     textSize: 'default',
     density: 'cozy',
@@ -40,6 +41,7 @@ afterEach(() => {
   hooks.resetCalls = [];
   hooks.theme = { mode: 'system', theme: 'dark' };
   hooks.prefs = {
+    appearance: 'desktop',
     accent: 'indigo',
     textSize: 'default',
     density: 'cozy',
@@ -53,18 +55,21 @@ it('renders the appearance heading by default and applies control changes', () =
   render(<AppearanceSection />);
   expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('radio', { name: 'Light' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Futuristic' }));
   fireEvent.click(screen.getByRole('radio', { name: 'Blue' }));
   fireEvent.change(screen.getByLabelText('Accent color hex value'), { target: { value: '123456' } });
   fireEvent.change(screen.getByLabelText('Accent color hex value'), { target: { value: 'nope' } });
   fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
   expect(hooks.modeCalls).toContain('light');
   expect(hooks.prefsCalls).toContainEqual({ accent: 'blue' });
+  expect(hooks.prefsCalls).toContainEqual({ appearance: 'futuristic' });
   expect(hooks.prefsCalls).toContainEqual({ accent: '#123456' });
   expect(hooks.resetCalls).toHaveLength(1);
 });
 
 it('renders appearance controls without the heading when embedded', () => {
   hooks.prefs = {
+    appearance: 'futuristic',
     accent: '#111111',
     textSize: 'default',
     density: 'cozy',

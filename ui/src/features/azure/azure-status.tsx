@@ -5,6 +5,7 @@ import type { AzureDevOpsStatus } from '../../lib/types.js';
 import { describeAzureConnection } from '../../lib/azure.js';
 import { Spinner } from '../../components/loading.js';
 import { Avatar } from '../../components/avatar.js';
+import { AZURE_AUTH_CHANGED_EVENT } from '../../hooks/use-microsoft-identity.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
 const ACCOUNT_STORAGE_KEY = 'azureDevOpsAccount';
@@ -108,6 +109,21 @@ export function AzureStatusBadge() {
       persist(ACCOUNT_STORAGE_KEY, data.account);
     }
   }, [data?.authenticated, data?.account]);
+
+  // Signing in/out of Azure DevOps is the "Microsoft identity" that gates
+  // Agency. Broadcast every real transition so the identity sync refreshes the
+  // provider bootstrap immediately and Agency appears/disappears live.
+  const lastAuthRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    const next = data.authenticated;
+    if (lastAuthRef.current !== next) {
+      lastAuthRef.current = next;
+      window.dispatchEvent(new Event(AZURE_AUTH_CHANGED_EVENT));
+    }
+  }, [data]);
 
   const authenticated = data?.authenticated ?? false;
   const state = signingIn

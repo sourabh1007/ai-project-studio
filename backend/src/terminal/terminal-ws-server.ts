@@ -15,6 +15,7 @@ import { isAllowedTerminalOrigin } from './terminal-origin.js';
 import { createTerminalConnection } from './terminal-connection.js';
 import {
   launchWithSelfHealing,
+  suggestLaunchFix,
   type HealFsPort,
   type HealLevel,
 } from './terminal-launch-heal.js';
@@ -113,7 +114,8 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
           if (existing && !existing.exited) return existing;
           const resolvedCwd = (await deps.resolveCwd?.(session, report, signal)) ?? deps.cwd;
           signal.throwIfAborted();
-          // Never heal an isolated session by silently launching in another cwd.
+          // A folder-bound session is never relocated to a *different* cwd; it
+          // may only be healed by recreating its own directory in place.
           const fallbackCwd = resolvedCwd ?? deps.cwd ?? process.cwd();
           report('Starting the interactive CLI…');
           return await launchWithSelfHealing({
@@ -122,6 +124,7 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
             fallbackCwd,
             fs: nodeHealFs,
             emit: (level, message) => send({ type: 'output', data: formatHealLine(level, message) }),
+            suggestFix: (cause) => suggestLaunchFix(cause),
             diagnose: deps.diagnose
               ? (errorText) => deps.diagnose!(session, errorText)
               : undefined,

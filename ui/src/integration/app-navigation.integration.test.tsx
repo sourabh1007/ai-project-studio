@@ -78,6 +78,11 @@ vi.mock('../features/automations/automations-view.js', () => ({
 function api(): ApiClient {
   return {
     getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
+    getProviderBootstrap: vi.fn().mockResolvedValue({
+      defaultProvider: 'copilot',
+      providers: [],
+      microsoftSignedIn: false,
+    }),
   } as unknown as ApiClient;
 }
 

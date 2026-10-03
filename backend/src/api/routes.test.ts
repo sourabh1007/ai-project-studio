@@ -16,6 +16,7 @@ function deps(): ApiRoutesDeps {
     relaunchSession: () => Promise.resolve(),
     providers: empty,
     providerBootstrapInfo: () => ({ defaultProvider: 'agency', providers: [] }),
+    microsoftSignedIn: () => true,
     aggregates: empty,
     summarizer: empty,
     summaries: empty,
@@ -32,6 +33,14 @@ function deps(): ApiRoutesDeps {
     ideUsage: empty,
     planUsage: empty,
     selfHeal: { list: () => [], heal: async () => true },
+    systemHealth: {
+      report: async () => ({
+        generatedAt: 0,
+        overall: 'ok' as const,
+        checks: [],
+        providers: [],
+      }),
+    },
     metaModels: empty,
     usageDetail: empty,
     mcp: empty,
@@ -119,6 +128,7 @@ describe('createApiRoutes', () => {
     const signatures = routes.map((r) => `${r.method} ${r.path}`);
     expect(signatures).toEqual([
       'get /health',
+      'get /system-health',
       'get /identity',
       'post /features',
       'get /features',
@@ -130,6 +140,7 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/sessions',
       'get /features/:featureId/sessions',
       'get /sessions/:id',
+      'get /sessions/:id/prompts',
       'put /sessions/:id',
       'get /features/:featureId/environment',
       'post /sessions/:id/relaunch',

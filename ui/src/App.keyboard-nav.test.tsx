@@ -110,6 +110,11 @@ function apiClient(): ApiClient {
     listRepos: vi.fn().mockResolvedValue([]),
     listSessions: vi.fn().mockResolvedValue([]),
     getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
+    getProviderBootstrap: vi.fn().mockResolvedValue({
+      defaultProvider: 'copilot',
+      providers: [],
+      microsoftSignedIn: false,
+    }),
   } as unknown as ApiClient;
 }
 

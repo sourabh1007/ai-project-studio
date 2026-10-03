@@ -18,26 +18,30 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
 }
 
 function rollup(scope: UsageRollup['scope'], granularity: UsageGranularity): UsageRollup {
+  const totals = {
+    sessions: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    cost: 0,
+    credits: 0,
+    nanoAiu: 0,
+  };
   return {
     scope,
     granularity,
-    totals: {
-      sessions: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningOutputTokens: 0,
-      cost: 0,
-      credits: 0,
-      nanoAiu: 0,
-    },
+    totals,
     periods: [],
     byModel: [],
-    byProvider: [],
+    byProvider: [
+      { provider: 'copilot', ...totals },
+      { provider: 'agency', ...totals },
+    ],
     byMcpServer: [],
   };
 }
 
-function makeDeps() {
+function makeDeps(signedIn = true) {
   const calls: string[] = [];
   const rollups = {
     workspace: (g: UsageGranularity) => {
@@ -70,7 +74,12 @@ function makeDeps() {
     capturedAt: '2026-01-01T00:00:00.000Z',
   };
   const metaUsage = { listRecent: (limit: number) => { calls.push(`recent:${limit}`); return [record]; } };
-  const routes = createUsageRollupRoutes({ rollups, metaUsage, activityLimit: 25 });
+  const routes = createUsageRollupRoutes({
+    rollups,
+    metaUsage,
+    activityLimit: 25,
+    microsoftSignedIn: () => signedIn,
+  });
   return { routes, calls, record };
 }
 
@@ -81,6 +90,24 @@ describe('usage-rollup-controller', () => {
     expect(res.status).toBe(200);
     expect((res.body as UsageRollup).scope).toBe('workspace');
     expect(calls).toContain('workspace:week');
+  });
+
+  it('keeps Agency in the per-provider breakdown when signed in with a Microsoft identity', () => {
+    const { routes } = makeDeps(true);
+    const res = pick(routes, 'get', '/usage/rollup')(req({ query: { granularity: 'week' } }));
+    expect((res.body as UsageRollup).byProvider.map((p) => p.provider)).toEqual(['copilot', 'agency']);
+  });
+
+  it('strips Agency from the per-provider breakdown when not signed in', () => {
+    const { routes } = makeDeps(false);
+    for (const path of ['/usage/rollup', '/usage/ide/rollup']) {
+      const res = pick(routes, 'get', path)(req());
+      expect((res.body as UsageRollup).byProvider.map((p) => p.provider)).toEqual(['copilot']);
+    }
+    const feat = pick(routes, 'get', '/features/:featureId/usage/rollup')(
+      req({ params: { featureId: 'fX' } }),
+    );
+    expect((feat.body as UsageRollup).byProvider.map((p) => p.provider)).toEqual(['copilot']);
   });
 
   it('defaults an unknown granularity to month for the IDE rollup', () => {

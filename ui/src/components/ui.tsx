@@ -25,7 +25,7 @@ export function Modal({
   title: string;
   onClose: () => void;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   className?: string;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
