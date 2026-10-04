@@ -77,6 +77,11 @@ export interface McpLogCaptureDeps {
  */
 export function createMcpLogCapture(deps: McpLogCaptureDeps) {
   const cursors = new Map<string, McpLogCursor>();
+  // Sources currently in a partial state (oversized/malformed/unattributed). Used
+  // to log the "partial" warning only on the transition into that state, so a
+  // source that stays partial across ticks (or is replayed from offset 0 after a
+  // restart) does not flood the console; it re-arms once it reads cleanly again.
+  const partialSources = new Set<string>();
   let after = '';
   let running = false;
   let stopped = false;
@@ -108,15 +113,21 @@ export function createMcpLogCapture(deps: McpLogCaptureDeps) {
               });
             }
             if (page.oversized || malformed || unattributed) {
-              deps.logger.warn('MCP usage log capture is partial', {
-                source: source.key, oversized: page.oversized, malformed, unattributed,
-              });
+              if (!partialSources.has(source.key)) {
+                partialSources.add(source.key);
+                deps.logger.warn('MCP usage log capture is partial', {
+                  source: source.key, oversized: page.oversized, malformed, unattributed,
+                });
+              }
+            } else {
+              partialSources.delete(source.key);
             }
             cursors.delete(source.key);
             cursors.set(source.key, page.cursor);
             if (cursors.size > deps.maxCachedSources) {
               const oldest = cursors.keys().next().value!;
               cursors.delete(oldest);
+              partialSources.delete(oldest);
             }
           } catch {
             // Do not log the event, arguments, result, or filesystem error text.
