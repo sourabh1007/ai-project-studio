@@ -1121,7 +1121,11 @@ function FeatureNode({
                 usage.reload();
                 onOpenSession(
                   session,
-                  sessionDisplayName(names[session.id], rows.length + 1, session.kind),
+                  sessionDisplayName(
+                    names[session.id],
+                    ordinals.get(session.id) ?? session.seq ?? rows.length + 1,
+                    session.kind,
+                  ),
                 );
               }}
               onCancel={() => setCreating(false)}

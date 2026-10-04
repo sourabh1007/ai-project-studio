@@ -845,13 +845,20 @@ function main(): void {
   const repoService = createRepoService({ repo: repoRepo, ids, clock });
   const repositoryContextRepo = createRepositoryContextRepo(db);
   const sessionRepo = createSessionRepo(db);
-  const reconciledCount = createSessionReconciler({
+  const sessionReconciler = createSessionReconciler({
     sessions: sessionRepo,
     clock,
-  }).reconcileOrphans();
+  });
+  const reconciledCount = sessionReconciler.reconcileOrphans();
   if (reconciledCount > 0) {
     logger.info('Reconciled orphaned sessions from previous run', {
       count: reconciledCount,
+    });
+  }
+  const hiddenMetaCount = sessionReconciler.hideBackgroundMetaSessions();
+  if (hiddenMetaCount > 0) {
+    logger.info('Hid legacy feature-scoped background meta sessions', {
+      count: hiddenMetaCount,
     });
   }
   const usageRepo = createUsageRepo(db);

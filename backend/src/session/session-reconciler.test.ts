@@ -104,4 +104,40 @@ describe('session-reconciler', () => {
     expect(count).toBe(0);
     expect(saved).toHaveLength(0);
   });
+
+  describe('hideBackgroundMetaSessions', () => {
+    it('re-scopes feature-scoped meta sessions to internal', () => {
+      const { repo, saved } = fakeRepo([
+        session({ id: 'meta-feature', kind: 'meta', scope: 'feature', status: 'completed' }),
+        session({ id: 'meta-default', kind: 'meta', status: 'completed' }),
+      ]);
+      const count = createSessionReconciler({
+        sessions: repo,
+        clock,
+      }).hideBackgroundMetaSessions();
+      expect(count).toBe(2);
+      expect(repo.get('meta-feature')?.scope).toBe('internal');
+      expect(repo.get('meta-default')?.scope).toBe('internal');
+      expect(saved).toHaveLength(2);
+    });
+
+    it('leaves dev sessions and already-internal meta sessions untouched', () => {
+      const { repo, saved } = fakeRepo([
+        session({ id: 'dev', kind: 'dev', scope: 'feature', status: 'completed' }),
+        session({
+          id: 'meta-internal',
+          kind: 'meta',
+          scope: 'internal',
+          status: 'completed',
+        }),
+      ]);
+      const count = createSessionReconciler({
+        sessions: repo,
+        clock,
+      }).hideBackgroundMetaSessions();
+      expect(count).toBe(0);
+      expect(repo.get('dev')?.scope).toBe('feature');
+      expect(saved).toHaveLength(0);
+    });
+  });
 });

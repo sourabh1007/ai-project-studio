@@ -12,6 +12,14 @@ import { isTerminal } from './session-state-machine.js';
 export interface SessionReconciler {
   /** Reconciles orphaned sessions, returning how many were updated. */
   reconcileOrphans(): number;
+  /**
+   * One-time cleanup for IDE background meta sessions (summaries, context
+   * merge) that older builds persisted with the default `feature` scope, so
+   * they surfaced as real user sessions in the Explorer and reappeared after
+   * every restart. Re-scopes every `meta` session to `internal` so it is
+   * hidden like all other background operations. Returns how many were updated.
+   */
+  hideBackgroundMetaSessions(): number;
 }
 
 export interface SessionReconcilerDeps {
@@ -39,6 +47,17 @@ export function createSessionReconciler(
         reconciled += 1;
       }
       return reconciled;
+    },
+    hideBackgroundMetaSessions() {
+      let hidden = 0;
+      for (const session of sessions.listAll()) {
+        if (session.kind !== 'meta' || session.scope === 'internal') {
+          continue;
+        }
+        sessions.save({ ...session, scope: 'internal' });
+        hidden += 1;
+      }
+      return hidden;
     },
   };
 }
