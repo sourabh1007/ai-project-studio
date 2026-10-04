@@ -35,37 +35,29 @@ export const DEFAULT_WORKSPACE_CONTEXT = [
 export interface WorkspaceContextSeederDeps {
   /** Reads/writes the layered context store. */
   contexts: Pick<ContextService, 'get' | 'setContent'>;
-  /** Whether the one-time seed has already run (persisted marker). */
-  hasSeeded: () => boolean;
-  /** Records that the one-time seed has run, so it never repeats. */
-  markSeeded: () => void;
-  /** Content to write into the empty workspace document. */
+  /** Content to write when the workspace document is first created. */
   content: string;
 }
 
 /**
- * Seeds the editable workspace context document exactly once, so the configured
- * standing prompt is present for every new session the first time the app runs.
+ * Seeds the editable workspace context document with the configured standing
+ * prompt the first time the app runs, so every new session launches with it.
  *
- * It is deliberately idempotent and non-destructive:
- *  - It never runs again once {@link WorkspaceContextSeederDeps.markSeeded} has
- *    recorded the one-time seed, so a document the user later deletes does not
- *    reappear after an app restart.
- *  - It only writes when no workspace document exists yet (or it is blank), so a
- *    document the user has already curated is never overwritten.
+ * It only writes when no workspace document exists yet, which makes it both
+ * idempotent and non-destructive: a document the user has edited — or cleared
+ * to blank and saved — already exists, so it is never overwritten or
+ * resurrected on a later launch. Because it keys off the document's own
+ * presence it needs no separate persisted flag, and so never writes to the
+ * validated config store.
  */
 export function seedWorkspaceContext(deps: WorkspaceContextSeederDeps): void {
-  if (deps.hasSeeded()) {
+  if (deps.contexts.get('workspace', '')) {
     return;
   }
-  const existing = deps.contexts.get('workspace', '');
-  if (!existing || existing.content.trim().length === 0) {
-    deps.contexts.setContent({
-      scope: 'workspace',
-      scopeId: '',
-      content: deps.content,
-      updatedBy: 'import',
-    });
-  }
-  deps.markSeeded();
+  deps.contexts.setContent({
+    scope: 'workspace',
+    scopeId: '',
+    content: deps.content,
+    updatedBy: 'import',
+  });
 }

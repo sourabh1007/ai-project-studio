@@ -2046,21 +2046,12 @@ function main(): void {
     config: contextConfig,
     onUpdated: (doc) => contextBroadcaster.onUpdated(doc),
   });
-  // One-time seed of the editable workspace context with the standing response
-  // prompt, so every new session launches with it. The marker lives in the
-  // config-override store so the seed never runs twice — a workspace document
-  // the user later deletes must not reappear after a restart.
-  const WORKSPACE_CONTEXT_SEED_NAMESPACE = 'workspaceContextSeed';
+  // Seed the editable workspace context with the standing response prompt the
+  // first time the app runs (no workspace document yet), so every new session
+  // launches with it. Keyed off the document's own presence — it never
+  // overwrites user edits and never writes to the validated config store.
   seedWorkspaceContext({
     contexts: contextService,
-    hasSeeded: () =>
-      configOverrideRepo.get(WORKSPACE_CONTEXT_SEED_NAMESPACE) !== null,
-    markSeeded: () =>
-      configOverrideRepo.set({
-        namespace: WORKSPACE_CONTEXT_SEED_NAMESPACE,
-        data: { seeded: true },
-        updatedAt: clock.isoNow(),
-      }),
     content: DEFAULT_WORKSPACE_CONTEXT,
   });
   const contextMerger = createContextMergeRunner({

@@ -10,35 +10,28 @@ import {
 type Contexts = Pick<ContextService, 'get' | 'setContent'>;
 
 function makeDeps(
-  overrides: Partial<WorkspaceContextSeederDeps> & {
-    existing?: ContextDocument | null;
-    seeded?: boolean;
-  } = {},
+  overrides: { existing?: ContextDocument | null; content?: string } = {},
 ): {
   deps: WorkspaceContextSeederDeps;
   get: ReturnType<typeof vi.fn>;
   setContent: ReturnType<typeof vi.fn>;
-  markSeeded: ReturnType<typeof vi.fn>;
 } {
   const get = vi.fn(() => overrides.existing ?? null);
   const setContent = vi.fn();
-  const markSeeded = vi.fn();
   const contexts: Contexts = {
     get: get as unknown as Contexts['get'],
     setContent: setContent as unknown as Contexts['setContent'],
   };
   const deps: WorkspaceContextSeederDeps = {
     contexts,
-    hasSeeded: () => overrides.seeded ?? false,
-    markSeeded,
     content: overrides.content ?? DEFAULT_WORKSPACE_CONTEXT,
   };
-  return { deps, get, setContent, markSeeded };
+  return { deps, get, setContent };
 }
 
 describe('seedWorkspaceContext', () => {
-  it('writes the default content into an empty workspace document once', () => {
-    const { deps, get, setContent, markSeeded } = makeDeps();
+  it('writes the default content when no workspace document exists', () => {
+    const { deps, get, setContent } = makeDeps();
 
     seedWorkspaceContext(deps);
 
@@ -49,20 +42,9 @@ describe('seedWorkspaceContext', () => {
       content: DEFAULT_WORKSPACE_CONTEXT,
       updatedBy: 'import',
     });
-    expect(markSeeded).toHaveBeenCalledTimes(1);
   });
 
-  it('never runs again once the one-time seed is marked', () => {
-    const { deps, get, setContent, markSeeded } = makeDeps({ seeded: true });
-
-    seedWorkspaceContext(deps);
-
-    expect(get).not.toHaveBeenCalled();
-    expect(setContent).not.toHaveBeenCalled();
-    expect(markSeeded).not.toHaveBeenCalled();
-  });
-
-  it('does not overwrite a workspace document the user already curated', () => {
+  it('does not overwrite an existing workspace document', () => {
     const existing: ContextDocument = {
       scope: 'workspace',
       scopeId: '',
@@ -70,35 +52,25 @@ describe('seedWorkspaceContext', () => {
       updatedAt: '2026-09-01T00:00:00.000Z',
       updatedBy: 'manual',
     };
-    const { deps, setContent, markSeeded } = makeDeps({ existing });
+    const { deps, setContent } = makeDeps({ existing });
 
     seedWorkspaceContext(deps);
 
     expect(setContent).not.toHaveBeenCalled();
-    expect(markSeeded).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a blank existing document as empty and seeds it', () => {
+  it('does not resurrect a document the user cleared to blank', () => {
     const existing: ContextDocument = {
       scope: 'workspace',
       scopeId: '',
-      content: '   \n  ',
+      content: '',
       updatedAt: '2026-09-01T00:00:00.000Z',
       updatedBy: 'manual',
     };
-    const { deps, setContent, markSeeded } = makeDeps({
-      existing,
-      content: 'seed me',
-    });
+    const { deps, setContent } = makeDeps({ existing });
 
     seedWorkspaceContext(deps);
 
-    expect(setContent).toHaveBeenCalledWith({
-      scope: 'workspace',
-      scopeId: '',
-      content: 'seed me',
-      updatedBy: 'import',
-    });
-    expect(markSeeded).toHaveBeenCalledTimes(1);
+    expect(setContent).not.toHaveBeenCalled();
   });
 });
