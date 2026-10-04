@@ -237,8 +237,7 @@ describe('McpManager', () => {
     const card = (await screen.findByText('ado')).closest<HTMLElement>('.mcp-server-card')!;
     fireEvent.click(within(card).getByRole('button', { name: 'Disable ado' }));
     await waitFor(() => expect(api.setMcpServerEnabled).toHaveBeenCalledWith('agency', 'global-builtins:ado', false));
-    expect(await within(card).findByRole('button', { name: 'Enable ado' })).toBeInTheDocument();
-    expect(within(card).getByText('Disabled')).toBeInTheDocument();
+    expect(await within(card).findByRole('button', { name: 'Enable ado' })).toHaveAttribute('aria-pressed', 'false');
   });
   it('shows an animated spinner and the supplied launch command while discovering tools', async () => {
     const pending = deferred<McpServerEntry>();
@@ -256,7 +255,7 @@ describe('McpManager', () => {
     await act(async () => pending.resolve({ ...entry, ...makeInspection(entry.name, [{ name: 'read', enabled: true }]) }));
     expect(await within(dialog).findByText('read')).toBeInTheDocument();
     expect(within(dialog).queryByRole('status', { name: 'Loading tools' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Auth ado' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auth ado' })).toBeEnabled();
   });
 
   it('rejects a pasted full command instead of adding a second command prefix', async () => {
@@ -829,7 +828,7 @@ describe('McpManager', () => {
     expect(within(dialog).queryByText(/without an outstanding sign-in request/)).toBeNull();
   });
 
-  it('keeps unknown native authentication disabled until Tools confirms a sign-in requirement', async () => {
+  it('proactively verifies unknown native auth in the background and enables sign-in from the card', async () => {
     const entry = {
       ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado', displayName: 'ado',
       capabilities, authentication: supported,
@@ -847,17 +846,10 @@ describe('McpManager', () => {
     });
     renderManager(api);
     const auth = await screen.findByRole('button', { name: 'Auth ado' });
-    expect(auth).toBeDisabled();
-    expect(auth).not.toHaveClass('is-danger');
-    fireEvent.click(auth);
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(api.inspectMcpServer).not.toHaveBeenCalled();
-    expect(api.startMcpAuthentication).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Tools for ado' }));
-    const openAuth = await screen.findByRole('button', { name: 'Open authentication' });
+    await waitFor(() => expect(api.inspectMcpServer).toHaveBeenCalledWith('agency', 'global-builtins:ado'));
+    await waitFor(() => expect(auth).toHaveClass('is-danger'));
     expect(auth).toBeEnabled();
-    expect(auth).toHaveClass('is-danger');
-    fireEvent.click(openAuth);
+    fireEvent.click(auth);
     const connect = await screen.findByRole('button', { name: 'Continue Agency sign-in' });
     fireEvent.click(connect);
     await waitFor(() => expect(api.startMcpAuthentication).toHaveBeenCalledWith('agency', entry.name));
@@ -878,11 +870,10 @@ describe('McpManager', () => {
     renderManager(api);
     for (const entry of entries) {
       const button = await screen.findByRole('button', { name: `${state === 'expired' ? 'Reauth' : 'Auth'} ${entry.name}` });
+      expect(button).toBeEnabled();
       if (required) {
-        expect(button).toBeEnabled();
         expect(button).toHaveClass('is-danger');
       } else {
-        expect(button).toBeDisabled();
         expect(button).not.toHaveClass('is-danger');
       }
     }
@@ -918,7 +909,7 @@ describe('McpManager', () => {
     await act(async () => complete.resolve({ ...pending, status: 'completed',
       server: { ...entry, ...makeInspection(entry.name, [{ name: 'read_pr', enabled: true }]) } }));
     expect(await within(dialog).findByText('No sign-in needed for this check.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auth ado' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auth ado' })).toBeEnabled();
     expect(within(dialog).queryByText('ABCD')).toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'Authenticate' })).toBeNull();
     expect(within(dialog).queryByRole('checkbox')).toBeNull();

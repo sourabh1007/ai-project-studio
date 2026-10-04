@@ -223,6 +223,7 @@ export function McpManager() {
   const selectedProviderRef = useRef<string | null>(null);
   const nextDialogIdRef = useRef(0);
   const managerActionEpochRef = useRef(0);
+  const authCheckRef = useRef<{ inFlight: number; done: Set<string> }>({ inFlight: 0, done: new Set() });
 
   selectedProviderRef.current = providerId;
 
@@ -347,6 +348,38 @@ export function McpManager() {
     currentError ??
     (showProviderLoadFailure ? null : providers.error) ??
     loadError;
+
+  // Lazily verify authorization for enabled native built-ins once, in the
+  // background with a small concurrency cap, so each card's auth key can show a
+  // real ready/needs-sign-in state instead of staying "unknown" until opened.
+  useEffect(() => {
+    if (!providerId || !canMutateConfig) return;
+    const pid = providerId;
+    const MAX_CONCURRENT_AUTH_CHECKS = 2;
+    const bookkeeping = authCheckRef.current;
+    let cancelled = false;
+    const candidates = list.filter((server) =>
+      (server.origin === 'agency-built-in' || Boolean(server.builtinName) || Boolean(server.catalog)) &&
+      server.enabled !== false &&
+      server.authState?.state === 'unknown' &&
+      capability('tools', server.capabilities, capabilities).supported);
+    const keyFor = (server: McpServerEntry) => `${pid}:${server.name}:${JSON.stringify(server.spec)}`;
+    function pump() {
+      while (!cancelled && bookkeeping.inFlight < MAX_CONCURRENT_AUTH_CHECKS) {
+        const next = candidates.find((server) => !bookkeeping.done.has(keyFor(server)));
+        if (!next) break;
+        const key = keyFor(next);
+        bookkeeping.done.add(key);
+        bookkeeping.inFlight += 1;
+        api.inspectMcpServer(pid, next.name)
+          .then((entry) => { if (!cancelled) setObservations((current) => ({ ...current, [key]: entry })); })
+          .catch(() => { /* leave state unknown; the key stays clickable for a manual check */ })
+          .finally(() => { bookkeeping.inFlight -= 1; pump(); });
+      }
+    }
+    pump();
+    return () => { cancelled = true; };
+  }, [providerId, canMutateConfig, list, capabilities, api]);
 
   function nextDialogId() {
     nextDialogIdRef.current += 1;
@@ -845,13 +878,14 @@ function McpServerCard({
   const [failed, setFailed] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null);
   const actionLock = useRef(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const epochRef = useRef(0);
   const appChecks = useRef(0);
   const displayName = server.displayName ?? server.name;
   const studioBridge = isStudioBridge(server);
-  const enabled = server.enabled ?? server.spec.enabled !== false;
+  const enabled = pendingEnabled ?? (server.enabled ?? server.spec.enabled !== false);
 
   const probe = useCallback(() => {
     const epoch = ++epochRef.current;
@@ -890,6 +924,10 @@ function McpServerCard({
   }, [providerId, server.name, server.spec]);
 
   useEffect(() => {
+    setPendingEnabled(null);
+  }, [server.enabled, server.spec]);
+
+  useEffect(() => {
     if (studioBridge) {
       appChecks.current = 1;
       probe();
@@ -911,12 +949,15 @@ function McpServerCard({
 
   async function toggleEnabled() {
     if (actionLock.current || !capability('toggle', capabilities).supported) return;
+    const next = !enabled;
     actionLock.current = true;
     setUpdating(true);
+    setPendingEnabled(next);
     setProbeError(null);
     try {
-      await onToggle(!enabled);
+      await onToggle(next);
     } catch (err) {
+      setPendingEnabled(null);
       setProbeError(normalizeError(err));
     } finally {
       actionLock.current = false;
@@ -953,9 +994,11 @@ function McpServerCard({
   const needsSignIn = auth ? auth.state === 'expired' || auth.state === 'required' : discovery?.authRequired === true;
   const ready = auth ? auth.state === 'ready' : discovery?.status === 'ok' && !discovery.authRequired;
   const reauth = auth?.state === 'expired';
-  const authTitle = ready ? 'No sign-in needed at the last check. Refresh Tools to check again.'
-    : needsSignIn ? auth?.message ?? 'Sign-in required.'
-      : 'Sign-in requirement unknown. Use Tools to check.';
+  const authTitle = needsSignIn
+    ? auth?.message ?? (reauth ? 'Authorization expired — click to sign in again.' : 'Sign-in required — click to authenticate.')
+    : ready
+      ? 'Authorized at the last check. Click to re-check or sign in again.'
+      : 'Authorization not confirmed yet — click to check or sign in.';
   const canRecheck = !server.catalog && !loading && enabled && (studioBridge || capability('tools', capabilities).supported);
   const healAttempts =
     status?.status === 'error' ? (status.healAttempts ?? []) : [];
@@ -967,12 +1010,6 @@ function McpServerCard({
     return (
       <div className="skill-card mcp-server-card mcp-builtin-card">
         <strong className="skill-card-name">{displayName}</strong>
-        {!server.catalog && (
-          <span className={`mcp-status mcp-status-${enabled ? 'ok' : 'muted'}`} role="status">
-            <span className="mcp-status-dot" aria-hidden="true" />
-            {enabled ? 'Enabled' : 'Disabled'}
-          </span>
-        )}
         <p className="skill-card-body">{server.description
           ?? (typeof server.spec.description === 'string' ? server.spec.description : 'Agency built-in MCP server.')}</p>
         <div className="row mcp-builtin-actions mcp-card-actions" role="group" aria-label={`Actions for ${displayName}`}>
@@ -996,7 +1033,7 @@ function McpServerCard({
                 onClick={onOpenAuth}
                 aria-label={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
                 title={authTitle}
-                disabled={!canMutateConfig || !enabled || !needsSignIn || !capability('tools', capabilities).supported}>
+                disabled={!canMutateConfig || !enabled || !capability('tools', capabilities).supported}>
                 <AuthKeyIcon size={15} />
               </button>
               <button type="button" className="tree-action"
@@ -1038,7 +1075,7 @@ function McpServerCard({
             className={`tree-action mcp-action-auth${(needsSignIn || (needsAuth && !studioBridge)) ? ' is-danger' : ''}${ready ? ' is-ready' : ''}`}
             title={studioBridge ? 'Authentication is managed by the IDE; no separate sign-in is needed.' : authTitle}
             aria-label={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
-            disabled={studioBridge || !canMutateConfig || !enabled || !(needsSignIn || needsAuth) || !capability('tools', capabilities).supported}
+            disabled={studioBridge || !canMutateConfig || !enabled || !capability('tools', capabilities).supported}
             onClick={needsAuth && !studioBridge ? authenticate : onOpenAuth}
           >
             <AuthKeyIcon size={15} />
