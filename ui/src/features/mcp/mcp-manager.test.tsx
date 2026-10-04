@@ -322,7 +322,7 @@ describe('McpManager', () => {
   it('keeps Agency cards concise while grouping them under the Agency heading', async () => {
     const instruction = { supported: false, reason: 'Configure using agency config set --global --mcp ado' };
     const catalogCapabilities: McpCapabilities = {
-      add: supported, edit: instruction, remove: instruction, toggle: instruction,
+      add: supported, edit: instruction, remove: instruction, toggle: supported,
       tools: instruction, toolToggle: instruction, restart: instruction,
     };
     const catalog = (name: string): McpServerEntry => ({
@@ -344,7 +344,7 @@ describe('McpManager', () => {
     expect(within(card as HTMLElement).queryByText('server')).toBeNull();
     expect(within(card as HTMLElement).queryByText('Installed Agency MCP catalog')).toBeNull();
     expect(screen.getByRole('region', { name: 'Agency built-in MCP servers' })).toContainElement(card);
-    expect(within(card as HTMLElement).queryByRole('button', { name: 'Enable ado' })).toBeNull();
+    expect(within(card as HTMLElement).getByRole('button', { name: 'Enable ado' })).toBeEnabled();
     expect(screen.getByText(/1 configured entry · 2 available MCP servers/)).toBeInTheDocument();
     const note = screen.getByText('The native configuration is not configured.');
     expect(note.closest('details')).not.toHaveAttribute('open');

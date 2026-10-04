@@ -976,17 +976,15 @@ function McpServerCard({
         <p className="skill-card-body">{server.description
           ?? (typeof server.spec.description === 'string' ? server.spec.description : 'Agency built-in MCP server.')}</p>
         <div className="row mcp-builtin-actions mcp-card-actions" role="group" aria-label={`Actions for ${displayName}`}>
-              {!server.catalog && (
-                <button type="button"
-                  className={`tree-action mcp-action-toggle${enabled ? ' is-on' : ''}`}
-                  onClick={() => void toggleEnabled()}
-                  aria-label={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
-                  aria-pressed={enabled}
-                  title={capability('toggle', capabilities).reason ?? `${enabled ? 'Disable' : 'Enable'} for all sessions and the metasession`}
-                  disabled={!canMutateConfig || updating || !capability('toggle', capabilities).supported}>
-                  {updating ? <Spinner size={14} label="Updating" /> : <PowerIcon size={15} />}
-                </button>
-              )}
+              <button type="button"
+                className={`tree-action mcp-action-toggle${enabled ? ' is-on' : ''}`}
+                onClick={() => void toggleEnabled()}
+                aria-label={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
+                aria-pressed={enabled}
+                title={capability('toggle', capabilities).reason ?? `${enabled ? 'Disable' : 'Enable'} for all sessions and the metasession`}
+                disabled={!canMutateConfig || updating || !capability('toggle', capabilities).supported}>
+                {updating ? <Spinner size={14} label="Updating" /> : <PowerIcon size={15} />}
+              </button>
               <button type="button" className="tree-action" onClick={onOpenTools}
                 aria-label={`Tools for ${displayName}`}
                 disabled={!canMutateConfig || !capability('tools', capabilities).supported}
