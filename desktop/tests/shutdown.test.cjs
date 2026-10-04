@@ -178,6 +178,9 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
       };
       if (name === 'node:child_process') return { spawn: (_bin, _args, options) => {
         assert.deepEqual(Array.from(options.stdio), ['ignore', 'pipe', 'pipe', 'ipc']);
+        // Packaged builds (app.isPackaged === true in this harness) must hide
+        // the backend's console window so a customer never sees a stray prompt.
+        assert.equal(options.windowsHide, true);
         spawned = childProcess();
         spawned.nonce = options.env.CW_DESKTOP_SHUTDOWN_NONCE;
         spawned.launchId = options.env.CW_DESKTOP_LAUNCH_ID;

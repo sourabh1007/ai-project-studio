@@ -301,6 +301,11 @@ function startBackend(port) {
   const child = spawn(nodeBin, [BACKEND_ENTRY], {
     env,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    // Show the backend's console window only in development (handy for watching
+    // raw Node output); a packaged customer build must never flash a stray
+    // command prompt, so hide it there. stdout/stderr are piped and re-logged
+    // with a [backend] prefix regardless, so nothing is lost when hidden.
+    windowsHide: app.isPackaged,
   });
   ownBackend(child, shutdownNonce, launchId);
 }
