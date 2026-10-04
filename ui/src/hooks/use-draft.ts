@@ -42,14 +42,19 @@ export function useDraft(key: string, base: string): DraftController {
   const prevBase = useRef(base);
 
   useEffect(() => {
-    if (prevBase.current === base) {
+    const previous = prevBase.current;
+    if (previous === base) {
       return;
     }
+    // Capture the old base locally and advance the ref *before* queuing state
+    // updates: React may evaluate the functional updaters lazily (on the next
+    // render), by which point `prevBase.current` would already equal the new
+    // base — so comparing against the ref inside the updater would never match.
+    prevBase.current = base;
     // Follow the new base only if the editor still matches the old one (i.e. the
     // user has not started editing); otherwise preserve their in-progress text.
-    setValueState((current) => (current === prevBase.current ? base : current));
-    setRestored((wasRestored) => (value === prevBase.current ? false : wasRestored));
-    prevBase.current = base;
+    setValueState((current) => (current === previous ? base : current));
+    setRestored((wasRestored) => (value === previous ? false : wasRestored));
   }, [base, value]);
 
   const setValue = useCallback(
