@@ -11,7 +11,18 @@ export function createCliMcpLogReader(root: string): McpLogReader {
         || !Number.isSafeInteger(cursor.offset) || cursor.offset < 0) {
         throw new Error('Invalid MCP log read bounds or session identity');
       }
-      const file = await open(join(root, sessionId, 'events.jsonl'), 'r');
+      let file: Awaited<ReturnType<typeof open>>;
+      try {
+        file = await open(join(root, sessionId, 'events.jsonl'), 'r');
+      } catch (error) {
+        // An absent log is expected (e.g. a session enumerated before its CLI
+        // emits events, or an owner whose state folder was pruned). Treat it as
+        // an empty read so capture retries silently instead of logging per tick.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { lines: [], cursor, oversized: false };
+        }
+        throw error;
+      }
       try {
         const stat = await file.stat();
         const reset = cursor.offset > stat.size;

@@ -130,6 +130,22 @@ describe('process-spawner', () => {
     expect(handle.snapshot().phase).toBe('exited');
   });
 
+  it('settles done with a null exit code when spawn throws synchronously instead of crashing', async () => {
+    const einval = Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' });
+    const spawner = createProcessSpawner(clock, () => { throw einval; });
+    const handle = spawner.spawn({ command: 'copilot.cmd', args: ['--version'], env: {} });
+
+    const exits: (number | null)[] = [];
+    handle.onExit((c) => exits.push(c));
+    // The synthetic child exposes a no-op kill and ignores non-error events.
+    expect(() => handle.kill()).not.toThrow();
+
+    const code = await handle.done;
+    expect(code).toBeNull();
+    expect(exits).toEqual([null]);
+    expect(handle.snapshot().phase).toBe('exited');
+  });
+
   it('ignores a close event that arrives after a spawn error already settled done', async () => {
     const child = new FakeChild();
     const spawner = createProcessSpawner(clock, () => child);

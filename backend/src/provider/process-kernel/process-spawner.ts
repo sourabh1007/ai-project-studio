@@ -56,6 +56,27 @@ const defaultRawSpawn: RawSpawn = (command, args, options) =>
     shell: false,
   }) as unknown as RawChildProcess;
 
+/**
+ * A stand-in for a child that was never created because spawn threw
+ * synchronously (notably Windows, which raises EINVAL for a .cmd/.bat shim
+ * under `shell: false` instead of emitting an async 'error'). It reports the
+ * failure through the normal 'error' path so callers see a null exit rather
+ * than a thrown exception.
+ */
+function synthesizeSpawnFailure(error: Error): RawChildProcess {
+  return {
+    pid: undefined,
+    stdout: null,
+    stderr: null,
+    on(event: 'close' | 'error', cb: (arg: never) => void): void {
+      if (event === 'error') {
+        queueMicrotask(() => (cb as unknown as (err: Error) => void)(error));
+      }
+    },
+    kill() {},
+  };
+}
+
 export function createProcessSpawner(
   clock: Clock,
   rawSpawn: RawSpawn = defaultRawSpawn,
@@ -69,10 +90,20 @@ export function createProcessSpawner(
       const stdoutAssembler = new LineAssembler();
       const stderrAssembler = new LineAssembler();
 
-      const child = rawSpawn(request.command, request.args, {
-        env: request.env,
-        cwd: request.cwd,
-      });
+      let child: RawChildProcess;
+      try {
+        child = rawSpawn(request.command, request.args, {
+          env: request.env,
+          cwd: request.cwd,
+        });
+      } catch (error) {
+        // spawn can throw synchronously (e.g. Windows EINVAL for a .cmd/.bat
+        // shim under shell:false) before any 'error' event could fire. Without
+        // this a single bad/missing CLI crashes the whole backend caller
+        // (copilot auto-upgrade, agency bootstrap, ...). Fall back to a
+        // synthetic child so the failure flows through the same null-exit path.
+        child = synthesizeSpawnFailure(error as Error);
+      }
       lifecycle.markRunning();
 
       const pump = (

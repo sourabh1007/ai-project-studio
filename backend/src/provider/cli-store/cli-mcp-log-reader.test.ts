@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 import { createCliMcpLogReader } from './cli-mcp-log-reader.js';
 import type { McpLogCursor } from '../../mcp-usage/mcp-log-capture.js';
 import { createMcpLogCapture } from '../../mcp-usage/mcp-log-capture.js';
@@ -65,9 +71,16 @@ describe('bounded read-only CLI event logs', () => {
   ] as [string, number, McpLogCursor][])('rejects unsafe identities or read bounds %s %s', async (id, limit, cursor) => {
     await expect(createCliMcpLogReader('.').read(id, cursor, limit)).rejects.toThrow('Invalid MCP log');
   });
-  it('surfaces missing sources rather than returning empty success', async () => {
+  it('treats an absent source as an empty read so capture retries silently', async () => {
     const { reader } = await fixture('');
-    await expect(reader.read('missing', start, 20)).rejects.toThrow();
+    const result = await reader.read('missing', start, 20);
+    expect(result).toEqual({ lines: [], cursor: start, oversized: false });
+  });
+  it('surfaces genuine IO failures rather than masking them as empty', async () => {
+    const { reader } = await fixture('');
+    const failure = Object.assign(new Error('denied'), { code: 'EPERM' });
+    vi.mocked(fsPromises.open).mockRejectedValueOnce(failure);
+    await expect(reader.read('session', start, 20)).rejects.toThrow('denied');
   });
   it('captures native built-in and configured calls through persistent rollups, replay and deletion', async () => {
     const at = '2026-09-26T12:00:00.000Z';
