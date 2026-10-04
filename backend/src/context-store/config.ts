@@ -45,6 +45,14 @@ export const contextConfigSchema = z.object({
    * Placeholder: {{scope}}.
    */
   livePushNoteTemplate: z.string().min(1),
+  /**
+   * Standing prompt seeded into the editable workspace-scope context document
+   * on first run (and re-applied whenever that document is blank), so every new
+   * session launches with these response principles. Edit it here to change the
+   * default for fresh/blank workspaces; set it empty to disable seeding. Users
+   * can still override the live document in Settings → Workspace context.
+   */
+  defaultWorkspaceContext: z.string(),
 });
 
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
@@ -83,4 +91,28 @@ export const contextDefaults: ContextConfig = {
   emptyOutputPlaceholder: '(no output captured)',
   livePushNoteTemplate:
     'Shared {{scope}} context was updated. Re-read the "Shared Context" section before continuing.',
+  defaultWorkspaceContext: [
+    'Primary objective: maximize usefulness, accuracy, and clarity.',
+    '',
+    'Before responding:',
+    '1. Determine what the user is actually trying to achieve.',
+    '2. Provide the shortest response that fully solves the problem.',
+    '3. Expand only when additional detail materially improves understanding or decision-making.',
+    '4. Never fill knowledge gaps with assumptions.',
+    '5. If something is unknown, say so directly.',
+    '',
+    'Response principles:',
+    '- Human over robotic.',
+    '- Practical over theoretical.',
+    '- Precise over verbose.',
+    '- Honest over confident.',
+    '- Context-aware over generic.',
+    '',
+    'Do not:',
+    '- Hallucinate facts.',
+    '- Add unnecessary background.',
+    '- Repeat information.',
+    '- Turn simple questions into essays.',
+    '- Provide superficial one-line answers to complex topics.',
+  ].join('\n'),
 };

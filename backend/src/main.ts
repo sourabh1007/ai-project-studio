@@ -275,7 +275,6 @@ import {
 import { createContextService } from './context-store/context-service.js';
 import {
   seedWorkspaceContext,
-  DEFAULT_WORKSPACE_CONTEXT,
 } from './context-store/workspace-context-seed.js';
 import { createContextBroadcaster } from './context-store/context-broadcaster.js';
 import { createContextMergeRunner } from './context-store/context-merge-runner.js';
@@ -2046,13 +2045,14 @@ function main(): void {
     config: contextConfig,
     onUpdated: (doc) => contextBroadcaster.onUpdated(doc),
   });
-  // Seed the editable workspace context with the standing response prompt the
-  // first time the app runs (no workspace document yet), so every new session
-  // launches with it. Keyed off the document's own presence — it never
-  // overwrites user edits and never writes to the validated config store.
+  // Seed the editable workspace context with the standing response prompt
+  // whenever the workspace document is absent or blank, so fresh (or cleared)
+  // workspaces are always populated by default. The default text is config —
+  // `context.defaultWorkspaceContext` — not hardcoded, and never overwrites a
+  // document the user has filled in.
   seedWorkspaceContext({
     contexts: contextService,
-    content: DEFAULT_WORKSPACE_CONTEXT,
+    content: contextConfig.defaultWorkspaceContext,
   });
   const contextMerger = createContextMergeRunner({
     sessions: sessionRepo,

@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ContextDocument } from './context-contract.js';
 import type { ContextService } from './context-service.js';
+import { contextDefaults } from './config.js';
 import {
-  DEFAULT_WORKSPACE_CONTEXT,
   seedWorkspaceContext,
   type WorkspaceContextSeederDeps,
 } from './workspace-context-seed.js';
+
+const DEFAULT = contextDefaults.defaultWorkspaceContext;
 
 type Contexts = Pick<ContextService, 'get' | 'setContent'>;
 
@@ -24,13 +26,13 @@ function makeDeps(
   };
   const deps: WorkspaceContextSeederDeps = {
     contexts,
-    content: overrides.content ?? DEFAULT_WORKSPACE_CONTEXT,
+    content: overrides.content ?? DEFAULT,
   };
   return { deps, get, setContent };
 }
 
 describe('seedWorkspaceContext', () => {
-  it('writes the default content when no workspace document exists', () => {
+  it('writes the configured default when no workspace document exists', () => {
     const { deps, get, setContent } = makeDeps();
 
     seedWorkspaceContext(deps);
@@ -39,12 +41,12 @@ describe('seedWorkspaceContext', () => {
     expect(setContent).toHaveBeenCalledWith({
       scope: 'workspace',
       scopeId: '',
-      content: DEFAULT_WORKSPACE_CONTEXT,
+      content: DEFAULT,
       updatedBy: 'import',
     });
   });
 
-  it('does not overwrite an existing workspace document', () => {
+  it('does not overwrite a workspace document the user has filled in', () => {
     const existing: ContextDocument = {
       scope: 'workspace',
       scopeId: '',
@@ -59,11 +61,11 @@ describe('seedWorkspaceContext', () => {
     expect(setContent).not.toHaveBeenCalled();
   });
 
-  it('does not resurrect a document the user cleared to blank', () => {
+  it('repopulates a blank workspace document from the configured default', () => {
     const existing: ContextDocument = {
       scope: 'workspace',
       scopeId: '',
-      content: '',
+      content: '   \n  ',
       updatedAt: '2026-09-01T00:00:00.000Z',
       updatedBy: 'manual',
     };
@@ -71,6 +73,20 @@ describe('seedWorkspaceContext', () => {
 
     seedWorkspaceContext(deps);
 
+    expect(setContent).toHaveBeenCalledWith({
+      scope: 'workspace',
+      scopeId: '',
+      content: DEFAULT,
+      updatedBy: 'import',
+    });
+  });
+
+  it('does nothing when the configured default is blank (seeding disabled)', () => {
+    const { deps, get, setContent } = makeDeps({ content: '   ' });
+
+    seedWorkspaceContext(deps);
+
+    expect(get).not.toHaveBeenCalled();
     expect(setContent).not.toHaveBeenCalled();
   });
 });
