@@ -664,7 +664,9 @@ describe('session-launcher', () => {
       prompt: 'analyze',
       kind: 'meta',
     });
-    expect(h.bootstrapCalls).toEqual([]);
+    // Meta sessions still compose their bootstrap (shared workspace context)
+    // but are never freshness-gated (no 'ready:' readiness check).
+    expect(h.bootstrapCalls).toEqual(['compose:sess-1']);
     h.rs.finish(0);
     await launched.completion;
   });

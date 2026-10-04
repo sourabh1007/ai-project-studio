@@ -89,6 +89,7 @@ export function createContextMergeRunner(
         model: deps.summarizerConfig.model,
         prompt,
         kind: 'meta',
+        scope: 'internal',
         purpose: 'context-merge',
         label: 'Workspace context',
         signal,

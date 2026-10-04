@@ -69,6 +69,7 @@ function harness(options: {
   maxOutputChars?: number;
   checkoutPath?: string | null;
   sharedContext?: string;
+  featureThrows?: boolean;
 } = {}) {
   const loads: string[] = [];
   const instructions: string[] = [];
@@ -78,15 +79,20 @@ function harness(options: {
   const allSessions = options.sessions ?? [];
   const bootstrap = createSessionBootstrap({
     features: {
-      get: () => ({
-        id: 'feature-1',
-        name: 'Feature name',
-        description: 'Feature description',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        summary: null,
-        repoId: options.repoId === undefined ? 'repo-1' : options.repoId,
-        checkoutPath: options.checkoutPath,
-      }),
+      get: () => {
+        if (options.featureThrows) {
+          throw new NotFoundError('no feature');
+        }
+        return {
+          id: 'feature-1',
+          name: 'Feature name',
+          description: 'Feature description',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          summary: null,
+          repoId: options.repoId === undefined ? 'repo-1' : options.repoId,
+          checkoutPath: options.checkoutPath,
+        };
+      },
     },
     sessions: {
       get: () => (options.storedCurrent ? baseSession : null),
@@ -297,12 +303,52 @@ describe('session bootstrap', () => {
     expect(h.contextIds).toEqual(['repo-1']);
   });
 
-  it('excludes meta and internal sessions', async () => {
-    const h = harness();
-    expect(await h.bootstrap.composeForSession({ ...baseSession, kind: 'meta' })).toBe('');
+  it('gives meta and internal sessions only the shared workspace context', async () => {
+    // With no shared content, meta/internal sessions get an empty bootstrap and
+    // never see the dev-only monitoring policy, feature brief or skills.
+    const empty = harness();
     expect(
-      await h.bootstrap.composeForSession({ ...baseSession, scope: 'internal' }),
+      await empty.bootstrap.composeForSession({ ...baseSession, kind: 'meta' }),
     ).toBe('');
+    expect(
+      await empty.bootstrap.composeForSession({
+        ...baseSession,
+        scope: 'internal',
+      }),
+    ).toBe('');
+
+    // When workspace context exists, it IS injected — but WITHOUT the dev-only
+    // sections — so standing workspace rules apply to background sessions too.
+    const withShared = harness({
+      sharedContext: '## Shared Context\n\n### Workspace\n\n- Standing rule',
+    });
+    const meta = await withShared.bootstrap.composeForSession({
+      ...baseSession,
+      kind: 'meta',
+    });
+    expect(meta).toContain('- Standing rule');
+    expect(meta).not.toContain('## Monitoring & Automations');
+    expect(meta).not.toContain('## Feature');
+    expect(withShared.composeInputs).toEqual([
+      { repoId: 'repo-1', featureId: 'feature-1' },
+    ]);
+  });
+
+  it('falls back to the global workspace layer for feature-less meta sessions', async () => {
+    const h = harness({
+      featureThrows: true,
+      sharedContext: '## Shared Context\n\n### Workspace\n\n- Global rule',
+    });
+    const result = await h.bootstrap.composeForSession({
+      ...baseSession,
+      featureId: '',
+      scope: 'internal',
+    });
+    expect(result).toContain('- Global rule');
+    // No feature resolved, so no repo/feature ids are passed to the composer.
+    expect(h.composeInputs).toEqual([
+      { repoId: undefined, featureId: undefined },
+    ]);
   });
 
   it('injects the layered shared context between repository and feature', async () => {

@@ -210,10 +210,10 @@ export function createTerminalManager(
   // are deleting); it is reported as `session.discarded` instead.
   const discarded = new Set<string>();
 
-  function composeBootstrap(session: Session): Promise<string> | string {
-    return session.kind === 'dev' && session.scope !== 'internal'
-      ? deps.bootstrap.composeForSession(session)
-      : '';
+  function composeBootstrap(session: Session): Promise<string> {
+    // Gating lives in `composeForSession`: dev sessions get the full bootstrap,
+    // meta/internal sessions get only the shared workspace context.
+    return deps.bootstrap.composeForSession(session);
   }
 
   function spawnTerminal(
@@ -435,11 +435,7 @@ export function createTerminalManager(
     assertLaunchable(session.id);
     // Compose first so repository-context readiness is enforced before any
     // lifecycle event is emitted or provider process is spawned.
-    const bootstrapOrPromise = composeBootstrap(session);
-    const bootstrap =
-      typeof bootstrapOrPromise === 'string'
-        ? bootstrapOrPromise
-        : await bootstrapOrPromise;
+    const bootstrap = await composeBootstrap(session);
     const injectionDir =
       deps.bootstrapInstructions && bootstrap.length > 0
         ? await prepareContextInjection(session, bootstrap)

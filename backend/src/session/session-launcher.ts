@@ -241,16 +241,16 @@ export function createSessionLauncher(
       owner.sessionId = created.id;
       if (blockedSessions.has(created.id)) owner.controller.abort();
       throwIfAborted(request.signal);
-      const bootstrap =
-        created.kind === 'dev' && created.scope !== 'internal'
-          ? await awaitWithSignal(
-              own(owner, () => {
-                throwIfAborted(request.signal);
-                return deps.bootstrap.composeForSession(created);
-              }),
-              request.signal,
-            )
-          : '';
+      // Gating lives in `composeForSession`: dev sessions get the full
+      // bootstrap, meta/internal sessions get only the shared workspace
+      // context, so every session carries the user-authored standing context.
+      const bootstrap = await awaitWithSignal(
+        own(owner, () => {
+          throwIfAborted(request.signal);
+          return deps.bootstrap.composeForSession(created);
+        }),
+        request.signal,
+      );
       throwIfAborted(request.signal);
       const launchPrompt = composeBootstrappedPrompt(bootstrap, request.prompt);
 

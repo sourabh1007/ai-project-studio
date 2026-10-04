@@ -132,8 +132,30 @@ export function createSessionBootstrap(
       await repositoryContext(deps, featureId);
     },
     async composeForSession(session) {
+      // Background/internal meta sessions (summaries, context merge, repository
+      // analysis, warm pool) run their own purpose-built prompts, so they do
+      // NOT receive the dev-only monitoring policy, feature brief, prior-session
+      // memory or skills. They DO still receive the user-authored shared
+      // context (workspace/repo/feature standing guidance) so workspace rules
+      // apply to every session. A warm/pool session may not resolve to a
+      // feature, in which case only the global workspace layer is included.
       if (session.kind !== 'dev' || session.scope === 'internal') {
-        return '';
+        let repoId: string | null | undefined;
+        let featureId: string | undefined;
+        try {
+          repoId = deps.features.get(session.featureId).repoId;
+          featureId = session.featureId;
+        } catch {
+          repoId = undefined;
+          featureId = undefined;
+        }
+        const sharedOnly = deps.sharedContext.composeLayered({
+          repoId,
+          featureId,
+        });
+        return sharedOnly
+          ? `# Session Bootstrap Context\n\n${sharedOnly}`
+          : '';
       }
 
       const feature = deps.features.get(session.featureId);

@@ -55,6 +55,7 @@ export function createSessionSummaryRunner(
         model: deps.config.model,
         prompt,
         kind: 'meta',
+        scope: 'internal',
         purpose: 'session-summary',
         label: 'Session summary',
         signal,

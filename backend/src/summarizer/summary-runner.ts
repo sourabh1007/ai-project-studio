@@ -41,6 +41,7 @@ export function createSummaryRunner(deps: SummaryRunnerDeps): FeatureSummarizer 
         model: deps.config.model,
         prompt,
         kind: 'meta',
+        scope: 'internal',
         purpose: 'feature-summary',
         label: 'Feature summary',
         signal: request.signal,

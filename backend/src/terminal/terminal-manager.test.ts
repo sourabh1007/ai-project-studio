@@ -1567,11 +1567,13 @@ describe('createTerminalManager', () => {
     }
   });
 
-  it('does not seed instructions for meta sessions', async () => {
-    const { manager, env, instructionCalls } = makeManager('Follow the rules.');
+  it('seeds instructions for meta sessions (shared workspace context)', async () => {
+    // Gating now lives in composeForSession, so the terminal manager forwards
+    // whatever bootstrap it returns for meta sessions too — previously it
+    // short-circuited and never composed a bootstrap for a meta session.
+    const { manager, instructionCalls } = makeManager('Follow the rules.');
     await manager.getOrLaunch({ ...sampleSession(), kind: 'meta' });
-    expect(instructionCalls).toEqual([]);
-    expect(env.writes).toEqual([]);
+    expect(instructionCalls).toEqual(['sess-1']);
   });
 
   it('throws when the session references an unknown provider', async () => {
