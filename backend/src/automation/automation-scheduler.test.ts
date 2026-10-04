@@ -894,6 +894,26 @@ describe('automation-scheduler', () => {
     );
   });
 
+  it('parks the monitor in needs-auth when the action throws an auth error', async () => {
+    const a = dueAutomation();
+    await scheduler(
+      checkReturning(okResult),
+      actionThrowing('Agency requires sign-in with your Microsoft account'),
+    ).tick();
+    const after = service.get(a.id);
+    expect(after.status).toBe('needs-auth');
+    expect(after.nextRunAt).toBeNull();
+    expect(after.failure).toContain('Sign-in required');
+    expect(after.progress).toBe('Sign-in required');
+    expect(repo.listRuns(a.id)).toContainEqual(
+      expect.objectContaining({
+        triggered: true,
+        status: 'failed',
+        detail: expect.stringContaining('Sign-in required:'),
+      }),
+    );
+  });
+
   it('does not record or persist a result after the monitor is deleted mid-action', async () => {
     const a = dueAutomation();
     const actions: ActionRunner = {
@@ -1138,6 +1158,34 @@ describe('automation-scheduler', () => {
         triggered: true,
         status: 'failed',
         detail: 'Action failed: later boom',
+      }),
+    );
+  });
+
+  it('parks the monitor in needs-auth when retained action completion hits auth', async () => {
+    const a = dueAutomation();
+    let rejectCompletion!: (error: Error) => void;
+    const retainedAction: ActionResult = {
+      ...action,
+      subagentId: 'g1',
+      completion: new Promise<void>((_resolve, reject) => {
+        rejectCompletion = reject;
+      }),
+    };
+    const sched = scheduler(checkReturning(okResult), actionReturning(retainedAction));
+    await sched.tick();
+    rejectCompletion(new Error('GitHub token has expired'));
+    await expect(sched.waitForIdle(100)).resolves.toBe(true);
+    expect(service.get(a.id)).toMatchObject({
+      status: 'needs-auth',
+      nextRunAt: null,
+      progress: 'Sign-in required',
+    });
+    expect(repo.listRuns(a.id)).toContainEqual(
+      expect.objectContaining({
+        triggered: true,
+        status: 'failed',
+        detail: expect.stringContaining('Sign-in required:'),
       }),
     );
   });

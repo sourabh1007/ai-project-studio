@@ -59,8 +59,73 @@ import {
   SignInIcon,
 } from '../../components/icons.js';
 import { GithubSignInModal } from '../github/github-signin.js';
+import {
+  AZURE_AUTH_CHANGED_EVENT,
+  useMicrosoftSignedIn,
+} from '../../hooks/use-microsoft-identity.js';
 
 type LifecycleAction = 'pause' | 'resume' | 'cancel' | 'run' | 'delete';
+type MonitorSignInKind = 'github' | 'azure';
+
+function isAiAction(automation: Automation): boolean {
+  return (
+    automation.action.type === 'metasession' ||
+    automation.action.type === 'report' ||
+    automation.action.type === 'subagent'
+  );
+}
+
+function automationText(automation: Automation): string {
+  return [
+    automation.failure ?? '',
+    automation.progress ?? '',
+    describeCheck(automation.check),
+    automation.action.type,
+  ].join(' ');
+}
+
+function signInKindForAutomation(
+  automation: Automation,
+  microsoftSignedIn: boolean | undefined,
+): MonitorSignInKind {
+  if (
+    automation.check.type === 'ci-pipeline' &&
+    automation.check.provider === 'azure'
+  ) {
+    return 'azure';
+  }
+  const text = automationText(automation);
+  if (
+    /azure|devops|microsoft|entra|agency|login\.microsoftonline\.com/i.test(
+      text,
+    )
+  ) {
+    return 'azure';
+  }
+  if (microsoftSignedIn === false && isAiAction(automation)) {
+    return 'azure';
+  }
+  return 'github';
+}
+
+function azureSignInTarget(automation: Automation): string | undefined {
+  if (automation.check.type !== 'ci-pipeline') {
+    return undefined;
+  }
+  if (automation.check.provider !== 'azure') {
+    return undefined;
+  }
+  const repo = typeof automation.check.repo === 'string'
+    ? automation.check.repo.trim()
+    : '';
+  if (!repo) {
+    return undefined;
+  }
+  if (repo.includes('://') || repo.includes('.visualstudio.com')) {
+    return repo;
+  }
+  return repo.split('/')[0] || undefined;
+}
 
 export function AutomationsView({ live }: { live: LiveState }) {
   const api = useApi();
@@ -274,6 +339,8 @@ function AutomationCard({
   const api = useApi();
   const [logsOpen, setLogsOpen] = useState(false);
   const [signInOpen, setSignInOpen] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const [confirmingRetry, setConfirmingRetry] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationRun[] | null>(null);
@@ -288,6 +355,9 @@ function AutomationCard({
   const currentCall = activeStepLabel(automation);
   const editable = canCancel(automation.status);
   const runnable = canRunNow(automation);
+  const microsoftSignedIn = useMicrosoftSignedIn();
+  const signInKind = signInKindForAutomation(automation, microsoftSignedIn);
+  const authActionsBlocked = needsAuth(automation.status);
   const logsVersion = useMemo(
     () =>
       JSON.stringify({
@@ -351,12 +421,42 @@ function AutomationCard({
         };
 
   function requestRunNow() {
+    if (authActionsBlocked) {
+      return;
+    }
     if (automation.uncertainty) {
       setRetryError(null);
       setConfirmingRetry(true);
       return;
     }
     void onAction(automation.id, 'run');
+  }
+
+  async function signInAndResume() {
+    setSignInError(null);
+    if (signInKind === 'github') {
+      setSignInOpen(true);
+      return;
+    }
+    if (signingIn) {
+      return;
+    }
+    setSigningIn(true);
+    try {
+      const result = await api.azureSignIn(azureSignInTarget(automation));
+      if (!result.authenticated) {
+        setSignInError(
+          result.message ?? 'Sign-in did not complete. Please try again.',
+        );
+        return;
+      }
+      window.dispatchEvent(new Event(AZURE_AUTH_CHANGED_EVENT));
+      await onAction(automation.id, 'resume');
+    } catch (err) {
+      setSignInError(err instanceof Error ? err.message : 'Sign-in failed.');
+    } finally {
+      setSigningIn(false);
+    }
   }
 
   return (
@@ -429,18 +529,24 @@ function AutomationCard({
           <strong>Sign-in required</strong>
           <span>
             {automation.failure ??
-              'This monitor reuses the same GitHub sign-in as the IDE. If it ' +
-                'lost access, sign in below to authorize in a browser window — ' +
-                'no terminal needed. If you already signed in elsewhere, just ' +
-                'Resume.'}
+              `This monitor reuses the same ${
+                signInKind === 'azure' ? 'Microsoft' : 'GitHub'
+              } sign-in as the IDE. If it lost access, sign in below to authorize in a browser window — no terminal needed. If you already signed in elsewhere, just resume.`}
           </span>
+          {signInError && <ErrorText error={signInError} />}
           <div className="automation-auth-actions">
             <button
               type="button"
               className="primary-button"
-              onClick={() => setSignInOpen(true)}
+              onClick={() => void signInAndResume()}
+              disabled={signingIn}
+              title={
+                signInKind === 'azure'
+                  ? 'Sign in with your Microsoft identity, then resume this monitor.'
+                  : 'Sign in to GitHub, then resume this monitor.'
+              }
             >
-              <SignInIcon size={14} /> Sign in
+              <SignInIcon size={14} /> {signingIn ? 'Signing in…' : 'Sign in'}
             </button>
           </div>
         </div>
@@ -501,6 +607,11 @@ function AutomationCard({
             type="button"
             className="ghost-button tone-resume"
             disabled={busyKey === `resume:${automation.id}`}
+            title={
+              needsAuth(automation.status)
+                ? 'Use this only if you have already signed in elsewhere; otherwise use Sign in above.'
+                : undefined
+            }
             onClick={() => {
               void onAction(automation.id, 'resume');
             }}
@@ -513,7 +624,7 @@ function AutomationCard({
           <button
             type="button"
             className="ghost-button tone-run"
-            disabled={busyKey === `run:${automation.id}`}
+            disabled={busyKey === `run:${automation.id}` || authActionsBlocked}
             onClick={requestRunNow}
           >
             <PlayIcon size={14} /> Run now

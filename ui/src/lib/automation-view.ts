@@ -244,7 +244,7 @@ export function canCancel(status: AutomationStatus): boolean {
 /** Whether the UI should offer an explicit "Run now" retry. */
 export function canRunNow(automation: Automation): boolean {
   return (
-    canCancel(automation.status) ||
+    (canCancel(automation.status) && automation.status !== 'needs-auth') ||
     (automation.mode === 'short' &&
       automation.status === 'failed' &&
       automation.uncertainty !== null &&

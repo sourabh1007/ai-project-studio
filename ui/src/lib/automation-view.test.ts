@@ -260,6 +260,7 @@ describe('lifecycle guards', () => {
   });
   it('canRunNow for active work and uncertain short failures only', () => {
     expect(canRunNow(automation({ status: 'active' }))).toBe(true);
+    expect(canRunNow(automation({ status: 'needs-auth' }))).toBe(false);
     expect(
       canRunNow(
         automation({

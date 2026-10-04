@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import { initialLiveState } from '../../lib/stream.js';
 import type { Automation, AutomationRun, Subagent } from '../../lib/types.js';
+import {
+  resetMicrosoftSignedIn,
+  setMicrosoftSignedIn,
+} from '../../lib/microsoft-identity.js';
 import { AutomationsView } from './automations-view.js';
 
 function automation(overrides: Partial<Automation> = {}): Automation {
@@ -78,6 +82,9 @@ function client(
       expiresIn: 900,
     }),
     githubSignInPoll: vi.fn().mockResolvedValue({ status: 'pending' }),
+    azureSignIn: vi
+      .fn()
+      .mockResolvedValue({ authenticated: true, account: 'alice', message: null }),
     ...overrides,
   } as unknown as ApiClient;
 }
@@ -91,6 +98,10 @@ function renderView(api: ApiClient, live = initialLiveState) {
 }
 
 describe('AutomationsView', () => {
+  beforeEach(() => {
+    resetMicrosoftSignedIn();
+  });
+
   it('segregates monitors into running, needs-sign-in, paused, and finished', async () => {
     const api = client([
       automation({ id: 'r', name: 'Running one', status: 'active' }),
@@ -573,6 +584,7 @@ describe('AutomationsView', () => {
       within(card).getByRole('button', { name: /Already signed in — resume/i }),
     );
     await waitFor(() => expect(api.resumeAutomation).toHaveBeenCalledWith('a1'));
+    expect(within(card).queryByRole('button', { name: /run now/i })).toBeNull();
   });
 
   it('opens an interactive sign-in window from a needs-auth monitor', async () => {
@@ -584,6 +596,57 @@ describe('AutomationsView', () => {
     fireEvent.click(within(card).getByRole('button', { name: /^Sign in$/i }));
     expect(await screen.findByText('Sign in to GitHub')).toBeInTheDocument();
     await waitFor(() => expect(api.githubSignInStart).toHaveBeenCalled());
+  });
+
+  it('runs Microsoft sign-in and resumes an Azure-blocked monitor', async () => {
+    setMicrosoftSignedIn(false);
+    const api = client([
+      automation({
+        status: 'needs-auth',
+        check: {
+          type: 'ci-pipeline',
+          provider: 'azure',
+          repo: 'contoso/project',
+        },
+      }),
+    ]);
+    renderView(api);
+    const card = (await screen.findByText('Watch CI')).closest(
+      '.automation-card',
+    ) as HTMLElement;
+
+    fireEvent.click(within(card).getByRole('button', { name: /^Sign in$/i }));
+
+    await waitFor(() => expect(api.azureSignIn).toHaveBeenCalledWith('contoso'));
+    await waitFor(() => expect(api.resumeAutomation).toHaveBeenCalledWith('a1'));
+    expect(api.githubSignInStart).not.toHaveBeenCalled();
+  });
+
+  it('keeps a needs-auth monitor parked when Microsoft sign-in does not complete', async () => {
+    setMicrosoftSignedIn(false);
+    const api = client([
+      automation({
+        status: 'needs-auth',
+        failure: 'Agency requires Microsoft sign-in.',
+      }),
+    ], {
+      azureSignIn: vi.fn().mockResolvedValue({
+        authenticated: false,
+        account: null,
+        message: 'Sign-in was cancelled before it finished.',
+      }),
+    });
+    renderView(api);
+    const card = (await screen.findByText('Watch CI')).closest(
+      '.automation-card',
+    ) as HTMLElement;
+
+    fireEvent.click(within(card).getByRole('button', { name: /^Sign in$/i }));
+
+    expect(
+      await within(card).findByText('Sign-in was cancelled before it finished.'),
+    ).toBeInTheDocument();
+    expect(api.resumeAutomation).not.toHaveBeenCalled();
   });
 
   it('requires explicit confirmation before retrying uncertain work', async () => {

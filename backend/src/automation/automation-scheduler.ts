@@ -1025,6 +1025,11 @@ export function createAutomationScheduler(
         settleAbortedRun(run.id);
         return null;
       }
+      const authMessage = detectAuthFromError(error);
+      if (authMessage !== null) {
+        enterNeedsAuth(run, authMessage);
+        return null;
+      }
       persistActionFailure(run.id, errorMessage(error));
       return null;
     }
@@ -1055,6 +1060,11 @@ export function createAutomationScheduler(
         (error) => {
           if (signal.aborted || deps.repo.get(automation.id) === null) {
             settleAbortedRun(run.id);
+            return;
+          }
+          const authMessage = detectAuthFromError(error);
+          if (authMessage !== null) {
+            enterNeedsAuth(run, authMessage);
             return;
           }
           persistActionFailure(run.id, errorMessage(error));
