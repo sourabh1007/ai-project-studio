@@ -101,6 +101,11 @@ describe('defaultSessionLabel', () => {
   it('formats the ordinal', () => {
     expect(defaultSessionLabel(3)).toBe('Session #3');
   });
+
+  it('labels meta-kind sessions distinctly so they are not mistaken for real sessions', () => {
+    expect(defaultSessionLabel(31, 'meta')).toBe('Meta #31');
+    expect(defaultSessionLabel(31, 'dev')).toBe('Session #31');
+  });
 });
 
 describe('sessionDisplayName', () => {
@@ -118,6 +123,10 @@ describe('sessionDisplayName', () => {
 
   it('falls back to the default label for whitespace', () => {
     expect(sessionDisplayName('   ', 5)).toBe('Session #5');
+  });
+
+  it('uses the meta label for meta-kind sessions', () => {
+    expect(sessionDisplayName(null, 9, 'meta')).toBe('Meta #9');
   });
 });
 
@@ -148,6 +157,10 @@ describe('sessionWorkTitle', () => {
   it('falls back to the default label when there is no prompt', () => {
     expect(sessionWorkTitle(null, '', null, 7)).toBe('Session #7');
     expect(sessionWorkTitle(null, '   \n  ', null, 8)).toBe('Session #8');
+  });
+
+  it('falls back to the meta label for a meta-kind session with no prompt', () => {
+    expect(sessionWorkTitle(null, '', null, 12, 64, 'meta')).toBe('Meta #12');
   });
 
   it('uses the CLI-history work title when the launch prompt is empty', () => {

@@ -76,17 +76,21 @@ export function createSessionNameStore(
 }
 
 /** The default label for a session at the given 1-based ordinal position. */
-export function defaultSessionLabel(ordinal: number): string {
-  return `Session #${ordinal}`;
+export function defaultSessionLabel(
+  ordinal: number,
+  kind?: string | null,
+): string {
+  return kind === 'meta' ? `Meta #${ordinal}` : `Session #${ordinal}`;
 }
 
 /** Resolves the display name: a custom name when set, otherwise the default label. */
 export function sessionDisplayName(
   custom: string | null | undefined,
   ordinal: number,
+  kind?: string | null,
 ): string {
   const trimmed = custom?.trim();
-  return trimmed ? trimmed : defaultSessionLabel(ordinal);
+  return trimmed ? trimmed : defaultSessionLabel(ordinal, kind);
 }
 
 /** Boilerplate prefixes stripped from a launch prompt when deriving a title. */
@@ -104,6 +108,7 @@ export function sessionWorkTitle(
   workTitle: string | null | undefined,
   ordinal: number,
   maxLength = 64,
+  kind?: string | null,
 ): string {
   const trimmedCustom = custom?.trim();
   if (trimmedCustom) {
@@ -114,7 +119,7 @@ export function sessionWorkTitle(
     .map((line) => line.trim())
     .find((line) => line.length > 0);
   if (!firstLine) {
-    return defaultSessionLabel(ordinal);
+    return defaultSessionLabel(ordinal, kind);
   }
   const cleaned = firstLine
     .replace(PROMPT_TITLE_NOISE, '')

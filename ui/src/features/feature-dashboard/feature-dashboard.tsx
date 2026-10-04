@@ -738,7 +738,14 @@ function Charts({
     const ordinal = ordinalById.get(sessionId) ?? 1;
     const session = sessionById.get(sessionId);
     if (session) {
-      return sessionWorkTitle(session.name, session.prompt, session.workTitle, ordinal);
+      return sessionWorkTitle(
+        session.name,
+        session.prompt,
+        session.workTitle,
+        ordinal,
+        64,
+        session.kind,
+      );
     }
     const agentLabel = agentLabelById.get(sessionId);
     if (agentLabel) {

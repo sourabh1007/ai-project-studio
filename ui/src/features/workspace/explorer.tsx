@@ -134,7 +134,7 @@ function SessionRow({
 
   // The persisted name is authoritative; fall back to any legacy localStorage
   // name (pre-persistence installs) and finally the ordinal label.
-  const name = sessionDisplayName(session.name ?? customName, ordinal);
+  const name = sessionDisplayName(session.name ?? customName, ordinal, session.kind);
   const model = session.resolvedModel ?? session.requestedModel;
   // Industry-standard per-session CLI indicator: a compact monogram badge
   // (e.g. Copilot → "C", Agency → "A") so the provider is scannable at a
@@ -1121,7 +1121,7 @@ function FeatureNode({
                 usage.reload();
                 onOpenSession(
                   session,
-                  sessionDisplayName(names[session.id], rows.length + 1),
+                  sessionDisplayName(names[session.id], rows.length + 1, session.kind),
                 );
               }}
               onCancel={() => setCreating(false)}
@@ -1177,7 +1177,7 @@ function FeatureNode({
                 onOpen={() =>
                   onOpenSession(
                     session,
-                    sessionDisplayName(names[session.id], ordinal),
+                    sessionDisplayName(names[session.id], ordinal, session.kind),
                   )
                 }
                 onRename={(name) => handleRenameSession(session.id, name)}
