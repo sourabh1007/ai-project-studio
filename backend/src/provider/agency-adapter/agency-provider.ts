@@ -4,6 +4,7 @@ import type {
   InteractiveCommand,
   McpErrorScanner,
   ModelChangeScanner,
+  SessionRestartScanner,
   SessionSpec,
 } from '../provider-contract.js';
 import type {
@@ -21,6 +22,7 @@ import { buildCopilotInteractiveArgs } from '../copilot-adapter/copilot-cmd-buil
 import { createCopilotOutputScanner } from '../copilot-adapter/copilot-output-scanner.js';
 import { createCopilotModelScanner } from '../copilot-adapter/copilot-model-scanner.js';
 import { createCopilotMcpScanner } from '../copilot-adapter/copilot-mcp-scanner.js';
+import { createCopilotRestartScanner } from '../copilot-adapter/copilot-restart-scanner.js';
 import { createCopilotMcpSupport } from '../copilot-adapter/copilot-mcp-support.js';
 
 export interface AgencyAdapterDeps {
@@ -81,6 +83,11 @@ export function createAgencyProvider(
       // Same Copilot CLI underneath, so MCP connection failures are announced
       // identically; reuse Copilot's MCP-error scanner.
       return createCopilotMcpScanner();
+    },
+    createRestartScanner(): SessionRestartScanner {
+      // Agency relays the same Copilot CLI "session needs to restart" line
+      // (e.g. when an MCP server is reconfigured), so reuse Copilot's scanner.
+      return createCopilotRestartScanner();
     },
     listImportableSessions(): ImportableSession[] {
       return deps.importStore.listImportable();

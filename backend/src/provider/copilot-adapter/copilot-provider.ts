@@ -3,6 +3,7 @@ import type {
   InteractiveCommand,
   McpErrorScanner,
   ModelChangeScanner,
+  SessionRestartScanner,
   SessionSpec,
 } from '../provider-contract.js';
 import type {
@@ -21,6 +22,7 @@ import { listCopilotModels } from './copilot-model-lister.js';
 import { createCopilotOutputScanner } from './copilot-output-scanner.js';
 import { createCopilotModelScanner } from './copilot-model-scanner.js';
 import { createCopilotMcpScanner } from './copilot-mcp-scanner.js';
+import { createCopilotRestartScanner } from './copilot-restart-scanner.js';
 
 export interface CopilotAdapterDeps {
   spawner: ProcessSpawner;
@@ -68,6 +70,9 @@ export function createCopilotProvider(
     },
     createMcpErrorScanner(): McpErrorScanner {
       return createCopilotMcpScanner();
+    },
+    createRestartScanner(): SessionRestartScanner {
+      return createCopilotRestartScanner();
     },
   };
 }

@@ -76,6 +76,7 @@ function interactiveProvider(
   withScanner = false,
   withModelScanner = false,
   withMcpScanner = false,
+  withRestartScanner = false,
 ): IAIProvider {
   const provider: IAIProvider = {
     id: 'copilot',
@@ -118,6 +119,16 @@ function interactiveProvider(
         }
         return [];
       },
+    });
+  }
+  if (withRestartScanner) {
+    // A trivial scanner: a `RESTART:` chunk requests one in-place relaunch,
+    // carrying the text after the colon as the reason.
+    provider.createRestartScanner = () => ({
+      feed: (chunk) =>
+        chunk.startsWith('RESTART:')
+          ? [{ reason: chunk.slice(8).trim() }]
+          : [],
     });
   }
   return provider;
@@ -164,6 +175,7 @@ function makeManager(
     withModelScanner?: boolean;
     trackModel?: boolean;
     withMcpScanner?: boolean;
+    withRestartScanner?: boolean;
   } = {},
   isTransientFailure?: (line: string) => boolean,
   extra: {
@@ -189,6 +201,7 @@ function makeManager(
       withScanner,
       modelOpts.withModelScanner ?? false,
       modelOpts.withMcpScanner ?? false,
+      modelOpts.withRestartScanner ?? false,
     ),
   );
   const ts = fakeTranscriptStore();
@@ -384,6 +397,131 @@ describe('createTerminalManager', () => {
     expect(result).toBeUndefined();
     expect(h.env.requests).toEqual([]);
     expect(h.env.kills()).toBe(0);
+  });
+
+  describe('auto-restart on a CLI restart request', () => {
+    const flush = async (times = 10): Promise<void> => {
+      for (let i = 0; i < times; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    };
+
+    it('relaunches the session in place and notifies when the CLI asks to restart', async () => {
+      const h = makeManager('', false, undefined, { withRestartScanner: true });
+      const session = sampleSession();
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      // Unrelated output flows through the attached scanner without matching.
+      h.env.emitData('just some ordinary CLI output\n');
+      // The CLI prints its "session needs to restart" line.
+      h.env.emitData('RESTART:MCP server is modified\n');
+      // relaunch kills the live PTY and awaits its native exit before respawning.
+      h.env.emitExit(0);
+      await flush();
+
+      // A fresh CLI was spawned (same session id/tab) and the old one discarded.
+      expect(h.env.requests).toHaveLength(2);
+      expect(h.env.requests[1].cwd).toBe('C:/old');
+      expect(h.discarded).toEqual(['sess-1']);
+      expect(h.ended).toEqual([]);
+      expect(h.notices).toContainEqual({
+        sessionId: 'sess-1',
+        level: 'info',
+        message:
+          'The CLI asked to restart the session (MCP server is modified); restarting it for you…',
+      });
+
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
+
+    it('does not auto-restart an internal session', async () => {
+      const h = makeManager('', false, undefined, { withRestartScanner: true });
+      const session = { ...sampleSession(), scope: 'internal' as const };
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      h.env.emitData('RESTART:MCP server is modified\n');
+      await flush();
+
+      // The guard skips the scanner entirely: no second spawn, no discard.
+      expect(h.env.requests).toHaveLength(1);
+      expect(h.discarded).toEqual([]);
+
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
+
+    it('does nothing when the provider exposes no restart scanner', async () => {
+      const h = makeManager();
+      const session = sampleSession();
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      h.env.emitData('RESTART:MCP server is modified\n');
+      await flush();
+
+      expect(h.env.requests).toHaveLength(1);
+      expect(h.discarded).toEqual([]);
+
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
+
+    it('logs when the auto-restart relaunch fails', async () => {
+      const h = makeManager('', false, undefined, {
+        withRestartScanner: true,
+      }, undefined, { composeFailOnCall: 2 });
+      const session = sampleSession();
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      h.env.emitData('RESTART:MCP server is modified\n');
+      h.env.emitExit(0);
+      await flush();
+
+      // The relaunch's bootstrap compose threw, so no replacement came up and
+      // the failure is logged rather than crashing output processing.
+      expect(h.env.requests).toHaveLength(1);
+      expect(h.logger.error).toHaveBeenCalledWith(
+        'Auto-restart after CLI request failed',
+        expect.objectContaining({ sessionId: 'sess-1' }),
+      );
+
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
+
+    it('omits the reason clause when the CLI gives no reason', async () => {
+      const h = makeManager('', false, undefined, { withRestartScanner: true });
+      const session = sampleSession();
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      // A bare `RESTART:` chunk carries no reason.
+      h.env.emitData('RESTART:\n');
+      h.env.emitExit(0);
+      await flush();
+
+      expect(h.notices).toContainEqual({
+        sessionId: 'sess-1',
+        level: 'info',
+        message: 'The CLI asked to restart the session; restarting it for you…',
+      });
+
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
+
+    it('does not auto-restart a meta session', async () => {
+      const h = makeManager('', false, undefined, { withRestartScanner: true });
+      const session = { ...sampleSession(), kind: 'meta' as const };
+      await h.manager.getOrLaunch(session, { cwd: 'C:/old' });
+
+      h.env.emitData('RESTART:MCP server is modified\n');
+      await flush();
+
+      expect(h.env.requests).toHaveLength(1);
+      expect(h.discarded).toEqual([]);
+
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
   });
   it('reserves the launch before synchronous internal-session lifecycle callbacks can reenter', async () => {
     const env = fakePtyEnv();

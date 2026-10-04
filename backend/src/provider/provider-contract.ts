@@ -44,6 +44,23 @@ export interface McpErrorScanner {
   feed(chunk: string): McpServerError[];
 }
 
+/** A CLI-announced request that the live session be restarted to recover. */
+export interface SessionRestartRequest {
+  /** Short human-readable cause, e.g. "MCP server configuration changed". */
+  reason: string;
+}
+
+/**
+ * Scans interactive terminal output for the CLI's own "session needs to
+ * restart" announcements (e.g. after an MCP server is reconfigured) so the IDE
+ * can transparently relaunch the session in place instead of leaving the user
+ * to notice the message and restart by hand. Provided by the provider since the
+ * wording is CLI-specific; providers whose CLI never asks for a restart omit it.
+ */
+export interface SessionRestartScanner {
+  feed(chunk: string): SessionRestartRequest[];
+}
+
 /** Everything needed to launch one AI session through a provider. */
 export interface SessionSpec {
   sessionId: string;
@@ -180,6 +197,14 @@ export interface IAIProvider {
    * session. Providers whose CLI emits no such line omit it.
    */
   createMcpErrorScanner?(): McpErrorScanner;
+  /**
+   * Optional capability: builds a scanner that detects the CLI's own
+   * "session needs to restart" announcements (e.g. after an MCP server is
+   * reconfigured mid-session), so the IDE can relaunch the session in place and
+   * continue rather than leaving the user to restart it by hand. Providers
+   * whose CLI never requests a restart omit it.
+   */
+  createRestartScanner?(): SessionRestartScanner;
   /**
    * Optional capability: lists past sessions from this provider's own store
    * that can be imported into a feature. Providers without an accessible

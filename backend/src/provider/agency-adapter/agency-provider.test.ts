@@ -174,6 +174,19 @@ describe('agency-provider', () => {
     ).toEqual([{ server: 'Azure', reason: 'nope' }]);
   });
 
+  it('createRestartScanner detects a restart request via the reused Copilot scanner', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner,
+      baseEnv: {},
+      importStore: fakeStore(),
+    });
+    const scanner = provider.createRestartScanner?.();
+    expect(
+      scanner?.feed('MCP server is modified, session needs to restart\n'),
+    ).toEqual([{ reason: 'MCP server is modified' }]);
+  });
+
   it('exposes Copilot MCP support', () => {
     const { spawner } = fakeSpawner();
     const provider = createAgencyProvider(agencyDefaults, {

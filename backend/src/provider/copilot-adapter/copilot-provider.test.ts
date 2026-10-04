@@ -144,4 +144,16 @@ describe('copilot-provider', () => {
       scanner?.feed('Failed to connect to MCP server "Azure": boom\n'),
     ).toEqual([{ server: 'Azure', reason: 'boom' }]);
   });
+
+  it('createRestartScanner detects a CLI session-restart request', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner,
+      baseEnv: {},
+    });
+    const scanner = provider.createRestartScanner?.();
+    expect(
+      scanner?.feed('MCP server is modified, session needs to restart\n'),
+    ).toEqual([{ reason: 'MCP server is modified' }]);
+  });
 });

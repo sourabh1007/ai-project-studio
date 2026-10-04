@@ -397,6 +397,11 @@ export function createTerminalManager(
     // scrolling past in the terminal.
     attachMcpErrorScanner(terminal, provider, session.id);
 
+    // Auto-heal the CLI's own "session needs to restart" requests (e.g. after an
+    // MCP server is reconfigured) by relaunching the session in place, so the
+    // user keeps working instead of being told to restart it by hand.
+    attachRestartScanner(terminal, provider, session, options);
+
     if (seeds.length > 0) {
       seedSequence(terminal, seeds, options.replaySeed ? currentReplayEpoch(session.id) : null);
     }
@@ -731,6 +736,54 @@ export function createTerminalManager(
             level: 'error',
             message: `MCP server "${error.server}" failed to connect${detail}`,
           });
+        }
+      },
+      exit: () => {},
+    });
+  }
+
+  /**
+   * Attaches a provider-supplied scanner that watches the tool's terminal
+   * output for the CLI's own "session needs to restart" announcements (e.g. an
+   * MCP server reconfigured mid-session) and transparently relaunches the
+   * session in place so the user can keep working, raising a single notice so
+   * the relaunch is not silent/unexplained. No-op when the provider exposes no
+   * restart scanner. Only interactive dev sessions are auto-relaunched; internal
+   * sessions are left to their own lifecycle.
+   */
+  function attachRestartScanner(
+    terminal: TerminalSession,
+    provider: ReturnType<ProviderRegistry['get']>,
+    session: Session,
+    options: LaunchOptions,
+  ): void {
+    if (
+      !provider.createRestartScanner ||
+      session.kind !== 'dev' ||
+      session.scope === 'internal'
+    ) {
+      return;
+    }
+    const scanner = provider.createRestartScanner();
+    terminal.attach({
+      send: (data) => {
+        for (const request of scanner.feed(data)) {
+          const detail = request.reason ? ` (${request.reason})` : '';
+          deps.bus.emit('session.notice', {
+            sessionId: session.id,
+            level: 'info',
+            message: `The CLI asked to restart the session${detail}; restarting it for you…`,
+          });
+          // Deliberate, seamless relaunch: keeps the same session id/tab and
+          // re-seeds bootstrap context. Fire-and-forget — the scanner callback
+          // is synchronous and must not block output processing.
+          void relaunch(session, options).catch((error: unknown) => {
+            deps.logger.error('Auto-restart after CLI request failed', {
+              sessionId: session.id,
+              error,
+            });
+          });
+          return;
         }
       },
       exit: () => {},
