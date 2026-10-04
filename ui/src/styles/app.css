@@ -945,7 +945,7 @@
 
 .activitybar .activity-item svg,
 .activitybar-brand img {
-  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 180ms var(--ease-spring);
   transform-origin: center;
 }
 
@@ -1425,7 +1425,7 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  animation: view-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: view-in 260ms var(--ease-smooth);
 }
 
 @keyframes view-in {
@@ -2886,7 +2886,7 @@ body.is-resizing {
   border-radius: var(--radius-md);
   background: var(--panel-inset);
   transition: border-color 160ms ease;
-  animation: pr-box-in 260ms ease both;
+  animation: pr-box-in 260ms var(--ease-smooth) both;
 }
 
 @keyframes pr-box-in {
@@ -3963,7 +3963,7 @@ body.is-resizing {
   background: var(--panel);
   box-shadow: var(--shadow-dialog);
   overflow-y: auto;
-  animation: pr-box-in 200ms ease both;
+  animation: pr-box-in 200ms var(--ease-smooth) both;
 }
 
 .cg-panel-head {
@@ -6166,7 +6166,7 @@ body.is-resizing {
   padding: var(--space-5);
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(2px);
-  animation: modal-fade 0.18s ease-out;
+  animation: modal-fade 0.18s var(--ease-out);
 }
 
 .modal {
@@ -6184,7 +6184,7 @@ body.is-resizing {
   background: var(--surface);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-dialog);
-  animation: modal-rise 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: modal-rise 0.24s var(--ease-spring);
 }
 
 .modal-sm {
@@ -7476,7 +7476,7 @@ body.is-resizing {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md, 6px);
   box-shadow: var(--shadow-dialog);
-  animation: modal-rise 0.1s ease-out;
+  animation: modal-rise 0.1s var(--ease-out);
 }
 
 .tab-context-item {
@@ -7941,7 +7941,7 @@ body.is-resizing {
 /* Grouped, labeled sections keep the dashboard scannable and compact. */
 .dash-section {
   margin-bottom: var(--space-4);
-  animation: dash-rise-in 0.45s ease both;
+  animation: dash-rise-in 0.45s var(--ease-smooth) both;
 }
 
 /* Staggered "bouncy loading" entrance for the dashboard when it opens. Sections
@@ -11724,7 +11724,7 @@ body.is-resizing {
   background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
   color: var(--text);
-  animation: update-banner-in 0.28s ease both;
+  animation: update-banner-in 0.28s var(--ease-smooth) both;
 }
 .update-banner-success {
   border-left-color: var(--success);
@@ -11913,7 +11913,7 @@ body.is-resizing {
   background: var(--surface-strong);
   box-shadow: var(--shadow-soft);
   color: var(--text);
-  animation: update-banner-in 0.28s ease both;
+  animation: update-banner-in 0.28s var(--ease-smooth) both;
 }
 .agency-update-popup-main {
   display: flex;
@@ -12784,7 +12784,7 @@ body.is-resizing {
 }
 .metasession-history-item {
   border-radius: 6px;
-  animation: metasession-history-in 160ms ease-out;
+  animation: metasession-history-in 160ms var(--ease-smooth);
 }
 .metasession-history-item:nth-child(odd) {
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
@@ -17082,7 +17082,7 @@ body.is-resizing {
 }
 
 .bug-bash-prereq-enter {
-  animation: bug-bash-rise-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: bug-bash-rise-in 0.32s var(--ease-smooth) both;
 }
 
 .bug-bash-prereq-enter:nth-child(2) {
