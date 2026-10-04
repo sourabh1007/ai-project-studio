@@ -1,15 +1,17 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { instructionsFilePath } from './bootstrap-instructions.js';
+import { instructionsFilePath, withInstructionsFrontmatter } from './bootstrap-instructions.js';
 import type { BootstrapInstructionsWriter } from './bootstrap-instructions-port.js';
 
 /**
  * Filesystem-backed writer for per-session bootstrap context. Files live under
  * `<baseDir>/<sessionId>/.github/instructions/` so the CLI discovers them via
  * `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`; `write` returns the per-session directory
- * to add to that env var. Defaults to an app-owned directory under the OS temp
- * dir so context files never land inside the user's repository.
+ * to add to that env var. The content is wrapped with the `applyTo` frontmatter
+ * the Copilot CLI requires — without it the CLI ignores the file and no context
+ * is injected. Defaults to an app-owned directory under the OS temp dir so
+ * context files never land inside the user's repository.
  */
 export function createBootstrapInstructionsWriter(
   baseDir: string = join(tmpdir(), 'aps-session-context'),
@@ -18,7 +20,7 @@ export function createBootstrapInstructionsWriter(
     async write(sessionId, content) {
       const { dir, filePath } = instructionsFilePath(baseDir, sessionId);
       await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, content, 'utf8');
+      await writeFile(filePath, withInstructionsFrontmatter(content), 'utf8');
       return dir;
     },
     async clear(sessionId) {

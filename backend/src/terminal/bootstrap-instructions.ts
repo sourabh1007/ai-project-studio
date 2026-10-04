@@ -17,6 +17,26 @@ export const CUSTOM_INSTRUCTIONS_DIRS_ENV = 'COPILOT_CUSTOM_INSTRUCTIONS_DIRS';
 export const INJECTING_CONTEXT_NOTICE = '⏳ Auto-injecting repository context…\r\n';
 
 /**
+ * YAML frontmatter the Copilot CLI requires before it will apply a modular
+ * `.instructions.md` file. Since v1.0.35-2 the CLI silently IGNORES instruction
+ * files that lack an `applyTo` glob (it no longer inlines unmatched files), so
+ * without this the entire bootstrap context — workspace, repository, feature,
+ * memory, skills — is written to disk but never loaded by the session. The
+ * composed body is provider-neutral; this Copilot-specific envelope is added
+ * only here, at the file-delivery boundary. `applyTo: '**'` applies the context
+ * to every file so it is in effect for the whole session.
+ */
+export function withInstructionsFrontmatter(content: string): string {
+  return [
+    '---',
+    "description: 'AI Project Studio session bootstrap context'",
+    "applyTo: '**'",
+    '---',
+    content,
+  ].join('\n');
+}
+
+/**
  * Resolves where a session's instructions file lives under `baseDir`. The CLI
  * only discovers custom-instruction files under a `.github/instructions`
  * subtree of a search directory (a bare file at the directory root is NOT

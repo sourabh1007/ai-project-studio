@@ -6,6 +6,7 @@ import {
   appendInstructionsDir,
   instructionsFilePath,
   withInstructionsDir,
+  withInstructionsFrontmatter,
 } from './bootstrap-instructions.js';
 
 describe('bootstrap-instructions', () => {
@@ -15,6 +16,28 @@ describe('bootstrap-instructions', () => {
 
   it('ends the injecting notice on its own line', () => {
     expect(INJECTING_CONTEXT_NOTICE.endsWith('\r\n')).toBe(true);
+  });
+
+  describe('withInstructionsFrontmatter', () => {
+    it('prepends applyTo/description frontmatter the CLI needs to apply the file', () => {
+      const out = withInstructionsFrontmatter('# Body\n\ntext');
+      expect(out).toBe(
+        [
+          '---',
+          "description: 'AI Project Studio session bootstrap context'",
+          "applyTo: '**'",
+          '---',
+          '# Body\n\ntext',
+        ].join('\n'),
+      );
+    });
+
+    it('opens with a frontmatter block and keeps the body intact', () => {
+      const out = withInstructionsFrontmatter('CONTEXT');
+      expect(out.startsWith('---\n')).toBe(true);
+      expect(out).toContain("applyTo: '**'");
+      expect(out.endsWith('\n---\nCONTEXT')).toBe(true);
+    });
   });
 
   describe('instructionsFilePath', () => {
