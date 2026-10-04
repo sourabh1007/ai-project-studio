@@ -7360,7 +7360,6 @@ body.is-resizing {
   overflow-x: auto;
   background: var(--panel-sidebar);
   border-bottom: 1px solid var(--border-strong);
-  scrollbar-width: thin;
 }
 
 .tab {
@@ -7777,7 +7776,8 @@ body.is-resizing {
 }
 
 [data-theme='light'] .terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(79, 70, 229, 0.35);
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+  background-clip: padding-box;
 }
 
 .terminal-host .xterm {
@@ -7787,12 +7787,25 @@ body.is-resizing {
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar {
-  width: 10px;
+  width: var(--scrollbar-size);
+}
+
+.terminal-host .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(129, 140, 248, 0.35);
+  background: var(--scrollbar-thumb);
+  border: 3px solid transparent;
   border-radius: 999px;
+  background-clip: padding-box;
+  transition: background-color var(--transition-fast);
+}
+
+.terminal-host .xterm-viewport::-webkit-scrollbar-thumb:hover,
+.terminal-host .xterm-viewport::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 /* ── Inspector (credits + summary) ─────────────────────────────────────── */

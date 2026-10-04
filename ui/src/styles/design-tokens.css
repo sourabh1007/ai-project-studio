@@ -368,16 +368,15 @@ body {
 }
 
 /* ── Professional scrollbars ─────────────────────────────────────────────
-   App-wide thin, rounded "floating capsule" scrollbars. Firefox and the
-   standard model use the `scrollbar-width`/`scrollbar-color` pair; Chromium
-   (Electron) uses the richer ::-webkit pseudo-elements below. The thumb is a
-   padding-box capsule that warms toward the accent on hover/drag. Component
-   rules with higher specificity (e.g. the terminal viewport) still win. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
-}
-
+   App-wide thin, rounded "floating capsule" scrollbars. This app only ever
+   runs in Electron (Chromium), so we drive every scrollbar through the richer
+   ::-webkit pseudo-elements and deliberately do NOT set the standard
+   `scrollbar-width`/`scrollbar-color` properties: since Chromium 121 those
+   standard properties (even inherited from an ancestor) DISABLE the
+   ::-webkit-scrollbar pseudo-elements, which would collapse our capsule back
+   into a plain thin/classic bar. The thumb is a padding-box capsule that warms
+   toward the accent on hover/drag; the track stays transparent so the thumb
+   appears to float. */
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
