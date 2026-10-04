@@ -30,9 +30,11 @@ import {
   Gauge,
   History,
   Info,
+  KeyRound,
   Layers,
   ListChecks,
   LogIn,
+  Power,
   Maximize2,
   Minimize2,
   Moon,
@@ -166,6 +168,8 @@ export const AiMagicIcon = makeIcon(WandSparkles);
 export const IntelligenceIcon = makeIcon(BrainCircuit);
 export const LaunchIcon = makeIcon(Rocket);
 export const SignInIcon = makeIcon(LogIn);
+export const AuthKeyIcon = makeIcon(KeyRound);
+export const PowerIcon = makeIcon(Power);
 export const BugBashIcon = makeIcon(Bug);
 export const AiChatIcon = makeIcon(Bot);
 export const SendIcon = makeIcon(Send);

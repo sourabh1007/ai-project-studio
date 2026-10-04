@@ -202,7 +202,7 @@ describe('McpManager', () => {
     await act(async () => pending.resolve(makeStatus('ai-project-studio', { toolCount: 6 })));
     expect(await screen.findByText('Online · 6 tools')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auth ai-project-studio' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for ai-project-studio' }));
     expect(await screen.findByText('read_status')).toBeInTheDocument();
     expect(api.inspectMcpServer).toHaveBeenCalledWith('studio', 'ai-project-studio');
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
@@ -218,7 +218,7 @@ describe('McpManager', () => {
     expect(within(card).getAllByRole('button')).toHaveLength(4);
     expect(within(card).getByRole('button', { name: 'Disable ado' })).toBeEnabled();
     expect(within(card).getByRole('button', { name: 'Tools for ado' })).toBeEnabled();
-    expect(within(card).getByRole('button', { name: 'Reauth ado' })).toHaveClass('btn-danger');
+    expect(within(card).getByRole('button', { name: 'Reauth ado' })).toHaveClass('is-danger');
     expect(within(card).getByRole('button', { name: 'Edit ado' })).toBeEnabled();
     expect(api.inspectMcpServer).not.toHaveBeenCalled();
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
@@ -560,7 +560,7 @@ describe('McpManager', () => {
     for (const name of ['Add server', 'Edit AI Project Studio', 'Remove AI Project Studio', 'Disable AI Project Studio', 'Restart AI Project Studio']) {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for AI Project Studio' }));
     const dialog = await screen.findByRole('dialog', { name: 'AI Project Studio · tools' });
     expect(await within(dialog).findByText('read_status')).toBeInTheDocument();
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
@@ -651,7 +651,7 @@ describe('McpManager', () => {
     await screen.findByText('Azure');
     expect(screen.getByRole('button', { name: 'Add server' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Edit Azure' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Tools' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Tools for Azure' })).toBeDisabled();
     expect(api.getMcpServerStatus).not.toHaveBeenCalled();
   });
 
@@ -689,7 +689,7 @@ describe('McpManager', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Re-check Azure' }));
     expect(await screen.findByText('Auth required')).toBeTruthy();
     const authButton = await screen.findByRole('button', {
-      name: 'Authenticate',
+      name: 'Auth Azure',
     });
     fireEvent.click(authButton);
 
@@ -753,7 +753,7 @@ describe('McpManager', () => {
 
     expect(await screen.findByText('Azure')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Azure' }));
 
     expect(await screen.findByText('read')).toBeTruthy();
     expect(screen.getByText('Read things')).toBeTruthy();
@@ -822,7 +822,7 @@ describe('McpManager', () => {
       }),
     });
     renderManager(api);
-    fireEvent.click(await screen.findByRole('button', { name: 'Tools' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Tools for Azure' }));
     const dialog = screen.getByRole('dialog', { name: 'Azure · tools' });
     expect(await within(dialog).findByText('Server timed out')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Authenticate' })).toBeNull();
@@ -848,7 +848,7 @@ describe('McpManager', () => {
     renderManager(api);
     const auth = await screen.findByRole('button', { name: 'Auth ado' });
     expect(auth).toBeDisabled();
-    expect(auth).not.toHaveClass('btn-danger');
+    expect(auth).not.toHaveClass('is-danger');
     fireEvent.click(auth);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(api.inspectMcpServer).not.toHaveBeenCalled();
@@ -856,7 +856,7 @@ describe('McpManager', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tools for ado' }));
     const openAuth = await screen.findByRole('button', { name: 'Open authentication' });
     expect(auth).toBeEnabled();
-    expect(auth).toHaveClass('btn-danger');
+    expect(auth).toHaveClass('is-danger');
     fireEvent.click(openAuth);
     const connect = await screen.findByRole('button', { name: 'Continue Agency sign-in' });
     fireEvent.click(connect);
@@ -880,10 +880,10 @@ describe('McpManager', () => {
       const button = await screen.findByRole('button', { name: `${state === 'expired' ? 'Reauth' : 'Auth'} ${entry.name}` });
       if (required) {
         expect(button).toBeEnabled();
-        expect(button).toHaveClass('btn-danger');
+        expect(button).toHaveClass('is-danger');
       } else {
         expect(button).toBeDisabled();
-        expect(button).not.toHaveClass('btn-danger');
+        expect(button).not.toHaveClass('is-danger');
       }
     }
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
@@ -1158,7 +1158,7 @@ describe('McpManager', () => {
     renderManager(api);
 
     expect(await screen.findByText('npx @agency/mcp')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Shared' }));
     await waitFor(() =>
       expect(inspectMcpServer).toHaveBeenCalledWith('agency', 'Shared'),
     );
@@ -1171,7 +1171,7 @@ describe('McpManager', () => {
       expect(screen.queryByRole('dialog', { name: 'Shared · tools' })).toBeNull(),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Shared' }));
     await waitFor(() =>
       expect(inspectMcpServer).toHaveBeenCalledWith('copilot', 'Shared'),
     );
@@ -1288,7 +1288,7 @@ describe('McpManager', () => {
     renderManager(api);
 
     expect(await screen.findByText('npx @agency/mcp')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Shared' }));
     expect(await screen.findByText('alpha')).toBeTruthy();
 
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -1301,7 +1301,7 @@ describe('McpManager', () => {
       expect(screen.queryByRole('dialog', { name: 'Shared · tools' })).toBeNull(),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Shared' }));
     const copilotDialog = await screen.findByRole('dialog', { name: 'Shared · tools' });
     expect(await within(copilotDialog).findByText('beta')).toBeTruthy();
     expect(within(copilotDialog).queryByText('alpha')).toBeNull();
@@ -1430,7 +1430,7 @@ describe('McpManager', () => {
     renderManager(api);
 
     await screen.findByText('Azure');
-    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tools for Azure' }));
     const dialog = await screen.findByRole('dialog', { name: 'Azure · tools' });
     expect(await within(dialog).findByText('write')).toBeTruthy();
 

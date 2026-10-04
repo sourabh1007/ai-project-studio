@@ -9109,6 +9109,46 @@ body.is-resizing {
   flex-wrap: wrap;
 }
 
+/* Icon-based MCP card action row (toggle / auth / tools / configure). */
+.mcp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mcp-builtin-actions.mcp-card-actions {
+  margin-top: var(--space-2);
+}
+
+.mcp-card-actions .tree-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Enabled toggle reads as "on" with the accent; disabled stays muted. */
+.mcp-action-toggle.is-on {
+  color: var(--success, #3fb950);
+}
+
+.mcp-action-toggle.is-on:hover {
+  background: color-mix(in srgb, var(--success, #3fb950) 16%, transparent);
+  color: var(--success, #3fb950);
+}
+
+/* Auth key lights up only when sign-in is required or expired. */
+.mcp-action-auth.is-danger {
+  color: var(--danger, #f85149);
+}
+
+.mcp-action-auth.is-danger:hover {
+  background: color-mix(in srgb, var(--danger, #f85149) 16%, transparent);
+  color: var(--danger, #f85149);
+}
+
+.mcp-action-auth.is-ready {
+  color: var(--success, #3fb950);
+}
+
 .mcp-builtin-setup {
   display: grid;
   gap: var(--space-2);

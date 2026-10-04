@@ -26,7 +26,9 @@ import {
   PencilIcon,
   PlusIcon,
   RestartIcon,
-  SignInIcon,
+  AuthKeyIcon,
+  PowerIcon,
+  SettingsIcon,
   ToolsIcon,
   TrashIcon,
   WarningIcon,
@@ -973,31 +975,39 @@ function McpServerCard({
         )}
         <p className="skill-card-body">{server.description
           ?? (typeof server.spec.description === 'string' ? server.spec.description : 'Agency built-in MCP server.')}</p>
-        <div className="row mcp-builtin-actions">
+        <div className="row mcp-builtin-actions mcp-card-actions" role="group" aria-label={`Actions for ${displayName}`}>
               {!server.catalog && (
-                <Button variant="ghost" loading={updating}
+                <button type="button"
+                  className={`tree-action mcp-action-toggle${enabled ? ' is-on' : ''}`}
                   onClick={() => void toggleEnabled()}
-                  ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
-                  title={capability('toggle', capabilities).reason ?? 'Applies to all sessions that use global built-ins'}
-                  disabled={!canMutateConfig || !capability('toggle', capabilities).supported}>
-                  {enabled ? 'Disable' : 'Enable'}
-                </Button>
+                  aria-label={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
+                  aria-pressed={enabled}
+                  title={capability('toggle', capabilities).reason ?? `${enabled ? 'Disable' : 'Enable'} for all sessions and the metasession`}
+                  disabled={!canMutateConfig || updating || !capability('toggle', capabilities).supported}>
+                  {updating ? <Spinner size={14} label="Updating" /> : <PowerIcon size={15} />}
+                </button>
               )}
-              <Button onClick={onOpenTools} ariaLabel={`Tools for ${displayName}`}
+              <button type="button" className="tree-action" onClick={onOpenTools}
+                aria-label={`Tools for ${displayName}`}
                 disabled={!canMutateConfig || !capability('tools', capabilities).supported}
                 title={capability('tools', capabilities).reason ?? 'List available tools'}>
-                Tools
-              </Button>
-              <Button variant={needsSignIn ? 'danger' : 'ghost'} onClick={onOpenAuth}
-                ariaLabel={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
+                <ToolsIcon size={15} />
+              </button>
+              <button type="button"
+                className={`tree-action mcp-action-auth${needsSignIn ? ' is-danger' : ''}${ready ? ' is-ready' : ''}`}
+                onClick={onOpenAuth}
+                aria-label={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
                 title={authTitle}
                 disabled={!canMutateConfig || !enabled || !needsSignIn || !capability('tools', capabilities).supported}>
-                {reauth ? 'Reauth' : 'Auth'}
-              </Button>
-              <Button variant="ghost" onClick={server.catalog ? onConfigure : onEdit}
-                ariaLabel={server.catalog ? `Configure ${displayName}` : `Edit ${displayName}`}
-                title={capability(server.catalog ? 'add' : 'edit', capabilities).reason ?? undefined}
-                disabled={!canMutateConfig || !capability(server.catalog ? 'add' : 'edit', capabilities).supported}>Configure</Button>
+                <AuthKeyIcon size={15} />
+              </button>
+              <button type="button" className="tree-action"
+                onClick={server.catalog ? onConfigure : onEdit}
+                aria-label={server.catalog ? `Configure ${displayName}` : `Edit ${displayName}`}
+                title={capability(server.catalog ? 'add' : 'edit', capabilities).reason ?? (server.catalog ? 'Configure this server' : 'Edit arguments and options')}
+                disabled={!canMutateConfig || !capability(server.catalog ? 'add' : 'edit', capabilities).supported}>
+                <SettingsIcon size={15} />
+              </button>
         </div>
         {!server.catalog && !capability('tools', capabilities).supported && (
           <p className="field-hint">{capability('tools', capabilities).reason}</p>
@@ -1013,7 +1023,38 @@ function McpServerCard({
           {server.catalog ? 'server' : specType(server.spec)}
         </span>
         <span className="mcp-provider-tag">{providerLabel}</span>
-        {!server.catalog && <div className="skill-card-actions">
+        {!server.catalog && <div className="skill-card-actions mcp-card-actions">
+          <button
+            type="button"
+            className={`tree-action mcp-action-toggle${enabled ? ' is-on' : ''}`}
+            title={capability('toggle', capabilities).reason ?? `${enabled ? 'Disable' : 'Enable'} for all sessions and the metasession`}
+            aria-label={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
+            aria-pressed={enabled}
+            disabled={!canMutateConfig || updating || !capability('toggle', capabilities).supported}
+            onClick={() => void toggleEnabled()}
+          >
+            {updating ? <Spinner size={14} label="Updating" /> : <PowerIcon size={15} />}
+          </button>
+          <button
+            type="button"
+            className={`tree-action mcp-action-auth${(needsSignIn || (needsAuth && !studioBridge)) ? ' is-danger' : ''}${ready ? ' is-ready' : ''}`}
+            title={studioBridge ? 'Authentication is managed by the IDE; no separate sign-in is needed.' : authTitle}
+            aria-label={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
+            disabled={studioBridge || !canMutateConfig || !enabled || !(needsSignIn || needsAuth) || !capability('tools', capabilities).supported}
+            onClick={needsAuth && !studioBridge ? authenticate : onOpenAuth}
+          >
+            <AuthKeyIcon size={15} />
+          </button>
+          <button
+            type="button"
+            className="tree-action"
+            title={studioBridge ? 'View app tools' : capability('tools', capabilities).reason ?? 'Connect to inspect tools'}
+            aria-label={`Tools for ${displayName}`}
+            disabled={!canMutateConfig || (!studioBridge && !capability('tools', capabilities).supported)}
+            onClick={onOpenTools}
+          >
+            <ToolsIcon size={15} />
+          </button>
           <button
             type="button"
             className="tree-action"
@@ -1087,42 +1128,7 @@ function McpServerCard({
       <p className="skill-card-body">{server.catalog && typeof server.spec.description === 'string'
         ? server.spec.description : server.builtinName
           ? 'Native Agency built-in; launch details are managed by Agency.' : describeSpec(server.spec)}</p>
-      {!server.catalog && <Button variant="ghost" loading={updating}
-        disabled={!canMutateConfig || !capability('toggle', capabilities).supported}
-        title={capability('toggle', capabilities).reason ?? 'Applies to future sessions'}
-        ariaLabel={`${enabled ? 'Disable' : 'Enable'} ${displayName}`}
-        onClick={() => void toggleEnabled()}>
-        {enabled ? 'Disable' : 'Enable'}
-      </Button>}
-      {needsAuth && !studioBridge && (
-        <Button
-          variant="danger"
-          onClick={authenticate}
-          disabled={!canMutateConfig || !enabled || !capability('tools', capabilities).supported}
-          title="Authenticate this MCP server"
-        >
-          <SignInIcon size={14} />
-          <span>Authenticate</span>
-        </Button>
-      )}
-      {(!needsAuth || studioBridge) && !server.catalog && <Button variant={needsSignIn && !studioBridge ? 'danger' : 'ghost'}
-        onClick={onOpenAuth} ariaLabel={`${reauth ? 'Reauth' : 'Auth'} ${displayName}`}
-        title={studioBridge ? 'Uses the IDE connection; no separate sign-in is needed.' : authTitle}
-        disabled={studioBridge || !canMutateConfig || !enabled || !capability('tools', capabilities).supported
-          || !needsSignIn}>
-        {reauth ? 'Reauth' : 'Auth'}
-      </Button>}
       {studioBridge && <p className="field-hint">Authentication is managed by the IDE.</p>}
-      {!server.catalog && <button
-        type="button"
-        className="mcp-tools-btn"
-        disabled={!canMutateConfig || (!studioBridge && !capability('tools', capabilities).supported)}
-        onClick={onOpenTools}
-        title={studioBridge ? 'View app tools' : capability('tools', capabilities).reason ?? 'Connect to inspect tools. Server startup may prompt for sign-in; existing CLI sessions are unchanged.'}
-      >
-        <ToolsIcon size={14} />
-        <span>Tools</span>
-      </button>}
       {server.catalog ? (
         <Button onClick={onConfigure} ariaLabel={`Configure ${displayName}`}
           disabled={!canMutateConfig || !capability('add', capabilities).supported}
