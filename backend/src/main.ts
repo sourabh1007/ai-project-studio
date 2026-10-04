@@ -273,6 +273,10 @@ import {
   type ContextConfig,
 } from './context-store/config.js';
 import { createContextService } from './context-store/context-service.js';
+import {
+  seedWorkspaceContext,
+  DEFAULT_WORKSPACE_CONTEXT,
+} from './context-store/workspace-context-seed.js';
 import { createContextBroadcaster } from './context-store/context-broadcaster.js';
 import { createContextMergeRunner } from './context-store/context-merge-runner.js';
 import { createContextMergeAutoTrigger } from './context-store/context-merge-auto.js';
@@ -2041,6 +2045,23 @@ function main(): void {
     clock,
     config: contextConfig,
     onUpdated: (doc) => contextBroadcaster.onUpdated(doc),
+  });
+  // One-time seed of the editable workspace context with the standing response
+  // prompt, so every new session launches with it. The marker lives in the
+  // config-override store so the seed never runs twice — a workspace document
+  // the user later deletes must not reappear after a restart.
+  const WORKSPACE_CONTEXT_SEED_NAMESPACE = 'workspaceContextSeed';
+  seedWorkspaceContext({
+    contexts: contextService,
+    hasSeeded: () =>
+      configOverrideRepo.get(WORKSPACE_CONTEXT_SEED_NAMESPACE) !== null,
+    markSeeded: () =>
+      configOverrideRepo.set({
+        namespace: WORKSPACE_CONTEXT_SEED_NAMESPACE,
+        data: { seeded: true },
+        updatedAt: clock.isoNow(),
+      }),
+    content: DEFAULT_WORKSPACE_CONTEXT,
   });
   const contextMerger = createContextMergeRunner({
     sessions: sessionRepo,
