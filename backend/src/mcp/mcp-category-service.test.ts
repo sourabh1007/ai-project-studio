@@ -585,7 +585,7 @@ describe('MCP categories and observational reads', () => {
     for (const category of ['agency', 'copilot', 'claude', 'studio']) {
       const config = await s.service.getServers(category);
       for (const entry of config.servers.filter((entry) => entry.displayName === 'ai-project-studio' || category === 'studio')) {
-        expect(entry).toMatchObject({ origin: 'app', providerLabel: 'This app' });
+        expect(entry).toMatchObject({ origin: 'app', providerLabel: 'This App' });
         expect(entry.builtinName).toBeUndefined();
       }
       for (const entry of config.servers.filter((entry) => ['custom', 'another'].includes(entry.displayName!))) {

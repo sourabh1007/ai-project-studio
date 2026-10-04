@@ -57,7 +57,7 @@ export function createMcpCategories(
   } : undefined;
   return [
     {
-      info: { id: 'agency', label: 'Agency', kind: 'cli', description: 'Agency configuration and separately labeled inherited sources.' },
+      info: { id: 'agency', label: 'Agency CLI', kind: 'cli', description: 'MCP servers provided by the Agency CLI — its built-in catalog plus your Agency and inherited configuration sources.' },
       catalog: agencyCatalog,
       builtinRuntime,
       options,
@@ -78,7 +78,7 @@ export function createMcpCategories(
       ],
     },
     {
-      info: { id: 'copilot', label: 'Copilot CLI', kind: 'cli', description: 'Copilot user configuration and separately labeled current-workspace files; no CLI installation is required to edit the user file.', documentationUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers' },
+      info: { id: 'copilot', label: 'Copilot', kind: 'cli', description: 'MCP servers for Copilot. Copilot ships no built-in servers, so these are populated from your local Copilot configuration (user file and current-workspace files).', documentationUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers' },
       sources: [
         copilot,
         { ...copilot, id: 'workspace', path: paths.workspaceMcp, scope: 'Copilot current workspace .mcp.json', allowBareMap: true, readOnlyReason: 'Workspace MCP files require native trust and precedence evaluation. Edit them in the native workspace configuration.' },
@@ -118,7 +118,7 @@ export function createMcpCategories(
       ],
     },
     {
-      info: { id: 'studio', label: 'This app', kind: 'app', description: 'App-owned Studio MCP server and its registered tool inventory.' },
+      info: { id: 'studio', label: 'This App', kind: 'app', description: 'MCP servers provided by this app, plus its registered tool inventory.' },
       sources: [], notices: [],
     },
   ];

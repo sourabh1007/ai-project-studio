@@ -368,7 +368,7 @@ describe('McpManager', () => {
     const api = client({
       getMcpServers: vi.fn().mockResolvedValue(makeConfig('agency', [
         { ...makeServer('user:ai-project-studio', 'studio'), displayName: 'AI Project Studio',
-          origin: 'app', providerLabel: 'This app', source: 'Inherited from Copilot user config' },
+          origin: 'app', providerLabel: 'This App', source: 'Inherited from Copilot user config' },
         { ...makeServer('native:ado', 'agency'), displayName: 'ado', origin: 'agency-built-in', builtinName: 'ado' },
         { ...makeServer('user:my-server', 'server'), displayName: 'My server', origin: 'custom' },
       ])),
@@ -376,7 +376,7 @@ describe('McpManager', () => {
     renderManager(api);
     const appSection = await screen.findByRole('region', { name: 'App MCP servers' });
     expect(within(appSection).getByText('AI Project Studio')).toBeInTheDocument();
-    expect(within(appSection).getByText('This app')).toBeInTheDocument();
+    expect(within(appSection).getByText('This App')).toBeInTheDocument();
     expect(within(appSection).queryByText('Agency')).toBeNull();
     expect(within(screen.getByRole('region', { name: 'Agency built-in MCP servers' })).getByText('ado')).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Custom MCP servers' })).getByText('My server')).toBeInTheDocument();
@@ -510,8 +510,8 @@ describe('McpManager', () => {
 
   it('lists distinct CLI and app categories without probing or mutating any server on load', async () => {
     const categories = [
-      { id: 'copilot', label: 'Copilot CLI' }, { id: 'agency', label: 'Agency' },
-      { id: 'claude', label: 'Claude Code' }, { id: 'studio', label: 'This app' },
+      { id: 'copilot', label: 'Copilot' }, { id: 'agency', label: 'Agency CLI' },
+      { id: 'claude', label: 'Claude Code' }, { id: 'studio', label: 'This App' },
     ];
     const api = client({
       listMcpProviders: vi.fn().mockResolvedValue(categories),
@@ -545,7 +545,7 @@ describe('McpManager', () => {
       source: 'App tool definitions', scope: 'App-owned', capabilities: readOnly,
     };
     const api = client({
-      listMcpProviders: vi.fn().mockResolvedValue([{ id: 'studio', label: 'This app', kind: 'app', capabilities: readOnly }]),
+      listMcpProviders: vi.fn().mockResolvedValue([{ id: 'studio', label: 'This App', kind: 'app', capabilities: readOnly }]),
       getMcpServers: vi.fn().mockResolvedValue({ ...makeConfig('studio', [entry]), capabilities: readOnly }),
       inspectMcpServer: vi.fn().mockResolvedValue({
         ...entry, tools: [{ name: 'read_status', enabled: true, description: 'Status' }],

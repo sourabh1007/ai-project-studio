@@ -39,7 +39,7 @@ import { McpToolsView } from './mcp-tools-view.js';
 import { McpAuthenticationBatch } from './mcp-authentication-batch.js';
 
 const SERVER_SECTIONS = [
-  { origin: 'app', title: 'App MCP servers', label: 'This app' },
+  { origin: 'app', title: 'App MCP servers', label: 'This App' },
   { origin: 'agency-built-in', title: 'Agency built-in MCP servers', label: 'Agency' },
   { origin: 'custom', title: 'Custom MCP servers', label: 'Custom' },
 ] as const;

@@ -255,7 +255,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     return {
       name: deps.studio.name, displayName: 'AI Project Studio', source: 'App-owned launch configuration',
       scope: 'app', enabled: true, spec: deps.studio.spec,
-      origin: 'app', providerLabel: 'This app',
+      origin: 'app', providerLabel: 'This App',
       capabilities: capabilities(Object.fromEntries(OPERATIONS.map((op) => [op, op === 'tools' ? null : LIFECYCLE_NOTICE]))),
       tools: deps.studio.tools,
       toolDiscovery: { status: 'skipped', message: 'App tool inventory; no connection probe was performed. Check status explicitly to verify the bridge.', output: [] },
@@ -325,7 +325,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
           }
           if (name === deps.studio.name) {
             entry.origin = 'app';
-            entry.providerLabel = 'This app';
+            entry.providerLabel = 'This App';
             delete entry.builtinName;
             entry.spec = deps.studio.spec;
             entry.capabilities = studioEntry().capabilities;
