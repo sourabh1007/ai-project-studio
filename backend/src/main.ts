@@ -2160,11 +2160,23 @@ function main(): void {
   // all read through this identity-aware view so no Agency metasession ever runs
   // — and none is ever displayed — without a Microsoft identity. Writes pass
   // through unchanged (persistence keeps the user's real choice).
+  //
+  // Until the user explicitly picks a provider, the metasession tracks the live
+  // default provider instead of the static config seed, so Agency becomes the
+  // default as soon as it is available (Microsoft identity + installed) and
+  // falls back to Copilot otherwise — matching session launch defaults. An
+  // explicit choice (persisted override) always wins, subject to the exposure
+  // degrade above.
+  const metaProviderExplicitlyChosen = () =>
+    (configOverrideService.getOverride(META_NAMESPACE) as { providerId?: unknown }).providerId !== undefined;
   const exposedMetaSettings = {
     get: () => {
       const value = metaSettings.get();
-      return isProviderExposed(value.providerId, microsoftIdentity.isSignedIn())
-        ? value
+      const providerId = metaProviderExplicitlyChosen()
+        ? value.providerId
+        : resolverConfig.defaultProvider;
+      return isProviderExposed(providerId, microsoftIdentity.isSignedIn())
+        ? { ...value, providerId }
         : { ...value, providerId: resolverConfig.defaultProvider };
     },
     set: (patch: Partial<ReturnType<typeof metaSettings.get>>) => metaSettings.set(patch),
