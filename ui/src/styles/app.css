@@ -7775,15 +7775,20 @@ body.is-resizing {
   background: #ffffff;
 }
 
-[data-theme='light'] .terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--accent) 34%, transparent);
-  background-clip: padding-box;
-}
-
 .terminal-host .xterm {
   height: 100%;
   max-height: none;
   overflow: visible;
+}
+
+/* xterm.css forces `.xterm-viewport { overflow-y: scroll; background: #000 }`,
+   which renders a permanent, hard-edged scrollbar bar ("pipe") down the right
+   edge even when nothing is scrolled, and clashes with non-black themes. Make it
+   a modern overlay scrollbar: transparent track/gutter, and a floating capsule
+   thumb that is invisible at rest and fades in only while the terminal is
+   hovered (or the thumb itself is active). */
+.terminal-host .xterm-viewport {
+  background-color: transparent !important;
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar {
@@ -7795,11 +7800,17 @@ body.is-resizing {
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
+  background: transparent;
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
   transition: background-color var(--transition-fast);
+}
+
+.terminal-host:hover .xterm-viewport::-webkit-scrollbar-thumb,
+.terminal-host .xterm-viewport:hover::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
 }
 
 .terminal-host .xterm-viewport::-webkit-scrollbar-thumb:hover,
