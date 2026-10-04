@@ -1741,6 +1741,7 @@ body.is-resizing {
   border-left: 1px solid var(--border-strong);
   background: var(--surface);
   overflow: hidden;
+  transition: width var(--transition-med);
 }
 
 .history-pane.is-collapsed {
@@ -1784,6 +1785,7 @@ body.is-resizing {
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  animation: metasession-history-in var(--transition-med) var(--ease-smooth) both;
 }
 
 .history-pane-header {
@@ -16330,6 +16332,53 @@ body.is-resizing {
   min-width: 80px;
   text-align: right;
   font-size: 12px;
+}
+
+.usage-provider-graph {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.usage-provider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 13px;
+}
+
+.usage-provider-label {
+  flex: none;
+  width: 92px;
+  min-width: 92px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.usage-provider-bar {
+  flex: 1;
+  min-width: 48px;
+  height: 8px;
+}
+
+.usage-provider-bar .dash-bar-fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 70%, transparent),
+    var(--accent)
+  );
+  transition: width var(--transition-med);
+}
+
+.usage-provider-value {
+  flex: none;
+  min-width: 56px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .usage-table {

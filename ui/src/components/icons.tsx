@@ -87,7 +87,7 @@ export function ChevronIcon({
       className={className}
       style={{
         transform: open ? 'rotate(90deg)' : 'none',
-        transition: 'transform 140ms ease',
+        transition: 'transform var(--transition-med)',
       }}
       aria-hidden
     />
