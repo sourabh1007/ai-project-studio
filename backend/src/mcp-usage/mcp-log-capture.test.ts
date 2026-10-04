@@ -97,21 +97,21 @@ describe('bounded MCP log reconciliation', () => {
     await capture.tick();
     expect(deps.logger.warn).toHaveBeenCalledOnce();
   });
-  it('warns once per partial source until it reads cleanly, then re-arms', async () => {
+  it('warns at most once per partial source for the process lifetime', async () => {
     const { deps, capture } = fixture();
     const oversized = { ...page([JSON.stringify(event())]), oversized: true };
     vi.mocked(deps.reader.read)
-      .mockResolvedValueOnce(oversized) // enters partial -> warns
+      .mockResolvedValueOnce(oversized) // enters partial -> warns once
       .mockResolvedValueOnce(oversized) // still partial -> suppressed
-      .mockResolvedValueOnce(page()) // clean read -> re-arms
-      .mockResolvedValueOnce(oversized); // partial again -> warns
+      .mockResolvedValueOnce(page()) // clean read -> does NOT re-arm
+      .mockResolvedValueOnce(oversized); // partial again -> still suppressed
     await capture.tick();
     await capture.tick();
     await capture.tick();
     await capture.tick();
     const partialWarnings = vi.mocked(deps.logger.warn).mock.calls
       .filter(([message]) => message === 'MCP usage log capture is partial');
-    expect(partialWarnings).toHaveLength(2);
+    expect(partialWarnings).toHaveLength(1);
   });
   it('retries from the last checkpoint after a sink failure, allowing durable deduplication', async () => {
     const { deps, capture } = fixture();

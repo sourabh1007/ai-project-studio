@@ -77,10 +77,13 @@ export interface McpLogCaptureDeps {
  */
 export function createMcpLogCapture(deps: McpLogCaptureDeps) {
   const cursors = new Map<string, McpLogCursor>();
-  // Sources currently in a partial state (oversized/malformed/unattributed). Used
-  // to log the "partial" warning only on the transition into that state, so a
-  // source that stays partial across ticks (or is replayed from offset 0 after a
-  // restart) does not flood the console; it re-arms once it reads cleanly again.
+  // Sources already reported as partial (oversized/malformed/unattributed). We
+  // warn at most once per source for the lifetime of the process: the signal is
+  // "this source drops some records", which does not change by repeating. Without
+  // this, a session log containing several >maxBytes lines (common when replaying
+  // history from offset 0 after a restart) would warn once per huge line, and a
+  // source that alternates oversized/clean pages would flood the console. Entries
+  // are pruned only when the source's cursor is evicted below.
   const partialSources = new Set<string>();
   let after = '';
   let running = false;
@@ -112,15 +115,11 @@ export function createMcpLogCapture(deps: McpLogCaptureDeps) {
                 callId: JSON.stringify([source.sessionId, call.callId]),
               });
             }
-            if (page.oversized || malformed || unattributed) {
-              if (!partialSources.has(source.key)) {
-                partialSources.add(source.key);
-                deps.logger.warn('MCP usage log capture is partial', {
-                  source: source.key, oversized: page.oversized, malformed, unattributed,
-                });
-              }
-            } else {
-              partialSources.delete(source.key);
+            if ((page.oversized || malformed || unattributed) && !partialSources.has(source.key)) {
+              partialSources.add(source.key);
+              deps.logger.warn('MCP usage log capture is partial', {
+                source: source.key, oversized: page.oversized, malformed, unattributed,
+              });
             }
             cursors.delete(source.key);
             cursors.set(source.key, page.cursor);
