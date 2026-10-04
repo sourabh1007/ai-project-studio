@@ -2541,7 +2541,11 @@ function main(): void {
       now: () => clock.now().getTime(),
       ttlMs: mcpConfig.optionsCacheTtlMs ?? mcpDefaults.optionsCacheTtlMs!,
       maxConcurrent: 2,
-    })),
+    }))
+      // Claude Code is never offered in this IDE (Copilot/Agency only), so the
+      // category is dropped from the manager surface while its generic service
+      // behaviour stays exercised by createMcpCategories tests.
+      .filter((category) => category.info.id !== 'claude'),
     enabled: () => mcpConfig.enabled,
     tools: createMcpToolInspector(),
     probeTimeoutMs: mcpConfig.discoveryTimeoutMs,
