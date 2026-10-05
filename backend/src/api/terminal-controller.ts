@@ -50,7 +50,12 @@ export function createTerminalRoutes(deps: TerminalControllerDeps): Route[] {
           prompt: '',
         });
         deps.sessions.save(session);
-        return { status: 201, body: session };
+        // Return the persisted row, not the in-memory object: the creation
+        // ordinal (`seq`) is assigned by the database on insert, so the UI needs
+        // the re-read row to label the tab with the same "Session #N" the
+        // explorer shows. Returning `session` here would omit `seq` and force
+        // the UI onto a positional fallback, mismatching the explorer row.
+        return { status: 201, body: deps.sessions.get(session.id) ?? session };
       },
     },
   ];

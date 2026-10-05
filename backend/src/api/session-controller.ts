@@ -101,7 +101,14 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
         launched.completion.catch((error) =>
           deps.logger.error('Session run failed', error),
         );
-        return { status: 202, body: launched.session };
+        // `session.started` persists the row synchronously during `start()`, so
+        // re-read it to return the database-assigned creation ordinal (`seq`).
+        // The in-memory `launched.session` lacks `seq`, which would push the UI
+        // onto a positional tab label that disagrees with the explorer row.
+        return {
+          status: 202,
+          body: deps.sessions.get(launched.session.id) ?? launched.session,
+        };
       },
     },
     {

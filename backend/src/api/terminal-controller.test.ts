@@ -37,7 +37,7 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
 }
 
-function harness(ready = true) {
+function harness(ready = true, persisted?: Session | null) {
   const registry = createProviderRegistry();
   registry.register(provider());
   const resolver = createProviderResolver(registry, {
@@ -52,7 +52,7 @@ function harness(ready = true) {
   const saved: Session[] = [];
   const sessions = {
     save: (s: Session) => saved.push(s),
-    get: () => null,
+    get: () => (persisted === undefined ? null : persisted),
     listByFeature: () => [],
   } as unknown as SessionRepo;
   const routes = createTerminalRoutes({
@@ -89,6 +89,34 @@ describe('terminal-controller', () => {
     expect(session.status).toBe('created');
     expect(session.prompt).toBe('');
     expect(h.saved).toHaveLength(1);
+  });
+
+  it('returns the persisted row carrying the database-assigned ordinal', async () => {
+    const persisted = {
+      id: 'sess-1',
+      featureId: 'feat-1',
+      name: null,
+      provider: 'copilot',
+      requestedModel: 'gpt-5.4',
+      resolvedModel: null,
+      status: 'created',
+      kind: 'dev',
+      prompt: '',
+      usageFilePath: 'u.jsonl',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      startedAt: null,
+      endedAt: null,
+      exitCode: null,
+      seq: 1021,
+    } as Session;
+    const h = harness(true, persisted);
+    const result = await pick(
+      h.routes,
+      'post',
+      '/features/:featureId/terminal-sessions',
+    )(req({ params: { featureId: 'feat-1' }, body: { model: 'gpt-5.4' } }));
+
+    expect((result.body as Session).seq).toBe(1021);
   });
 
   it('applies the default kind and resolves the default provider/model', async () => {

@@ -48,6 +48,7 @@ function harness(
     resolveCwd?: (featureId: string) => string | undefined;
     resolveEnvironment?: (featureId: string) => Promise<{ cwd: string | null; branch: string | null }>;
     relaunchSession?: (session: Session) => Promise<void>;
+    getResult?: Session | null;
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
@@ -73,7 +74,12 @@ function harness(
         { ...session, id: 'meta1', featureId: id, kind: 'meta', prompt: '' },
       ]),
     ],
-    get: (id: string) => (id === 's1' ? session : null),
+    get: (id: string) =>
+      id === 's1'
+        ? 'getResult' in options
+          ? options.getResult ?? null
+          : session
+        : null,
   } as unknown as SessionRepo;
   const deleted: string[] = [];
   const renamed: Array<{ id: string; name: string | null }> = [];
@@ -146,6 +152,24 @@ describe('session-controller', () => {
       model: 'gpt-5.4-mini',
       signal,
     });
+  });
+
+  it('returns the persisted row so the tab ordinal matches the explorer', async () => {
+    const persisted = { ...session, seq: 1021 };
+    const h = harness(Promise.resolve(session), undefined, { getResult: persisted });
+    const result = await pick(h.routes, 'post', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'f1' }, body: { prompt: 'hello' }, signal: new AbortController().signal }),
+    );
+    expect(result.status).toBe(202);
+    expect((result.body as Session).seq).toBe(1021);
+  });
+
+  it('falls back to the launched session when the row is not yet readable', async () => {
+    const h = harness(Promise.resolve(session), undefined, { getResult: null });
+    const result = await pick(h.routes, 'post', '/features/:featureId/sessions')(
+      req({ params: { featureId: 'f1' }, body: { prompt: 'hello' }, signal: new AbortController().signal }),
+    );
+    expect(result.body).toBe(session);
   });
 
   it('pins the launch cwd to the resolved feature worktree, overriding client cwd', async () => {
