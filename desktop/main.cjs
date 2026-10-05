@@ -699,9 +699,14 @@ function showAboutDialog(win) {
 }
 
 /**
- * Copy/paste shortcuts belong to the renderer/browser, not a second registered
- * menu accelerator. Menu clicks still dispatch the native editing event. The
- * terminal's capture listeners own those events; cut remains Chromium-owned.
+ * Copy/paste shortcuts belong entirely to the renderer/browser, so these Edit
+ * entries carry NO keyboard accelerator. On Windows an `accelerator` with
+ * `registerAccelerator: false` still fires the menu item's click on the
+ * keystroke (electron/electron#18295); for Paste that dispatches a SECOND
+ * trusted `paste` event on top of the renderer's own handling, which is the
+ * terminal's intermittent double-paste. Mouse menu clicks still dispatch the
+ * native editing event once; the terminal's capture listeners own those
+ * events, and cut remains Chromium-owned.
  */
 function installApplicationMenu() {
   const isMac = process.platform === 'darwin';
@@ -712,21 +717,15 @@ function installApplicationMenu() {
     { role: 'cut' },
     {
       label: 'Copy',
-      accelerator: 'CmdOrCtrl+C',
-      registerAccelerator: false,
       click: (_item, win) => win?.webContents.copy(),
     },
-    // Paste without a registered accelerator — see the doc comment above.
+    // No accelerator — keyboard paste is owned by the renderer (see above).
     {
       label: 'Paste',
-      accelerator: 'CmdOrCtrl+V',
-      registerAccelerator: false,
       click: (_item, win) => win?.webContents.paste(),
     },
     {
       label: 'Paste and Match Style',
-      accelerator: 'CmdOrCtrl+Shift+V',
-      registerAccelerator: false,
       click: (_item, win) => win?.webContents.pasteAndMatchStyle(),
     },
     { role: 'delete' },

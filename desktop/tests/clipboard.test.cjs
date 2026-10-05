@@ -92,7 +92,10 @@ test('copy/paste menu shortcuts do not register competing accelerator owners', (
   });
   for (const label of ['Copy', 'Paste', 'Paste and Match Style']) {
     const item = template.find((entry) => entry.label === label);
-    assert.equal(item.registerAccelerator, false);
+    // No keyboard accelerator at all: the renderer owns Ctrl+C/V, so the menu
+    // must not fire a second native edit command on the keystroke (the Windows
+    // double-paste, electron/electron#18295).
+    assert.equal(item.accelerator, undefined);
     let invoked = 0;
     const method = label === 'Copy' ? 'copy' : label === 'Paste' ? 'paste' : 'pasteAndMatchStyle';
     item.click(null, { webContents: { [method]: () => { invoked++; } } });
