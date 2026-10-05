@@ -75,7 +75,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
        scope, prompt, usage_file_path, created_at, started_at, ended_at, exit_code, name,
        group_id, order_index, worktree_path, branch, seq)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       (SELECT COALESCE(MAX(seq), 0) + 1 FROM sessions))
+       CASE WHEN ? = 'feature'
+         THEN (SELECT COALESCE(MAX(seq), 0) + 1 FROM sessions WHERE scope = 'feature')
+         ELSE NULL END)
      ON CONFLICT(id) DO UPDATE SET
        feature_id = excluded.feature_id,
        provider = excluded.provider,
@@ -138,6 +140,10 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
         intOrNull(session.orderIndex) ?? 0,
         textOrNull(session.worktreePath),
         textOrNull(session.branch),
+        // Scope again for the seq CASE: hidden (internal) sessions get a NULL
+        // ordinal so they never consume a user-visible "Session #N"; only
+        // feature-scoped sessions advance the displayed sequence.
+        session.scope ?? 'feature',
       );
     },
     get(id) {

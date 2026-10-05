@@ -348,6 +348,21 @@ describe('session-repo', () => {
     db.close();
   });
 
+  it('gives hidden internal sessions a NULL seq and skips the visible ordinal', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session({ id: 'v1' }));
+    repo.save(session({ id: 'meta', scope: 'internal', kind: 'meta' }));
+    repo.save(session({ id: 'v2' }));
+
+    // The hidden session consumes no number...
+    expect(repo.get('meta')?.seq).toBeNull();
+    // ...so the two visible sessions stay contiguous (1, 2), not (1, 3).
+    expect(repo.get('v1')?.seq).toBe(1);
+    expect(repo.get('v2')?.seq).toBe(2);
+    db.close();
+  });
+
   it('persists a name on save and renames it in place', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const repo = createSessionRepo(db);

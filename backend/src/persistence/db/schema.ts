@@ -2012,21 +2012,28 @@ const MANAGED_MIGRATIONS: readonly ManagedMigration[] = [
 ];
 
 /**
- * Assigns the immutable creation ordinal (`seq`) to any session rows that
- * predate the column. Runs once per database: after every legacy row has a
- * value, `MAX(seq)` covers them all and this becomes a no-op. New rows get
- * their `seq` at insert time in the session repo, so this only bootstraps the
- * historical rows in stable creation order (created_at, then id as a tiebreak).
+ * Assigns the immutable creation ordinal (`seq`) to any *visible*
+ * (feature-scoped) session rows that predate the column. Hidden
+ * (internal/meta) sessions are intentionally left with a NULL `seq` so they
+ * never consume a user-facing "Session #N" number; only feature-scoped
+ * sessions carry the ordinal. Runs once per database: after every legacy
+ * feature row has a value this becomes a no-op. New rows get their `seq` at
+ * insert time in the session repo, so this only bootstraps the historical
+ * feature rows in stable creation order (created_at, then id as a tiebreak).
  */
 function backfillSessionSeq(db: DatabaseSync): void {
   const pending = db
-    .prepare('SELECT id FROM sessions WHERE seq IS NULL ORDER BY created_at, id')
+    .prepare(
+      "SELECT id FROM sessions WHERE seq IS NULL AND scope = 'feature' ORDER BY created_at, id",
+    )
     .all() as unknown as { id: string }[];
   if (pending.length === 0) {
     return;
   }
   const maxRow = db
-    .prepare('SELECT COALESCE(MAX(seq), 0) AS max FROM sessions')
+    .prepare(
+      "SELECT COALESCE(MAX(seq), 0) AS max FROM sessions WHERE scope = 'feature'",
+    )
     .get() as unknown as { max: number };
   const assign = db.prepare('UPDATE sessions SET seq = ? WHERE id = ?');
   let next = maxRow.max;
