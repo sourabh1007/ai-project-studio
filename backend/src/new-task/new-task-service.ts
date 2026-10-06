@@ -180,7 +180,7 @@ export function createNewTaskService(
         // A shipped task has an open PR; there is nothing to cancel or reset.
         return run;
       }
-      return touch(run, { status: 'draft', plan: null, error: null });
+      return touch(run, { status: 'draft', plan: null, planLog: [], error: null });
     },
 
     async fileDiff(attachmentId, path) {
@@ -226,6 +226,7 @@ export function createNewTaskService(
           problem,
           context,
           plan: null,
+          planLog: [],
           status: 'draft',
           error: null,
         });
@@ -243,6 +244,7 @@ export function createNewTaskService(
         reviewFeatureId: null,
         error: null,
         agents: [],
+        planLog: [],
         createdAt: now,
         updatedAt: now,
       };
@@ -362,6 +364,10 @@ export function createNewTaskService(
           line: `🌿 Working on branch ${worktree.branch}.`,
         });
         const plannerStartedMs = deps.clock.now().getTime();
+        // Capture the planner's analysis trail so a revisited planned run can
+        // replay how the plan was reached (the live log is otherwise lost once
+        // the run settles).
+        const planLog: string[] = [];
         const result = await deps.ai.runDetailed({
           featureId: run.featureId,
           prompt: planPrompt,
@@ -378,6 +384,7 @@ export function createNewTaskService(
           timeoutMs: deps.config.planTimeoutMs,
           signal,
           onActivity: (line) => {
+            planLog.push(line);
             emit(run, 'planning', line, 'planner');
             sink?.activity({ phase: 'planning', line, agentId: 'planner' });
           },
@@ -391,6 +398,7 @@ export function createNewTaskService(
           plan: result.text.trim(),
           status: 'planned',
           agents: [planner],
+          planLog,
         });
         sink?.done(planned);
         return planned;

@@ -1146,6 +1146,13 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     () => agentList.filter((agent) => agent.role === 'planner'),
     [agentList],
   );
+  // The analysis timeline prefers the live stream, but a revisited/reloaded
+  // planned run has no live state — fall back to the persisted `planLog` so the
+  // "steps it took to come up with the plan" still render.
+  const analysisLines = useMemo(
+    () => (planLog.length > 0 ? planLog : (run?.planLog ?? [])),
+    [planLog, run?.planLog],
+  );
   const teamAgents = useMemo(
     () => agentList.filter((agent) => agent.role !== 'planner'),
     [agentList],
@@ -1374,7 +1381,7 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
               onOpenFile={openFile}
             />
             <PlanAnalysisTimeline
-              lines={planLog}
+              lines={analysisLines}
               busy={planning}
               ready={hasPlan}
             />

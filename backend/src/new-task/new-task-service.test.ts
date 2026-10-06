@@ -153,7 +153,7 @@ describe('deriveTitle / derivePrBody', () => {
     const base: NewTaskRun = {
       id: 'a1', featureId: 'f1', problem: 'P', context: 'CTX', plan: 'PLAN',
       status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [],
+      reviewFeatureId: null, error: null, agents: [], planLog: [],
       createdAt: 't', updatedAt: 't',
     };
     const body = derivePrBody(base);
@@ -173,7 +173,7 @@ describe('deriveTitle / derivePrBody', () => {
     const base: NewTaskRun = {
       id: 'a1', featureId: 'f1', problem: 'P', context: '', plan: 'x'.repeat(20_000),
       status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [],
+      reviewFeatureId: null, error: null, agents: [], planLog: [],
       createdAt: 't', updatedAt: 't',
     };
     const body = derivePrBody(base);
@@ -185,7 +185,7 @@ describe('deriveTitle / derivePrBody', () => {
     const base: NewTaskRun = {
       id: 'a1', featureId: 'f1', problem: 'P'.repeat(5000), context: '', plan: 'PLAN',
       status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [],
+      reviewFeatureId: null, error: null, agents: [], planLog: [],
       createdAt: 't', updatedAt: 't',
     };
     const body = derivePrBody(base);
@@ -251,6 +251,24 @@ describe('new-task-service plan', () => {
     expect(run.plan).toBe('GENERATED');
     expect(run.branch).toBe('copilot/new-task-a1');
     expect(events).toContainEqual({ phase: 'planning', line: 'working…' });
+  });
+
+  it('persists the analysis trail so a revisited run can replay it', async () => {
+    const { service } = harness();
+    service.saveInputs('a1', 'f1', { problem: 'P', context: '' });
+    await service.plan('a1');
+    // The persisted run (what a reopened wizard reads) keeps the planner's
+    // streamed steps even though no live stream is attached.
+    expect(service.get('a1')!.planLog).toContain('working…');
+  });
+
+  it('clears a stale analysis trail when inputs are re-edited', async () => {
+    const { service } = harness();
+    service.saveInputs('a1', 'f1', { problem: 'P', context: '' });
+    await service.plan('a1');
+    expect(service.get('a1')!.planLog.length).toBeGreaterThan(0);
+    const reset = service.saveInputs('a1', 'f1', { problem: 'P2', context: '' });
+    expect(reset.planLog).toEqual([]);
   });
 
   it('marks the run failed and rethrows on planner error', async () => {

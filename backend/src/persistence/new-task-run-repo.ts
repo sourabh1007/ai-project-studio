@@ -19,6 +19,7 @@ interface NewTaskRunRow {
   review_feature_id: string | null;
   error: string | null;
   agents: string | null;
+  plan_log: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +32,21 @@ function parseAgents(raw: string | null): NewTaskAgent[] {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as NewTaskAgent[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Parse the persisted plan-log JSON array of strings, tolerating bad values. */
+function parsePlanLog(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((line): line is string => typeof line === 'string')
+      : [];
   } catch {
     return [];
   }
@@ -50,6 +66,7 @@ function mapRun(row: NewTaskRunRow): NewTaskRun {
     reviewFeatureId: row.review_feature_id,
     error: row.error,
     agents: parseAgents(row.agents),
+    planLog: parsePlanLog(row.plan_log),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -61,14 +78,14 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
   const insert = db.prepare(
     `INSERT INTO new_task_runs (
       id, feature_id, problem, context, plan, status, branch,
-      pr_number, pr_url, review_feature_id, error, agents, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      pr_number, pr_url, review_feature_id, error, agents, plan_log, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE new_task_runs SET
       feature_id = ?, problem = ?, context = ?, plan = ?, status = ?,
       branch = ?, pr_number = ?, pr_url = ?, review_feature_id = ?,
-      error = ?, agents = ?, updated_at = ?
+      error = ?, agents = ?, plan_log = ?, updated_at = ?
     WHERE id = ?`,
   );
   const deleteById = db.prepare('DELETE FROM new_task_runs WHERE id = ?');
@@ -95,6 +112,7 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
         run.reviewFeatureId,
         run.error,
         JSON.stringify(run.agents ?? []),
+        JSON.stringify(run.planLog ?? []),
         run.createdAt,
         run.updatedAt,
       );
@@ -112,6 +130,7 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
         run.reviewFeatureId,
         run.error,
         JSON.stringify(run.agents ?? []),
+        JSON.stringify(run.planLog ?? []),
         run.updatedAt,
         run.id,
       );

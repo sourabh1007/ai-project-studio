@@ -348,6 +348,7 @@ const CORE_TABLES: readonly TableSchema[] = [
     review_feature_id TEXT,
     error TEXT,
     agents TEXT,
+    plan_log TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -1087,6 +1088,14 @@ const ADDED_COLUMNS: readonly {
     table: 'new_task_runs',
     column: 'agents',
     ddl: 'ALTER TABLE new_task_runs ADD COLUMN agents TEXT',
+  },
+  {
+    // The planner's analysis trail (streamed reasoning / tool calls), stored as
+    // a JSON string array so a revisited planned run can replay how it was
+    // reached. Nullable: older runs have none.
+    table: 'new_task_runs',
+    column: 'plan_log',
+    ddl: 'ALTER TABLE new_task_runs ADD COLUMN plan_log TEXT',
   },
   {
     // Extra free-form information the user supplies on the describe step, folded

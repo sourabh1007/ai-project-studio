@@ -19,6 +19,7 @@ const RUN: NewTaskRun = {
   reviewFeatureId: null,
   error: null,
   agents: [],
+  planLog: [],
   createdAt: 't',
   updatedAt: 't',
 };

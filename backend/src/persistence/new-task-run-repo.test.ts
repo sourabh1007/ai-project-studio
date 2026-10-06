@@ -17,6 +17,7 @@ function run(overrides: Partial<NewTaskRun> = {}): NewTaskRun {
     reviewFeatureId: null,
     error: null,
     agents: [],
+    planLog: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -99,6 +100,40 @@ describe('new-task-run-repo', () => {
     expect(r.get('a1')!.agents).toEqual([]);
     r.update(run({ agents: undefined as unknown as NewTaskRun['agents'] }));
     expect(r.get('a1')!.agents).toEqual([]);
+    db.close();
+  });
+
+  it('persists and reads back a non-empty analysis trail', () => {
+    const { db, repo: r } = repo();
+    const planLog = ['🔧 Read src/app.ts', '🤔 Considering the flow', '💬 Plan'];
+    r.create(run({ planLog }));
+    expect(r.get('a1')!.planLog).toEqual(planLog);
+    db.close();
+  });
+
+  it('tolerates null, corrupt, non-array and non-string plan logs', () => {
+    const { db, repo: r } = repo();
+    r.create(run({ id: 'n' }));
+    r.create(run({ id: 'c' }));
+    r.create(run({ id: 'o' }));
+    r.create(run({ id: 'm' }));
+    db.exec("UPDATE new_task_runs SET plan_log = NULL WHERE id = 'n'");
+    db.exec("UPDATE new_task_runs SET plan_log = 'not json' WHERE id = 'c'");
+    db.exec("UPDATE new_task_runs SET plan_log = '{\"a\":1}' WHERE id = 'o'");
+    db.exec("UPDATE new_task_runs SET plan_log = '[\"ok\", 7, null]' WHERE id = 'm'");
+    expect(r.get('n')!.planLog).toEqual([]);
+    expect(r.get('c')!.planLog).toEqual([]);
+    expect(r.get('o')!.planLog).toEqual([]);
+    expect(r.get('m')!.planLog).toEqual(['ok']);
+    db.close();
+  });
+
+  it('defaults a missing analysis trail to an empty array on write', () => {
+    const { db, repo: r } = repo();
+    r.create(run({ planLog: undefined as unknown as NewTaskRun['planLog'] }));
+    expect(r.get('a1')!.planLog).toEqual([]);
+    r.update(run({ planLog: undefined as unknown as NewTaskRun['planLog'] }));
+    expect(r.get('a1')!.planLog).toEqual([]);
     db.close();
   });
 

@@ -64,6 +64,13 @@ export interface NewTaskRun {
    * team has run.
    */
   agents: NewTaskAgent[];
+  /**
+   * The planner's analysis trail — the discrete "steps it took" (streamed
+   * reasoning, tool calls, file reads) captured during the planning turn.
+   * Persisted so revisiting a planned run still shows how the plan was reached;
+   * the UI renders it as the animated analysis timeline. Empty before planning.
+   */
+  planLog: string[];
   createdAt: string;
   updatedAt: string;
 }

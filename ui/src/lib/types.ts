@@ -744,6 +744,8 @@ export interface NewTaskRun {
   reviewFeatureId: string | null;
   error: string | null;
   agents: NewTaskAgent[];
+  /** The planner's persisted analysis trail (steps taken to reach the plan). */
+  planLog: string[];
   createdAt: string;
   updatedAt: string;
 }
