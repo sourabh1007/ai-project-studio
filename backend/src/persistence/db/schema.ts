@@ -349,6 +349,8 @@ const CORE_TABLES: readonly TableSchema[] = [
     error TEXT,
     agents TEXT,
     plan_log TEXT,
+    title TEXT,
+    summary TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -1096,6 +1098,20 @@ const ADDED_COLUMNS: readonly {
     table: 'new_task_runs',
     column: 'plan_log',
     ddl: 'ALTER TABLE new_task_runs ADD COLUMN plan_log TEXT',
+  },
+  {
+    // The concise, planner-produced task title. It renames the task's feature
+    // and headlines the exported plan document. Nullable: older runs have none.
+    table: 'new_task_runs',
+    column: 'title',
+    ddl: 'ALTER TABLE new_task_runs ADD COLUMN title TEXT',
+  },
+  {
+    // The one-to-two sentence solution summary used as the pull request's
+    // "Solution" so the description stays concise. Nullable: older runs have none.
+    table: 'new_task_runs',
+    column: 'summary',
+    ddl: 'ALTER TABLE new_task_runs ADD COLUMN summary TEXT',
   },
   {
     // Extra free-form information the user supplies on the describe step, folded

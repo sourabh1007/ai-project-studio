@@ -18,6 +18,8 @@ function run(overrides: Partial<NewTaskRun> = {}): NewTaskRun {
     error: null,
     agents: [],
     planLog: [],
+    title: null,
+    summary: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -51,6 +53,8 @@ describe('new-task-run-repo', () => {
       prUrl: 'https://github.com/o/r/pull/42',
       reviewFeatureId: 'rf1',
       error: null,
+      title: 'Add the retry',
+      summary: 'Retries failed uploads.',
       updatedAt: '2026-01-02T00:00:00.000Z',
     });
     r.update(updated);

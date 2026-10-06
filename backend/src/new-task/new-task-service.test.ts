@@ -5,7 +5,9 @@ import {
   createNewTaskService,
   deriveTitle,
   derivePrBody,
+  buildPlanDoc,
   PR_BODY_MAX,
+  PLAN_DOC_PATH,
   type NewTaskServiceDeps,
 } from './new-task-service.js';
 import { newTaskDefaults } from './config.js';
@@ -33,6 +35,12 @@ function inMemoryRepo(): NewTaskServiceDeps['repo'] {
 function harness(overrides: Partial<NewTaskServiceDeps> = {}) {
   let tick = 0;
   const events: Array<{ phase: string; line: string }> = [];
+  const renames: Array<{ featureId: string; name: string }> = [];
+  const planDocWrites: Array<{
+    worktreePath: string;
+    path: string;
+    content: string;
+  }> = [];
   const deps: NewTaskServiceDeps = {
     repo: inMemoryRepo(),
     workspace: {
@@ -58,6 +66,12 @@ function harness(overrides: Partial<NewTaskServiceDeps> = {}) {
     },
     reviews: {
       makeEligible: async ({ featureId }) => featureId,
+    },
+    feature: {
+      rename: (featureId, name) => void renames.push({ featureId, name }),
+    },
+    planDoc: {
+      write: async (input) => void planDocWrites.push(input),
     },
     config: newTaskDefaults,
     clock: {
@@ -102,7 +116,13 @@ function harness(overrides: Partial<NewTaskServiceDeps> = {}) {
     },
     ...overrides,
   };
-  return { deps, events, service: createNewTaskService(deps) };
+  return {
+    deps,
+    events,
+    renames,
+    planDocWrites,
+    service: createNewTaskService(deps),
+  };
 }
 
 function sink(): NewTaskImplementSink & {
@@ -136,7 +156,15 @@ function sink(): NewTaskImplementSink & {
   };
 }
 
-describe('deriveTitle / derivePrBody', () => {
+describe('deriveTitle / derivePrBody / buildPlanDoc', () => {
+  const base: NewTaskRun = {
+    id: 'a1', featureId: 'f1', problem: 'P', context: 'CTX', plan: 'INLINEPLAN',
+    status: 'planned', branch: 'b', prNumber: null, prUrl: null,
+    reviewFeatureId: null, error: null, agents: [], planLog: [],
+    title: 'Fix the thing', summary: 'Adds a retry to the client.',
+    createdAt: 't', updatedAt: 't',
+  };
+
   it('takes the first non-empty problem line', () => {
     expect(deriveTitle('\n  Fix the login bug  \nmore')).toBe('Fix the login bug');
   });
@@ -149,48 +177,52 @@ describe('deriveTitle / derivePrBody', () => {
     expect(title.endsWith('…')).toBe(true);
   });
 
-  it('contains only the problem and the solution (the plan)', () => {
-    const base: NewTaskRun = {
-      id: 'a1', featureId: 'f1', problem: 'P', context: 'CTX', plan: 'PLAN',
-      status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [], planLog: [],
-      createdAt: 't', updatedAt: 't',
-    };
+  it('carries the problem, the solution summary, and a plan-doc pointer', () => {
     const body = derivePrBody(base);
     expect(body).toContain('## Problem');
     expect(body).toContain('P');
     expect(body).toContain('## Solution');
-    expect(body).toContain('PLAN');
+    expect(body).toContain('Adds a retry to the client.');
+    // The full plan does NOT appear inline; only the summary + a pointer do.
+    expect(body).not.toContain('INLINEPLAN');
+    expect(body).toContain(PLAN_DOC_PATH);
     // Nothing beyond the problem and solution belongs in the description.
     expect(body).not.toContain('## Context');
     expect(body).not.toContain('CTX');
-    expect(body).not.toContain('## Changed files');
-    expect(body).not.toContain('Opened by the New Task agent');
-    expect(derivePrBody({ ...base, plan: null })).toContain('## Solution');
   });
 
-  it('truncates a long plan to stay under the PR description limit', () => {
-    const base: NewTaskRun = {
-      id: 'a1', featureId: 'f1', problem: 'P', context: '', plan: 'x'.repeat(20_000),
-      status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [], planLog: [],
-      createdAt: 't', updatedAt: 't',
-    };
-    const body = derivePrBody(base);
-    expect(body.length).toBeLessThanOrEqual(PR_BODY_MAX);
-    expect(body).toContain('plan truncated');
+  it('falls back to the plan then a placeholder when there is no summary', () => {
+    expect(derivePrBody({ ...base, summary: null })).toContain('INLINEPLAN');
+    expect(
+      derivePrBody({ ...base, summary: null, plan: null }),
+    ).toContain('see the attached plan');
   });
 
-  it('hard-clamps even when the fixed sections alone overflow', () => {
-    const base: NewTaskRun = {
-      id: 'a1', featureId: 'f1', problem: 'P'.repeat(5000), context: '', plan: 'PLAN',
-      status: 'planned', branch: 'b', prNumber: null, prUrl: null,
-      reviewFeatureId: null, error: null, agents: [], planLog: [],
-      createdAt: 't', updatedAt: 't',
-    };
-    const body = derivePrBody(base);
+  it('shows a placeholder when the problem is blank', () => {
+    expect(derivePrBody({ ...base, problem: '   ' })).toContain('_(none)_');
+  });
+
+  it('keeps only the first paragraph of the problem and clamps a long one', () => {
+    const multi = derivePrBody({ ...base, problem: 'First para\n\nSecond para' });
+    expect(multi).toContain('First para');
+    expect(multi).not.toContain('Second para');
+    expect(derivePrBody({ ...base, problem: 'x'.repeat(700) })).toContain('…');
+  });
+
+  it('clamps an over-long summary to stay under the PR description limit', () => {
+    const body = derivePrBody({ ...base, summary: 'x'.repeat(20_000) });
     expect(body.length).toBeLessThanOrEqual(PR_BODY_MAX);
     expect(body.endsWith('…')).toBe(true);
+  });
+
+  it('builds a plan document headed by the task title', () => {
+    expect(buildPlanDoc(base)).toBe('# Fix the thing\n\nINLINEPLAN\n');
+    // Falls back to the derived problem title when none was produced.
+    expect(buildPlanDoc({ ...base, title: null, problem: 'Add caching' })).toBe(
+      '# Add caching\n\nINLINEPLAN\n',
+    );
+    // Tolerates a missing plan body.
+    expect(buildPlanDoc({ ...base, plan: null })).toBe('# Fix the thing\n\n\n');
   });
 });
 
@@ -342,6 +374,35 @@ describe('new-task-service plan', () => {
       credits: 2,
     });
     expect(run.agents[0].durationMs).not.toBeNull();
+  });
+
+  it('lifts the title + summary from the plan and renames the feature', async () => {
+    const { service, renames } = harness({
+      ai: {
+        runDetailed: async () => ({
+          text:
+            '## Overview\nDo it.\n' +
+            '<!--NEWTASK-META {"title":"Add upload retry","summary":"Retries failed uploads."} -->',
+          sessionId: 's1',
+        }),
+      },
+    });
+    service.saveInputs('a1', 'f1', { problem: 'P', context: '' });
+    const run = await service.plan('a1');
+    expect(run.title).toBe('Add upload retry');
+    expect(run.summary).toBe('Retries failed uploads.');
+    // The meta marker is stripped from the stored plan.
+    expect(run.plan).toBe('## Overview\nDo it.');
+    expect(renames).toEqual([{ featureId: 'f1', name: 'Add upload retry' }]);
+  });
+
+  it('falls back to the problem-derived title when the planner emits no meta', async () => {
+    const { service, renames } = harness();
+    service.saveInputs('a1', 'f1', { problem: 'Fix login', context: '' });
+    const run = await service.plan('a1');
+    expect(run.title).toBe('Fix login');
+    expect(run.summary).toBeNull();
+    expect(renames).toEqual([{ featureId: 'f1', name: 'Fix login' }]);
   });
 
   it('reports a planner failure through the sink instead of throwing', async () => {
@@ -744,7 +805,23 @@ describe('new-task-service implement', () => {
   });
 
   it('implements, opens a PR and becomes review-eligible', async () => {
-    const { service } = harness();
+    let prBody = '';
+    let prTitle = '';
+    const { service, planDocWrites } = harness({
+      ai: {
+        runDetailed: async () => ({
+          text: 'PLAN BODY\n<!--NEWTASK-META {"title":"Ship it","summary":"Does the thing."} -->',
+          sessionId: 's1',
+        }),
+      },
+      pr: {
+        create: async (input) => {
+          prBody = input.body;
+          prTitle = input.title;
+          return { number: 99, url: 'https://x/pull/99' };
+        },
+      },
+    });
     await planned(service);
     const s = sink();
     await service.implement('a1', s);
@@ -755,12 +832,45 @@ describe('new-task-service implement', () => {
       prUrl: 'https://x/pull/99',
       reviewFeatureId: 'f1',
     });
+    // The PR title/body use the planned title + summary, not the whole plan.
+    expect(prTitle).toBe('Ship it');
+    expect(prBody).toContain('Does the thing.');
+    expect(prBody).not.toContain('PLAN BODY');
+    expect(prBody).toContain(PLAN_DOC_PATH);
+    // The full plan is committed to the branch as a .md.
+    expect(planDocWrites).toEqual([
+      {
+        worktreePath: '/wt',
+        path: PLAN_DOC_PATH,
+        content: '# Ship it\n\nPLAN BODY\n',
+      },
+    ]);
     expect(s.activities.map((a) => a.phase)).toContain('creating-pr');
     expect(s.activities.at(-1)).toEqual({
       phase: 'done',
       line: 'Opened pull request #99.',
     });
     expect(service.get('a1')!.status).toBe('pr-created');
+  });
+
+  it('derives the PR title from the problem when the run has no title', async () => {
+    let prTitle = '';
+    const { service, deps, planDocWrites } = harness({
+      pr: {
+        create: async (input) => {
+          prTitle = input.title;
+          return { number: 99, url: 'https://x/pull/99' };
+        },
+      },
+    });
+    await planned(service);
+    // Simulate a legacy run with no planner-derived title.
+    deps.repo.update({ ...deps.repo.get('a1')!, title: null });
+    const s = sink();
+    await service.implement('a1', s);
+    expect(s.failure).toBeNull();
+    expect(prTitle).toBe('P');
+    expect(planDocWrites[0]!.content).toBe('# P\n\nGENERATED\n');
   });
 
   it('implements via the team, forwarding agents and persisting them', async () => {

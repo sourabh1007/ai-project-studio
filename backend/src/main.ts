@@ -3122,6 +3122,16 @@ function main(): void {
         return feature.id;
       },
     },
+    feature: {
+      rename: (featureId, name) => {
+        featureService.rename(featureId, name);
+      },
+    },
+    planDoc: {
+      write: async ({ worktreePath, path, content }) => {
+        writeFileSync(pathJoin(worktreePath, path), content, 'utf8');
+      },
+    },
     config: newTaskConfig,
     clock,
     ai: metaAi,

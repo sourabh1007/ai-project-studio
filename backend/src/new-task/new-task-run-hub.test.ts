@@ -20,6 +20,8 @@ const RUN: NewTaskRun = {
   error: null,
   agents: [],
   planLog: [],
+  title: null,
+  summary: null,
   createdAt: 't',
   updatedAt: 't',
 };

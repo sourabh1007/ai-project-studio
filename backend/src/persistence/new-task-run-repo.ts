@@ -20,6 +20,8 @@ interface NewTaskRunRow {
   error: string | null;
   agents: string | null;
   plan_log: string | null;
+  title: string | null;
+  summary: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +69,8 @@ function mapRun(row: NewTaskRunRow): NewTaskRun {
     error: row.error,
     agents: parseAgents(row.agents),
     planLog: parsePlanLog(row.plan_log),
+    title: row.title,
+    summary: row.summary,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -78,14 +82,15 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
   const insert = db.prepare(
     `INSERT INTO new_task_runs (
       id, feature_id, problem, context, plan, status, branch,
-      pr_number, pr_url, review_feature_id, error, agents, plan_log, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      pr_number, pr_url, review_feature_id, error, agents, plan_log,
+      title, summary, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE new_task_runs SET
       feature_id = ?, problem = ?, context = ?, plan = ?, status = ?,
       branch = ?, pr_number = ?, pr_url = ?, review_feature_id = ?,
-      error = ?, agents = ?, plan_log = ?, updated_at = ?
+      error = ?, agents = ?, plan_log = ?, title = ?, summary = ?, updated_at = ?
     WHERE id = ?`,
   );
   const deleteById = db.prepare('DELETE FROM new_task_runs WHERE id = ?');
@@ -113,6 +118,8 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
         run.error,
         JSON.stringify(run.agents ?? []),
         JSON.stringify(run.planLog ?? []),
+        run.title,
+        run.summary,
         run.createdAt,
         run.updatedAt,
       );
@@ -131,6 +138,8 @@ export function createNewTaskRunRepo(db: DatabaseSync): NewTaskRunRepo {
         run.error,
         JSON.stringify(run.agents ?? []),
         JSON.stringify(run.planLog ?? []),
+        run.title,
+        run.summary,
         run.updatedAt,
         run.id,
       );

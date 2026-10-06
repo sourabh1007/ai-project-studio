@@ -71,7 +71,62 @@ export const DEFAULT_PLAN_PROMPT_TEMPLATE = [
   'Rules: keep every step to a single line; ground each path in a file that',
   'actually exists (or a new file the plan clearly adds); stay focused on the',
   'stated problem — no unrelated work.',
+  '',
+  'Finally, as the VERY LAST line of your response, output a single machine-read',
+  'metadata comment EXACTLY in this form (and nothing after it):',
+  '<!--NEWTASK-META {"title":"<=72 char imperative task title","summary":"1-2 sentence plain-English summary of the solution"} -->',
+  'The title names the task (e.g. "Add retry to the upload client"); the summary',
+  'describes what the change does. Keep both concise and free of markdown.',
 ].join('\n');
+
+/**
+ * Marker the planner appends so the service can lift a concise title + solution
+ * summary out of the streamed plan. An HTML comment keeps it invisible in any
+ * markdown viewer if a stray copy survives.
+ */
+const PLAN_META_RE = /<!--\s*NEWTASK-META\s*(\{[\s\S]*?\})\s*-->/g;
+
+/** Strips every NEWTASK-META comment (even malformed ones) from the plan body. */
+const PLAN_META_STRIP_RE = /<!--\s*NEWTASK-META[\s\S]*?-->/g;
+
+/** The plan body plus the concise title/summary lifted from its meta trailer. */
+export interface PlanResult {
+  /** The plan markdown with the meta trailer removed. */
+  plan: string;
+  /** Concise task title, or null when the planner emitted none. */
+  title: string | null;
+  /** One-to-two sentence solution summary, or null when none was emitted. */
+  summary: string | null;
+}
+
+/**
+ * Lift the `NEWTASK-META` trailer (a title + solution summary) out of a planning
+ * turn's output and return the plan body with every such marker stripped. The
+ * last well-formed marker wins; malformed or absent markers degrade to null
+ * fields so planning never breaks on a bad turn.
+ */
+export function parsePlanResult(raw: string): PlanResult {
+  let title: string | null = null;
+  let summary: string | null = null;
+  for (const match of raw.matchAll(PLAN_META_RE)) {
+    try {
+      const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+      if (typeof parsed.title === 'string' && parsed.title.trim().length > 0) {
+        title = parsed.title.trim();
+      }
+      if (
+        typeof parsed.summary === 'string' &&
+        parsed.summary.trim().length > 0
+      ) {
+        summary = parsed.summary.trim();
+      }
+    } catch {
+      // Ignore a malformed marker and keep scanning for a valid one.
+    }
+  }
+  const plan = raw.replace(PLAN_META_STRIP_RE, '').trim();
+  return { plan, title, summary };
+}
 
 /**
  * The default implementation prompt. Placeholders: {{problem}}, {{context}},

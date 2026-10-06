@@ -71,6 +71,19 @@ export interface NewTaskRun {
    * the UI renders it as the animated analysis timeline. Empty before planning.
    */
   planLog: string[];
+  /**
+   * A concise, human-readable title for the task, produced by the planner
+   * during the planning turn (falling back to the problem's first line). It
+   * renames the task's feature so the workspace reflects the work, and is the
+   * heading used by the exported plan document. Null before planning.
+   */
+  title: string | null;
+  /**
+   * A one-to-two sentence summary of the solution, produced alongside the plan.
+   * Used as the pull request's "Solution" so the description stays concise while
+   * the full plan lives in a committed `.md` on the branch. Null before planning.
+   */
+  summary: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -232,6 +245,29 @@ export interface NewTaskReviewPort {
     prNumber: number;
     featureId: string;
   }): Promise<string>;
+}
+
+/**
+ * Renames the task's own feature once planning has produced a concise title, so
+ * the workspace (tab, headings) reflects the actual work instead of the
+ * placeholder the feature was created with.
+ */
+export interface NewTaskFeaturePort {
+  rename(featureId: string, name: string): void;
+}
+
+/**
+ * Writes the exported plan document into the run's worktree so it is committed
+ * on the branch alongside the change and is therefore attached to (visible
+ * from) the pull request. Thin fs adapter; keeps the service IO-free.
+ */
+export interface NewTaskPlanDocPort {
+  write(input: {
+    worktreePath: string;
+    /** Repo-relative path to write, e.g. `NEWTASK-PLAN.md`. */
+    path: string;
+    content: string;
+  }): Promise<void>;
 }
 
 /** The settled outcome of one plan refine-chat turn. */

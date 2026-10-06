@@ -8,6 +8,7 @@ import {
   buildReviewPrompt,
   buildWorkerPrompt,
   parseClarifyResponse,
+  parsePlanResult,
   DEFAULT_CLARIFY_PROMPT_TEMPLATE,
   DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   DEFAULT_IMPLEMENT_PROMPT_TEMPLATE,
@@ -33,6 +34,55 @@ describe('new-task-prompt', () => {
     expect(prompt).toContain('slow query');
     expect(prompt).toContain('on the dashboard');
     expect(prompt).not.toContain(NO_CONTEXT_MARKER);
+    // The planner is asked to emit the machine-read title/summary trailer.
+    expect(prompt).toContain('NEWTASK-META');
+  });
+
+  describe('parsePlanResult', () => {
+    it('lifts the title + summary and strips the meta trailer', () => {
+      const raw =
+        '## Overview\nDo the thing.\n' +
+        '<!--NEWTASK-META {"title":"Add retry","summary":"Retries uploads."} -->';
+      expect(parsePlanResult(raw)).toEqual({
+        plan: '## Overview\nDo the thing.',
+        title: 'Add retry',
+        summary: 'Retries uploads.',
+      });
+    });
+
+    it('keeps the last well-formed marker and ignores malformed ones', () => {
+      const raw =
+        'PLAN\n<!--NEWTASK-META {not json} -->\n' +
+        '<!--NEWTASK-META {"title":"Final","summary":"Last wins."} -->';
+      const parsed = parsePlanResult(raw);
+      expect(parsed.title).toBe('Final');
+      expect(parsed.summary).toBe('Last wins.');
+      expect(parsed.plan).toBe('PLAN');
+    });
+
+    it('degrades to null fields when no marker is present or fields are blank', () => {
+      expect(parsePlanResult('just a plan')).toEqual({
+        plan: 'just a plan',
+        title: null,
+        summary: null,
+      });
+      expect(
+        parsePlanResult('P <!--NEWTASK-META {"title":"  ","summary":""} -->'),
+      ).toEqual({ plan: 'P', title: null, summary: null });
+      // Non-string fields are ignored too.
+      expect(
+        parsePlanResult('P <!--NEWTASK-META {"title":1,"other":true} -->'),
+      ).toEqual({ plan: 'P', title: null, summary: null });
+    });
+
+    it('accepts each field independently', () => {
+      expect(
+        parsePlanResult('P <!--NEWTASK-META {"summary":"Only a summary."} -->'),
+      ).toEqual({ plan: 'P', title: null, summary: 'Only a summary.' });
+      expect(
+        parsePlanResult('P <!--NEWTASK-META {"title":"Only a title."} -->'),
+      ).toEqual({ plan: 'P', title: 'Only a title.', summary: null });
+    });
   });
 
   it('falls back to a marker when context is blank', () => {

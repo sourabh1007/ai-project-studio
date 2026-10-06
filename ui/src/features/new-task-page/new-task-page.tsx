@@ -1118,7 +1118,8 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   const downloadPlan = useCallback(
     (format: PlanExportFormat) => {
       if (!run?.plan) return;
-      const title = run.branch?.trim() || `${feature.name} — New Task`;
+      const title =
+        run.title?.trim() || run.branch?.trim() || `${feature.name} — New Task`;
       const markdown = stripPlanPreamble(run.plan);
       const docString = buildPlanDocument(
         { title, markdown, bodyHtml: planHtml },
@@ -1134,7 +1135,7 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
       anchor.remove();
       URL.revokeObjectURL(url);
     },
-    [run?.plan, run?.branch, feature.name, planHtml],
+    [run?.plan, run?.branch, run?.title, feature.name, planHtml],
   );
 
   const agentUsage = useAgentUsage(feature.id, 'New task');

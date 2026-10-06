@@ -746,6 +746,10 @@ export interface NewTaskRun {
   agents: NewTaskAgent[];
   /** The planner's persisted analysis trail (steps taken to reach the plan). */
   planLog: string[];
+  /** Concise, planner-produced task title (renames the feature), or null. */
+  title: string | null;
+  /** One-to-two sentence solution summary used in the PR, or null. */
+  summary: string | null;
   createdAt: string;
   updatedAt: string;
 }

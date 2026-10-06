@@ -17,6 +17,7 @@ import { buildPlanPrompt } from './new-task-prompt.js';
 import {
   buildClarifyPrompt,
   parseClarifyResponse,
+  parsePlanResult,
 } from './new-task-prompt.js';
 import {
   buildRefinePrompt,
@@ -27,9 +28,11 @@ import { agentMetricsOf, type NewTaskTeam } from './new-task-team.js';
 import type {
   NewTaskAgent,
   NewTaskEventMap,
+  NewTaskFeaturePort,
   NewTaskGitPort,
   NewTaskImplementSink,
   NewTaskInputs,
+  NewTaskPlanDocPort,
   NewTaskPrPort,
   NewTaskReviewPort,
   NewTaskRun,
@@ -45,6 +48,10 @@ export interface NewTaskServiceDeps {
   git: NewTaskGitPort;
   pr: NewTaskPrPort;
   reviews: NewTaskReviewPort;
+  /** Renames the task's feature to the planned title. */
+  feature: NewTaskFeaturePort;
+  /** Writes the plan document into the worktree so it ships on the branch. */
+  planDoc: NewTaskPlanDocPort;
   config: NewTaskConfig;
   clock: Clock;
   /** The reusable "run an AI prompt" primitive. */
@@ -85,33 +92,55 @@ export function deriveTitle(problem: string): string {
 
 /**
  * Azure DevOps rejects a pull-request description longer than 4000 characters,
- * so keep the composed body comfortably under that ceiling. The plan can run to
- * many thousands of characters, so it is truncated to whatever budget the fixed
- * sections leave; the full plan always lives on the branch.
+ * so keep the composed body comfortably under that ceiling. The body is now
+ * concise (problem + solution summary + a pointer to the committed plan), so it
+ * rarely approaches the limit, but the final clamp guards a misbehaving summary.
  */
 export const PR_BODY_MAX = 3900;
 
-const PLAN_TRUNCATION_NOTE =
-  '\n\n… _(plan truncated to fit the pull-request description limit; the full plan is on the branch.)_';
+/** Repo-relative path the full plan is committed to on the branch. */
+export const PLAN_DOC_PATH = 'NEWTASK-PLAN.md';
+
+/** Longest problem excerpt kept in the concise PR description. */
+const PROBLEM_EXCERPT_MAX = 600;
+
+/** The first paragraph of `text`, trimmed and clamped to `max` characters. */
+function firstParagraph(text: string, max: number): string {
+  const trimmed = text.trim();
+  const breakAt = trimmed.search(/\n\s*\n/);
+  const paragraph = (breakAt === -1 ? trimmed : trimmed.slice(0, breakAt)).trim();
+  return paragraph.length <= max
+    ? paragraph
+    : `${paragraph.slice(0, max - 1).trimEnd()}…`;
+}
 
 /**
- * Compose the PR body from just the problem and the approved plan (the
- * solution) — nothing else. The plan is presented as the "Solution" and
- * truncated to whatever budget the fixed sections leave; the full plan always
- * lives on the branch.
+ * Compose a concise PR body: the problem (first paragraph) and the solution
+ * summary only, plus a pointer to the full plan committed on the branch. The
+ * exhaustive plan lives in {@link PLAN_DOC_PATH}, not the description.
  */
 export function derivePrBody(run: NewTaskRun): string {
-  const prefix = ['## Problem', run.problem.trim(), '', '## Solution', ''].join(
-    '\n',
-  );
-  const plan = (run.plan ?? '').trim();
-  const budget = PR_BODY_MAX - prefix.length;
-  const planText =
-    plan.length <= budget
-      ? plan
-      : `${plan.slice(0, Math.max(0, budget - PLAN_TRUNCATION_NOTE.length))}${PLAN_TRUNCATION_NOTE}`;
-  const body = `${prefix}${planText}`;
+  const problem = firstParagraph(run.problem, PROBLEM_EXCERPT_MAX) || '_(none)_';
+  const summary =
+    (run.summary ?? '').trim() ||
+    firstParagraph(run.plan ?? '', PROBLEM_EXCERPT_MAX) ||
+    '_(see the attached plan)_';
+  const body = [
+    '## Problem',
+    problem,
+    '',
+    '## Solution',
+    summary,
+    '',
+    `📄 The full implementation plan is committed on this branch as \`${PLAN_DOC_PATH}\`.`,
+  ].join('\n');
   return body.length <= PR_BODY_MAX ? body : `${body.slice(0, PR_BODY_MAX - 1)}…`;
+}
+
+/** The exported plan document: an H1 of the task title over the plan markdown. */
+export function buildPlanDoc(run: NewTaskRun): string {
+  const title = (run.title ?? '').trim() || deriveTitle(run.problem);
+  return `# ${title}\n\n${(run.plan ?? '').trim()}\n`;
 }
 
 export function createNewTaskService(
@@ -180,7 +209,14 @@ export function createNewTaskService(
         // A shipped task has an open PR; there is nothing to cancel or reset.
         return run;
       }
-      return touch(run, { status: 'draft', plan: null, planLog: [], error: null });
+      return touch(run, {
+        status: 'draft',
+        plan: null,
+        planLog: [],
+        title: null,
+        summary: null,
+        error: null,
+      });
     },
 
     async fileDiff(attachmentId, path) {
@@ -227,6 +263,8 @@ export function createNewTaskService(
           context,
           plan: null,
           planLog: [],
+          title: null,
+          summary: null,
           status: 'draft',
           error: null,
         });
@@ -245,6 +283,8 @@ export function createNewTaskService(
         error: null,
         agents: [],
         planLog: [],
+        title: null,
+        summary: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -394,8 +434,16 @@ export function createNewTaskService(
           deps.clock.now().getTime() - plannerStartedMs,
         );
         sink?.agent?.(planner);
+        // Lift the concise title + solution summary out of the plan and rename
+        // the task's feature so the workspace reflects the work, not the
+        // placeholder it was created with.
+        const parsed = parsePlanResult(result.text);
+        const title = parsed.title ?? deriveTitle(run.problem);
+        deps.feature.rename(run.featureId, title);
         const planned = touch(run, {
-          plan: result.text.trim(),
+          plan: parsed.plan,
+          title,
+          summary: parsed.summary,
           status: 'planned',
           agents: [planner],
           planLog,
@@ -490,6 +538,19 @@ export function createNewTaskService(
             'The implementation made no file changes, so there is nothing to open a pull request for.',
           );
         }
+        // Attach the full plan to the branch as a committed .md so it ships with
+        // the pull request (the description only carries a concise summary). This
+        // is a separate commit made AFTER the empty-change guard so the plan doc
+        // never masks an implementation that changed nothing.
+        await deps.planDoc.write({
+          worktreePath,
+          path: PLAN_DOC_PATH,
+          content: buildPlanDoc(run),
+        });
+        await deps.git.commitAll({
+          worktreePath,
+          message: `Add implementation plan (${PLAN_DOC_PATH})`,
+        });
         sink.activity({ phase: 'creating-pr', line: 'Pushing the branch…' });
         await deps.git.pushBranch({ worktreePath, branch });
         sink.activity({ phase: 'creating-pr', line: 'Opening the pull request…' });
@@ -498,7 +559,7 @@ export function createNewTaskService(
           worktreePath,
           branch,
           baseBranch: workspace.baseBranch,
-          title: deriveTitle(run.problem),
+          title: run.title?.trim() || deriveTitle(run.problem),
           body: derivePrBody(run),
         });
         const reviewFeatureId = await deps.reviews.makeEligible({
