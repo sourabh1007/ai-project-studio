@@ -257,17 +257,27 @@ export function createApiClient(options: ApiClientOptions = {}) {
   // Only GETs are bounded — mutations and AI turns (POST/PUT) can legitimately
   // run long, so they are never aborted here.
   const GET_TIMEOUT_MS = options.getTimeoutMs ?? 20_000;
+  // MCP tool discovery is bounded on the backend at ~15s (it launches and tears
+  // down a server process); give the client call enough headroom above that
+  // bound to absorb spawn/cleanup overhead rather than aborting at the generic
+  // 20s guard and showing a misleading "backend may be busy" error.
+  const MCP_INSPECT_TIMEOUT_MS = 35_000;
 
   async function request<T>(
     path: string,
     init?: RequestInit,
     validate?: (body: unknown) => string | null,
+    // Per-call override for the bounded-GET timeout. A few idempotent reads
+    // legitimately spawn slow subprocesses on the backend (MCP tool discovery
+    // launches and tears down a server process), so they need more headroom
+    // than the generic GET guard without relaxing it for every other read.
+    timeoutMs?: number,
   ): Promise<T> {
     const method = (init?.method ?? 'GET').toUpperCase();
     const bounded = method === 'GET';
     const controller = bounded ? new AbortController() : undefined;
     const timer = controller
-      ? setTimeout(() => controller.abort(), GET_TIMEOUT_MS)
+      ? setTimeout(() => controller.abort(), timeoutMs ?? GET_TIMEOUT_MS)
       : undefined;
     const timedOut = () =>
       new ApiError(
@@ -1011,6 +1021,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
     inspectMcpServer: (providerId: string, serverName: string) =>
       request<McpServerEntry>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/tools`,
+        undefined,
+        undefined,
+        // Discovery spawns and tears down a real MCP server process on the
+        // backend (bounded there at ~15s); allow comfortably more than the
+        // generic 20s GET guard so Windows spawn/cleanup overhead can't trip a
+        // premature "backend may be busy" abort before the backend answers.
+        MCP_INSPECT_TIMEOUT_MS,
       ),
     getMcpServerStatus: (providerId: string, serverName: string) =>
       request<McpServerStatus>(
