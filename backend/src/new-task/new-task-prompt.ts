@@ -341,20 +341,26 @@ export const DEFAULT_WORKER_PROMPT_TEMPLATE = [
   '{{files}}',
   '',
   'Implement your slice completely and surgically, following the repository\'s',
-  'existing conventions. Do NOT build the whole repository, run the full test',
-  'suite, commit, push, or open a pull request — the lead agent handles',
-  'verification afterwards. End with a one-line summary of what you changed.',
+  'existing conventions. Do NOT build the whole repository or run the full test',
+  'suite, and do NOT commit, push, or open a pull request — the lead agent',
+  'handles wider verification afterwards. If your slice adds or changes tests,',
+  'you MAY run ONLY those specific tests (scoped to your own files) to confirm',
+  'they pass — nothing broader. End with a one-line summary of what you changed.',
 ].join('\n');
 
 /**
- * The default lead-agent review prompt: integrate the sub-agents' changes, fix
- * any seams, and build ONLY the affected projects. Placeholders: {{problem}},
- * {{context}}, {{plan}}.
+ * The default lead-agent review prompt: integrate the sub-agents' parallel
+ * changes, fix any seams, and run ONE quick scoped build/typecheck of the
+ * affected project(s) — deliberately NOT a full test-suite-and-fix loop, which
+ * is slow and duplicates the downstream PR/CI checks. Placeholders:
+ * {{problem}}, {{context}}, {{plan}}.
  */
 export const DEFAULT_REVIEW_PROMPT_TEMPLATE = [
   'You are the lead agent reviewing the change your team of sub-agents just',
   'implemented in this repository worktree. The sub-agents edited their own files',
-  'in parallel; your job is to integrate and verify the result.',
+  'in parallel; your job is to integrate the pieces and do a FAST sanity check —',
+  'not an exhaustive verification (the pull request, Review Board, and CI verify',
+  'the rest). Keep this turn quick.',
   '',
   'Problem statement:',
   '{{problem}}',
@@ -365,16 +371,17 @@ export const DEFAULT_REVIEW_PROMPT_TEMPLATE = [
   'Approved plan:',
   '{{plan}}',
   '',
-  'Do the following:',
-  '- Inspect the combined changes (use git status/diff) and confirm they satisfy',
-  '  the plan and fit together — fix any integration seams, missing wiring, or',
-  '  inconsistencies between the slices.',
-  '- Determine which project(s) actually contain the changed files and build and',
-  '  test ONLY those project(s). Do NOT build or test the entire repository —',
-  '  scope every build/test command to the changed project(s).',
-  '- If a build or test fails, fix the cause and re-run just that project.',
+  'Do exactly this, then stop:',
+  '- Inspect the combined changes (git status/diff) and confirm the parallel',
+  '  slices fit together — fix only genuine integration seams: missing wiring,',
+  '  duplicate or conflicting edits, or inconsistencies BETWEEN the slices.',
+  '- Run ONE quick, scoped build or typecheck of just the project(s) containing',
+  '  the changed files, to catch integration breaks. Do NOT run the full test',
+  '  suite, do NOT build the whole repository, and do NOT enter a build/test/fix',
+  '  loop — if that single check surfaces an obvious integration error, fix just',
+  '  that and re-run the one check at most once, then stop even if issues remain.',
   'Do NOT commit, push, or open a pull request — the tooling handles that. End',
-  'with a one-line summary of what you verified and any fixes you made.',
+  'with a one-line summary of what you verified and any seams you fixed.',
 ].join('\n');
 
 /** Render the manager decomposition prompt. */

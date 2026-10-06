@@ -366,41 +366,47 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
         }),
       );
 
-      // 3. Manager reviews the combined change and builds only affected projects.
-      managerActivity(
-        '🔎 Reviewing the combined changes and building the affected projects…',
-      );
-      const reviewStart = nowMs();
-      const review = await deps.ai.runDetailed({
-        featureId: request.featureId,
-        prompt: buildReviewPrompt(deps.config.reviewPromptTemplate, {
-          problem: request.problem,
-          context: request.context,
-          plan: request.plan,
-        }),
-        cwd: request.worktreePath,
-        scope: 'internal',
-        model: 'auto',
-        label: 'New task · manager review',
-        onStart: (id) => {
-          manager.sessionIds = [...new Set([...(manager.sessionIds ?? []), id])];
-          emitManager();
-        },
-        timeoutMs: deps.config.implementTimeoutMs,
-        signal,
-        onActivity: managerActivity,
-      });
-      managerElapsed += nowMs() - reviewStart;
-      const reviewMetrics = agentMetricsOf(review);
-      manager.inputTokens = addMetric(
-        manager.inputTokens,
-        reviewMetrics.inputTokens,
-      );
-      manager.outputTokens = addMetric(
-        manager.outputTokens,
-        reviewMetrics.outputTokens,
-      );
-      manager.credits = addMetric(manager.credits, reviewMetrics.credits);
+      // 3. The lead agent integrates and verifies the combined change — but
+      // ONLY when the work ran as multiple parallel slices that can have seams
+      // between them. A single slice was implemented coherently by one worker
+      // (the console-equivalent of a plain implement turn), so the expensive
+      // review/build turn adds little and is skipped to keep the run fast.
+      if (slices.length > 1) {
+        managerActivity(
+          '🔎 Reviewing the combined changes and building the affected projects…',
+        );
+        const reviewStart = nowMs();
+        const review = await deps.ai.runDetailed({
+          featureId: request.featureId,
+          prompt: buildReviewPrompt(deps.config.reviewPromptTemplate, {
+            problem: request.problem,
+            context: request.context,
+            plan: request.plan,
+          }),
+          cwd: request.worktreePath,
+          scope: 'internal',
+          model: 'auto',
+          label: 'New task · manager review',
+          onStart: (id) => {
+            manager.sessionIds = [...new Set([...(manager.sessionIds ?? []), id])];
+            emitManager();
+          },
+          timeoutMs: deps.config.implementTimeoutMs,
+          signal,
+          onActivity: managerActivity,
+        });
+        managerElapsed += nowMs() - reviewStart;
+        const reviewMetrics = agentMetricsOf(review);
+        manager.inputTokens = addMetric(
+          manager.inputTokens,
+          reviewMetrics.inputTokens,
+        );
+        manager.outputTokens = addMetric(
+          manager.outputTokens,
+          reviewMetrics.outputTokens,
+        );
+        manager.credits = addMetric(manager.credits, reviewMetrics.credits);
+      }
       manager.durationMs = managerElapsed;
       manager.status = 'done';
       emitManager();

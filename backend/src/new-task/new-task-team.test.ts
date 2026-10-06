@@ -89,7 +89,17 @@ const REQUEST = {
 
 it('retains manager review attribution when an earlier provider did not publish onStart', async () => {
   const { team } = makeTeam({
-    decompose: () => ({ text: '{}', sessionId: 'not-published' }),
+    decompose: () => ({
+      text: fence(
+        JSON.stringify({
+          workers: [
+            { title: 'A', files: ['a.ts'] },
+            { title: 'B', files: ['b.ts'] },
+          ],
+        }),
+      ),
+      sessionId: 'not-published',
+    }),
     startDecompose: false,
   });
   const result = await team.implement({ ...REQUEST, sink: recordingSink() });
@@ -373,7 +383,14 @@ describe('createNewTaskTeam.implement', () => {
   it('adds review metrics when the decompose turn reported none (null + b)', async () => {
     const { team } = makeTeam({
       decompose: () => ({
-        text: fence(JSON.stringify({ workers: [{ title: 'A', files: ['a.ts'] }] })),
+        text: fence(
+          JSON.stringify({
+            workers: [
+              { title: 'A', files: ['a.ts'] },
+              { title: 'B', files: ['b.ts'] },
+            ],
+          }),
+        ),
         sessionId: 'm',
       }),
       worker: () => ({ text: 'ok', sessionId: 'w' }),
@@ -392,7 +409,14 @@ describe('createNewTaskTeam.implement', () => {
   it('keeps decompose metrics when the review turn reports none (a + null)', async () => {
     const { team } = makeTeam({
       decompose: () => ({
-        text: fence(JSON.stringify({ workers: [{ title: 'A', files: ['a.ts'] }] })),
+        text: fence(
+          JSON.stringify({
+            workers: [
+              { title: 'A', files: ['a.ts'] },
+              { title: 'B', files: ['b.ts'] },
+            ],
+          }),
+        ),
         sessionId: 'm',
         usage: { inputTokens: 6, outputTokens: 2, nanoAiu: null, credits: 3 },
       }),
@@ -403,6 +427,27 @@ describe('createNewTaskTeam.implement', () => {
     const result = await team.implement({ ...REQUEST, sink });
     expect(result.agents[0].inputTokens).toBe(6);
     expect(result.agents[0].credits).toBe(3);
+  });
+
+  it('skips the review turn when the work is a single slice', async () => {
+    const { team, calls } = makeTeam({
+      decompose: () => ({
+        text: fence(JSON.stringify({ workers: [{ title: 'A', files: ['a.ts'] }] })),
+        sessionId: 'm',
+        usage: { inputTokens: 6, outputTokens: 2, nanoAiu: null, credits: 3 },
+      }),
+      worker: () => ({ text: 'ok', sessionId: 'w' }),
+    });
+    const sink = recordingSink();
+    const result = await team.implement({ ...REQUEST, sink });
+    // No review turn was dispatched, and the manager still completes cleanly
+    // carrying only its decompose metrics.
+    expect(calls.filter((c) => c.includes('review'))).toHaveLength(0);
+    expect(result.agents.map((a) => a.id)).toEqual([MANAGER_AGENT_ID, 'sub-1']);
+    expect(result.agents[0].status).toBe('done');
+    expect(result.agents[0].inputTokens).toBe(6);
+    expect(result.agents[0].credits).toBe(3);
+    expect(result.agents[0].durationMs).toBeGreaterThan(0);
   });
 
   it('runs a single fallback slice when the plan cannot be decomposed', async () => {
