@@ -17127,6 +17127,261 @@ body.is-resizing {
   cursor: default;
 }
 
+/* New Task page uses more of the window so the plan and analysis timeline are
+   not cramped in a narrow column. */
+.new-task-page {
+  max-width: 1120px;
+}
+
+/* ---- Plan analysis timeline (live, animated) ---- */
+.plan-timeline-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  min-height: 0;
+}
+.plan-timeline-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+.plan-timeline-live {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+}
+.plan-timeline-live::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: plan-pulse 1.3s ease-in-out infinite;
+}
+.plan-timeline-body {
+  overflow-y: auto;
+  max-height: 46vh;
+  padding-right: 4px;
+}
+.plan-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.plan-timeline-step {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 0 14px 0;
+  animation: plan-step-in 0.32s ease-out both;
+}
+/* Connector line linking the markers. */
+.plan-timeline-step::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 20px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--border);
+}
+.plan-timeline-step:last-child::before {
+  display: none;
+}
+.plan-timeline-marker {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.plan-timeline-marker.is-final {
+  background: color-mix(in srgb, var(--success, #2ea043) 18%, var(--panel));
+  color: var(--success, #2ea043);
+  border-color: color-mix(in srgb, var(--success, #2ea043) 45%, transparent);
+}
+.plan-timeline-marker.is-active {
+  background: transparent;
+  border: 2px solid var(--accent);
+  animation: plan-pulse 1.3s ease-in-out infinite;
+}
+.plan-timeline-text {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.plan-timeline-step.is-done .plan-timeline-text {
+  color: var(--text-muted, color-mix(in srgb, var(--text) 78%, transparent));
+}
+/* The live frontier: up to two steps animating in parallel. */
+.plan-timeline-parallel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.plan-timeline-parallel.is-dual {
+  grid-template-columns: 1fr 1fr;
+}
+.plan-lane {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  animation: plan-step-in 0.3s ease-out both;
+}
+.plan-lane-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: plan-spin 0.7s linear infinite;
+}
+.plan-lane-text {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+@media (max-width: 720px) {
+  .plan-timeline-parallel.is-dual {
+    grid-template-columns: 1fr;
+  }
+}
+@keyframes plan-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes plan-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.18);
+  }
+}
+@keyframes plan-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-timeline-step,
+  .plan-lane {
+    animation: none;
+  }
+  .plan-timeline-marker.is-active,
+  .plan-lane-spinner,
+  .plan-timeline-live::before {
+    animation: none;
+  }
+}
+
+/* ---- Plan head: branch chip + download menu ---- */
+.new-task-plan-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.new-task-download {
+  position: relative;
+}
+.new-task-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.new-task-download-btn:hover {
+  border-color: var(--accent);
+}
+.new-task-download-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(0, 0, 0, 0.25));
+}
+.new-task-download:hover .new-task-download-menu,
+.new-task-download:focus-within .new-task-download-menu {
+  display: flex;
+}
+.new-task-download-menu button {
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.new-task-download-menu button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
 /* Bug Bash — Prepare step (dynamically-generated prerequisite questions). */
 .bug-bash-prepare-intro {
   margin-bottom: 4px;

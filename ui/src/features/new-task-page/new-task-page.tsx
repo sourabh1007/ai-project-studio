@@ -19,6 +19,7 @@ import {
   CheckIcon,
   ChevronIcon,
   CloseIcon,
+  ExportIcon,
   FileIcon,
   LaunchIcon,
   MoveIcon,
@@ -28,6 +29,13 @@ import {
   TaskPlanSkillIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
+import { stripPlanPreamble } from '../../lib/plan-format.js';
+import {
+  buildPlanDocument,
+  planExportFilename,
+  planExportMime,
+  type PlanExportFormat,
+} from '../../lib/plan-export.js';
 import { RefineChatPanel } from '../../components/refine-chat-panel.js';
 import { annotateDiffLines } from '../../lib/diff-lines.js';
 import type {
@@ -473,42 +481,104 @@ function Stepper({
   );
 }
 
-/** A scrolling monospace log panel for streamed activity lines. */
-function ActivityLog({
-  title,
+/** First line of a streamed step, used as its timeline label. */
+function stepLabel(line: string): string {
+  return line.split('\n')[0].trim();
+}
+
+/**
+ * An animated, real-time timeline of the planner's analysis. Completed steps
+ * stack with connectors and a check; the live frontier shows up to two steps
+ * animating in parallel while the agent investigates. New steps slide in as
+ * they stream, so the panel reads as a progressing analysis rather than a wall
+ * of prose.
+ */
+function PlanAnalysisTimeline({
   lines,
   busy,
-  tall,
+  ready,
 }: {
-  title: string;
   lines: string[];
   busy: boolean;
-  tall?: boolean;
+  ready: boolean;
 }) {
+  const steps = useMemo(
+    () =>
+      lines
+        .filter((line) => !line.startsWith('📝 Prompt sent to the agent:'))
+        .map(stepLabel)
+        .filter((line) => line.length > 0),
+    [lines],
+  );
   const bodyRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const body = bodyRef.current;
-    if (body) {
-      body.scrollTop = body.scrollHeight;
-    }
-  }, [lines]);
+    if (body) body.scrollTop = body.scrollHeight;
+  }, [steps.length]);
+
+  // While analysing, the last up to two steps are the live parallel frontier;
+  // everything earlier is complete.
+  const frontierCount = busy ? Math.min(2, steps.length) : 0;
+  const completed = steps.slice(0, steps.length - frontierCount);
+  const frontier = steps.slice(steps.length - frontierCount);
+
   return (
-    <section className={`new-task-log${tall ? ' new-task-log--tall' : ''}`}>
+    <section className="plan-timeline-panel new-task-log--tall">
       <h3>
         {busy && <span className="new-task-spinner" aria-hidden="true" />}
         <ActivityIcon size={15} />
-        {title}
-        <span className="new-task-log-count">{lines.length}</span>
+        Analysis
+        {busy && <span className="plan-timeline-live">live</span>}
+        <span className="new-task-log-count">{steps.length}</span>
       </h3>
-      <div className="new-task-log-body" ref={bodyRef}>
-        {lines.length === 0 ? (
-          <p className="muted new-task-log-empty">Waiting for the agent…</p>
+      <div className="plan-timeline-body" ref={bodyRef}>
+        {steps.length === 0 ? (
+          <p className="muted new-task-log-empty">
+            {busy ? 'Spinning up the analysis…' : 'Waiting for the agent…'}
+          </p>
         ) : (
-          lines.map((line, i) => (
-            <div key={i} className="new-task-log-line">
-              {line}
-            </div>
-          ))
+          <ol className="plan-timeline">
+            {completed.map((text, i) => (
+              <li key={`c-${i}`} className="plan-timeline-step is-done">
+                <span className="plan-timeline-marker">
+                  <CheckIcon size={12} />
+                </span>
+                <span className="plan-timeline-text" title={text}>
+                  {text}
+                </span>
+              </li>
+            ))}
+            {frontier.length > 0 && (
+              <li className="plan-timeline-step is-frontier">
+                <span
+                  className="plan-timeline-marker is-active"
+                  aria-hidden="true"
+                />
+                <div
+                  className={`plan-timeline-parallel${frontier.length > 1 ? ' is-dual' : ''}`}
+                >
+                  {frontier.map((text, i) => (
+                    <div key={`f-${i}`} className="plan-lane">
+                      <span className="plan-lane-spinner" aria-hidden="true" />
+                      <span className="plan-lane-text" title={text}>
+                        {text}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </li>
+            )}
+            {ready && !busy && (
+              <li className="plan-timeline-step is-done is-final">
+                <span className="plan-timeline-marker is-final">
+                  <CheckIcon size={12} />
+                </span>
+                <span className="plan-timeline-text">
+                  Analysis complete — plan ready.
+                </span>
+              </li>
+            )}
+          </ol>
         )}
       </div>
     </section>
@@ -522,9 +592,9 @@ interface ImplLogEntry {
 }
 
 /**
- * The implementation activity log. Unlike the plain {@link ActivityLog}, each
- * line is tagged with the sub-agent that emitted it (resolved live from the
- * `agents` map) so the user can see which specialist is doing what.
+ * The implementation activity log. Each line is tagged with the sub-agent that
+ * emitted it (resolved live from the `agents` map) so the user can see which
+ * specialist is doing what.
  */
 function ImplementActivityLog({
   entries,
@@ -1038,8 +1108,33 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   }, []);
 
   const planHtml = useMemo(
-    () => (run?.plan ? renderMarkdownComment(run.plan) : ''),
+    () => (run?.plan ? renderMarkdownComment(stripPlanPreamble(run.plan)) : ''),
     [run?.plan],
+  );
+
+  // Download the reviewed plan as Markdown, a styled HTML page, or a
+  // Word-openable document. The pure builders live in `lib/plan-export`; here
+  // we only turn the returned string into a Blob and click a temporary anchor.
+  const downloadPlan = useCallback(
+    (format: PlanExportFormat) => {
+      if (!run?.plan) return;
+      const title = run.branch?.trim() || `${feature.name} — New Task`;
+      const markdown = stripPlanPreamble(run.plan);
+      const docString = buildPlanDocument(
+        { title, markdown, bodyHtml: planHtml },
+        format,
+      );
+      const blob = new Blob([docString], { type: planExportMime(format) });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = planExportFilename(title, format);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    },
+    [run?.plan, run?.branch, feature.name, planHtml],
   );
 
   const agentUsage = useAgentUsage(feature.id, 'New task');
@@ -1278,11 +1373,10 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
               onOpen={setOpenAgentId}
               onOpenFile={openFile}
             />
-            <ActivityLog
-              title="Planning activity"
+            <PlanAnalysisTimeline
               lines={planLog}
               busy={planning}
-              tall
+              ready={hasPlan}
             />
             <StepNav
               back={{ label: 'Back', onClick: () => setStep('describe') }}
@@ -1327,11 +1421,49 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                     <TaskPlanSkillIcon size={16} />{' '}
                     {isReplanning ? 'Previous plan' : 'Proposed plan'}
                   </h3>
-                  {run?.branch && (
-                    <span className="new-task-branch-chip" title="Change branch">
-                      <MoveIcon size={12} /> {run.branch}
-                    </span>
-                  )}
+                  <div className="new-task-plan-head-actions">
+                    {run?.branch && (
+                      <span
+                        className="new-task-branch-chip"
+                        title="Change branch"
+                      >
+                        <MoveIcon size={12} /> {run.branch}
+                      </span>
+                    )}
+                    <div className="new-task-download">
+                      <button
+                        type="button"
+                        className="new-task-download-btn"
+                        title="Download the plan"
+                      >
+                        <ExportIcon size={14} /> Download
+                        <ChevronIcon size={13} open={false} />
+                      </button>
+                      <div className="new-task-download-menu" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => downloadPlan('md')}
+                        >
+                          Markdown (.md)
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => downloadPlan('html')}
+                        >
+                          Web page (.html)
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => downloadPlan('doc')}
+                        >
+                          Word (.doc)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 {isReplanning && (
                   <p className="muted new-task-accept-note">
