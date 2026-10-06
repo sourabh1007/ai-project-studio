@@ -69,6 +69,7 @@ import type {
   RefineChatMessage,
   BugBashRefineResult,
   NewTaskRefineResult,
+  NewTaskClarifyResult,
   ReviewBoardChatReply,
   ReviewBoardChatContext,
   PerspectiveAnalysis,
@@ -716,6 +717,29 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<NewTaskRefineResult>(
         `/features/${featureId}/new-task/${attachmentId}/refine`,
         jsonBody({ history, message }),
+      ),
+    applyRefinedNewTaskPlan: (
+      featureId: string,
+      attachmentId: string,
+      plan: string,
+    ) =>
+      request<{ run: NewTaskRun }>(
+        `/features/${featureId}/new-task/${attachmentId}/apply-plan`,
+        jsonBody({ plan }),
+      ),
+    // Clarify the problem statement BEFORE planning: post the current (possibly
+    // unsaved) problem + context; the server runs a lightweight AI turn and
+    // returns a clearer rewrite plus the information still missing. Persists
+    // nothing — the UI shows the result for the user to apply/insert.
+    clarifyNewTask: (
+      featureId: string,
+      attachmentId: string,
+      problem: string,
+      context: string,
+    ) =>
+      request<NewTaskClarifyResult>(
+        `/features/${featureId}/new-task/${attachmentId}/clarify`,
+        jsonBody({ problem, context }),
       ),
     getBugBash: (featureId: string, attachmentId: string) =>
       request<{ run: BugBashRun | null }>(

@@ -17,11 +17,18 @@ describe('new-task config', () => {
     expect(newTaskDefaults.planPromptTemplate.length).toBeGreaterThan(0);
     expect(newTaskDefaults.implementPromptTemplate.length).toBeGreaterThan(0);
     expect(newTaskDefaults.refinePromptTemplate.length).toBeGreaterThan(0);
+    expect(newTaskDefaults.clarifyPromptTemplate.length).toBeGreaterThan(0);
   });
 
   it('rejects an empty refine prompt template', () => {
     expect(() =>
       newTaskConfigSchema.parse({ ...newTaskDefaults, refinePromptTemplate: '' }),
+    ).toThrow();
+  });
+
+  it('rejects an empty clarify prompt template', () => {
+    expect(() =>
+      newTaskConfigSchema.parse({ ...newTaskDefaults, clarifyPromptTemplate: '' }),
     ).toThrow();
   });
 

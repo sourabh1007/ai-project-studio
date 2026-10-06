@@ -15,6 +15,10 @@ import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { NewTaskConfig } from './config.js';
 import { buildPlanPrompt } from './new-task-prompt.js';
 import {
+  buildClarifyPrompt,
+  parseClarifyResponse,
+} from './new-task-prompt.js';
+import {
   buildRefinePrompt,
   parseRefineResponse,
   type RefineChatMessage,
@@ -246,6 +250,30 @@ export function createNewTaskService(
       return run;
     },
 
+    async clarify(featureId, inputs: NewTaskInputs, signal) {
+      const problem = inputs.problem.trim();
+      if (problem.length === 0) {
+        throw new ValidationError('A problem statement is required.');
+      }
+      const context = inputs.context.trim();
+      const workspace = deps.workspace.resolve(featureId);
+      const prompt = buildClarifyPrompt(deps.config.clarifyPromptTemplate, {
+        problem,
+        context,
+      });
+      const result = await deps.ai.runDetailed({
+        featureId,
+        prompt,
+        cwd: workspace.repoLocalPath,
+        scope: 'internal',
+        model: 'auto',
+        label: 'New task · Clarify',
+        timeoutMs: deps.config.planTimeoutMs,
+        signal,
+      });
+      return parseClarifyResponse(result.text, problem);
+    },
+
     async refine(attachmentId, history: RefineChatMessage[], message, signal) {
       const run = requireRun(attachmentId);
       const text = message.trim();
@@ -274,11 +302,27 @@ export function createNewTaskService(
         signal,
       });
       const parsed = parseRefineResponse(result.text);
-      let next = run;
-      if (typeof parsed.revised === 'string' && parsed.revised.trim().length > 0) {
-        next = touch(run, { plan: parsed.revised });
+      const proposal =
+        typeof parsed.revised === 'string' && parsed.revised.trim().length > 0
+          ? parsed.revised.trim()
+          : null;
+      // Do NOT persist the revision here: the user reviews the proposal and
+      // accepts it via applyRefinedPlan. The run is returned unchanged.
+      return { reply: parsed.reply, run, proposal };
+    },
+
+    applyRefinedPlan(attachmentId, plan) {
+      const run = requireRun(attachmentId);
+      if (run.status === 'pr-created') {
+        throw new ValidationError(
+          'This task already has an open pull request; its plan is frozen.',
+        );
       }
-      return { reply: parsed.reply, run: next };
+      const text = plan.trim();
+      if (text.length === 0) {
+        throw new ValidationError('A non-empty plan is required.');
+      }
+      return touch(run, { plan: text });
     },
 
     async plan(attachmentId, signal, sink, options) {

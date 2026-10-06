@@ -440,7 +440,7 @@ describe('new-task-service refine', () => {
     );
   });
 
-  it('replies without changing the plan when nothing is revised', async () => {
+  it('replies without proposing a change when nothing is revised', async () => {
     const runDetailed = vi.fn(async () => ({
       text: '```json\n{"reply":"Here is why","revised":null}\n```',
       sessionId: 's',
@@ -452,6 +452,7 @@ describe('new-task-service refine', () => {
       'why?',
     );
     expect(result.reply).toBe('Here is why');
+    expect(result.proposal).toBeNull();
     expect(result.run.plan).toBe('OLD PLAN');
     expect(runDetailed.mock.calls[0][0]).toMatchObject({
       label: 'New task · Refine',
@@ -459,35 +460,39 @@ describe('new-task-service refine', () => {
     });
   });
 
-  it('applies a revised plan string', async () => {
+  it('proposes a revised plan without applying it', async () => {
     const runDetailed = vi.fn(async () => ({
-      text: '```json\n{"reply":"Updated","revised":"NEW PLAN"}\n```',
+      text: '```json\n{"reply":"Updated","revised":"  NEW PLAN  "}\n```',
       sessionId: 's',
     }));
     const { service, deps } = await seededPlan({ ai: { runDetailed } });
     const result = await service.refine('a1', [], 'rewrite it');
     expect(result.reply).toBe('Updated');
-    expect(result.run.plan).toBe('NEW PLAN');
-    expect(deps.repo.get('a1')!.plan).toBe('NEW PLAN');
+    expect(result.proposal).toBe('NEW PLAN');
+    // The stored plan is untouched until the user consents via applyRefinedPlan.
+    expect(result.run.plan).toBe('OLD PLAN');
+    expect(deps.repo.get('a1')!.plan).toBe('OLD PLAN');
   });
 
-  it('ignores a blank revised plan string', async () => {
+  it('proposes nothing for a blank revised plan string', async () => {
     const runDetailed = vi.fn(async () => ({
       text: '```json\n{"reply":"ok","revised":"   "}\n```',
       sessionId: 's',
     }));
     const { service } = await seededPlan({ ai: { runDetailed } });
     const result = await service.refine('a1', [], 'clear it');
+    expect(result.proposal).toBeNull();
     expect(result.run.plan).toBe('OLD PLAN');
   });
 
-  it('ignores a non-string revised payload', async () => {
+  it('proposes nothing for a non-string revised payload', async () => {
     const runDetailed = vi.fn(async () => ({
       text: '```json\n{"reply":"ok","revised":{"a":1}}\n```',
       sessionId: 's',
     }));
     const { service } = await seededPlan({ ai: { runDetailed } });
     const result = await service.refine('a1', [], 'hello');
+    expect(result.proposal).toBeNull();
     expect(result.run.plan).toBe('OLD PLAN');
   });
   it('handles a run with no plan yet', async () => {
@@ -501,6 +506,104 @@ describe('new-task-service refine', () => {
     expect(result.reply).toBe('draft');
     expect(result.run.plan).toBeNull();
     expect(runDetailed.mock.calls[0][0].prompt).toContain('(empty)');
+  });
+});
+
+describe('new-task-service applyRefinedPlan', () => {
+  async function seededPlan(overrides: Partial<NewTaskServiceDeps> = {}) {
+    const h = harness(overrides);
+    h.service.saveInputs('a1', 'f1', { problem: 'P', context: 'C' });
+    h.deps.repo.update({ ...h.service.get('a1')!, plan: 'OLD PLAN' });
+    return h;
+  }
+
+  it('applies and persists the accepted plan, trimming it', () => {
+    const { service, deps } = harness();
+    service.saveInputs('a1', 'f1', { problem: 'P', context: 'C' });
+    deps.repo.update({ ...service.get('a1')!, plan: 'OLD PLAN' });
+    const run = service.applyRefinedPlan('a1', '  NEW PLAN  ');
+    expect(run.plan).toBe('NEW PLAN');
+    expect(deps.repo.get('a1')!.plan).toBe('NEW PLAN');
+  });
+
+  it('rejects a blank plan', async () => {
+    const { service } = await seededPlan();
+    expect(() => service.applyRefinedPlan('a1', '   ')).toThrow(
+      'A non-empty plan is required.',
+    );
+  });
+
+  it('throws when there is no run', () => {
+    const { service } = harness();
+    expect(() => service.applyRefinedPlan('missing', 'X')).toThrow(
+      NotFoundError,
+    );
+  });
+
+  it('refuses once a pull request is open', async () => {
+    const { service, deps } = await seededPlan();
+    deps.repo.update({ ...service.get('a1')!, status: 'pr-created' });
+    expect(() => service.applyRefinedPlan('a1', 'NEW PLAN')).toThrow(
+      'already has an open pull request',
+    );
+  });
+});
+
+describe('new-task-service clarify', () => {
+  it('runs an AI turn and returns the parsed clarification', async () => {
+    const runDetailed = vi.fn(async () => ({
+      text: '{"improvedProblem":"Make the dashboard list load in <1s","missingInfo":["affected endpoint","acceptance criteria"]}',
+      sessionId: 's',
+    }));
+    const { service } = harness({ ai: { runDetailed } });
+    const result = await service.clarify('f1', {
+      problem: '  make it faster  ',
+      context: '  dashboard  ',
+    });
+    expect(result).toEqual({
+      improvedProblem: 'Make the dashboard list load in <1s',
+      missingInfo: ['affected endpoint', 'acceptance criteria'],
+    });
+    const req = runDetailed.mock.calls[0][0];
+    expect(req.featureId).toBe('f1');
+    expect(req.prompt).toContain('make it faster');
+    expect(req.prompt).toContain('dashboard');
+    expect(req.label).toBe('New task · Clarify');
+  });
+
+  it('does not require a saved run and persists nothing', async () => {
+    const { service } = harness();
+    await service.clarify('f1', { problem: 'p', context: '' });
+    expect(service.get('a1')).toBeNull();
+  });
+
+  it('falls back to the original problem on unparseable output', async () => {
+    const runDetailed = vi.fn(async () => ({ text: 'oops', sessionId: 's' }));
+    const { service } = harness({ ai: { runDetailed } });
+    const result = await service.clarify('f1', {
+      problem: '  keep this  ',
+      context: '',
+    });
+    expect(result).toEqual({ improvedProblem: 'keep this', missingInfo: [] });
+  });
+
+  it('rejects a blank problem statement', async () => {
+    const { service } = harness();
+    await expect(
+      service.clarify('f1', { problem: '   ', context: 'c' }),
+    ).rejects.toThrow('A problem statement is required.');
+  });
+
+  it('forwards the abort signal to the AI turn', async () => {
+    const runDetailed = vi.fn(async () => ({ text: '{}', sessionId: 's' }));
+    const { service } = harness({ ai: { runDetailed } });
+    const controller = new AbortController();
+    await service.clarify(
+      'f1',
+      { problem: 'p', context: '' },
+      controller.signal,
+    );
+    expect(runDetailed.mock.calls[0][0].signal).toBe(controller.signal);
   });
 });
 

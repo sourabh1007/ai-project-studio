@@ -4144,8 +4144,8 @@ function main(): void {
 
   // New Task: one plan refine-chat turn. The client posts the full prior
   // conversation plus the new message; the server runs a single AI turn and
-  // returns the reply plus the run, with the plan replaced when revised.
-  // Plain request/response — no stream.
+  // returns the reply plus any proposed revised plan (awaiting the user's
+  // consent — the stored plan is NOT changed here). Plain request/response.
   app.post(
     `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/refine`,
     async (req, res) => {
@@ -4165,6 +4165,52 @@ function main(): void {
           message,
         );
         res.json(result);
+      } catch (error) {
+        const mapped = toErrorResult(error);
+        res.status(mapped.status).json(mapped.body);
+      }
+    },
+  );
+
+  // New Task: clarify the problem statement BEFORE planning. The client posts
+  // the current (possibly unsaved) problem + context; the server runs a single
+  // lightweight AI turn and returns a clearer rewrite plus the information still
+  // missing. Nothing is persisted. Plain request/response.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/clarify`,
+    async (req, res) => {
+      const featureId = req.params.featureId;
+      const body = (req.body ?? {}) as {
+        problem?: unknown;
+        context?: unknown;
+      };
+      const problem = typeof body.problem === 'string' ? body.problem : '';
+      const context = typeof body.context === 'string' ? body.context : '';
+      try {
+        const result = await newTaskService.clarify(featureId, {
+          problem,
+          context,
+        });
+        res.json(result);
+      } catch (error) {
+        const mapped = toErrorResult(error);
+        res.status(mapped.status).json(mapped.body);
+      }
+    },
+  );
+
+  // New Task: apply a plan revision the user accepted from the refine chat.
+  // This is the consent step for a refine proposal — only now is the plan
+  // replaced and persisted. Plain request/response.
+  app.post(
+    `${apiConfig.basePath}/features/:featureId/new-task/:attachmentId/apply-plan`,
+    (req, res) => {
+      const attachmentId = req.params.attachmentId;
+      const body = (req.body ?? {}) as { plan?: unknown };
+      const plan = typeof body.plan === 'string' ? body.plan : '';
+      try {
+        const run = newTaskService.applyRefinedPlan(attachmentId, plan);
+        res.json({ run });
       } catch (error) {
         const mapped = toErrorResult(error);
         res.status(mapped.status).json(mapped.body);

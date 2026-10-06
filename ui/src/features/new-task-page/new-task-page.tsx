@@ -14,13 +14,16 @@ import { ApiError } from '../../lib/api.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import {
   ActivityIcon,
+  AiMagicIcon,
   ArrowDownIcon,
   CheckIcon,
   ChevronIcon,
+  CloseIcon,
   FileIcon,
   LaunchIcon,
   MoveIcon,
   PencilIcon,
+  PlusIcon,
   PrReviewIcon,
   TaskPlanSkillIcon,
 } from '../../components/icons.js';
@@ -30,6 +33,7 @@ import { annotateDiffLines } from '../../lib/diff-lines.js';
 import type {
   Feature,
   NewTaskAgent,
+  NewTaskClarifyResult,
   NewTaskFileChange,
   NewTaskFileDiff,
   NewTaskImplementEvent,
@@ -609,6 +613,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   const [context, setContext] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
   const [suggestion, setSuggestion] = useState('');
+  const [clarifying, setClarifying] = useState(false);
+  const [clarifyResult, setClarifyResult] =
+    useState<NewTaskClarifyResult | null>(null);
+  const [clarifyError, setClarifyError] = useState<string | null>(null);
+  const [addedInfo, setAddedInfo] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [planning, setPlanning] = useState(false);
   const [implementing, setImplementing] = useState(false);
@@ -866,6 +875,59 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     [api, feature.id, attachmentId, problem, context, baseBranch, suggestion, hydrate, resetToDraft, applyAgentEvent],
   );
 
+  // Ask the planner to sharpen the (possibly unsaved) problem statement before
+  // planning: it returns a clearer rewrite to apply with one click and a list
+  // of still-missing details the user can add to context as chips. Reads the
+  // repo for nothing and persists nothing — purely an authoring aid.
+  const runClarify = useCallback(async () => {
+    if (problem.trim().length === 0) return;
+    setClarifyError(null);
+    setClarifying(true);
+    try {
+      const result = await api.clarifyNewTask(
+        feature.id,
+        attachmentId,
+        problem,
+        context,
+      );
+      setClarifyResult(result);
+      setAddedInfo([]);
+    } catch (err: unknown) {
+      setClarifyError(
+        err instanceof ApiError
+          ? err.message
+          : 'The planner could not clarify this right now.',
+      );
+    } finally {
+      setClarifying(false);
+    }
+  }, [api, feature.id, attachmentId, problem, context]);
+
+  // Accept the clarified problem statement in place; keep the chips around so
+  // the user can still fold in any missing-info items afterwards.
+  const applyImprovedProblem = useCallback(() => {
+    if (!clarifyResult) return;
+    setProblem(clarifyResult.improvedProblem);
+    setClarifyResult((prev) =>
+      prev ? { ...prev, improvedProblem: '' } : prev,
+    );
+  }, [clarifyResult]);
+
+  // Fold one missing-info chip into the Context box as a labelled prompt line
+  // the user then fills in, and mark the chip as added so it can't double-add.
+  const addMissingInfo = useCallback((item: string) => {
+    setContext((prev) => {
+      const line = `${item}: `;
+      if (prev.includes(line)) return prev;
+      return prev.trim().length > 0 ? `${prev.trimEnd()}\n${line}` : line;
+    });
+    setAddedInfo((prev) => (prev.includes(item) ? prev : [...prev, item]));
+  }, []);
+
+  const dismissClarify = useCallback(() => {
+    setClarifyResult(null);
+    setClarifyError(null);
+  }, []);
   const runImplement = useCallback(async () => {
     setError(null);
     setImplementLog([]);
@@ -1071,18 +1133,103 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
       <div className="new-task-step-panel">
         {step === 'describe' && (
           <section className="new-task-inputs">
-            <label>
-              <span>Problem statement</span>
+            <label className="new-task-field new-task-field-grow">
+              <span className="new-task-field-head">
+                <span className="new-task-field-label">Problem statement</span>
+                {!locked && (
+                  <button
+                    type="button"
+                    className="new-task-clarify-btn"
+                    onClick={() => void runClarify()}
+                    disabled={!canPlan || clarifying || planning}
+                    title="Let the planner sharpen your problem statement and suggest what's missing"
+                  >
+                    <AiMagicIcon size={14} />
+                    {clarifying ? 'Clarifying…' : 'Clarify & suggest'}
+                  </button>
+                )}
+              </span>
               <textarea
-                rows={3}
+                className="new-task-textarea-grow"
                 value={problem}
                 disabled={locked || planning}
                 placeholder="What needs to change, and why?"
                 onChange={(e) => setProblem(e.target.value)}
               />
             </label>
-            <label>
-              <span>Context (optional)</span>
+
+            {clarifyError && <ErrorText error={clarifyError} />}
+
+            {clarifyResult && (
+              <div className="new-task-clarify-card">
+                <div className="new-task-clarify-head">
+                  <span className="new-task-clarify-title">
+                    <AiMagicIcon size={14} /> Planner suggestions
+                  </span>
+                  <button
+                    type="button"
+                    className="new-task-clarify-close"
+                    onClick={dismissClarify}
+                    title="Dismiss"
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </div>
+                {clarifyResult.improvedProblem && (
+                  <div className="new-task-clarify-improved">
+                    <p className="muted new-task-clarify-sub">
+                      Clearer problem statement
+                    </p>
+                    <p className="new-task-clarify-text">
+                      {clarifyResult.improvedProblem}
+                    </p>
+                    <Button variant="secondary" onClick={applyImprovedProblem}>
+                      <CheckIcon size={14} /> Use this
+                    </Button>
+                  </div>
+                )}
+                {clarifyResult.missingInfo.length > 0 && (
+                  <div className="new-task-clarify-missing">
+                    <p className="muted new-task-clarify-sub">
+                      Add the missing details to Context
+                    </p>
+                    <div className="new-task-chip-row">
+                      {clarifyResult.missingInfo.map((item) => {
+                        const added = addedInfo.includes(item);
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            className={`new-task-chip${added ? ' new-task-chip-added' : ''}`}
+                            onClick={() => addMissingInfo(item)}
+                            disabled={added || locked}
+                            title={
+                              added ? 'Added to Context' : 'Add to Context'
+                            }
+                          >
+                            {added ? (
+                              <CheckIcon size={12} />
+                            ) : (
+                              <PlusIcon size={12} />
+                            )}
+                            {item}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {!clarifyResult.improvedProblem &&
+                  clarifyResult.missingInfo.length === 0 && (
+                    <p className="muted">
+                      This looks clear already — nothing to add.
+                    </p>
+                  )}
+              </div>
+            )}
+
+            <label className="new-task-field">
+              <span className="new-task-field-label">Context (optional)</span>
               <textarea
                 rows={4}
                 value={context}
@@ -1091,8 +1238,10 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                 onChange={(e) => setContext(e.target.value)}
               />
             </label>
-            <label className="new-task-base">
-              <span>Base branch (optional)</span>
+            <label className="new-task-base new-task-field">
+              <span className="new-task-field-label">
+                Base branch (optional)
+              </span>
               <input
                 type="text"
                 value={baseBranch}
@@ -1226,10 +1375,10 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                   </div>
                 )}
                 {planReady && (
-                  <RefineChatPanel<NewTaskRun>
+                  <RefineChatPanel<NewTaskRun, string>
                     title="Refine with the planner"
                     context="Challenge or edit this plan in plain language before you implement it."
-                    hint="e.g. “Skip the migration and reuse the existing table instead.” The planner reads the repo and rewrites the plan when you ask — it edits no files."
+                    hint="e.g. “Skip the migration and reuse the existing table instead.” The planner reads the repo and proposes a revised plan when you ask — you Apply or Discard it, and it edits no files."
                     placeholder="Ask the planner to change the plan…"
                     onSend={(history, message) =>
                       api.refineNewTask(
@@ -1238,6 +1387,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                         history,
                         message,
                       )
+                    }
+                    onApply={(plan) =>
+                      api
+                        .applyRefinedNewTaskPlan(feature.id, attachmentId, plan)
+                        .then((result) => result.run)
                     }
                     onRevised={hydrate}
                   />

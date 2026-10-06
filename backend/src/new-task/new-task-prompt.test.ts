@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyTemplate,
+  buildClarifyPrompt,
   buildDecomposePrompt,
   buildImplementPrompt,
   buildPlanPrompt,
   buildReviewPrompt,
   buildWorkerPrompt,
+  parseClarifyResponse,
+  DEFAULT_CLARIFY_PROMPT_TEMPLATE,
   DEFAULT_DECOMPOSE_PROMPT_TEMPLATE,
   DEFAULT_IMPLEMENT_PROMPT_TEMPLATE,
   DEFAULT_PLAN_PROMPT_TEMPLATE,
@@ -146,5 +149,63 @@ describe('new-task-prompt', () => {
       plan: 'plan',
     });
     expect(blank).toContain(NO_CONTEXT_MARKER);
+  });
+
+  it('builds a clarify prompt from trimmed inputs', () => {
+    const prompt = buildClarifyPrompt(DEFAULT_CLARIFY_PROMPT_TEMPLATE, {
+      problem: '  make it faster  ',
+      context: '  the list view  ',
+    });
+    expect(prompt).toContain('make it faster');
+    expect(prompt).toContain('the list view');
+    expect(prompt).not.toContain(NO_CONTEXT_MARKER);
+  });
+
+  it('falls back to the marker when clarify context is blank', () => {
+    const prompt = buildClarifyPrompt(DEFAULT_CLARIFY_PROMPT_TEMPLATE, {
+      problem: 'p',
+      context: '   ',
+    });
+    expect(prompt).toContain(NO_CONTEXT_MARKER);
+  });
+
+  it('parses a clarify response, trimming and dropping blanks/non-strings', () => {
+    const parsed = parseClarifyResponse(
+      'Here you go:\n```json\n{"improvedProblem":"  Clear ask  ","missingInfo":["  affected files  ","", 7, "edge cases"]}\n```',
+      'original',
+    );
+    expect(parsed.improvedProblem).toBe('Clear ask');
+    expect(parsed.missingInfo).toEqual(['affected files', 'edge cases']);
+  });
+
+  it('clarify parse degrades to the fallback on malformed or non-object output', () => {
+    expect(parseClarifyResponse('no json here', '  fallback  ')).toEqual({
+      improvedProblem: 'fallback',
+      missingInfo: [],
+    });
+    expect(parseClarifyResponse('{bad json}', 'fb')).toEqual({
+      improvedProblem: 'fb',
+      missingInfo: [],
+    });
+    expect(parseClarifyResponse('[1,2,3]', 'fb')).toEqual({
+      improvedProblem: 'fb',
+      missingInfo: [],
+    });
+    expect(parseClarifyResponse('null', 'fb')).toEqual({
+      improvedProblem: 'fb',
+      missingInfo: [],
+    });
+  });
+
+  it('clarify parse keeps the fallback when improvedProblem is blank or missing', () => {
+    expect(
+      parseClarifyResponse('{"improvedProblem":"   ","missingInfo":[]}', 'fb'),
+    ).toEqual({ improvedProblem: 'fb', missingInfo: [] });
+    expect(
+      parseClarifyResponse('{"missingInfo":["x"]}', 'fb'),
+    ).toEqual({ improvedProblem: 'fb', missingInfo: ['x'] });
+    expect(
+      parseClarifyResponse('{"improvedProblem":"ok"}', 'fb'),
+    ).toEqual({ improvedProblem: 'ok', missingInfo: [] });
   });
 });

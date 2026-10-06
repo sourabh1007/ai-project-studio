@@ -603,6 +603,24 @@ export interface BugBashRefineResult {
 export interface NewTaskRefineResult {
   reply: string;
   run: NewTaskRun;
+  /**
+   * The complete revised plan the turn proposes, awaiting the user's consent,
+   * or null when the turn only answered without proposing a change. The stored
+   * plan is unchanged until the user accepts it (see `applyRefinedNewTaskPlan`).
+   */
+  proposal: string | null;
+}
+
+/**
+ * The result of a "clarify the problem statement" turn: a clearer, well-scoped
+ * rewrite of the problem plus the concrete pieces of information still missing.
+ * Non-destructive — the UI offers these for the user to apply/insert.
+ */
+export interface NewTaskClarifyResult {
+  /** The rewritten, well-scoped problem statement. */
+  improvedProblem: string;
+  /** Short phrases naming information still missing to plan confidently. */
+  missingInfo: string[];
 }
 
 /**

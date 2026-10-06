@@ -2057,6 +2057,36 @@ describe('new task client', () => {
       }),
     );
   });
+
+  it('applies a refined plan with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ run: { id: 'att1', plan: 'APPLIED' } }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.applyRefinedNewTaskPlan('f1', 'att1', 'APPLIED'),
+    ).resolves.toEqual({ run: { id: 'att1', plan: 'APPLIED' } });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/apply-plan');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ plan: 'APPLIED' }));
+  });
+
+  it('clarifies the problem statement with a JSON POST body', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({ improvedProblem: 'Clear ask', missingInfo: ['files'] }),
+    );
+    const client = createApiClient({ fetchImpl });
+    await expect(
+      client.clarifyNewTask('f1', 'att1', 'make it faster', 'the list'),
+    ).resolves.toEqual({ improvedProblem: 'Clear ask', missingInfo: ['files'] });
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/new-task/att1/clarify');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(
+      JSON.stringify({ problem: 'make it faster', context: 'the list' }),
+    );
+  });
 });
 
 describe('bug bash client', () => {

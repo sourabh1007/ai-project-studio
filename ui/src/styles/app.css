@@ -16974,6 +16974,159 @@ body.is-resizing {
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
+/* Describe step fills the available height instead of leaving a large empty
+   gap below a short card: the step panel claims the remaining vertical space
+   and the problem-statement field grows to use it. */
+.new-task-step-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.new-task-inputs {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.new-task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.new-task-field-grow {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.new-task-field-grow .new-task-textarea-grow {
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+.new-task-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.new-task-field-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.new-task-clarify-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.new-task-clarify-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+.new-task-clarify-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Planner clarification callout: a non-destructive panel offering a clearer
+   problem statement and chips for the missing details. */
+.new-task-clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+.new-task-clarify-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.new-task-clarify-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.new-task-clarify-close {
+  display: inline-flex;
+  padding: 2px;
+  color: var(--text-muted, var(--text));
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.7;
+}
+.new-task-clarify-close:hover {
+  opacity: 1;
+}
+.new-task-clarify-sub {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.new-task-clarify-improved,
+.new-task-clarify-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.new-task-clarify-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.new-task-clarify-improved .btn {
+  align-self: flex-start;
+}
+.new-task-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.new-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.new-task-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.new-task-chip-added {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  cursor: default;
+}
+.new-task-chip:disabled {
+  cursor: default;
+}
+
 /* Bug Bash — Prepare step (dynamically-generated prerequisite questions). */
 .bug-bash-prepare-intro {
   margin-bottom: 4px;
@@ -18952,6 +19105,37 @@ body.is-resizing {
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
   color: var(--text);
   max-width: 92%;
+}
+.refine-chat-assistant-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  max-width: 92%;
+}
+.refine-chat-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-1, rgba(127, 127, 127, 0.06));
+  font-size: 12px;
+}
+.refine-chat-proposal-note {
+  color: var(--text);
+}
+.refine-chat-proposal-actions {
+  display: flex;
+  gap: 8px;
+}
+.refine-chat-proposal-applied {
+  border-left-color: var(--success, #2ea043);
+}
+.refine-chat-proposal-discarded {
+  border-left-color: var(--border);
 }
 .refine-chat-form {
   display: flex;

@@ -43,14 +43,34 @@ export const DEFAULT_PLAN_PROMPT_TEMPLATE = [
   'Additional context:',
   '{{context}}',
   '',
-  'Investigate the relevant code, then write a clear, concrete implementation',
-  'plan a reviewer can approve. Use short markdown sections:',
-  '- "Summary": one paragraph on the approach.',
-  '- "Files to change": a bullet per file with what changes and why.',
-  '- "Steps": an ordered list of the edits to make.',
-  '- "Risks & tests": how the change is validated and what could break.',
-  'Ground every file path in something that actually exists. Keep it focused on',
-  'solving the stated problem — no unrelated work.',
+  'Investigate the relevant code, then write a SHORT plan a reviewer can approve',
+  'at a glance. Be terse: use phrases, not paragraphs. No preamble, no filler, do',
+  'not restate the problem. Group the work into a few small, clearly-labelled',
+  'categories, each a few one-line steps, and explain structure with compact',
+  'ASCII diagrams rather than prose. Use this shape:',
+  '',
+  '## Overview',
+  'One or two sentences on the approach — no more. Then a small ASCII diagram of',
+  'the overall flow or before→after, in a fenced code block, e.g.:',
+  '```',
+  'Request ─▶ Controller ─▶ Service ─▶ Repo',
+  '                 │',
+  '                 └─▶ emits event ─▶ UI',
+  '```',
+  '',
+  '## <Category>  (group by area, e.g. Backend / UI / Data — 2 to 5 categories)',
+  '1. `path/to/file` — what changes, in a short phrase.',
+  '2. …',
+  'Add a tiny ASCII diagram in a ``` code block ONLY when it makes a step clearer',
+  '(a flow, a tree, or a before/after). Keep diagrams to a few lines — not art —',
+  'and omit them where they add nothing.',
+  '',
+  '## Validation',
+  '- How it is tested and what could break — one line each.',
+  '',
+  'Rules: keep every step to a single line; ground each path in a file that',
+  'actually exists (or a new file the plan clearly adds); stay focused on the',
+  'stated problem — no unrelated work.',
 ].join('\n');
 
 /**
@@ -104,6 +124,100 @@ export function buildImplementPrompt(
     context: input.context.trim() || NO_CONTEXT_MARKER,
     plan: input.plan.trim(),
   });
+}
+
+/**
+ * The default "clarify the problem statement" prompt. It does NOT touch the
+ * repository and NEVER plans — it only helps the user sharpen their ask before
+ * planning: it rewrites the problem statement to be clear and well-scoped, and
+ * lists the concrete pieces of information that are still missing. The model
+ * must answer as strict JSON so the service can parse it deterministically.
+ * Placeholders: {{problem}}, {{context}}.
+ */
+export const DEFAULT_CLARIFY_PROMPT_TEMPLATE = [
+  'You are an expert software engineer helping a user sharpen a task request',
+  'BEFORE any planning or coding happens. Do NOT modify files, do NOT write a',
+  'plan, and do NOT investigate the repository. Work only from the text below.',
+  '',
+  'Problem statement:',
+  '{{problem}}',
+  '',
+  'Additional context:',
+  '{{context}}',
+  '',
+  'Do two things:',
+  '1. Rewrite the problem statement so it is clear, specific, and well-scoped —',
+  '   a crisp paragraph an engineer could act on. Preserve the user\'s intent and',
+  '   every concrete detail they gave (links, names, constraints). Do NOT invent',
+  '   facts; if something is unknown, leave it out rather than guessing.',
+  '2. List the specific pieces of information still MISSING that would make this',
+  '   task unambiguous and ready to plan — e.g. affected files/modules, acceptance',
+  '   criteria, constraints, edge cases, environments, or links. Each item is a',
+  '   short noun phrase the user can answer, not a full sentence.',
+  '',
+  'Respond with STRICT JSON only — no markdown, no commentary — in exactly this',
+  'shape:',
+  '{',
+  '  "improvedProblem": "the rewritten problem statement as a single string",',
+  '  "missingInfo": ["short phrase", "short phrase", ...]',
+  '}',
+  'Return between 0 and 6 missingInfo items (omit any that are already answered).',
+].join('\n');
+
+/** The parsed result of a clarify turn. */
+export interface ClarifyResult {
+  improvedProblem: string;
+  missingInfo: string[];
+}
+
+/** Render the clarify prompt from the user's current inputs. */
+export function buildClarifyPrompt(
+  template: string,
+  input: { problem: string; context: string },
+): string {
+  return applyTemplate(template, {
+    problem: input.problem.trim(),
+    context: input.context.trim() || NO_CONTEXT_MARKER,
+  });
+}
+
+/**
+ * Parse the strict-JSON clarify response. The model occasionally wraps JSON in
+ * prose or a ```json fence, so the first balanced `{…}` object is extracted
+ * before parsing. Malformed output degrades gracefully to a usable result
+ * (the original text as the improved statement, no missing-info items) so the
+ * UI never breaks on a bad turn.
+ */
+export function parseClarifyResponse(
+  raw: string,
+  fallbackProblem: string,
+): ClarifyResult {
+  const empty: ClarifyResult = {
+    improvedProblem: fallbackProblem.trim(),
+    missingInfo: [],
+  };
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return empty;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return empty;
+  }
+  const record = parsed as Record<string, unknown>;
+  const improved =
+    typeof record.improvedProblem === 'string' &&
+    record.improvedProblem.trim().length > 0
+      ? record.improvedProblem.trim()
+      : empty.improvedProblem;
+  const missingInfo = Array.isArray(record.missingInfo)
+    ? record.missingInfo
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    : [];
+  return { improvedProblem: improved, missingInfo };
 }
 
 /**

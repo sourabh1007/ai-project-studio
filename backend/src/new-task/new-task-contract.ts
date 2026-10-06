@@ -10,6 +10,7 @@
  */
 
 import type { RefineChatMessage } from '../refine-chat/refine-chat.js';
+import type { ClarifyResult } from './new-task-prompt.js';
 
 /**
  * The lifecycle of one New Task run.
@@ -230,8 +231,15 @@ export interface NewTaskReviewPort {
 export interface NewTaskRefineResult {
   /** The assistant's markdown reply to append to the chat. */
   reply: string;
-  /** The run, with the plan replaced when the turn revised it. */
+  /** The run, unchanged by the turn — a proposed edit is NOT applied here. */
   run: NewTaskRun;
+  /**
+   * The COMPLETE revised plan the turn proposes, awaiting the user's consent, or
+   * null when the turn only answered/discussed without proposing a change. The
+   * caller shows it for Apply/Discard and calls {@link NewTaskService.applyRefinedPlan}
+   * on Apply; nothing is persisted until then.
+   */
+  proposal: string | null;
 }
 
 /** One streamed progress line while a run's plan/implement turn executes. */
@@ -341,6 +349,19 @@ export interface NewTaskService {
     inputs: NewTaskInputs,
   ): NewTaskRun;
   /**
+   * Help the user sharpen the task BEFORE planning: run a lightweight AI turn
+   * over the current (possibly unsaved) problem + context and return a clearer,
+   * well-scoped rewrite of the problem statement plus the concrete pieces of
+   * information still missing. Reads nothing from the repo and persists nothing
+   * — the UI shows the result for the user to Apply/insert. `featureId` scopes
+   * the AI run to the feature's workspace. Throws when the problem is blank.
+   */
+  clarify(
+    featureId: string,
+    inputs: NewTaskInputs,
+    signal?: AbortSignal,
+  ): Promise<ClarifyResult>;
+  /**
    * Run the AI planner and return the run enriched with its plan. When a `sink`
    * is supplied the planning activity is streamed to it (and the settled run or
    * failure reported through it instead of throwing); `options` can override the
@@ -365,8 +386,9 @@ export interface NewTaskService {
   /**
    * Run one plan refine-chat turn: the user challenges or asks to edit the
    * generated plan in plain language. `history` is the prior conversation and
-   * `message` the new user message. Returns the assistant reply and the run,
-   * with the plan replaced when the turn revised it.
+   * `message` the new user message. Returns the assistant reply plus a proposed
+   * revised plan (when the turn asked for a change) awaiting the user's consent —
+   * the stored plan is NOT changed here; call {@link applyRefinedPlan} to accept.
    */
   refine(
     attachmentId: string,
@@ -374,6 +396,14 @@ export interface NewTaskService {
     message: string,
     signal?: AbortSignal,
   ): Promise<NewTaskRefineResult>;
+  /**
+   * Apply a plan revision the user accepted from the refine chat: replace the
+   * run's plan with `plan` and persist it. This is the consent step for a
+   * {@link NewTaskRefineResult.proposal} — `refine` never changes the plan on
+   * its own. Throws when the plan is blank, no run exists, or a PR is already
+   * open (a shipped task's plan is frozen). Returns the updated run.
+   */
+  applyRefinedPlan(attachmentId: string, plan: string): NewTaskRun;
   /**
    * Cancel-and-reset: revert an in-flight (`planning`/`implementing`) or
    * `failed` run to a clean `draft` so it can be retried from its inputs. The

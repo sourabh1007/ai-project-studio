@@ -5,6 +5,7 @@ import {
   DEFAULT_PLAN_PROMPT_TEMPLATE,
   DEFAULT_REVIEW_PROMPT_TEMPLATE,
   DEFAULT_WORKER_PROMPT_TEMPLATE,
+  DEFAULT_CLARIFY_PROMPT_TEMPLATE,
 } from './new-task-prompt.js';
 import { DEFAULT_REFINE_PROMPT_TEMPLATE } from '../refine-chat/refine-chat.js';
 
@@ -53,6 +54,11 @@ export const newTaskConfigSchema = z.object({
    * {{artifact}}, {{revisedHint}}, {{transcript}}, {{message}}.
    */
   refinePromptTemplate: z.string().min(1),
+  /**
+   * Clarify prompt: sharpens the problem statement before planning and lists
+   * the information still missing. Placeholders: {{problem}}, {{context}}.
+   */
+  clarifyPromptTemplate: z.string().min(1),
 });
 
 export type NewTaskConfig = z.infer<typeof newTaskConfigSchema>;
@@ -72,4 +78,5 @@ export const newTaskDefaults: NewTaskConfig = {
   workerPromptTemplate: DEFAULT_WORKER_PROMPT_TEMPLATE,
   reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
   refinePromptTemplate: DEFAULT_REFINE_PROMPT_TEMPLATE,
+  clarifyPromptTemplate: DEFAULT_CLARIFY_PROMPT_TEMPLATE,
 };
