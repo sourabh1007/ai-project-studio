@@ -102,11 +102,38 @@ export function extractJsonObject(text: string): string | null {
 }
 
 /**
+ * Split a list of files into `count` contiguous, roughly-even groups. Keeping
+ * each group contiguous preserves the manager's file ordering, so files it
+ * listed next to each other (e.g. a module and its test) tend to stay together.
+ */
+export function splitIntoGroups(files: string[], count: number): string[][] {
+  const groups: string[][] = [];
+  const n = Math.min(count, files.length);
+  if (n <= 1) {
+    return [files];
+  }
+  const base = Math.floor(files.length / n);
+  const remainder = files.length % n;
+  let cursor = 0;
+  for (let i = 0; i < n; i += 1) {
+    const size = base + (i < remainder ? 1 : 0);
+    groups.push(files.slice(cursor, cursor + size));
+    cursor += size;
+  }
+  return groups;
+}
+
+/**
  * Parse the manager's decomposition into file-disjoint slices, clamped to
  * `maxWorkers`. Files claimed by an earlier slice are dropped from later ones so
  * no two workers ever own the same file. Slices left with no files after that
  * dedupe are discarded. Falls back to a single whole-plan slice when the
  * response can't be parsed or yields no file-bearing slices.
+ *
+ * When the manager returns a SINGLE file-bearing slice that spans several files
+ * and the budget allows more workers, the slice is deterministically fanned out
+ * into contiguous sub-slices so the implementation still runs in parallel; the
+ * lead agent's review turn integrates any seams afterwards.
  */
 export function parseDecomposition(
   text: string,
@@ -151,7 +178,23 @@ export function parseDecomposition(
       role: raw.role ?? 'developer',
     });
   }
-  return slices.length > 0 ? slices : fallback;
+  if (slices.length === 0) {
+    return fallback;
+  }
+  if (slices.length === 1 && slices[0].files.length >= 2 && maxWorkers >= 2) {
+    return fanOutSingleSlice(slices[0], maxWorkers);
+  }
+  return slices;
+}
+
+/** Fan a single multi-file slice out into contiguous parallel sub-slices. */
+function fanOutSingleSlice(slice: WorkSlice, maxWorkers: number): WorkSlice[] {
+  return splitIntoGroups(slice.files, maxWorkers).map((files, index) => ({
+    title: `${slice.title} (part ${index + 1})`,
+    description: slice.description,
+    files,
+    role: slice.role,
+  }));
 }
 
 /**

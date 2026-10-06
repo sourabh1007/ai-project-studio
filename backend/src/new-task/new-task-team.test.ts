@@ -9,6 +9,7 @@ import {
   extractJsonObject,
   MANAGER_AGENT_ID,
   parseDecomposition,
+  splitIntoGroups,
   type NewTaskTeamSink,
 } from './new-task-team.js';
 
@@ -181,6 +182,88 @@ describe('parseDecomposition', () => {
     expect(slices).toEqual([
       { title: 'Slice 1', description: '', files: ['a.ts'], role: 'developer' },
     ]);
+  });
+
+  it('fans a single multi-file slice out into contiguous parallel sub-slices', () => {
+    const slices = parseDecomposition(
+      fence(
+        JSON.stringify({
+          workers: [
+            {
+              title: 'Everything',
+              description: 'all of it',
+              role: 'tester',
+              files: ['a.ts', 'b.ts', 'c.ts'],
+            },
+          ],
+        }),
+      ),
+      2,
+    );
+    expect(slices).toEqual([
+      {
+        title: 'Everything (part 1)',
+        description: 'all of it',
+        files: ['a.ts', 'b.ts'],
+        role: 'tester',
+      },
+      {
+        title: 'Everything (part 2)',
+        description: 'all of it',
+        files: ['c.ts'],
+        role: 'tester',
+      },
+    ]);
+  });
+
+  it('does not fan out a single one-file slice', () => {
+    const slices = parseDecomposition(
+      fence(JSON.stringify({ workers: [{ title: 'Solo', files: ['only.ts'] }] })),
+      4,
+    );
+    expect(slices).toEqual([
+      { title: 'Solo', description: '', files: ['only.ts'], role: 'developer' },
+    ]);
+  });
+
+  it('does not fan out when the worker budget is one', () => {
+    const slices = parseDecomposition(
+      fence(JSON.stringify({ workers: [{ title: 'Solo', files: ['a.ts', 'b.ts'] }] })),
+      1,
+    );
+    expect(slices).toEqual([
+      { title: 'Solo', description: '', files: ['a.ts', 'b.ts'], role: 'developer' },
+    ]);
+  });
+});
+
+describe('splitIntoGroups', () => {
+  it('returns a single group when the count is one or fewer', () => {
+    expect(splitIntoGroups(['a', 'b', 'c'], 1)).toEqual([['a', 'b', 'c']]);
+    expect(splitIntoGroups(['a'], 0)).toEqual([['a']]);
+  });
+
+  it('returns a single group when there is at most one file', () => {
+    expect(splitIntoGroups(['only'], 3)).toEqual([['only']]);
+  });
+
+  it('splits evenly into contiguous groups', () => {
+    expect(splitIntoGroups(['a', 'b', 'c', 'd'], 2)).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
+  });
+
+  it('gives earlier groups the remainder when the split is uneven', () => {
+    expect(splitIntoGroups(['a', 'b', 'c', 'd', 'e'], 3)).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+      ['e'],
+    ]);
+  });
+
+  it('caps the group count at the number of files', () => {
+    expect(splitIntoGroups(['a', 'b'], 5)).toEqual([['a'], ['b']]);
   });
 });
 

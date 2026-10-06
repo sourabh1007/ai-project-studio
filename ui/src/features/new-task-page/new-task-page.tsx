@@ -248,6 +248,18 @@ function AgentCard({
           ))}
         </div>
       )}
+      {workers.length === 0 && agent.role === 'manager' && isLive && (
+        <div className="new-task-agent-children">
+          <div
+            className="new-task-agent-forming"
+            role="status"
+            aria-label="Assembling sub-agents"
+          >
+            <span className="new-task-spinner" aria-hidden="true" />
+            Assembling sub-agents…
+          </div>
+        </div>
+      )}
     </div>
   );
 }
