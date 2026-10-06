@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { useMicrosoftSignedIn } from '../../hooks/use-microsoft-identity.js';
+import { installedProviders } from '../../lib/providers.js';
+import { providerLabel } from '../../lib/meta-model.js';
 import {
   Button,
   Card,
@@ -22,6 +25,8 @@ import type {
   MetaSessionInfo,
   MetaSessionState,
   MetaSettings,
+  ModelInfo,
+  ProviderInfo,
 } from '../../lib/types.js';
 import {
   formatClock,
@@ -617,8 +622,12 @@ const PRICE_LABEL: Record<string, string> = {
  */
 function MetaModelPicker(): JSX.Element {
   const api = useApi();
+  const signedIn = useMicrosoftSignedIn();
   const [settings, setSettings] = useState<MetaSettings | null>(null);
   const [models, setModels] = useState<MetaModelOption[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerModels, setProviderModels] = useState<ModelInfo[]>([]);
+  const [draftProvider, setDraftProvider] = useState('');
   const [draftModel, setDraftModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -635,11 +644,22 @@ function MetaModelPicker(): JSX.Element {
         if (!alive) return;
         setSettings(value);
         setDraftModel(value.model);
+        setDraftProvider(value.providerId ?? '');
       })
       .catch(() => {
         // Don't swallow into a permanent spinner: surface a retryable error so
         // a transient hiccup (slow/hung backend) can be recovered by the user.
         if (alive) setSettingsError(true);
+      });
+    // The installed providers power the provider selector; Agency only appears
+    // once a Microsoft identity is signed in, so this is re-read when `signedIn`
+    // flips (see the dependency list).
+    void Promise.resolve(api.listProviders?.())
+      .then((list) => {
+        if (alive) setProviders(list ? installedProviders(list) : []);
+      })
+      .catch(() => {
+        if (alive) setProviders([]);
       });
     // The catalog is sourced from Agency over ACP; the very first request after
     // launch spawns the CLI and can briefly return an empty list while it warms
@@ -673,13 +693,63 @@ function MetaModelPicker(): JSX.Element {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [api, reloadKey]);
+  }, [api, reloadKey, signedIn]);
+
+  // Per-provider model list, loaded only when the draft provider differs from
+  // the saved one (whose richer, cost-annotated catalog comes from getMetaModels
+  // below). Tolerates a backend that can't list a provider's models.
+  function loadProviderModels(providerId: string): void {
+    void Promise.resolve(api.listModels?.(providerId))
+      .then((list) => setProviderModels(list ?? []))
+      .catch(() => setProviderModels([]));
+  }
+
+  function onProviderChange(providerId: string): void {
+    setDraftProvider(providerId);
+    setDraftModel('auto');
+    setProviderModels([]);
+    setSaved(false);
+    if (settings && providerId !== settings.providerId) {
+      loadProviderModels(providerId);
+    }
+  }
+
+  // The current provider's cost-annotated catalog applies only while the draft
+  // provider matches the saved one; after switching provider, fall back to that
+  // provider's plain model list.
+  const useCatalog =
+    settings !== null &&
+    (draftProvider === '' || draftProvider === settings.providerId);
 
   // Always keep the current selection choosable even if the live catalog omits
   // it (custom or legacy id): fall back to a synthetic option.
   const options = useMemo<MetaModelOption[]>(() => {
-    if (draftModel === '' || models.some((m) => m.id === draftModel)) {
-      return models;
+    const base: MetaModelOption[] = useCatalog
+      ? models
+      : [
+          {
+            id: 'auto',
+            name: 'Auto',
+            description: '',
+            usageMultiplier: null,
+            usageLabel: null,
+            priceCategory: null,
+            enabled: true,
+          },
+          ...providerModels
+            .filter((m) => m.id !== 'auto')
+            .map((m) => ({
+              id: m.id,
+              name: m.label,
+              description: '',
+              usageMultiplier: null,
+              usageLabel: null,
+              priceCategory: null,
+              enabled: true,
+            })),
+        ];
+    if (draftModel === '' || base.some((m) => m.id === draftModel)) {
+      return base;
     }
     return [
       {
@@ -691,12 +761,14 @@ function MetaModelPicker(): JSX.Element {
         priceCategory: null,
         enabled: true,
       },
-      ...models,
+      ...base,
     ];
-  }, [models, draftModel]);
+  }, [models, providerModels, useCatalog, draftModel]);
 
   const selected = options.find((m) => m.id === draftModel) ?? null;
-  const dirty = settings !== null && draftModel !== settings.model;
+  const dirty =
+    settings !== null &&
+    (draftModel !== settings.model || draftProvider !== settings.providerId);
 
   async function apply(): Promise<void> {
     if (!settings) return;
@@ -704,11 +776,12 @@ function MetaModelPicker(): JSX.Element {
     setError(null);
     try {
       const next = await api.updateMetaSettings({
-        providerId: settings.providerId,
+        providerId: draftProvider || settings.providerId,
         model: draftModel,
       });
       setSettings(next);
       setDraftModel(next.model);
+      setDraftProvider(next.providerId);
       setSaved(true);
     } catch {
       setError('Could not update the AI model. Try again.');
@@ -746,6 +819,26 @@ function MetaModelPicker(): JSX.Element {
         </p>
       </div>
       <div className="metamodel-row">
+        <label className="metamodel-field">
+          <span className="metapool-field-label">Provider</span>
+          <select
+            className="input"
+            value={draftProvider}
+            disabled={saving}
+            onChange={(e) => onProviderChange(e.target.value)}
+          >
+            {providers.length === 0 && (
+              <option value={draftProvider}>
+                {providerLabel(draftProvider)}
+              </option>
+            )}
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {providerLabel(provider.id)}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="metamodel-field">
           <span className="metapool-field-label">Model</span>
           <select

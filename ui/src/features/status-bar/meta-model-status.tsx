@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { useMicrosoftSignedIn } from '../../hooks/use-microsoft-identity.js';
 import { metaModelLabel } from '../../lib/meta-model.js';
 import { installedProviders } from '../../lib/providers.js';
 import { Button } from '../../components/ui.js';
@@ -18,6 +19,11 @@ import type {
  */
 export function MetaModelStatus(): JSX.Element | null {
   const api = useApi();
+  // The exposed metasession provider tracks the live default (Agency once a
+  // Microsoft identity is signed in, Copilot otherwise). Re-read the settings
+  // whenever that identity flips so the label never sticks on the pre-sign-in
+  // provider shown at first paint.
+  const signedIn = useMicrosoftSignedIn();
   const [settings, setSettings] = useState<MetaSettings | null>(null);
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -41,7 +47,7 @@ export function MetaModelStatus(): JSX.Element | null {
     return () => {
       alive = false;
     };
-  }, [api]);
+  }, [api, signedIn]);
 
   const loadModels = useCallback(
     (providerId: string) => {
