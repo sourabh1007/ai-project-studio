@@ -347,8 +347,9 @@ describe('parseNameStatus', () => {
 });
 
 describe('changedFilesAgainst', () => {
-  it('diffs the branch against its base and parses the summary', async () => {
+  it('resolves the remote base ref and parses the summary', async () => {
     const { git, calls } = scriptedRunner([
+      { code: 0, stdout: 'abc123\n', stderr: '' },
       { code: 0, stdout: 'M\tsrc/a.ts\n', stderr: '' },
     ]);
     const port = createNewTaskGit({ git, pathExists: () => false,
@@ -358,13 +359,51 @@ describe('changedFilesAgainst', () => {
       baseBranch: 'main',
     });
     expect(calls[0]).toEqual([
-      '-C', '/wt', 'diff', '--name-status', 'main...HEAD',
+      '-C', '/wt', 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}',
+    ]);
+    expect(calls[1]).toEqual([
+      '-C', '/wt', 'diff', '--name-status', 'abc123...HEAD',
     ]);
     expect(files).toEqual([{ path: 'src/a.ts', changeType: 'modified' }]);
   });
 
+  it('falls back to the local base ref when origin is blank', async () => {
+    const { git, calls } = scriptedRunner([
+      { code: 0, stdout: '   \n', stderr: '' },
+      { code: 0, stdout: 'def456\n', stderr: '' },
+      { code: 0, stdout: 'A\tsrc/b.ts\n', stderr: '' },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => false,
+      removeDir: () => {} });
+    const files = await port.changedFilesAgainst({
+      worktreePath: '/wt',
+      baseBranch: 'main',
+    });
+    expect(calls[1]).toEqual([
+      '-C', '/wt', 'rev-parse', '--verify', '--quiet', 'main^{commit}',
+    ]);
+    expect(calls[2]).toEqual([
+      '-C', '/wt', 'diff', '--name-status', 'def456...HEAD',
+    ]);
+    expect(files).toEqual([{ path: 'src/b.ts', changeType: 'added' }]);
+  });
+
+  it('falls back to HEAD when no base ref resolves', async () => {
+    const { git, calls } = scriptedRunner([
+      { code: 1, stdout: '', stderr: '' },
+      { code: 1, stdout: '', stderr: '' },
+      { code: 0, stdout: '', stderr: '' },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => false,
+      removeDir: () => {} });
+    await port.changedFilesAgainst({ worktreePath: '/wt', baseBranch: 'main' });
+    expect(calls[2]).toEqual([
+      '-C', '/wt', 'diff', '--name-status', 'HEAD...HEAD',
+    ]);
+  });
+
   it('throws when the diff fails', async () => {
-    const { git } = scriptedRunner([FAIL]);
+    const { git } = scriptedRunner([{ code: 0, stdout: 'abc\n', stderr: '' }, FAIL]);
     const port = createNewTaskGit({ git, pathExists: () => false,
       removeDir: () => {} });
     await expect(
@@ -373,7 +412,10 @@ describe('changedFilesAgainst', () => {
   });
 
   it('uses a generic message when the diff has no stderr', async () => {
-    const { git } = scriptedRunner([{ code: 1, stdout: '', stderr: '' }]);
+    const { git } = scriptedRunner([
+      { code: 0, stdout: 'abc\n', stderr: '' },
+      { code: 1, stdout: '', stderr: '' },
+    ]);
     const port = createNewTaskGit({ git, pathExists: () => false,
       removeDir: () => {} });
     await expect(
@@ -383,8 +425,9 @@ describe('changedFilesAgainst', () => {
 });
 
 describe('fileDiff', () => {
-  it('returns the diff and full branch content for a file', async () => {
+  it('returns the live (working-tree) diff and full branch content', async () => {
     const { git, calls } = scriptedRunner([
+      { code: 0, stdout: 'abc123\n', stderr: '' },
       { code: 0, stdout: '@@ -1 +1 @@\n-old\n+new\n', stderr: '' },
       { code: 0, stdout: 'new\n', stderr: '' },
     ]);
@@ -396,9 +439,12 @@ describe('fileDiff', () => {
       path: 'src/a.ts',
     });
     expect(calls[0]).toEqual([
-      '-C', '/wt', 'diff', 'main...HEAD', '--', 'src/a.ts',
+      '-C', '/wt', 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}',
     ]);
-    expect(calls[1]).toEqual(['-C', '/wt', 'show', 'HEAD:src/a.ts']);
+    expect(calls[1]).toEqual([
+      '-C', '/wt', 'diff', 'abc123', '--', 'src/a.ts',
+    ]);
+    expect(calls[2]).toEqual(['-C', '/wt', 'show', 'HEAD:src/a.ts']);
     expect(result).toEqual({
       path: 'src/a.ts',
       diff: '@@ -1 +1 @@\n-old\n+new\n',
@@ -408,6 +454,7 @@ describe('fileDiff', () => {
 
   it('degrades to empty content when the file no longer exists', async () => {
     const { git } = scriptedRunner([
+      { code: 0, stdout: 'abc\n', stderr: '' },
       { code: 0, stdout: 'diff', stderr: '' },
       { code: 1, stdout: '', stderr: 'missing' },
     ]);
@@ -423,7 +470,7 @@ describe('fileDiff', () => {
   });
 
   it('throws when the diff fails', async () => {
-    const { git } = scriptedRunner([FAIL]);
+    const { git } = scriptedRunner([{ code: 0, stdout: 'abc\n', stderr: '' }, FAIL]);
     const port = createNewTaskGit({ git, pathExists: () => false,
       removeDir: () => {} });
     await expect(
@@ -432,7 +479,10 @@ describe('fileDiff', () => {
   });
 
   it('uses a generic message when the diff has no stderr', async () => {
-    const { git } = scriptedRunner([{ code: 1, stdout: '', stderr: '' }]);
+    const { git } = scriptedRunner([
+      { code: 0, stdout: 'abc\n', stderr: '' },
+      { code: 1, stdout: '', stderr: '' },
+    ]);
     const port = createNewTaskGit({ git, pathExists: () => false,
       removeDir: () => {} });
     await expect(

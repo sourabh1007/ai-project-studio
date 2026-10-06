@@ -18804,6 +18804,18 @@ body.is-resizing {
   white-space: nowrap;
 }
 
+.new-task-diff-planned {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  white-space: nowrap;
+}
+
 .new-task-diff-actions {
   display: flex;
   align-items: center;

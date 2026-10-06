@@ -283,16 +283,44 @@ export function createNewTaskGit(deps: NewTaskGitDeps): NewTaskGitPort {
     }
   }
 
+  /**
+   * Resolve a base commit that actually exists in the worktree. The branch is
+   * cut from `origin/<base>` (local `<base>` often does not exist in a
+   * worktree), so a literal `<base>...HEAD` revision fails with
+   * "bad revision". Probe the remote-tracking ref first, then the local ref,
+   * and fall back to HEAD so a diff can always be computed.
+   */
+  async function resolveBaseRev(
+    worktreePath: string,
+    baseBranch: string,
+  ): Promise<string> {
+    for (const ref of [`origin/${baseBranch}`, baseBranch]) {
+      const probe = await deps.git([
+        '-C',
+        worktreePath,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `${ref}^{commit}`,
+      ]);
+      if (probe.code === 0 && probe.stdout.trim().length > 0) {
+        return probe.stdout.trim();
+      }
+    }
+    return 'HEAD';
+  }
+
   async function changedFilesAgainst(input: {
     worktreePath: string;
     baseBranch: string;
   }): Promise<NewTaskFileChange[]> {
+    const base = await resolveBaseRev(input.worktreePath, input.baseBranch);
     const diff = await deps.git([
       '-C',
       input.worktreePath,
       'diff',
       '--name-status',
-      `${input.baseBranch}...HEAD`,
+      `${base}...HEAD`,
     ]);
     if (diff.code !== 0) {
       throw new ValidationError(
@@ -307,11 +335,15 @@ export function createNewTaskGit(deps: NewTaskGitDeps): NewTaskGitPort {
     baseBranch: string;
     path: string;
   }): Promise<NewTaskFileDiff> {
+    const base = await resolveBaseRev(input.worktreePath, input.baseBranch);
+    // Two-dot (base vs working tree) so an *in-progress* change — edited but not
+    // yet committed, as when the user clicks a file mid-implementation — still
+    // shows its live diff instead of nothing.
     const diff = await deps.git([
       '-C',
       input.worktreePath,
       'diff',
-      `${input.baseBranch}...HEAD`,
+      base,
       '--',
       input.path,
     ]);

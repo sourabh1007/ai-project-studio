@@ -372,6 +372,7 @@ function FileDiffModal({
   diff,
   loading,
   error,
+  plannedBy,
   showFull,
   onToggleFull,
   onClose,
@@ -380,6 +381,7 @@ function FileDiffModal({
   diff: NewTaskFileDiff | null;
   loading: boolean;
   error: string | null;
+  plannedBy: string | null;
   showFull: boolean;
   onToggleFull: () => void;
   onClose: () => void;
@@ -403,6 +405,11 @@ function FileDiffModal({
           <div className="new-task-diff-title">
             <FileIcon size={14} />
             <code>{path}</code>
+            {plannedBy && (
+              <span className="new-task-diff-planned" title="Which agent owns this file's change">
+                {plannedBy}
+              </span>
+            )}
           </div>
           <div className="new-task-diff-actions">
             <button
@@ -1857,6 +1864,12 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
           diff={fileDiff}
           loading={fileDiffLoading}
           error={fileDiffError}
+          plannedBy={(() => {
+            const owner = agentList.find((a) => a.files.includes(openFilePath));
+            return owner
+              ? `${AGENT_ROLE_LABEL[owner.role]} · ${owner.title}`
+              : null;
+          })()}
           showFull={showFullFile}
           onToggleFull={() => setShowFullFile((prev) => !prev)}
           onClose={closeFile}
