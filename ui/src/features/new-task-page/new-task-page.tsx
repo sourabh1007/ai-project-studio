@@ -19,6 +19,7 @@ import {
   CheckIcon,
   ChevronIcon,
   CloseIcon,
+  ExpandIcon,
   ExportIcon,
   FileIcon,
   LaunchIcon,
@@ -26,6 +27,7 @@ import {
   PencilIcon,
   PlusIcon,
   PrReviewIcon,
+  RestoreIcon,
   TaskPlanSkillIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
@@ -94,6 +96,34 @@ const AGENT_ROLE_LABEL: Record<NewTaskAgent['role'], string> = {
   manager: 'Lead agent',
   developer: 'Developer',
   tester: 'Tester',
+};
+
+/** The visual progress state of a file chip, derived from its owning agent. */
+type FileProgress = 'pending' | 'running' | 'done' | 'failed';
+
+/**
+ * Map an agent's lifecycle status to the progress state shown on its file
+ * chips. A file's change is only as far along as the agent editing it, so the
+ * chip doubles as a per-file progress bar.
+ */
+function fileProgress(status: NewTaskAgent['status']): FileProgress {
+  return status;
+}
+
+/** How full the chip's progress bar renders for each state. */
+const FILE_PROGRESS_PCT: Record<FileProgress, number> = {
+  pending: 0,
+  running: 100,
+  done: 100,
+  failed: 100,
+};
+
+/** Accessible label describing a file chip's progress. */
+const FILE_PROGRESS_LABEL: Record<FileProgress, string> = {
+  pending: 'queued — not started',
+  running: 'change in progress',
+  done: 'change complete',
+  failed: 'change failed',
 };
 
 /**
@@ -190,11 +220,16 @@ function AgentCard({
             <button
               key={file}
               type="button"
-              className="new-task-file-chip"
+              className={`new-task-file-chip is-${fileProgress(agent.status)}`}
               onClick={() => onOpenFile(file)}
-              title="Show this file's diff"
+              title={`${file} — ${FILE_PROGRESS_LABEL[fileProgress(agent.status)]}`}
             >
-              {file}
+              <span
+                className="new-task-file-chip-fill"
+                style={{ width: `${FILE_PROGRESS_PCT[fileProgress(agent.status)]}%` }}
+                aria-hidden="true"
+              />
+              <span className="new-task-file-chip-label">{file}</span>
             </button>
           ))}
         </div>
@@ -606,19 +641,42 @@ function ImplementActivityLog({
   agents: Record<string, NewTaskAgent>;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
     const body = bodyRef.current;
     if (body) {
       body.scrollTop = body.scrollHeight;
     }
-  }, [entries]);
+  }, [entries, fullscreen]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
   return (
-    <section className="new-task-log new-task-log--tall">
+    <section
+      className={`new-task-log new-task-log--tall${
+        fullscreen ? ' new-task-log--fullscreen' : ''
+      }`}
+    >
       <h3>
         {busy && <span className="new-task-spinner" aria-hidden="true" />}
         <ActivityIcon size={15} />
         Implementation activity
         <span className="new-task-log-count">{entries.length}</span>
+        <button
+          type="button"
+          className="new-task-log-expand"
+          onClick={() => setFullscreen((on) => !on)}
+          aria-pressed={fullscreen}
+          title={fullscreen ? 'Exit full screen' : 'View full screen'}
+          aria-label={fullscreen ? 'Exit full screen' : 'View full screen'}
+        >
+          {fullscreen ? <RestoreIcon size={14} /> : <ExpandIcon size={14} />}
+        </button>
       </h3>
       <div className="new-task-log-body" ref={bodyRef}>
         {entries.length === 0 ? (

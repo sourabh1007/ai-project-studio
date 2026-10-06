@@ -18196,6 +18196,46 @@ body.is-resizing {
   border: 1px solid var(--border);
 }
 
+/* Full-screen toggle for the implementation activity log. */
+.new-task-log-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.new-task-log-expand:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+/* The log blown up to fill the viewport. */
+.new-task-log--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  margin: 0;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  padding: var(--space-4);
+  gap: var(--space-3);
+}
+
+.new-task-log--fullscreen .new-task-log-body {
+  flex: 1;
+  max-height: none;
+}
+
 /* Back/next footer. */
 .new-task-stepnav {
   display: flex;
@@ -18443,6 +18483,8 @@ body.is-resizing {
 }
 
 .new-task-file-chip {
+  position: relative;
+  overflow: hidden;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -18457,6 +18499,81 @@ body.is-resizing {
 .new-task-file-chip:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* The filename sits above the progress fill. */
+.new-task-file-chip-label {
+  position: relative;
+  z-index: 1;
+}
+
+/* The progress fill behind the filename; width is driven inline per state. */
+.new-task-file-chip-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  width: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: width 0.3s ease;
+  pointer-events: none;
+}
+
+.new-task-file-chip.is-pending {
+  opacity: 0.72;
+}
+
+/* A done change reads as a full, calm success fill. */
+.new-task-file-chip.is-done {
+  border-color: color-mix(in srgb, var(--success, #3fb950) 40%, var(--border));
+  color: var(--text);
+}
+
+.new-task-file-chip.is-done .new-task-file-chip-fill {
+  background: color-mix(in srgb, var(--success, #3fb950) 22%, transparent);
+}
+
+/* A failed change reads as a danger fill. */
+.new-task-file-chip.is-failed {
+  border-color: color-mix(in srgb, var(--danger, #f85149) 40%, var(--border));
+  color: var(--text);
+}
+
+.new-task-file-chip.is-failed .new-task-file-chip-fill {
+  background: color-mix(in srgb, var(--danger, #f85149) 22%, transparent);
+}
+
+/* A running change shows an indeterminate sweeping bar. */
+.new-task-file-chip.is-running {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+
+.new-task-file-chip.is-running .new-task-file-chip-fill {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 30%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: new-task-file-sweep 1.4s linear infinite;
+}
+
+@keyframes new-task-file-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-task-file-chip.is-running .new-task-file-chip-fill {
+    animation: none;
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
 }
 
 .new-task-agent-children {
