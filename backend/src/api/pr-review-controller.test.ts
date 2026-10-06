@@ -416,7 +416,7 @@ describe('pr-review-controller', () => {
         routes,
         'post',
         '/features/:featureId/pr-review/comments',
-      )(req({ params: { featureId: 'f1' }, body: { path: 'a.ts' } })),
+      )(req({ params: { featureId: 'f1' }, body: { path: 'a.ts', line: 0, body: 'nit' } })),
     ).rejects.toThrow(/"line"/);
   });
 

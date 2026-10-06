@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { GhCommandResult } from '../github-auth/github-auth-service.js';
 import {
+  addPrCommentArgs,
   addThreadArgs,
   createGithubCommentsGateway,
   listThreadsArgs,
+  parseAddedComment,
   parseAddedThread,
   parsePullNodeId,
   parsePullHeadSha,
@@ -176,6 +178,14 @@ describe('argument builders', () => {
     expect(args).toContain('body=hi');
   });
 
+  it('builds PR-level comment args without an anchor', () => {
+    const args = addPrCommentArgs('PR1', { body: 'general note' });
+    expect(args.join(' ')).toContain('addComment');
+    expect(args).toContain('subjectId=PR1');
+    expect(args).toContain('body=general note');
+    expect(args.join(' ')).not.toContain('path=');
+  });
+
   it('builds pull-node-id args', () => {
     expect(pullNodeIdArgs(TARGET)).toContain('owner=acme');
   });
@@ -326,6 +336,33 @@ describe('parseAddedThread', () => {
   });
 });
 
+describe('parseAddedComment', () => {
+  it('maps a PR-level comment as an unanchored thread', () => {
+    const json = JSON.stringify({
+      data: {
+        addComment: {
+          commentEdge: { node: { id: 'IC9', body: 'general note', author: { login: 'octo' } } },
+        },
+      },
+    });
+    const thread = parseAddedComment(json);
+    expect(thread?.id).toBe('IC9');
+    expect(thread?.path).toBeNull();
+    expect(thread?.line).toBeNull();
+    expect(thread?.status).toBe('active');
+    expect(thread?.comments[0].body).toBe('general note');
+  });
+
+  it.each([
+    'nope',
+    JSON.stringify({ data: {} }),
+    JSON.stringify({ data: { addComment: { commentEdge: {} } } }),
+    JSON.stringify({ data: { addComment: { commentEdge: { node: { body: 'x' } } } } }),
+  ])('returns null for %s', (stdout) => {
+    expect(parseAddedComment(stdout)).toBeNull();
+  });
+});
+
 describe('parseStatusResult', () => {
   it('reads isResolved from the mutation payload', () => {
     const json = JSON.stringify({
@@ -405,6 +442,31 @@ describe('createGithubCommentsGateway', () => {
     await expect(
       gw.add({ path: 'a.cs', line: 2, body: 'hi' }),
     ).rejects.toThrow(/did not return/);
+  });
+
+  it('posts a PR-level comment when no anchor is supplied', async () => {
+    const pullId = JSON.stringify({
+      data: { repository: { pullRequest: { id: 'PR1' } } },
+    });
+    const created = JSON.stringify({
+      data: { addComment: { commentEdge: { node: { id: 'IC1', body: 'general note' } } } },
+    });
+    const { run, calls } = queuedRunner([ok(pullId), ok(created)]);
+    const gw = createGithubCommentsGateway(run, TARGET);
+    const thread = await gw.add({ body: 'general note' });
+    expect(thread.id).toBe('IC1');
+    expect(thread.path).toBeNull();
+    expect(calls[1].join(' ')).toContain('addComment');
+    expect(calls[1]).toContain('subjectId=PR1');
+  });
+
+  it('throws when GitHub returns no created PR-level comment', async () => {
+    const pullId = JSON.stringify({
+      data: { repository: { pullRequest: { id: 'PR1' } } },
+    });
+    const { run } = queuedRunner([ok(pullId), ok(JSON.stringify({ data: {} }))]);
+    const gw = createGithubCommentsGateway(run, TARGET);
+    await expect(gw.add({ body: 'general note' })).rejects.toThrow(/did not return/);
   });
 
   it('sets status', async () => {

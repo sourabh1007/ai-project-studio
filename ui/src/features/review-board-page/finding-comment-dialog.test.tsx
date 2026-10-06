@@ -98,7 +98,6 @@ describe('FindingCommentDialog', () => {
   });
 
   it.each([
-    { anchors: [], text: /No exact, commentable/ },
     { headSha: null, text: /reviewed commit is unknown/ },
     { current: () => false, text: /review changed or is running/ },
   ])('blocks posting when the anchor or identity is unavailable', (options) => {
@@ -106,6 +105,20 @@ describe('FindingCommentDialog', () => {
     expect(screen.getByText(options.text)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it('offers a PR-level fallback when no precise anchor exists and posts an unanchored comment', async () => {
+    const post = vi.fn().mockResolvedValue({ ...created, path: null, line: null });
+    const { onPosted } = setup({ anchors: [], headSha: null, post });
+    expect(screen.getByText(/this will be posted as a/)).toBeInTheDocument();
+    // Blocked until the reviewer opts in to the unanchored post.
+    expect(screen.getByRole('button', { name: 'Leave comment' })).toBeDisabled();
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText(/Post this as an unanchored PR-level comment/));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave comment' }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post.mock.calls[0][1]).toEqual({ body: 'Wrong buffer lifetime\n\nKeep the buffer alive.' });
+    await waitFor(() => expect(onPosted).toHaveBeenCalledOnce());
   });
 
   it('blocks blank comments', () => {

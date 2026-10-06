@@ -61,6 +61,12 @@ export const ADD_THREAD_MUTATION =
   'path:$path,line:$line,side:RIGHT,body:$body}){thread{id isResolved path line ' +
   'comments(first:100){nodes{id body path line createdAt author{login}}}}}}';
 
+/** `mutation` posting a PR-level (unanchored) comment to the conversation. */
+export const ADD_PR_COMMENT_MUTATION =
+  'mutation($subjectId:ID!,$body:String!){' +
+  'addComment(input:{subjectId:$subjectId,body:$body}){' +
+  'commentEdge{node{id body createdAt author{login}}}}}';
+
 /** Splits an `owner/name` slug into its GraphQL `owner` / `name` variables. */
 export function splitSlug(repo: string): { owner: string; name: string } {
   const slash = repo.indexOf('/');
@@ -113,6 +119,23 @@ export function addThreadArgs(
     `path=${input.path}`,
     '-F',
     `line=${input.line}`,
+    '-f',
+    `body=${input.body}`,
+  ];
+}
+
+/** Builds the `gh api graphql` argv posting a PR-level (unanchored) comment. */
+export function addPrCommentArgs(
+  pullRequestId: string,
+  input: AddPrCommentInput,
+): string[] {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `query=${ADD_PR_COMMENT_MUTATION}`,
+    '-F',
+    `subjectId=${pullRequestId}`,
     '-f',
     `body=${input.body}`,
   ];
@@ -249,6 +272,34 @@ export function parseAddedThread(stdout: string): PrCommentThread | null {
   return node ? mapThread(node) : null;
 }
 
+/** Parses the created comment from {@link ADD_PR_COMMENT_MUTATION}'s response. */
+export function parseAddedComment(stdout: string): PrCommentThread | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const node = (
+    parsed as {
+      data?: {
+        addComment?: { commentEdge?: { node?: GhThreadCommentNode } | null } | null;
+      };
+    }
+  )?.data?.addComment?.commentEdge?.node;
+  const comment = node ? mapComment(node) : null;
+  if (!node || !comment || typeof node.id !== 'string') {
+    return null;
+  }
+  return {
+    id: node.id,
+    path: null,
+    line: null,
+    status: 'active',
+    comments: [comment],
+  };
+}
+
 /** Parses the resolved/reopened thread state from a status mutation response. */
 export function parseStatusResult(
   stdout: string,
@@ -313,6 +364,15 @@ export function createGithubCommentsGateway(
         throw new ProviderError(
           `Could not resolve GitHub node id for PR #${target.number}`,
         );
+      }
+      if (input.path === undefined || input.line === undefined) {
+        const createdPrComment = parseAddedComment(
+          await exec(addPrCommentArgs(pullNodeId, input), 'post comment'),
+        );
+        if (!createdPrComment) {
+          throw new ProviderError('GitHub did not return the created comment.');
+        }
+        return createdPrComment;
       }
       const created = parseAddedThread(
         await exec(addThreadArgs(pullNodeId, input), 'post comment'),

@@ -123,14 +123,23 @@ describe('assertAddCommentInput', () => {
     ).toEqual({ path: 'a.cs', line: 4, body: 'nit' });
   });
 
-  it('defaults a missing body object to an empty object before validating', () => {
-    expect(() => assertAddCommentInput(undefined)).toThrow(/file "path"/);
+  it('accepts a PR-level comment with neither path nor line', () => {
+    expect(assertAddCommentInput({ body: 'general note' })).toEqual({ body: 'general note' });
+  });
+
+  it('rejects a head-guarded comment that is not anchored', () => {
+    expect(() => assertAddCommentInput({ body: 'x', expectedHeadSha: 'captured' }))
+      .toThrow(/anchored/);
+  });
+
+  it('requires an empty object to fail on the missing body first', () => {
+    expect(() => assertAddCommentInput(undefined)).toThrow(/comment "body"/);
   });
 
   it.each([
-    [{ line: 1, body: 'x' }, /file "path"/],
+    [{ body: 'x', line: 1 }, /Provide both/],
+    [{ body: 'x', path: 'a' }, /Provide both/],
     [{ path: '   ', line: 1, body: 'x' }, /file "path"/],
-    [{ path: 'a', body: 'x' }, /"line"/],
     [{ path: 'a', line: 0, body: 'x' }, /"line"/],
     [{ path: 'a', line: 1.5, body: 'x' }, /"line"/],
     [{ path: 'a', line: 1 }, /comment "body"/],
@@ -248,6 +257,17 @@ describe('createPrCommentsService', () => {
     expect(created.id).toBe('created');
     expect((gateway as RecordingGateway).calls).toEqual([
       'add:a.cs:5:looks good',
+    ]);
+  });
+
+  it('adds a PR-level comment with no anchor and no head guard', async () => {
+    const reviews = new Map([['f1', review('f1', 'r1')]]);
+    const repos = new Map([['r1', repo('r1')]]);
+    const { service, gateway } = setup({ reviews, repos });
+    const created = await service.add('f1', { body: 'general note' });
+    expect(created.id).toBe('created');
+    expect((gateway as RecordingGateway).calls).toEqual([
+      'add:undefined:undefined:general note',
     ]);
   });
 

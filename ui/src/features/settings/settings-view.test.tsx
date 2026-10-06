@@ -167,10 +167,12 @@ describe('SettingsView drafts', () => {
     fireEvent.change(await screen.findByDisplayValue('warm'), { target: { value: 'cool' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restart now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, restart' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Restart not confirmed');
     expect(screen.getByRole('button', { name: 'Restart now' })).toBeEnabled();
     expect(screen.queryByText('private backend detail')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Restart now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, restart' }));
     expect(screen.getByRole('button', { name: /Restarting/ })).toBeDisabled();
     finish(true);
     await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(2));

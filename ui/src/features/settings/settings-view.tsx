@@ -18,7 +18,7 @@ import {
   seedValue,
   type SettingField,
 } from '../../lib/settings-model.js';
-import { Button, Card, EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
+import { Button, Card, EmptyState, ErrorText, IconBadge, ConfirmDialog } from '../../components/ui.js';
 import { SettingsPage, CollapsibleCard } from './settings-page.js';
 import {
   InfoIcon,
@@ -577,6 +577,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const bridge = desktopBridge();
   useEffect(() => {
@@ -662,6 +663,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   }
 
   async function restart() {
+    setConfirmRestart(false);
     setRestarting(true);
     setRestartError(null);
     try {
@@ -676,6 +678,29 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
 
   return (
     <>
+      {confirmRestart && (
+        <ConfirmDialog
+          title="Restart the app?"
+          confirmLabel="Yes, restart"
+          cancelLabel="Keep working"
+          danger
+          busy={restarting}
+          onConfirm={() => void restart()}
+          onCancel={() => setConfirmRestart(false)}
+          message={
+            <div>
+              <p>
+                Restarting ends every running CLI session and terminal in this
+                window. Any in-progress agent work or unsent prompts will be
+                interrupted.
+              </p>
+              <p className="muted">
+                Your saved settings apply once the app comes back up.
+              </p>
+            </div>
+          }
+        />
+      )}
       {restartPending && (
         <div className="settings-restart-banner" role="status">
           <div>
@@ -687,7 +712,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
             {restartError && <p role="alert">{restartError}</p>}
           </div>
           {bridge ? (
-            <Button onClick={restart} disabled={restarting}>
+            <Button onClick={() => setConfirmRestart(true)} disabled={restarting}>
               {restarting ? (
                 <>
                   <Spinner size={13} label="Restarting" /> Restarting…

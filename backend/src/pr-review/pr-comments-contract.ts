@@ -38,14 +38,19 @@ export interface PrCommentThread {
   comments: PrComment[];
 }
 
-/** A new inline comment the reviewer posts from the file popup. */
+/**
+ * A new comment the reviewer posts from the file popup. When `path` and `line`
+ * are supplied the comment anchors to that new/right-side line; when both are
+ * omitted it is posted as a PR-level (unanchored) comment — the fallback used
+ * when the captured diff has no precise right-side anchor for the finding.
+ */
 export interface AddPrCommentInput {
   /** Captured Review Board head; when supplied, fail closed on stale or uncaptured anchors. */
   expectedHeadSha?: string;
-  /** Repo-relative path of the changed file the comment anchors to. */
-  path: string;
-  /** 1-based line on the new (right) side of the diff. */
-  line: number;
+  /** Repo-relative path of the changed file the comment anchors to; omitted for a PR-level comment. */
+  path?: string;
+  /** 1-based line on the new (right) side of the diff; omitted for a PR-level comment. */
+  line?: number;
   /** The comment text. */
   body: string;
 }

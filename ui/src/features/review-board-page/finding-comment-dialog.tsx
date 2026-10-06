@@ -22,29 +22,38 @@ export function FindingCommentDialog({
   const [body, setBody] = useState(`${finding.title}\n\n${finding.detail}`);
   const [selection, setSelection] = useState(anchors.length === 1 ? '0' : '');
   const [confirmedLegacy, setConfirmedLegacy] = useState(false);
+  const [confirmedPrLevel, setConfirmedPrLevel] = useState(false);
   const [retryConfirmed, setRetryConfirmed] = useState(false);
   const [posting, setPosting] = useState(false);
   const [posted, setPosted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const locked = useRef(false);
+  const prLevel = anchors.length === 0;
   const anchor = selection === '' ? undefined : anchors[Number(selection)];
   const stale = !isCurrent();
-  const canPost = !posting && !posted && !stale && Boolean(headSha && body.trim() && anchor) &&
-    (!anchor?.legacy || confirmedLegacy) && (!error || retryConfirmed);
+  const anchorReady = prLevel
+    ? confirmedPrLevel
+    : Boolean(headSha && anchor) && (!anchor?.legacy || confirmedLegacy);
+  const canPost = !posting && !posted && !stale && Boolean(body.trim()) &&
+    anchorReady && (!error || retryConfirmed);
   const submit = async () => {
-    if (locked.current || !canPost || !anchor || !headSha || !isCurrent()) return;
+    if (locked.current || !canPost || !isCurrent()) return;
+    if (!prLevel && (!anchor || !headSha)) return;
     locked.current = true;
     setPosting(true);
     setError(null);
     setRetryConfirmed(false);
     try {
-      const created = await api.addPrReviewComment(featureId, {
-        path: anchor.path, line: anchor.line, body: body.trim(), expectedHeadSha: headSha,
-      });
+      const created = await api.addPrReviewComment(
+        featureId,
+        prLevel
+          ? { body: body.trim() }
+          : { path: anchor!.path, line: anchor!.line, body: body.trim(), expectedHeadSha: headSha! },
+      );
       // A successful mutation must not be repeated even if its returned anchor
       // or the local review changed while the provider was handling the request.
       setPosted(true);
-      if (created.path !== anchor.path || created.line !== anchor.line) {
+      if (!prLevel && (created.path !== anchor!.path || created.line !== anchor!.line)) {
         setError('The provider returned a different comment location. Check the PR; this finding has not been resolved.');
         return;
       }
@@ -69,9 +78,21 @@ export function FindingCommentDialog({
           then mark this finding resolved in Review Board. The comment thread stays open on the pull request.
         </p>
         {stale && <ErrorText error="The review changed or is running. Close this dialog and use the latest finding." />}
-        {!headSha && <ErrorText error="The reviewed commit is unknown. Refresh the PR and rerun the review before posting." />}
-        {anchors.length === 0 ? (
-          <ErrorText error="No exact, commentable new/right-side line was reported in the captured diff. Open the diff to inspect the finding or rerun its review for a precise location. Deleted/left-side findings cannot be posted here." />
+        {!prLevel && !headSha && <ErrorText error="The reviewed commit is unknown. Refresh the PR and rerun the review before posting." />}
+        {prLevel ? (
+          <div className="rb-post-prlevel">
+            <p>
+              No exact new/right-side line was reported in the captured diff, so
+              this will be posted as a <strong>PR-level comment</strong> on the
+              conversation (not anchored to a line). Open the diff to inspect the
+              finding or rerun its review for a precise location.
+            </p>
+            <label className="rb-post-confirm">
+              <input type="checkbox" checked={confirmedPrLevel} disabled={posting || posted}
+                onChange={(e) => setConfirmedPrLevel(e.target.checked)} />
+              Post this as an unanchored PR-level comment.
+            </label>
+          </div>
         ) : (
           <div className="field">
             <label htmlFor="finding-comment-location">Agent-reported location (new/right side)</label>

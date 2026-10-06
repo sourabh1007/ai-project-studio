@@ -942,10 +942,14 @@ export interface PrCommentThread {
   comments: PrComment[];
 }
 
-/** Payload posting a new inline comment from the file popup. */
+/**
+ * Payload posting a new comment from the file popup. `path`/`line` anchor the
+ * comment to a new/right-side line; omit both to post a PR-level comment when
+ * no precise anchor is available.
+ */
 export interface AddPrCommentInput {
-  path: string;
-  line: number;
+  path?: string;
+  line?: number;
   body: string;
   expectedHeadSha?: string;
 }

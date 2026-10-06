@@ -241,6 +241,17 @@ describe('buildAddThreadBody', () => {
     };
     expect(body.threadContext.filePath).toBe('/x.cs');
   });
+
+  it('omits the thread context for a PR-level comment', () => {
+    const body = buildAddThreadBody({ body: 'general note' }) as {
+      threadContext?: unknown;
+      status: string;
+      comments: { content: string }[];
+    };
+    expect(body.threadContext).toBeUndefined();
+    expect(body.status).toBe('active');
+    expect(body.comments[0].content).toBe('general note');
+  });
 });
 
 describe('createAzureCommentsGateway', () => {

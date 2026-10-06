@@ -159,8 +159,14 @@ export function parseThreads(body: unknown): PrCommentThread[] {
   return threads;
 }
 
-/** The request body creating an inline comment thread anchored to a line. */
+/** The request body creating a comment thread, inline or PR-level. */
 export function buildAddThreadBody(input: AddPrCommentInput): unknown {
+  if (input.path === undefined || input.line === undefined) {
+    return {
+      comments: [{ parentCommentId: 0, content: input.body, commentType: 'text' }],
+      status: 'active',
+    };
+  }
   const filePath = input.path.startsWith('/') ? input.path : `/${input.path}`;
   return {
     comments: [{ parentCommentId: 0, content: input.body, commentType: 'text' }],

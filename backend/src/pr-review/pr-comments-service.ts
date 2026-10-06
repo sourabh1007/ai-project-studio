@@ -39,24 +39,39 @@ export function assertAddCommentInput(body: unknown): AddPrCommentInput {
     body?: unknown;
     expectedHeadSha?: unknown;
   };
-  if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
-    throw new ValidationError('A non-empty file "path" is required.');
-  }
-  if (
-    typeof raw.line !== 'number' ||
-    !Number.isInteger(raw.line) ||
-    raw.line < 1
-  ) {
-    throw new ValidationError('A positive integer "line" is required.');
-  }
   if (typeof raw.body !== 'string' || raw.body.trim().length === 0) {
     throw new ValidationError('A non-empty comment "body" is required.');
   }
+  const hasPath = raw.path !== undefined && raw.path !== null;
+  const hasLine = raw.line !== undefined && raw.line !== null;
+  if (hasPath !== hasLine) {
+    throw new ValidationError(
+      'Provide both "path" and "line" to anchor a comment, or neither for a PR-level comment.',
+    );
+  }
+  if (hasPath) {
+    if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
+      throw new ValidationError('A non-empty file "path" is required.');
+    }
+    if (
+      typeof raw.line !== 'number' ||
+      !Number.isInteger(raw.line) ||
+      raw.line < 1
+    ) {
+      throw new ValidationError('A positive integer "line" is required.');
+    }
+  }
   if (raw.expectedHeadSha !== undefined) {
     assertExpectedHeadSha(raw.expectedHeadSha);
+    if (!hasPath) {
+      throw new ValidationError(
+        'A head-guarded comment must be anchored to a "path" and "line".',
+      );
+    }
   }
   return {
-    path: raw.path, line: raw.line, body: raw.body,
+    body: raw.body,
+    ...(hasPath ? { path: raw.path as string, line: raw.line as number } : {}),
     ...(raw.expectedHeadSha !== undefined ? { expectedHeadSha: raw.expectedHeadSha } : {}),
   };
 }
@@ -69,7 +84,10 @@ export function assertAddCommentInput(body: unknown): AddPrCommentInput {
 export function createPrCommentsService(
   deps: PrCommentsServiceDeps,
 ): PrCommentsService {
-  const gatewayFor = (featureId: string, guardedInput?: AddPrCommentInput) => {
+  const gatewayFor = (
+    featureId: string,
+    guardedInput?: AddPrCommentInput & { path: string; line: number },
+  ) => {
     const review = deps.reviews.get(featureId);
     if (!review) {
       throw new NotFoundError(`No code review for feature ${featureId}`);
@@ -102,7 +120,11 @@ export function createPrCommentsService(
     async add(featureId, input): Promise<PrCommentThread> {
       if (input.expectedHeadSha !== undefined) {
         const validated = assertAddCommentInput(input);
-        return gatewayFor(featureId, validated).add(validated);
+        // assertAddCommentInput requires an anchor whenever a head guard is set.
+        return gatewayFor(
+          featureId,
+          validated as AddPrCommentInput & { path: string; line: number },
+        ).add(validated);
       }
       return gatewayFor(featureId).add(input);
     },
