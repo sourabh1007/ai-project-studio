@@ -67,16 +67,21 @@ describe('createSessionRefResolver', () => {
     expect(await resolver.resolve('f1')).toBeNull();
   });
 
-  it('starts non-PR sessions on master even when another repo default is configured', async () => {
+  it('starts non-PR sessions on the repository default branch', async () => {
     const resolver = harness({ repo: repo({ defaultBranch: 'trunk' }) });
     expect(await resolver.resolve('f1')).toEqual({
       repoLocalPath: 'C:\\src\\app',
-      ref: 'master',
+      ref: 'trunk',
     });
   });
 
   it('falls back to master when the repository has no default branch', async () => {
     const resolver = harness({ repo: repo({ defaultBranch: null }) });
+    expect((await resolver.resolve('f1'))?.ref).toBe(FALLBACK_DEFAULT_BRANCH);
+  });
+
+  it('falls back to master when the repository default branch is blank', async () => {
+    const resolver = harness({ repo: repo({ defaultBranch: '   ' }) });
     expect((await resolver.resolve('f1'))?.ref).toBe(FALLBACK_DEFAULT_BRANCH);
   });
   it('uses the PR source branch even if its review checkout switched branches', async () => {
@@ -99,7 +104,7 @@ describe('createSessionRefResolver', () => {
       getPrBranch: () => null, isPrFeature: () => false,
       branch: { read: async () => 'generated-task-branch' },
     };
-    expect((await createSessionRefResolver(deps).resolve('f1'))?.ref).toBe('master');
+    expect((await createSessionRefResolver(deps).resolve('f1'))?.ref).toBe('main');
     await expect(createSessionRefResolver({
       ...deps, isPrFeature: () => true, getFeature: () => feature(),
     }).resolve('f1')).rejects.toThrow('PR checkout is unavailable');
@@ -116,14 +121,14 @@ describe('createSessionRefResolver', () => {
     expect((await resolver.resolve('f1'))?.ref).toBe('users/me/fix');
   });
 
-  it('falls back to master when a legacy PR source branch is unknown', async () => {
+  it('falls back to the repository default branch when a legacy PR source branch is unknown', async () => {
     const resolver = harness({
       feature: feature({ checkoutPath: 'C:\\wt\\pr-7' }),
       branch: null,
     });
     expect(await resolver.resolve('f1')).toEqual({
       repoLocalPath: 'C:\\src\\app',
-      ref: FALLBACK_DEFAULT_BRANCH,
+      ref: 'main',
       checkoutPath: 'C:\\wt\\pr-7',
     });
   });

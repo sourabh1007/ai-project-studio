@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSharedCheckoutPreparer, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
+import { createSharedCheckoutPreparer, isMissingRef, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
 import { sessionWorktreeConfigSchema, sessionWorktreeDefaults, SESSION_WORKTREE_NAMESPACE } from './config.js';
 
 const target = { repoLocalPath: 'C:\\repo', ref: 'master' };
@@ -44,6 +44,23 @@ describe('shared session checkout', () => {
   it('exposes a not-a-git-repository detector', () => {
     expect(isNotGitRepository('fatal: not a git repository (or any of the parent directories): .git')).toBe(true);
     expect(isNotGitRepository('Local changes would be overwritten')).toBe(false);
+  });
+  it.each([
+    'fatal: invalid reference: master',
+    "error: pathspec 'master' did not match any file(s) known to git",
+  ])('opens on the current branch when the target ref is missing (%s)', async (stderr) => {
+    const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')
+      ? ok('main') : { code: 1, stdout: '', stderr });
+    const report = vi.fn();
+    const prepare = createSharedCheckoutPreparer({ git });
+    expect(await prepare(target, report)).toBe(target.repoLocalPath);
+    expect(git).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('was not found'));
+  });
+  it('detects missing refs across git phrasings', () => {
+    expect(isMissingRef('fatal: invalid reference: master')).toBe(true);
+    expect(isMissingRef("error: pathspec 'x' did not match")).toBe(true);
+    expect(isMissingRef('Local changes would be overwritten')).toBe(false);
   });
   it.each(['Local changes would be overwritten', ''])('surfaces unsafe/failed branch switches without recovery resets (%s)', async (stderr) => {
     const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')

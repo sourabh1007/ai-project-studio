@@ -13,6 +13,16 @@ export function isNotGitRepository(stderr: string): boolean {
   return /not a git repository/i.test(stderr);
 }
 
+/**
+ * True when git refused a checkout because the target branch/ref doesn't exist
+ * (e.g. the repo uses `main` but we asked for `master`). Covers both the
+ * `fatal: invalid reference: <ref>` and `error: pathspec '<ref>' did not match`
+ * phrasings git uses across versions.
+ */
+export function isMissingRef(stderr: string): boolean {
+  return /invalid reference|did not match/i.test(stderr);
+}
+
 /** Serializes branch selection in a shared checkout; never creates a copy or resets work. */
 export function createSharedCheckoutPreparer(deps: {
   git(args: string[], report: (message: string) => void): Promise<GitRunResult>;
@@ -45,6 +55,10 @@ export function createSharedCheckoutPreparer(deps: {
         '-C', cwd, 'checkout', '--progress', target.ref, '--',
       ], report);
       if (result.code !== 0) {
+        if (isMissingRef(result.stderr)) {
+          report(`Branch ${target.ref} was not found, so the session opened on the current branch instead.`);
+          return cwd;
+        }
         throw new ValidationError(result.stderr.trim() ||
           `Cannot switch the shared checkout to ${target.ref}. Resolve local changes or missing branches and retry.`);
       }
