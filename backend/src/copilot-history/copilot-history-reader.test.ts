@@ -334,6 +334,133 @@ describe('createCopilotHistoryReader', () => {
     expect(reader.prompts('s1')).toEqual([]);
   });
 
+  it('shows the live prompt and streamed reply for an unsaved in-flight turn', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+      usageEventTimes: () => ['2024-01-01T00:05:10Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: '  Latest prompt  ', at: '2024-01-01T00:05:00Z', response: '  reply so far  ' }) },
+      now: () => Date.parse('2024-01-01T00:05:20Z'),
+    });
+    const result = reader.prompts('s1');
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({
+      index: 1, text: 'Latest prompt', at: '2024-01-01T00:05:00Z', response: 'reply so far',
+      status: 'answering', answeredAt: null, durationMs: null, pending: true,
+    });
+  });
+
+  it('keeps the live prompt visible but marks it answered once activity settles', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+      usageEventTimes: () => ['2024-01-01T00:00:10Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: 'Latest prompt', at: '2024-01-01T00:00:05Z', response: null }) },
+      now: () => Date.parse('2024-01-01T01:00:00Z'),
+    });
+    expect(reader.prompts('s1')[1]).toEqual({
+      index: 1, text: 'Latest prompt', at: '2024-01-01T00:00:05Z', response: null,
+      status: 'answered', answeredAt: null, durationMs: null, pending: true,
+    });
+  });
+
+  it('surfaces the very first live prompt before any turn is saved, with no events', () => {
+    const { source } = fakeSource({
+      usageEventTimes: () => [],
+      latestActivityTurn: () => null,
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: 'First ever', at: '2024-01-01T00:00:00Z', response: '' }) },
+      now: () => 1000,
+    });
+    expect(reader.prompts('s1')).toEqual([
+      {
+        index: 0, text: 'First ever', at: '2024-01-01T00:00:00Z', response: null,
+        status: 'answered', answeredAt: null, durationMs: null, pending: true,
+      },
+    ]);
+  });
+
+  it('treats a whitespace-only live reply as no response yet', () => {
+    const { source } = fakeSource({ userMessages: () => [] });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: 'Ask', at: 't', response: '   ' }) },
+      now: () => 1000,
+    });
+    expect(reader.prompts('s1')[0].response).toBeNull();
+  });
+
+  it('drops the live row once the in-flight prompt matches the newest saved turn', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'Saved prompt', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+      usageEventTimes: () => ['2024-01-01T00:00:05Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: 'Saved prompt', at: '2024-01-01T00:00:00Z', response: 'A1' }) },
+      now: () => Date.parse('2024-01-01T00:00:06Z'),
+    });
+    expect(reader.prompts('s1')).toHaveLength(1);
+  });
+
+  it('ignores a blank or injected live prompt', () => {
+    const blank = fakeSource({ userMessages: () => [] });
+    expect(
+      createCopilotHistoryReader({
+        source: blank.source,
+        config: copilotHistoryDefaults,
+        livePrompts: { latest: () => ({ text: '   ', at: 't', response: null }) },
+        now: () => 1000,
+      }).prompts('s1'),
+    ).toEqual([]);
+
+    const injected = fakeSource({ userMessages: () => [] });
+    expect(
+      createCopilotHistoryReader({
+        source: injected.source,
+        config: copilotHistoryDefaults,
+        livePrompts: { latest: () => ({ text: '# Session Bootstrap Context\n\nx', at: 't', response: null }) },
+        now: () => 1000,
+      }).prompts('s1'),
+    ).toEqual([]);
+  });
+
+  it('falls back to the activity indicator when the live source returns null', () => {
+    const { source } = fakeSource({
+      usageEventTimes: () => ['2024-01-01T00:00:00Z'],
+      latestActivityTurn: () => 0,
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => null },
+      now: () => Date.parse('2024-01-01T00:00:05Z'),
+    });
+    expect(reader.prompts('s1')).toEqual([
+      {
+        index: 0, text: '', at: '2024-01-01T00:00:00.000Z', response: null,
+        status: 'answering', answeredAt: null, durationMs: null, pending: true,
+      },
+    ]);
+  });
+
   it('marks unanswered and answering turns and tolerates missing times/events', () => {
     const { source } = fakeSource({
       userMessages: () => [

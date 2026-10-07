@@ -259,6 +259,7 @@ import { createFeatureService } from './feature/feature-service.js';
 import { createFeatureWorkSummaryService } from './feature/feature-work-summary.js';
 import { createCopilotHistoryDb } from './copilot-history/copilot-history-db.js';
 import { createCopilotHistoryReader } from './copilot-history/copilot-history-reader.js';
+import { createLivePromptFsReader } from './copilot-history/copilot-live-prompt-fs-adapter.js';
 import { createSessionFilesRepo } from './persistence/session-files-repo.js';
 import { createWorkspaceAdmin } from './workspace/workspace-admin-service.js';
 
@@ -2100,6 +2101,15 @@ function main(): void {
   const copilotHistoryReader = createCopilotHistoryReader({
     source: createCopilotHistoryDb({
       databasePath: cliStoreDatabasePath,
+    }),
+    livePrompts: createLivePromptFsReader({
+      sessionStateDir: pathJoin(
+        homedir(),
+        copilotHistoryConfig.subdir,
+        copilotHistoryConfig.sessionStateDir,
+      ),
+      eventsFile: copilotHistoryConfig.eventsFile,
+      tailBytes: copilotHistoryConfig.livePromptTailBytes,
     }),
     config: copilotHistoryConfig,
   });

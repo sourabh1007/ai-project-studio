@@ -1,10 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
-import { CheckIcon, ChevronIcon, CircleIcon, ClockIcon, RefreshIcon } from '../../components/icons.js';
+import {
+  CheckIcon,
+  ChevronIcon,
+  CircleIcon,
+  ClockIcon,
+  CopyIcon,
+  DownloadHtmlIcon,
+  DownloadMarkdownIcon,
+  RefreshIcon,
+} from '../../components/icons.js';
 import { Spinner } from '../../components/loading.js';
 import { Modal } from '../../components/ui.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { renderMarkdownComment, markdownPreviewText } from '../../lib/markdown.js';
+import {
+  buildResponseHtmlDocument,
+  responseFileName,
+  type ResponseExportFormat,
+} from '../../lib/prompt-export.js';
 import { formatDateTime, formatDuration } from '../../lib/format.js';
 import type { PromptStatus, SessionPrompt } from '../../lib/types.js';
 
@@ -47,6 +61,82 @@ function StatusIcon({ prompt }: { prompt: SessionPrompt }) {
   );
 }
 
+/**
+ * Copy / download controls for a response. Copying writes the raw Markdown to
+ * the clipboard; downloads emit either the Markdown source or a self-contained
+ * HTML document. Uses the browser Blob + anchor pattern so it works identically
+ * in the Electron renderer on macOS and Windows.
+ */
+function ResponseToolbar({ prompt }: { prompt: SessionPrompt }) {
+  const [copied, setCopied] = useState(false);
+  const response = prompt.response ?? '';
+
+  const copy = () => {
+    void navigator.clipboard
+      .writeText(response)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => setCopied(false));
+  };
+
+  const download = (format: ResponseExportFormat) => {
+    const body =
+      format === 'html'
+        ? buildResponseHtmlDocument(
+            markdownPreviewText(prompt.text) || 'Response',
+            renderMarkdownComment(response),
+          )
+        : response;
+    const mime = format === 'html' ? 'text/html' : 'text/markdown';
+    const blob = new Blob([body], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = responseFileName(prompt.text, format);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="history-detail-toolbar">
+      <button
+        type="button"
+        className="history-detail-tool"
+        onClick={copy}
+        title="Copy response as Markdown"
+        aria-label="Copy response as Markdown"
+      >
+        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+        <span>{copied ? 'Copied' : 'Copy'}</span>
+      </button>
+      <button
+        type="button"
+        className="history-detail-tool"
+        onClick={() => download('md')}
+        title="Download response as Markdown (.md)"
+        aria-label="Download response as Markdown"
+      >
+        <DownloadMarkdownIcon size={13} />
+        <span>.md</span>
+      </button>
+      <button
+        type="button"
+        className="history-detail-tool"
+        onClick={() => download('html')}
+        title="Download response as HTML (.html)"
+        aria-label="Download response as HTML"
+      >
+        <DownloadHtmlIcon size={13} />
+        <span>.html</span>
+      </button>
+    </div>
+  );
+}
+
 /** Full prompt + response popup, with timing and colour-coded roles. */
 function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () => void }) {
   const durationText =
@@ -75,7 +165,10 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
       <section className="history-detail-block history-detail-block--response">
         <header>
           <span className="history-detail-role">Response</span>
-          <time>{prompt.answeredAt ? formatDateTime(prompt.answeredAt) : '—'}</time>
+          <div className="history-detail-head-right">
+            {prompt.response && <ResponseToolbar prompt={prompt} />}
+            <time>{prompt.answeredAt ? formatDateTime(prompt.answeredAt) : '—'}</time>
+          </div>
         </header>
         {prompt.response ? (
           <div
@@ -86,7 +179,9 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
           <p className="history-detail-pending">
             {prompt.status === 'answering'
               ? 'The AI is generating a response…'
-              : 'No response was recorded.'}
+              : prompt.pending
+                ? 'The response is still being saved…'
+                : 'No response was recorded.'}
           </p>
         )}
       </section>

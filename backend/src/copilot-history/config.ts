@@ -24,6 +24,17 @@ export const copilotHistoryConfigSchema = z.object({
    * finalises the turn.
    */
   activeAnswerWindowMs: z.number().int().positive(),
+  /** Directory under {@link subdir} that holds per-session CLI event logs. */
+  sessionStateDir: z.string().min(1),
+  /** Event-log file name inside each session's state directory. */
+  eventsFile: z.string().min(1),
+  /**
+   * How many bytes to read from the tail of a session's event log when
+   * resolving the live in-flight prompt/response. Bounds the per-poll read so a
+   * long-running session's multi-megabyte log never blocks the event loop; the
+   * latest user turn virtually always lives within this window.
+   */
+  livePromptTailBytes: z.number().int().positive(),
 });
 
 export type CopilotHistoryConfig = z.infer<typeof copilotHistoryConfigSchema>;
@@ -34,4 +45,7 @@ export const copilotHistoryDefaults: CopilotHistoryConfig = {
   maxCheckpointsPerSession: 20,
   maxOverviewChars: 600,
   activeAnswerWindowMs: 45000,
+  sessionStateDir: 'session-state',
+  eventsFile: 'events.jsonl',
+  livePromptTailBytes: 524288,
 };

@@ -19,7 +19,10 @@ import {
   Circle,
   Clock,
   Coins,
+  Copy,
   Download,
+  FileCode2,
+  FileDown,
   FileText,
   Files,
   Folder,
@@ -179,4 +182,7 @@ export const InstructionSkillIcon = makeIcon(BookOpen);
 export const TaskPlanSkillIcon = makeIcon(ListChecks);
 export const TagIcon = makeIcon(Tag);
 export const ExportIcon = makeIcon(Download);
+export const CopyIcon = makeIcon(Copy);
+export const DownloadMarkdownIcon = makeIcon(FileDown);
+export const DownloadHtmlIcon = makeIcon(FileCode2);
 export const UploadIcon = makeIcon(Upload);

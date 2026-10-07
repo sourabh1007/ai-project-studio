@@ -103,6 +103,38 @@ export interface CopilotHistorySource {
   latestActivityTurn(sessionId: string): number | null;
 }
 
+/**
+ * The latest in-flight turn the CLI has logged live for a session, read from the
+ * CLI's own `events.jsonl` event log rather than its SQLite store. The store
+ * only persists a turn's prompt/response text at the *next* turn boundary, so a
+ * just-typed prompt (and its streaming reply) is invisible there until the user
+ * asks again. The event log, by contrast, records the user message the instant
+ * it is sent and appends each assistant message as it is produced — so this is
+ * the only source that can show the current prompt and answer in real time.
+ */
+export interface LivePromptTurn {
+  /** The user's latest prompt text, exactly as typed. */
+  text: string;
+  /** ISO timestamp the prompt was sent, or '' when unknown. */
+  at: string;
+  /**
+   * The assistant's reply so far for this turn, concatenated from the live
+   * event stream, or null when the assistant has not emitted prose text yet
+   * (e.g. it is still running tools).
+   */
+  response: string | null;
+}
+
+/**
+ * Reads the most recent genuine (non-injected) user turn for a session from the
+ * CLI's live event log. Isolated behind a port so the reader stays pure and the
+ * filesystem tail-read is the only IO-aware piece.
+ */
+export interface LivePromptSource {
+  /** The latest live turn for one session, or null when none is readable. */
+  latest(sessionId: string): LivePromptTurn | null;
+}
+
 /** Aggregates raw CLI rows into per-session history. */
 export interface CopilotHistoryReader {
   read(sessionIds: string[]): SessionHistory[];

@@ -7,7 +7,7 @@
   interpolate-size: allow-keywords;
 
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+  --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
 
   /* Desktop typography; explicit appearance preferences can scale this ramp. */
   --fs-page-title: 18px;

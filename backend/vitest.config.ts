@@ -60,6 +60,7 @@ export default defineConfig({
         'src/feature/feature-branch-git-adapter.ts',
         'src/mcp/mcp-config-file-adapter.ts',
         'src/mcp/mcp-tool-inspector-adapter.ts',
+        'src/copilot-history/copilot-live-prompt-fs-adapter.ts',
         'src/meta/acp/acp-process-adapter.ts',
         'src/automation/shell-executor-adapter.ts',
         'src/automation/http-probe-adapter.ts',

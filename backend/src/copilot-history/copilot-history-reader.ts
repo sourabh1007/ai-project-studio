@@ -3,6 +3,8 @@ import type {
   CheckpointSummary,
   CopilotHistoryReader,
   CopilotHistorySource,
+  LivePromptSource,
+  LivePromptTurn,
   SessionHistory,
   SessionPrompt,
 } from './copilot-history-contract.js';
@@ -10,6 +12,12 @@ import type {
 export interface CopilotHistoryReaderDeps {
   source: CopilotHistorySource;
   config: CopilotHistoryConfig;
+  /**
+   * Live event-log source used to surface the current prompt (and its streaming
+   * reply) before the CLI store persists them. Optional: when absent the reader
+   * falls back to a text-less, activity-derived "answering" indicator.
+   */
+  livePrompts?: LivePromptSource;
   /** Wall clock used to bound the live "answering" indicator; defaults to Date.now. */
   now?: () => number;
 }
@@ -150,6 +158,8 @@ export function createCopilotHistoryReader(
         eventMs,
         now(),
         config.activeAnswerWindowMs,
+        deps.livePrompts?.latest(sessionId) ?? null,
+        rows.length > 0 ? rows[rows.length - 1].text : null,
       );
       return inFlight ? [...prompts, inFlight] : prompts;
     },
@@ -157,14 +167,24 @@ export function createCopilotHistoryReader(
 }
 
 /**
- * Builds a synthetic live "answering" row for an in-flight turn the CLI store
- * has not finalised yet. The CLI persists a turn's prompt/response text only at
- * the next turn boundary, so a just-submitted prompt is otherwise invisible
- * until the user asks again. Usage events, however, are written live as the
- * assistant responds: when the latest event's turn index runs ahead of every
- * persisted turn and is recent, the assistant is actively answering right now.
- * Returns null when there is no such turn or activity has gone stale (so the
- * indicator self-clears instead of sticking if the CLI never writes the turn).
+ * Builds a synthetic live row for the current turn the CLI store has not
+ * finalised yet. The store persists a turn's prompt/response text only at the
+ * next turn boundary, so a just-submitted prompt is otherwise invisible until
+ * the user asks again.
+ *
+ * When a live event-log turn is supplied (`live`), it is authoritative: its
+ * prompt differs from the newest persisted prompt exactly while the turn is
+ * unsaved, so the row is shown with the real prompt text and the reply streamed
+ * so far, and withdrawn the moment the store catches up (prompts match) — no
+ * dependence on the activity window, so the latest prompt stays visible at idle.
+ * The row reads as "answering" while usage events are still arriving and
+ * "answered" once activity settles (the reply is saved shortly after).
+ *
+ * When no live turn is available (no event log, or it was unreadable), the
+ * reader falls back to the legacy behaviour: usage events are written live as
+ * the assistant responds, so a latest event-turn beyond every persisted turn,
+ * seen recently, implies an in-flight turn — surfaced as a text-less, self-
+ * clearing "answering" placeholder.
  */
 function buildInFlightPrompt(
   rows: { index: number }[],
@@ -172,11 +192,42 @@ function buildInFlightPrompt(
   eventMs: number[],
   nowMs: number,
   windowMs: number,
+  live: LivePromptTurn | null,
+  persistedText: string | null,
 ): SessionPrompt | null {
+  const maxTurn = rows.reduce((max, row) => Math.max(max, row.index), -1);
+
+  if (live) {
+    const liveText = live.text.trim();
+    if (
+      liveText.length === 0 ||
+      isInjectedPrompt(liveText) ||
+      liveText === persistedText
+    ) {
+      return null;
+    }
+    const latestEventMs = eventMs.length ? eventMs[eventMs.length - 1] : NaN;
+    const answering =
+      !Number.isNaN(latestEventMs) && nowMs - latestEventMs <= windowMs;
+    const response =
+      live.response && live.response.trim().length > 0
+        ? live.response.trim()
+        : null;
+    return {
+      index: maxTurn + 1,
+      text: liveText,
+      at: live.at,
+      response,
+      status: answering ? 'answering' : 'answered',
+      answeredAt: null,
+      durationMs: null,
+      pending: true,
+    };
+  }
+
   if (activityTurn === null) {
     return null;
   }
-  const maxTurn = rows.reduce((max, row) => Math.max(max, row.index), -1);
   if (activityTurn <= maxTurn) {
     return null;
   }

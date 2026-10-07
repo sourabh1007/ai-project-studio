@@ -1848,6 +1848,7 @@ body.is-resizing {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
   text-align: left;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -1866,6 +1867,8 @@ body.is-resizing {
   align-items: center;
   gap: 7px;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .history-status {
@@ -2005,6 +2008,39 @@ body.is-resizing {
   color: var(--text-muted);
 }
 .history-detail-block header time { font-size: 11px; color: var(--text-muted); }
+.history-detail-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.history-detail-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.history-detail-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 5px);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.history-detail-tool:hover {
+  color: var(--text);
+  border-color: var(--accent, var(--border-strong));
+  background: var(--panel);
+}
+.history-detail-tool svg { flex-shrink: 0; }
 .history-detail-md {
   margin: 0;
   font-family: var(--font-sans);
@@ -2014,6 +2050,7 @@ body.is-resizing {
   max-height: 46vh;
   overflow: auto;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .history-detail-md > :first-child { margin-top: 0; }
 .history-detail-md > :last-child { margin-bottom: 0; }
