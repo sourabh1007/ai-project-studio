@@ -6,7 +6,10 @@ import type {
   PrCommentThreadStatus,
   PrCommentsGatewayResolver,
   PrCommentsService,
+  PrReactionContent,
+  ReactPrCommentInput,
 } from './pr-comments-contract.js';
+import { PR_REACTION_CONTENTS } from './pr-comments-contract.js';
 import type { PrReview } from './pr-review-contract.js';
 import { assertExpectedHeadSha, hasCapturedRightLine, isRepoRelativePath } from './pr-comment-location.js';
 
@@ -29,6 +32,38 @@ export function assertThreadStatus(value: string): PrCommentThreadStatus {
   throw new ValidationError(
     `Unknown thread status "${value}"; expected "active" or "resolved".`,
   );
+}
+
+/** Validates a reaction toggle payload from a request body. */
+export function assertReactInput(
+  threadId: string,
+  commentId: string,
+  body: unknown,
+): ReactPrCommentInput {
+  if (typeof threadId !== 'string' || threadId.trim().length === 0) {
+    throw new ValidationError('A non-empty "threadId" is required.');
+  }
+  if (typeof commentId !== 'string' || commentId.trim().length === 0) {
+    throw new ValidationError('A non-empty "commentId" is required.');
+  }
+  const raw = (body ?? {}) as { content?: unknown; on?: unknown };
+  if (
+    typeof raw.content !== 'string' ||
+    !(PR_REACTION_CONTENTS as string[]).includes(raw.content)
+  ) {
+    throw new ValidationError(
+      `A valid reaction "content" is required; expected one of ${PR_REACTION_CONTENTS.join(', ')}.`,
+    );
+  }
+  if (typeof raw.on !== 'boolean') {
+    throw new ValidationError('A boolean "on" flag is required.');
+  }
+  return {
+    threadId,
+    commentId,
+    content: raw.content as PrReactionContent,
+    on: raw.on,
+  };
 }
 
 /** Validates an inline comment payload from a request body. */
@@ -133,6 +168,9 @@ export function createPrCommentsService(
         throw new ValidationError('A non-empty "threadId" is required.');
       }
       return gatewayFor(featureId).setStatus(threadId, status);
+    },
+    async react(featureId, input) {
+      return gatewayFor(featureId).react(input);
     },
   };
 }

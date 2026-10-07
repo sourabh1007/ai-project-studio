@@ -1510,7 +1510,7 @@ function main(): void {
     return { status: response.status, body };
   };
   const azureHttpSend = async (
-    method: 'POST' | 'PATCH' | 'PUT',
+    method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     url: string,
     token: string,
     payload: unknown,
@@ -1541,6 +1541,8 @@ function main(): void {
     azureHttpSend('PATCH', url, token, payload);
   const azureHttpPut = (url: string, token: string, payload: unknown) =>
     azureHttpSend('PUT', url, token, payload);
+  const azureHttpDelete = (url: string, token: string) =>
+    azureHttpSend('DELETE', url, token, undefined);
   const listAzureReposFor = (org: string) =>
     listAzureRepos(
       {
@@ -2849,6 +2851,8 @@ function main(): void {
           httpGet: azureHttpGet,
           httpPost: azureHttpPost,
           httpPatch: azureHttpPatch,
+          httpPut: azureHttpPut,
+          httpDelete: azureHttpDelete,
         },
         { ...target, pullRequestId: pull.number },
       );

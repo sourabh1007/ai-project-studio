@@ -10,6 +10,7 @@ import type { PrApprovalService } from '../pr-review/pr-approval-contract.js';
 import type { PrDescriptionService } from '../pr-review/pr-description-contract.js';
 import {
   assertAddCommentInput,
+  assertReactInput,
   assertThreadStatus,
 } from '../pr-review/pr-comments-service.js';
 import { ValidationError } from '../kernel/error-types.js';
@@ -218,6 +219,21 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
           req.params.featureId,
           req.params.threadId,
           assertThreadStatus(assertStatusBody(req.body)),
+        ),
+      }),
+    },
+    {
+      method: 'post',
+      path: '/features/:featureId/pr-review/comments/:threadId/comments/:commentId/reactions',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.prComments.react(
+          req.params.featureId,
+          assertReactInput(
+            req.params.threadId,
+            req.params.commentId,
+            req.body,
+          ),
         ),
       }),
     },

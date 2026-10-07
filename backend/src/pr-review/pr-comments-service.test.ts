@@ -10,6 +10,7 @@ import type {
 import type { PrReview, PrReviewPull } from './pr-review-contract.js';
 import {
   assertAddCommentInput,
+  assertReactInput,
   assertThreadStatus,
   createPrCommentsService,
 } from './pr-comments-service.js';
@@ -62,6 +63,19 @@ function recordingGateway(): RecordingGateway {
     setStatus: async (id: string, status: PrCommentThreadStatus) => {
       calls.push(`setStatus:${id}:${status}`);
       return { ...thread(id), status };
+    },
+    react: async (input) => {
+      calls.push(`react:${input.threadId}:${input.commentId}:${input.content}:${input.on}`);
+      return {
+        id: input.commentId,
+        author: null,
+        authorAvatarUrl: null,
+        body: '',
+        createdAt: null,
+        reactions: input.on
+          ? [{ content: input.content, count: 1, viewerReacted: true }]
+          : [],
+      };
     },
   };
 }
@@ -303,5 +317,56 @@ describe('createPrCommentsService', () => {
     const reviews = new Map([['f1', review('f1', 'gone')]]);
     const { service } = setup({ reviews });
     await expect(service.list('f1')).rejects.toThrow(/No repository gone/);
+  });
+
+  it('reacts to a comment via the gateway', async () => {
+    const reviews = new Map([['f1', review('f1', 'r1')]]);
+    const repos = new Map([['r1', repo('r1')]]);
+    const { service, gateway } = setup({ reviews, repos });
+    const comment = await service.react('f1', {
+      threadId: 't1', commentId: 'c1', content: 'THUMBS_UP', on: true,
+    });
+    expect(comment.reactions).toEqual([
+      { content: 'THUMBS_UP', count: 1, viewerReacted: true },
+    ]);
+    expect((gateway as RecordingGateway).calls).toEqual([
+      'react:t1:c1:THUMBS_UP:true',
+    ]);
+  });
+});
+
+describe('assertReactInput', () => {
+  it('accepts a well-formed reaction toggle', () => {
+    expect(assertReactInput('t1', 'c1', { content: 'HEART', on: true })).toEqual({
+      threadId: 't1', commentId: 'c1', content: 'HEART', on: true,
+    });
+  });
+
+  it.each(['', '  '])('rejects an empty threadId %j', (threadId) => {
+    expect(() => assertReactInput(threadId, 'c1', { content: 'HEART', on: true })).toThrow(
+      /"threadId"/,
+    );
+  });
+
+  it.each(['', '  '])('rejects an empty commentId %j', (commentId) => {
+    expect(() => assertReactInput('t1', commentId, { content: 'HEART', on: true })).toThrow(
+      /"commentId"/,
+    );
+  });
+
+  it.each([undefined, 42, 'NOPE', {}])('rejects an invalid content %j', (content) => {
+    expect(() => assertReactInput('t1', 'c1', { content, on: true })).toThrow(
+      /"content"/,
+    );
+  });
+
+  it.each([undefined, 'yes', 1])('rejects a non-boolean on flag %j', (on) => {
+    expect(() => assertReactInput('t1', 'c1', { content: 'HEART', on })).toThrow(
+      /"on"/,
+    );
+  });
+
+  it('treats a missing body as an invalid content', () => {
+    expect(() => assertReactInput('t1', 'c1', undefined)).toThrow(/"content"/);
   });
 });

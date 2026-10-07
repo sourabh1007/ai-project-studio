@@ -267,6 +267,7 @@ const FEATURE_ROUTE_SIGNATURES = [
   'post /features/:featureId/pr-review/export-description',
   'post /features/:featureId/pr-review/comments',
   'post /features/:featureId/pr-review/comments/:threadId/status',
+  'post /features/:featureId/pr-review/comments/:threadId/comments/:commentId/reactions',
   'post /features/:featureId/review-board/analyze',
   'post /features/:featureId/review-board/perspectives/:perspectiveId/analyze',
   'post /features/:featureId/review-board/chat',

@@ -9,6 +9,38 @@ import type { PrReviewPull } from './pr-review-contract.js';
  */
 export type PrCommentThreadStatus = 'active' | 'resolved';
 
+/** A reaction emoji available on PR comments (GitHub's set; Azure maps the thumbs-up only). */
+export type PrReactionContent =
+  | 'THUMBS_UP'
+  | 'THUMBS_DOWN'
+  | 'LAUGH'
+  | 'HOORAY'
+  | 'CONFUSED'
+  | 'HEART'
+  | 'ROCKET'
+  | 'EYES';
+
+/** The full ordered set of reaction contents the UI offers. */
+export const PR_REACTION_CONTENTS: readonly PrReactionContent[] = [
+  'THUMBS_UP',
+  'THUMBS_DOWN',
+  'LAUGH',
+  'HOORAY',
+  'CONFUSED',
+  'HEART',
+  'ROCKET',
+  'EYES',
+];
+
+/** An aggregated reaction on a comment. */
+export interface PrReaction {
+  content: PrReactionContent;
+  /** Number of users who reacted with this emoji. */
+  count: number;
+  /** Whether the signed-in viewer has reacted with this emoji. */
+  viewerReacted: boolean;
+}
+
 /** A single comment within a review thread, as shown in the comments panel. */
 export interface PrComment {
   /** Provider-native comment id (string form). */
@@ -20,6 +52,8 @@ export interface PrComment {
   body: string;
   /** ISO timestamp the comment was posted; null when unknown. */
   createdAt: string | null;
+  /** Aggregated reactions on the comment, newest providers first. */
+  reactions: PrReaction[];
 }
 
 /**
@@ -55,6 +89,18 @@ export interface AddPrCommentInput {
   body: string;
 }
 
+/** A reaction toggle the reviewer makes on an existing comment. */
+export interface ReactPrCommentInput {
+  /** Provider-native thread id the comment lives in (needed by Azure). */
+  threadId: string;
+  /** Provider-native comment id to react to. */
+  commentId: string;
+  /** Which reaction to toggle. */
+  content: PrReactionContent;
+  /** True to add the reaction, false to remove it. */
+  on: boolean;
+}
+
 /**
  * The provider-agnostic port the comments service talks to. One instance is
  * bound to a single pull request (repo + number) by the composition root, which
@@ -70,6 +116,8 @@ export interface PrCommentsGateway {
     threadId: string,
     status: PrCommentThreadStatus,
   ): Promise<PrCommentThread>;
+  /** Adds or removes a reaction on a comment and returns the updated comment. */
+  react(input: ReactPrCommentInput): Promise<PrComment>;
 }
 
 /**
@@ -94,4 +142,5 @@ export interface PrCommentsService {
     threadId: string,
     status: PrCommentThreadStatus,
   ): Promise<PrCommentThread>;
+  react(featureId: string, input: ReactPrCommentInput): Promise<PrComment>;
 }

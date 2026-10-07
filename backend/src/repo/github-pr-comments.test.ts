@@ -5,13 +5,16 @@ import {
   addThreadArgs,
   createGithubCommentsGateway,
   listThreadsArgs,
+  mapReactionGroups,
   parseAddedComment,
   parseAddedThread,
   parsePullNodeId,
   parsePullHeadSha,
+  parseReactedComment,
   parseStatusResult,
   parseThreads,
   pullNodeIdArgs,
+  reactArgs,
   setStatusArgs,
   splitSlug,
 } from './github-pr-comments.js';
@@ -206,6 +209,7 @@ describe('parseThreads', () => {
           authorAvatarUrl: 'https://github.com/alice.png',
           body: 'nit',
           createdAt: '2026-01-01T00:00:00Z',
+          reactions: [],
         },
       ],
     });
@@ -478,4 +482,106 @@ describe('createGithubCommentsGateway', () => {
     const updated = await gw.setStatus('T1', 'resolved');
     expect(updated.status).toBe('resolved');
   });
+
+  it('reacts to a comment and returns the updated reactions', async () => {
+    const json = JSON.stringify({
+      data: {
+        addReaction: {
+          subject: {
+            reactionGroups: [
+              { content: 'THUMBS_UP', viewerHasReacted: true, reactors: { totalCount: 3 } },
+            ],
+          },
+        },
+      },
+    });
+    const { run, calls } = queuedRunner([ok(json)]);
+    const gw = createGithubCommentsGateway(run, TARGET);
+    const comment = await gw.react({ threadId: 'T1', commentId: 'C9', content: 'THUMBS_UP', on: true });
+    expect(comment.id).toBe('C9');
+    expect(comment.reactions).toEqual([
+      { content: 'THUMBS_UP', count: 3, viewerReacted: true },
+    ]);
+    expect(calls[0].join(' ')).toContain('addReaction');
+    expect(calls[0]).toContain('subjectId=C9');
+    expect(calls[0]).toContain('content=THUMBS_UP');
+  });
 });
+
+describe('reactArgs', () => {
+  it('builds add-reaction args when toggling on', () => {
+    const args = reactArgs({ threadId: 'T1', commentId: 'C1', content: 'HEART', on: true });
+    expect(args.join(' ')).toContain('addReaction');
+    expect(args).toContain('subjectId=C1');
+    expect(args).toContain('content=HEART');
+  });
+
+  it('builds remove-reaction args when toggling off', () => {
+    const args = reactArgs({ threadId: 'T1', commentId: 'C1', content: 'HEART', on: false });
+    expect(args.join(' ')).toContain('removeReaction');
+  });
+});
+
+describe('mapReactionGroups', () => {
+  it('maps valid groups and uses the users fallback count', () => {
+    expect(
+      mapReactionGroups([
+        { content: 'THUMBS_UP', viewerHasReacted: true, reactors: { totalCount: 2 } },
+        { content: 'HEART', users: { totalCount: 4 } },
+      ]),
+    ).toEqual([
+      { content: 'THUMBS_UP', count: 2, viewerReacted: true },
+      { content: 'HEART', count: 4, viewerReacted: false },
+    ]);
+  });
+
+  it('drops empty, unknown, and malformed groups', () => {
+    expect(
+      mapReactionGroups([
+        { content: 'THUMBS_UP', reactors: { totalCount: 0 } },
+        { content: 'EYES' },
+        { content: 'UNKNOWN', reactors: { totalCount: 5 } },
+        { reactors: { totalCount: 5 } },
+        {},
+      ]),
+    ).toEqual([]);
+  });
+
+  it('returns [] for null or undefined', () => {
+    expect(mapReactionGroups(null)).toEqual([]);
+    expect(mapReactionGroups(undefined)).toEqual([]);
+  });
+});
+
+describe('parseReactedComment', () => {
+  it('parses reaction groups across any mutation field name', () => {
+    const json = JSON.stringify({
+      data: {
+        removeReaction: {
+          subject: { reactionGroups: [{ content: 'ROCKET', reactors: { totalCount: 1 } }] },
+        },
+      },
+    });
+    expect(parseReactedComment(json, 'C1')).toEqual({
+      id: 'C1',
+      author: null,
+      authorAvatarUrl: null,
+      body: '',
+      createdAt: null,
+      reactions: [{ content: 'ROCKET', count: 1, viewerReacted: false }],
+    });
+  });
+
+  it('leaves reactions empty for unparsable output', () => {
+    expect(parseReactedComment('not json', 'C2').reactions).toEqual([]);
+  });
+
+  it('leaves reactions empty when no subject carries reaction groups', () => {
+    expect(parseReactedComment(JSON.stringify({ data: { addReaction: {} } }), 'C3').reactions).toEqual([]);
+  });
+
+  it('leaves reactions empty when the response has no data field', () => {
+    expect(parseReactedComment('{}', 'C4').reactions).toEqual([]);
+  });
+});
+

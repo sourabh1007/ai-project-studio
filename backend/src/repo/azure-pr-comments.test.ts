@@ -4,7 +4,9 @@ import {
   azureStatusValue,
   buildAddThreadBody,
   createAzureCommentsGateway,
+  likesUrl,
   mapAzureStatus,
+  mapLikes,
   mapThread,
   parseThreads,
   threadUrl,
@@ -30,6 +32,8 @@ function deps(overrides: Partial<AzureCommentsDeps> = {}): AzureCommentsDeps {
     httpGet: async () => resp(200, { value: [] }),
     httpPost: async () => resp(200, {}),
     httpPatch: async () => resp(200, {}),
+    httpPut: async () => resp(200, {}),
+    httpDelete: async () => resp(200, {}),
     ...overrides,
   };
 }
@@ -170,6 +174,7 @@ describe('mapThread', () => {
           authorAvatarUrl: 'https://ado/alice.png',
           body: 'nit',
           createdAt: '2026-01-01T00:00:00Z',
+          reactions: [],
         },
       ],
     });
@@ -345,5 +350,67 @@ describe('createAzureCommentsGateway', () => {
       TARGET,
     );
     await expect(gw.setStatus('5', 'active')).rejects.toThrow(/HTTP 500/);
+  });
+
+  it('adds a 👍 via PUT and returns the viewer reaction', async () => {
+    const put = vi.fn(async () => resp(200, {}));
+    const gw = createAzureCommentsGateway(deps({ httpPut: put }), TARGET);
+    const comment = await gw.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: true });
+    expect(comment).toEqual({
+      id: '1',
+      author: null,
+      authorAvatarUrl: null,
+      body: '',
+      createdAt: null,
+      reactions: [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }],
+    });
+    expect(put).toHaveBeenCalledWith(likesUrl(TARGET, '5', '1'), 'tok', {});
+  });
+
+  it('removes a 👍 via DELETE and returns no reactions', async () => {
+    const del = vi.fn(async () => resp(204, {}));
+    const gw = createAzureCommentsGateway(deps({ httpDelete: del }), TARGET);
+    const comment = await gw.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: false });
+    expect(comment.reactions).toEqual([]);
+    expect(del).toHaveBeenCalledWith(likesUrl(TARGET, '5', '1'), 'tok');
+  });
+
+  it('rejects non-thumbs-up reactions', async () => {
+    const gw = createAzureCommentsGateway(deps(), TARGET);
+    await expect(
+      gw.react({ threadId: '5', commentId: '1', content: 'HEART', on: true }),
+    ).rejects.toThrow(/only support/);
+  });
+
+  it('throws when the like request returns an error status', async () => {
+    const gw = createAzureCommentsGateway(
+      deps({ httpPut: async () => resp(500) }),
+      TARGET,
+    );
+    await expect(
+      gw.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: true }),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe('likesUrl', () => {
+  it('builds the per-comment likes URL', () => {
+    expect(likesUrl(TARGET, '5', '1')).toContain(
+      '/threads/5/comments/1/likes?api-version=',
+    );
+  });
+});
+
+describe('mapLikes', () => {
+  it('maps a non-empty usersLiked array to a 👍 reaction', () => {
+    expect(mapLikes([{}, {}])).toEqual([
+      { content: 'THUMBS_UP', count: 2, viewerReacted: false },
+    ]);
+  });
+
+  it('returns [] for empty, null, or non-array input', () => {
+    expect(mapLikes([])).toEqual([]);
+    expect(mapLikes(null)).toEqual([]);
+    expect(mapLikes(undefined)).toEqual([]);
   });
 });

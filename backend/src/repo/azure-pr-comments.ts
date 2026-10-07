@@ -5,6 +5,8 @@ import type {
   AzureHttpGetter,
   AzureHttpPatcher,
   AzureHttpPoster,
+  AzureHttpPutter,
+  AzureHttpDeleter,
   AzureTokenGetter,
 } from './azure-repo-lister.js';
 import type { AzureRepoTarget } from './azure-pr-lister.js';
@@ -14,6 +16,7 @@ import type {
   PrCommentThread,
   PrCommentThreadStatus,
   PrCommentsGateway,
+  PrReaction,
 } from '../pr-review/pr-comments-contract.js';
 
 const API_VERSION = '7.1';
@@ -24,12 +27,14 @@ export interface AzurePrTarget extends AzureRepoTarget {
   pullRequestId: number;
 }
 
-/** The deps an Azure comments gateway needs: a token plus the three verbs. */
+/** The deps an Azure comments gateway needs: a token plus the verbs used. */
 export interface AzureCommentsDeps {
   token: AzureTokenGetter;
   httpGet: AzureHttpGetter;
   httpPost: AzureHttpPoster;
   httpPatch: AzureHttpPatcher;
+  httpPut: AzureHttpPutter;
+  httpDelete: AzureHttpDeleter;
 }
 
 function threadsBase(target: AzurePrTarget): string {
@@ -51,6 +56,18 @@ export function threadUrl(target: AzurePrTarget, threadId: string): string {
   return `${threadsBase(target)}/${encodeURIComponent(
     threadId,
   )}?api-version=${API_VERSION}`;
+}
+
+/** REST URL for liking / unliking a single comment within a thread. */
+export function likesUrl(
+  target: AzurePrTarget,
+  threadId: string,
+  commentId: string,
+): string {
+  return (
+    `${threadsBase(target)}/${encodeURIComponent(threadId)}/comments` +
+    `/${encodeURIComponent(commentId)}/likes?api-version=${API_VERSION}`
+  );
 }
 
 /**
@@ -79,6 +96,7 @@ interface AdoComment {
   publishedDate?: string;
   author?: AdoCommentAuthor | null;
   commentType?: string;
+  usersLiked?: unknown[] | null;
 }
 
 interface AdoThreadContext {
@@ -98,6 +116,15 @@ function stripLeadingSlash(path: string): string {
   return path.startsWith('/') ? path.slice(1) : path;
 }
 
+/** Maps Azure's `usersLiked` array to our reaction model (like → 👍 only). */
+export function mapLikes(usersLiked: unknown[] | null | undefined): PrReaction[] {
+  const count = Array.isArray(usersLiked) ? usersLiked.length : 0;
+  if (count === 0) {
+    return [];
+  }
+  return [{ content: 'THUMBS_UP', count, viewerReacted: false }];
+}
+
 function mapComment(comment: AdoComment): PrComment | null {
   if (typeof comment?.id !== 'number') {
     return null;
@@ -112,6 +139,7 @@ function mapComment(comment: AdoComment): PrComment | null {
       typeof comment.publishedDate === 'string' && comment.publishedDate
         ? comment.publishedDate
         : null,
+    reactions: mapLikes(comment.usersLiked),
   };
 }
 
@@ -261,6 +289,33 @@ export function createAzureCommentsGateway(
           comments: [],
         }
       );
+    },
+    async react(input) {
+      if (input.content !== 'THUMBS_UP') {
+        throw new ValidationError(
+          'Azure DevOps pull-request comments only support the 👍 reaction.',
+        );
+      }
+      const token = await authorize();
+      const url = likesUrl(target, input.threadId, input.commentId);
+      const res = input.on
+        ? await deps.httpPut(url, token, {})
+        : await deps.httpDelete(url, token);
+      if (res.status < 200 || res.status >= 300) {
+        throw new ProviderError(
+          `Failed to react to Azure DevOps comment (HTTP ${res.status})`,
+        );
+      }
+      return {
+        id: input.commentId,
+        author: null,
+        authorAvatarUrl: null,
+        body: '',
+        createdAt: null,
+        reactions: input.on
+          ? [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }]
+          : [],
+      };
     },
   };
 }

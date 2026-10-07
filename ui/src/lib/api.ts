@@ -60,8 +60,10 @@ import type {
   PrReviewChatReply,
   PrReviewFileContent,
   ChangeGraphCategory,
+  PrComment,
   PrCommentThread,
   PrCommentThreadStatus,
+  PrReactionContent,
   PrApprovalResult,
   PrDescriptionExportResult,
   ReviewBoard,
@@ -900,6 +902,17 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<PrCommentThread>(
         `/features/${featureId}/pr-review/comments/${threadId}/status`,
         jsonBody({ status }),
+      ),
+    reactPrReviewComment: (
+      featureId: string,
+      threadId: string,
+      commentId: string,
+      content: PrReactionContent,
+      on: boolean,
+    ) =>
+      request<PrComment>(
+        `/features/${featureId}/pr-review/comments/${threadId}/comments/${commentId}/reactions`,
+        jsonBody({ content, on }),
       ),
     approvePrReview: (featureId: string, input: { expectedHeadSha: string }) =>
       request<PrApprovalResult>(

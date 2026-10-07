@@ -931,6 +931,37 @@ export interface PrComment {
   authorAvatarUrl: string | null;
   body: string;
   createdAt: string | null;
+  reactions: PrReaction[];
+}
+
+/** An emoji reaction available on PR comments (GitHub's set; Azure maps 👍). */
+export type PrReactionContent =
+  | 'THUMBS_UP'
+  | 'THUMBS_DOWN'
+  | 'LAUGH'
+  | 'HOORAY'
+  | 'CONFUSED'
+  | 'HEART'
+  | 'ROCKET'
+  | 'EYES';
+
+/** The ordered reaction set the UI offers, each with its display emoji. */
+export const PR_REACTION_EMOJI: Record<PrReactionContent, string> = {
+  THUMBS_UP: '👍',
+  THUMBS_DOWN: '👎',
+  LAUGH: '😄',
+  HOORAY: '🎉',
+  CONFUSED: '😕',
+  HEART: '❤️',
+  ROCKET: '🚀',
+  EYES: '👀',
+};
+
+/** An aggregated reaction on a comment. */
+export interface PrReaction {
+  content: PrReactionContent;
+  count: number;
+  viewerReacted: boolean;
 }
 
 /** A review thread on the PR, anchored to a file + line when inline. */

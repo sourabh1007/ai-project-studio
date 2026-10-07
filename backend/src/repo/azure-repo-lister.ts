@@ -43,6 +43,12 @@ export type AzureHttpPutter = (
   body: unknown,
 ) => Promise<AzureHttpResponse>;
 
+/** Performs an authenticated DELETE against the Azure DevOps REST API. */
+export type AzureHttpDeleter = (
+  url: string,
+  token: string,
+) => Promise<AzureHttpResponse>;
+
 /** Resolves the cached OAuth bearer token for an organization, or null. */
 export type AzureTokenGetter = (org: string) => Promise<string | null>;
 

@@ -1436,6 +1436,24 @@ describe('createApiClient', () => {
     expect(init?.body).toBe(JSON.stringify({ status: 'resolved' }));
   });
 
+  it('toggles a PR review comment reaction via a JSON POST', async () => {
+    const { fetchImpl, calls } = mockFetch(
+      jsonResponse({
+        id: 'c1', author: null, authorAvatarUrl: null, body: '', createdAt: null,
+        reactions: [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }],
+      }),
+    );
+    const client = createApiClient({ fetchImpl });
+    const updated = await client.reactPrReviewComment('f1', 't1', 'c1', 'THUMBS_UP', true);
+    expect(updated.reactions).toEqual([
+      { content: 'THUMBS_UP', count: 1, viewerReacted: true },
+    ]);
+    const [url, init] = calls[0];
+    expect(url).toBe('/api/features/f1/pr-review/comments/t1/comments/c1/reactions');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ content: 'THUMBS_UP', on: true }));
+  });
+
   it('approves a PR review via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ approved: true, state: 'approved' }),

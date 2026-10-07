@@ -12,9 +12,12 @@ import { renderMarkdownComment } from '../../lib/markdown.js';
 import { MarkdownComposer } from '../../components/markdown-composer.js';
 import type {
   AddPrCommentInput,
+  PrComment,
   PrCommentThread,
   PrCommentThreadStatus,
+  PrReactionContent,
 } from '../../lib/types.js';
+import { PR_REACTION_EMOJI } from '../../lib/types.js';
 
 /**
  * Shared live-comments state for a PR review. Both the page-level comments panel
@@ -33,6 +36,13 @@ export interface PrCommentsController {
   setStatus: (
     threadId: string,
     status: PrCommentThreadStatus,
+  ) => Promise<void>;
+  /** Toggles an emoji reaction on a comment and reflects it live. */
+  react: (
+    threadId: string,
+    commentId: string,
+    content: PrReactionContent,
+    on: boolean,
   ) => Promise<void>;
 }
 
@@ -105,7 +115,44 @@ export function usePrComments(featureId: string): PrCommentsController {
     [api, featureId],
   );
 
-  return { threads, loading, error, featureId, reload, add, setStatus };
+  const react = useCallback(
+    async (
+      threadId: string,
+      commentId: string,
+      content: PrReactionContent,
+      on: boolean,
+    ) => {
+      setError(null);
+      try {
+        const updated = await api.reactPrReviewComment(
+          featureId,
+          threadId,
+          commentId,
+          content,
+          on,
+        );
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === threadId
+              ? {
+                  ...t,
+                  comments: t.comments.map((c) =>
+                    c.id === commentId
+                      ? { ...c, reactions: updated.reactions }
+                      : c,
+                  ),
+                }
+              : t,
+          ),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [api, featureId],
+  );
+
+  return { threads, loading, error, featureId, reload, add, setStatus, react };
 }
 
 function anchorLabel(thread: PrCommentThread): string {
@@ -126,14 +173,107 @@ function CommentBody({ body }: { body: string }) {
   );
 }
 
+/** The order emoji reactions are offered in the add-reaction picker. */
+const REACTION_ORDER: PrReactionContent[] = [
+  'THUMBS_UP',
+  'THUMBS_DOWN',
+  'LAUGH',
+  'HOORAY',
+  'CONFUSED',
+  'HEART',
+  'ROCKET',
+  'EYES',
+];
+
+/**
+ * Reaction pills under a comment plus an add-reaction picker. Pills show each
+ * emoji with its count and highlight the ones the viewer added; clicking a pill
+ * toggles it. When `onReact` is omitted the pills render read-only.
+ */
+function CommentReactions({
+  reactions,
+  onReact,
+}: {
+  reactions: PrComment['reactions'];
+  onReact?: (content: PrReactionContent, on: boolean) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const byContent = useMemo(
+    () => new Map(reactions.map((r) => [r.content, r])),
+    [reactions],
+  );
+  if (reactions.length === 0 && !onReact) {
+    return null;
+  }
+  return (
+    <div className="pr-comment-reactions">
+      {reactions.map((r) => (
+        <button
+          key={r.content}
+          type="button"
+          className={`pr-reaction-pill${r.viewerReacted ? ' pr-reaction-pill-on' : ''}`}
+          onClick={onReact ? () => onReact(r.content, !r.viewerReacted) : undefined}
+          disabled={!onReact}
+          aria-pressed={r.viewerReacted}
+          title={`${r.content.replace('_', ' ').toLowerCase()} · ${r.count}`}
+        >
+          <span className="pr-reaction-emoji">{PR_REACTION_EMOJI[r.content]}</span>
+          <span className="pr-reaction-count">{r.count}</span>
+        </button>
+      ))}
+      {onReact ? (
+        <div className="pr-reaction-add">
+          <button
+            type="button"
+            className="pr-reaction-pill pr-reaction-add-toggle"
+            onClick={() => setPicking((p) => !p)}
+            aria-label="Add a reaction"
+            aria-expanded={picking}
+            title="Add a reaction"
+          >
+            🙂﹢
+          </button>
+          {picking ? (
+            <div className="pr-reaction-picker" role="menu">
+              {REACTION_ORDER.map((content) => (
+                <button
+                  key={content}
+                  type="button"
+                  className="pr-reaction-choice"
+                  role="menuitem"
+                  aria-label={content.replace('_', ' ').toLowerCase()}
+                  onClick={() => {
+                    setPicking(false);
+                    onReact(content, !byContent.get(content)?.viewerReacted);
+                  }}
+                  title={content.replace('_', ' ').toLowerCase()}
+                >
+                  {PR_REACTION_EMOJI[content]}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** One review thread with its comments and a resolve/reopen toggle. */
 function ThreadCard({
   thread,
   onSetStatus,
+  onReact,
   collapsible = false,
 }: {
   thread: PrCommentThread;
   onSetStatus: (status: PrCommentThreadStatus) => void;
+  /** Toggles a reaction on one of the thread's comments. Omit for read-only. */
+  onReact?: (
+    commentId: string,
+    content: PrReactionContent,
+    on: boolean,
+  ) => void;
   /** When true, the thread can be minimized to a small author avatar bubble. */
   collapsible?: boolean;
 }) {
@@ -210,6 +350,14 @@ function ThreadCard({
               {c.author ?? 'Someone'}
             </span>
             <CommentBody body={c.body} />
+            <CommentReactions
+              reactions={c.reactions}
+              onReact={
+                onReact
+                  ? (content, on) => onReact(c.id, content, on)
+                  : undefined
+              }
+            />
           </li>
         ))}
       </ul>
@@ -226,7 +374,7 @@ export function PrCommentsPanel({
 }: {
   comments: PrCommentsController;
 }) {
-  const { threads, loading, error, setStatus } = comments;
+  const { threads, loading, error, setStatus, react } = comments;
   const open = threads.filter((t) => t.status === 'active').length;
   return (
     <section className="pr-box pr-comments-box" aria-label="PR comments">
@@ -252,6 +400,9 @@ export function PrCommentsPanel({
               key={thread.id}
               thread={thread}
               onSetStatus={(status) => void setStatus(thread.id, status)}
+              onReact={(commentId, content, on) =>
+                void react(thread.id, commentId, content, on)
+              }
             />
           ))}
         </div>
@@ -356,6 +507,9 @@ export function FileLevelThreads({
           key={thread.id}
           thread={thread}
           onSetStatus={(status) => void comments.setStatus(thread.id, status)}
+          onReact={(commentId, content, on) =>
+            void comments.react(thread.id, commentId, content, on)
+          }
         />
       ))}
     </div>
@@ -474,6 +628,9 @@ function CommentableLines({
                     collapsible
                     onSetStatus={(status) =>
                       void comments.setStatus(thread.id, status)
+                    }
+                    onReact={(commentId, content, on) =>
+                      void comments.react(thread.id, commentId, content, on)
                     }
                   />
                 ))}

@@ -7,6 +7,9 @@ import type {
   PrCommentThread,
   PrCommentThreadStatus,
   PrCommentsGateway,
+  PrReaction,
+  PrReactionContent,
+  ReactPrCommentInput,
 } from '../pr-review/pr-comments-contract.js';
 
 /** The `owner/name` slug plus PR number a GitHub gateway is bound to. */
@@ -17,6 +20,13 @@ export interface GithubPrTarget {
   number: number;
 }
 
+interface GhReactionGroup {
+  content?: string;
+  viewerHasReacted?: boolean;
+  reactors?: { totalCount?: number } | null;
+  users?: { totalCount?: number } | null;
+}
+
 interface GhThreadCommentNode {
   id?: string;
   body?: string;
@@ -24,6 +34,7 @@ interface GhThreadCommentNode {
   line?: number | null;
   createdAt?: string | null;
   author?: { login?: string } | null;
+  reactionGroups?: GhReactionGroup[] | null;
 }
 
 interface GhThreadNode {
@@ -34,6 +45,10 @@ interface GhThreadNode {
   comments?: { nodes?: GhThreadCommentNode[] | null } | null;
 }
 
+/** GraphQL selection fetching a comment's reaction groups with viewer state. */
+const REACTION_GROUPS_SELECTION =
+  'reactionGroups{content viewerHasReacted reactors{totalCount}}';
+
 /**
  * The GraphQL query listing a PR's review threads with their comments. Kept as a
  * single-line string so it can be passed as `-f query=…` to `gh api graphql`.
@@ -42,7 +57,8 @@ export const LIST_THREADS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){' +
   'repository(owner:$owner,name:$name){pullRequest(number:$number){' +
   'id reviewThreads(first:100){nodes{id isResolved path line ' +
-  'comments(first:100){nodes{id body path line createdAt author{login}}}}}}}}';
+  'comments(first:100){nodes{id body path line createdAt author{login} ' +
+  REACTION_GROUPS_SELECTION + '}}}}}}}';
 
 /** `mutation` resolving a review thread by node id. */
 export const RESOLVE_THREAD_MUTATION =
@@ -66,6 +82,18 @@ export const ADD_PR_COMMENT_MUTATION =
   'mutation($subjectId:ID!,$body:String!){' +
   'addComment(input:{subjectId:$subjectId,body:$body}){' +
   'commentEdge{node{id body createdAt author{login}}}}}';
+
+/** `mutation` adding a reaction to a comment, returning its reaction groups. */
+export const ADD_REACTION_MUTATION =
+  'mutation($subjectId:ID!,$content:ReactionContent!){' +
+  'addReaction(input:{subjectId:$subjectId,content:$content}){' +
+  'subject{' + REACTION_GROUPS_SELECTION + '}}}';
+
+/** `mutation` removing a reaction from a comment, returning its reaction groups. */
+export const REMOVE_REACTION_MUTATION =
+  'mutation($subjectId:ID!,$content:ReactionContent!){' +
+  'removeReaction(input:{subjectId:$subjectId,content:$content}){' +
+  'subject{' + REACTION_GROUPS_SELECTION + '}}}';
 
 /** Splits an `owner/name` slug into its GraphQL `owner` / `name` variables. */
 export function splitSlug(repo: string): { owner: string; name: string } {
@@ -141,6 +169,20 @@ export function addPrCommentArgs(
   ];
 }
 
+/** Builds the `gh api graphql` argv toggling a reaction on a comment. */
+export function reactArgs(input: ReactPrCommentInput): string[] {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `query=${input.on ? ADD_REACTION_MUTATION : REMOVE_REACTION_MUTATION}`,
+    '-F',
+    `subjectId=${input.commentId}`,
+    '-F',
+    `content=${input.content}`,
+  ];
+}
+
 /** Builds the `gh api graphql` argv fetching the PR's GraphQL node id. */
 export function pullNodeIdArgs(target: GithubPrTarget, includeHead = false): string[] {
   const { owner, name } = splitSlug(target.repo);
@@ -159,6 +201,34 @@ export function pullNodeIdArgs(target: GithubPrTarget, includeHead = false): str
   ];
 }
 
+const VALID_REACTION_CONTENTS: readonly PrReactionContent[] = [
+  'THUMBS_UP', 'THUMBS_DOWN', 'LAUGH', 'HOORAY', 'CONFUSED', 'HEART', 'ROCKET', 'EYES',
+];
+
+/** Maps GitHub reaction groups to the shared reaction model, dropping empties. */
+export function mapReactionGroups(
+  groups: GhReactionGroup[] | null | undefined,
+): PrReaction[] {
+  const reactions: PrReaction[] = [];
+  for (const group of groups ?? []) {
+    const content = group?.content;
+    if (typeof content !== 'string' ||
+        !(VALID_REACTION_CONTENTS as string[]).includes(content)) {
+      continue;
+    }
+    const count = group.reactors?.totalCount ?? group.users?.totalCount ?? 0;
+    if (count <= 0) {
+      continue;
+    }
+    reactions.push({
+      content: content as PrReactionContent,
+      count,
+      viewerReacted: group.viewerHasReacted === true,
+    });
+  }
+  return reactions;
+}
+
 function mapComment(node: GhThreadCommentNode): PrComment | null {
   if (typeof node?.id !== 'string') {
     return null;
@@ -174,6 +244,7 @@ function mapComment(node: GhThreadCommentNode): PrComment | null {
       typeof node.createdAt === 'string' && node.createdAt
         ? node.createdAt
         : null,
+    reactions: mapReactionGroups(node.reactionGroups),
   };
 }
 
@@ -300,6 +371,34 @@ export function parseAddedComment(stdout: string): PrCommentThread | null {
   };
 }
 
+/** Parses the updated reactions from a reaction mutation response. */
+export function parseReactedComment(
+  stdout: string,
+  commentId: string,
+): PrComment {
+  let groups: GhReactionGroup[] | null | undefined;
+  try {
+    const parsed = JSON.parse(stdout) as {
+      data?: Record<string, { subject?: { reactionGroups?: GhReactionGroup[] } } | undefined>;
+    };
+    for (const value of Object.values(parsed?.data ?? {})) {
+      if (value?.subject?.reactionGroups) {
+        groups = value.subject.reactionGroups;
+      }
+    }
+  } catch {
+    // Unparsable response leaves reactions empty; the UI will reload.
+  }
+  return {
+    id: commentId,
+    author: null,
+    authorAvatarUrl: null,
+    body: '',
+    createdAt: null,
+    reactions: mapReactionGroups(groups),
+  };
+}
+
 /** Parses the resolved/reopened thread state from a status mutation response. */
 export function parseStatusResult(
   stdout: string,
@@ -388,6 +487,10 @@ export function createGithubCommentsGateway(
         'update comment',
       );
       return parseStatusResult(stdout, threadId, status);
+    },
+    async react(input) {
+      const stdout = await exec(reactArgs(input), 'react to comment');
+      return parseReactedComment(stdout, input.commentId);
     },
   };
 }

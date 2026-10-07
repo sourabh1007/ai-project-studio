@@ -101,6 +101,13 @@ function harness() {
     setStatus: (id: string, threadId: string, status: string) => (
       (calls.setStatus = [id, threadId, status]), Promise.resolve(thread)
     ),
+    react: (id: string, input: unknown) => (
+      (calls.react = [id, input]),
+      Promise.resolve({
+        id: 'c1', author: null, authorAvatarUrl: null, body: '', createdAt: null,
+        reactions: [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }],
+      })
+    ),
   } as unknown as PrCommentsService;
   const prApprovals = {
     status: async (id: string) => {
@@ -461,5 +468,40 @@ describe('pr-review-controller', () => {
         }),
       ),
     ).rejects.toThrow(/Unknown thread status/);
+  });
+
+  it('toggles a reaction on a comment from the request body', async () => {
+    const { routes, calls } = harness();
+    const res = await pick(
+      routes,
+      'post',
+      '/features/:featureId/pr-review/comments/:threadId/comments/:commentId/reactions',
+    )(
+      req({
+        params: { featureId: 'f1', threadId: 't1', commentId: 'c1' },
+        body: { content: 'THUMBS_UP', on: true },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(calls.react).toEqual([
+      'f1',
+      { threadId: 't1', commentId: 'c1', content: 'THUMBS_UP', on: true },
+    ]);
+  });
+
+  it('rejects a reaction request with an invalid content', async () => {
+    const { routes } = harness();
+    await expect(
+      pick(
+        routes,
+        'post',
+        '/features/:featureId/pr-review/comments/:threadId/comments/:commentId/reactions',
+      )(
+        req({
+          params: { featureId: 'f1', threadId: 't1', commentId: 'c1' },
+          body: { content: 'NOPE', on: true },
+        }),
+      ),
+    ).rejects.toThrow(/"content"/);
   });
 });

@@ -15,7 +15,7 @@ function thread(overrides: Partial<PrCommentThread> & { id: string }): PrComment
     path: 'src/a.cs',
     line: 3,
     status: 'active',
-    comments: [{ id: `${overrides.id}-c`, author: 'alice', authorAvatarUrl: null, body: 'nit', createdAt: null }],
+    comments: [{ id: `${overrides.id}-c`, author: 'alice', authorAvatarUrl: null, body: 'nit', createdAt: null, reactions: [] }],
     ...overrides,
   };
 }
@@ -79,6 +79,7 @@ describe('PrCommentsPanel', () => {
                 '<script>alert(1)</script>',
               ].join('\n'),
               createdAt: null,
+              reactions: [],
             },
           ],
         }),
@@ -139,6 +140,39 @@ describe('PrCommentsPanel', () => {
     expect(
       screen.getByRole('button', { name: 'Reopen' }),
     ).toBeInTheDocument();
+  });
+
+  it('adds and toggles an emoji reaction on a comment', async () => {
+    const reacted = {
+      id: 't1-c', author: null, authorAvatarUrl: null, body: '', createdAt: null,
+      reactions: [{ content: 'THUMBS_UP' as const, count: 1, viewerReacted: true }],
+    };
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([
+        thread({
+          id: 't1',
+          comments: [{
+            id: 't1-c', author: 'alice', authorAvatarUrl: null, body: 'nit',
+            createdAt: null, reactions: [],
+          }],
+        }),
+      ]),
+      reactPrReviewComment: vi.fn().mockResolvedValue(reacted),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <PrCommentsPanel comments={c} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a reaction' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'thumbs up' }));
+    await waitFor(() =>
+      expect(client.reactPrReviewComment).toHaveBeenCalledWith(
+        'f1', 't1', 't1-c', 'THUMBS_UP', true,
+      ),
+    );
+    // The returned reaction now renders as a highlighted pill.
+    expect(await screen.findByRole('button', { pressed: true })).toHaveTextContent('👍');
   });
 
   it('surfaces a load error', async () => {

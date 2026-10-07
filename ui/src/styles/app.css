@@ -4284,6 +4284,88 @@ body.is-resizing {
   color: var(--text-muted);
 }
 
+/* Emoji reaction pills under a comment, plus the add-reaction picker. */
+.pr-comment-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.pr-reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.pr-reaction-pill:disabled {
+  cursor: default;
+}
+
+.pr-reaction-pill:not(:disabled):hover,
+.pr-reaction-pill:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.pr-reaction-pill-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.pr-reaction-count {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.pr-reaction-add {
+  position: relative;
+  display: inline-flex;
+}
+
+.pr-reaction-add-toggle {
+  font-size: 0.72rem;
+}
+
+.pr-reaction-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.pr-reaction-choice {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pr-reaction-choice:hover,
+.pr-reaction-choice:focus-visible {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
+}
+
 /* Minimized inline comment: a small round author avatar pinned at the line. */
 .pr-comment-bubble {
   position: relative;

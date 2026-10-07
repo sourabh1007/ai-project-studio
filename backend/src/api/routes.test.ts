@@ -214,6 +214,7 @@ describe('createApiRoutes', () => {
       'get /features/:featureId/pr-review/comments',
       'post /features/:featureId/pr-review/comments',
       'post /features/:featureId/pr-review/comments/:threadId/status',
+      'post /features/:featureId/pr-review/comments/:threadId/comments/:commentId/reactions',
       'get /features/:featureId/review-board',
       'post /features/:featureId/review-board/analyze',
       'post /features/:featureId/review-board/perspectives/:perspectiveId/analyze',
