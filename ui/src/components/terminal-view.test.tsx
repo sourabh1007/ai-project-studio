@@ -865,6 +865,35 @@ describe('TerminalView scrollback repaint', () => {
     expect(fit.fit).toHaveBeenCalled();
   });
 
+  it('forces a refit on a container resize even while a stale selection lingers', () => {
+    vi.useFakeTimers();
+    render(<TerminalView sessionId="s1" />);
+
+    const term = h.term!;
+    const fit = h.fit!;
+    // Settle the fresh-session fit burst, then pretend the terminal grew (a
+    // sidebar collapse widens the pane) while the user still has text selected
+    // — e.g. they selected output, then clicked the collapse button elsewhere,
+    // so xterm never cleared the selection.
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue('selected');
+    fit.fit.mockClear();
+
+    act(() => {
+      for (const cb of h.resizeCallbacks) {
+        cb();
+      }
+      vi.advanceTimersByTime(120);
+    });
+
+    // The resize must refit despite the lingering selection, instead of leaving
+    // the terminal stranded at the old column count until an app restart.
+    expect(fit.fit).toHaveBeenCalled();
+  });
+
   it('defers a pending fit until the host has valid geometry', () => {
     vi.useFakeTimers();
     let width = 0;

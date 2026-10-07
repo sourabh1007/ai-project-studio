@@ -596,8 +596,9 @@ export function TerminalView({
 
     let pendingFit = false;
     let pendingFitNeedsRepaint = false;
+    let pendingFitForce = false;
     let dragActive = false;
-    const performFit = () => {
+    const performFit = (force: boolean) => {
       if (replayAwaitingTerminalSettle || dragActive) {
         return false;
       }
@@ -611,7 +612,13 @@ export function TerminalView({
       // Ctrl+C / copy-on-select appears to "do nothing" until the burst ends —
       // then starts working once fits settle. Deferring the fit keeps the
       // selection intact so copying works immediately, even on a new session.
-      if (term.hasSelection()) {
+      //
+      // A `force` fit (a real container resize, e.g. the sidebar collapsing)
+      // bypasses this guard: the resize already invalidates the on-screen
+      // selection, and deferring here would otherwise strand xterm at its old
+      // column count for as long as the stale selection lingered — the sidebar
+      // collapse leaving the terminal narrow with blank space on the right.
+      if (!force && term.hasSelection()) {
         return false;
       }
       try {
@@ -626,19 +633,24 @@ export function TerminalView({
       if (!pendingFit) {
         return;
       }
-      if (!performFit()) {
+      if (!performFit(pendingFitForce)) {
         return;
       }
       pendingFit = false;
+      pendingFitForce = false;
       sendResize();
       if (pendingFitNeedsRepaint) {
         pendingFitNeedsRepaint = false;
         repaintViewport();
       }
     };
-    const requestFit = ({ repaint = false }: { repaint?: boolean } = {}) => {
+    const requestFit = ({
+      repaint = false,
+      force = false,
+    }: { repaint?: boolean; force?: boolean } = {}) => {
       pendingFit = true;
       pendingFitNeedsRepaint ||= repaint;
+      pendingFitForce ||= force;
       flushPendingFit();
     };
 
@@ -654,8 +666,11 @@ export function TerminalView({
       settleTimer = scheduleTimeout(() => {
         settleTimer = undefined;
         // Clear cached glyphs and repaint so any stale cells from the old width
-        // cannot survive into the newly wrapped viewport.
-        requestFit({ repaint: true });
+        // cannot survive into the newly wrapped viewport. Force the fit: a real
+        // container resize already invalidated any on-screen selection, so it
+        // must not be deferred behind one (which left the terminal narrow with
+        // blank space on the right after a sidebar collapse).
+        requestFit({ repaint: true, force: true });
       }, 120);
     };
 
