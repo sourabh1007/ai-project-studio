@@ -47,3 +47,35 @@ it('shows an honest empty state and handles a zero-call inventory without NaN', 
   expect(screen.getByText('None recorded')).toBeInTheDocument();
   expect(root.container.textContent).not.toMatch(/NaN|Infinity/);
 });
+
+it('expands a per-tool breakdown and surfaces last-used timing', () => {
+  render(<McpUsageCharts rows={[
+    row('bluebird', 5, {
+      provider: 'agency', origin: 'built-in',
+      lastCallAt: '2024-05-01T10:00:00.000Z',
+      tools: [
+        { tool: 'code_search', calls: 3, firstCallAt: '2024-05-01T09:00:00.000Z', lastCallAt: '2024-05-01T10:00:00.000Z' },
+        { tool: 'code_read', calls: 2, firstCallAt: null, lastCallAt: null },
+      ],
+    }),
+    row('plain', 1),
+  ]} />);
+  // plain has no tools → no expand control
+  const table = screen.getByRole('table', { name: 'MCP server I/O' });
+  const plain = within(table).getByRole('cell', { name: /plain/ }).closest('tr')!;
+  expect(within(plain).queryByRole('button')).toBeNull();
+
+  const toggle = screen.getByRole('button', { name: /bluebird/ });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('table', { name: 'Per-tool calls' })).toBeNull();
+
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const tools = screen.getByRole('table', { name: 'Per-tool calls' });
+  expect(within(tools).getByRole('cell', { name: 'code_search' })).toBeInTheDocument();
+  expect(within(tools).getByRole('cell', { name: 'code_read' })).toBeInTheDocument();
+
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.queryByRole('table', { name: 'Per-tool calls' })).toBeNull();
+});

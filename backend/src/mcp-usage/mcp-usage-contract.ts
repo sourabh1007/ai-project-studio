@@ -9,6 +9,8 @@ export interface McpObservedCall {
   sessionId: string;
   provider: string;
   server: string;
+  /** Public tool identifier the call invoked (never arguments/results); '' when the event omitted it. */
+  tool: string;
   callId: string;
   origin: McpOrigin;
   scope: 'feature' | 'internal';

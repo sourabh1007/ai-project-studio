@@ -12,8 +12,8 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
       input_bytes, output_bytes, duration_ms, recorded_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const insertObserved = db.prepare(`INSERT INTO mcp_observed_calls (
-      feature_id, session_id, provider, server, call_id, origin, scope, recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      feature_id, session_id, provider, server, tool, call_id, origin, scope, recorded_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (provider, session_id, call_id) DO NOTHING`);
   const deleteByFeature = db.prepare(
     'DELETE FROM mcp_server_usage WHERE feature_id = ?',
@@ -35,6 +35,7 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
         entry.sessionId,
         entry.provider,
         entry.server,
+        entry.tool,
         entry.callId,
         entry.origin,
         entry.scope,

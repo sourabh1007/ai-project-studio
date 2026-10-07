@@ -221,7 +221,7 @@ describe('createUsageRollupRepo', () => {
     const { db, reader } = seed();
     const repo = createMcpUsageRepo(db);
     const base = {
-      featureId: 'f1', provider: 'github', callId: 'call-1',
+      featureId: 'f1', provider: 'github', tool: '', callId: 'call-1',
       origin: 'configured' as const, recordedAt: '2026-01-01T00:00:00.000Z',
     };
     repo.recordObserved({ ...base, sessionId: 's1', server: 'github', scope: 'feature' });
@@ -240,7 +240,7 @@ describe('createUsageRollupRepo', () => {
       provider: 'github', server: 'azure', origin: 'unknown', calls: 6,
       inputBytes: 10, outputBytes: 20, durationMs: 5,
       inputTokens: null, outputTokens: null, nanoAiu: null, credits: null,
-      attribution: 'unavailable',
+      attribution: 'unavailable', tools: [], firstCallAt: null, lastCallAt: null,
     }]);
     expect(reader.featureMcpServers('f1').find((row) => row.server === 'azure')?.calls).toBe(6);
     db.close();

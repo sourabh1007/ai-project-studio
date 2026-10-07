@@ -50,6 +50,24 @@ export interface McpServerBreakdown {
   outputBytes: number;
   /** Summed wall-clock time attributed to the server's tool calls, ms. */
   durationMs: number;
+  /** Earliest observed tool-call time (ISO), from named calls; null when none. */
+  firstCallAt?: string | null;
+  /** Latest observed tool-call time (ISO), from named calls; null when none. */
+  lastCallAt?: string | null;
+  /**
+   * Per-tool breakdown of the server's observed calls, busiest first. Only
+   * covers calls whose public tool name was captured (proxy-only servers and
+   * pre-upgrade rows contribute none), so the counts can be a subset of `calls`.
+   */
+  tools?: McpToolBreakdown[];
+}
+
+/** One tool's share of a server's observed MCP calls. */
+export interface McpToolBreakdown {
+  tool: string;
+  calls: number;
+  firstCallAt: string | null;
+  lastCallAt: string | null;
 }
 
 /** Raw per-session usage rollup as read from the usage store. */

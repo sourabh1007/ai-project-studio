@@ -45,7 +45,7 @@ function identifier(value: unknown): value is string {
 }
 
 /** Only explicit public CLI MCP identity fields qualify; tool-name prefixes do not. */
-export function mcpCallFromEvent(value: unknown): Pick<McpObservedCall, 'server' | 'callId' | 'origin' | 'recordedAt'> | null {
+export function mcpCallFromEvent(value: unknown): Pick<McpObservedCall, 'server' | 'tool' | 'callId' | 'origin' | 'recordedAt'> | null {
   const event = object(value);
   if (event?.type !== 'tool.execution_start') return null;
   const data = object(event.data);
@@ -54,8 +54,12 @@ export function mcpCallFromEvent(value: unknown): Pick<McpObservedCall, 'server'
   if (!identifier(server) || typeof event.timestamp !== 'string'
     || !Number.isFinite(Date.parse(event.timestamp))) return null;
   const source = data.mcpConfigSource;
+  // The tool name is a public identifier (e.g. `repo_pull_request`); arguments
+  // and results are never read. Absent/invalid names degrade to '' so the call
+  // still counts toward the server total without a per-tool attribution.
+  const tool = identifier(data.toolName) ? data.toolName : '';
   return {
-    server, callId: data.toolCallId, recordedAt: new Date(event.timestamp).toISOString(),
+    server, tool, callId: data.toolCallId, recordedAt: new Date(event.timestamp).toISOString(),
     origin: source === 'builtin' ? 'built-in'
       : source === 'user' || source === 'workspace' || source === 'plugin' ? 'configured' : 'unknown',
   };

@@ -1315,6 +1315,16 @@ export interface McpServerBreakdown {
   inputBytes: number;
   outputBytes: number;
   durationMs: number;
+  firstCallAt?: string | null;
+  lastCallAt?: string | null;
+  tools?: McpToolBreakdown[];
+}
+
+export interface McpToolBreakdown {
+  tool: string;
+  calls: number;
+  firstCallAt: string | null;
+  lastCallAt: string | null;
 }
 
 export interface SessionBreakdown extends UsageTotals {

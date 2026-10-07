@@ -9,7 +9,7 @@ import type {
   WarmAgentSession,
 } from '../aggregation/aggregation-contract.js';
 import type { AggregationConfig } from '../aggregation/config.js';
-import { mcpRollupSource, toMcpBreakdown, type McpRollupRow } from './mcp-rollup.js';
+import { attachMcpTools, mcpRollupSource, mcpToolRollupSource, toMcpBreakdown, type McpRollupRow, type McpToolRollupRow } from './mcp-rollup.js';
 
 const TOTALS_COLUMNS = `
   COUNT(DISTINCT session_id) AS sessions,
@@ -118,6 +118,7 @@ export function createAggregateRepo(
   const byMcpServerStmt = db.prepare(
     mcpRollupSource('feature_id = ?', 'feature_id = ?'),
   );
+  const byMcpServerToolsStmt = db.prepare(mcpToolRollupSource('feature_id = ?'));
 
   // Warm-ACP agent runs for a feature. These reuse a pooled session so they are
   // never persisted as feature `sessions`; their usage lives only in
@@ -176,9 +177,10 @@ export function createAggregateRepo(
       );
     },
     byMcpServer(featureId) {
-      return (byMcpServerStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
+      const servers = (byMcpServerStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
+      return attachMcpTools(servers, byMcpServerToolsStmt.all(featureId) as unknown as McpToolRollupRow[]);
     },
   };
 }

@@ -729,7 +729,7 @@ describe('db schema/connection', () => {
           name: string; notnull: number; pk: number;
         }[];
         expect(columns.map(({ name }) => name)).toEqual([
-          'feature_id', 'session_id', 'provider', 'server', 'call_id',
+          'feature_id', 'session_id', 'provider', 'server', 'tool', 'call_id',
           'origin', 'scope', 'recorded_at',
         ]);
         expect(columns.every((column) => column.notnull === 1)).toBe(true);
@@ -737,7 +737,7 @@ describe('db schema/connection', () => {
           .sort((a, b) => a.pk - b.pk).map(({ name }) => name))
           .toEqual(['provider', 'session_id', 'call_id']);
         const insert = upgraded.prepare(`INSERT INTO mcp_observed_calls VALUES (
-          'f1', 'warm-provider-session', 'copilot', 'github', 'c1', ?, ?, '2026-01-01'
+          'f1', 'warm-provider-session', 'copilot', 'github', 'repo_pr', 'c1', ?, ?, '2026-01-01'
         )`);
         expect(() => insert.run('other', 'internal')).toThrow();
         expect(() => insert.run('built-in', 'other')).toThrow();

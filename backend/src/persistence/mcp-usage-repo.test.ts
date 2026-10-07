@@ -9,6 +9,7 @@ function observed(overrides: Partial<McpObservedCall> = {}): McpObservedCall {
     sessionId: 's1',
     provider: 'copilot',
     server: 'filesystem',
+    tool: '',
     callId: 'call-1',
     origin: 'built-in',
     scope: 'feature',
@@ -49,7 +50,7 @@ describe('mcp-usage-repo', () => {
     }));
     expect(db.prepare('SELECT * FROM mcp_observed_calls').all()).toEqual([{
       feature_id: 'f1', session_id: 's1', provider: 'copilot', server: 'filesystem',
-      call_id: 'call-1', origin: 'built-in', scope: 'feature',
+      tool: '', call_id: 'call-1', origin: 'built-in', scope: 'feature',
       recorded_at: '2025-01-01T00:00:00.000Z',
     }]);
     db.close();

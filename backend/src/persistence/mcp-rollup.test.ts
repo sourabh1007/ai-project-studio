@@ -5,7 +5,7 @@ import type { McpObservedCall, McpServerUsageRecord } from '../mcp-usage/mcp-usa
 import { createAggregateRepo } from './aggregate-repo.js';
 import { createDatabase } from './db/connection.js';
 import { createMcpUsageRepo } from './mcp-usage-repo.js';
-import { toMcpBreakdown } from './mcp-rollup.js';
+import { attachMcpTools, toMcpBreakdown } from './mcp-rollup.js';
 import { createUsageRollupRepo } from './usage-rollup-repo.js';
 
 function seed() {
@@ -13,7 +13,7 @@ function seed() {
   const repo = createMcpUsageRepo(db);
   const observed = (overrides: Partial<McpObservedCall> = {}) => repo.recordObserved({
     featureId: 'f1', sessionId: 's1', provider: 'copilot', server: 'github',
-    callId: 'call-1', origin: 'configured', scope: 'feature',
+    tool: '', callId: 'call-1', origin: 'configured', scope: 'feature',
     recordedAt: '2026-01-01T00:00:00.000Z', ...overrides,
   });
   const proxy = (overrides: Partial<McpServerUsageRecord> = {}) => repo.record({
@@ -31,6 +31,9 @@ const unavailable = {
   attribution: 'unavailable',
 };
 
+/** Reader rows additionally carry the (here empty) per-tool breakdown. */
+const noTools = { ...unavailable, tools: [], firstCallAt: null, lastCallAt: null };
+
 describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
   function setup() {
     const data = seed();
@@ -47,9 +50,9 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     observed({ provider: 'agency', origin: 'built-in' });
     expect(read()).toEqual([
       { provider: 'agency', server: 'github', origin: 'built-in', calls: 1,
-        inputBytes: 0, outputBytes: 0, durationMs: 0, ...unavailable },
+        inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools },
       { provider: 'copilot', server: 'github', origin: 'configured', calls: 1,
-        inputBytes: 10, outputBytes: 20, durationMs: 30, ...unavailable },
+        inputBytes: 10, outputBytes: 20, durationMs: 30, ...noTools },
     ]);
     expect(read('missing')).toEqual([]);
     db.close();
@@ -67,7 +70,7 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     // max(5, 2) + max(1, 4), not max(6, 6).
     expect(read()).toEqual([{
       provider: 'copilot', server: 'github', origin: 'configured', calls: 9,
-      inputBytes: 30, outputBytes: 60, durationMs: 90, ...unavailable,
+      inputBytes: 30, outputBytes: 60, durationMs: 90, ...noTools,
     }]);
     expect(read('f2')[0].calls).toBe(1);
     db.close();
@@ -95,6 +98,24 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     expect(read()[0].calls).toBe(3);
     db.close();
   });
+
+  it('breaks named tool calls down busiest-first and dates each server by its tools', () => {
+    const { db, observed, read } = setup();
+    observed({ tool: 'search', callId: 't1', recordedAt: '2026-01-02T00:00:00.000Z' });
+    observed({ tool: 'search', callId: 't2', recordedAt: '2026-01-05T00:00:00.000Z' });
+    observed({ tool: 'create_pr', callId: 't3', recordedAt: '2026-01-03T00:00:00.000Z' });
+    observed({ tool: 'read', callId: 't5', recordedAt: '2026-01-01T00:00:00.000Z' });
+    observed({ tool: '', callId: 't4', recordedAt: '2026-01-09T00:00:00.000Z' });
+    const [server] = read();
+    expect(server.tools).toEqual([
+      { tool: 'search', calls: 2, firstCallAt: '2026-01-02T00:00:00.000Z', lastCallAt: '2026-01-05T00:00:00.000Z' },
+      { tool: 'create_pr', calls: 1, firstCallAt: '2026-01-03T00:00:00.000Z', lastCallAt: '2026-01-03T00:00:00.000Z' },
+      { tool: 'read', calls: 1, firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+    expect(server.firstCallAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(server.lastCallAt).toBe('2026-01-05T00:00:00.000Z');
+    db.close();
+  });
 });
 
 describe('MCP rollup scopes', () => {
@@ -105,11 +126,11 @@ describe('MCP rollup scopes', () => {
     expect(db.prepare('SELECT id FROM sessions').all()).toEqual([]);
     expect(rollup.workspaceMcpServers()).toEqual([{
       provider: 'copilot', server: 'filesystem', origin: 'configured', calls: 1,
-      inputBytes: 0, outputBytes: 0, durationMs: 0, ...unavailable,
+      inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools,
     }]);
     expect(rollup.ideMcpServers()).toEqual([{
       provider: 'copilot', server: 'github', origin: 'built-in', calls: 1,
-      inputBytes: 0, outputBytes: 0, durationMs: 0, ...unavailable,
+      inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools,
     }]);
     expect(rollup.featureMcpServers('f1')).toHaveLength(2);
     db.close();
@@ -131,5 +152,18 @@ describe('MCP rollup scopes', () => {
       provider: 'copilot', server: 'github', origin: 'unknown',
       calls: 1, inputBytes: 2, outputBytes: 3, durationMs: 4, ...unavailable,
     });
+  });
+
+  it('keys provider-less servers by name so their tool rows still attach', () => {
+    const server = { server: 'github', origin: 'unknown' as const, calls: 1,
+      inputBytes: 0, outputBytes: 0, durationMs: 0, ...unavailable };
+    const [merged] = attachMcpTools([{ ...server, provider: undefined }], [
+      { provider: '', server: 'github', tool: 'search', calls: 1,
+        firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+    expect(merged.tools).toEqual([
+      { tool: 'search', calls: 1, firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+    expect(merged.firstCallAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });

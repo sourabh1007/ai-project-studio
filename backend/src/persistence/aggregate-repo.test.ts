@@ -234,6 +234,9 @@ describe('aggregate-repo', () => {
       inputBytes: 150,
       outputBytes: 600,
       durationMs: 50,
+      tools: [],
+      firstCallAt: null,
+      lastCallAt: null,
     });
     // Other features are excluded.
     expect(reader.byMcpServer('f3')).toEqual([]);

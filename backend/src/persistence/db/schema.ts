@@ -409,6 +409,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     session_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     server TEXT NOT NULL,
+    tool TEXT NOT NULL DEFAULT '',
     call_id TEXT NOT NULL,
     origin TEXT NOT NULL CHECK (origin IN ('built-in', 'configured', 'unknown')),
     scope TEXT NOT NULL CHECK (scope IN ('feature', 'internal')),
@@ -1126,6 +1127,15 @@ const ADDED_COLUMNS: readonly {
     table: 'bug_bash_runs',
     column: 'prerequisites',
     ddl: 'ALTER TABLE bug_bash_runs ADD COLUMN prerequisites TEXT',
+  },
+  {
+    // The public tool identifier each observed MCP call invoked, enabling the
+    // per-tool usage breakdown. Lives in the usage database; pre-existing rows
+    // default to '' (no per-tool attribution).
+    table: 'mcp_observed_calls',
+    column: 'tool',
+    schema: 'usage',
+    ddl: "ALTER TABLE usage.mcp_observed_calls ADD COLUMN tool TEXT NOT NULL DEFAULT ''",
   },
 ];
 

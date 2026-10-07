@@ -16622,6 +16622,43 @@ body.is-resizing {
   font-size: 12px;
 }
 
+.mcp-usage-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mcp-usage-expand:hover {
+  color: var(--accent);
+}
+
+.mcp-usage-caret {
+  display: inline-block;
+  width: 0.9em;
+  color: var(--text-muted);
+}
+
+.mcp-usage-tools-row > td {
+  padding: 0 0 var(--space-2) var(--space-5);
+  background: var(--surface-muted, rgba(127, 127, 127, 0.06));
+}
+
+.mcp-usage-tools {
+  width: 100%;
+  font-size: 11px;
+}
+
+.mcp-usage-tools th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .pr-feature-summary > a,
 .pr-feature-summary p {
   overflow-wrap: anywhere;

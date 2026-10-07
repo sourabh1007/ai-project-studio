@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { IdeUsageConfig } from '../ide-usage/config.js';
-import { mcpRollupSource, toMcpBreakdown, type McpRollupRow } from './mcp-rollup.js';
+import { attachMcpTools, mcpRollupSource, mcpToolRollupSource, toMcpBreakdown, type McpRollupRow, type McpToolRollupRow } from './mcp-rollup.js';
 import type {
   UsageDayRow,
   UsageRollupReader,
@@ -139,6 +139,9 @@ export function createUsageRollupRepo(
     )`, "scope = 'internal'"),
   );
   const featureMcpStmt = db.prepare(mcpRollupSource('feature_id = ?', 'feature_id = ?'));
+  const workspaceMcpToolsStmt = db.prepare(mcpToolRollupSource("scope = 'feature'"));
+  const ideMcpToolsStmt = db.prepare(mcpToolRollupSource("scope = 'internal'"));
+  const featureMcpToolsStmt = db.prepare(mcpToolRollupSource('feature_id = ?'));
 
   return {
     workspaceDays() {
@@ -153,17 +156,20 @@ export function createUsageRollupRepo(
       ).map(toDayRow);
     },
     workspaceMcpServers() {
-      return (workspaceMcpStmt.all() as unknown as McpRollupRow[]).map(toMcpBreakdown);
+      const servers = (workspaceMcpStmt.all() as unknown as McpRollupRow[]).map(toMcpBreakdown);
+      return attachMcpTools(servers, workspaceMcpToolsStmt.all() as unknown as McpToolRollupRow[]);
     },
     ideMcpServers() {
-      return (ideMcpStmt.all(...metaKinds) as unknown as McpRollupRow[]).map(
+      const servers = (ideMcpStmt.all(...metaKinds) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
+      return attachMcpTools(servers, ideMcpToolsStmt.all() as unknown as McpToolRollupRow[]);
     },
     featureMcpServers(featureId) {
-      return (featureMcpStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
+      const servers = (featureMcpStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
+      return attachMcpTools(servers, featureMcpToolsStmt.all(featureId) as unknown as McpToolRollupRow[]);
     },
   };
 }

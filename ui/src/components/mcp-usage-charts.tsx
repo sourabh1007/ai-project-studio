@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import type { McpServerBreakdown } from '../lib/types.js';
-import { formatAic, formatBytes, formatCompactNumber, formatCredits, formatDuration, formatTokens } from '../lib/format.js';
+import { Fragment, useState } from 'react';
+import type { McpServerBreakdown, McpToolBreakdown } from '../lib/types.js';
+import { formatAic, formatBytes, formatCompactNumber, formatCredits, formatDateTime, formatDuration, formatTokens } from '../lib/format.js';
 
 type Metric = 'calls' | 'bytes' | 'tokens' | 'credits';
 const METRICS: { id: Metric; label: string }[] = [
@@ -30,6 +30,12 @@ function label(row: McpServerBreakdown) {
 
 export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
   const [metric, setMetric] = useState<Metric>('calls');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (key: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
   const ranked = [...rows].sort((a, b) =>
     (valueOf(b, metric) ?? -1) - (valueOf(a, metric) ?? -1) || label(a).localeCompare(label(b)));
   const byCalls = [...rows].sort((a, b) => b.calls - a.calls || label(a).localeCompare(label(b)));
@@ -98,19 +104,54 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
     <div className="mcp-usage-table-scroll" tabIndex={0} role="region" aria-label="MCP server usage details">
       <table className="usage-table" aria-label="MCP server I/O">
         <thead><tr><th>Server</th><th>Source</th><th>Calls</th><th>Input tokens</th><th>Output tokens</th>
-          <th>AIC</th><th>Vendor credits</th><th>Traffic in / out</th><th>Total time</th></tr></thead>
-        <tbody>{ranked.map((row) => <tr key={label(row)}>
-          <td title={label(row)}>{row.server}{row.provider && <small className="mcp-usage-provider">{row.provider}</small>}</td>
-          <td>{row.origin === 'built-in' ? 'CLI built-in' : row.origin === 'configured' ? 'Configured' : 'Not identified'}</td>
-          <td className="dash-num">{formatCompactNumber(row.calls)}</td>
-          <td className="dash-num">{reported(row.inputTokens, formatTokens)}</td>
-          <td className="dash-num">{reported(row.outputTokens, formatTokens)}</td>
-          <td className="dash-num">{reported(row.nanoAiu, formatAic)}{row.attribution === 'partial' && row.nanoAiu != null ? ' (partial)' : ''}</td>
-          <td className="dash-num">{reported(row.credits, formatCredits)}</td>
-          <td className="dash-num">{formatBytes(row.inputBytes)} / {formatBytes(row.outputBytes)}</td>
-          <td className="dash-num">{formatDuration(row.durationMs)}</td>
-        </tr>)}</tbody>
+          <th>AIC</th><th>Vendor credits</th><th>Traffic in / out</th><th>Total time</th><th>Last used</th></tr></thead>
+        <tbody>{ranked.map((row) => {
+          const key = label(row);
+          const tools = row.tools ?? [];
+          const isOpen = expanded.has(key);
+          return <Fragment key={key}>
+            <tr className={tools.length > 0 ? 'mcp-usage-row-expandable' : undefined}>
+              <td title={key}>
+                {tools.length > 0
+                  ? <button type="button" className="mcp-usage-expand" aria-expanded={isOpen}
+                      onClick={() => toggleExpanded(key)}>
+                      <span className="mcp-usage-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                      {row.server}
+                    </button>
+                  : row.server}
+                {row.provider && <small className="mcp-usage-provider">{row.provider}</small>}
+              </td>
+              <td>{row.origin === 'built-in' ? 'CLI built-in' : row.origin === 'configured' ? 'Configured' : 'Not identified'}</td>
+              <td className="dash-num">{formatCompactNumber(row.calls)}</td>
+              <td className="dash-num">{reported(row.inputTokens, formatTokens)}</td>
+              <td className="dash-num">{reported(row.outputTokens, formatTokens)}</td>
+              <td className="dash-num">{reported(row.nanoAiu, formatAic)}{row.attribution === 'partial' && row.nanoAiu != null ? ' (partial)' : ''}</td>
+              <td className="dash-num">{reported(row.credits, formatCredits)}</td>
+              <td className="dash-num">{formatBytes(row.inputBytes)} / {formatBytes(row.outputBytes)}</td>
+              <td className="dash-num">{formatDuration(row.durationMs)}</td>
+              <td className="dash-num">{formatDateTime(row.lastCallAt ?? null)}</td>
+            </tr>
+            {isOpen && <tr className="mcp-usage-tools-row">
+              <td colSpan={10}>
+                <ToolBreakdownTable tools={tools} />
+              </td>
+            </tr>}
+          </Fragment>;
+        })}</tbody>
       </table>
     </div>
   </div>;
+}
+
+/** Per-tool detail shown when a server row is expanded. */
+function ToolBreakdownTable({ tools }: { tools: McpToolBreakdown[] }) {
+  return <table className="usage-table mcp-usage-tools" aria-label="Per-tool calls">
+    <thead><tr><th>Tool</th><th>Calls</th><th>First used</th><th>Last used</th></tr></thead>
+    <tbody>{tools.map((tool) => <tr key={tool.tool}>
+      <td title={tool.tool}>{tool.tool}</td>
+      <td className="dash-num">{formatCompactNumber(tool.calls)}</td>
+      <td className="dash-num">{tool.firstCallAt ? formatDateTime(tool.firstCallAt) : UNAVAILABLE}</td>
+      <td className="dash-num">{tool.lastCallAt ? formatDateTime(tool.lastCallAt) : UNAVAILABLE}</td>
+    </tr>)}</tbody>
+  </table>;
 }

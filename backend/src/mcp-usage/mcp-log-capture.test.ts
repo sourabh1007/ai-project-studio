@@ -30,14 +30,20 @@ describe('explicit CLI MCP event identification', () => {
     ['plugin', 'configured'], ['managed', 'unknown'], [undefined, 'unknown'], ['future', 'unknown'],
   ])('uses only explicit provenance %s', (mcpConfigSource, origin) => {
     expect(mcpCallFromEvent(event({ mcpConfigSource }))).toEqual({
-      server: 'ado', callId: 'call-1', recordedAt: timestamp, origin,
+      server: 'ado', tool: '', callId: 'call-1', recordedAt: timestamp, origin,
     });
+  });
+  it('captures the public tool name without reading arguments or results', () => {
+    expect(mcpCallFromEvent(event({ toolName: 'repo_pull_request' }))).toEqual({
+      server: 'ado', tool: 'repo_pull_request', callId: 'call-1', recordedAt: timestamp, origin: 'unknown',
+    });
+    expect(mcpCallFromEvent(event({ toolName: 7 })).tool).toBe('');
   });
   it('prefers config identity over display name and never reads billing/arguments', () => {
     expect(mcpCallFromEvent(event({
       mcpConfigServerName: 'my-server', arguments: { secret: 'not retained' },
       inputTokens: 10, nanoAiu: 200,
-    }))).toEqual({ server: 'my-server', callId: 'call-1', recordedAt: timestamp, origin: 'unknown' });
+    }))).toEqual({ server: 'my-server', tool: '', callId: 'call-1', recordedAt: timestamp, origin: 'unknown' });
   });
   it.each([
     null, [], 1, 'text', {}, { type: 'tool.execution_complete' },
@@ -56,7 +62,7 @@ describe('bounded MCP log reconciliation', () => {
     const { deps, capture } = fixture();
     await capture.tick();
     expect(deps.usage.recordObserved).toHaveBeenCalledWith({
-      featureId: 'f', sessionId: 's', provider: 'agency', server: 'ado',
+      featureId: 'f', sessionId: 's', provider: 'agency', server: 'ado', tool: '',
       callId: '["s","call-1"]', origin: 'unknown', scope: 'feature', recordedAt: timestamp,
     });
     await capture.tick();
