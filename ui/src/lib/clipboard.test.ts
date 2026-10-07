@@ -124,6 +124,37 @@ describe('toClipboardText', () => {
     );
   });
 
+  it('strips box-drawing right borders regardless of padding or weight', () => {
+    expect(toClipboardText('push the changes          │', false)).toBe(
+      'push the changes',
+    );
+    // Single space before a decorative bar — the old 2-space rule missed this.
+    expect(toClipboardText('ush the changes │', false)).toBe('ush the changes');
+    expect(toClipboardText('heavy border ┃', false)).toBe('heavy border');
+    expect(toClipboardText('double border ║', false)).toBe('double border');
+    expect(toClipboardText('eighth-block edge ▕', false)).toBe('eighth-block edge');
+    expect(toClipboardText('fullwidth bar ｜', false)).toBe('fullwidth bar');
+  });
+
+  it('strips a leading thread-rail gutter bar even without a trailing edge', () => {
+    expect(toClipboardText('   │ not committed or pushed yet.', false)).toBe(
+      'not committed or pushed yet.',
+    );
+    expect(toClipboardText('│ push the changes', false)).toBe('push the changes');
+  });
+
+  it('removes both borders of a box-drawn row', () => {
+    expect(toClipboardText('│ MCP server requires auth            │', false)).toBe(
+      'MCP server requires auth',
+    );
+  });
+
+  it('keeps ASCII markdown tables intact', () => {
+    expect(toClipboardText('| Name | Value |\n| a | b |', false)).toBe(
+      '| Name | Value |\n| a | b |',
+    );
+  });
+
   it('converts LF to CRLF on Windows', () => {
     expect(toClipboardText('a\nb\nc', true)).toBe('a\r\nb\r\nc');
   });

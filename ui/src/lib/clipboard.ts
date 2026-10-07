@@ -84,13 +84,40 @@ const COPY_ARTIFACTS =
 const NON_BREAKING_SPACES = /[\u00A0\u2007\u202F]/g;
 
 /**
- * Normalises copied terminal text. xterm selections can include frame/seam
- * pipes from the CLI's bordered, wrapped output; strip only those padded edge
- * artifacts while preserving real inline pipes. Non-text decoration glyphs and
- * invisible marks are removed first so AI output pastes as clean text. Then
- * apply the host clipboard's line-ending convention (CRLF on Windows, LF
- * elsewhere) without doubling CRs. Kept DOM-free (the caller passes the
- * platform) so it unit-tests to 100%.
+ * Vertical bars the CLI draws purely as box frames and thread-rail gutters —
+ * light/heavy/double/dashed box verticals, one-eighth block edges, the
+ * vertical-box-line glyphs and the fullwidth bar. None of these ever carry
+ * textual meaning in CLI output, so they are stripped as a leading or trailing
+ * edge (and as a wrapped-row seam) regardless of how much padding surrounds
+ * them. The ASCII `|` (U+007C) is deliberately NOT in this set: it doubles as a
+ * real inline operator and markdown-table rule, so it is only treated as a
+ * frame edge when clearly padded (see the regexes below).
+ */
+const FRAME_BARS =
+  '\\u00A6\\u2502\\u2503\\u2506\\u2507\\u250A\\u250B\\u2551\\u2595\\u258F\\u23B8\\u23B9\\uFF5C';
+
+/**
+ * A trailing frame edge: any decorative bar (with or without padding), or an
+ * ASCII `|` that is padded by at least two spaces/tabs so it cannot be a real
+ * trailing operator.
+ */
+const TRAILING_FRAME = new RegExp(`(?:[ \\t]*[${FRAME_BARS}]|[ \\t]{2,}\\|)[ \\t]*$`);
+/** A leading decorative bar (thread-rail gutter / frame edge) — always strippable. */
+const LEADING_BOX_FRAME = new RegExp(`^[ \\t]*[${FRAME_BARS}][ \\t]?`);
+/** A leading bar including ASCII `|` — only used on rows already proven bordered. */
+const LEADING_ANY_FRAME = new RegExp(`^[ \\t]*[${FRAME_BARS}|][ \\t]?`);
+/** A wrapped-row seam: a bar padded on both sides, injected at a reflow boundary. */
+const SEAM_FRAME = new RegExp(`[ \\t]{2,}[${FRAME_BARS}|][ \\t]{1,}`, 'g');
+
+/**
+ * Normalises copied terminal text. xterm selections can include frame, gutter
+ * and seam bars from the CLI's bordered, wrapped output; strip those edge
+ * artifacts while preserving real inline pipes (e.g. `A|B`, `| grep-ready`) and
+ * ASCII markdown tables. Non-text decoration glyphs and invisible marks are
+ * removed first so AI output pastes as clean text. Then apply the host
+ * clipboard's line-ending convention (CRLF on Windows, LF elsewhere) without
+ * doubling CRs. Kept DOM-free (the caller passes the platform) so it unit-tests
+ * to 100%.
  */
 export function toClipboardText(text: string, isWindows: boolean): string {
   const cleaned = text
@@ -99,11 +126,16 @@ export function toClipboardText(text: string, isWindows: boolean): string {
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => {
-      const withoutTrailingFrame = line.replace(/[ \t]{2,}[|│][ \t]*$/, '');
-      return (withoutTrailingFrame === line
-        ? line
-        : withoutTrailingFrame.replace(/^[ \t]*[|│][ \t]?/, '')
-      ).replace(/[ \t]{2,}[|│][ \t]{1,}/g, ' ');
+      const withoutTrailingFrame = line.replace(TRAILING_FRAME, '');
+      const hadTrailing = withoutTrailingFrame !== line;
+      // Decorative gutters/frames at the start are always safe to drop. An ASCII
+      // `|` at the start is only dropped when the row also had a trailing frame
+      // edge (a fully bordered row), so genuine leading pipes still survive.
+      let out = withoutTrailingFrame.replace(LEADING_BOX_FRAME, '');
+      if (hadTrailing && out === withoutTrailingFrame) {
+        out = withoutTrailingFrame.replace(LEADING_ANY_FRAME, '');
+      }
+      return out.replace(SEAM_FRAME, ' ');
     })
     .join('\n');
   return isWindows ? cleaned.replace(/\n/g, '\r\n') : cleaned;
