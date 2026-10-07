@@ -786,6 +786,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   );
   const [step, setStep] = useState<Step>('describe');
   const [showSuggestion, setShowSuggestion] = useState(false);
+  // True only while a refine-chat turn is actually in flight on the backend —
+  // i.e. the planner is reading the repo and (if warranted) regenerating the
+  // plan from the user's latest message. Drives the plan card's live "updating"
+  // bar so the signal reflects real work, not a decorative spinner.
+  const [refiningPlan, setRefiningPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionNote, setSessionNote] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -1556,6 +1561,22 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                     shown for reference until the new one is ready.
                   </p>
                 )}
+                {refiningPlan && (
+                  <div
+                    className="new-task-plan-regen"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span
+                      className="new-task-plan-regen-bar"
+                      aria-hidden="true"
+                    />
+                    <span className="new-task-plan-regen-text">
+                      The planner is reviewing your feedback and updating the
+                      plan…
+                    </span>
+                  </div>
+                )}
                 <div
                   className="cg-chat-md new-task-plan-md"
                   dangerouslySetInnerHTML={{ __html: planHtml }}
@@ -1597,14 +1618,19 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                     context="Challenge or edit this plan in plain language before you implement it."
                     hint="e.g. “Skip the migration and reuse the existing table instead.” The planner reads the repo and proposes a revised plan when you ask — you Apply or Discard it, and it edits no files."
                     placeholder="Ask the planner to change the plan…"
-                    onSend={(history, message) =>
-                      api.refineNewTask(
-                        feature.id,
-                        attachmentId,
-                        history,
-                        message,
-                      )
-                    }
+                    onSend={async (history, message) => {
+                      setRefiningPlan(true);
+                      try {
+                        return await api.refineNewTask(
+                          feature.id,
+                          attachmentId,
+                          history,
+                          message,
+                        );
+                      } finally {
+                        setRefiningPlan(false);
+                      }
+                    }}
                     onApply={(plan) =>
                       api
                         .applyRefinedNewTaskPlan(feature.id, attachmentId, plan)

@@ -18412,6 +18412,56 @@ body.is-resizing {
   color: var(--accent);
 }
 
+/* Live "the planner is updating the plan" bar — shown only while a refine-chat
+ * turn is genuinely in flight on the backend. */
+.new-task-plan-regen {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+
+.new-task-plan-regen-bar {
+  position: relative;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.new-task-plan-regen-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: new-task-plan-regen-travel 1.1s cubic-bezier(0.4, 0, 0.2, 1)
+    infinite;
+}
+
+.new-task-plan-regen-text {
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+@keyframes new-task-plan-regen-travel {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-task-plan-regen-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.6;
+  }
+}
+
 /* Summary hero + stat cards. */
 .new-task-result-hero {
   display: flex;
