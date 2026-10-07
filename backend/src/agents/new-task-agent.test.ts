@@ -3,7 +3,7 @@ import { createNewTaskAgent, NEW_TASK_AGENT_ID } from './new-task-agent.js';
 
 describe('new-task-agent', () => {
   it('describes the agent manifest', () => {
-    const agent = createNewTaskAgent({ hasRepo: () => true, hasReview: () => false });
+    const agent = createNewTaskAgent({ hasRepo: () => true });
     expect(agent.manifest.id).toBe(NEW_TASK_AGENT_ID);
     expect(agent.manifest.id).toBe('new-task');
     expect(agent.manifest.icon).toBe('new-task');
@@ -18,22 +18,15 @@ describe('new-task-agent', () => {
     ).toBe(true);
   });
 
-  it('is attachable on a plain feature with a repository and no PR review', () => {
-    const agent = createNewTaskAgent({ hasRepo: () => true, hasReview: () => false });
+  it('is attachable on any feature with a repository, even one that already has a PR', () => {
+    const agent = createNewTaskAgent({ hasRepo: () => true });
     expect(agent.checkPrerequisite('f1')).toEqual({ met: true });
   });
 
   it('blocks with a reason when the feature has no repository', () => {
-    const agent = createNewTaskAgent({ hasRepo: () => false, hasReview: () => false });
+    const agent = createNewTaskAgent({ hasRepo: () => false });
     const result = agent.checkPrerequisite('f1');
     expect(result.met).toBe(false);
     expect(result.reason).toMatch(/repository/i);
-  });
-
-  it('blocks when the feature is already a PR task (has a review)', () => {
-    const agent = createNewTaskAgent({ hasRepo: () => true, hasReview: () => true });
-    const result = agent.checkPrerequisite('f1');
-    expect(result.met).toBe(false);
-    expect(result.reason).toMatch(/already a PR task/i);
   });
 });

@@ -2804,7 +2804,6 @@ function main(): void {
         featureService.list().some(
           (feature) => feature.id === featureId && !!feature.repoId,
         ),
-      hasReview: (featureId) => prReviewService.find(featureId) !== null,
     }),
     createBugBashAgent({
       hasRepo: (featureId) =>

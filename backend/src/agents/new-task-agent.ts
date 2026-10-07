@@ -8,13 +8,6 @@ export interface NewTaskAgentDeps {
    * prerequisite stays a pure predicate here.
    */
   hasRepo(featureId: string): boolean;
-  /**
-   * True when the feature is already a PR feature (it has a pull-request
-   * review). New Task starts from a plain feature and *produces* the PR, so it
-   * must not be offered where a PR already exists — the Review Board is the
-   * agent for those. Wired to the non-throwing PR-review lookup.
-   */
-  hasReview(featureId: string): boolean;
 }
 
 /** Stable id for the built-in New Task agent. */
@@ -25,7 +18,9 @@ export const NEW_TASK_AGENT_ID = 'new-task';
  * repository end to end. It captures a problem statement + context, plans the
  * change for the user to review, and — on approval — implements it, opens a
  * pull request, and converts the task into a Review-Board-eligible "PR task".
- * Multiple can be attached to one feature, each solving a distinct problem.
+ * Multiple can be attached to one feature, each solving a distinct problem —
+ * including on a feature that already has a pull request, so you can keep
+ * opening follow-up tasks after the first one produced its PR.
  */
 export function createNewTaskAgent(deps: NewTaskAgentDeps): AgentDefinition {
   return {
@@ -68,15 +63,6 @@ export function createNewTaskAgent(deps: NewTaskAgentDeps): AgentDefinition {
           reason:
             'New Task needs a repository to work in. Link this feature to a ' +
             'repository first.',
-        };
-      }
-      if (deps.hasReview(featureId)) {
-        return {
-          met: false,
-          reason:
-            'This feature is already a PR task. New Task creates a new pull ' +
-            'request from a plain feature — use the Review Board to review an ' +
-            'existing pull request.',
         };
       }
       return { met: true };
