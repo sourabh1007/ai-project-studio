@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSharedCheckoutPreparer, isMissingRef, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
+import { createSharedCheckoutPreparer, detectDefaultBranch, isMissingRef, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
 import { sessionWorktreeConfigSchema, sessionWorktreeDefaults, SESSION_WORKTREE_NAMESPACE } from './config.js';
 
 const target = { repoLocalPath: 'C:\\repo', ref: 'master' };
@@ -48,14 +48,51 @@ describe('shared session checkout', () => {
   it.each([
     'fatal: invalid reference: master',
     "error: pathspec 'master' did not match any file(s) known to git",
-  ])('opens on the current branch when the target ref is missing (%s)', async (stderr) => {
-    const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')
-      ? ok('main') : { code: 1, stdout: '', stderr });
+  ])('opens on the current branch when the target ref is missing and no default is detectable (%s)', async (stderr) => {
+    const git = vi.fn(async (args: string[]) => {
+      if (args.includes('refs/remotes/origin/HEAD')) return { code: 128, stdout: '', stderr: '' };
+      if (args.includes('symbolic-ref')) return ok('main');
+      return { code: 1, stdout: '', stderr };
+    });
     const report = vi.fn();
     const prepare = createSharedCheckoutPreparer({ git });
     expect(await prepare(target, report)).toBe(target.repoLocalPath);
-    expect(git).toHaveBeenCalledTimes(2);
-    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('was not found'));
+    expect(git).toHaveBeenCalledTimes(3);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('opened on the current branch'));
+  });
+  it('self-heals a missing ref by checking out the detected default branch', async () => {
+    const git = vi.fn(async (args: string[]) => {
+      if (args.includes('refs/remotes/origin/HEAD')) return ok('origin/main\n');
+      if (args.includes('symbolic-ref')) return ok('feature\n');
+      if (args.includes('main')) return ok('');
+      return { code: 1, stdout: '', stderr: 'fatal: invalid reference: master' };
+    });
+    const report = vi.fn();
+    const prepare = createSharedCheckoutPreparer({ git });
+    expect(await prepare(target, report)).toBe(target.repoLocalPath);
+    expect(git).toHaveBeenCalledWith([
+      '-c', 'core.longpaths=true', '-c', `checkout.workers=${sessionWorktreeDefaults.checkoutWorkers}`,
+      '-C', target.repoLocalPath, 'checkout', '--progress', 'main', '--',
+    ], expect.any(Function));
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining("default branch main instead"));
+  });
+  it('stays on the current branch when the detected default also fails to check out', async () => {
+    const git = vi.fn(async (args: string[]) => {
+      if (args.includes('refs/remotes/origin/HEAD')) return ok('origin/main');
+      if (args.includes('symbolic-ref')) return ok('feature');
+      return { code: 1, stdout: '', stderr: "error: pathspec 'x' did not match" };
+    });
+    const report = vi.fn();
+    const prepare = createSharedCheckoutPreparer({ git });
+    expect(await prepare(target, report)).toBe(target.repoLocalPath);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('opened on the current branch'));
+  });
+  it('exposes a default-branch detector that strips the origin prefix and reports absence', async () => {
+    const detected = vi.fn(async (args: string[]) =>
+      args.includes('refs/remotes/origin/HEAD') ? ok('origin/trunk\n') : ok(''));
+    expect(await detectDefaultBranch(detected, 'C:\\repo', () => {})).toBe('trunk');
+    expect(await detectDefaultBranch(async () => ({ code: 1, stdout: '', stderr: '' }), 'C:\\repo', () => {})).toBeNull();
+    expect(await detectDefaultBranch(async () => ok('   '), 'C:\\repo', () => {})).toBeNull();
   });
   it('detects missing refs across git phrasings', () => {
     expect(isMissingRef('fatal: invalid reference: master')).toBe(true);

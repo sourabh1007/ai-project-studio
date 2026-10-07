@@ -23,6 +23,29 @@ export function isMissingRef(stderr: string): boolean {
   return /invalid reference|did not match/i.test(stderr);
 }
 
+/**
+ * Asks Git for the repository's actual default branch rather than guessing
+ * `main`/`master`. `origin/HEAD` records the remote's default, so stripping the
+ * `origin/` prefix yields the branch a fresh clone would check out. Returns null
+ * when the symbolic ref is absent (e.g. a repo cloned without `--mirror` whose
+ * `origin/HEAD` was never set), leaving the caller to keep the current branch.
+ */
+export async function detectDefaultBranch(
+  git: (args: string[], report: (message: string) => void) => Promise<GitRunResult>,
+  cwd: string,
+  report: (message: string) => void,
+): Promise<string | null> {
+  const symbolic = await git(
+    ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+    report,
+  );
+  if (symbolic.code !== 0) {
+    return null;
+  }
+  const branch = symbolic.stdout.trim().replace(/^origin\//, '');
+  return branch.length > 0 ? branch : null;
+}
+
 /** Serializes branch selection in a shared checkout; never creates a copy or resets work. */
 export function createSharedCheckoutPreparer(deps: {
   git(args: string[], report: (message: string) => void): Promise<GitRunResult>;
@@ -50,12 +73,21 @@ export function createSharedCheckoutPreparer(deps: {
       }
       if (branch.code === 0 && branch.stdout.trim() === target.ref) return cwd;
       report(`Switching the shared checkout to ${target.ref}…`);
-      const result = await deps.git([
+      const checkout = (ref: string) => deps.git([
         '-c', 'core.longpaths=true', '-c', `checkout.workers=${deps.checkoutWorkers ?? sessionWorktreeDefaults.checkoutWorkers}`,
-        '-C', cwd, 'checkout', '--progress', target.ref, '--',
+        '-C', cwd, 'checkout', '--progress', ref, '--',
       ], report);
+      const result = await checkout(target.ref);
       if (result.code !== 0) {
         if (isMissingRef(result.stderr)) {
+          // Self-heal: the recorded default (main/master) is wrong for this
+          // repo, so fall back to the branch Git itself reports as default
+          // before giving up and staying on whatever is checked out.
+          const detected = await detectDefaultBranch(deps.git, cwd, report);
+          if (detected && detected !== target.ref && (await checkout(detected)).code === 0) {
+            report(`Branch ${target.ref} was not found, so the session opened the repository's default branch ${detected} instead.`);
+            return cwd;
+          }
           report(`Branch ${target.ref} was not found, so the session opened on the current branch instead.`);
           return cwd;
         }
