@@ -945,6 +945,55 @@ describe('createApiClient', () => {
     expect(calls[4][1]?.method).toBe('DELETE');
   });
 
+  it('performs the full planner lifecycle over HTTP', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 't1' }));
+    const client = createApiClient({ fetchImpl });
+
+    await client.listPlannerTasks();
+    await client.createPlannerTask({ title: 'New', date: '2025-01-01', repoId: 'r1' });
+    await client.updatePlannerTask('t1', { launchKind: 'session', sessionId: 's1' });
+    await client.removePlannerTask('t1');
+
+    expect(calls[0][0]).toBe('/api/planner/tasks');
+    expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+    expect(calls[1][0]).toBe('/api/planner/tasks');
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[1][1]?.body).toBe(
+      JSON.stringify({ title: 'New', date: '2025-01-01', repoId: 'r1' }),
+    );
+    expect(calls[2][0]).toBe('/api/planner/tasks/t1');
+    expect(calls[2][1]?.method).toBe('PUT');
+    expect(calls[2][1]?.body).toBe(
+      JSON.stringify({ launchKind: 'session', sessionId: 's1' }),
+    );
+    expect(calls[3][0]).toBe('/api/planner/tasks/t1');
+    expect(calls[3][1]?.method).toBe('DELETE');
+  });
+
+  it('generates a planner summary over HTTP, optionally with a signal', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ content: 'ok' }));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+
+    await client.generatePlannerSummary({
+      scope: 'month',
+      date: '2025-01-01',
+      prompt: 'focus',
+    });
+    await client.generatePlannerSummary(
+      { scope: 'day', date: '2025-01-02', prompt: '' },
+      controller.signal,
+    );
+
+    expect(calls[0][0]).toBe('/api/planner/summary');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe(
+      JSON.stringify({ scope: 'month', date: '2025-01-01', prompt: 'focus' }),
+    );
+    expect(calls[0][1]?.signal).toBeUndefined();
+    expect(calls[1][1]?.signal).toBe(controller.signal);
+  });
+
   it('reads IDE AI usage', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ totals: {} }));
     const client = createApiClient({ fetchImpl });

@@ -14,7 +14,9 @@ import {
   Bot,
   BrainCircuit,
   Bug,
+  Calendar,
   Check,
+  ChevronLeft,
   ChevronRight,
   Circle,
   Clock,
@@ -142,6 +144,10 @@ export const DragHandleIcon = makeIcon(GripVertical);
 export const PullRequestIcon = makeIcon(GitPullRequest);
 export const PrReviewIcon = makeIcon(ScanSearch);
 export const AutomationIcon = makeIcon(Radar);
+export const PlannerIcon = makeIcon(ListChecks);
+export const CalendarIcon = makeIcon(Calendar);
+export const ChevronLeftIcon = makeIcon(ChevronLeft);
+export const ChevronRightIcon = makeIcon(ChevronRight);
 export const SettingsIcon = makeIcon(Settings2);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);

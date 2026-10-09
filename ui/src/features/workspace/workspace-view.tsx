@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session, AttachedAgent, PrReview } from '../../lib/types.js';
+import type { WorkspaceLaunchIntent } from '../../lib/planner-launch.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { createDisposer } from '../../lib/disposer.js';
@@ -89,11 +90,15 @@ export function WorkspaceView({
   sidebarOpen,
   onToggleSidebar,
   reopen = null,
+  launch = null,
+  onLaunchConsumed,
 }: {
   live: LiveState;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   reopen?: { tab: PoppableTab; label: string; nonce: number } | null;
+  launch?: { intent: WorkspaceLaunchIntent; nonce: number } | null;
+  onLaunchConsumed?: () => void;
 }) {
   const nameStore = useMemo(
     () => createSessionNameStore(window.localStorage),
@@ -461,6 +466,28 @@ export function WorkspaceView({
     openTab(reopen.tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reopenNonce]);
+
+  // Open a tab for a launch intent handed over from the Planner. Keyed on the
+  // nonce so launching the same task twice still opens a fresh tab. Imported
+  // features are registered as pending so a concurrent tree reload keeps them.
+  const launchNonce = launch?.nonce ?? null;
+  useEffect(() => {
+    if (!launch) {
+      return;
+    }
+    const { intent } = launch;
+    if (intent.kind === 'session') {
+      openSession(intent.session, intent.label);
+    } else if (intent.kind === 'agent') {
+      pendingImportedFeatures.current.set(intent.feature.id, intent.feature);
+      openAgent(intent.feature, intent.attached);
+    } else {
+      pendingImportedFeatures.current.set(intent.feature.id, intent.feature);
+      openReviewBoard(intent.feature);
+    }
+    onLaunchConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [launchNonce]);
 
   async function renameFeature(feature: Feature, name: string) {
     const updated = await api.renameFeature(feature.id, name);

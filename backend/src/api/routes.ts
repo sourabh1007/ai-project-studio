@@ -10,6 +10,8 @@ import type { SessionSummarizer } from '../session-summary/session-summary-contr
 import type { SessionImportService } from '../session-import/session-import-contract.js';
 import type { SkillsService } from '../skills/skills-service.js';
 import type { FeatureTasksService } from '../feature-tasks/feature-tasks-service.js';
+import type { PlannerService } from '../planner/planner-service.js';
+import type { PlannerSummarizer } from '../planner-summary/planner-summary-contract.js';
 import type { FeatureTreeService } from '../feature-tree/feature-tree-service.js';
 import type { IdeUsageService } from '../ide-usage/ide-usage-service.js';
 import type { UsageRollupService } from '../usage-rollup/usage-rollup-service.js';
@@ -90,6 +92,8 @@ import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
+import { createPlannerRoutes } from './planner-controller.js';
+import { createPlannerSummaryRoutes } from './planner-summary-controller.js';
 import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
 import { createReviewBoardRoutes } from './review-board-controller.js';
@@ -171,6 +175,8 @@ export interface ApiRoutesDeps {
   /** Reverses a session skill on its live terminal when it is untagged. */
   removeSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
+  planner: PlannerService;
+  plannerSummarizer: PlannerSummarizer;
   taskLookup: Pick<FeatureTasksRepo, 'get'>;
   tree: FeatureTreeService;
   groupLookup: Pick<FeatureGroupsRepo, 'get'>;
@@ -333,6 +339,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       removeSessionSkill: deps.removeSessionSkill,
     }),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
+    ...createPlannerRoutes({ planner: deps.planner }),
+    ...createPlannerSummaryRoutes({ plannerSummarizer: deps.plannerSummarizer }),
     ...createFeatureTreeRoutes({ tree: deps.tree }),
     ...createPrReviewRoutes({
       prReviews: deps.prReviews,

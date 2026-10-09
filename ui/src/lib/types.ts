@@ -2002,7 +2002,88 @@ export interface AddFeatureTaskInput {
   detail?: string;
 }
 
-// --- Monitors & Automations -------------------------------------------------
+// --- Planner ----------------------------------------------------------------
+
+/** Priority buckets, highest (`p0`) to lowest (`p3`). */
+export type PlannerPriority = 'p0' | 'p1' | 'p2' | 'p3';
+
+/** Whether a planner task is still open or checked off. */
+export type PlannerTaskStatus = 'open' | 'done';
+
+/** A generic work item (`task`) or a pull-request item (`pr`). */
+export type PlannerTaskKind = 'task' | 'pr';
+
+/** What a planner task was launched into, so it can be re-opened later. */
+export type PlannerLaunchKind = 'session' | 'agent' | 'review';
+
+/** A standalone, dated checklist task in the Planner. */
+export interface PlannerTask {
+  id: string;
+  title: string;
+  notes: string;
+  priority: PlannerPriority;
+  status: PlannerTaskStatus;
+  kind: PlannerTaskKind;
+  prUrl: string;
+  /** `YYYY-MM-DD` calendar day; freely editable, including past dates. */
+  date: string;
+  /** Repository the task's launches target; `null` when none was chosen. */
+  repoId: string | null;
+  /** What the task was launched into, or `null` if it hasn't been launched. */
+  launchKind: PlannerLaunchKind | null;
+  /** The workspace feature created for the launch, if any. */
+  featureId: string | null;
+  /** The session created for a `session` launch, if any. */
+  sessionId: string | null;
+  /** Editable display name of the launched session/feature. */
+  launchLabel: string | null;
+  /**
+   * `YYYY-MM-DD` the task was deferred to the backlog, or `null` when active.
+   * Backlogged tasks are hidden from the day view until restored.
+   */
+  backloggedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePlannerTaskInput {
+  title: string;
+  notes?: string;
+  priority?: PlannerPriority;
+  kind?: PlannerTaskKind;
+  prUrl?: string;
+  date?: string;
+  repoId?: string | null;
+}
+
+export interface UpdatePlannerTaskInput {
+  title?: string;
+  notes?: string;
+  priority?: PlannerPriority;
+  kind?: PlannerTaskKind;
+  prUrl?: string;
+  date?: string;
+  status?: PlannerTaskStatus;
+  repoId?: string | null;
+  launchKind?: PlannerLaunchKind | null;
+  featureId?: string | null;
+  sessionId?: string | null;
+  launchLabel?: string | null;
+  backloggedAt?: string | null;
+}
+
+/** The scope a planner AI summary covers. */
+export type PlannerSummaryScope = 'day' | 'month' | 'year';
+
+/** An AI-generated summary of the planner tasks in a scope. */
+export interface PlannerSummaryResult {
+  scope: PlannerSummaryScope;
+  date: string;
+  range: string;
+  content: string;
+  taskCount: number;
+  createdAt: string;
+}
 
 export type AutomationMode = 'short' | 'long';
 

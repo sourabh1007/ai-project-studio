@@ -14,6 +14,11 @@ import type {
   CreateGroupInput,
   CreateSkillInput,
   AddFeatureTaskInput,
+  CreatePlannerTaskInput,
+  UpdatePlannerTaskInput,
+  PlannerSummaryResult,
+  PlannerSummaryScope,
+  PlannerTask,
   AgencyStatus,
   SystemHealthReport,
   ProviderBootstrapInfo,
@@ -1155,6 +1160,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<FeatureTask>(`/tasks/${taskId}`, putBody({})),
     removeFeatureTask: (taskId: string) =>
       request<{ id: string }>(`/tasks/${taskId}`, del()),
+    listPlannerTasks: () => request<PlannerTask[]>('/planner/tasks'),
+    createPlannerTask: (input: CreatePlannerTaskInput) =>
+      request<PlannerTask>('/planner/tasks', jsonBody(input)),
+    updatePlannerTask: (taskId: string, input: UpdatePlannerTaskInput) =>
+      request<PlannerTask>(`/planner/tasks/${taskId}`, putBody(input)),
+    removePlannerTask: (taskId: string) =>
+      request<{ id: string }>(`/planner/tasks/${taskId}`, del()),
+    generatePlannerSummary: (
+      input: { scope: PlannerSummaryScope; date: string; prompt: string },
+      signal?: AbortSignal,
+    ) =>
+      request<PlannerSummaryResult>('/planner/summary', {
+        ...jsonBody(input),
+        ...(signal ? { signal } : {}),
+      }),
     listAgents: () => request<AgentCatalogItem[]>('/agents'),
     getAgent: (agentId: string) =>
       request<AgentCatalogItem>(`/agents/${encodeURIComponent(agentId)}`),

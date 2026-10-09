@@ -149,6 +149,20 @@ describe('normalizeUiPreferences', () => {
     expect(p.density).toBe(DEFAULT_UI_PREFERENCES.density);
   });
 
+  it('normalizes the planner quick-add toggles', () => {
+    expect(DEFAULT_UI_PREFERENCES.plannerAutocorrect).toBe(true);
+    expect(DEFAULT_UI_PREFERENCES.plannerAutosuggest).toBe(true);
+    expect(DEFAULT_UI_PREFERENCES.plannerAutoformat).toBe(true);
+    const p = normalizeUiPreferences({
+      plannerAutocorrect: false,
+      plannerAutosuggest: 'nope',
+    });
+    expect(p.plannerAutocorrect).toBe(false);
+    // Non-boolean falls back to the default.
+    expect(p.plannerAutosuggest).toBe(true);
+    expect(p.plannerAutoformat).toBe(true);
+  });
+
   it('keeps a valid appearance and falls back for an invalid one', () => {
     expect(APPEARANCES).toContain('desktop');
     expect(APPEARANCES).toContain('futuristic');

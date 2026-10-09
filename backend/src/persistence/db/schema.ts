@@ -647,6 +647,27 @@ const TASK_TABLES: readonly TableSchema[] = [
     created_at TEXT NOT NULL
   )`,
   },
+  {
+    name: 'planner_tasks',
+    ddl: `CREATE TABLE IF NOT EXISTS planner_tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    status TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    pr_url TEXT NOT NULL,
+    date TEXT NOT NULL,
+    repo_id TEXT,
+    launch_kind TEXT,
+    feature_id TEXT,
+    session_id TEXT,
+    launch_label TEXT,
+    backlogged_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  },
 ];
 
 const AUTOMATIONS_TABLE: TableSchema = {
@@ -866,6 +887,10 @@ const INDEXES: readonly IndexSchema[] = [
   {
     schema: 'tasks',
     ddl: 'CREATE INDEX IF NOT EXISTS tasks.idx_feature_tasks_feature_id ON feature_tasks (feature_id)',
+  },
+  {
+    schema: 'tasks',
+    ddl: 'CREATE INDEX IF NOT EXISTS tasks.idx_planner_tasks_date ON planner_tasks (date)',
   },
   {
     schema: 'automations',
@@ -1136,6 +1161,42 @@ const ADDED_COLUMNS: readonly {
     column: 'tool',
     schema: 'usage',
     ddl: "ALTER TABLE usage.mcp_observed_calls ADD COLUMN tool TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: 'planner_tasks',
+    column: 'repo_id',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN repo_id TEXT',
+  },
+  {
+    table: 'planner_tasks',
+    column: 'launch_kind',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN launch_kind TEXT',
+  },
+  {
+    table: 'planner_tasks',
+    column: 'feature_id',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN feature_id TEXT',
+  },
+  {
+    table: 'planner_tasks',
+    column: 'session_id',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN session_id TEXT',
+  },
+  {
+    table: 'planner_tasks',
+    column: 'launch_label',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN launch_label TEXT',
+  },
+  {
+    table: 'planner_tasks',
+    column: 'backlogged_at',
+    schema: 'tasks',
+    ddl: 'ALTER TABLE tasks.planner_tasks ADD COLUMN backlogged_at TEXT',
   },
 ];
 

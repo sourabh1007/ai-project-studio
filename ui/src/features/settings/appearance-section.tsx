@@ -26,6 +26,35 @@ import {
 
 const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
 
+/** A labelled on/off switch row for a boolean appearance preference. */
+function PlannerToggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="appearance-row appearance-toggle">
+      <div className="appearance-row-head">
+        <span className="appearance-row-label">{label}</span>
+        <span className="appearance-row-hint">{hint}</span>
+      </div>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={label}
+      />
+    </label>
+  );
+}
+
+
 /** Fallback swatch shown in the terminal colour picker while on the theme default. */
 const TERMINAL_DEFAULT_SWATCH = '#d7e2f7';
 
@@ -315,6 +344,27 @@ export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
           </div>
         </div>
       </div>
+
+      <div className="appearance-group-heading">Planner quick-add</div>
+
+      <PlannerToggle
+        label="Autocorrect"
+        hint="Fix common typos and normalize acronyms as you type"
+        checked={prefs.plannerAutocorrect}
+        onChange={(plannerAutocorrect) => setPrefs({ plannerAutocorrect })}
+      />
+      <PlannerToggle
+        label="Suggestions"
+        hint="Suggest previously used task titles while typing"
+        checked={prefs.plannerAutosuggest}
+        onChange={(plannerAutosuggest) => setPrefs({ plannerAutosuggest })}
+      />
+      <PlannerToggle
+        label="Auto-format on add"
+        hint="Tidy the title (trim, collapse spaces, capitalize) when adding"
+        checked={prefs.plannerAutoformat}
+        onChange={(plannerAutoformat) => setPrefs({ plannerAutoformat })}
+      />
     </>
   );
 

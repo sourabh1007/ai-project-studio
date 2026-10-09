@@ -59,6 +59,11 @@ const AgentsView = lazy(() =>
     default: m.AgentsView,
   })),
 );
+const PlannerView = lazy(() =>
+  import('./features/planner/planner-view.js').then((m) => ({
+    default: m.PlannerView,
+  })),
+);
 import {
   CommandPalette,
   type PaletteCommand,
@@ -80,6 +85,7 @@ import { isOneOf } from './lib/persisted-state.js';
 import { hasOpenModalDialog } from './lib/focus-ownership.js';
 import { desktopBridge } from './lib/desktop-bridge.js';
 import type { PoppableTab } from './features/workspace/tab-popout.js';
+import type { WorkspaceLaunchIntent } from './lib/planner-launch.js';
 import {
   AutomationIcon,
   AiChatIcon,
@@ -87,16 +93,17 @@ import {
   FilesIcon,
   McpIcon,
   MoonIcon,
+  PlannerIcon,
   SettingsIcon,
   SkillsIcon,
   SunIcon,
   UsageIcon,
 } from './components/icons.js';
 
-type View = 'workspace' | 'skills' | 'mcp' | 'automations' | 'usage' | 'agents' | 'settings';
+type View = 'workspace' | 'planner' | 'skills' | 'mcp' | 'automations' | 'usage' | 'agents' | 'settings';
 
 /** View cycle order for Ctrl+Tab / Ctrl+Shift+Tab. */
-const VIEW_ORDER: View[] = ['workspace', 'skills', 'mcp', 'automations', 'usage', 'agents', 'settings'];
+const VIEW_ORDER: View[] = ['workspace', 'planner', 'skills', 'mcp', 'automations', 'usage', 'agents', 'settings'];
 
 /** The global keyboard shortcuts, shown in the discoverable shortcuts sheet. */
 const SHORTCUT_BINDINGS: ShortcutBinding[] = [
@@ -144,6 +151,16 @@ export function App() {
     label: string;
     nonce: number;
   } | null>(null);
+  // A launch requested from the Planner is handed to the workspace view, which
+  // opens the matching tab. The nonce makes repeated launches distinct events.
+  const [workspaceLaunch, setWorkspaceLaunch] = useState<{
+    intent: WorkspaceLaunchIntent;
+    nonce: number;
+  } | null>(null);
+  function launchInWorkspace(intent: WorkspaceLaunchIntent) {
+    setWorkspaceLaunch((prev) => ({ intent, nonce: (prev?.nonce ?? 0) + 1 }));
+    setView('workspace');
+  }
   async function openActiveSession(entry: ActiveSessionEntry) {
     try {
       if (entry.kind !== 'session' || !entry.sessionId) {
@@ -271,6 +288,13 @@ export function App() {
         section: 'Navigation',
         keywords: ['workspace', 'files', 'sessions'],
         run: goto('workspace'),
+      },
+      {
+        id: 'view-planner',
+        title: 'Open Planner',
+        section: 'Navigation',
+        keywords: ['tasks', 'checklist', 'todo', 'priority'],
+        run: goto('planner'),
       },
       {
         id: 'view-skills',
@@ -414,6 +438,16 @@ export function App() {
             </button>
             <button
               type="button"
+              className={`activity-item ${view === 'planner' ? 'is-active' : ''}`.trim()}
+              title="Planner"
+              aria-label="Planner"
+              aria-current={view === 'planner' ? 'page' : undefined}
+              onClick={() => setView('planner')}
+            >
+              <PlannerIcon size={22} />
+            </button>
+            <button
+              type="button"
               className={`activity-item ${view === 'skills' ? 'is-active' : ''}`.trim()}
               title="Skills"
               aria-label="Skills"
@@ -501,7 +535,13 @@ export function App() {
                   sidebarOpen={sidebarOpen}
                   onToggleSidebar={() => setSidebarOpen((v) => !v)}
                   reopen={reopenTab}
+                  launch={workspaceLaunch}
+                  onLaunchConsumed={() => setWorkspaceLaunch(null)}
                 />
+              ) : view === 'planner' ? (
+                <div className="settings-pane">
+                  <PlannerView onLaunch={launchInWorkspace} />
+                </div>
               ) : view === 'skills' ? (
                 <div className="settings-pane">
                   <SkillsManager />
@@ -548,7 +588,9 @@ export function App() {
           <span className="statusbar-item statusbar-accent">
             {view === 'workspace'
               ? 'Workspace'
-              : view === 'skills'
+              : view === 'planner'
+                ? 'Planner'
+                : view === 'skills'
                 ? 'Skills'
                 : view === 'mcp'
                   ? 'MCP Servers'

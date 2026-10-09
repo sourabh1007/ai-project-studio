@@ -69,6 +69,12 @@ export interface UiPreferences {
   terminalTextSize: TerminalTextSize;
   /** Terminal foreground: the sentinel `'theme'` or a `#rrggbb` override. */
   terminalTextColor: string;
+  /** Planner quick-add: fix typos/acronyms as you type. */
+  plannerAutocorrect: boolean;
+  /** Planner quick-add: suggest previously used task titles. */
+  plannerAutosuggest: boolean;
+  /** Planner quick-add: tidy the title (trim/capitalize) when adding. */
+  plannerAutoformat: boolean;
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
@@ -82,6 +88,9 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   terminalFont: 'consolas',
   terminalTextSize: 'default',
   terminalTextColor: 'theme',
+  plannerAutocorrect: true,
+  plannerAutosuggest: true,
+  plannerAutoformat: true,
 };
 
 export const APPEARANCES: readonly Appearance[] = ['desktop', 'futuristic'];
@@ -240,6 +249,11 @@ function normalizeTerminalColor(value: unknown): string {
   return DEFAULT_UI_PREFERENCES.terminalTextColor;
 }
 
+/** Normalize a persisted boolean, falling back to `fallback` when absent. */
+function pickBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
 /** A type guard for a persisted, possibly-partial preferences object. */
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = (typeof value === 'object' && value !== null ? value : {}) as Record<
@@ -275,6 +289,18 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
       DEFAULT_UI_PREFERENCES.terminalTextSize,
     ),
     terminalTextColor: normalizeTerminalColor(raw.terminalTextColor),
+    plannerAutocorrect: pickBool(
+      raw.plannerAutocorrect,
+      DEFAULT_UI_PREFERENCES.plannerAutocorrect,
+    ),
+    plannerAutosuggest: pickBool(
+      raw.plannerAutosuggest,
+      DEFAULT_UI_PREFERENCES.plannerAutosuggest,
+    ),
+    plannerAutoformat: pickBool(
+      raw.plannerAutoformat,
+      DEFAULT_UI_PREFERENCES.plannerAutoformat,
+    ),
   };
 }
 

@@ -386,6 +386,8 @@ import {
 import { createFeatureTasksService } from './feature-tasks/feature-tasks-service.js';
 import { createTaskPlanRunner } from './feature-tasks/task-plan-runner.js';
 import { createFeatureTasksRepo } from './persistence/feature-tasks-repo.js';
+import { createPlannerService } from './planner/planner-service.js';
+import { createPlannerRepo } from './persistence/planner-repo.js';
 import {
   AUTOMATION_NAMESPACE,
   automationConfigSchema,
@@ -424,6 +426,19 @@ import {
   featureTasksDefaults,
   type FeatureTasksConfig,
 } from './feature-tasks/config.js';
+import {
+  PLANNER_NAMESPACE,
+  plannerConfigSchema,
+  plannerDefaults,
+  type PlannerConfig,
+} from './planner/config.js';
+import {
+  PLANNER_SUMMARY_NAMESPACE,
+  plannerSummaryConfigSchema,
+  plannerSummaryDefaults,
+  type PlannerSummaryConfig,
+} from './planner-summary/config.js';
+import { createPlannerSummaryRunner } from './planner-summary/planner-summary-runner.js';
 import { createFeatureTreeService } from './feature-tree/feature-tree-service.js';
 import { createFeatureGroupsRepo } from './persistence/feature-groups-repo.js';
 import {
@@ -613,6 +628,8 @@ function main(): void {
   registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
   registry.register({ namespace: MCP_NAMESPACE, schema: mcpConfigSchema, defaults: mcpDefaults });
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
+  registry.register({ namespace: PLANNER_NAMESPACE, schema: plannerConfigSchema, defaults: plannerDefaults });
+  registry.register({ namespace: PLANNER_SUMMARY_NAMESPACE, schema: plannerSummaryConfigSchema, defaults: plannerSummaryDefaults });
   registry.register({ namespace: FEATURE_TREE_NAMESPACE, schema: featureTreeConfigSchema, defaults: featureTreeDefaults });
   registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
   registry.register({ namespace: PLAN_USAGE_NAMESPACE, schema: planUsageConfigSchema, defaults: planUsageDefaults });
@@ -822,6 +839,10 @@ function main(): void {
   const metaConfig = config[META_NAMESPACE] as MetaConfig;
   const mcpConfig = config[MCP_NAMESPACE] as McpConfig;
   const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
+  const plannerConfig = config[PLANNER_NAMESPACE] as PlannerConfig;
+  const plannerSummaryConfig = config[
+    PLANNER_SUMMARY_NAMESPACE
+  ] as PlannerSummaryConfig;
   const featureTreeConfig = config[FEATURE_TREE_NAMESPACE] as FeatureTreeConfig;
   const ideUsageConfig = config[IDE_USAGE_NAMESPACE] as IdeUsageConfig;
   const repositoryContextConfig = config[
@@ -3279,6 +3300,19 @@ function main(): void {
     clock,
     config: featureTasksConfig,
   });
+  const plannerService = createPlannerService({
+    repo: createPlannerRepo(db),
+    ids,
+    clock,
+    config: plannerConfig,
+  });
+  const plannerSummarizer = createPlannerSummaryRunner({
+    planner: plannerService,
+    features: featureService,
+    meta: metaAi,
+    clock,
+    config: plannerSummaryConfig,
+  });
   const featureTreeService = createFeatureTreeService({
     groups: featureGroupsRepo,
     sessions: sessionRepo,
@@ -3706,6 +3740,8 @@ function main(): void {
         }
       },
       tasks: featureTasksService,
+      planner: plannerService,
+      plannerSummarizer,
       taskLookup: featureTasksRepo,
       tree: featureTreeService,
       groupLookup: featureGroupsRepo,

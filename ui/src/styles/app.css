@@ -19785,3 +19785,660 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
+
+/* --- Planner ------------------------------------------------------------- */
+.planner {
+  --kind-review: #8957e5;
+  --kind-agent: #1f6feb;
+  --kind-session: #2ea043;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 28px 48px;
+  max-width: 980px;
+  margin: 0 auto;
+  width: 100%;
+}
+.planner-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+.planner-header .muted {
+  max-width: 68ch;
+  line-height: 1.5;
+}
+
+/* Hero "just type it" box */
+.planner-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.planner-hero-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.planner-hero-icon {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.planner-hero-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  padding: 6px 2px;
+}
+.planner-hero-input:focus {
+  outline: none;
+}
+.planner-hero-add {
+  flex: 0 0 auto;
+}
+.planner-hero-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.planner-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kind-session) 14%, transparent);
+  color: var(--kind-session);
+}
+.planner-chip.kind-review {
+  background: color-mix(in srgb, var(--kind-review) 14%, transparent);
+  color: var(--kind-review);
+}
+.planner-chip.kind-agent {
+  background: color-mix(in srgb, var(--kind-agent) 14%, transparent);
+  color: var(--kind-agent);
+}
+.planner-chip.is-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.planner-notes-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.planner-notes-toggle:hover {
+  color: var(--text);
+}
+.planner-notes-input {
+  width: 100%;
+  resize: vertical;
+}
+
+/* Day navigation + repo toolbar */
+.planner-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.planner-daybar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.planner-daybar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.planner-daybar-label {
+  font-weight: 600;
+  color: var(--text);
+  min-width: 7ch;
+}
+.planner-daybar-date {
+  width: 20px;
+  opacity: 0.6;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.planner-daybar-date::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+.planner-today-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.planner-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.planner-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.planner-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.planner-tool-btn:hover:not(:disabled) {
+  background: var(--surface-hover, var(--surface));
+  border-color: var(--accent);
+}
+.planner-tool-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.planner-backlog-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 600;
+}
+.planner-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+.planner-export-btn {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.planner-export-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.planner-export-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Quick-add autosuggest */
+.planner-hero-field {
+  position: relative;
+  flex: 1;
+}
+.planner-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.planner-suggest-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.planner-suggest-item:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* Settings: planner toggle rows */
+.appearance-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+}
+
+/* AI summary panel */
+.planner-summary {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.planner-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.planner-summary-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.planner-summary-scope {
+  display: inline-flex;
+  margin-left: auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.planner-summary-scope-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.planner-summary-scope-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+.planner-summary-prompt {
+  width: 100%;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted, var(--surface));
+  color: var(--text);
+  font: inherit;
+}
+.planner-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.planner-summary-result {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.planner-summary-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.planner-summary-text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* Task list */
+.planner-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.planner-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: border-color var(--transition-med), box-shadow var(--transition-med);
+}
+.planner-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.planner-item.is-done {
+  opacity: 0.6;
+}
+.planner-item.is-done .planner-item-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.planner-check {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+.planner-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.planner-item-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planner-item-notes {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.planner-item-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.planner-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.planner-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-med);
+}
+.planner-action:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.planner-action.is-primary.kind-review {
+  background: var(--kind-review);
+  border-color: var(--kind-review);
+  color: #fff;
+}
+.planner-action.is-primary.kind-agent {
+  background: var(--kind-agent);
+  border-color: var(--kind-agent);
+  color: #fff;
+}
+.planner-action.is-primary.kind-session {
+  background: var(--kind-session);
+  border-color: var(--kind-session);
+  color: #fff;
+}
+.planner-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Launched link chip */
+.planner-launched {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt, var(--surface));
+}
+.planner-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text);
+}
+.planner-launched.kind-review .planner-open { color: var(--kind-review); }
+.planner-launched.kind-agent .planner-open { color: var(--kind-agent); }
+.planner-launched.kind-session .planner-open { color: var(--kind-session); }
+.planner-open:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.planner-open-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planner-rename {
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 180px;
+}
+.planner-mini {
+  padding: 4px;
+  color: var(--text-muted);
+}
+.planner-item-date {
+  flex: 0 0 auto;
+  width: 34px;
+  overflow: hidden;
+  opacity: 0.55;
+}
+.planner-item-date:hover {
+  opacity: 1;
+}
+
+/* ============================================================================
+ * Mobile / narrow-viewport layer — appended last so it wins on specificity
+ * ties. Makes the IDE shell and every mounted view reflow cleanly on phones.
+ * Breakpoint 640px covers phones in portrait and small landscape.
+ * ==========================================================================*/
+@media (max-width: 640px) {
+  /* --- Shell ------------------------------------------------------------- */
+  .ide-main {
+    grid-template-columns: 44px 1fr;
+  }
+  .activitybar {
+    padding: var(--space-2) 0;
+  }
+  .ide-content {
+    /* Allow the active view to manage its own vertical scroll on touch. */
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Status bar: compress and let each group clip gracefully instead of
+     pushing the row wider than the screen. */
+  .statusbar {
+    height: 22px;
+    padding: 0 var(--space-2);
+    font-size: 10px;
+  }
+  .statusbar-group {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .statusbar-group:last-child {
+    justify-content: flex-end;
+  }
+  .statusbar-item {
+    height: 22px;
+    padding: 0 4px;
+  }
+
+  /* --- Page paddings: reclaim horizontal space -------------------------- */
+  .dashboard,
+  .agent-page {
+    padding: var(--space-3);
+  }
+  .planner {
+    padding: 16px 14px 40px;
+  }
+
+  /* --- Two-pane layouts collapse to a single column --------------------- */
+  .rb-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-auto-rows: min-content;
+  }
+  .rb-body > .rb-nav {
+    max-height: 190px;
+    overflow-y: auto;
+  }
+  .rb-body > .rb-explain,
+  .rb-body > .rb-agent {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .dash-grid {
+    grid-template-columns: 1fr;
+  }
+  .agent-catalog {
+    min-width: 0;
+    max-width: none;
+  }
+
+  /* --- Wide data tables scroll horizontally instead of overflowing ------ */
+  .dash-table {
+    overflow-x: auto;
+  }
+  .dash-table-head,
+  .dash-table-row,
+  .dash-usage-tree .dash-table-head,
+  .dash-usage-tree .dash-table-row {
+    min-width: 360px;
+  }
+  .usage-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .usage-period-row {
+    grid-template-columns: 1fr auto;
+    row-gap: 2px;
+  }
+
+  /* --- Horizontal toolbars / header rows wrap --------------------------- */
+  .skill-card-head,
+  .skill-card-actions,
+  .skill-tagger-head,
+  .config-module-head,
+  .settings-collapsible-head,
+  .settings-collapsible-actions,
+  .mcp-card-actions,
+  .mcp-status-row,
+  .mcp-tools-modal-head,
+  .mcp-tools-head-actions,
+  .mcp-tool-row,
+  .mcp-category-select,
+  .dash-section-head,
+  .dash-panel-head,
+  .dash-header-actions,
+  .usage-provider-row,
+  .agents-detail-head,
+  .agents-card-meta,
+  .apt-row,
+  .agent-catalog-item,
+  .agent-page-header,
+  .rb-finding-head,
+  .rb-finding-actions,
+  .rb-diff-modal-head,
+  .rb-agent-form,
+  .rb-explain-summary,
+  .planner-hero-row,
+  .planner-daybar,
+  .planner-daybar-center,
+  .planner-repo,
+  .planner-item-side,
+  .planner-actions {
+    flex-wrap: wrap;
+  }
+
+  /* --- Planner polish on narrow screens --------------------------------- */
+  .planner-item {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .planner-item-body {
+    flex: 1 1 100%;
+    order: 1;
+  }
+  .planner-item-side {
+    flex: 1 1 100%;
+    order: 2;
+    justify-content: flex-end;
+  }
+  .planner-rename {
+    width: 100%;
+  }
+  .planner-open {
+    max-width: 60vw;
+  }
+}
+
+/* Extra-small phones: slightly larger touch targets and tighter chrome. */
+@media (max-width: 400px) {
+  .activity-item {
+    width: 34px;
+    height: 34px;
+  }
+  .planner-action,
+  .mcp-card-actions button,
+  .skill-card-actions button {
+    min-height: 32px;
+  }
+}
