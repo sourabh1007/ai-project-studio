@@ -20122,6 +20122,272 @@ body.is-resizing {
   line-height: 1.5;
 }
 
+/* --- Planner colour + motion polish ------------------------------------- */
+
+/* Day content slides in when the viewed day changes (keyed on `day`). */
+.planner-day-content {
+  animation: planner-day-slide var(--transition-slow) var(--ease-smooth) both;
+}
+@keyframes planner-day-slide {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Colourful hero accent + lift on hover. */
+.planner-hero {
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--transition-med), box-shadow var(--transition-med),
+    transform var(--transition-med);
+}
+.planner-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--kind-review),
+    var(--kind-agent),
+    var(--kind-session)
+  );
+  opacity: 0.85;
+}
+.planner-hero:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.planner-hero-add {
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+.planner-hero-add:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Day navigator gets an accent-tinted active chip. */
+.planner-daybar-center {
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.planner-daybar-center:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+.planner-today-btn {
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+.planner-today-btn:hover {
+  transform: translateY(-1px);
+}
+
+/* Interaction polish on toolbar + action buttons. */
+.planner-tool-btn,
+.planner-export-btn {
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast), transform var(--transition-fast);
+}
+.planner-tool-btn:hover:not(:disabled),
+.planner-export-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.planner-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.planner-check {
+  transition: transform var(--transition-fast);
+}
+.planner-check:active {
+  transform: scale(0.82);
+}
+.planner-item.is-done .planner-check {
+  animation: planner-check-pop var(--transition-med) var(--ease-smooth);
+}
+@keyframes planner-check-pop {
+  40% {
+    transform: scale(1.25);
+  }
+}
+
+/* Glowing "AI summary" trigger in the toolbar. */
+.planner-ai-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 13px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(
+    120deg,
+    var(--kind-agent),
+    var(--kind-review) 55%,
+    #d2478b
+  );
+  background-size: 180% 180%;
+  animation: planner-ai-glow 3.2s var(--ease-smooth) infinite,
+    planner-ai-shift 6s ease infinite;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--kind-review) 45%, transparent);
+  transition: transform var(--transition-fast);
+}
+.planner-ai-trigger:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+}
+.planner-ai-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+  animation: none;
+}
+@keyframes planner-ai-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--kind-review) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 16px 3px color-mix(in srgb, var(--kind-review) 50%, transparent);
+  }
+}
+@keyframes planner-ai-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+.planner-ai-trigger.is-generate {
+  font-size: 13px;
+  padding: 8px 16px;
+}
+
+/* AI summary modal. */
+.planner-summary-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  animation: modal-fade var(--transition-fast) var(--ease-out) both;
+}
+.planner-summary-modal {
+  width: min(680px, 100%);
+  max-height: 86vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+  animation: modal-rise var(--transition-med) var(--ease-smooth) both;
+}
+.planner-summary-modal .planner-summary-head {
+  gap: 10px;
+}
+.planner-summary-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(120deg, var(--kind-agent), var(--kind-review));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--kind-review) 40%, transparent);
+}
+.planner-summary-prompt-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.planner-summary-downloads {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.planner-summary-rendered {
+  line-height: 1.6;
+  font-size: 0.92rem;
+  word-break: break-word;
+}
+.planner-summary-rendered > :first-child {
+  margin-top: 0;
+}
+.planner-summary-rendered > :last-child {
+  margin-bottom: 0;
+}
+.planner-summary-rendered h1,
+.planner-summary-rendered h2,
+.planner-summary-rendered h3 {
+  font-size: 1rem;
+  margin: 14px 0 6px;
+}
+.planner-summary-rendered ul,
+.planner-summary-rendered ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+.planner-summary-rendered code {
+  background: var(--surface-muted, color-mix(in srgb, var(--text) 8%, transparent));
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 0.85em;
+}
+.planner-summary-tasks {
+  margin-top: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+.planner-summary-tasks-head {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.planner-summary-tasks ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.planner-summary-tasks li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+.planner-summary-tasks li.is-done .planner-summary-task-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.planner-summary-task-date {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  color: var(--kind-agent);
+  background: color-mix(in srgb, var(--kind-agent) 12%, transparent);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
 /* Task list */
 .planner-list {
   list-style: none;
@@ -20273,12 +20539,20 @@ body.is-resizing {
 }
 .planner-item-date {
   flex: 0 0 auto;
-  width: 34px;
-  overflow: hidden;
-  opacity: 0.55;
+  width: auto;
+  min-width: 140px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  opacity: 0.85;
+  transition: opacity var(--transition-fast), border-color var(--transition-fast);
 }
 .planner-item-date:hover {
   opacity: 1;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 /* ============================================================================

@@ -187,6 +187,7 @@ describe('PlannerView', () => {
   it('generates and renders an AI summary for the selected scope', async () => {
     const api = client({}, [task()]);
     renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'AI summary' }));
     const monthTab = await screen.findByRole('tab', { name: 'Month' });
     fireEvent.click(monthTab);
     fireEvent.change(screen.getByLabelText('Summary guidance'), {
@@ -208,6 +209,7 @@ describe('PlannerView', () => {
       task(),
     ]);
     renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'AI summary' }));
     fireEvent.click(await screen.findByText('Generate summary'));
     expect(await screen.findByText('boom')).toBeTruthy();
   });

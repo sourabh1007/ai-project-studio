@@ -37,7 +37,7 @@ describe('buildPlannerSummaryPrompt', () => {
       { scope: 'month', date: '2026-02-10', prompt: 'Focus on wins' },
       config,
     );
-    expect(prompt).toContain('Summarize the month of 2026-02.');
+    expect(prompt).toContain('Summarize the month of 2026-02,');
     expect(prompt).toContain('Guidance: Focus on wins');
     expect(prompt).toContain('[x] [2026-02-10 · p0] Ship it');
     expect(prompt).toContain('[ ] [2026-02-10 · p1] Write docs');

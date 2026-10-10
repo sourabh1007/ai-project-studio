@@ -4,11 +4,14 @@ import { useAsync } from '../../hooks/use-async.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
 import { EmptyState, ErrorText } from '../../components/ui.js';
 import {
+  AiIcon,
   AiMagicIcon,
   CalendarIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
+  DownloadHtmlIcon,
+  DownloadMarkdownIcon,
   ExportIcon,
   PencilIcon,
   PlannerIcon,
@@ -17,6 +20,7 @@ import {
   SessionIcon,
   TrashIcon,
 } from '../../components/icons.js';
+import { renderMarkdownComment } from '../../lib/markdown.js';
 import { addDays, formatDayLabel, isIsoDate, todayIso } from '../../lib/planner-dates.js';
 import { detectIntent, type PlannerIntent } from '../../lib/planner-detect.js';
 import { autocorrect, autoformatTitle, suggestTitles } from '../../lib/planner-text.js';
@@ -74,6 +78,52 @@ function downloadTextFile(content: string, mime: string, filename: string): void
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Selects the non-backlogged tasks whose date falls in the summary scope. */
+function tasksForScope(
+  tasks: readonly PlannerTask[],
+  scope: PlannerSummaryScope,
+  date: string,
+): PlannerTask[] {
+  const prefix =
+    scope === 'year' ? date.slice(0, 4) : scope === 'month' ? date.slice(0, 7) : date;
+  return tasks
+    .filter((task) => !task.backloggedAt && task.date.startsWith(prefix))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
+}
+
+/** Builds the downloadable Markdown doc: the AI summary plus the dated tasks. */
+function buildSummaryMarkdown(
+  result: PlannerSummaryResult,
+  tasks: readonly PlannerTask[],
+): string {
+  const lines = [`# Planner summary — ${result.range}`, '', result.content.trim(), ''];
+  if (tasks.length > 0) {
+    lines.push(`## Tasks (${tasks.length})`, '');
+    for (const task of tasks) {
+      const mark = task.status === 'done' ? '[x]' : '[ ]';
+      lines.push(`- ${mark} \`${task.date}\` — ${task.title}`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+/** Wraps rendered Markdown in a standalone HTML document for download. */
+function buildSummaryHtml(markdown: string, range: string): string {
+  const body = renderMarkdownComment(markdown);
+  return [
+    '<!doctype html>',
+    '<html lang="en">',
+    '<head>',
+    '<meta charset="utf-8" />',
+    `<title>Planner summary — ${range}</title>`,
+    '<style>body{font:15px/1.6 system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#1f2328}code{background:#eff1f3;padding:1px 5px;border-radius:5px}h1,h2{line-height:1.25}</style>',
+    '</head>',
+    `<body>${body}</body>`,
+    '</html>',
+  ].join('\n');
 }
 
 /** Dispatches to the launch helper for a given intent. */
@@ -145,6 +195,7 @@ export function PlannerView({
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summary, setSummary] = useState<PlannerSummaryResult | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   const repoList = repos.data ?? [];
   const effectiveRepoId = repoId || repoList[0]?.id || null;
@@ -278,12 +329,32 @@ export function PlannerView({
     }
   }
 
-  /** Downloads the current summary as a Markdown file. */
-  function downloadSummary(result: PlannerSummaryResult) {
+  /** The dated tasks that back the most recent summary (for display/export). */
+  const summaryTasks = useMemo(
+    () =>
+      summary ? tasksForScope(allTasks, summary.scope, summary.date) : [],
+    [allTasks, summary],
+  );
+
+  /** Downloads the current summary (with its dated task list) as Markdown. */
+  function downloadSummaryMarkdown(result: PlannerSummaryResult) {
     downloadTextFile(
-      `# Planner summary — ${result.range}\n\n${result.content}\n`,
+      buildSummaryMarkdown(result, tasksForScope(allTasks, result.scope, result.date)),
       'text/markdown',
       `planner-summary-${result.range}.md`,
+    );
+  }
+
+  /** Downloads the current summary (with its dated task list) as HTML. */
+  function downloadSummaryHtml(result: PlannerSummaryResult) {
+    const markdown = buildSummaryMarkdown(
+      result,
+      tasksForScope(allTasks, result.scope, result.date),
+    );
+    downloadTextFile(
+      buildSummaryHtml(markdown, result.range),
+      'text/html',
+      `planner-summary-${result.range}.html`,
     );
   }
 
@@ -382,85 +453,6 @@ export function PlannerView({
         </p>
       </header>
 
-      <section className="planner-hero">
-        <div className="planner-hero-row">
-          <PlannerIcon size={18} className="planner-hero-icon" />
-          <div className="planner-hero-field">
-            <input
-              type="text"
-              className="planner-hero-input"
-              placeholder="What are you working on?"
-              value={title}
-              onChange={(e) => changeTitle(e.target.value)}
-              onFocus={() => setTitleFocused(true)}
-              onBlur={() => window.setTimeout(() => setTitleFocused(false), 120)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  void addTask();
-                }
-              }}
-              aria-label="New task"
-            />
-            {titleFocused && suggestions.length > 0 && (
-              <ul className="planner-suggest" role="listbox">
-                {suggestions.map((suggestion) => (
-                  <li key={suggestion}>
-                    <button
-                      type="button"
-                      className="planner-suggest-item"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setTitle(suggestion);
-                        setTitleFocused(false);
-                      }}
-                    >
-                      {suggestion}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <button
-            type="button"
-            className="primary planner-hero-add"
-            onClick={() => void addTask()}
-            disabled={adding}
-          >
-            <PlusIcon size={16} /> Add
-          </button>
-        </div>
-        <div className="planner-hero-foot">
-          {title.trim() ? (
-            <span className={`planner-chip kind-${detected.primary}`}>
-              <DetectedIcon size={13} /> {INTENTS[detected.primary].verb}
-            </span>
-          ) : (
-            <span className="planner-chip is-ghost">
-              Type a task — I&rsquo;ll suggest the best way to start it
-            </span>
-          )}
-          <button
-            type="button"
-            className="planner-notes-toggle"
-            onClick={() => setShowNotes((v) => !v)}
-          >
-            {showNotes ? 'Hide details' : '+ Add details'}
-          </button>
-        </div>
-        {showNotes && (
-          <textarea
-            className="planner-notes-input"
-            placeholder="Extra context, links, acceptance criteria…"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            aria-label="Task details"
-          />
-        )}
-        <ErrorText error={formError} />
-      </section>
-
       <section className="planner-toolbar">
         <div className="planner-daybar">
           <button
@@ -557,13 +549,103 @@ export function PlannerView({
               <span className="planner-backlog-count">{backlogTasks.length}</span>
             )}
           </button>
+          <button
+            type="button"
+            className="planner-ai-trigger"
+            onClick={() => setSummaryOpen(true)}
+            aria-label="AI summary"
+            title="Summarize these tasks with AI"
+          >
+            <AiIcon size={15} />
+            <span>AI summary</span>
+          </button>
         </div>
+      </section>
+
+      <section className="planner-hero">
+        <div className="planner-hero-row">
+          <PlannerIcon size={18} className="planner-hero-icon" />
+          <div className="planner-hero-field">
+            <input
+              type="text"
+              className="planner-hero-input"
+              placeholder="What are you working on?"
+              value={title}
+              onChange={(e) => changeTitle(e.target.value)}
+              onFocus={() => setTitleFocused(true)}
+              onBlur={() => window.setTimeout(() => setTitleFocused(false), 120)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  void addTask();
+                }
+              }}
+              aria-label="New task"
+            />
+            {titleFocused && suggestions.length > 0 && (
+              <ul className="planner-suggest" role="listbox">
+                {suggestions.map((suggestion) => (
+                  <li key={suggestion}>
+                    <button
+                      type="button"
+                      className="planner-suggest-item"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setTitle(suggestion);
+                        setTitleFocused(false);
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button
+            type="button"
+            className="primary planner-hero-add"
+            onClick={() => void addTask()}
+            disabled={adding}
+          >
+            <PlusIcon size={16} /> Add
+          </button>
+        </div>
+        <div className="planner-hero-foot">
+          {title.trim() ? (
+            <span className={`planner-chip kind-${detected.primary}`}>
+              <DetectedIcon size={13} /> {INTENTS[detected.primary].verb}
+            </span>
+          ) : (
+            <span className="planner-chip is-ghost">
+              Type a task — I&rsquo;ll suggest the best way to start it
+            </span>
+          )}
+          <button
+            type="button"
+            className="planner-notes-toggle"
+            onClick={() => setShowNotes((v) => !v)}
+          >
+            {showNotes ? 'Hide details' : '+ Add details'}
+          </button>
+        </div>
+        {showNotes && (
+          <textarea
+            className="planner-notes-input"
+            placeholder="Extra context, links, acceptance criteria…"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            aria-label="Task details"
+          />
+        )}
+        <ErrorText error={formError} />
       </section>
 
       <ErrorText error={tasks.error} />
       <ErrorText error={launchError} />
 
-      {dayTasks.length === 0 ? (
+      <div className="planner-day-content" key={day}>
+        {dayTasks.length === 0 ? (
         <EmptyState
           title="Nothing planned for this day"
           description="Add a task above. Use the arrows to plan ahead or backfill a past day."
@@ -599,70 +681,134 @@ export function PlannerView({
           ))}
         </ul>
       )}
+      </div>
 
-      <section className="planner-summary">
-        <div className="planner-summary-head">
-          <AiMagicIcon size={15} />
-          <span className="planner-summary-title">AI summary</span>
-          <div className="planner-summary-scope" role="tablist">
-            {SUMMARY_SCOPES.map(({ scope, label }) => (
-              <button
-                key={scope}
-                type="button"
-                role="tab"
-                aria-selected={summaryScope === scope}
-                className={
-                  summaryScope === scope
-                    ? 'planner-summary-scope-btn is-active'
-                    : 'planner-summary-scope-btn'
-                }
-                onClick={() => setSummaryScope(scope)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <textarea
-          className="planner-summary-prompt"
-          value={summaryPrompt}
-          onChange={(e) => setSummaryPrompt(e.target.value)}
-          placeholder="Optional guidance (e.g. focus on blockers)…"
-          rows={2}
-          aria-label="Summary guidance"
-        />
-        <div className="planner-summary-actions">
-          <button
-            type="button"
-            className="planner-tool-btn"
-            onClick={() => void generateSummary()}
-            disabled={summaryBusy}
+      {summaryOpen && (
+        <div
+          className="planner-summary-overlay"
+          role="presentation"
+          onClick={() => setSummaryOpen(false)}
+        >
+          <div
+            className="planner-summary-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="AI task summary"
+            onClick={(e) => e.stopPropagation()}
           >
-            <AiMagicIcon size={14} />
-            {summaryBusy ? 'Generating…' : 'Generate summary'}
-          </button>
-          {summary && (
-            <button
-              type="button"
-              className="planner-export-btn"
-              onClick={() => downloadSummary(summary)}
-              title="Download the summary as Markdown"
-            >
-              Download
-            </button>
-          )}
-        </div>
-        <ErrorText error={summaryError} />
-        {summary && (
-          <div className="planner-summary-result">
-            <div className="planner-summary-meta">
-              {summary.range} · {summary.taskCount} task
-              {summary.taskCount === 1 ? '' : 's'}
+            <div className="planner-summary-head">
+              <span className="planner-summary-badge">
+                <AiIcon size={16} />
+              </span>
+              <span className="planner-summary-title">AI task summary</span>
+              <div className="planner-summary-scope" role="tablist">
+                {SUMMARY_SCOPES.map(({ scope, label }) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    role="tab"
+                    aria-selected={summaryScope === scope}
+                    className={
+                      summaryScope === scope
+                        ? 'planner-summary-scope-btn is-active'
+                        : 'planner-summary-scope-btn'
+                    }
+                    onClick={() => setSummaryScope(scope)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="icon-button planner-mini"
+                onClick={() => setSummaryOpen(false)}
+                aria-label="Close AI summary"
+                title="Close"
+              >
+                <CloseIcon size={15} />
+              </button>
             </div>
-            <p className="planner-summary-text">{summary.content}</p>
+            <label
+              className="planner-summary-prompt-label"
+              htmlFor="planner-summary-prompt"
+            >
+              Ask the AI how to summarize these tasks
+            </label>
+            <textarea
+              id="planner-summary-prompt"
+              className="planner-summary-prompt"
+              value={summaryPrompt}
+              onChange={(e) => setSummaryPrompt(e.target.value)}
+              placeholder="e.g. focus on blockers, group by repo, highlight what shipped…"
+              rows={3}
+              aria-label="Summary guidance"
+            />
+            <div className="planner-summary-actions">
+              <button
+                type="button"
+                className="planner-ai-trigger is-generate"
+                onClick={() => void generateSummary()}
+                disabled={summaryBusy}
+              >
+                <AiMagicIcon size={15} />
+                {summaryBusy ? 'Generating…' : 'Generate summary'}
+              </button>
+              {summary && (
+                <div className="planner-summary-downloads">
+                  <button
+                    type="button"
+                    className="planner-export-btn"
+                    onClick={() => downloadSummaryMarkdown(summary)}
+                    title="Download the summary as Markdown"
+                  >
+                    <DownloadMarkdownIcon size={14} /> .md
+                  </button>
+                  <button
+                    type="button"
+                    className="planner-export-btn"
+                    onClick={() => downloadSummaryHtml(summary)}
+                    title="Download the summary as HTML"
+                  >
+                    <DownloadHtmlIcon size={14} /> .html
+                  </button>
+                </div>
+              )}
+            </div>
+            <ErrorText error={summaryError} />
+            {summary && (
+              <div className="planner-summary-result">
+                <div className="planner-summary-meta">
+                  {summary.range} · {summary.taskCount} task
+                  {summary.taskCount === 1 ? '' : 's'}
+                </div>
+                <div
+                  className="planner-summary-rendered"
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdownComment(summary.content),
+                  }}
+                />
+                {summaryTasks.length > 0 && (
+                  <div className="planner-summary-tasks">
+                    <div className="planner-summary-tasks-head">Task list</div>
+                    <ul>
+                      {summaryTasks.map((t) => (
+                        <li
+                          key={t.id}
+                          className={t.status === 'done' ? 'is-done' : ''}
+                        >
+                          <span className="planner-summary-task-date">{t.date}</span>
+                          <span className="planner-summary-task-title">{t.title}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        )}
-      </section>
+        </div>
+      )}
     </div>
   );
 }
