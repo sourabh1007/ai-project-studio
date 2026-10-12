@@ -4,10 +4,14 @@ import { z } from 'zod';
 export const PLANNER_SUMMARY_NAMESPACE = 'plannerSummary';
 
 export const plannerSummaryConfigSchema = z.object({
-  /** Name of the persistent internal feature that hosts summary sessions. */
-  hostFeatureName: z.string().min(1),
-  /** Description stored on the host feature when it is first created. */
-  hostFeatureDescription: z.string().min(1),
+  /**
+   * Synthetic feature id that summary metasessions are attributed to. It is a
+   * well-known constant rather than a real feature row (mirroring the
+   * `self-recovery`/`self-heal` internal metasessions), so summary usage folds
+   * into cost accounting without creating a visible "Planner summaries" feature
+   * in the workspace tree.
+   */
+  hostFeatureId: z.string().min(1),
   /** Overall prompt. Placeholders: {{scope}}, {{range}}, {{guidance}}, {{tasks}}. */
   promptTemplate: z.string().min(1),
   /** Per-task line. Placeholders: {{mark}}, {{date}}, {{priority}}, {{title}}. */
@@ -30,9 +34,7 @@ export const plannerSummaryConfigSchema = z.object({
 export type PlannerSummaryConfig = z.infer<typeof plannerSummaryConfigSchema>;
 
 export const plannerSummaryDefaults: PlannerSummaryConfig = {
-  hostFeatureName: 'Planner summaries',
-  hostFeatureDescription:
-    'Internal workspace that hosts the Planner’s AI summary sessions.',
+  hostFeatureId: 'planner-summary',
   promptTemplate: [
     'You are reviewing a developer’s personal planner.',
     'Summarize the {{scope}} of {{range}}, limited strictly to the tasks listed below.',

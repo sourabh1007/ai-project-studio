@@ -132,6 +132,24 @@ describe('PlannerView', () => {
     );
   });
 
+  it('edits a task title and notes inline', async () => {
+    const api = client({}, [task()]);
+    renderView(api);
+    fireEvent.click(await screen.findByLabelText('Edit "Fix the login bug"'));
+    const titleInput = screen.getByLabelText('Edit task title');
+    fireEvent.change(titleInput, { target: { value: 'Fix the logout bug' } });
+    fireEvent.change(screen.getByLabelText('Edit task notes'), {
+      target: { value: 'affects SSO' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() =>
+      expect(api.updatePlannerTask).toHaveBeenCalledWith('t1', {
+        title: 'Fix the logout bug',
+        notes: 'affects SSO',
+      }),
+    );
+  });
+
   it('hides backlogged tasks from the day and restores them from the backlog', async () => {
     const api = client({}, [task({ backloggedAt: '2025-01-02' })]);
     renderView(api);

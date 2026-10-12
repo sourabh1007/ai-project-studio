@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
@@ -7,6 +7,7 @@ import {
   AiIcon,
   AiMagicIcon,
   CalendarIcon,
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
@@ -29,6 +30,7 @@ import {
   type PlannerExportFormat,
 } from '../../lib/planner-export.js';
 import {
+  humanizeLaunchError,
   launchNewTask,
   launchReview,
   launchSession,
@@ -176,6 +178,7 @@ export function PlannerView({
   const [mode, setMode] = useState<'planner' | 'backlog'>('planner');
   const [day, setDay] = useState(() => todayIso());
   const [title, setTitle] = useState('');
+  const titleRef = useRef<HTMLTextAreaElement>(null);
   const [notes, setNotes] = useState('');
   const [showNotes, setShowNotes] = useState(false);
   const [titleFocused, setTitleFocused] = useState(false);
@@ -187,6 +190,9 @@ export function PlannerView({
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editNotes, setEditNotes] = useState('');
   const [movingAll, setMovingAll] = useState(false);
 
   const [summaryScope, setSummaryScope] =
@@ -218,6 +224,17 @@ export function PlannerView({
     [prefs.plannerAutosuggest, title, titleHistory],
   );
   const detected = useMemo(() => detectIntent(title.trim()), [title]);
+
+  // Grow the quick-add textarea to fit its content so multi-line tasks are
+  // fully visible while typing, then shrink back as content is removed.
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el) {
+      return;
+    }
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title]);
 
   const unfinishedCount = dayTasks.filter((t) => t.status !== 'done').length;
 
@@ -271,6 +288,25 @@ export function PlannerView({
   async function removeTask(id: string) {
     await api.removePlannerTask(id);
     tasks.reload();
+  }
+
+  /** Opens the inline editor for a task's title and notes. */
+  function startEdit(task: PlannerTask) {
+    setEditingId(task.id);
+    setEditTitle(task.title);
+    setEditNotes(task.notes);
+  }
+
+  /** Saves the edited title/notes, or discards the edit when the title is blank. */
+  async function commitEdit(task: PlannerTask) {
+    const title = editTitle.trim();
+    if (!title) {
+      setEditingId(null);
+      return;
+    }
+    const finalTitle = prefs.plannerAutoformat ? autoformatTitle(title) : title;
+    setEditingId(null);
+    await patchTask(task.id, { title: finalTitle, notes: editNotes.trim() });
   }
 
   /** Moves every unfinished task on the viewed day to the next day. */
@@ -370,7 +406,7 @@ export function PlannerView({
       onLaunch(result);
       tasks.reload();
     } catch (err) {
-      setLaunchError(err instanceof Error ? err.message : 'Could not launch the task.');
+      setLaunchError(humanizeLaunchError(err));
     } finally {
       setBusyTaskId(null);
     }
@@ -566,8 +602,9 @@ export function PlannerView({
         <div className="planner-hero-row">
           <PlannerIcon size={18} className="planner-hero-icon" />
           <div className="planner-hero-field">
-            <input
-              type="text"
+            <textarea
+              ref={titleRef}
+              rows={1}
               className="planner-hero-input"
               placeholder="What are you working on?"
               value={title}
@@ -575,7 +612,10 @@ export function PlannerView({
               onFocus={() => setTitleFocused(true)}
               onBlur={() => window.setTimeout(() => setTitleFocused(false), 120)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                // Enter adds the task; Shift+Enter inserts a newline so tasks
+                // can span multiple lines with their formatting preserved.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
                   void addTask();
                 }
               }}
@@ -661,6 +701,14 @@ export function PlannerView({
               renaming={renamingId === task.id}
               renameValue={renameValue}
               onRenameValue={setRenameValue}
+              editing={editingId === task.id}
+              editTitle={editTitle}
+              editNotes={editNotes}
+              onEditTitle={setEditTitle}
+              onEditNotes={setEditNotes}
+              onStartEdit={() => startEdit(task)}
+              onCommitEdit={() => void commitEdit(task)}
+              onCancelEdit={() => setEditingId(null)}
               onToggleDone={() =>
                 void patchTask(task.id, {
                   status: task.status === 'done' ? 'open' : 'done',
@@ -929,6 +977,14 @@ function PlannerRow({
   renaming,
   renameValue,
   onRenameValue,
+  editing,
+  editTitle,
+  editNotes,
+  onEditTitle,
+  onEditNotes,
+  onStartEdit,
+  onCommitEdit,
+  onCancelEdit,
   onToggleDone,
   onDefer,
   onLaunch,
@@ -944,6 +1000,14 @@ function PlannerRow({
   renaming: boolean;
   renameValue: string;
   onRenameValue: (value: string) => void;
+  editing: boolean;
+  editTitle: string;
+  editNotes: string;
+  onEditTitle: (value: string) => void;
+  onEditNotes: (value: string) => void;
+  onStartEdit: () => void;
+  onCommitEdit: () => void;
+  onCancelEdit: () => void;
   onToggleDone: () => void;
   onDefer: () => void;
   onLaunch: (intent: PlannerIntent) => void;
@@ -957,6 +1021,60 @@ function PlannerRow({
   const launched = task.launchKind;
   const LaunchedIcon = launched ? INTENTS[launched].Icon : SessionIcon;
 
+  if (editing) {
+    return (
+      <li className="planner-item is-editing">
+        <div className="planner-item-edit">
+          <input
+            type="text"
+            className="planner-edit-title"
+            value={editTitle}
+            autoFocus
+            onChange={(e) => onEditTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                onCommitEdit();
+              } else if (e.key === 'Escape') {
+                onCancelEdit();
+              }
+            }}
+            aria-label="Edit task title"
+            placeholder="Task title"
+          />
+          <textarea
+            className="planner-edit-notes"
+            value={editNotes}
+            onChange={(e) => onEditNotes(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                onCancelEdit();
+              }
+            }}
+            rows={2}
+            aria-label="Edit task notes"
+            placeholder="Notes (optional)"
+          />
+          <div className="planner-edit-actions">
+            <button
+              type="button"
+              className="planner-ai-trigger is-generate"
+              onClick={onCommitEdit}
+            >
+              <CheckIcon size={14} /> Save
+            </button>
+            <button
+              type="button"
+              className="planner-tool-btn"
+              onClick={onCancelEdit}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </li>
+    );
+  }
+
   return (
     <li className={`planner-item ${task.status === 'done' ? 'is-done' : ''}`.trim()}>
       <input
@@ -967,7 +1085,14 @@ function PlannerRow({
         aria-label={`Mark "${task.title}" done`}
       />
       <div className="planner-item-body">
-        <span className="planner-item-title">{task.title}</span>
+        <button
+          type="button"
+          className="planner-item-title"
+          onClick={onStartEdit}
+          title="Click to edit this task"
+        >
+          {task.title}
+        </button>
         {task.notes && <span className="planner-item-notes">{task.notes}</span>}
       </div>
 
@@ -1050,6 +1175,15 @@ function PlannerRow({
           </div>
         )}
 
+        <button
+          type="button"
+          className="icon-button planner-mini"
+          onClick={onStartEdit}
+          aria-label={`Edit "${task.title}"`}
+          title="Edit task"
+        >
+          <PencilIcon size={14} />
+        </button>
         <button
           type="button"
           className="icon-button planner-mini"

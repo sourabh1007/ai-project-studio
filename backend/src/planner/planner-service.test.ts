@@ -104,13 +104,6 @@ describe('planner service create', () => {
     expect(() => service.create({ title: '   ' })).toThrow(ValidationError);
   });
 
-  it('rejects an over-long title', () => {
-    const { service } = makeService();
-    expect(() =>
-      service.create({ title: 'x'.repeat(plannerDefaults.maxTitleLength + 1) }),
-    ).toThrow(ValidationError);
-  });
-
   it('rejects over-long notes', () => {
     const { service } = makeService();
     expect(() =>

@@ -34,7 +34,7 @@ import type {
 } from '../../lib/types.js';
 import { formatAic, formatDuration } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
-import { sessionDisplayName } from '../../lib/session-names.js';
+import { sessionWorkTitle } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from '../../components/ui.js';
@@ -133,8 +133,18 @@ function SessionRow({
   const dot = sessionDotClass(session.status);
 
   // The persisted name is authoritative; fall back to any legacy localStorage
-  // name (pre-persistence installs) and finally the ordinal label.
-  const name = sessionDisplayName(session.name ?? customName, ordinal, session.kind);
+  // name (pre-persistence installs), then a title derived from the session's
+  // launch prompt or CLI work history, and finally the ordinal label. Deriving
+  // from the work title keeps sessions meaningfully named even when the custom
+  // name is unavailable (e.g. localStorage cleared by an app data-path change).
+  const name = sessionWorkTitle(
+    session.name ?? customName,
+    session.prompt,
+    session.workTitle,
+    ordinal,
+    64,
+    session.kind,
+  );
   const model = session.resolvedModel ?? session.requestedModel;
   // Industry-standard per-session CLI indicator: a compact monogram badge
   // (e.g. Copilot → "C", Agency → "A") so the provider is scannable at a
@@ -1121,9 +1131,12 @@ function FeatureNode({
                 usage.reload();
                 onOpenSession(
                   session,
-                  sessionDisplayName(
-                    names[session.id],
+                  sessionWorkTitle(
+                    session.name ?? names[session.id],
+                    session.prompt,
+                    session.workTitle,
                     ordinals.get(session.id) ?? session.seq ?? rows.length + 1,
+                    64,
                     session.kind,
                   ),
                 );
@@ -1181,7 +1194,14 @@ function FeatureNode({
                 onOpen={() =>
                   onOpenSession(
                     session,
-                    sessionDisplayName(names[session.id], ordinal, session.kind),
+                    sessionWorkTitle(
+                      session.name ?? names[session.id],
+                      session.prompt,
+                      session.workTitle,
+                      ordinal,
+                      64,
+                      session.kind,
+                    ),
                   )
                 }
                 onRename={(name) => handleRenameSession(session.id, name)}

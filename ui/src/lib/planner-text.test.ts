@@ -45,6 +45,16 @@ describe('autoformatTitle', () => {
     expect(autoformatTitle('   ')).toBe('');
     expect(autoformatTitle('')).toBe('');
   });
+
+  it('preserves line breaks while collapsing in-line whitespace', () => {
+    expect(autoformatTitle('first   line\n\n  second   line.  ')).toBe(
+      'First line\nsecond line',
+    );
+  });
+
+  it('trims surrounding blank lines', () => {
+    expect(autoformatTitle('\n\n  hello \n world \n\n')).toBe('Hello\nworld');
+  });
 });
 
 describe('suggestTitles', () => {

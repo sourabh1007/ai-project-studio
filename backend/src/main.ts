@@ -3308,7 +3308,6 @@ function main(): void {
   });
   const plannerSummarizer = createPlannerSummaryRunner({
     planner: plannerService,
-    features: featureService,
     meta: metaAi,
     clock,
     config: plannerSummaryConfig,

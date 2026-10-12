@@ -105,7 +105,7 @@ describe('Explorer repository context gating', () => {
     expect(screen.queryByText('gpt-5')).toBeNull();
     expect(client.listSessionFiles).not.toHaveBeenCalled();
     fireEvent.click(row);
-    expect(onOpenSession).toHaveBeenCalledWith(session, 'Session #1');
+    expect(onOpenSession).toHaveBeenCalledWith(session, 'Compact session');
     const expand = screen.getByRole('button', { name: 'Expand files for Compact session' });
     expect(expand).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(expand);

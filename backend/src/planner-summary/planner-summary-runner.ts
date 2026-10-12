@@ -1,6 +1,4 @@
 import type { Clock } from '../kernel/clock.js';
-import type { Feature } from '../feature/feature-contract.js';
-import type { FeatureService } from '../feature/feature-service.js';
 import type { MetaRunner } from '../meta/meta-runner.js';
 import type { PlannerService } from '../planner/planner-service.js';
 import type { PlannerSummaryConfig } from './config.js';
@@ -14,7 +12,6 @@ import { scopeRange, tasksInScope } from './planner-summary-range.js';
 
 export interface PlannerSummaryRunnerDeps {
   planner: Pick<PlannerService, 'list'>;
-  features: Pick<FeatureService, 'list' | 'create'>;
   /**
    * Shared headless-AI primitive. Routing through it (rather than the raw
    * session launcher) is what makes summaries fast: it leases a warm pooled
@@ -28,8 +25,10 @@ export interface PlannerSummaryRunnerDeps {
 
 /**
  * Runs an AI summary of the planner tasks in a requested scope (day/month/year)
- * via the shared MetaRunner. The run is attributed to a persistent internal
- * host feature so its credit usage is visible in Usage, and declares its prompt
+ * via the shared MetaRunner. The run is attributed to a well-known synthetic
+ * internal feature id (not a real feature row, mirroring `self-recovery`), so
+ * its credit usage folds into cost accounting without surfacing a visible
+ * "Planner summaries" feature in the workspace tree. It declares its prompt
  * tool-free (`noTools` + `toolsOptional`) so the warm ACP pool can serve it
  * quickly. The core stays provider-agnostic: provider/model come from the
  * user's meta settings inside the MetaRunner.
@@ -37,25 +36,6 @@ export interface PlannerSummaryRunnerDeps {
 export function createPlannerSummaryRunner(
   deps: PlannerSummaryRunnerDeps,
 ): PlannerSummarizer {
-  /** Finds the reusable internal host feature, creating it once if absent. */
-  const hostFeature = (): Feature => {
-    const existing = deps.features
-      .list()
-      .find(
-        (feature) =>
-          (feature.repoId ?? null) === null &&
-          feature.name === deps.config.hostFeatureName,
-      );
-    return (
-      existing ??
-      deps.features.create({
-        name: deps.config.hostFeatureName,
-        description: deps.config.hostFeatureDescription,
-        repoId: null,
-      })
-    );
-  };
-
   return {
     async summarize(request): Promise<PlannerSummaryResult> {
       request.signal?.throwIfAborted();
@@ -65,10 +45,9 @@ export function createPlannerSummaryRunner(
         request.date,
       );
       const prompt = buildPlannerSummaryPrompt(tasks, request, deps.config);
-      const host = hostFeature();
 
       const text = await deps.meta.run({
-        featureId: host.id,
+        featureId: deps.config.hostFeatureId,
         scope: 'internal',
         prompt,
         noTools: true,

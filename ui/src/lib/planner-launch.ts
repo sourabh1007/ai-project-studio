@@ -74,11 +74,17 @@ export function parsePullNumber(input: string): number | null {
 }
 
 /**
- * Derives a concise, tidy workspace name from a planner task title: trimmed,
+ * Derives a concise, tidy workspace name from a planner task title: the first
+ * non-empty line (so multi-line tasks still yield a single-line name), trimmed,
  * stripped of a trailing full stop, sentence-cased, and length-capped.
  */
 export function featureNameForTask(task: PlannerTask): string {
-  const cleaned = task.title.trim().replace(/[.\s]+$/, '');
+  const firstLine =
+    task.title
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? '';
+  const cleaned = firstLine.replace(/[.\s]+$/, '');
   if (!cleaned) {
     return 'Planner task';
   }
@@ -192,6 +198,26 @@ export async function launchReview(
   const parentFeatureId = await resolveParentFeatureId(api, task, repoId);
   const feature = await api.createPrFeature(repoId, number, parentFeatureId);
   return { kind: 'review-board', feature };
+}
+
+/**
+ * Translates a raw launcher / back-end error into a concise, actionable
+ * message. Launches run git against the selected repository's checkout, so the
+ * most common failure is a raw `fatal: not a git repository` from an absent or
+ * invalid local clone — unhelpful on its own, so it is mapped to concrete
+ * guidance. Any other error falls back to its own message.
+ */
+export function humanizeLaunchError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const trimmed = raw.trim();
+  if (/not a git repository/i.test(trimmed)) {
+    return (
+      'The selected repository has no valid local git checkout. Add or re-open ' +
+      'its repository in the workspace (or pick a different one) before ' +
+      'starting this task.'
+    );
+  }
+  return trimmed.length > 0 ? trimmed : 'Could not launch the task.';
 }
 
 /** Maps an intent returned by a launch into the link persisted on the task. */

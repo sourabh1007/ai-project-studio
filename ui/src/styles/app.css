@@ -19815,7 +19815,7 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 16px;
+  padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
@@ -19823,20 +19823,29 @@ body.is-resizing {
 }
 .planner-hero-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
 }
 .planner-hero-icon {
   color: var(--text-muted);
   flex: 0 0 auto;
+  margin-top: 12px;
 }
 .planner-hero-input {
   flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   border: none;
   background: transparent;
-  font-size: 15px;
-  padding: 6px 2px;
+  font-size: 18px;
+  line-height: 1.4;
+  padding: 12px 4px;
+  font-family: inherit;
+  color: inherit;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .planner-hero-input:focus {
   outline: none;
@@ -20433,16 +20442,63 @@ body.is-resizing {
 }
 .planner-item-title {
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+button.planner-item-title {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: text;
+}
+button.planner-item-title:hover {
+  color: var(--accent);
+}
+.planner-item.is-editing {
+  align-items: stretch;
+}
+.planner-item-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.planner-edit-title,
+.planner-edit-notes {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.planner-edit-title {
+  font-weight: 500;
+}
+.planner-edit-notes {
+  resize: vertical;
+  font-size: 13px;
+}
+.planner-edit-actions {
+  display: flex;
+  gap: 8px;
 }
 .planner-item-notes {
   font-size: 12px;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .planner-item-side {
   display: flex;

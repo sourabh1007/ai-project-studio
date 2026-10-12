@@ -9,6 +9,7 @@ import type {
 import {
   datedFeatureName,
   featureNameForTask,
+  humanizeLaunchError,
   launchNewTask,
   launchReview,
   launchSession,
@@ -147,6 +148,12 @@ describe('featureNameForTask', () => {
     expect(featureNameForTask(makeTask({ title: '   ' }))).toBe('Planner task');
   });
 
+  it('uses the first non-empty line of a multi-line title', () => {
+    expect(
+      featureNameForTask(makeTask({ title: '\n  Fix login  \nmore detail' })),
+    ).toBe('Fix login');
+  });
+
   it('truncates a long title with an ellipsis', () => {
     const name = featureNameForTask(makeTask({ title: 'x'.repeat(200) }));
     expect(name.endsWith('…')).toBe(true);
@@ -169,6 +176,29 @@ describe('promptForTask', () => {
 describe('datedFeatureName', () => {
   it('prefixes the tidy task name with its day', () => {
     expect(datedFeatureName(makeTask())).toBe('2025-01-01 · Fix the login bug');
+  });
+});
+
+describe('humanizeLaunchError', () => {
+  it('maps a raw "not a git repository" failure to actionable guidance', () => {
+    const message = humanizeLaunchError(
+      new Error('fatal: not a git repository (or any of the parent directories): .git'),
+    );
+    expect(message).toContain('no valid local git checkout');
+    expect(message).not.toContain('fatal:');
+  });
+
+  it('passes other error messages through unchanged', () => {
+    expect(humanizeLaunchError(new Error('Boom'))).toBe('Boom');
+  });
+
+  it('stringifies non-Error values', () => {
+    expect(humanizeLaunchError('plain string error')).toBe('plain string error');
+  });
+
+  it('falls back to a default message when empty', () => {
+    expect(humanizeLaunchError(null)).toBe('Could not launch the task.');
+    expect(humanizeLaunchError(new Error('   '))).toBe('Could not launch the task.');
   });
 });
 

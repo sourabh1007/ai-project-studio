@@ -49,11 +49,6 @@ export function createPlannerService(deps: PlannerServiceDeps): PlannerService {
     if (trimmed.length === 0) {
       throw new ValidationError('Task title must not be empty');
     }
-    if (trimmed.length > deps.config.maxTitleLength) {
-      throw new ValidationError(
-        `Task title exceeds ${deps.config.maxTitleLength} characters`,
-      );
-    }
     return trimmed;
   };
 

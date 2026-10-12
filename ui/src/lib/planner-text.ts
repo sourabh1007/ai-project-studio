@@ -62,16 +62,24 @@ export function autocorrect(text: string): string {
 }
 
 /**
- * Formats a title on Add: trims, collapses whitespace, strips a trailing
- * sentence period, and capitalizes the first letter. Empty input stays empty.
+ * Formats a title on Add: collapses runs of spaces/tabs within each line while
+ * **preserving line breaks** (so multi-line tasks keep their formatting),
+ * trims surrounding blank lines, strips a trailing sentence period from the
+ * last line, and capitalizes the first letter. Empty input stays empty.
  */
 export function autoformatTitle(text: string): string {
-  const collapsed = text.trim().replace(/\s+/g, ' ');
-  if (!collapsed) {
+  const lines = text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter((line) => line !== '');
+  if (lines.length === 0) {
     return '';
   }
-  const noTrailingDot = collapsed.replace(/\.+$/, '');
-  return noTrailingDot.charAt(0).toUpperCase() + noTrailingDot.slice(1);
+  const last = lines.length - 1;
+  lines[last] = lines[last].replace(/\.+$/, '');
+  lines[0] = lines[0].charAt(0).toUpperCase() + lines[0].slice(1);
+  return lines.join('\n');
 }
 
 /**
