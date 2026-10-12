@@ -14,6 +14,7 @@ import {
   DownloadHtmlIcon,
   DownloadMarkdownIcon,
   ExportIcon,
+  ImportIcon,
   PencilIcon,
   PlannerIcon,
   PlusIcon,
@@ -22,6 +23,7 @@ import {
   TrashIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
+import { PlannerImportDialog } from './planner-import-dialog.js';
 import { addDays, formatDayLabel, isIsoDate, todayIso } from '../../lib/planner-dates.js';
 import { detectIntent, type PlannerIntent } from '../../lib/planner-detect.js';
 import { autocorrect, autoformatTitle, suggestTitles } from '../../lib/planner-text.js';
@@ -202,6 +204,7 @@ export function PlannerView({
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summary, setSummary] = useState<PlannerSummaryResult | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const repoList = repos.data ?? [];
   const effectiveRepoId = repoId || repoList[0]?.id || null;
@@ -587,6 +590,15 @@ export function PlannerView({
           </button>
           <button
             type="button"
+            className="planner-tool-btn"
+            onClick={() => setImportOpen(true)}
+            title="Import tasks from Azure DevOps or GitHub"
+          >
+            <ImportIcon size={14} />
+            <span>Import</span>
+          </button>
+          <button
+            type="button"
             className="planner-ai-trigger"
             onClick={() => setSummaryOpen(true)}
             aria-label="AI summary"
@@ -648,6 +660,14 @@ export function PlannerView({
             disabled={adding}
           >
             <PlusIcon size={16} /> Add
+          </button>
+          <button
+            type="button"
+            className="planner-hero-import"
+            onClick={() => setImportOpen(true)}
+            title="Import tasks from Azure DevOps or GitHub"
+          >
+            <ImportIcon size={16} /> Import
           </button>
         </div>
         <div className="planner-hero-foot">
@@ -730,6 +750,21 @@ export function PlannerView({
         </ul>
       )}
       </div>
+
+      {importOpen && (
+        <PlannerImportDialog
+          api={api}
+          repos={repoList}
+          date={day}
+          onClose={() => setImportOpen(false)}
+          onImported={(count) => {
+            setImportOpen(false);
+            if (count > 0) {
+              tasks.reload();
+            }
+          }}
+        />
+      )}
 
       {summaryOpen && (
         <div

@@ -59,6 +59,9 @@ import type {
   RemoteRepo,
   RemotePullRequest,
   PullFilter,
+  RemoteWorkItem,
+  RemoteIssue,
+  IssueFilter,
   PrReview,
   PrReviewStepKey,
   PrReviewChatMessage,
@@ -465,6 +468,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<RemotePullRequest[]>(
         `/repos/${repoId}/pulls?filter=${filter}`,
       ),
+    listRepoWorkItems: (repoId: string) =>
+      request<RemoteWorkItem[]>(`/repos/${repoId}/work-items`),
+    listRepoIssues: (repoId: string, filter: IssueFilter = 'all') =>
+      request<RemoteIssue[]>(`/repos/${repoId}/issues?filter=${filter}`),
     createPrFeature: (
       repoId: string,
       number: number,

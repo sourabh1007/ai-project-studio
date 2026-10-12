@@ -57,6 +57,11 @@ import { createAzureRoutes } from './azure-controller.js';
 import type { RepoService } from '../repo/repo-service.js';
 import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
+import type {
+  RemoteWorkItem,
+  RemoteIssue,
+} from '../repo/remote-import-contract.js';
+import type { IssueFilter } from '../repo/github-issue-lister.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
@@ -249,6 +254,10 @@ export interface ApiRoutesDeps {
   listGithubRepos: () => Promise<RemoteRepo[]>;
   /** Lists repositories across an Azure DevOps organization's projects. */
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
+  /** Lists the active work items of a repository's Azure DevOps project. */
+  listRepoWorkItems: (repoId: string) => Promise<RemoteWorkItem[]>;
+  /** Lists the open issues of a repository (GitHub repositories only). */
+  listRepoIssues: (repoId: string, filter: IssueFilter) => Promise<RemoteIssue[]>;
   /** Lists a repo's pull requests and turns one into a review feature. */
   prFeatures: PrFeatureService;
   /** Automated AI reviews for PR review features. */
@@ -411,6 +420,8 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       provision: deps.provisionRepo,
       listGithubRepos: deps.listGithubRepos,
       listAzureRepos: deps.listAzureRepos,
+      listRepoWorkItems: deps.listRepoWorkItems,
+      listRepoIssues: deps.listRepoIssues,
       prFeatures: deps.prFeatures,
     }),
   ], {

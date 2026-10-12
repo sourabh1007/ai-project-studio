@@ -2,6 +2,11 @@ import { z } from 'zod';
 import type { RepoService } from '../repo/repo-service.js';
 import type { CreateRepositoryInput } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
+import type {
+  RemoteWorkItem,
+  RemoteIssue,
+} from '../repo/remote-import-contract.js';
+import type { IssueFilter } from '../repo/github-issue-lister.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
@@ -36,6 +41,10 @@ export interface RepoControllerDeps {
   listGithubRepos: () => Promise<RemoteRepo[]>;
   /** Lists repositories across an Azure DevOps organization's projects. */
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
+  /** Lists the active work items of a repository's Azure DevOps project. */
+  listRepoWorkItems: (repoId: string) => Promise<RemoteWorkItem[]>;
+  /** Lists the open issues of a repository (GitHub repositories only). */
+  listRepoIssues: (repoId: string, filter: IssueFilter) => Promise<RemoteIssue[]>;
   /** Lists a repo's pull requests and turns one into a review feature. */
   prFeatures: PrFeatureService;
 }
@@ -137,6 +146,27 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
         return {
           status: 200,
           body: await deps.prFeatures.listPulls(req.params.id, filter),
+        };
+      },
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/work-items',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.listRepoWorkItems(req.params.id),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/issues',
+      handler: async (req) => {
+        const raw = req.query.filter;
+        const filter: IssueFilter =
+          raw === 'mine' || raw === 'assigned' ? raw : 'all';
+        return {
+          status: 200,
+          body: await deps.listRepoIssues(req.params.id, filter),
         };
       },
     },

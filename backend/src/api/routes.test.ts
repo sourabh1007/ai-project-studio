@@ -93,6 +93,8 @@ function deps(): ApiRoutesDeps {
     provisionRepo: () => Promise.resolve(empty),
     listGithubRepos: () => Promise.resolve([]),
     listAzureRepos: () => Promise.resolve([]),
+    listRepoWorkItems: () => Promise.resolve([]),
+    listRepoIssues: () => Promise.resolve([]),
     prFeatures: empty,
     prReviews: empty,
     reviewBoard: empty,
@@ -295,6 +297,8 @@ describe('createApiRoutes', () => {
       'get /providers/github/repos',
       'get /providers/azure-devops/repos',
       'get /repos/:id/pulls',
+      'get /repos/:id/work-items',
+      'get /repos/:id/issues',
       'post /repos/:id/pulls',
     ]);
   });

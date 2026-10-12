@@ -189,6 +189,8 @@ import { createRepoService } from './repo/repo-service.js';
 import { provisionRepo } from './repo/repo-provisioner.js';
 import { listGithubRepos } from './repo/github-repo-lister.js';
 import { listGithubPulls, getGithubPull } from './repo/github-pr-lister.js';
+import { listGithubIssues, type IssueFilter } from './repo/github-issue-lister.js';
+import { listAzureWorkItems } from './repo/azure-workitem-lister.js';
 import {
   listAzureRepos,
   type AzureHttpResponse,
@@ -229,6 +231,10 @@ import type {
   RemotePullRequest,
   PullFilter,
 } from './repo/remote-pr-contract.js';
+import type {
+  RemoteWorkItem,
+  RemoteIssue,
+} from './repo/remote-import-contract.js';
 import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
 import type { AzureTarget } from './azure-auth/azure-devops-auth.js';
 import {
@@ -1619,6 +1625,45 @@ function main(): void {
       );
     }
     return getAzurePull(azurePullDeps, target, number);
+  };
+
+  // Planner "import" dispatch: lists the active work items of an Azure DevOps
+  // repository's project, and the open issues of a GitHub repository, using the
+  // same provider logins as PR listing. The user multi-selects items in the
+  // Planner and each becomes a plain task carrying a link to the source item.
+  const azureWorkItemDeps = {
+    token: azureTokenFor,
+    httpGet: azureHttpGet,
+    httpPost: azureHttpPost,
+  };
+  const listRepoWorkItems = async (
+    repoId: string,
+  ): Promise<RemoteWorkItem[]> => {
+    const repo = repoService.get(repoId);
+    if (repo.provider !== 'azure-devops') {
+      throw new ValidationError(
+        'Work items can only be imported from Azure DevOps repositories.',
+      );
+    }
+    const target = parseAzureRepoUrl(repo.remoteUrl);
+    if (!target) {
+      throw new ValidationError(
+        `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+      );
+    }
+    return listAzureWorkItems(azureWorkItemDeps, target);
+  };
+  const listRepoIssues = async (
+    repoId: string,
+    filter: IssueFilter,
+  ): Promise<RemoteIssue[]> => {
+    const repo = repoService.get(repoId);
+    if (repo.provider !== 'github') {
+      throw new ValidationError(
+        'Issues can only be imported from GitHub repositories.',
+      );
+    }
+    return listGithubIssues(ghRun, repo.name, { filter });
   };
 
   // Resolves the working directory a session's terminal runs in: a PR review's
@@ -3844,6 +3889,8 @@ function main(): void {
       provisionRepo: provisionRepoInput,
       listGithubRepos: listGithubReposFor,
       listAzureRepos: listAzureReposFor,
+      listRepoWorkItems,
+      listRepoIssues,
       prFeatures: prFeatureService,
       prReviews: prReviewService,
       reviewBoard: reviewBoardService,

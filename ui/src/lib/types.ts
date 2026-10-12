@@ -1065,6 +1065,36 @@ export interface RemotePullRequest {
 /** Server-side scope for listing pull requests. */
 export type PullFilter = 'mine' | 'assigned' | 'all';
 
+/** An Azure DevOps work item importable into the Planner. */
+export interface RemoteWorkItem {
+  provider: 'azure-devops';
+  id: number;
+  title: string;
+  url: string;
+  /** Work-item type, e.g. `Bug`, `Task`, `User Story`. */
+  type: string;
+  /** Current workflow state, e.g. `Active`, `New`. */
+  state: string;
+  /** Display name of the assignee, or null when unassigned. */
+  assignedTo: string | null;
+}
+
+/** A GitHub issue importable into the Planner. */
+export interface RemoteIssue {
+  provider: 'github';
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  author: string | null;
+  assignees: string[];
+  labels: string[];
+  createdAt: string | null;
+}
+
+/** Server-side scope for listing issues. */
+export type IssueFilter = 'mine' | 'assigned' | 'all';
+
 /** How a picked remote repo becomes a workspace repository. */
 export type RepoProvisionMode = 'clone' | 'existing';
 

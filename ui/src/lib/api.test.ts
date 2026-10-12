@@ -1165,6 +1165,23 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/repos/r1/pulls?filter=mine');
   });
 
+  it("lists a repository's work items", async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 5 }]));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listRepoWorkItems('r1');
+    expect(result).toEqual([{ id: 5 }]);
+    expect(calls[0][0]).toBe('/api/repos/r1/work-items');
+  });
+
+  it("lists a repository's issues with the default and an explicit filter", async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ number: 3 }]));
+    const client = createApiClient({ fetchImpl });
+    await client.listRepoIssues('r1');
+    expect(calls[0][0]).toBe('/api/repos/r1/issues?filter=all');
+    await client.listRepoIssues('r1', 'mine');
+    expect(calls[1][0]).toBe('/api/repos/r1/issues?filter=mine');
+  });
+
   it('creates a review feature from a pull request via a JSON POST', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f1' }));
     const client = createApiClient({ fetchImpl });

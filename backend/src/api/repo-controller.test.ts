@@ -4,6 +4,10 @@ import type { RepoService } from '../repo/repo-service.js';
 import type { Repository } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
 import type { RemotePullRequest } from '../repo/remote-pr-contract.js';
+import type {
+  RemoteWorkItem,
+  RemoteIssue,
+} from '../repo/remote-import-contract.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
@@ -39,6 +43,30 @@ const reviewFeature: Feature = {
   repoId: 'r1',
   checkoutPath: 'C:/wt/app-pr-12',
 };
+
+const workItem: RemoteWorkItem = {
+  provider: 'azure-devops',
+  id: 101,
+  title: 'Fix cache',
+  url: 'https://dev.azure.com/acme/proj/_workitems/edit/101',
+  type: 'Bug',
+  state: 'Active',
+  assignedTo: 'Mona',
+};
+const workItems = [workItem];
+
+const issue: RemoteIssue = {
+  provider: 'github',
+  number: 42,
+  title: 'Crash on launch',
+  url: 'https://github.com/acme/app/issues/42',
+  state: 'open',
+  author: 'octocat',
+  assignees: ['hubot'],
+  labels: ['bug'],
+  createdAt: '2025-01-01T00:00:00.000Z',
+};
+const issues = [issue];
 
 const repositoryContext: RepositoryContext = {
   repositoryId: 'r1',
@@ -91,6 +119,9 @@ function harness() {
   const insightsLoaded: string[] = [];
   const insightsRefresh: boolean[] = [];
   const definitionReads: Array<{ id: string; path: string }> = [];
+  const workItemRepoIds: string[] = [];
+  const issueRepoIds: string[] = [];
+  const issueFilters: string[] = [];
   let azureOrg = '';
   const service = {
     list: () => [repo],
@@ -170,6 +201,15 @@ function harness() {
       azureOrg = org;
       return [];
     },
+    listRepoWorkItems: async (repoId) => {
+      workItemRepoIds.push(repoId);
+      return workItems;
+    },
+    listRepoIssues: async (repoId, filter) => {
+      issueRepoIds.push(repoId);
+      issueFilters.push(filter);
+      return issues;
+    },
     prFeatures,
   });
   return {
@@ -186,6 +226,9 @@ function harness() {
     insightsLoaded,
     insightsRefresh,
     definitionReads,
+    workItemRepoIds,
+    issueRepoIds,
+    issueFilters,
     getAzureOrg: () => azureOrg,
   };
 }
@@ -367,5 +410,32 @@ describe('repo-controller', () => {
         req({ params: { id: 'r1' }, body: { number: -1 } }),
       ),
     ).rejects.toMatchObject({ kind: 'validation' });
+  });
+
+  it('lists a repository work items', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/work-items')(
+      req({ params: { id: 'r1' } }),
+    );
+    expect(result).toEqual({ status: 200, body: [workItem] });
+    expect(h.workItemRepoIds).toEqual(['r1']);
+  });
+
+  it('lists a repository issues, passing the filter through', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'get', '/repos/:id/issues')(
+      req({ params: { id: 'r1' }, query: { filter: 'mine' } }),
+    );
+    expect(result).toEqual({ status: 200, body: [issue] });
+    expect(h.issueRepoIds).toEqual(['r1']);
+    expect(h.issueFilters).toEqual(['mine']);
+  });
+
+  it('defaults an unknown issue filter to all', async () => {
+    const h = harness();
+    await pick(h.routes, 'get', '/repos/:id/issues')(
+      req({ params: { id: 'r1' }, query: { filter: 'bogus' } }),
+    );
+    expect(h.issueFilters).toEqual(['all']);
   });
 });
