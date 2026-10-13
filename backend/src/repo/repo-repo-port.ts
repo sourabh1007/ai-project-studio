@@ -6,4 +6,6 @@ export interface RepoRepo {
   get(id: string): Repository | null;
   list(): Repository[];
   delete(id: string): void;
+  /** Re-points an existing repository at a new local checkout in place. */
+  updateLocalPath(id: string, localPath: string, defaultBranch: string | null): void;
 }

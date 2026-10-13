@@ -45,6 +45,9 @@ export interface PlannerLaunchLink {
 /** The agent attached when launching a task with the New Task planner. */
 const NEW_TASK_AGENT_ID = 'new-task';
 
+/** Reports a human-readable phase label as a launch progresses, for live UI. */
+export type LaunchPhaseReporter = (phase: string) => void;
+
 /** How long a derived feature name may get before it is truncated. */
 const MAX_FEATURE_NAME = 80;
 
@@ -102,13 +105,15 @@ export function promptForTask(task: PlannerTask): string {
 }
 
 /**
- * The name of the dated parent feature a launch is nested under: the task's
- * calendar day followed by the tidy task name (e.g. `2026-02-10 · Fix login`).
- * Grouping every launch for a task beneath one dated parent keeps the workspace
- * tree organized by day.
+ * The name of the dated parent feature a launch is nested under: simply the
+ * task's calendar day (e.g. `2026-02-10`). Grouping every launch for a task
+ * beneath one dated parent keeps the workspace tree organized by day; the
+ * parent is a lightweight date bucket, so it carries no task name — the task's
+ * own child feature/session underneath it holds the title. Once the user moves
+ * a session out of this bucket, the workspace's own naming rules take over.
  */
 export function datedFeatureName(task: PlannerTask): string {
-  return `${task.date} · ${featureNameForTask(task)}`;
+  return task.date;
 }
 
 /**
@@ -120,10 +125,12 @@ async function resolveParentFeatureId(
   api: PlannerLaunchApi,
   task: PlannerTask,
   repoId: string | null,
+  onPhase?: LaunchPhaseReporter,
 ): Promise<string> {
   if (task.featureId) {
     return task.featureId;
   }
+  onPhase?.('Preparing workspace…');
   const parent = await api.createFeature({
     name: datedFeatureName(task),
     description: promptForTask(task),
@@ -140,14 +147,17 @@ export async function launchNewTask(
   api: PlannerLaunchApi,
   task: PlannerTask,
   repoId: string | null,
+  onPhase?: LaunchPhaseReporter,
 ): Promise<WorkspaceLaunchIntent> {
-  const parentFeatureId = await resolveParentFeatureId(api, task, repoId);
+  const parentFeatureId = await resolveParentFeatureId(api, task, repoId, onPhase);
+  onPhase?.('Creating task…');
   const feature = await api.createFeature({
     name: featureNameForTask(task),
     description: promptForTask(task),
     repoId: repoId ?? null,
     parentFeatureId,
   });
+  onPhase?.('Attaching New Task agent…');
   const attachment = await api.attachAgent(feature.id, NEW_TASK_AGENT_ID);
   const catalog = await api.getAgent(NEW_TASK_AGENT_ID);
   const attached: AttachedAgent = { attachment, manifest: catalog.manifest };
@@ -163,15 +173,18 @@ export async function launchSession(
   api: PlannerLaunchApi,
   task: PlannerTask,
   repoId: string | null,
+  onPhase?: LaunchPhaseReporter,
 ): Promise<WorkspaceLaunchIntent> {
   const name = featureNameForTask(task);
-  const parentFeatureId = await resolveParentFeatureId(api, task, repoId);
+  const parentFeatureId = await resolveParentFeatureId(api, task, repoId, onPhase);
+  onPhase?.('Creating session…');
   const feature = await api.createFeature({
     name,
     description: promptForTask(task),
     repoId: repoId ?? null,
     parentFeatureId,
   });
+  onPhase?.('Starting session…');
   const started = await api.startSession(feature.id, {
     prompt: promptForTask(task),
   });
@@ -187,6 +200,7 @@ export async function launchReview(
   api: PlannerLaunchApi,
   task: PlannerTask,
   repoId: string | null,
+  onPhase?: LaunchPhaseReporter,
 ): Promise<WorkspaceLaunchIntent> {
   if (!repoId) {
     throw new Error('Pick a repository before starting a review.');
@@ -195,7 +209,8 @@ export async function launchReview(
   if (number === null) {
     throw new Error('This task has no pull-request number to review.');
   }
-  const parentFeatureId = await resolveParentFeatureId(api, task, repoId);
+  const parentFeatureId = await resolveParentFeatureId(api, task, repoId, onPhase);
+  onPhase?.('Importing pull request…');
   const feature = await api.createPrFeature(repoId, number, parentFeatureId);
   return { kind: 'review-board', feature };
 }

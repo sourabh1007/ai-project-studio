@@ -59,6 +59,7 @@ function harness(
     withOwnedAutomationCleanup?: boolean;
     withOwnedSubagentCleanup?: boolean;
     withOwnedAgentCleanup?: boolean;
+    withPlannerLinks?: boolean;
     withRetention?: boolean;
     childFeatures?: Feature[];
     withoutBackground?: boolean;
@@ -209,6 +210,12 @@ function harness(
           deleteByFeature: (id) => calls.push(`ownedAgents.deleteByFeature:${id}`),
         }
       : undefined,
+    plannerLinks: options.withPlannerLinks
+      ? {
+          clearLaunchByFeature: (id) => calls.push(`plannerLinks.clearLaunchByFeature:${id}`),
+          clearLaunchBySession: (id) => calls.push(`plannerLinks.clearLaunchBySession:${id}`),
+        }
+      : undefined,
     retainedUsage: options.withRetention
       ? {
           summarizeSession: (input) => {
@@ -255,6 +262,22 @@ describe('workspace-admin-service', () => {
     ]));
     expect(calls.indexOf('mcpUsage.deleteBySession:s1'))
       .toBeLessThan(calls.indexOf('mcpUsage.deleteByFeature:f1'));
+  });
+
+  it('clears Planner launch links by session and feature when a feature is deleted', async () => {
+    const { admin, calls } = harness([session('s1')], { withPlannerLinks: true });
+    await admin.deleteFeature('f1');
+    expect(calls).toEqual(expect.arrayContaining([
+      'plannerLinks.clearLaunchBySession:s1',
+      'plannerLinks.clearLaunchByFeature:f1',
+    ]));
+  });
+
+  it('clears the Planner launch link of a single deleted session', async () => {
+    const { admin, calls } = harness([session('s1')], { withPlannerLinks: true });
+    await admin.deleteSession('s1');
+    expect(calls).toContain('plannerLinks.clearLaunchBySession:s1');
+    expect(calls).not.toContain('plannerLinks.clearLaunchByFeature:f1');
   });
 
   it('does not purge a session until its producers and final persistence have drained', async () => {

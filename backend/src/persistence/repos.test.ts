@@ -684,4 +684,17 @@ describe('repo-repo', () => {
     expect(repo.get('r1')).toBeNull();
     db.close();
   });
+
+  it('re-points a repository at a new local checkout in place', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createRepoRepo(db);
+    repo.create(repository());
+    repo.updateLocalPath('r1', 'D:/work/app', 'release/1.0');
+    expect(repo.get('r1')?.localPath).toBe('D:/work/app');
+    expect(repo.get('r1')?.defaultBranch).toBe('release/1.0');
+    repo.updateLocalPath('r1', 'D:/work/app2', null);
+    expect(repo.get('r1')?.localPath).toBe('D:/work/app2');
+    expect(repo.get('r1')?.defaultBranch).toBeNull();
+    db.close();
+  });
 });

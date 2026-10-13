@@ -85,6 +85,21 @@ describe('PlannerView', () => {
     expect(screen.getByText('Nothing planned for this day')).toBeTruthy();
   });
 
+  it('marks day changes with direction-aware slide classes', async () => {
+    const { container } = renderView(client());
+    expect(await screen.findByText('Today')).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle('Next day'));
+    expect(
+      container.querySelector('.planner-day-content')?.classList.contains('slide-forward'),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTitle('Previous day'));
+    expect(
+      container.querySelector('.planner-day-content')?.classList.contains('slide-back'),
+    ).toBe(true);
+  });
+
   it('lists a task for today with its detected actions', async () => {
     renderView(client({}, [task()]));
     expect(await screen.findByText('Fix the login bug')).toBeTruthy();
@@ -192,6 +207,7 @@ describe('PlannerView', () => {
       .mockImplementation(() => {});
     try {
       renderView(client({}, [task()]));
+      fireEvent.click(await screen.findByTitle('Export this day'));
       const md = await screen.findByTitle('Export this day as Markdown');
       fireEvent.click(md);
       expect(createUrl).toHaveBeenCalledTimes(1);

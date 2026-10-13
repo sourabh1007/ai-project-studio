@@ -190,7 +190,11 @@ import { provisionRepo } from './repo/repo-provisioner.js';
 import { listGithubRepos } from './repo/github-repo-lister.js';
 import { listGithubPulls, getGithubPull } from './repo/github-pr-lister.js';
 import { listGithubIssues, type IssueFilter } from './repo/github-issue-lister.js';
-import { listAzureWorkItems } from './repo/azure-workitem-lister.js';
+import {
+  listAzureWorkItemComments,
+  listAzureWorkItems,
+  type WorkItemFilter,
+} from './repo/azure-workitem-lister.js';
 import {
   listAzureRepos,
   type AzureHttpResponse,
@@ -1638,6 +1642,7 @@ function main(): void {
   };
   const listRepoWorkItems = async (
     repoId: string,
+    filter: WorkItemFilter,
   ): Promise<RemoteWorkItem[]> => {
     const repo = repoService.get(repoId);
     if (repo.provider !== 'azure-devops') {
@@ -1651,7 +1656,25 @@ function main(): void {
         `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
       );
     }
-    return listAzureWorkItems(azureWorkItemDeps, target);
+    return listAzureWorkItems(azureWorkItemDeps, target, { filter });
+  };
+  const listRepoWorkItemComments = async (
+    repoId: string,
+    workItemId: number,
+  ): Promise<string[]> => {
+    const repo = repoService.get(repoId);
+    if (repo.provider !== 'azure-devops') {
+      throw new ValidationError(
+        'Work-item comments can only be imported from Azure DevOps repositories.',
+      );
+    }
+    const target = parseAzureRepoUrl(repo.remoteUrl);
+    if (!target) {
+      throw new ValidationError(
+        `Cannot parse an Azure DevOps repository from ${repo.remoteUrl}`,
+      );
+    }
+    return listAzureWorkItemComments(azureWorkItemDeps, target, workItemId);
   };
   const listRepoIssues = async (
     repoId: string,
@@ -3249,6 +3272,7 @@ function main(): void {
     bus: bus as unknown as EventBus<BugBashEventMap>,
   });
   const bugBashRunHub = createBugBashRunHub({ service: bugBashService });
+  const plannerRepo = createPlannerRepo(db);
   const workspaceAdmin = createWorkspaceAdmin({
     features: featureService,
     sessions: sessionRepo,
@@ -3311,6 +3335,14 @@ function main(): void {
         bugBashRunRepo.deleteByFeature(featureId);
       },
     },
+    plannerLinks: {
+      clearLaunchByFeature: (featureId) => {
+        plannerRepo.clearLaunchByFeature(featureId);
+      },
+      clearLaunchBySession: (sessionId) => {
+        plannerRepo.clearLaunchBySession(sessionId);
+      },
+    },
     background: (task) => {
       void task().catch((error) => {
         logger.error('Deferred feature worktree teardown failed', { error });
@@ -3346,7 +3378,7 @@ function main(): void {
     config: featureTasksConfig,
   });
   const plannerService = createPlannerService({
-    repo: createPlannerRepo(db),
+    repo: plannerRepo,
     ids,
     clock,
     config: plannerConfig,
@@ -3890,6 +3922,7 @@ function main(): void {
       listGithubRepos: listGithubReposFor,
       listAzureRepos: listAzureReposFor,
       listRepoWorkItems,
+      listRepoWorkItemComments,
       listRepoIssues,
       prFeatures: prFeatureService,
       prReviews: prReviewService,

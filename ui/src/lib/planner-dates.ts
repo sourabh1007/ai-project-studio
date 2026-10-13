@@ -47,6 +47,22 @@ export function dayDiff(a: string, b: string): number {
   return Math.round((toUtc(a) - toUtc(b)) / 86_400_000);
 }
 
+export type PlannerSlideDirection = 'forward' | 'back' | 'none';
+
+/** Direction to animate a day change; ISO days sort in calendar order. */
+export function plannerSlideDirection(
+  previous: string,
+  next: string,
+): PlannerSlideDirection {
+  if (next > previous) {
+    return 'forward';
+  }
+  if (next < previous) {
+    return 'back';
+  }
+  return 'none';
+}
+
 /**
  * A friendly label for a day relative to `now`: "Today", "Yesterday",
  * "Tomorrow", or a weekday-qualified date like "Mon, Jan 5, 2026".
@@ -70,4 +86,40 @@ export function formatDayLabel(iso: string, now: Date = new Date()): string {
     year: 'numeric',
     timeZone: 'UTC',
   });
+}
+
+/**
+ * Splits a day into its full weekday and long date for the Planner masthead,
+ * where the two are styled independently (small eyebrow + hero heading).
+ */
+export function formatDayParts(iso: string): { weekday: string; date: string } {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return {
+    weekday: date.toLocaleDateString(undefined, { weekday: 'long', timeZone: 'UTC' }),
+    date: date.toLocaleDateString(undefined, {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }),
+  };
+}
+
+/**
+ * Relative distance from `now` for the masthead's accent pill: "Today",
+ * "Tomorrow", "Yesterday", or a counted "in N days" / "N days ago".
+ */
+export function relativeDayLabel(iso: string, now: Date = new Date()): string {
+  const diff = dayDiff(iso, todayIso(now));
+  if (diff === 0) {
+    return 'Today';
+  }
+  if (diff === 1) {
+    return 'Tomorrow';
+  }
+  if (diff === -1) {
+    return 'Yesterday';
+  }
+  return diff > 0 ? `in ${diff} days` : `${-diff} days ago`;
 }

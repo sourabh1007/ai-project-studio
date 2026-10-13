@@ -3,7 +3,10 @@ import {
   addDays,
   dayDiff,
   formatDayLabel,
+  formatDayParts,
   isIsoDate,
+  plannerSlideDirection,
+  relativeDayLabel,
   todayIso,
 } from './planner-dates';
 
@@ -50,6 +53,14 @@ describe('dayDiff', () => {
   });
 });
 
+describe('plannerSlideDirection', () => {
+  it('uses ISO calendar ordering for day changes', () => {
+    expect(plannerSlideDirection('2026-02-10', '2026-02-11')).toBe('forward');
+    expect(plannerSlideDirection('2026-02-10', '2026-02-09')).toBe('back');
+    expect(plannerSlideDirection('2026-02-10', '2026-02-10')).toBe('none');
+  });
+});
+
 describe('formatDayLabel', () => {
   const now = new Date(2026, 1, 10);
 
@@ -63,5 +74,30 @@ describe('formatDayLabel', () => {
     const label = formatDayLabel('2026-01-05', now);
     expect(label).toContain('2026');
     expect(label).toContain('Jan');
+  });
+});
+
+describe('formatDayParts', () => {
+  it('splits a day into its full weekday and long date', () => {
+    const parts = formatDayParts('2026-01-05');
+    expect(parts.weekday).toBe('Monday');
+    expect(parts.date).toContain('January');
+    expect(parts.date).toContain('5');
+    expect(parts.date).toContain('2026');
+  });
+});
+
+describe('relativeDayLabel', () => {
+  const now = new Date(2026, 1, 10);
+
+  it('names adjacent days', () => {
+    expect(relativeDayLabel('2026-02-10', now)).toBe('Today');
+    expect(relativeDayLabel('2026-02-11', now)).toBe('Tomorrow');
+    expect(relativeDayLabel('2026-02-09', now)).toBe('Yesterday');
+  });
+
+  it('counts distant days in each direction', () => {
+    expect(relativeDayLabel('2026-02-13', now)).toBe('in 3 days');
+    expect(relativeDayLabel('2026-02-05', now)).toBe('5 days ago');
   });
 });

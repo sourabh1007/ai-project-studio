@@ -23,10 +23,10 @@ interface GhPullJson {
 
 /** The `--json` fields requested from `gh` for a pull request. */
 const PULL_JSON_FIELDS =
-  'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests';
+  'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests,body';
 
 /** Single-PR fetch also pulls the description body for the problem statement. */
-const PULL_VIEW_JSON_FIELDS = `${PULL_JSON_FIELDS},body`;
+const PULL_VIEW_JSON_FIELDS = PULL_JSON_FIELDS;
 
 function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | null {
   const number = item?.number;
@@ -56,7 +56,6 @@ function mapPull(item: GhPullJson, currentUser?: string): RemotePullRequest | nu
     authorAvatarUrl: login ? `https://github.com/${login}.png` : null,
     isAuthor,
     isReviewer,
-    // Only present on single-PR fetches (list requests omit the body field).
     ...(item.body === undefined
       ? {}
       : { body: item.body.trim() ? item.body : null }),

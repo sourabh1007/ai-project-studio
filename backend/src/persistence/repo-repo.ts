@@ -36,6 +36,9 @@ export function createRepoRepo(db: DatabaseSync): RepoRepo {
     'SELECT * FROM repositories ORDER BY created_at, id',
   );
   const deleteOne = db.prepare('DELETE FROM repositories WHERE id = ?');
+  const updatePath = db.prepare(
+    'UPDATE repositories SET local_path = ?, default_branch = ? WHERE id = ?',
+  );
 
   return {
     create(repo) {
@@ -58,6 +61,9 @@ export function createRepoRepo(db: DatabaseSync): RepoRepo {
     },
     delete(id) {
       deleteOne.run(id);
+    },
+    updateLocalPath(id, localPath, defaultBranch) {
+      updatePath.run(localPath, defaultBranch ?? null, id);
     },
   };
 }

@@ -76,6 +76,18 @@ export interface OwnedAgentRemover {
   deleteByFeature(featureId: string): void;
 }
 
+/**
+ * Clears the launch link a Planner task recorded when it opened a workspace
+ * surface, so deleting that session/feature from the workspace is reflected back
+ * on the originating Planner task: the task returns to its un-launched state and
+ * the user can recreate a fresh session/review/task from it. The task itself is
+ * never removed — only its stale pointer into the now-deleted workspace surface.
+ */
+export interface PlannerLinkRemover {
+  clearLaunchByFeature(featureId: string): void;
+  clearLaunchBySession(sessionId: string): void;
+}
+
 export interface WorkspaceAdminDeps {
   features: Pick<FeatureService, 'get' | 'list' | 'rename' | 'remove'>;
   sessions: Pick<SessionRepo, 'get' | 'listByFeatureAll' | 'delete' | 'deleteByFeature' | 'rename'>;
@@ -125,6 +137,12 @@ export interface WorkspaceAdminDeps {
   ownedSubagents?: OwnedSubagentRemover;
   /** Optional: removes agent attachments owned by the deleted feature. */
   ownedAgents?: OwnedAgentRemover;
+  /**
+   * Optional: clears the launch link on any Planner task that opened the
+   * feature/session being deleted, so the deletion is reflected on the Planner
+   * and the task can be relaunched.
+   */
+  plannerLinks?: PlannerLinkRemover;
   /**
    * Optional: schedules slow, best-effort teardown (the on-disk git worktree
    * removal and its dependent PR-review row purge) to run detached from the
@@ -211,6 +229,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     deps.metaUsage?.deleteBySession(sessionId);
     deps.metaOperations?.deleteBySession(sessionId);
     deps.mcpUsage?.deleteBySession(sessionId);
+    deps.plannerLinks?.clearLaunchBySession(sessionId);
     deps.usage.deleteBySession(sessionId);
     deps.sessionFiles.deleteBySession(sessionId);
     deps.sessionSummaries?.delete(sessionId);
@@ -246,6 +265,7 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     deps.metaUsage?.deleteByFeature(id);
     deps.metaOperations?.deleteByFeature(id);
     deps.mcpUsage?.deleteByFeature(id);
+    deps.plannerLinks?.clearLaunchByFeature(id);
     deps.summaries.delete(id);
     deps.sharedContext?.remove('feature', id);
     // Record removal is synchronous so the feature disappears from the UI at

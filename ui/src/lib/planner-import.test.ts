@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { workItemToTask, issueToTask, pullToTask } from './planner-import';
+import {
+  workItemToTask,
+  issueToTask,
+  pullToTask,
+  defaultWorkItemFilter,
+  isWorkItemFilter,
+} from './planner-import';
 import type {
   RemoteIssue,
   RemotePullRequest,
@@ -14,6 +20,7 @@ const workItem: RemoteWorkItem = {
   type: 'Bug',
   state: 'Active',
   assignedTo: 'Mona',
+  description: 'Fix cache misses before release.',
 };
 
 const issue: RemoteIssue = {
@@ -35,6 +42,7 @@ const pull: RemotePullRequest = {
   url: 'https://github.com/acme/app/pull/12',
   sourceBranch: 'feature/login',
   author: 'Mona',
+  body: 'Implements login with tests.',
 };
 
 describe('workItemToTask', () => {
@@ -44,7 +52,8 @@ describe('workItemToTask', () => {
       kind: 'task',
       notes:
         'Bug #101 · Active\nAssigned to Mona\n' +
-        'https://dev.azure.com/acme/proj/_workitems/edit/101',
+        'https://dev.azure.com/acme/proj/_workitems/edit/101\n' +
+        'Description:\nFix cache misses before release.',
       repoId: 'r1',
       date: '2025-02-01',
     });
@@ -52,7 +61,7 @@ describe('workItemToTask', () => {
 
   it('omits the state, assignee, and date when absent', () => {
     const task = workItemToTask(
-      { ...workItem, state: '', assignedTo: null },
+      { ...workItem, state: '', assignedTo: null, description: null },
       null,
     );
     expect(task).toEqual({
@@ -61,6 +70,16 @@ describe('workItemToTask', () => {
       notes: 'Bug #101\nhttps://dev.azure.com/acme/proj/_workitems/edit/101',
       repoId: null,
     });
+  });
+
+  it('appends comments when supplied', () => {
+    const task = workItemToTask(workItem, 'r1', undefined, [
+      'First comment',
+      'Second comment',
+    ]);
+    expect(task.notes).toContain(
+      'Comments:\nFirst comment\nSecond comment',
+    );
   });
 });
 
@@ -97,14 +116,14 @@ describe('pullToTask', () => {
       title: 'Add login',
       kind: 'pr',
       prUrl: 'https://github.com/acme/app/pull/12',
-      notes: 'PR #12\nAuthor: Mona',
+      notes: 'PR #12\nAuthor: Mona\nImplements login with tests.',
       repoId: 'r1',
       date: '2025-02-01',
     });
   });
 
   it('omits the author line and date when absent', () => {
-    const task = pullToTask({ ...pull, author: null }, null);
+    const task = pullToTask({ ...pull, author: null, body: null }, null);
     expect(task).toEqual({
       title: 'Add login',
       kind: 'pr',
@@ -112,5 +131,46 @@ describe('pullToTask', () => {
       notes: 'PR #12',
       repoId: null,
     });
+  });
+});
+
+describe('isWorkItemFilter', () => {
+  it('accepts the default filter', () => {
+    expect(isWorkItemFilter(defaultWorkItemFilter)).toBe(true);
+    expect(defaultWorkItemFilter).toEqual({
+      assignedTo: 'me',
+      state: '',
+      area: '',
+      iteration: '',
+      tag: '',
+    });
+  });
+
+  it('accepts a fully-populated filter', () => {
+    expect(
+      isWorkItemFilter({
+        assignedTo: 'all',
+        state: 'Active',
+        area: 'Proj\\Team',
+        iteration: 'Proj\\Sprint',
+        tag: 'GSI',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects non-objects, bad assignedTo, and non-string fields', () => {
+    expect(isWorkItemFilter(null)).toBe(false);
+    expect(isWorkItemFilter('nope')).toBe(false);
+    expect(isWorkItemFilter({ ...defaultWorkItemFilter, assignedTo: 'x' })).toBe(
+      false,
+    );
+    expect(isWorkItemFilter({ ...defaultWorkItemFilter, state: 1 })).toBe(false);
+    expect(isWorkItemFilter({ ...defaultWorkItemFilter, area: null })).toBe(
+      false,
+    );
+    expect(
+      isWorkItemFilter({ ...defaultWorkItemFilter, iteration: undefined }),
+    ).toBe(false);
+    expect(isWorkItemFilter({ ...defaultWorkItemFilter, tag: 2 })).toBe(false);
   });
 });

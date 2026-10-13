@@ -174,8 +174,8 @@ describe('promptForTask', () => {
 });
 
 describe('datedFeatureName', () => {
-  it('prefixes the tidy task name with its day', () => {
-    expect(datedFeatureName(makeTask())).toBe('2025-01-01 · Fix the login bug');
+  it('names the dated parent bucket after the day alone, with no task name', () => {
+    expect(datedFeatureName(makeTask())).toBe('2025-01-01');
   });
 });
 
@@ -207,7 +207,7 @@ describe('launchNewTask', () => {
     const api = makeApi();
     const intent = await launchNewTask(api, makeTask(), 'r1');
     expect(api.createFeature).toHaveBeenNthCalledWith(1, {
-      name: '2025-01-01 · Fix the login bug',
+      name: '2025-01-01',
       description: 'Fix the login bug',
       repoId: 'r1',
     });
@@ -238,6 +238,17 @@ describe('launchNewTask', () => {
       expect.objectContaining({ repoId: null }),
     );
   });
+
+  it('reports progress phases to the onPhase reporter', async () => {
+    const api = makeApi();
+    const phases: string[] = [];
+    await launchNewTask(api, makeTask(), 'r1', (p) => phases.push(p));
+    expect(phases).toEqual([
+      'Preparing workspace…',
+      'Creating task…',
+      'Attaching New Task agent…',
+    ]);
+  });
 });
 
 describe('launchSession', () => {
@@ -245,7 +256,7 @@ describe('launchSession', () => {
     const api = makeApi();
     const intent = await launchSession(api, makeTask({ notes: 'n' }), 'r1');
     expect(api.createFeature).toHaveBeenNthCalledWith(1, {
-      name: '2025-01-01 · Fix the login bug',
+      name: '2025-01-01',
       description: 'Fix the login bug\n\nn',
       repoId: 'r1',
     });
@@ -273,6 +284,17 @@ describe('launchSession', () => {
       expect.objectContaining({ repoId: null }),
     );
   });
+
+  it('reports progress phases to the onPhase reporter', async () => {
+    const api = makeApi();
+    const phases: string[] = [];
+    await launchSession(api, makeTask(), 'r1', (p) => phases.push(p));
+    expect(phases).toEqual([
+      'Preparing workspace…',
+      'Creating session…',
+      'Starting session…',
+    ]);
+  });
 });
 
 describe('launchReview', () => {
@@ -284,7 +306,7 @@ describe('launchReview', () => {
       'r1',
     );
     expect(api.createFeature).toHaveBeenCalledWith(
-      expect.objectContaining({ name: '2025-01-01 · Fix the login bug' }),
+      expect.objectContaining({ name: '2025-01-01' }),
     );
     expect(api.createPrFeature).toHaveBeenCalledWith('r1', 9, 'f1');
     expect(intent).toEqual({ kind: 'review-board', feature });
@@ -319,6 +341,18 @@ describe('launchReview', () => {
     await expect(
       launchReview(api, makeTask({ title: 'no pr here', prUrl: '' }), 'r1'),
     ).rejects.toThrow('no pull-request number');
+  });
+
+  it('reports progress phases to the onPhase reporter', async () => {
+    const api = makeApi();
+    const phases: string[] = [];
+    await launchReview(
+      api,
+      makeTask({ kind: 'pr', prUrl: '9' }),
+      'r1',
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual(['Preparing workspace…', 'Importing pull request…']);
   });
 });
 

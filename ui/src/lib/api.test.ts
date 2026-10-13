@@ -1165,12 +1165,35 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/repos/r1/pulls?filter=mine');
   });
 
-  it("lists a repository's work items", async () => {
+  it("lists a repository's work items with no filter", async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 5 }]));
     const client = createApiClient({ fetchImpl });
     const result = await client.listRepoWorkItems('r1');
     expect(result).toEqual([{ id: 5 }]);
     expect(calls[0][0]).toBe('/api/repos/r1/work-items');
+  });
+
+  it("lists a repository's work items with a filter, dropping blanks", async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([{ id: 5 }]));
+    const client = createApiClient({ fetchImpl });
+    await client.listRepoWorkItems('r1', {
+      assignedTo: 'all',
+      state: 'Active',
+      area: ' Proj\\Team ',
+      iteration: '',
+      tag: 'GSI',
+    });
+    expect(calls[0][0]).toBe(
+      '/api/repos/r1/work-items?assignedTo=all&state=Active&area=Proj%5CTeam&tag=GSI',
+    );
+  });
+
+  it("lists a repository work item's comments", async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse(['one', 'two']));
+    const client = createApiClient({ fetchImpl });
+    const result = await client.listRepoWorkItemComments('r1', 5);
+    expect(result).toEqual(['one', 'two']);
+    expect(calls[0][0]).toBe('/api/repos/r1/work-items/5/comments');
   });
 
   it("lists a repository's issues with the default and an explicit filter", async () => {

@@ -7,6 +7,7 @@ import type {
   RemoteIssue,
 } from '../repo/remote-import-contract.js';
 import type { IssueFilter } from '../repo/github-issue-lister.js';
+import type { WorkItemFilter } from '../repo/azure-workitem-lister.js';
 import type { ProvisionRepoInput } from '../repo/repo-provisioner.js';
 import type { PrFeatureService } from '../repo/pr-feature-service.js';
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
@@ -23,6 +24,11 @@ const createRepoSchema = z.object({
   mode: z.enum(['clone', 'existing']),
 });
 
+const reprovisionRepoSchema = z.object({
+  localPath: z.string().min(1),
+  mode: z.enum(['clone', 'existing']),
+});
+
 const reviewPullSchema = z.object({
   number: z.number().int().positive(),
   parentFeatureId: z.string().min(1).nullish(),
@@ -30,6 +36,25 @@ const reviewPullSchema = z.object({
 });
 
 const refreshContextSchema = z.object({}).strict().optional();
+
+/** Trims a query value to a non-empty string, or undefined when blank/missing. */
+function cleanQuery(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Builds a work-item filter from the import query params, defaulting to @Me. */
+export function workItemFilterFromQuery(
+  query: Record<string, string | undefined>,
+): WorkItemFilter {
+  return {
+    assignedTo: query.assignedTo === 'all' ? 'all' : 'me',
+    state: cleanQuery(query.state),
+    area: cleanQuery(query.area),
+    iteration: cleanQuery(query.iteration),
+    tag: cleanQuery(query.tag),
+  };
+}
 
 export interface RepoControllerDeps {
   repos: RepoService;
@@ -42,7 +67,15 @@ export interface RepoControllerDeps {
   /** Lists repositories across an Azure DevOps organization's projects. */
   listAzureRepos: (org: string) => Promise<RemoteRepo[]>;
   /** Lists the active work items of a repository's Azure DevOps project. */
-  listRepoWorkItems: (repoId: string) => Promise<RemoteWorkItem[]>;
+  listRepoWorkItems: (
+    repoId: string,
+    filter: WorkItemFilter,
+  ) => Promise<RemoteWorkItem[]>;
+  /** Lists the comments for one Azure DevOps work item. */
+  listRepoWorkItemComments: (
+    repoId: string,
+    workItemId: number,
+  ) => Promise<string[]>;
   /** Lists the open issues of a repository (GitHub repositories only). */
   listRepoIssues: (repoId: string, filter: IssueFilter) => Promise<RemoteIssue[]>;
   /** Lists a repo's pull requests and turns one into a review feature. */
@@ -69,6 +102,27 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
         const repository = deps.repos.create(createInput);
         deps.repositoryContexts.initialize(repository.id);
         return { status: 201, body: repository };
+      },
+    },
+    {
+      method: 'post',
+      path: '/repos/:id/reprovision',
+      handler: async (req) => {
+        const { localPath, mode } = parseInput(reprovisionRepoSchema, req.body);
+        const existing = deps.repos.get(req.params.id);
+        const createInput = await deps.provision({
+          provider: existing.provider,
+          remoteUrl: existing.remoteUrl,
+          name: existing.name,
+          defaultBranch: existing.defaultBranch,
+          localPath,
+          mode,
+        });
+        const repository = deps.repos.updateLocalPath({
+          ...createInput,
+          id: existing.id,
+        });
+        return { status: 200, body: repository };
       },
     },
     {
@@ -154,7 +208,21 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       path: '/repos/:id/work-items',
       handler: async (req) => ({
         status: 200,
-        body: await deps.listRepoWorkItems(req.params.id),
+        body: await deps.listRepoWorkItems(
+          req.params.id,
+          workItemFilterFromQuery(req.query),
+        ),
+      }),
+    },
+    {
+      method: 'get',
+      path: '/repos/:id/work-items/:wid/comments',
+      handler: async (req) => ({
+        status: 200,
+        body: await deps.listRepoWorkItemComments(
+          req.params.id,
+          Number(req.params.wid),
+        ),
       }),
     },
     {

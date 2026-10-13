@@ -1056,6 +1056,8 @@ export interface RemotePullRequest {
   createdAt?: string | null;
   /** Author's avatar image URL; null/absent when unknown. */
   authorAvatarUrl?: string | null;
+  /** Pull-request description/body, or null when absent. */
+  body?: string | null;
   /** True when the signed-in user opened this pull request. */
   isAuthor?: boolean;
   /** True when the signed-in user is a requested reviewer. */
@@ -1077,6 +1079,8 @@ export interface RemoteWorkItem {
   state: string;
   /** Display name of the assignee, or null when unassigned. */
   assignedTo: string | null;
+  /** Plain-text work-item description, or null when absent. */
+  description: string | null;
 }
 
 /** A GitHub issue importable into the Planner. */
@@ -1094,6 +1098,20 @@ export interface RemoteIssue {
 
 /** Server-side scope for listing issues. */
 export type IssueFilter = 'mine' | 'assigned' | 'all';
+
+/** Narrowing options for importing Azure DevOps work items into the Planner. */
+export interface WorkItemFilter {
+  /** `me` scopes to the signed-in user; `all` to the whole project. */
+  assignedTo: 'me' | 'all';
+  /** Exact workflow state (e.g. `Active`); blank means "any non-closed". */
+  state: string;
+  /** Area path; matched hierarchically. */
+  area: string;
+  /** Iteration path; matched hierarchically. */
+  iteration: string;
+  /** A single tag the item must carry. */
+  tag: string;
+}
 
 /** How a picked remote repo becomes a workspace repository. */
 export type RepoProvisionMode = 'clone' | 'existing';

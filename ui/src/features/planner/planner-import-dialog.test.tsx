@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   RemoteIssue,
   RemotePullRequest,
   RemoteWorkItem,
   Repository,
 } from '../../lib/types.js';
+import { defaultWorkItemFilter } from '../../lib/planner-import.js';
 import {
   PlannerImportDialog,
   type PlannerImportApi,
@@ -24,6 +25,7 @@ const workItem: RemoteWorkItem = {
   type: 'Bug',
   state: 'Active',
   assignedTo: 'Alice',
+  description: 'Work item details',
 };
 
 const issue: RemoteIssue = {
@@ -50,6 +52,7 @@ const pull: RemotePullRequest = {
 function api(overrides: Partial<PlannerImportApi> = {}): PlannerImportApi {
   return {
     listRepoWorkItems: vi.fn().mockResolvedValue([workItem]),
+    listRepoWorkItemComments: vi.fn().mockResolvedValue(['First comment']),
     listRepoIssues: vi.fn().mockResolvedValue([issue]),
     listRepoPulls: vi.fn().mockResolvedValue([pull]),
     createPlannerTask: vi.fn().mockResolvedValue({ id: 'new' }),
@@ -78,10 +81,17 @@ function renderDialog(
 }
 
 describe('PlannerImportDialog', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('loads work items and imports the selected ones', async () => {
     const { client, onImported } = renderDialog();
     expect(await screen.findByText('Work item title')).toBeInTheDocument();
-    expect(client.listRepoWorkItems).toHaveBeenCalledWith('r1');
+    expect(client.listRepoWorkItems).toHaveBeenCalledWith(
+      'r1',
+      defaultWorkItemFilter,
+    );
 
     fireEvent.click(screen.getByText('Work item title'));
     fireEvent.click(screen.getByRole('button', { name: /Add 1 to Planner/ }));
@@ -89,7 +99,27 @@ describe('PlannerImportDialog', () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(1));
     expect(client.createPlannerTask).toHaveBeenCalledTimes(1);
     expect(client.createPlannerTask).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Work item title', kind: 'task', date: '2025-02-03' }),
+      expect.objectContaining({
+        title: 'Work item title',
+        kind: 'task',
+        date: '2025-02-03',
+        notes: expect.stringContaining('Comments:\nFirst comment'),
+      }),
+    );
+    expect(client.listRepoWorkItemComments).toHaveBeenCalledWith('r1', 12);
+  });
+
+  it('imports work items without comments when the comments fetch fails', async () => {
+    const { client, onImported } = renderDialog({
+      listRepoWorkItemComments: vi.fn().mockRejectedValue(new Error('offline')),
+    });
+    fireEvent.click(await screen.findByText('Work item title'));
+    fireEvent.click(screen.getByRole('button', { name: /Add 1 to Planner/ }));
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith(1));
+    expect(client.createPlannerTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notes: expect.not.stringContaining('Comments:'),
+      }),
     );
   });
 
@@ -99,6 +129,37 @@ describe('PlannerImportDialog', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'GitHub Issues' }));
     expect(await screen.findByText('Issue title')).toBeInTheDocument();
     expect(client.listRepoIssues).toHaveBeenCalledWith('r2');
+  });
+
+  it('narrows work items by filter and persists the choice', async () => {
+    const { client } = renderDialog();
+    await screen.findByText('Work item title');
+
+    fireEvent.change(screen.getByLabelText('Tag'), {
+      target: { value: 'GSI' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Everyone' }));
+
+    await waitFor(() =>
+      expect(client.listRepoWorkItems).toHaveBeenLastCalledWith('r1', {
+        assignedTo: 'all',
+        state: '',
+        area: '',
+        iteration: '',
+        tag: 'GSI',
+      }),
+    );
+
+    // A freshly mounted dialog reuses the persisted filter.
+    const { client: client2 } = renderDialog();
+    await screen.findAllByText('Work item title');
+    expect(client2.listRepoWorkItems).toHaveBeenCalledWith('r1', {
+      assignedTo: 'all',
+      state: '',
+      area: '',
+      iteration: '',
+      tag: 'GSI',
+    });
   });
 
   it('switches to ADO PRs and imports a pr task', async () => {

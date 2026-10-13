@@ -13,6 +13,12 @@ function inMemoryRepo(): RepoRepo {
     get: (id) => store.get(id) ?? null,
     list: () => [...store.values()],
     delete: (id) => void store.delete(id),
+    updateLocalPath: (id, localPath, defaultBranch) => {
+      const existing = store.get(id);
+      if (existing) {
+        store.set(id, { ...existing, localPath, defaultBranch });
+      }
+    },
   };
 }
 
@@ -117,5 +123,75 @@ describe('repo-service', () => {
       svc.create({ ...base, localPath: 'C:/work/app-2' }),
     ).not.toThrow();
     expect(svc.list()).toHaveLength(2);
+  });
+
+  describe('updateLocalPath', () => {
+    const base = {
+      provider: 'github' as const,
+      remoteUrl: 'https://github.com/acme/app.git',
+      name: 'acme/app',
+    };
+
+    it('re-points an existing repo in place, keeping its id', () => {
+      const svc = service();
+      svc.create({ ...base, localPath: 'C:/work/app', defaultBranch: 'main' });
+      const updated = svc.updateLocalPath({
+        ...base,
+        id: 'repo-1',
+        localPath: 'D:/work/app',
+        defaultBranch: 'release',
+      });
+      expect(updated).toMatchObject({
+        id: 'repo-1',
+        localPath: 'D:/work/app',
+        defaultBranch: 'release',
+      });
+      expect(svc.get('repo-1').localPath).toBe('D:/work/app');
+    });
+
+    it('defaults an omitted default branch to null', () => {
+      const svc = service();
+      svc.create({ ...base, localPath: 'C:/work/app' });
+      const updated = svc.updateLocalPath({
+        ...base,
+        id: 'repo-1',
+        localPath: 'D:/work/app',
+      });
+      expect(updated.defaultBranch).toBeNull();
+    });
+
+    it('throws NotFound for an unknown repository', () => {
+      const svc = service();
+      expect(() =>
+        svc.updateLocalPath({ ...base, id: 'nope', localPath: 'D:/x' }),
+      ).toThrow(AppError);
+    });
+
+    it('rejects re-pointing onto another repo at the same remote and path', () => {
+      const svc = service();
+      svc.create({ ...base, localPath: 'C:/work/app' });
+      svc.create({ ...base, localPath: 'C:/work/app-2' });
+      expect(() =>
+        svc.updateLocalPath({
+          ...base,
+          id: 'repo-2',
+          localPath: 'C:/work/app',
+        }),
+      ).toThrow(/already added/);
+    });
+
+    it('allows re-pointing to the same repo\'s own current path', () => {
+      const svc = service();
+      svc.create({ ...base, localPath: 'C:/work/app', defaultBranch: 'main' });
+      expect(() =>
+        svc.updateLocalPath({
+          ...base,
+          id: 'repo-1',
+          localPath: 'C:/work/app',
+          defaultBranch: 'dev',
+        }),
+      ).not.toThrow();
+      expect(svc.get('repo-1').defaultBranch).toBe('dev');
+    });
   });
 });

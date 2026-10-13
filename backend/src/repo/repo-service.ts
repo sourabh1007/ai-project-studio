@@ -15,6 +15,11 @@ export interface RepoService {
   get(id: string): Repository;
   list(): Repository[];
   remove(id: string): void;
+  /**
+   * Re-points an existing repository at a freshly provisioned local checkout,
+   * keeping the same id (and therefore every task/feature already linked to it).
+   */
+  updateLocalPath(input: CreateRepositoryInput & { id: string }): Repository;
 }
 
 /** Application service for repositories: builds records and enforces existence. */
@@ -61,6 +66,24 @@ export function createRepoService(deps: RepoServiceDeps): RepoService {
     remove(id) {
       requireRepo(id);
       deps.repo.delete(id);
+    },
+    updateLocalPath(input) {
+      requireRepo(input.id);
+      const clash = deps.repo
+        .list()
+        .find(
+          (r) =>
+            r.id !== input.id &&
+            r.remoteUrl === input.remoteUrl &&
+            r.localPath === input.localPath,
+        );
+      if (clash) {
+        throw new ValidationError(
+          `Repository already added: ${input.name} at ${input.localPath}`,
+        );
+      }
+      deps.repo.updateLocalPath(input.id, input.localPath, input.defaultBranch ?? null);
+      return requireRepo(input.id);
     },
   };
 }

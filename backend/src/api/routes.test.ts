@@ -94,6 +94,7 @@ function deps(): ApiRoutesDeps {
     listGithubRepos: () => Promise.resolve([]),
     listAzureRepos: () => Promise.resolve([]),
     listRepoWorkItems: () => Promise.resolve([]),
+    listRepoWorkItemComments: () => Promise.resolve([]),
     listRepoIssues: () => Promise.resolve([]),
     prFeatures: empty,
     prReviews: empty,
@@ -289,6 +290,7 @@ describe('createApiRoutes', () => {
       'post /azure-devops/signout',
       'get /repos',
       'post /repos',
+      'post /repos/:id/reprovision',
       'get /repos/:id/context',
       'get /repos/:id/insights',
       'get /repos/:id/insights/file',
@@ -298,6 +300,7 @@ describe('createApiRoutes', () => {
       'get /providers/azure-devops/repos',
       'get /repos/:id/pulls',
       'get /repos/:id/work-items',
+      'get /repos/:id/work-items/:wid/comments',
       'get /repos/:id/issues',
       'post /repos/:id/pulls',
     ]);

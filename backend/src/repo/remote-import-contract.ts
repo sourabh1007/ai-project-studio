@@ -20,6 +20,8 @@ export interface RemoteWorkItem {
   state: string;
   /** Display name of the assignee, or null when unassigned. */
   assignedTo: string | null;
+  /** Plain-text work-item description, or null when absent. */
+  description: string | null;
 }
 
 /** An open issue on a GitHub repository. */

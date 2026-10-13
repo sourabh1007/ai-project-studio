@@ -69,6 +69,18 @@ export function createPlannerRepo(db: DatabaseSync): PlannerRepo {
      WHERE id = ?`,
   );
   const deleteRow = db.prepare('DELETE FROM planner_tasks WHERE id = ?');
+  const clearByFeature = db.prepare(
+    `UPDATE planner_tasks
+       SET launch_kind = NULL, feature_id = NULL, session_id = NULL,
+           launch_label = NULL
+     WHERE feature_id = ?`,
+  );
+  const clearBySession = db.prepare(
+    `UPDATE planner_tasks
+       SET launch_kind = NULL, feature_id = NULL, session_id = NULL,
+           launch_label = NULL
+     WHERE session_id = ?`,
+  );
 
   return {
     create(task) {
@@ -119,6 +131,12 @@ export function createPlannerRepo(db: DatabaseSync): PlannerRepo {
     },
     delete(id) {
       deleteRow.run(id);
+    },
+    clearLaunchByFeature(featureId) {
+      clearByFeature.run(featureId);
+    },
+    clearLaunchBySession(sessionId) {
+      clearBySession.run(sessionId);
     },
   };
 }

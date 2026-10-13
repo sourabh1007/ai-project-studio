@@ -26,6 +26,7 @@ const listJson = JSON.stringify([
     baseRefName: 'main',
     createdAt: '2024-01-01T00:00:00Z',
     author: { login: 'octocat', name: 'Mona' },
+    body: 'Implements login',
   },
   {
     number: 8,
@@ -52,6 +53,7 @@ describe('parseGithubPulls', () => {
         authorLogin: 'octocat',
         createdAt: '2024-01-01T00:00:00Z',
         authorAvatarUrl: 'https://github.com/octocat.png',
+        body: 'Implements login',
         isAuthor: false,
         isReviewer: false,
       },
@@ -185,7 +187,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests,body',
     ]);
   });
 
@@ -218,7 +220,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests,body',
     ]);
   });
 
@@ -239,7 +241,7 @@ describe('listGithubPulls', () => {
       '--limit',
       '100',
       '--json',
-      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests',
+      'number,title,url,headRefName,baseRefName,createdAt,author,reviewRequests,body',
     ]);
   });
 

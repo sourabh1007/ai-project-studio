@@ -62,6 +62,7 @@ import type {
   RemoteWorkItem,
   RemoteIssue,
   IssueFilter,
+  WorkItemFilter,
   PrReview,
   PrReviewStepKey,
   PrReviewChatMessage,
@@ -352,6 +353,26 @@ export function createApiClient(options: ApiClientOptions = {}) {
     };
   }
 
+  function workItemFilterQuery(filter?: WorkItemFilter): string {
+    if (!filter) {
+      return '';
+    }
+    const params = new URLSearchParams();
+    params.set('assignedTo', filter.assignedTo);
+    for (const [key, value] of [
+      ['state', filter.state],
+      ['area', filter.area],
+      ['iteration', filter.iteration],
+      ['tag', filter.tag],
+    ] as const) {
+      const trimmed = value.trim();
+      if (trimmed) {
+        params.set(key, trimmed);
+      }
+    }
+    return `?${params.toString()}`;
+  }
+
   function putBody(body: unknown): RequestInit {
     return {
       method: 'PUT',
@@ -468,8 +489,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<RemotePullRequest[]>(
         `/repos/${repoId}/pulls?filter=${filter}`,
       ),
-    listRepoWorkItems: (repoId: string) =>
-      request<RemoteWorkItem[]>(`/repos/${repoId}/work-items`),
+    listRepoWorkItems: (repoId: string, filter?: WorkItemFilter) =>
+      request<RemoteWorkItem[]>(
+        `/repos/${repoId}/work-items${workItemFilterQuery(filter)}`,
+      ),
+    listRepoWorkItemComments: (repoId: string, workItemId: number) =>
+      request<string[]>(`/repos/${repoId}/work-items/${workItemId}/comments`),
     listRepoIssues: (repoId: string, filter: IssueFilter = 'all') =>
       request<RemoteIssue[]>(`/repos/${repoId}/issues?filter=${filter}`),
     createPrFeature: (

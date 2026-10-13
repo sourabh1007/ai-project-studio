@@ -122,4 +122,69 @@ describe('planner-repo', () => {
     repo.delete('t1');
     expect(repo.get('t1')).toBeNull();
   });
+
+  it('clears the launch link of every task that opened a deleted feature', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createPlannerRepo(db);
+    repo.create(
+      task({ id: 'a', launchKind: 'agent', featureId: 'feat-1', launchLabel: 'Plan' }),
+    );
+    repo.create(
+      task({
+        id: 'b',
+        launchKind: 'session',
+        featureId: 'feat-1',
+        sessionId: 'sess-1',
+        launchLabel: 'Work',
+      }),
+    );
+    repo.create(
+      task({ id: 'c', launchKind: 'review', featureId: 'feat-2', launchLabel: 'Review' }),
+    );
+
+    repo.clearLaunchByFeature('feat-1');
+
+    expect(repo.get('a')).toMatchObject({
+      launchKind: null, featureId: null, sessionId: null, launchLabel: null,
+    });
+    expect(repo.get('b')).toMatchObject({
+      launchKind: null, featureId: null, sessionId: null, launchLabel: null,
+    });
+    // An unrelated feature's task keeps its link.
+    expect(repo.get('c')).toMatchObject({
+      launchKind: 'review', featureId: 'feat-2', launchLabel: 'Review',
+    });
+  });
+
+  it('clears the launch link of a task whose session was deleted', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createPlannerRepo(db);
+    repo.create(
+      task({
+        id: 'a',
+        launchKind: 'session',
+        featureId: 'feat-1',
+        sessionId: 'sess-1',
+        launchLabel: 'Work',
+      }),
+    );
+    repo.create(
+      task({
+        id: 'b',
+        launchKind: 'session',
+        featureId: 'feat-2',
+        sessionId: 'sess-2',
+        launchLabel: 'Other',
+      }),
+    );
+
+    repo.clearLaunchBySession('sess-1');
+
+    expect(repo.get('a')).toMatchObject({
+      launchKind: null, featureId: null, sessionId: null, launchLabel: null,
+    });
+    expect(repo.get('b')).toMatchObject({
+      launchKind: 'session', featureId: 'feat-2', sessionId: 'sess-2',
+    });
+  });
 });

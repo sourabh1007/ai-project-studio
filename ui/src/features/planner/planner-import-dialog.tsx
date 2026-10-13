@@ -1,22 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ApiClient } from '../../lib/api.js';
 import { ErrorText } from '../../components/ui.js';
-import { CloseIcon, ImportIcon, RepoIcon } from '../../components/icons.js';
+import { CloseIcon, ExpandIcon, ImportIcon, RepoIcon, RestoreIcon } from '../../components/icons.js';
 import {
+  defaultWorkItemFilter,
+  isWorkItemFilter,
   issueToTask,
   pullToTask,
   workItemToTask,
 } from '../../lib/planner-import.js';
+import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import type {
   CreatePlannerTaskInput,
+  RemoteWorkItem,
   RepoProvider,
   Repository,
+  WorkItemFilter,
 } from '../../lib/types.js';
 
 /** The subset of the API client the import dialog depends on. */
 export type PlannerImportApi = Pick<
   ApiClient,
-  'listRepoWorkItems' | 'listRepoIssues' | 'listRepoPulls' | 'createPlannerTask'
+  | 'listRepoWorkItems'
+  | 'listRepoWorkItemComments'
+  | 'listRepoIssues'
+  | 'listRepoPulls'
+  | 'createPlannerTask'
 >;
 
 /** A provider source the user can import planner tasks from. */
@@ -39,6 +48,7 @@ interface ImportRow {
   title: string;
   meta: string;
   task: CreatePlannerTaskInput;
+  workItem?: RemoteWorkItem;
 }
 
 interface PlannerImportDialogProps {
@@ -57,9 +67,10 @@ async function loadRows(
   source: ImportSource,
   repoId: string,
   date: string,
+  workItemFilter: WorkItemFilter,
 ): Promise<ImportRow[]> {
   if (source === 'ado-work-items') {
-    const items = await api.listRepoWorkItems(repoId);
+    const items = await api.listRepoWorkItems(repoId, workItemFilter);
     return items.map((item) => ({
       key: `wi-${item.id}`,
       title: item.title,
@@ -67,6 +78,7 @@ async function loadRows(
         .filter((p) => p)
         .join(' · '),
       task: workItemToTask(item, repoId, date),
+      workItem: item,
     }));
   }
   if (source === 'gh-issues') {
@@ -106,6 +118,12 @@ export function PlannerImportDialog({
   onImported,
 }: PlannerImportDialogProps): JSX.Element {
   const [source, setSource] = useState<ImportSource>('ado-work-items');
+  const [expanded, setExpanded] = useState(false);
+  const [workItemFilter, setWorkItemFilter] = usePersistentState<WorkItemFilter>(
+    'cw-planner-import-wi-filter',
+    defaultWorkItemFilter,
+    { validate: isWorkItemFilter },
+  );
   const provider = SOURCES.find((s) => s.id === source)!.provider;
   const eligibleRepos = useMemo(
     () => repos.filter((r) => r.provider === provider),
@@ -139,7 +157,7 @@ export function PlannerImportDialog({
     setLoading(true);
     setError(null);
     setSelected(new Set());
-    loadRows(api, source, repoId, date)
+    loadRows(api, source, repoId, date, workItemFilter)
       .then((loaded) => {
         if (!cancelled) {
           setRows(loaded);
@@ -159,7 +177,7 @@ export function PlannerImportDialog({
     return () => {
       cancelled = true;
     };
-  }, [api, source, repoId, date]);
+  }, [api, source, repoId, date, workItemFilter]);
 
   const toggle = (key: string): void => {
     setSelected((prev) => {
@@ -187,7 +205,20 @@ export function PlannerImportDialog({
     setError(null);
     try {
       for (const row of chosen) {
-        await api.createPlannerTask(row.task);
+        let task = row.task;
+        if (row.workItem && repoId) {
+          try {
+            const comments = await api.listRepoWorkItemComments(
+              repoId,
+              row.workItem.id,
+            );
+            task = workItemToTask(row.workItem, repoId, date, comments);
+          } catch {
+            // Comments enrich notes but should not block importing the task.
+            task = row.task;
+          }
+        }
+        await api.createPlannerTask(task);
       }
       onImported(chosen.length);
     } catch (err) {
@@ -204,7 +235,7 @@ export function PlannerImportDialog({
       onClick={onClose}
     >
       <div
-        className="planner-summary-modal planner-import-modal"
+        className={`planner-summary-modal planner-import-modal${expanded ? ' is-expanded' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label="Import tasks"
@@ -215,15 +246,27 @@ export function PlannerImportDialog({
             <ImportIcon size={16} />
           </span>
           <span className="planner-summary-title">Import tasks</span>
-          <button
-            type="button"
-            className="icon-button planner-mini"
-            onClick={onClose}
-            aria-label="Close import"
-            title="Close"
-          >
-            <CloseIcon size={15} />
-          </button>
+          <div className="planner-summary-head-actions">
+            <button
+              type="button"
+              className="icon-button planner-mini"
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? 'Restore size' : 'Expand'}
+              aria-pressed={expanded}
+              title={expanded ? 'Restore size' : 'Expand'}
+            >
+              {expanded ? <RestoreIcon size={15} /> : <ExpandIcon size={15} />}
+            </button>
+            <button
+              type="button"
+              className="icon-button planner-mini"
+              onClick={onClose}
+              aria-label="Close import"
+              title="Close"
+            >
+              <CloseIcon size={15} />
+            </button>
+          </div>
         </div>
 
         <div className="planner-import-sources" role="tablist">
@@ -266,6 +309,81 @@ export function PlannerImportDialog({
             </select>
           </label>
         )}
+
+        {source === 'ado-work-items' && eligibleRepos.length > 0 ? (
+          <div className="planner-import-filters">
+            <div className="planner-import-filter-seg" role="group" aria-label="Assigned to">
+              <button
+                type="button"
+                className={
+                  workItemFilter.assignedTo === 'me'
+                    ? 'planner-import-seg is-active'
+                    : 'planner-import-seg'
+                }
+                aria-pressed={workItemFilter.assignedTo === 'me'}
+                onClick={() =>
+                  setWorkItemFilter((f) => ({ ...f, assignedTo: 'me' }))
+                }
+              >
+                Assigned to me
+              </button>
+              <button
+                type="button"
+                className={
+                  workItemFilter.assignedTo === 'all'
+                    ? 'planner-import-seg is-active'
+                    : 'planner-import-seg'
+                }
+                aria-pressed={workItemFilter.assignedTo === 'all'}
+                onClick={() =>
+                  setWorkItemFilter((f) => ({ ...f, assignedTo: 'all' }))
+                }
+              >
+                Everyone
+              </button>
+            </div>
+            <input
+              className="planner-import-filter-input"
+              type="text"
+              value={workItemFilter.state}
+              placeholder="State (e.g. Active)"
+              aria-label="State"
+              onChange={(e) =>
+                setWorkItemFilter((f) => ({ ...f, state: e.target.value }))
+              }
+            />
+            <input
+              className="planner-import-filter-input"
+              type="text"
+              value={workItemFilter.area}
+              placeholder="Area path"
+              aria-label="Area path"
+              onChange={(e) =>
+                setWorkItemFilter((f) => ({ ...f, area: e.target.value }))
+              }
+            />
+            <input
+              className="planner-import-filter-input"
+              type="text"
+              value={workItemFilter.iteration}
+              placeholder="Iteration path"
+              aria-label="Iteration path"
+              onChange={(e) =>
+                setWorkItemFilter((f) => ({ ...f, iteration: e.target.value }))
+              }
+            />
+            <input
+              className="planner-import-filter-input"
+              type="text"
+              value={workItemFilter.tag}
+              placeholder="Tag"
+              aria-label="Tag"
+              onChange={(e) =>
+                setWorkItemFilter((f) => ({ ...f, tag: e.target.value }))
+              }
+            />
+          </div>
+        ) : null}
 
         <ErrorText error={error} />
 

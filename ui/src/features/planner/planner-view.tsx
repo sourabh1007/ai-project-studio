@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
-import { EmptyState, ErrorText } from '../../components/ui.js';
+import { EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
 import {
   AiIcon,
   AiMagicIcon,
   CalendarIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
@@ -24,7 +25,15 @@ import {
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import { PlannerImportDialog } from './planner-import-dialog.js';
-import { addDays, formatDayLabel, isIsoDate, todayIso } from '../../lib/planner-dates.js';
+import {
+  addDays,
+  formatDayLabel,
+  formatDayParts,
+  isIsoDate,
+  plannerSlideDirection,
+  relativeDayLabel,
+  todayIso,
+} from '../../lib/planner-dates.js';
 import { detectIntent, type PlannerIntent } from '../../lib/planner-detect.js';
 import { autocorrect, autoformatTitle, suggestTitles } from '../../lib/planner-text.js';
 import {
@@ -40,6 +49,7 @@ import {
   reopenTask,
   type PlannerLaunchApi,
   type WorkspaceLaunchIntent,
+  type LaunchPhaseReporter,
 } from '../../lib/planner-launch.js';
 import type {
   PlannerSummaryResult,
@@ -137,6 +147,7 @@ function launcherFor(
   api: PlannerLaunchApi,
   task: PlannerTask,
   repoId: string | null,
+  onPhase?: LaunchPhaseReporter,
 ) => Promise<WorkspaceLaunchIntent> {
   if (intent === 'review') {
     return launchReview;
@@ -179,6 +190,7 @@ export function PlannerView({
 
   const [mode, setMode] = useState<'planner' | 'backlog'>('planner');
   const [day, setDay] = useState(() => todayIso());
+  const previousDayRef = useRef(day);
   const [title, setTitle] = useState('');
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [notes, setNotes] = useState('');
@@ -189,6 +201,7 @@ export function PlannerView({
 
   const [repoId, setRepoId] = useState('');
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+  const [busyPhase, setBusyPhase] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -205,6 +218,22 @@ export function PlannerView({
   const [summary, setSummary] = useState<PlannerSummaryResult | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  // Close the export menu on any outside click so it behaves like a popover.
+  useEffect(() => {
+    if (!exportOpen) {
+      return;
+    }
+    const onDown = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [exportOpen]);
 
   const repoList = repos.data ?? [];
   const effectiveRepoId = repoId || repoList[0]?.id || null;
@@ -227,6 +256,22 @@ export function PlannerView({
     [prefs.plannerAutosuggest, title, titleHistory],
   );
   const detected = useMemo(() => detectIntent(title.trim()), [title]);
+  const daySlideDirection = plannerSlideDirection(previousDayRef.current, day);
+  const dayContentClass =
+    daySlideDirection === 'none'
+      ? 'planner-day-content'
+      : `planner-day-content slide-${daySlideDirection}`;
+  const dayParts = formatDayParts(day);
+  const dayRelative = relativeDayLabel(day);
+  const isToday = day === todayIso();
+  const dateTitleClass =
+    daySlideDirection === 'none'
+      ? 'planner-date-title'
+      : `planner-date-title slide-${daySlideDirection}`;
+
+  useEffect(() => {
+    previousDayRef.current = day;
+  }, [day]);
 
   // Grow the quick-add textarea to fit its content so multi-line tasks are
   // fully visible while typing, then shrink back as content is removed.
@@ -400,10 +445,12 @@ export function PlannerView({
   /** Runs a fresh launch for `task`, records the link, and opens it. */
   async function launchTask(task: PlannerTask, intent: PlannerIntent) {
     setBusyTaskId(task.id);
+    setBusyPhase(`Starting ${INTENTS[intent].label}…`);
     setLaunchError(null);
     try {
       const repo = task.repoId || effectiveRepoId;
-      const result = await launcherFor(intent)(api, task, repo);
+      const result = await launcherFor(intent)(api, task, repo, setBusyPhase);
+      setBusyPhase('Opening…');
       const link = linkFromIntent(result);
       await api.updatePlannerTask(task.id, { ...link, repoId: repo });
       onLaunch(result);
@@ -412,6 +459,7 @@ export function PlannerView({
       setLaunchError(humanizeLaunchError(err));
     } finally {
       setBusyTaskId(null);
+      setBusyPhase(null);
     }
   }
 
@@ -421,6 +469,7 @@ export function PlannerView({
       return;
     }
     setBusyTaskId(task.id);
+    setBusyPhase('Opening…');
     setLaunchError(null);
     try {
       const intent = await reopenTask(api, task);
@@ -431,6 +480,7 @@ export function PlannerView({
       return;
     } finally {
       setBusyTaskId(null);
+      setBusyPhase(null);
     }
   }
 
@@ -480,76 +530,25 @@ export function PlannerView({
 
   return (
     <div className="planner">
-      <header className="planner-header">
-        <h1>
-          <PlannerIcon size={20} /> Planner
-        </h1>
-        <p className="muted">
-          Jot down what you&rsquo;re working on. The Planner figures out whether
-          it&rsquo;s a pull request to review, a task to plan, or a session to
-          start — then opens it in the workspace and keeps a link you can return
-          to any time.
-        </p>
-      </header>
-
-      <section className="planner-toolbar">
-        <div className="planner-daybar">
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setDay((d) => addDays(d, -1))}
-            aria-label="Previous day"
-            title="Previous day"
-          >
-            <ChevronLeftIcon size={18} />
-          </button>
-          <div className="planner-daybar-center">
-            <CalendarIcon size={15} />
-            <span className="planner-daybar-label">{formatDayLabel(day)}</span>
-            <input
-              type="date"
-              className="planner-daybar-date"
-              value={day}
-              onChange={(e) => {
-                if (isIsoDate(e.target.value)) {
-                  setDay(e.target.value);
-                }
-              }}
-              aria-label="Jump to date"
-            />
+      <header className="planner-masthead">
+        <div className="planner-brandbar">
+          <div className="page-header-main">
+            <IconBadge icon={<PlannerIcon size={22} />} tone="ai" size="md" glow />
+            <h1 className="page-title planner-brand-title">Planner</h1>
           </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setDay((d) => addDays(d, 1))}
-            aria-label="Next day"
-            title="Next day"
-          >
-            <ChevronRightIcon size={18} />
-          </button>
-          {day !== todayIso() && (
-            <button
-              type="button"
-              className="planner-today-btn"
-              onClick={() => setDay(todayIso())}
-            >
-              Today
-            </button>
-          )}
-        </div>
-        <div className="planner-toolbar-actions">
-          <label className="planner-repo">
-            Repository
-            <select
-              value={effectiveRepoId ?? ''}
-              onChange={(e) => setRepoId(e.target.value)}
-              aria-label="Repository for launches"
-            >
-              <option value="">None</option>
-              {repoList.map((repo) => (
-                <option key={repo.id} value={repo.id}>
-                  {repo.name}
-                </option>
+          <div className="planner-toolbar-actions">
+            <label className="planner-repo">
+              Repository
+              <select
+                value={effectiveRepoId ?? ''}
+                onChange={(e) => setRepoId(e.target.value)}
+                aria-label="Repository for launches"
+              >
+                <option value="">None</option>
+                {repoList.map((repo) => (
+                  <option key={repo.id} value={repo.id}>
+                    {repo.name}
+                  </option>
               ))}
             </select>
           </label>
@@ -562,20 +561,38 @@ export function PlannerView({
           >
             <ChevronRightIcon size={14} /> Move unfinished
           </button>
-          <div className="planner-export">
-            <ExportIcon size={14} />
-            {EXPORT_FORMATS.map(({ format, label }) => (
-              <button
-                key={format}
-                type="button"
-                className="planner-export-btn"
-                onClick={() => exportDay(format)}
-                disabled={dayTasks.length === 0}
-                title={`Export this day as ${label}`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="planner-export" ref={exportRef}>
+            <button
+              type="button"
+              className="planner-tool-btn"
+              onClick={() => setExportOpen((open) => !open)}
+              disabled={dayTasks.length === 0}
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+              title="Export this day"
+            >
+              <ExportIcon size={14} /> Export
+              <ChevronDownIcon size={13} />
+            </button>
+            {exportOpen && (
+              <div className="planner-export-menu" role="menu">
+                {EXPORT_FORMATS.map(({ format, label }) => (
+                  <button
+                    key={format}
+                    type="button"
+                    role="menuitem"
+                    className="planner-export-item"
+                    onClick={() => {
+                      exportDay(format);
+                      setExportOpen(false);
+                    }}
+                    title={`Export this day as ${label}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -607,8 +624,58 @@ export function PlannerView({
             <AiIcon size={15} />
             <span>AI summary</span>
           </button>
+          </div>
         </div>
-      </section>
+        <div className="planner-date-nav">
+          <button
+            type="button"
+            className="icon-button planner-date-arrow"
+            onClick={() => setDay((d) => addDays(d, -1))}
+            aria-label="Previous day"
+            title="Previous day"
+          >
+            <ChevronLeftIcon size={20} />
+          </button>
+          <div className="planner-date-hero">
+            <span className="planner-date-weekday">{dayParts.weekday}</span>
+            <h2 className={dateTitleClass} key={day}>
+              {dayParts.date}
+            </h2>
+            <span className={`planner-date-rel${isToday ? ' is-today' : ''}`}>
+              {dayRelative}
+            </span>
+            <input
+              type="date"
+              className="planner-date-picker"
+              value={day}
+              onChange={(e) => {
+                if (isIsoDate(e.target.value)) {
+                  setDay(e.target.value);
+                }
+              }}
+              aria-label="Jump to date"
+            />
+          </div>
+          <button
+            type="button"
+            className="icon-button planner-date-arrow"
+            onClick={() => setDay((d) => addDays(d, 1))}
+            aria-label="Next day"
+            title="Next day"
+          >
+            <ChevronRightIcon size={20} />
+          </button>
+          {!isToday && (
+            <button
+              type="button"
+              className="planner-today-btn"
+              onClick={() => setDay(todayIso())}
+            >
+              Today
+            </button>
+          )}
+        </div>
+      </header>
 
       <section className="planner-hero">
         <div className="planner-hero-row">
@@ -704,7 +771,8 @@ export function PlannerView({
       <ErrorText error={tasks.error} />
       <ErrorText error={launchError} />
 
-      <div className="planner-day-content" key={day}>
+      <div className="planner-day-viewport">
+      <div className={dayContentClass} key={day}>
         {dayTasks.length === 0 ? (
         <EmptyState
           title="Nothing planned for this day"
@@ -718,6 +786,7 @@ export function PlannerView({
               key={task.id}
               task={task}
               busy={busyTaskId === task.id}
+              busyPhase={busyTaskId === task.id ? busyPhase : null}
               renaming={renamingId === task.id}
               renameValue={renameValue}
               onRenameValue={setRenameValue}
@@ -749,6 +818,7 @@ export function PlannerView({
           ))}
         </ul>
       )}
+      </div>
       </div>
 
       {importOpen && (
@@ -1009,6 +1079,7 @@ function BacklogRow({
 function PlannerRow({
   task,
   busy,
+  busyPhase,
   renaming,
   renameValue,
   onRenameValue,
@@ -1032,6 +1103,7 @@ function PlannerRow({
 }: {
   task: PlannerTask;
   busy: boolean;
+  busyPhase: string | null;
   renaming: boolean;
   renameValue: string;
   onRenameValue: (value: string) => void;
@@ -1055,6 +1127,13 @@ function PlannerRow({
 }) {
   const launched = task.launchKind;
   const LaunchedIcon = launched ? INTENTS[launched].Icon : SessionIcon;
+  const statusNode =
+    busy && busyPhase ? (
+      <span className="planner-launch-status" role="status">
+        <span className="planner-launch-spinner" aria-hidden="true" />
+        <span className="planner-launch-status-text">{busyPhase}</span>
+      </span>
+    ) : null;
 
   if (editing) {
     return (
@@ -1132,7 +1211,9 @@ function PlannerRow({
       </div>
 
       <div className="planner-item-side">
-        {launched ? (
+        {statusNode ? (
+          statusNode
+        ) : launched ? (
           <div className={`planner-launched kind-${launched}`}>
             {renaming ? (
               <input
@@ -1214,6 +1295,7 @@ function PlannerRow({
           type="button"
           className="icon-button planner-mini"
           onClick={onStartEdit}
+          disabled={busy}
           aria-label={`Edit "${task.title}"`}
           title="Edit task"
         >
@@ -1223,6 +1305,7 @@ function PlannerRow({
           type="button"
           className="icon-button planner-mini"
           onClick={onDefer}
+          disabled={busy}
           aria-label={`Defer "${task.title}" to backlog`}
           title="Defer to backlog"
         >
@@ -1232,6 +1315,7 @@ function PlannerRow({
           type="button"
           className="icon-button planner-mini"
           onClick={onDelete}
+          disabled={busy}
           aria-label={`Delete "${task.title}"`}
           title="Delete"
         >

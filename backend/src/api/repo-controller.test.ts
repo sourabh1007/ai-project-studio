@@ -52,8 +52,10 @@ const workItem: RemoteWorkItem = {
   type: 'Bug',
   state: 'Active',
   assignedTo: 'Mona',
+  description: 'Fix cache details',
 };
 const workItems = [workItem];
+const workItemComments = ['Looks good', 'Please add tests'];
 
 const issue: RemoteIssue = {
   provider: 'github',
@@ -120,14 +122,27 @@ function harness() {
   const insightsRefresh: boolean[] = [];
   const definitionReads: Array<{ id: string; path: string }> = [];
   const workItemRepoIds: string[] = [];
+  const workItemFilters: unknown[] = [];
+  const workItemCommentRequests: Array<{ repoId: string; workItemId: number }> = [];
   const issueRepoIds: string[] = [];
   const issueFilters: string[] = [];
+  const reprovisioned: unknown[] = [];
   let azureOrg = '';
   const service = {
     list: () => [repo],
+    get: (id: string) => {
+      if (id !== repo.id) {
+        throw new Error(`Unknown repository: ${id}`);
+      }
+      return repo;
+    },
     create: (input: unknown) => {
       created.push(input);
       return repo;
+    },
+    updateLocalPath: (input: { id: string; localPath: string }) => {
+      reprovisioned.push(input);
+      return { ...repo, localPath: input.localPath };
     },
     remove: (id: string) => void removed.push(id),
   } as unknown as RepoService;
@@ -201,9 +216,14 @@ function harness() {
       azureOrg = org;
       return [];
     },
-    listRepoWorkItems: async (repoId) => {
+    listRepoWorkItems: async (repoId, filter) => {
       workItemRepoIds.push(repoId);
+      workItemFilters.push(filter);
       return workItems;
+    },
+    listRepoWorkItemComments: async (repoId, workItemId) => {
+      workItemCommentRequests.push({ repoId, workItemId });
+      return workItemComments;
     },
     listRepoIssues: async (repoId, filter) => {
       issueRepoIds.push(repoId);
@@ -227,8 +247,11 @@ function harness() {
     insightsRefresh,
     definitionReads,
     workItemRepoIds,
+    workItemFilters,
+    workItemCommentRequests,
     issueRepoIds,
     issueFilters,
+    reprovisioned,
     getAzureOrg: () => azureOrg,
   };
 }
@@ -261,6 +284,41 @@ describe('repo-controller', () => {
     const h = harness();
     await expect(
       pick(h.routes, 'post', '/repos')(req({ body: { provider: 'nope' } })),
+    ).rejects.toMatchObject({ kind: 'validation' });
+  });
+
+  it('re-provisions an existing repository in place, keeping its id', async () => {
+    const h = harness();
+    const result = await pick(h.routes, 'post', '/repos/:id/reprovision')(
+      req({
+        params: { id: 'r1' },
+        body: { localPath: 'D:/work/app', mode: 'existing' },
+      }),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ id: 'r1', localPath: 'D:/work/app' });
+    // Provision runs from the stored repo's provider/remote, not client input.
+    expect(h.provisioned).toEqual([
+      {
+        provider: repo.provider,
+        remoteUrl: repo.remoteUrl,
+        name: repo.name,
+        defaultBranch: repo.defaultBranch,
+        localPath: 'D:/work/app',
+        mode: 'existing',
+      },
+    ]);
+    expect(h.reprovisioned).toEqual([
+      expect.objectContaining({ id: 'r1', localPath: 'D:/work/app' }),
+    ]);
+  });
+
+  it('rejects invalid reprovision payloads', async () => {
+    const h = harness();
+    await expect(
+      pick(h.routes, 'post', '/repos/:id/reprovision')(
+        req({ params: { id: 'r1' }, body: { mode: 'clone' } }),
+      ),
     ).rejects.toMatchObject({ kind: 'validation' });
   });
 
@@ -412,13 +470,60 @@ describe('repo-controller', () => {
     ).rejects.toMatchObject({ kind: 'validation' });
   });
 
-  it('lists a repository work items', async () => {
+  it('lists a repository work items, defaulting the filter to @Me', async () => {
     const h = harness();
     const result = await pick(h.routes, 'get', '/repos/:id/work-items')(
       req({ params: { id: 'r1' } }),
     );
     expect(result).toEqual({ status: 200, body: [workItem] });
     expect(h.workItemRepoIds).toEqual(['r1']);
+    expect(h.workItemFilters).toEqual([
+      {
+        assignedTo: 'me',
+        state: undefined,
+        area: undefined,
+        iteration: undefined,
+        tag: undefined,
+      },
+    ]);
+  });
+
+  it('parses the work-item filter query params, trimming blanks', async () => {
+    const h = harness();
+    await pick(h.routes, 'get', '/repos/:id/work-items')(
+      req({
+        params: { id: 'r1' },
+        query: {
+          assignedTo: 'all',
+          state: 'Active',
+          area: ' Proj\\Team ',
+          iteration: '',
+          tag: 'GSI',
+        },
+      }),
+    );
+    expect(h.workItemFilters).toEqual([
+      {
+        assignedTo: 'all',
+        state: 'Active',
+        area: 'Proj\\Team',
+        iteration: undefined,
+        tag: 'GSI',
+      },
+    ]);
+  });
+
+  it('lists comments for a repository work item', async () => {
+    const h = harness();
+    const result = await pick(
+      h.routes,
+      'get',
+      '/repos/:id/work-items/:wid/comments',
+    )(req({ params: { id: 'r1', wid: '101' } }));
+    expect(result).toEqual({ status: 200, body: workItemComments });
+    expect(h.workItemCommentRequests).toEqual([
+      { repoId: 'r1', workItemId: 101 },
+    ]);
   });
 
   it('lists a repository issues, passing the filter through', async () => {
