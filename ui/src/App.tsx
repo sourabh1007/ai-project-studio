@@ -14,6 +14,7 @@ import { liveSignal } from './lib/stream.js';
 import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
+import { BrandMark } from './components/brand-mark.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
 import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
@@ -409,12 +410,7 @@ export function App() {
               aria-label="Open command palette"
               onClick={() => setPaletteOpen(true)}
             >
-              <img
-                src="/logo.png"
-                alt="AI Project Studio"
-                width={30}
-                height={30}
-              />
+              <BrandMark size={28} />
             </button>
             <button
               type="button"

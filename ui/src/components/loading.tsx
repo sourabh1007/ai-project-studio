@@ -5,6 +5,7 @@
  * bottom status bar.
  */
 import { useEffect, useState } from 'react';
+import { BrandMark } from './brand-mark.js';
 
 /** A small inline spinner, sized to the surrounding text by default. */
 export function Spinner({
@@ -67,7 +68,7 @@ export function BrandedLoader({
       <span className="branded-loader-mark" aria-hidden="true">
         <span className="branded-loader-orbit" />
         <span className="branded-loader-orbit branded-loader-orbit-2" />
-        <img src="/logo.png" alt="" width={40} height={40} />
+        <BrandMark size={40} />
       </span>
       <span className="branded-loader-title">{title}</span>
       {detail && <span className="branded-loader-detail">{detail}</span>}

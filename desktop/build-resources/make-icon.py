@@ -1,9 +1,12 @@
 """Generates the AI Project Studio app icon (icon.png / icon.ico / icon.icns).
 
-Design goals: a clean, enterprise-grade monogram that stays legible at 16px in
-the Windows Task Manager and taskbar. A gradient "squircle" tile with a soft
-brand-coloured glow, a glossy top sheen, a thin bevel, and a bold "AI" mark with
-a single spark accent. No busy 3D clutter — high contrast, minimal detail.
+Design goals: a clean, enterprise-grade mark that stays legible at 16px in the
+Windows Task Manager and taskbar, and reads on any OS theme. A gradient
+"squircle" tile with a soft brand-coloured glow, a glossy top sheen and a thin
+bevel carries a bold terminal `>_` prompt — the universal "run a command" cue
+for a developer tool — finished with a single AI spark. The glyph is extruded
+with a soft drop shadow and a top bevel highlight for a tactile 3D feel without
+busy clutter. Mirrors the in-app SVG brand mark (ui/src/components/brand-mark).
 """
 
 from __future__ import annotations
@@ -16,9 +19,9 @@ S = 1024          # final icon size
 SS = 4            # supersample factor for crisp anti-aliasing
 W = S * SS        # working canvas size
 
-# Brand gradient (top-left violet -> bottom-right blue).
-C1 = (126, 82, 246)   # #7E52F6
-C2 = (52, 120, 248)   # #3478F8
+# Brand gradient (top-left violet -> indigo -> bottom-right blue).
+C1 = (139, 92, 246)   # #8B5CF6
+C2 = (47, 128, 248)   # #2F80F8
 GLOW = (108, 132, 255)  # accent glow colour
 RADIUS = int(0.235 * W)  # macOS-style squircle corner radius
 
@@ -39,21 +42,6 @@ def diagonal_gradient(size, c1, c2):
     return small.resize((size, size), Image.BICUBIC)
 
 
-def squircle_mask(size, radius):
-    m = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(m)
-    d.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=255)
-    return m
-
-
-def load_font(size):
-    for name in ("ariblk.ttf", "segoeuib.ttf", "arialbd.ttf"):
-        p = os.path.join(r"C:\Windows\Fonts", name)
-        if os.path.exists(p):
-            return ImageFont.truetype(p, size)
-    return ImageFont.load_default()
-
-
 def spark(draw, cx, cy, r, color, thin=0.30):
     """A 4-point sparkle (concave star)."""
     pts = [
@@ -67,6 +55,23 @@ def spark(draw, cx, cy, r, color, thin=0.30):
         (cx - r * thin, cy - r * thin),
     ]
     draw.polygon(pts, fill=color)
+
+
+def stroke_path(draw, pts, width, color):
+    """A rounded poly-line: curved joints plus circular end caps."""
+    draw.line(pts, fill=color, width=width, joint="curve")
+    r = width / 2
+    for (x, y) in pts:
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
+
+
+def prompt_glyph(size, pts_sets, width, color):
+    """Renders the `>_` stroke set onto a transparent layer of `size`."""
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for pts in pts_sets:
+        stroke_path(d, pts, width, color)
+    return layer
 
 
 def build():
@@ -119,32 +124,41 @@ def build():
                          width=max(2, int(0.004 * W)))
     canvas = Image.alpha_composite(canvas, bevel)
 
-    # --- "AI" monogram ---
-    text_layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-    tdraw = ImageDraw.Draw(text_layer)
-    font = load_font(int(0.44 * W))
-    label = "AI"
-    bbox = tdraw.textbbox((0, 0), label, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx = (W - tw) / 2 - bbox[0]
-    ty = (W - th) / 2 - bbox[1] + int(0.03 * W)
+    # --- terminal prompt `>_` (the "run a command" cue) ---
+    # Chevron + underscore, centred as a balanced unit.
+    def P(nx, ny):
+        return (nx * W, ny * W)
+
+    chevron = [P(0.345, 0.335), P(0.515, 0.505), P(0.345, 0.675)]
+    underscore = [P(0.560, 0.672), P(0.730, 0.672)]
+    stroke_w = int(0.078 * W)
 
     # soft drop shadow for depth
-    shadow = Image.new("RGBA", (W, W), (0, 0, 0, 0))
-    shd = ImageDraw.Draw(shadow)
-    shd.text((tx, ty + int(0.012 * W)), label, font=font, fill=(20, 24, 60, 130))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(int(0.01 * W)))
+    shadow = prompt_glyph(W, [chevron, underscore], stroke_w, (18, 22, 55, 140))
+    shadow = shadow.transform(
+        (W, W), Image.AFFINE, (1, 0, 0, 0, 1, int(0.016 * W)))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(int(0.012 * W)))
     canvas = Image.alpha_composite(canvas, shadow)
 
-    tdraw.text((tx, ty), label, font=font, fill=(255, 255, 255, 255))
-    canvas = Image.alpha_composite(canvas, text_layer)
+    # base glyph (white)
+    glyph = prompt_glyph(W, [chevron, underscore], stroke_w, (255, 255, 255, 255))
+    canvas = Image.alpha_composite(canvas, glyph)
 
-    # --- spark accent (top-right of the monogram) ---
+    # top bevel highlight, nudged up, for a tactile 3D edge
+    hi = prompt_glyph(W, [chevron, underscore],
+                      int(stroke_w * 0.46), (226, 236, 255, 150))
+    hi = hi.transform((W, W), Image.AFFINE, (1, 0, 0, 0, 1, -int(0.010 * W)))
+    hi = hi.filter(ImageFilter.GaussianBlur(int(0.004 * W)))
+    hi.putalpha(Image.composite(hi.split()[3],
+                                Image.new("L", (W, W), 0), glyph.split()[3]))
+    canvas = Image.alpha_composite(canvas, hi)
+
+    # --- spark accent (top-right) with a soft glow ---
     spark_layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     sdraw = ImageDraw.Draw(spark_layer)
-    sx, sy = int(0.70 * W), int(0.30 * W)
-    spark(sdraw, sx, sy, int(0.055 * W), (255, 255, 255, 255))
-    glow_spark = spark_layer.filter(ImageFilter.GaussianBlur(int(0.012 * W)))
+    sx, sy = int(0.705 * W), int(0.300 * W)
+    spark(sdraw, sx, sy, int(0.058 * W), (255, 255, 255, 255))
+    glow_spark = spark_layer.filter(ImageFilter.GaussianBlur(int(0.013 * W)))
     canvas = Image.alpha_composite(canvas, glow_spark)
     canvas = Image.alpha_composite(canvas, spark_layer)
 
@@ -169,3 +183,4 @@ def build():
 
 if __name__ == "__main__":
     build()
+
