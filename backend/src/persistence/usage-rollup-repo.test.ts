@@ -240,7 +240,8 @@ describe('createUsageRollupRepo', () => {
       provider: 'github', server: 'azure', origin: 'unknown', calls: 6,
       inputBytes: 10, outputBytes: 20, durationMs: 5,
       inputTokens: null, outputTokens: null, nanoAiu: null, credits: null,
-      attribution: 'unavailable', tools: [], firstCallAt: null, lastCallAt: null,
+      attribution: 'unavailable', tools: [],
+      firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:04.000Z',
     }]);
     expect(reader.featureMcpServers('f1').find((row) => row.server === 'azure')?.calls).toBe(6);
     db.close();

@@ -127,8 +127,9 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
               <td className="dash-num">{reported(row.outputTokens, formatTokens)}</td>
               <td className="dash-num">{reported(row.nanoAiu, formatAic)}{row.attribution === 'partial' && row.nanoAiu != null ? ' (partial)' : ''}</td>
               <td className="dash-num">{reported(row.credits, formatCredits)}</td>
-              <td className="dash-num">{formatBytes(row.inputBytes)} / {formatBytes(row.outputBytes)}</td>
-              <td className="dash-num">{formatDuration(row.durationMs)}</td>
+              <td className="dash-num">{row.inputBytes + row.outputBytes > 0
+                ? `${formatBytes(row.inputBytes)} / ${formatBytes(row.outputBytes)}` : UNAVAILABLE}</td>
+              <td className="dash-num">{row.durationMs > 0 ? formatDuration(row.durationMs) : UNAVAILABLE}</td>
               <td className="dash-num">{formatDateTime(row.lastCallAt ?? null)}</td>
             </tr>
             {isOpen && <tr className="mcp-usage-tools-row">

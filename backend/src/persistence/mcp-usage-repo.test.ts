@@ -51,8 +51,26 @@ describe('mcp-usage-repo', () => {
     expect(db.prepare('SELECT * FROM mcp_observed_calls').all()).toEqual([{
       feature_id: 'f1', session_id: 's1', provider: 'copilot', server: 'filesystem',
       tool: '', call_id: 'call-1', origin: 'built-in', scope: 'feature',
-      recorded_at: '2025-01-01T00:00:00.000Z',
+      recorded_at: '2025-01-01T00:00:00.000Z', duration_ms: null,
     }]);
+    db.close();
+  });
+
+  it('stamps a call duration once from its first non-skewed completion', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createMcpUsageRepo(db);
+    repo.recordObserved(observed({ recordedAt: '2025-01-01T00:00:00.000Z' }));
+    const durationOf = () => (db.prepare('SELECT duration_ms AS d FROM mcp_observed_calls').get() as { d: number | null }).d;
+    // A completion earlier than the start (clock skew) does not stamp.
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2024-12-31T23:59:59.000Z' });
+    expect(durationOf()).toBeNull();
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2025-01-01T00:00:02.250Z' });
+    expect(durationOf()).toBe(2250);
+    // A later completion never overwrites the first measurement, and an
+    // unmatched call id is a silent no-op.
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2025-01-01T00:00:09.000Z' });
+    repo.recordCompletion({ provider: 'copilot', callId: 'absent', completedAt: '2025-01-01T00:00:09.000Z' });
+    expect(durationOf()).toBe(2250);
     db.close();
   });
 

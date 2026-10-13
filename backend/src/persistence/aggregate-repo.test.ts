@@ -235,8 +235,8 @@ describe('aggregate-repo', () => {
       outputBytes: 600,
       durationMs: 50,
       tools: [],
-      firstCallAt: null,
-      lastCallAt: null,
+      firstCallAt: '2025-01-01T00:00:00.000Z',
+      lastCallAt: '2025-01-02T00:00:00.000Z',
     });
     // Other features are excluded.
     expect(reader.byMcpServer('f3')).toEqual([]);

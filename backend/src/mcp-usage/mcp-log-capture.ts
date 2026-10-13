@@ -1,5 +1,5 @@
 import type { Logger } from '../kernel/logger.js';
-import type { McpObservedCall, McpObservedUsageRepo } from './mcp-usage-contract.js';
+import type { McpObservedCall, McpObservedCompletion, McpObservedUsageRepo } from './mcp-usage-contract.js';
 
 export interface McpLogSource {
   key: string;
@@ -65,6 +65,20 @@ export function mcpCallFromEvent(value: unknown): Pick<McpObservedCall, 'server'
   };
 }
 
+/**
+ * The payload-free identity of a `tool.execution_complete` event: just the call
+ * id and when it finished. Completion events carry no server/tool identity, so
+ * they only time a call already seen as a start. Arguments/results are ignored.
+ */
+export function mcpCompletionFromEvent(value: unknown): Pick<McpObservedCompletion, 'callId' | 'completedAt'> | null {
+  const event = object(value);
+  if (event?.type !== 'tool.execution_complete') return null;
+  const data = object(event.data);
+  if (!data || !identifier(data.toolCallId) || typeof event.timestamp !== 'string'
+    || !Number.isFinite(Date.parse(event.timestamp))) return null;
+  return { callId: data.toolCallId, completedAt: new Date(event.timestamp).toISOString() };
+}
+
 export interface McpLogCaptureDeps {
   owners: McpLogOwners;
   reader: McpLogReader;
@@ -111,13 +125,23 @@ export function createMcpLogCapture(deps: McpLogCaptureDeps) {
               let event: unknown;
               try { event = JSON.parse(line); } catch { malformed += 1; continue; }
               const call = mcpCallFromEvent(event);
-              if (!call) continue;
-              const owner = deps.owners.resolve(source, call.recordedAt);
-              if (!owner) { unattributed += 1; continue; }
-              deps.usage.recordObserved({
-                ...call, ...owner, provider: source.provider,
-                callId: JSON.stringify([source.sessionId, call.callId]),
-              });
+              if (call) {
+                const owner = deps.owners.resolve(source, call.recordedAt);
+                if (!owner) { unattributed += 1; continue; }
+                deps.usage.recordObserved({
+                  ...call, ...owner, provider: source.provider,
+                  callId: JSON.stringify([source.sessionId, call.callId]),
+                });
+                continue;
+              }
+              const completion = mcpCompletionFromEvent(event);
+              if (completion) {
+                deps.usage.recordCompletion({
+                  provider: source.provider,
+                  callId: JSON.stringify([source.sessionId, completion.callId]),
+                  completedAt: completion.completedAt,
+                });
+              }
             }
             if ((page.oversized || malformed || unattributed) && !partialSources.has(source.key)) {
               partialSources.add(source.key);

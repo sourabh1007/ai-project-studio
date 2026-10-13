@@ -30,6 +30,18 @@ it('ranks actual calls, shows share, and keeps unavailable billing distinct from
   expect(screen.getByRole('list', { name: 'MCP server ranking by bytes' })).toBeInTheDocument();
 });
 
+it('renders honest unavailable traffic and time for unmeasured remote servers', () => {
+  render(<McpUsageCharts rows={[
+    row('remote', 4, { provider: 'agency', origin: 'configured', inputBytes: 0, outputBytes: 0, durationMs: 0,
+      lastCallAt: '2024-05-01T10:00:00.000Z' }),
+  ]} />);
+  const table = screen.getByRole('table', { name: 'MCP server I/O' });
+  const remote = within(table).getByRole('cell', { name: /remote/ }).closest('tr')!;
+  // 4 billing columns + traffic + total time all honestly unavailable, not 0 B / 0s.
+  expect(within(remote).getAllByText('Not reported')).toHaveLength(6);
+  expect(within(remote).queryByText('0 B / 0 B')).toBeNull();
+});
+
 it('shows reported totals and partial attribution without hiding other servers', () => {
   render(<McpUsageCharts rows={[
     row('reported', 1, { nanoAiu: 2e9, credits: 1, inputTokens: 20, outputTokens: 10, attribution: 'partial' }),

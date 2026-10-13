@@ -15,6 +15,13 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
       feature_id, session_id, provider, server, tool, call_id, origin, scope, recorded_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (provider, session_id, call_id) DO NOTHING`);
+  // Only the first completion that is not earlier than the start stamps a
+  // duration; a non-positive gap (clock skew) and replays leave it untouched.
+  // ROUND (not truncate) absorbs julianday's sub-millisecond float error.
+  const stampDuration = db.prepare(`UPDATE mcp_observed_calls
+    SET duration_ms = CAST(ROUND((julianday(?) - julianday(recorded_at)) * 86400000) AS INTEGER)
+    WHERE provider = ? AND call_id = ? AND duration_ms IS NULL
+      AND julianday(?) >= julianday(recorded_at)`);
   const deleteByFeature = db.prepare(
     'DELETE FROM mcp_server_usage WHERE feature_id = ?',
   );
@@ -40,6 +47,14 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
         entry.origin,
         entry.scope,
         entry.recordedAt,
+      );
+    },
+    recordCompletion(entry) {
+      stampDuration.run(
+        entry.completedAt,
+        entry.provider,
+        entry.callId,
+        entry.completedAt,
       );
     },
     record(entry) {

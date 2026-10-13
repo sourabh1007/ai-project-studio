@@ -23,7 +23,7 @@ function seed() {
   });
   const aggregate = createAggregateRepo(db, aggregationDefaults);
   const rollup = createUsageRollupRepo(db, ideUsageDefaults);
-  return { db, observed, proxy, aggregate, rollup };
+  return { db, repo, observed, proxy, aggregate, rollup };
 }
 
 const unavailable = {
@@ -31,8 +31,8 @@ const unavailable = {
   attribution: 'unavailable',
 };
 
-/** Reader rows additionally carry the (here empty) per-tool breakdown. */
-const noTools = { ...unavailable, tools: [], firstCallAt: null, lastCallAt: null };
+/** A server whose every call shares one timestamp spans that single instant. */
+const dated = (at: string) => ({ ...unavailable, tools: [], firstCallAt: at, lastCallAt: at });
 
 describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
   function setup() {
@@ -50,9 +50,9 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     observed({ provider: 'agency', origin: 'built-in' });
     expect(read()).toEqual([
       { provider: 'agency', server: 'github', origin: 'built-in', calls: 1,
-        inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools },
+        inputBytes: 0, outputBytes: 0, durationMs: 0, ...dated('2026-01-01T00:00:00.000Z') },
       { provider: 'copilot', server: 'github', origin: 'configured', calls: 1,
-        inputBytes: 10, outputBytes: 20, durationMs: 30, ...noTools },
+        inputBytes: 10, outputBytes: 20, durationMs: 30, ...dated('2026-01-01T00:00:00.000Z') },
     ]);
     expect(read('missing')).toEqual([]);
     db.close();
@@ -70,7 +70,7 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     // max(5, 2) + max(1, 4), not max(6, 6).
     expect(read()).toEqual([{
       provider: 'copilot', server: 'github', origin: 'configured', calls: 9,
-      inputBytes: 30, outputBytes: 60, durationMs: 90, ...noTools,
+      inputBytes: 30, outputBytes: 60, durationMs: 90, ...dated('2026-01-01T00:00:00.000Z'),
     }]);
     expect(read('f2')[0].calls).toBe(1);
     db.close();
@@ -99,7 +99,7 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
     db.close();
   });
 
-  it('breaks named tool calls down busiest-first and dates each server by its tools', () => {
+  it('breaks named tool calls down busiest-first and dates each server by every observed call', () => {
     const { db, observed, read } = setup();
     observed({ tool: 'search', callId: 't1', recordedAt: '2026-01-02T00:00:00.000Z' });
     observed({ tool: 'search', callId: 't2', recordedAt: '2026-01-05T00:00:00.000Z' });
@@ -113,7 +113,26 @@ describe.each(['aggregate', 'rollup'] as const)('%s MCP rollups', (reader) => {
       { tool: 'read', calls: 1, firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:00.000Z' },
     ]);
     expect(server.firstCallAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(server.lastCallAt).toBe('2026-01-05T00:00:00.000Z');
+    expect(server.lastCallAt).toBe('2026-01-09T00:00:00.000Z');
+    db.close();
+  });
+
+  it('sums observed per-call durations stamped by matching completions', () => {
+    const { db, repo, observed, read } = setup();
+    observed({ callId: 'c1', recordedAt: '2026-01-01T00:00:00.000Z' });
+    observed({ callId: 'c2', recordedAt: '2026-01-01T00:00:10.000Z' });
+    observed({ callId: 'c3', recordedAt: '2026-01-01T00:00:20.000Z' });
+    // c1 completes 1.5s later; c2 is never stamped; c3's completion predates
+    // its start (clock skew) so it is ignored. Only c1 contributes time.
+    repo.recordCompletion({ provider: 'copilot', callId: 'c1', completedAt: '2026-01-01T00:00:01.500Z' });
+    repo.recordCompletion({ provider: 'copilot', callId: 'c3', completedAt: '2026-01-01T00:00:19.000Z' });
+    // A second completion for c1 does not overwrite the first measurement.
+    repo.recordCompletion({ provider: 'copilot', callId: 'c1', completedAt: '2026-01-01T00:00:05.000Z' });
+    // An unmatched completion (wrong provider) is a no-op.
+    repo.recordCompletion({ provider: 'agency', callId: 'c2', completedAt: '2026-01-01T00:00:12.000Z' });
+    const [server] = read();
+    expect(server.calls).toBe(3);
+    expect(server.durationMs).toBe(1500);
     db.close();
   });
 });
@@ -126,11 +145,11 @@ describe('MCP rollup scopes', () => {
     expect(db.prepare('SELECT id FROM sessions').all()).toEqual([]);
     expect(rollup.workspaceMcpServers()).toEqual([{
       provider: 'copilot', server: 'filesystem', origin: 'configured', calls: 1,
-      inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools,
+      inputBytes: 0, outputBytes: 0, durationMs: 0, ...dated('2026-01-01T00:00:00.000Z'),
     }]);
     expect(rollup.ideMcpServers()).toEqual([{
       provider: 'copilot', server: 'github', origin: 'built-in', calls: 1,
-      inputBytes: 0, outputBytes: 0, durationMs: 0, ...noTools,
+      inputBytes: 0, outputBytes: 0, durationMs: 0, ...dated('2026-01-01T00:00:00.000Z'),
     }]);
     expect(rollup.featureMcpServers('f1')).toHaveLength(2);
     db.close();
@@ -150,7 +169,8 @@ describe('MCP rollup scopes', () => {
       calls: 1n, inputBytes: 2n, outputBytes: 3n, durationMs: 4n,
     })).toEqual({
       provider: 'copilot', server: 'github', origin: 'unknown',
-      calls: 1, inputBytes: 2, outputBytes: 3, durationMs: 4, ...unavailable,
+      calls: 1, inputBytes: 2, outputBytes: 3, durationMs: 4,
+      firstCallAt: null, lastCallAt: null, ...unavailable,
     });
   });
 
@@ -165,5 +185,14 @@ describe('MCP rollup scopes', () => {
       { tool: 'search', calls: 1, firstCallAt: '2026-01-01T00:00:00.000Z', lastCallAt: '2026-01-01T00:00:00.000Z' },
     ]);
     expect(merged.firstCallAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('leaves a server without tool rows empty and undated', () => {
+    const server = { provider: 'copilot', server: 'github', origin: 'unknown' as const,
+      calls: 1, inputBytes: 0, outputBytes: 0, durationMs: 0, ...unavailable };
+    const [merged] = attachMcpTools([server], []);
+    expect(merged.tools).toEqual([]);
+    expect(merged.firstCallAt).toBeNull();
+    expect(merged.lastCallAt).toBeNull();
   });
 });

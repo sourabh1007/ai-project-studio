@@ -414,6 +414,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     origin TEXT NOT NULL CHECK (origin IN ('built-in', 'configured', 'unknown')),
     scope TEXT NOT NULL CHECK (scope IN ('feature', 'internal')),
     recorded_at TEXT NOT NULL,
+    duration_ms INTEGER,
     PRIMARY KEY (provider, session_id, call_id)
   )`,
   },
@@ -1161,6 +1162,16 @@ const ADDED_COLUMNS: readonly {
     column: 'tool',
     schema: 'usage',
     ddl: "ALTER TABLE usage.mcp_observed_calls ADD COLUMN tool TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    // Wall-clock time (ms) of a single observed MCP call, derived by correlating
+    // the call's `tool.execution_complete` timestamp with its start. Nullable:
+    // remains null until (and unless) the completion event is captured, so the
+    // per-server "total time" is a best-effort lower bound for remote servers.
+    table: 'mcp_observed_calls',
+    column: 'duration_ms',
+    schema: 'usage',
+    ddl: 'ALTER TABLE usage.mcp_observed_calls ADD COLUMN duration_ms INTEGER',
   },
   {
     table: 'planner_tasks',

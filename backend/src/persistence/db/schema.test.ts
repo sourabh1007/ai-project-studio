@@ -730,14 +730,16 @@ describe('db schema/connection', () => {
         }[];
         expect(columns.map(({ name }) => name)).toEqual([
           'feature_id', 'session_id', 'provider', 'server', 'tool', 'call_id',
-          'origin', 'scope', 'recorded_at',
+          'origin', 'scope', 'recorded_at', 'duration_ms',
         ]);
-        expect(columns.every((column) => column.notnull === 1)).toBe(true);
+        expect(columns.filter((column) => column.name !== 'duration_ms')
+          .every((column) => column.notnull === 1)).toBe(true);
+        expect(columns.find((column) => column.name === 'duration_ms')!.notnull).toBe(0);
         expect(columns.filter((column) => column.pk > 0)
           .sort((a, b) => a.pk - b.pk).map(({ name }) => name))
           .toEqual(['provider', 'session_id', 'call_id']);
         const insert = upgraded.prepare(`INSERT INTO mcp_observed_calls VALUES (
-          'f1', 'warm-provider-session', 'copilot', 'github', 'repo_pr', 'c1', ?, ?, '2026-01-01'
+          'f1', 'warm-provider-session', 'copilot', 'github', 'repo_pr', 'c1', ?, ?, '2026-01-01', NULL
         )`);
         expect(() => insert.run('other', 'internal')).toThrow();
         expect(() => insert.run('built-in', 'other')).toThrow();

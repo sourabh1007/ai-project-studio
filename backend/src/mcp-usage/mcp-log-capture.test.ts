@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createMcpLogCapture, mcpCallFromEvent, type McpLogCaptureDeps, type McpLogPage } from './mcp-log-capture.js';
+import { createMcpLogCapture, mcpCallFromEvent, mcpCompletionFromEvent, type McpLogCaptureDeps, type McpLogPage } from './mcp-log-capture.js';
 import { MCP_USAGE_NAMESPACE, mcpUsageConfigSchema, mcpUsageDefaults } from './config.js';
 
 const timestamp = '2026-09-26T10:00:00.000Z';
@@ -17,7 +17,7 @@ function fixture(overrides: Partial<McpLogCaptureDeps> = {}) {
       resolve: vi.fn().mockReturnValue({ featureId: 'f', sessionId: 's', scope: 'feature' }),
     },
     reader: { read: vi.fn().mockResolvedValue(page()) },
-    usage: { recordObserved: vi.fn() },
+    usage: { recordObserved: vi.fn(), recordCompletion: vi.fn() },
     logger: { warn: vi.fn() },
     sourcesPerTick: 2, bytesPerSource: 4096, maxCachedSources: 2, ...overrides,
   };
@@ -57,6 +57,24 @@ describe('explicit CLI MCP event identification', () => {
   });
 });
 
+describe('MCP completion timing', () => {
+  const complete = (data: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({
+    type: 'tool.execution_complete', timestamp, data: { toolCallId: 'call-1', success: true, ...data }, ...extra,
+  });
+  it('extracts only the call id and finish time, ignoring result payloads', () => {
+    expect(mcpCompletionFromEvent(complete({ result: 'secret', success: false }))).toEqual({
+      callId: 'call-1', completedAt: timestamp,
+    });
+  });
+  it.each([
+    null, [], 'text', { type: 'tool.execution_start', data: { toolCallId: 'call-1' } },
+    { type: 'tool.execution_complete', data: null }, complete({ toolCallId: '' }),
+    complete({ toolCallId: 7 }), { ...complete(), timestamp: 'invalid' }, { ...complete(), timestamp: 2 },
+  ])('ignores non-completion or invalid records: %j', (value) => {
+    expect(mcpCompletionFromEvent(value)).toBeNull();
+  });
+});
+
 describe('bounded MCP log reconciliation', () => {
   it('stores only observed identity and checks ownership after reading', async () => {
     const { deps, capture } = fixture();
@@ -68,6 +86,21 @@ describe('bounded MCP log reconciliation', () => {
     await capture.tick();
     expect(deps.reader.read).toHaveBeenLastCalledWith('s', { offset: 42, skipping: false }, 4096);
     expect(deps.owners.list).toHaveBeenLastCalledWith('', 2);
+  });
+  it('stamps durations from completion events without re-resolving ownership', async () => {
+    const { deps, capture } = fixture();
+    const completion = {
+      type: 'tool.execution_complete', timestamp: '2026-09-26T10:00:02.000Z',
+      data: { toolCallId: 'call-1', success: true },
+    };
+    vi.mocked(deps.reader.read).mockResolvedValue(page([JSON.stringify(event()), JSON.stringify(completion)]));
+    await capture.tick();
+    expect(deps.usage.recordObserved).toHaveBeenCalledOnce();
+    expect(deps.usage.recordCompletion).toHaveBeenCalledWith({
+      provider: 'agency', callId: '["s","call-1"]', completedAt: '2026-09-26T10:00:02.000Z',
+    });
+    // A completion is timing-only: it never counts as an unattributed owner.
+    expect(deps.logger.warn).not.toHaveBeenCalled();
   });
   it('pages sources, wraps the scan, and bounds the cursor cache', async () => {
     const { deps, capture } = fixture({ maxCachedSources: 1, sourcesPerTick: 1 });

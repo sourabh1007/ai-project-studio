@@ -9,6 +9,8 @@ export interface McpRollupRow {
   inputBytes: number | bigint;
   outputBytes: number | bigint;
   durationMs: number | bigint;
+  firstCallAt?: string | null;
+  lastCallAt?: string | null;
 }
 
 /** One (provider, server, tool) group of observed calls, from the tool rollup. */
@@ -30,6 +32,8 @@ export function toMcpBreakdown(row: McpRollupRow): McpServerBreakdown {
     inputBytes: Number(row.inputBytes),
     outputBytes: Number(row.outputBytes),
     durationMs: Number(row.durationMs),
+    firstCallAt: row.firstCallAt ?? null,
+    lastCallAt: row.lastCallAt ?? null,
     inputTokens: null,
     outputTokens: null,
     nanoAiu: null,
@@ -43,9 +47,10 @@ const serverKey = (provider: string | undefined, server: string): string =>
 
 /**
  * Folds per-tool observed-call rows into their server breakdowns, busiest tool
- * first. The server's first/last call time is derived from its named tools, so a
- * server with no captured tool names keeps `tools: []` and null timestamps. Pure
- * so both read-side repos can share identical merge behaviour.
+ * first. The server's own first/last call time (derived from every observed and
+ * proxy slice upstream) is authoritative; the tool-derived span is only a
+ * fallback for rows that arrive without one. Pure so both read-side repos can
+ * share identical merge behaviour.
  */
 export function attachMcpTools(
   servers: McpServerBreakdown[],
@@ -74,8 +79,8 @@ export function attachMcpTools(
     return {
       ...server,
       tools: byServer.get(key) ?? [],
-      firstCallAt: firstByServer.get(key) ?? null,
-      lastCallAt: lastByServer.get(key) ?? null,
+      firstCallAt: server.firstCallAt ?? firstByServer.get(key) ?? null,
+      lastCallAt: server.lastCallAt ?? lastByServer.get(key) ?? null,
     };
   });
 }
@@ -88,20 +93,24 @@ export function mcpRollupSource(proxyFilter: string, observedFilter: string): st
       SUM(MAX(proxy_calls, observed_calls)) AS calls,
       SUM(input_bytes) AS inputBytes,
       SUM(output_bytes) AS outputBytes,
-      SUM(duration_ms) AS durationMs
+      SUM(duration_ms) AS durationMs,
+      MIN(first_at) AS firstCallAt,
+      MAX(last_at) AS lastCallAt
     FROM (
       SELECT feature_id, session_id, provider, server,
         SUM(proxy_calls) AS proxy_calls, SUM(observed_calls) AS observed_calls,
         SUM(input_bytes) AS input_bytes, SUM(output_bytes) AS output_bytes,
         SUM(duration_ms) AS duration_ms,
-        MIN(origin) AS first_origin, MAX(origin) AS last_origin
+        MIN(origin) AS first_origin, MAX(origin) AS last_origin,
+        MIN(recorded_at) AS first_at, MAX(recorded_at) AS last_at
       FROM (
         SELECT feature_id, session_id, provider, server, calls AS proxy_calls,
           0 AS observed_calls, input_bytes, output_bytes, duration_ms,
-          'configured' AS origin
+          'configured' AS origin, recorded_at
         FROM mcp_server_usage WHERE ${proxyFilter}
         UNION ALL
-        SELECT feature_id, session_id, provider, server, 0, 1, 0, 0, 0, origin
+        SELECT feature_id, session_id, provider, server, 0, 1, 0, 0,
+          COALESCE(duration_ms, 0), origin, recorded_at
         FROM mcp_observed_calls WHERE ${observedFilter}
       )
       GROUP BY feature_id, session_id, provider, server

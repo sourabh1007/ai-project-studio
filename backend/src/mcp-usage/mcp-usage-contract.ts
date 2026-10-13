@@ -17,10 +17,25 @@ export interface McpObservedCall {
   recordedAt: string;
 }
 
+/** Identity of a completed tool call, correlated to its start by call id. */
+export interface McpObservedCompletion {
+  provider: string;
+  /** Composite call identity, exactly as written by `recordObserved`. */
+  callId: string;
+  /** ISO timestamp the `tool.execution_complete` event was emitted. */
+  completedAt: string;
+}
+
 /** Separate port so existing proxy-only adapters remain compatible. */
 export interface McpObservedUsageRepo {
   /** Inserts once per provider/session/call identity; replays do not overwrite. */
   recordObserved(entry: McpObservedCall): void;
+  /**
+   * Stamps a previously-observed call with its wall-clock duration, computed
+   * from the gap between its recorded start and this completion. First
+   * completion wins; replays and unmatched completions are no-ops.
+   */
+  recordCompletion(entry: McpObservedCompletion): void;
 }
 
 /**
