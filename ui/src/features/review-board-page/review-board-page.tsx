@@ -875,7 +875,15 @@ export function ReviewBoardPage({
             <PrReviewIcon size={18} /> Review Board
           </h2>
           <p className="rb-subtitle">
-            #{board.pull.number} · {board.pull.title}
+            <a
+              className="rb-pr-link"
+              href={board.pull.url}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open PR #${board.pull.number} in the browser`}
+            >
+              #{board.pull.number} · {board.pull.title}
+            </a>
             {board.pull.headSha ? (
               <span
                 className="rb-commit"

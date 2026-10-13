@@ -1,22 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentType } from 'react';
 import { renderMarkdownComment } from '../lib/markdown.js';
 import { applyMarkdownFormat, type MarkdownFormat } from '../lib/markdown-format.js';
+import {
+  BoldIcon,
+  BulletListIcon,
+  CodeBlockIcon,
+  InlineCodeIcon,
+  ItalicIcon,
+  LinkIcon,
+  PreviewIcon,
+  QuoteIcon,
+  StrikethroughIcon,
+  WriteIcon,
+} from './icons.js';
 
 interface ToolbarButton {
   format: MarkdownFormat;
-  label: string;
+  Icon: ComponentType<{ size?: number; className?: string }>;
   title: string;
 }
 
 const TOOLBAR: ToolbarButton[] = [
-  { format: 'bold', label: 'B', title: 'Bold (Ctrl/Cmd+B)' },
-  { format: 'italic', label: 'I', title: 'Italic (Ctrl/Cmd+I)' },
-  { format: 'strike', label: 'S', title: 'Strikethrough' },
-  { format: 'code', label: '<>', title: 'Inline code' },
-  { format: 'codeblock', label: '{}', title: 'Code block' },
-  { format: 'link', label: 'Link', title: 'Link (Ctrl/Cmd+K)' },
-  { format: 'bullet', label: 'List', title: 'Bulleted list' },
-  { format: 'quote', label: 'Quote', title: 'Blockquote' },
+  { format: 'bold', Icon: BoldIcon, title: 'Bold (Ctrl/Cmd+B)' },
+  { format: 'italic', Icon: ItalicIcon, title: 'Italic (Ctrl/Cmd+I)' },
+  { format: 'strike', Icon: StrikethroughIcon, title: 'Strikethrough' },
+  { format: 'code', Icon: InlineCodeIcon, title: 'Inline code' },
+  { format: 'codeblock', Icon: CodeBlockIcon, title: 'Code block' },
+  { format: 'link', Icon: LinkIcon, title: 'Link (Ctrl/Cmd+K)' },
+  { format: 'bullet', Icon: BulletListIcon, title: 'Bulleted list' },
+  { format: 'quote', Icon: QuoteIcon, title: 'Blockquote' },
 ];
 
 /**
@@ -108,7 +121,8 @@ export function MarkdownComposer({
             className={`md-composer-tab${tab === 'write' ? ' is-active' : ''}`}
             onClick={() => setTab('write')}
           >
-            Write
+            <WriteIcon size={14} />
+            <span>Write</span>
           </button>
           <button
             type="button"
@@ -117,24 +131,25 @@ export function MarkdownComposer({
             className={`md-composer-tab${tab === 'preview' ? ' is-active' : ''}`}
             onClick={() => setTab('preview')}
           >
-            Preview
+            <PreviewIcon size={14} />
+            <span>Preview</span>
           </button>
         </div>
         {tab === 'write' && (
           <div className="md-composer-tools" role="toolbar" aria-label="Formatting">
-            {TOOLBAR.map((button) => (
+            {TOOLBAR.map(({ format, Icon, title }) => (
               <button
-                key={button.format}
+                key={format}
                 type="button"
                 className="md-composer-tool"
-                title={button.title}
-                aria-label={button.title}
+                title={title}
+                aria-label={title}
                 disabled={disabled}
                 // Keep the textarea selection when a tool is clicked.
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => apply(button.format)}
+                onClick={() => apply(format)}
               >
-                {button.label}
+                <Icon size={15} />
               </button>
             ))}
           </div>

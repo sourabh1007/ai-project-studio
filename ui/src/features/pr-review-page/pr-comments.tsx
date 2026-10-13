@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { Avatar } from '../../components/avatar.js';
+import { RestoreIcon } from '../../components/icons.js';
 import {
   annotateDiffLines,
   rightSideLines,
@@ -330,11 +331,12 @@ function ThreadCard({
         {collapsible ? (
           <Button
             variant="ghost"
+            className="pr-comment-minimize"
             onClick={() => setCollapsed(true)}
             ariaLabel="Minimize comment"
             title="Minimize comment"
           >
-            Minimize
+            <RestoreIcon size={15} />
           </Button>
         ) : null}
       </div>

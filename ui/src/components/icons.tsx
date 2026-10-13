@@ -11,18 +11,22 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Bold,
   Bot,
   BrainCircuit,
   Bug,
   Calendar,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Circle,
   Clock,
+  Code,
   Coins,
   Copy,
   Download,
+  Eye,
   FileCode2,
   FileDown,
   FileText,
@@ -35,8 +39,11 @@ import {
   Gauge,
   History,
   Info,
+  Italic,
   KeyRound,
   Layers,
+  Link2,
+  List,
   ListChecks,
   LogIn,
   Power,
@@ -46,12 +53,14 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
+  PenLine,
   PictureInPicture,
   PictureInPicture2,
   Play,
   Plug,
   Plus,
   Pause,
+  Quote,
   Radar,
   RefreshCw,
   RotateCcw,
@@ -64,6 +73,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  SquareCode,
+  Strikethrough,
   Sun,
   Tag,
   Timer,
@@ -148,6 +159,7 @@ export const PlannerIcon = makeIcon(ListChecks);
 export const CalendarIcon = makeIcon(Calendar);
 export const ChevronLeftIcon = makeIcon(ChevronLeft);
 export const ChevronRightIcon = makeIcon(ChevronRight);
+export const ChevronDownIcon = makeIcon(ChevronDown);
 export const SettingsIcon = makeIcon(Settings2);
 export const SunIcon = makeIcon(Sun);
 export const MoonIcon = makeIcon(Moon);
@@ -189,6 +201,16 @@ export const TaskPlanSkillIcon = makeIcon(ListChecks);
 export const TagIcon = makeIcon(Tag);
 export const ExportIcon = makeIcon(Download);
 export const CopyIcon = makeIcon(Copy);
+export const BoldIcon = makeIcon(Bold);
+export const ItalicIcon = makeIcon(Italic);
+export const StrikethroughIcon = makeIcon(Strikethrough);
+export const InlineCodeIcon = makeIcon(Code);
+export const CodeBlockIcon = makeIcon(SquareCode);
+export const LinkIcon = makeIcon(Link2);
+export const BulletListIcon = makeIcon(List);
+export const QuoteIcon = makeIcon(Quote);
+export const WriteIcon = makeIcon(PenLine);
+export const PreviewIcon = makeIcon(Eye);
 export const DownloadMarkdownIcon = makeIcon(FileDown);
 export const DownloadHtmlIcon = makeIcon(FileCode2);
 export const UploadIcon = makeIcon(Upload);
