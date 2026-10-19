@@ -36,6 +36,10 @@ function service(overrides: Partial<NewTaskService> = {}): NewTaskService {
     plan: async () => run({ status: 'planned', plan: 'the plan' }),
     implement: async () => undefined,
     fileDiff: async () => ({ path: 'x', diff: '', content: '' }),
+    clarify: async () => { throw new Error('clarify is not used in this fixture'); },
+    refine: async () => { throw new Error('refine is not used in this fixture'); },
+    applyRefinedPlan: () => { throw new Error('applyRefinedPlan is not used in this fixture'); },
+    reset: () => run(),
     ...overrides,
   };
 }

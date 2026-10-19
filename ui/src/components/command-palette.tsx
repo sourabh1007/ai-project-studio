@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useAnimatedPresence } from '../hooks/use-motion.js';
 import { createPortal } from 'react-dom';
 import { type Command, filterCommands } from '../lib/command-palette.js';
 import { attachDialogFocusOwnership } from '../lib/focus-ownership.js';
@@ -27,6 +28,8 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const { present, exiting } = useAnimatedPresence(open, '--motion-overlay-duration');
 
   const results = useMemo(
     () => filterCommands(commands, query),
@@ -43,7 +46,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
   }, [open]);
 
   useEffect(() => {
-    if (!open) {
+    if (!present) {
       return undefined;
     }
     const panel = panelRef.current;
@@ -53,7 +56,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
     return attachDialogFocusOwnership(panel, {
       initialFocus: inputRef.current,
     });
-  }, [open]);
+  }, [present]);
 
   // Keep the active index within the current result bounds as filtering changes.
   useEffect(() => {
@@ -67,14 +70,14 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
   useEffect(() => {
     const node = listRef.current?.children[active] as HTMLElement | undefined;
     node?.scrollIntoView({ block: 'nearest' });
-  }, [active]);
+  }, [active, results]);
 
-  if (!open) {
+  if (!present) {
     return null;
   }
 
   const run = (command: PaletteCommand | undefined) => {
-    if (!command) return;
+    if (!open || !command) return;
     onClose();
     command.run();
   };
@@ -101,7 +104,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
 
   return createPortal(
     <div
-      className="cmdk-overlay"
+      className={`cmdk-overlay${exiting ? ' is-exiting' : ''}`}
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
@@ -126,6 +129,12 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
             placeholder="Type a command…"
             value={query}
             aria-label="Command palette search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={open && results.length > 0}
+            aria-controls={results.length > 0 ? listId : undefined}
+            aria-activedescendant={open && results[active] ? `${listId}-${active}` : undefined}
+            readOnly={exiting}
             onChange={(event) => {
               setQuery(event.target.value);
               setActive(0);
@@ -133,20 +142,21 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
           />
         </div>
         {results.length === 0 ? (
-          <div className="cmdk-empty">No matching commands</div>
+          <div className="cmdk-empty" role="status">No matching commands</div>
         ) : (
-          <ul className="cmdk-list" ref={listRef} role="listbox">
+          <ul className="cmdk-list" ref={listRef} role="listbox" id={listId} aria-label="Commands">
             {results.map((command, index) => (
               <li
                 key={command.id}
+                id={`${listId}-${index}`}
                 role="option"
                 aria-selected={index === active}
                 className={`cmdk-item ${index === active ? 'is-active' : ''}`.trim()}
                 onMouseEnter={() => setActive(index)}
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  run(command);
                 }}
+                onClick={() => run(command)}
               >
                 <span className="cmdk-item-title">{command.title}</span>
                 {command.section ? (

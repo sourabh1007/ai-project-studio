@@ -1,18 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useAnimatedPresence } from '../../hooks/use-motion.js';
 import { useApi } from '../../app/api-context.js';
 import {
   CheckIcon,
   ChevronIcon,
   CircleIcon,
   ClockIcon,
+  CloseIcon,
   CopyIcon,
   DownloadHtmlIcon,
   DownloadMarkdownIcon,
+  ExpandIcon,
   RefreshIcon,
+  SearchIcon,
 } from '../../components/icons.js';
 import { Spinner } from '../../components/loading.js';
 import { Modal } from '../../components/ui.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
+import { PaneResizer } from '../../components/pane-resizer.js';
+import { Disclosure } from '../../components/disclosure.js';
+import { copyText } from '../../hooks/clipboard-write.js';
+import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { renderMarkdownComment, markdownPreviewText } from '../../lib/markdown.js';
 import {
   buildResponseHtmlDocument,
@@ -37,7 +45,7 @@ const STATUS_LABEL: Record<PromptStatus, string> = {
 };
 
 /** A small status glyph with a descriptive tooltip for a prompt's lifecycle. */
-function StatusIcon({ prompt }: { prompt: SessionPrompt }) {
+function StatusIcon({ prompt, showLabel = true }: { prompt: SessionPrompt; showLabel?: boolean }) {
   const base = STATUS_LABEL[prompt.status];
   const tip =
     prompt.status === 'answered' && prompt.durationMs != null
@@ -53,7 +61,7 @@ function StatusIcon({ prompt }: { prompt: SessionPrompt }) {
       {prompt.status === 'answered' ? (
         <CheckIcon size={13} />
       ) : prompt.status === 'answering' ? (
-        <Spinner size={13} label={tip} />
+        <Spinner size={13} label={tip} showLabel={showLabel} />
       ) : (
         <CircleIcon size={11} />
       )}
@@ -69,16 +77,30 @@ function StatusIcon({ prompt }: { prompt: SessionPrompt }) {
  */
 function ResponseToolbar({ prompt }: { prompt: SessionPrompt }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; clearTimeout(copyTimer.current); };
+  }, []);
   const response = prompt.response ?? '';
 
   const copy = () => {
-    void navigator.clipboard
-      .writeText(response)
-      .then(() => {
+    setCopyError(null);
+    void copyText(response)
+      .then((result) => {
+        if (!mounted.current) return;
+        if (!result.ok) {
+          setCopied(false);
+          setCopyError(result.writeState === 'unknown'
+            ? 'Clipboard write could not be confirmed' : 'Clipboard unavailable');
+          return;
+        }
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
-      .catch(() => setCopied(false));
+        clearTimeout(copyTimer.current);
+        copyTimer.current = setTimeout(() => setCopied(false), 1500);
+      });
   };
 
   const download = (format: ResponseExportFormat) => {
@@ -108,11 +130,13 @@ function ResponseToolbar({ prompt }: { prompt: SessionPrompt }) {
         className="history-detail-tool"
         onClick={copy}
         title="Copy response as Markdown"
-        aria-label="Copy response as Markdown"
+        aria-label={copied ? 'Response copied' : 'Copy response as Markdown'}
       >
         {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
         <span>{copied ? 'Copied' : 'Copy'}</span>
       </button>
+      <span className="sr-only" role="status">{copied ? 'Response copied to clipboard' : ''}</span>
+      {copyError && <span role="alert" className="history-copy-error">Could not copy: {copyError}</span>}
       <button
         type="button"
         className="history-detail-tool"
@@ -144,10 +168,19 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
   return (
     <Modal title="Prompt & response" onClose={onClose} size="lg" className="history-detail">
       <div className="history-detail-meta">
-        <StatusIcon prompt={prompt} />
+        <StatusIcon prompt={prompt} showLabel={false} />
         <span className="history-detail-status">{STATUS_LABEL[prompt.status]}</span>
         {durationText && <span className="history-detail-duration">· took {durationText}</span>}
       </div>
+      <Disclosure className="prompt-record-details" summary="Recorded turn details">
+        <dl className="clarity-details-grid">
+          <dt>Turn</dt><dd>{prompt.index + 1}</dd>
+          <dt>Prompt recorded</dt><dd>{formatDateTime(prompt.at || null)}</dd>
+          <dt>Answer recorded</dt><dd>{formatDateTime(prompt.answeredAt)}</dd>
+          <dt>Duration</dt><dd>{durationText ?? 'Not reported'}</dd>
+          <dt>History state</dt><dd>{prompt.pending ? 'Still being saved' : 'Recorded'}</dd>
+        </dl>
+      </Disclosure>
       <section className="history-detail-block history-detail-block--prompt">
         <header>
           <span className="history-detail-role">You asked</span>
@@ -227,26 +260,58 @@ function PromptRow({
   );
 }
 
+function PromptSearch({ query, onChange }: { query: string; onChange: (value: string) => void }) {
+  return (
+    <div className="history-pane-search">
+      <SearchIcon size={14} />
+      <input
+        type="search"
+        className="history-pane-search-input"
+        aria-label="Search prompt history"
+        placeholder="Search prompts and responses..."
+        value={query}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {query && (
+        <button
+          type="button"
+          className="history-pane-refresh"
+          aria-label="Clear prompt history search"
+          title="Clear search"
+          onClick={() => onChange('')}
+        >
+          <CloseIcon size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The scrollable prompt list, shared by the docked pane and the full-screen view. */
 function PromptList({
   prompts,
+  totalCount,
   loading,
   error,
   onSelect,
 }: {
   prompts: SessionPrompt[];
+  totalCount: number;
   loading: boolean;
   error: boolean;
   onSelect: (prompt: SessionPrompt) => void;
 }) {
-  if (loading && prompts.length === 0) {
+  if (loading && totalCount === 0) {
     return <p className="history-pane-empty">Loading…</p>;
   }
   if (error) {
     return <p className="history-pane-empty">Couldn’t load prompt history.</p>;
   }
-  if (prompts.length === 0) {
+  if (totalCount === 0) {
     return <p className="history-pane-empty">No prompts recorded yet.</p>;
+  }
+  if (prompts.length === 0) {
+    return <p className="history-pane-empty">No prompts or responses match your search.</p>;
   }
   return (
     <ol className="history-pane-list">
@@ -272,15 +337,37 @@ function PromptList({
 export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
   const api = useApi();
   const [open, setOpen] = usePersistentState('cw-history-pane-open', true);
+  const historyPresence = useAnimatedPresence(open, '--motion-panel-duration');
+  const [width, setWidth] = usePersistentState('cw-history-pane-width', 300, {
+    validate: isFiniteNumber,
+    normalize: (value) => clampNumber(value, 220, 560),
+  });
   const [prompts, setPrompts] = useState<SessionPrompt[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const [selected, setSelected] = useState<SessionPrompt | null>(null);
+  const detailOpen = selected !== null;
   const [expanded, setExpanded] = useState(false);
+  const historyVisible = open || expanded || detailOpen;
+  const [query, setQuery] = useState('');
+  const needle = query.trim().toLowerCase();
+  const matchingPrompts = useMemo(
+    () => needle
+      ? prompts.filter((prompt) =>
+          prompt.text.toLowerCase().includes(needle) ||
+          (prompt.response ?? '').toLowerCase().includes(needle))
+      : prompts,
+    [prompts, needle],
+  );
 
   useEffect(() => {
-    if (!sessionId || (!open && !expanded)) {
+    setQuery('');
+    setSelected(null);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !historyVisible) {
       return;
     }
     let cancelled = false;
@@ -294,6 +381,13 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
         .then((result) => {
           if (!cancelled) {
             setPrompts(result);
+            setSelected((current) => current
+              ? result.find((prompt) => prompt.index === current.index &&
+                  (!current.text || prompt.text === current.text) &&
+                  (!current.at || !prompt.at || prompt.at === current.at)) ??
+                result.find((prompt) => current.text && current.at &&
+                  prompt.text === current.text && prompt.at === current.at) ?? current
+              : null);
             setError(false);
           }
         })
@@ -317,16 +411,32 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
         clearTimeout(timer);
       }
     };
-  }, [api, sessionId, open, expanded, reloadTick]);
+  }, [api, sessionId, historyVisible, reloadTick]);
 
   if (!sessionId) {
     return null;
   }
 
   const countLabel = prompts.length === 1 ? '1 prompt' : `${prompts.length} prompts`;
+  const resultLabel = needle ? `${matchingPrompts.length} of ${countLabel}` : countLabel;
 
   return (
-    <aside className={`history-pane${open ? '' : ' is-collapsed'}`}>
+    <aside
+      className={`history-pane${open ? '' : ' is-collapsed'}`}
+      style={{ '--history-width': `${width}px` } as CSSProperties}
+    >
+      {open && (
+        <PaneResizer
+          className="history-resizer"
+          label="Resize prompt history"
+          value={width}
+          min={220}
+          max={560}
+          resetValue={300}
+          reverse
+          onChange={setWidth}
+        />
+      )}
       <button
         type="button"
         className="history-pane-toggle"
@@ -345,10 +455,11 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
           <span className="history-pane-rail">History</span>
         )}
       </button>
-      {open && (
-        <div className="history-pane-body">
+      {historyPresence.present && (
+        <div className={`history-pane-body${historyPresence.exiting ? ' is-exiting' : ''}`}
+          aria-hidden={!open || undefined} ref={(node) => { node?.toggleAttribute('inert', !open); }}>
           <div className="history-pane-header">
-            <span className="history-pane-count">{countLabel}</span>
+            <span className="history-pane-count" aria-live="polite">{resultLabel}</span>
             <div className="history-pane-actions">
               <button
                 type="button"
@@ -370,9 +481,11 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
               </button>
             </div>
           </div>
+          <PromptSearch query={query} onChange={setQuery} />
           <div className="history-pane-content">
             <PromptList
-              prompts={prompts}
+              prompts={matchingPrompts}
+              totalCount={prompts.length}
               loading={loading}
               error={error}
               onSelect={setSelected}
@@ -388,7 +501,7 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
           className="history-fullscreen"
         >
           <div className="history-fullscreen-bar">
-            <span className="history-pane-count">{countLabel}</span>
+            <span className="history-pane-count" aria-live="polite">{resultLabel}</span>
             <button
               type="button"
               className="history-pane-refresh"
@@ -399,9 +512,11 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
               <RefreshIcon size={14} />
             </button>
           </div>
+          <PromptSearch query={query} onChange={setQuery} />
           <div className="history-fullscreen-content">
             <PromptList
-              prompts={prompts}
+              prompts={matchingPrompts}
+              totalCount={prompts.length}
               loading={loading}
               error={error}
               onSelect={setSelected}
@@ -411,20 +526,5 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
       )}
       {selected && <PromptDetail prompt={selected} onClose={() => setSelected(null)} />}
     </aside>
-  );
-}
-
-/** A small expand-to-full-screen glyph (two outward corners). */
-function ExpandIcon() {
-  return (
-    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }

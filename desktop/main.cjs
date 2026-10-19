@@ -4,7 +4,6 @@ const { app, BrowserWindow, Menu, shell, nativeTheme, ipcMain, session, clipboar
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const http = require('node:http');
-const net = require('node:net');
 const path = require('node:path');
 const fs = require('node:fs');
 const regression = require('./regression-isolation.cjs').configure(app);
@@ -13,6 +12,7 @@ const ipcInput = require('./ipc-input.cjs');
 const { createBackendFailureLog } = require('./backend-failure-log.cjs');
 const { createHttpCacheCleanupHandler } = require('./http-cache-cleanup.cjs');
 const { createAppearanceStore, registerAppearanceIpc } = require('./appearance-store.cjs');
+const { createStablePort } = require('./stable-port.cjs');
 let clipboardAttachmentStore = null;
 const {
   requestBackendShutdown,
@@ -158,18 +158,16 @@ function safeWrite(stream, text) {
   }
 }
 
-/** Finds a free TCP port by binding to port 0 and reading the assigned port. */
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on('error', reject);
-    server.listen(0, HOST, () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
+/**
+ * Resolves the backend's listen port, reused across launches so the app's page
+ * origin — and therefore its `localStorage` (open tabs, explorer collapse, the
+ * saved PR-review team roster) — stays stable across restarts and updates. The
+ * remembered port lives in the (update-stable) userData directory.
+ */
+const stablePort = createStablePort({
+  host: HOST,
+  portFile: path.join(app.getPath('userData'), 'desktop-port.json'),
+});
 
 /**
  * Resolves once the backend proves, on /identity, that it is the child this
@@ -1330,7 +1328,7 @@ async function bootstrap() {
     }
     await ensureBackendDependencies(splash);
     if (startupCancelled) return;
-    const port = await getFreePort();
+    const port = await stablePort.resolve();
     if (startupCancelled) return;
     startBackend(port);
     splash.update('connecting');

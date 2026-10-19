@@ -5,6 +5,8 @@
  */
 
 export type ClientMessage =
+  | { type: 'worktree-selection'; generation: number; requestId: number; choiceId: string | null }
+  | { type: 'checkout-recovery'; generation: number; requestId: number; approved: boolean }
   | { type: 'ping'; generation: number; seq: number }
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
@@ -12,6 +14,8 @@ export type ClientMessage =
 export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
+  | { type: 'worktree-selection'; requestId: number; choices: { id: string; checkoutPath: string; ref: string }[] }
+  | { type: 'checkout-recovery'; requestId: number; detail: string }
   | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number; detail?: string; heartbeat?: boolean }
   | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
@@ -37,6 +41,20 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
   }
   if (!isRecord(parsed)) {
     return null;
+  }
+  if (parsed.type === 'worktree-selection') {
+    return Number.isSafeInteger(parsed.requestId) && (parsed.requestId as number) > 0 &&
+      Array.isArray(parsed.choices) && parsed.choices.length > 0 &&
+      parsed.choices.every((choice) => isRecord(choice) &&
+        typeof choice.id === 'string' && choice.id.length > 0 &&
+        typeof choice.checkoutPath === 'string' && choice.checkoutPath.length > 0 &&
+        typeof choice.ref === 'string' && choice.ref.length > 0)
+      ? parsed as ServerMessage : null;
+  }
+  if (parsed.type === 'checkout-recovery') {
+    return Number.isSafeInteger(parsed.requestId) && (parsed.requestId as number) > 0 && typeof parsed.detail === 'string'
+      ? { type: 'checkout-recovery', requestId: parsed.requestId as number, detail: parsed.detail }
+      : null;
   }
   if (parsed.type === 'state' || parsed.type === 'ack' || parsed.type === 'pong') {
     if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;

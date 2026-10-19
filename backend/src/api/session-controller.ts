@@ -15,7 +15,10 @@ const startSessionSchema = z.object({
   prompt: z.string().min(1),
   kind: z.enum(['dev', 'meta']).optional(),
   cwd: z.string().min(1).optional(),
+  taskCheckoutId: z.string().min(1).optional(),
 });
+
+const relaunchSessionSchema = z.object({ taskCheckoutId: z.string().min(1).optional() });
 
 const renameSessionSchema = z.object({
   name: z.string().max(120).nullable(),
@@ -33,7 +36,7 @@ export interface SessionControllerDeps {
    * the repo checkout. New interactive sessions also share these checkouts;
    * previously recorded session copies are retained by `resolveSessionLaunchCwd`.
    */
-  resolveCwd?: (featureId: string) => string | undefined;
+  resolveCwd?: (featureId: string, taskCheckoutId?: string) => string | undefined;
   /**
    * Resolves the full working directory + branch a feature's sessions run in,
    * so the UI can show — and get consent for — the branch a cross-feature move
@@ -45,7 +48,7 @@ export interface SessionControllerDeps {
    * directory. Called after a consented cross-feature move so the running CLI
    * comes up on the new branch. No-op when the session has no live terminal.
    */
-  relaunchSession: (session: Session) => Promise<void>;
+  relaunchSession: (session: Session, taskCheckoutId?: string) => Promise<void>;
 }
 
 function includeInternal(query: string | undefined): boolean {
@@ -89,8 +92,8 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       method: 'post',
       path: '/features/:featureId/sessions',
       handler: async (req) => {
-        const input = parseInput(startSessionSchema, req.body);
-        const pinnedCwd = deps.resolveCwd?.(req.params.featureId);
+        const { taskCheckoutId, ...input } = parseInput(startSessionSchema, req.body);
+        const pinnedCwd = deps.resolveCwd?.(req.params.featureId, taskCheckoutId);
         const launched = await deps.launcher.start({
           featureId: req.params.featureId,
           ...input,
@@ -167,11 +170,12 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
       method: 'post',
       path: '/sessions/:id/relaunch',
       handler: async (req) => {
+        const input = parseInput(relaunchSessionSchema, req.body ?? {});
         const session = deps.sessions.get(req.params.id);
         if (!session) {
           return { status: 404, body: { error: { kind: 'not_found', message: 'Unknown session' } } };
         }
-        await deps.relaunchSession(session);
+        await deps.relaunchSession(session, input.taskCheckoutId);
         return { status: 200, body: session };
       },
     },

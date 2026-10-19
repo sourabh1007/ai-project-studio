@@ -37,7 +37,7 @@ describe('explicit CLI MCP event identification', () => {
     expect(mcpCallFromEvent(event({ toolName: 'repo_pull_request' }))).toEqual({
       server: 'ado', tool: 'repo_pull_request', callId: 'call-1', recordedAt: timestamp, origin: 'unknown',
     });
-    expect(mcpCallFromEvent(event({ toolName: 7 })).tool).toBe('');
+    expect(mcpCallFromEvent(event({ toolName: 7 }))?.tool).toBe('');
   });
   it('prefers config identity over display name and never reads billing/arguments', () => {
     expect(mcpCallFromEvent(event({
@@ -76,6 +76,13 @@ describe('MCP completion timing', () => {
 });
 
 describe('bounded MCP log reconciliation', () => {
+  it('delivers parsed events to generic telemetry observers without a second reader', async () => {
+    const observeEvent = vi.fn();
+    const { deps, capture } = fixture({ observeEvent });
+    await capture.tick();
+    expect(observeEvent).toHaveBeenCalledWith(event(), { key: 'agency:s', provider: 'agency', sessionId: 's' });
+    expect(deps.reader.read).toHaveBeenCalledOnce();
+  });
   it('stores only observed identity and checks ownership after reading', async () => {
     const { deps, capture } = fixture();
     await capture.tick();

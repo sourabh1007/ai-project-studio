@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createCopilotHistoryReader, isInjectedPrompt } from './copilot-history-reader.js';
+import { createCopilotHistoryReader, isInjectedPrompt, extractUserRequest, toVisiblePrompt } from './copilot-history-reader.js';
 import type {
   CopilotHistorySource,
   HistoryCheckpointRow,
   HistorySessionRow,
 } from './copilot-history-contract.js';
 import { copilotHistoryDefaults } from './config.js';
+import { parseLatestLivePrompt } from './copilot-live-prompt-parser.js';
 
 function fakeSource(overrides: Partial<CopilotHistorySource> = {}): {
   source: CopilotHistorySource;
@@ -31,6 +32,107 @@ function fakeSource(overrides: Partial<CopilotHistorySource> = {}): {
 }
 
 describe('createCopilotHistoryReader', () => {
+  it.each([false, true])('uses recorded completion with recent usage and delayed persistence (saved=%s)', (saved) => {
+    const { source } = fakeSource({
+      userMessages: () => saved ? [
+        { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
+      ] : [],
+      usageEventTimes: () => ['2024-01-01T00:00:09Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T00:00:10Z'),
+      livePrompts: { latest: () => parseLatestLivePrompt([
+        JSON.stringify({ type: 'user.message', data: { content: 'ask', messageId: 'm1', turnId: '0' }, timestamp: '2024-01-01T00:00:00Z' }),
+        JSON.stringify({ type: 'assistant.message', data: { originatingMessageId: 'm1', content: 'Done.' } }),
+        JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' }, timestamp: '2024-01-01T00:00:05Z' }),
+      ].join('\n'), toVisiblePrompt) },
+    });
+    expect(reader.prompts('s1')).toEqual([{
+      index: 0, text: 'ask', at: '2024-01-01T00:00:00Z', response: 'Done.',
+      status: 'answered', answeredAt: '2024-01-01T00:00:05Z', durationMs: 5000,
+      ...(!saved ? { pending: true } : {}),
+    }]);
+  });
+
+  it.each([false, true])('keeps a partial live response generating until completion (saved=%s)', (saved) => {
+    const { source } = fakeSource({
+      userMessages: () => saved ? [
+        { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
+      ] : [],
+      usageEventTimes: () => ['2024-01-01T00:00:09Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T00:00:10Z'),
+      livePrompts: { latest: () => ({ text: 'ask', at: '2024-01-01T00:00:00Z', response: 'Checking…' }) },
+    });
+    expect(reader.prompts('s1')[0]).toMatchObject({ response: 'Checking…', status: 'answering', answeredAt: null });
+  });
+
+  it.each([false, true])('keeps completion without a recorded reply distinct from generating (saved=%s)', (saved) => {
+    const { source } = fakeSource({
+      userMessages: () => saved ? [
+        { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '' },
+      ] : [],
+      usageEventTimes: () => ['2024-01-01T00:00:09Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T00:00:10Z'),
+      livePrompts: { latest: () => ({ text: 'ask', at: '', response: null, completedAt: null }) },
+    });
+    expect(reader.prompts('s1')[0]).toMatchObject({ response: null, status: 'unanswered', answeredAt: null, durationMs: null });
+  });
+
+  it('does not discard a repeated prompt entered in a new turn', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'ask', assistant_response: 'Old answer', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({
+        text: 'ask', at: '2024-01-01T00:01:00Z', response: 'New answer',
+        completedAt: '2024-01-01T00:01:05Z',
+      }) },
+    });
+    expect(reader.prompts('s1')).toHaveLength(2);
+    expect(reader.prompts('s1')[1]).toMatchObject({ response: 'New answer', status: 'answered' });
+  });
+
+  it.each([null, 'Finished reply'])('reconciles an idle saved prompt without inventing a response (%s)', (response) => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
+      ],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T01:00:00Z'),
+      livePrompts: { latest: () => ({ text: 'ask', at: '2024-01-01T00:00:00.000Z', response }) },
+    });
+    expect(reader.prompts('s1')).toHaveLength(1);
+    expect(reader.prompts('s1')[0]).toMatchObject({
+      response, status: response ? 'answered' : 'unanswered', answeredAt: null,
+    });
+  });
+
+  it('uses the recorded completion time over stored text and later billing timestamps', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: 'ask', assistant_response: 'Done.', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+      usageEventTimes: () => ['2024-01-01T00:00:09Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({
+        text: 'ask', at: '2024-01-01T00:00:00Z', response: null, completedAt: '2024-01-01T00:00:05Z',
+      }) },
+    });
+    expect(reader.prompts('s1')[0]).toMatchObject({
+      response: 'Done.', status: 'answered', answeredAt: '2024-01-01T00:00:05Z', durationMs: 5000,
+    });
+  });
+
   it('returns an empty history per id when no ids are given', () => {
     const { source } = fakeSource();
     const reader = createCopilotHistoryReader({
@@ -355,7 +457,7 @@ describe('createCopilotHistoryReader', () => {
     });
   });
 
-  it('keeps the live prompt visible but marks it answered once activity settles', () => {
+  it('keeps an idle live prompt visible without claiming an unrecorded answer', () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -370,7 +472,7 @@ describe('createCopilotHistoryReader', () => {
     });
     expect(reader.prompts('s1')[1]).toEqual({
       index: 1, text: 'Latest prompt', at: '2024-01-01T00:00:05Z', response: null,
-      status: 'answered', answeredAt: null, durationMs: null, pending: true,
+      status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
     });
   });
 
@@ -388,7 +490,7 @@ describe('createCopilotHistoryReader', () => {
     expect(reader.prompts('s1')).toEqual([
       {
         index: 0, text: 'First ever', at: '2024-01-01T00:00:00Z', response: null,
-        status: 'answered', answeredAt: null, durationMs: null, pending: true,
+        status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
       },
     ]);
   });
@@ -540,5 +642,94 @@ describe('isInjectedPrompt', () => {
     expect(isInjectedPrompt('Add a dark mode toggle')).toBe(false);
     expect(isInjectedPrompt('Why is the session bootstrap failing?')).toBe(false);
     expect(isInjectedPrompt('')).toBe(false);
+  });
+});
+
+describe('extractUserRequest', () => {
+  it('returns the request embedded after the launch marker', () => {
+    const launch =
+      '# Session Bootstrap Context\n\n## Feature\n\nName: X\n\n## User Request\n\nBuild the thing';
+    expect(extractUserRequest(launch)).toBe('Build the thing');
+  });
+
+  it('returns null when there is no embedded request', () => {
+    expect(extractUserRequest('# Session Bootstrap Context\n\njust context')).toBeNull();
+    expect(
+      extractUserRequest('# Session Bootstrap Context\n\n## User Request\n\n   '),
+    ).toBeNull();
+  });
+});
+
+describe('toVisiblePrompt', () => {
+  it('passes genuine prompts through trimmed', () => {
+    expect(toVisiblePrompt('  Add a toggle  ')).toBe('Add a toggle');
+  });
+
+  it('hides blank and pure-injected prompts', () => {
+    expect(toVisiblePrompt('   ')).toBeNull();
+    expect(toVisiblePrompt('You maintain a durable, shared knowledge base …')).toBeNull();
+  });
+
+  it('unwraps a launch prompt to its embedded request', () => {
+    expect(
+      toVisiblePrompt('# Session Bootstrap Context\n\nctx\n\n## User Request\n\nFix the bug'),
+    ).toBe('Fix the bug');
+  });
+
+  it('hides a launch wrapper whose embedded request is itself an app template', () => {
+    expect(
+      toVisiblePrompt(
+        '# Session Bootstrap Context\n\nctx\n\n## User Request\n\nYou maintain a durable, shared knowledge base …',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
+  const launch =
+    '# Session Bootstrap Context\n\n## Feature\n\nName: X\n\n## User Request\n\nLaunch request';
+
+  it('surfaces the embedded request of a launched session first turn from the store', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: launch, assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
+        { turn_index: 1, user_message: 'Typed follow-up', assistant_response: 'A2', timestamp: '2024-01-01T00:05:00Z' },
+      ],
+    });
+    const reader = createCopilotHistoryReader({ source, config: copilotHistoryDefaults });
+    const result = reader.prompts('s1');
+    expect(result.map((p) => p.text)).toEqual(['Launch request', 'Typed follow-up']);
+  });
+
+  it('surfaces the embedded request of a launch prompt that is still in-flight (live)', () => {
+    const { source } = fakeSource({ userMessages: () => [] });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: launch, at: '2024-01-01T00:00:00Z', response: null }) },
+      now: () => 1000,
+    });
+    expect(reader.prompts('s1')).toEqual([
+      {
+        index: 0, text: 'Launch request', at: '2024-01-01T00:00:00Z', response: null,
+        status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
+      },
+    ]);
+  });
+
+  it('drops the live launch row once the store persists the same unwrapped turn', () => {
+    const { source } = fakeSource({
+      userMessages: () => [
+        { turn_index: 0, user_message: launch, assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
+      ],
+      usageEventTimes: () => ['2024-01-01T00:00:05Z'],
+    });
+    const reader = createCopilotHistoryReader({
+      source,
+      config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: launch, at: '2024-01-01T00:00:00Z', response: 'A1' }) },
+      now: () => Date.parse('2024-01-01T00:00:06Z'),
+    });
+    expect(reader.prompts('s1')).toHaveLength(1);
   });
 });

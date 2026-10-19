@@ -132,7 +132,7 @@ function makeService(deps: Deps = {}) {
     generateTeam,
     team,
     bus: {
-      emit: (type: keyof BugBashEventMap, payload: BugBashActivity) =>
+      emit: (_type: keyof BugBashEventMap, payload: BugBashActivity) =>
         emitted.push({
           phase: payload.phase,
           line: payload.line,
@@ -147,7 +147,7 @@ describe('bug-bash-service: saveInputs', () => {
   it('rejects a blank feature info', () => {
     const { service } = makeService();
     expect(() =>
-      service.saveInputs('a1', 'f1', { featureInfo: '  ', setupInfo: 'x' }),
+      service.saveInputs('a1', 'f1', { featureInfo: '  ', setupInfo: 'x', otherInfo: '' }),
     ).toThrow('Feature information is required.');
   });
 
@@ -212,6 +212,7 @@ describe('bug-bash-service: prerequisites', () => {
             id: 'prereq-1',
             question: 'Which account?',
             detail: 'old',
+            options: [],
             answer: 'account-42',
           },
         ],
@@ -232,8 +233,8 @@ describe('bug-bash-service: prerequisites', () => {
     const { service } = makeService(
       seeded({
         prerequisites: [
-          { id: 'prereq-1', question: 'Q1', detail: '', answer: '' },
-          { id: 'prereq-2', question: 'Q2', detail: '', answer: 'keep' },
+          { id: 'prereq-1', question: 'Q1', detail: '', options: [], answer: '' },
+          { id: 'prereq-2', question: 'Q2', detail: '', options: [], answer: 'keep' },
         ],
       }),
     );
@@ -258,8 +259,8 @@ describe('bug-bash-service: prerequisites', () => {
         setupInfo: 'run it',
         otherInfo: 'be careful',
         prerequisites: [
-          { id: 'prereq-1', question: 'Which account?', detail: '', answer: 'acct-1' },
-          { id: 'prereq-2', question: 'Unanswered?', detail: '', answer: '   ' },
+          { id: 'prereq-1', question: 'Which account?', detail: '', options: [], answer: 'acct-1' },
+          { id: 'prereq-2', question: 'Unanswered?', detail: '', options: [], answer: '   ' },
         ],
       }),
       generateTeam,

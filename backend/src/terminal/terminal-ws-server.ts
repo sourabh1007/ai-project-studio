@@ -13,6 +13,8 @@ import {
 } from './terminal-protocol.js';
 import { isAllowedTerminalOrigin } from './terminal-origin.js';
 import { createTerminalConnection } from './terminal-connection.js';
+import type { ConfirmCheckoutRecovery } from '../session-worktree/checkout-recovery.js';
+import type { SelectSessionWorktree } from '../session-worktree/session-ref-resolver.js';
 import {
   launchWithSelfHealing,
   suggestLaunchFix,
@@ -64,7 +66,7 @@ export interface TerminalWsDeps {
    * repository). Takes precedence over {@link TerminalWsDeps.cwd} when it
    * returns a path; falls back to `cwd` for repo-less sessions.
    */
-  resolveCwd?: (session: Session, report: (message: string) => void, signal: AbortSignal) => string | undefined | Promise<string | undefined>;
+  resolveCwd?: (session: Session, report: (message: string) => void, signal: AbortSignal, confirm: ConfirmCheckoutRecovery, select: SelectSessionWorktree) => string | undefined | Promise<string | undefined>;
   /**
    * Optional metasession diagnosis used by self-healing when a launch failure
    * cannot be repaired automatically: given the session and the failure text,
@@ -108,11 +110,11 @@ export function attachTerminalWs(deps: TerminalWsDeps): WebSocketServer {
     };
 
     const connection = createTerminalConnection({
-      launch: async (report, signal) => {
+      launch: async (report, signal, confirm, select) => {
         try {
           const existing = deps.manager.get(session.id);
           if (existing && !existing.exited) return existing;
-          const resolvedCwd = (await deps.resolveCwd?.(session, report, signal)) ?? deps.cwd;
+          const resolvedCwd = (await deps.resolveCwd?.(session, report, signal, confirm, select)) ?? deps.cwd;
           signal.throwIfAborted();
           // A folder-bound session is never relocated to a *different* cwd; it
           // may only be healed by recreating its own directory in place.

@@ -70,6 +70,7 @@ function harness(options: {
   checkoutPath?: string | null;
   sharedContext?: string;
   featureThrows?: boolean;
+  onSkillContextPrepared?: (session: Session) => void;
 } = {}) {
   const loads: string[] = [];
   const instructions: string[] = [];
@@ -78,6 +79,7 @@ function harness(options: {
     [];
   const allSessions = options.sessions ?? [];
   const bootstrap = createSessionBootstrap({
+    onSkillContextPrepared: options.onSkillContextPrepared,
     features: {
       get: () => {
         if (options.featureThrows) {
@@ -145,6 +147,17 @@ function harness(options: {
 }
 
 describe('session bootstrap', () => {
+  it('observes IDE context preparation only when skill instructions are composed for development', async () => {
+    const prepared: string[] = [];
+    const h = harness({ onSkillContextPrepared: (value) => prepared.push(value.id) });
+    await h.bootstrap.composeForSession(baseSession);
+    expect(prepared).toEqual([baseSession.id]);
+    await h.bootstrap.composeForSession({ ...baseSession, kind: 'meta' });
+    expect(prepared).toHaveLength(1);
+    await harness({ featureInstructions: '', onSkillContextPrepared: (value) => prepared.push(value.id) })
+      .bootstrap.composeForSession(baseSession);
+    expect(prepared).toHaveLength(1);
+  });
   it('composes repository, feature, recent summaries, and skills in order', async () => {
     const old = session('old', '2026-01-01T00:00:00.000Z');
     const recent = session('recent', '2026-01-03T00:00:00.000Z');

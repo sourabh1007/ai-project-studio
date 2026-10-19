@@ -2,7 +2,10 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
-import { attachTerminalWs } from './terminal-ws-server.js';
+import { attachTerminalWs, type TerminalWsDeps } from './terminal-ws-server.js';
+import { createCheckoutRecovery } from '../session-worktree/checkout-recovery.js';
+import { createSessionLaunchCwdResolver } from '../session-worktree/session-launch-cwd.js';
+import { createSessionRefResolver } from '../session-worktree/session-ref-resolver.js';
 import { createTerminalManager } from './terminal-manager.js';
 import { terminalDefaults } from './config.js';
 import type { ServerMessage } from './terminal-protocol.js';
@@ -23,7 +26,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function fixture(compose = async () => '', recovery = false) {
+async function fixture(compose = async () => '', recovery = false, resolveCwd: TerminalWsDeps['resolveCwd'] = () => 'fixture') {
   const processes: Array<{
     writes: string[]; resizes: number[][]; killed: boolean;
     output(data: string): void; exit(code: number): void;
@@ -70,7 +73,7 @@ async function fixture(compose = async () => '', recovery = false) {
   const wss = attachTerminalWs({
     server, manager, config: terminalDefaults,
     getSession: (id) => id === session.id ? session : null,
-    resolveCwd: () => 'fixture', logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    resolveCwd, logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   cleanups.push(async () => {
@@ -99,6 +102,74 @@ async function fixture(compose = async () => '', recovery = false) {
 }
 
 describe('terminal WebSocket lifecycle (real WS, controlled PTY port)', () => {
+  it.each(['t2', null, 'unoffered'] as const)('round-trips task choice %s before PTY launch and remembers only a valid selection', async (choiceId) => {
+    const choices = [
+      { id: 't1', checkoutPath: 'task-one', ref: 'task1' },
+      { id: 't2', checkoutPath: 'task-two', ref: 'task2' },
+    ];
+    const ref = createSessionRefResolver({
+      getFeature: () => ({
+        id: 'f1', repoId: 'r1', name: 'Feature', description: '', createdAt: '', summary: null, checkoutPath: null,
+      }),
+      getRepo: () => ({
+        id: 'r1', provider: 'github', remoteUrl: 'https://example/app', name: 'app',
+        localPath: 'primary', defaultBranch: 'main', createdAt: '',
+      }),
+      branch: { read: async () => null }, getTaskCheckouts: () => choices,
+    });
+    let stored: Session | null = null;
+    const prepare = vi.fn(async (_session: Session, target: { checkoutPath?: string }) => target.checkoutPath!);
+    const bindSession = vi.fn((_id: string, selected: { path: string; branch: string }) => {
+      Object.assign(stored!, { worktreePath: selected.path, branch: selected.branch });
+    });
+    const resolve = createSessionLaunchCwdResolver({
+      getSession: () => stored, pathExists: async () => true,
+      resolveTarget: (id, select) => ref.resolve(id, select), fallbackCwd: () => 'primary',
+      prepare, bindSession,
+    });
+    const f = await fixture(async () => '', false, (session, report, signal, confirm, select) => {
+      stored ??= session;
+      return resolve(session, report, signal, confirm, select);
+    });
+    const c = f.connect();
+    await expect.poll(() => c.frames.some((frame) => frame.type === 'worktree-selection')).toBe(true);
+    expect(f.processes).toHaveLength(0);
+    expect(prepare).not.toHaveBeenCalled();
+    c.input('not replayed', 0);
+    c.ws.send(JSON.stringify({ type: 'worktree-selection', requestId: 1, generation: 0, choiceId }));
+    if (choiceId === 't2') {
+      await c.ready();
+      expect(bindSession).toHaveBeenCalledWith('s1', { path: 'task-two', branch: 'task2' });
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(f.processes[0].writes).toEqual([]);
+      f.processes[0].exit(0);
+      c.ws.close(); await c.closed;
+      const reconnect = f.connect(); await reconnect.ready(2);
+      expect(reconnect.frames.some((frame) => frame.type === 'worktree-selection')).toBe(false);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(bindSession).toHaveBeenCalledOnce();
+    } else {
+      await expect.poll(() => c.frames.some((frame) => frame.type === 'state' && frame.state === 'failed')).toBe(true);
+      expect(f.processes).toHaveLength(0);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(bindSession).not.toHaveBeenCalled();
+    }
+  });
+  it('keeps an existing checkout and launches without requesting destructive consent', async () => {
+    const git = vi.fn(async (args: string[]) => ({ code: 0, stdout: args.includes('status') ? '?? local.txt' : '', stderr: '' }));
+    const recover = createCheckoutRecovery({ git, pathExists: async () => true, canonicalPath: async (path) => path });
+    const f = await fixture(async () => '', false, async (_session, report, _signal, confirm) =>
+      (await recover({
+        target: { repoLocalPath: 'primary', checkoutPath: 'fixture', ref: 'review' },
+        cwd: 'fixture', report, confirm,
+      }))!);
+    const c = f.connect();
+    await c.ready();
+    expect(c.frames.some((frame) => frame.type === 'checkout-recovery')).toBe(false);
+    expect(f.processes).toHaveLength(1);
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown sessions and cross-origin sockets', async () => {
     const f = await fixture();
     expect(await f.connect('missing').closed).toBe(4404);

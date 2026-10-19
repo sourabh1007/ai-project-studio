@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTerminalConnection } from './terminal-connection.js';
 import { createTerminalSession, type TerminalSession } from './terminal-session.js';
 import type { ServerMessage } from './terminal-protocol.js';
+import type { ConfirmCheckoutRecovery } from '../session-worktree/checkout-recovery.js';
+import type { SelectSessionWorktree } from '../session-worktree/session-ref-resolver.js';
 
 function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: number) {
   let listener!: (terminal: TerminalSession | null, failed?: boolean) => void;
@@ -9,6 +11,8 @@ function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: nu
   let reject!: (error: unknown) => void;
   let report!: (message: string) => void;
   let signal!: AbortSignal;
+  let confirm!: ConfirmCheckoutRecovery;
+  let select!: SelectSessionWorktree;
   let output!: (data: string) => void;
   let exit!: (code: number | null) => void;
   const writes: string[] = [];
@@ -26,8 +30,10 @@ function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: nu
   });
   const unsub = vi.fn();
   const connection = createTerminalConnection({
-    launch: (notify, abort) => {
+    launch: (notify, abort, consent, choose) => {
       report = notify; signal = abort;
+      confirm = consent;
+      select = choose;
       return new Promise((yes, no) => { resolve = yes; reject = no; });
     },
     launchTimeoutMs,
@@ -42,11 +48,94 @@ function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: nu
     bind: (next: TerminalSession | null, failed?: boolean) => listener(next, failed),
     launch: () => resolve(terminal), reject: (error: unknown = new Error('launch failed')) => reject(error),
     report: (message: string) => report(message), signal,
+    confirm: (detail = 'Discard files?') => confirm(detail),
+    select: () => select([{ id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' }, { id: 't2', checkoutPath: 'C:\\task2', ref: 'task2' }]),
     output: (data: string) => output(data), exit: () => exit(0),
   };
 }
 
 describe('terminal connection ownership', () => {
+  it.each(['t2', null])('scopes worktree choice %s to its request and blocks input until launch', async (choiceId) => {
+    const f = fixture();
+    f.input('queued', 0);
+    const decision = f.select();
+    expect(f.frames).toContainEqual(expect.objectContaining({ type: 'worktree-selection', requestId: 1 }));
+    expect(await f.select()).toBeNull();
+    expect(await f.confirm()).toBe(false);
+    f.input('typing in picker', 0);
+    f.connection.receive({ type: 'worktree-selection', requestId: 1, generation: 9, choiceId: 't1' });
+    f.connection.receive({ type: 'worktree-selection', requestId: 2, generation: 0, choiceId: 't1' });
+    f.connection.receive({ type: 'worktree-selection', requestId: 1, generation: 0, choiceId });
+    await expect(decision).resolves.toBe(choiceId);
+    f.connection.receive({ type: 'worktree-selection', requestId: 1, generation: 0, choiceId: 't1' });
+    f.launch(); await f.started;
+    f.terminal.markInputReady();
+    expect(f.writes).toEqual([]);
+    expect(await f.select()).toBeNull();
+    f.connection.close();
+    expect(await f.select()).toBeNull();
+  });
+  it('cancels worktree choices on disconnect, timeout, completion and concurrent recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const action of ['close', 'timeout', 'complete', 'recovery'] as const) {
+        const f = fixture(false, 16, 1, 25);
+        if (action === 'recovery') {
+          const consent = f.confirm();
+          expect(await f.select()).toBeNull();
+          f.connection.close();
+          await expect(consent).resolves.toBe(false);
+        } else {
+          const decision = f.select();
+          if (action === 'close') f.connection.close();
+          if (action === 'timeout') await vi.advanceTimersByTimeAsync(25);
+          if (action === 'complete') f.launch();
+          await expect(decision).resolves.toBeNull();
+          if (action === 'timeout') expect(await f.select()).toBeNull();
+        }
+        if (action !== 'complete') f.launch();
+        await f.started;
+        f.connection.close();
+      }
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([false, true])('scopes checkout recovery consent to the socket request and generation (approved=%s)', async (approved) => {
+    const f = fixture();
+    f.input('queued', 0);
+    const decision = f.confirm();
+    expect(f.frames).toContainEqual({ type: 'checkout-recovery', requestId: 1, detail: 'Discard files?' });
+    expect(await f.confirm()).toBe(false);
+    f.input('must not replay', 0);
+    f.connection.receive({ type: 'checkout-recovery', requestId: 1, generation: 9, approved: true });
+    f.connection.receive({ type: 'checkout-recovery', requestId: 2, generation: 0, approved: true });
+    f.connection.receive({ type: 'checkout-recovery', requestId: 1, generation: 0, approved });
+    await expect(decision).resolves.toBe(approved);
+    f.connection.receive({ type: 'checkout-recovery', requestId: 1, generation: 0, approved: true });
+    f.launch(); await f.started;
+    f.terminal.markInputReady();
+    expect(f.writes).toEqual([]);
+    expect(await f.confirm()).toBe(false);
+    f.connection.close();
+    expect(await f.confirm()).toBe(false);
+  });
+
+  it('cancels consent on disconnect, timeout, and launch completion instead of authorizing a later recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const action of ['close', 'timeout', 'complete'] as const) {
+        const f = fixture(false, 16, 1, 25);
+        const decision = f.confirm();
+        if (action === 'close') f.connection.close();
+        if (action === 'timeout') await vi.advanceTimersByTimeAsync(25);
+        if (action === 'complete') f.launch();
+        await expect(decision).resolves.toBe(false);
+        if (action === 'timeout') expect(await f.confirm()).toBe(false);
+        if (action !== 'complete') f.launch();
+        await f.started;
+        f.connection.close();
+      }
+    } finally { vi.useRealTimers(); }
+  });
   it('answers health probes while launch or input is waiting without touching the CLI or replay authority', async () => {
     const f = fixture();
     f.connection.receive({ type: 'ping', generation: 0, seq: 1 });

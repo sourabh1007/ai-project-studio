@@ -14,8 +14,8 @@ function setup() {
   const deps: ResourcesDeps = {
     fs: fs.fs, config: resourcesDefaults, now: () => now, backendPid: 2,
     host: () => evaluateResources(undefined, now, resourcePressureDefaults),
-    processes: vi.fn(async () => ({ measuredAt: now, logicalCpuCount: 4, processes: [{ pid: 2, parentPid: 1, startedAt: 1, name: 'node', role: 'backend', cpuTimeMs: 100, memoryBytes: 500 }] })),
-    roots: vi.fn(async () => [{ category: 'app', path: root }]),
+    processes: vi.fn<ResourcesDeps['processes']>(async () => ({ measuredAt: now, logicalCpuCount: 4, processes: [{ pid: 2, parentPid: 1, startedAt: 1, name: 'node', role: 'backend', cpuTimeMs: 100, memoryBytes: 500 }] })),
+    roots: vi.fn<ResourcesDeps['roots']>(async () => [{ category: 'app', path: root }]),
     logs: { directory: at('logs'), appDataRoots: [root], isManagedFile: () => true, olderThan: 100 },
   };
   return { deps, fs, setNow: (n: number) => { now = n; }, service: createResourcesService(deps) };

@@ -777,7 +777,7 @@ function RemoveMcpServerDialog({ target, categoryLabel, onClose, onRemoved }: {
     }
   };
   return (
-    <Modal title="Remove MCP configuration" onClose={() => { if (!locked.current) onClose(); }}>
+    <Modal title="Remove MCP configuration" dismissible={!busy} onClose={() => { if (!locked.current) onClose(); }}>
       <p>Remove <strong>{target.server.displayName ?? target.server.name}</strong> from {categoryLabel}?</p>
       {target.server.source && <p className="field-hint">{target.server.source}</p>}
       <p>This removes this configuration entry, not the server software. Running sessions are unchanged.

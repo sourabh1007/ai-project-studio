@@ -280,13 +280,29 @@ export function createTerminalManager(
       throw error;
     }
 
+    // A launch that preloads a task (e.g. the Planner) persists the request on
+    // the session's `prompt`. Auto-send it once, on the very first interactive
+    // launch, so the opened session starts working on the task immediately
+    // rather than coming up blank. Skipped on reopen/relaunch (the persisted
+    // status is no longer `created`) and during self-recovery (which drives its
+    // own provider-confirmed `replaySeed`), so the task is never re-sent.
+    const promptSeed =
+      session.status === 'created' &&
+      session.kind === 'dev' &&
+      session.scope !== 'internal' &&
+      !options.replaySeed
+        ? session.prompt.trim()
+        : '';
+
     // Blocks to seed once the CLI is ready, in order: repository/feature/skill
-    // bootstrap first, then any replay prompt from a self-recovery restart.
-    // When the context is delivered as an instructions file, it is NOT seeded —
-    // the CLI reads it silently — leaving only any replay prompt.
-    const seeds = [injectContext ? '' : bootstrap, options.replaySeed ?? ''].filter(
-      (block) => block.length > 0,
-    );
+    // bootstrap first, then the preloaded task prompt, then any replay prompt
+    // from a self-recovery restart. When the context is delivered as an
+    // instructions file, it is NOT seeded — the CLI reads it silently.
+    const seeds = [
+      injectContext ? '' : bootstrap,
+      promptSeed,
+      options.replaySeed ?? '',
+    ].filter((block) => block.length > 0);
 
     let terminal!: TerminalSession;
     type ExitOutcome = {

@@ -11,10 +11,12 @@ import {
   decodeServerMessage,
   encodeClientMessage,
   type TerminalState,
+  type ServerMessage,
 } from '../lib/terminal-protocol.js';
 import { createTerminalDelivery } from '../lib/terminal-delivery.js';
 import { createTerminalHealth, type TerminalHealth } from '../lib/terminal-health.js';
 import { ActivityIcon } from './icons.js';
+import { Button, Modal } from './ui.js';
 import {
   toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
   type ClipboardAttachmentResult, type DesktopClipboardBridge,
@@ -217,6 +219,10 @@ export function TerminalView({
   appearanceRef.current = appearance;
   const [connectionStatus, setConnectionStatus] = useState<{ state: TerminalState; notice: string }>({ state: 'connecting', notice: '' });
   const [connectionAttempt, setConnectionAttempt] = useState(0);
+  const [worktreeSelection, setWorktreeSelection] = useState<{
+    choices: Extract<ServerMessage, { type: 'worktree-selection' }>['choices'];
+    respond(choiceId: string | null): void;
+  } | null>(null);
   const [startupDetail, setStartupDetail] = useState('');
   const [startupSeconds, setStartupSeconds] = useState(0);
   const [health, setHealth] = useState<TerminalHealth | null>(null);
@@ -952,6 +958,7 @@ export function TerminalView({
     window.addEventListener('focus', refocus);
 
     const connect = () => {
+      setWorktreeSelection(null);
       let handshakeTimedOut = false;
       healthMonitor = createTerminalHealth(Date.now);
       setHealth(null);
@@ -980,7 +987,26 @@ export function TerminalView({
           return;
         }
         healthMonitor.receive(message);
+        if (message.type === 'worktree-selection') {
+          const socket = ws;
+          const generation = terminalGeneration;
+          setWorktreeSelection({
+            choices: message.choices,
+            respond: (choiceId) => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(encodeClientMessage({ type: 'worktree-selection', generation, requestId: message.requestId, choiceId }));
+              }
+              setWorktreeSelection(null);
+            },
+          });
+        }
+        if (message.type === 'checkout-recovery') {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(encodeClientMessage({ type: 'checkout-recovery', generation: terminalGeneration, requestId: message.requestId, approved: false }));
+          }
+        }
         if (message.type === 'state') {
+          if (message.state === 'failed' || message.state === 'closed' || message.state === 'ready') setWorktreeSelection(null);
           window.clearTimeout(handshakeTimer);
           setHealth(healthMonitor.snapshot());
           setStartupDetail(message.detail ?? '');
@@ -1059,6 +1085,7 @@ export function TerminalView({
         }));
       };
       ws.onclose = (event) => {
+        setWorktreeSelection(null);
         window.clearTimeout(handshakeTimer);
         if (disposed) return;
         invalidateClipboardRead();
@@ -1077,6 +1104,20 @@ export function TerminalView({
         : null;
     observer?.observe(host);
     window.addEventListener('resize', applyFitSettled);
+    // A monitor/DPI change can leave the CSS dimensions unchanged. Re-arm the
+    // resolution query each time so repeated display moves repaint the atlas.
+    let resolutionQuery: MediaQueryList | undefined;
+    const watchResolution = () => {
+      if (typeof window.matchMedia !== 'function') return;
+      resolutionQuery?.removeEventListener('change', onResolutionChange);
+      resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      resolutionQuery.addEventListener('change', onResolutionChange);
+    };
+    const onResolutionChange = () => {
+      watchResolution();
+      applyFitSettled();
+    };
+    watchResolution();
 
     return () => {
       clipboardMounted = false;
@@ -1094,6 +1135,7 @@ export function TerminalView({
       host.removeEventListener('focusout', onClipboardFocusOut);
       window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('resize', applyFitSettled);
+      resolutionQuery?.removeEventListener('change', onResolutionChange);
       window.removeEventListener('focus', refocus);
       window.removeEventListener('mouseup', onDocumentMouseUp);
       host.removeEventListener('mousedown', onHostMouseDown);
@@ -1128,6 +1170,16 @@ export function TerminalView({
   }, [sessionId, connectionAttempt]);
 
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    {worktreeSelection && <Modal title="Choose a task worktree" onClose={() => worktreeSelection.respond(null)} size="md">
+      <p>This feature has multiple task checkouts. Choose one for this session. The choice is saved for future reconnects.</p>
+      {worktreeSelection.choices.map((choice) => <p key={choice.id}>
+        <Button variant="secondary" onClick={() => worktreeSelection.respond(choice.id)}>{choice.ref}</Button>
+        <br /><code>{choice.checkoutPath}</code>
+      </p>)}
+      <div className="modal-actions">
+        <Button variant="secondary" onClick={() => worktreeSelection.respond(null)}>Cancel launch</Button>
+      </div>
+    </Modal>}
     <div role="status" aria-live="polite" className={statusHidden ? 'terminal-status terminal-status--idle' : 'terminal-status'} style={{ flexShrink: 0, fontSize: 12 }}>
       {preparing && <span className="spinner" aria-hidden="true" style={{ marginRight: 6 }} />}
       {startupDetail || (connectionStatus.state === 'ready' && health

@@ -407,7 +407,7 @@ describe('launchWithSelfHealing', () => {
         fs: fakeFs(new Set(['C:/repo'])),
         emit,
       });
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(250);
       expect(await promise).toBe('terminal');
       expect(launch).toHaveBeenCalledTimes(2);
     } finally {

@@ -20,6 +20,8 @@ function inMemoryRepo(seed: PlannerTask[] = []): PlannerRepo {
       ),
     update: (task) => void tasks.set(task.id, task),
     delete: (id) => void tasks.delete(id),
+    clearLaunchByFeature: () => { throw new Error('not used in planner-service tests'); },
+    clearLaunchBySession: () => { throw new Error('not used in planner-service tests'); },
   };
 }
 

@@ -64,6 +64,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   let notice = '';
   let geometry: { cols: number; rows: number } | undefined;
   let sentGeometry = '';
+  let recovering = false;
   const report = () => deps.status(state, notice);
   const discard = (reason: string) => {
     if (pending.size || outbox.length) {
@@ -123,7 +124,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   return {
     offer(data: string) {
       if (!data) return;
-      if (state === 'failed' || state === 'closed' || state === 'reconnecting') {
+      if (recovering || state === 'failed' || state === 'closed' || state === 'reconnecting') {
         if (!notice) notice = 'Input not sent: terminal is not writable.';
         report();
         return;
@@ -136,7 +137,12 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
       pump();
     },
     receive(message: ServerMessage) {
-      if (message.type === 'state') {
+      if (message.type === 'checkout-recovery' || message.type === 'worktree-selection') {
+        recovering = true;
+        discard(message.type === 'checkout-recovery' ? 'Checkout recovery requires confirmation.' : 'Choose a worktree first.');
+        report();
+      } else if (message.type === 'state') {
+        if (message.state === 'ready') recovering = false;
         if (message.generation !== generation && generation !== 0) discard('Terminal generation changed.');
         generation = message.generation;
         limit = message.inputLimit;
@@ -156,6 +162,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
       }
     },
     disconnect(reconnect: boolean) {
+      recovering = false;
       discard('Connection lost.');
       generation = 0;
       seq = 0;

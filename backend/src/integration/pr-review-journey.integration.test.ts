@@ -394,6 +394,7 @@ describe('PR review vertical journey', () => {
       body: 'Original PR description',
     };
     const commentGateway: PrCommentsGateway = {
+      react: async () => { throw new Error('reaction is not used in this journey'); },
       list: async () => [commentState.thread],
       add: async (input) => {
         commentState.thread = {
@@ -402,6 +403,8 @@ describe('PR review vertical journey', () => {
             {
               id: 'comment-1',
               author: 'reviewer',
+              authorAvatarUrl: null,
+              reactions: [],
               body: input.body,
               createdAt: timestamp,
             },

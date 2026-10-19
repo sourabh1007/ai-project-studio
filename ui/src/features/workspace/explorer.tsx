@@ -1863,6 +1863,8 @@ export function Explorer({
     input: MoveNodeInput;
     fromBranch: string | null;
     toBranch: string | null;
+    worktrees?: { id: string; checkoutPath: string; ref: string }[];
+    taskCheckoutId?: string;
   } | null>(null);
   const [moveConsentBusy, setMoveConsentBusy] = useState(false);
   const [moveConsentError, setMoveConsentError] = useState<string | null>(null);
@@ -1902,9 +1904,9 @@ export function Explorer({
           api.getFeatureEnvironment(session.featureId),
           api.getFeatureEnvironment(input.targetFeatureId),
         ]);
-        if ((from.branch ?? null) !== (to.branch ?? null)) {
+        if (to.worktrees?.length || session.worktreePath || (from.branch ?? null) !== (to.branch ?? null)) {
           setMoveConsentError(null);
-          setPendingMove({ input, fromBranch: from.branch, toBranch: to.branch });
+          setPendingMove({ input, fromBranch: session.branch ?? from.branch, toBranch: to.branch, worktrees: to.worktrees });
           return;
         }
       }
@@ -1919,11 +1921,15 @@ export function Explorer({
     if (!pendingMove) {
       return;
     }
+    if (pendingMove.worktrees?.length && !pendingMove.taskCheckoutId) {
+      setMoveConsentError('Choose a destination task worktree.');
+      return;
+    }
     setMoveConsentBusy(true);
     setMoveConsentError(null);
     try {
       await api.moveNode(pendingMove.input);
-      await api.relaunchSession(pendingMove.input.id);
+      await api.relaunchSession(pendingMove.input.id, pendingMove.taskCheckoutId);
       setTreeRevision((v) => v + 1);
       setPendingMove(null);
     } catch (error) {
@@ -2288,6 +2294,17 @@ export function Explorer({
           error={moveConsentError}
           message={
             <>
+              {pendingMove.worktrees && <label>
+                Destination task worktree
+                <select value={pendingMove.taskCheckoutId ?? ''} onChange={(event) => {
+                  const choice = pendingMove.worktrees?.find((item) => item.id === event.target.value);
+                  setPendingMove({ ...pendingMove, taskCheckoutId: choice?.id, toBranch: choice?.ref ?? null });
+                  setMoveConsentError(null);
+                }}>
+                  <option value="">Choose a checkout</option>
+                  {pendingMove.worktrees.map((choice) => <option key={choice.id} value={choice.id}>{choice.ref} - {choice.checkoutPath}</option>)}
+                </select>
+              </label>}
               <p className="confirm-dialog-lead">
                 This session runs on{' '}
                 <strong>{pendingMove.fromBranch ?? 'its current branch'}</strong>.

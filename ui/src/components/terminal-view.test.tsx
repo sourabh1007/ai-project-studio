@@ -184,6 +184,118 @@ describe('TerminalView scrollback repaint', () => {
     vi.restoreAllMocks();
   });
 
+  it('re-arms display-scale monitoring and repaints at unchanged CSS dimensions without reconnecting', () => {
+    vi.useFakeTimers();
+    const listeners: Array<() => void> = [];
+    const removers: Array<ReturnType<typeof vi.fn>> = [];
+    const matchMedia = vi.fn((media: string) => {
+      const removeEventListener = vi.fn();
+      removers.push(removeEventListener);
+      return {
+        media, matches: true, onchange: null,
+        addEventListener: vi.fn((_type: string, callback: () => void) => listeners.push(callback)),
+        removeEventListener, addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+      };
+    });
+    vi.stubGlobal('matchMedia', matchMedia);
+    vi.stubGlobal('devicePixelRatio', 1);
+    const view = render(<TerminalView sessionId="s1" />);
+    act(() => { vi.advanceTimersByTime(800); });
+    const ws = h.ws;
+    const font = h.term!.options.fontSize;
+    h.fit!.fit.mockClear();
+    h.webgl!.clearTextureAtlas.mockClear();
+    h.term!.refresh.mockClear();
+    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 1dppx)');
+    vi.stubGlobal('devicePixelRatio', 1.5);
+    act(() => { listeners[0](); vi.advanceTimersByTime(120); });
+    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 1.5dppx)');
+    expect(removers[0]).toHaveBeenCalledWith('change', listeners[0]);
+    expect(h.fit!.fit).toHaveBeenCalledTimes(1);
+    expect(h.webgl!.clearTextureAtlas).toHaveBeenCalled();
+    expect(h.term!.refresh).toHaveBeenCalled();
+    expect(h.ws).toBe(ws);
+    expect(h.term!.options.fontSize).toBe(font);
+    vi.stubGlobal('devicePixelRatio', 2);
+    act(() => { listeners[1](); vi.advanceTimersByTime(120); });
+    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 2dppx)');
+    view.unmount();
+    expect(removers[2]).toHaveBeenCalledWith('change', listeners[2]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['choose', 'cancel', 'escape', 'closed-socket'] as const)('asks for a task checkout without a default and sends only the choice ID (%s)', (action) => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const ws = h.ws!;
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'worktree-selection', requestId: 5, choices: [
+          { id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' },
+          { id: 't2', checkoutPath: 'C:\\task2', ref: 'task2' },
+        ],
+      }) });
+    });
+    expect(view.getByRole('dialog', { name: 'Choose a task worktree' })).toHaveTextContent('saved for future reconnects');
+    expect(view.getByText('C:\\task2')).toBeInTheDocument();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'worktree-selection')).toEqual([]);
+    if (action === 'closed-socket') ws.readyState = 3;
+    if (action === 'escape') fireEvent.keyDown(view.getByRole('dialog'), { key: 'Escape' });
+    else fireEvent.click(view.getByRole('button', { name: action === 'choose' ? 'task2' : 'Cancel launch' }));
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'worktree-selection')).toEqual(
+      action === 'closed-socket' ? [] : [{ type: 'worktree-selection', requestId: 5, generation: 0, choiceId: action === 'choose' ? 't2' : null }],
+    );
+  });
+  it.each(['failed', 'closed', 'ready', 'disconnect'] as const)('dismisses the worktree picker on %s without choosing', (state) => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const ws = h.ws!;
+    act(() => ws.onmessage?.({ data: JSON.stringify({
+      type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' }],
+    }) }));
+    expect(view.getByRole('dialog')).toBeInTheDocument();
+    act(() => {
+      if (state === 'disconnect') ws.onclose?.({ code: 4408 });
+      else ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, generation: 0, state, inputLimit: 65536 }) });
+    });
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'worktree-selection')).toEqual([]);
+  });
+  it.each([true, false])('defaults legacy recovery requests to keeping the checkout without a dialog (socket open=%s)', (open) => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const ws = h.ws!;
+    act(() => {
+      ws.readyState = open ? MockWebSocket.OPEN : 3;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, generation: 0, state: 'connecting', inputLimit: 65536,
+      }) });
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'checkout-recovery', requestId: 3, detail: 'Local files will be discarded. Replace checkout?',
+      }) });
+    });
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'checkout-recovery')).toEqual(
+      open ? [{ type: 'checkout-recovery', requestId: 3, generation: 0, approved: false }] : [],
+    );
+  });
+
+  it('dismisses recovery on failure or disconnect without sending approval', () => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const ws = h.ws!;
+    const request = () => ws.onmessage?.({ data: JSON.stringify({
+      type: 'checkout-recovery', requestId: 1, detail: 'Replace?',
+    }) });
+    act(request);
+    act(() => ws.onmessage?.({ data: JSON.stringify({
+      type: 'state', version: 2, generation: 0, state: 'failed', inputLimit: 65536, detail: 'Recovery timed out',
+    }) }));
+    expect(view.queryByRole('dialog')).toBeNull();
+    act(request);
+    act(() => ws.onclose?.({ code: 4408 }));
+    expect(view.queryByRole('dialog')).toBeNull();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'checkout-recovery')).toEqual([]);
+  });
+
   it('shows checkout progress and elapsed time until ready, then clears the spinner', () => {
     vi.useFakeTimers();
     const view = render(<TerminalView sessionId="s1" />);

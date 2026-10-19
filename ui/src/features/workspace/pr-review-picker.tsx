@@ -340,7 +340,8 @@ export function PrReviewPicker({
     <Modal
       title={`Open Pull Request · ${repo.name}`}
       size={tab === 'team' ? 'xl' : 'md'}
-      onClose={busy ? () => {} : onClose}
+      dismissible={!busy}
+      onClose={onClose}
     >
       <div className="pr-picker">
         {busy && (

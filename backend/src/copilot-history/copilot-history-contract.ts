@@ -32,10 +32,8 @@ export interface SessionPrompt {
   /** Wall-clock milliseconds from prompt to answer, or null when unknown. */
   durationMs: number | null;
   /**
-   * True for a synthetic, live "answering" row representing an in-flight turn
-   * whose prompt/response text the CLI store has not persisted yet. Such a row
-   * carries no `text`/`response` and exists only to show the assistant is
-   * actively responding right now.
+   * True for a live row whose prompt/response has not reached the CLI store
+   * yet. Persistence can lag behind generation, including after completion.
    */
   pending?: boolean;
 }
@@ -123,6 +121,8 @@ export interface LivePromptTurn {
    * (e.g. it is still running tools).
    */
   response: string | null;
+  /** Recorded turn-end time, null if missing/invalid; absent until completion. */
+  completedAt?: string | null;
 }
 
 /**

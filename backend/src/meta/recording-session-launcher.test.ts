@@ -60,7 +60,7 @@ function recorder() {
   };
 }
 
-const clock = { isoNow: () => '2026-01-01T00:00:00.000Z', now: () => 0 };
+const clock = { isoNow: () => '2026-01-01T00:00:00.000Z', now: () => new Date(0) };
 
 function request(overrides: Partial<StartSessionRequest> = {}): StartSessionRequest {
   return {

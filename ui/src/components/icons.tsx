@@ -52,6 +52,8 @@ import {
   Moon,
   MoreHorizontal,
   PanelLeftClose,
+  PanelRightClose,
+  Columns2,
   Pencil,
   PenLine,
   PictureInPicture,
@@ -135,6 +137,8 @@ export const RestoreIcon = makeIcon(Minimize2);
 export const PopOutIcon = makeIcon(PictureInPicture2);
 export const PopInIcon = makeIcon(PictureInPicture);
 export const CollapseSidebarIcon = makeIcon(PanelLeftClose);
+export const CollapseRightPanelIcon = makeIcon(PanelRightClose);
+export const SplitViewIcon = makeIcon(Columns2);
 export const CircleIcon = makeIcon(Circle);
 export const ClockIcon = makeIcon(Clock);
 export const RefreshIcon = makeIcon(RefreshCw);

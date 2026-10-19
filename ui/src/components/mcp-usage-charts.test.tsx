@@ -18,14 +18,15 @@ it('ranks actual calls, shows share, and keeps unavailable billing distinct from
   expect(screen.getByText('80.0%')).toBeInTheDocument();
   const table = screen.getByRole('table', { name: 'MCP server I/O' });
   const bluebird = within(table).getByRole('cell', { name: /bluebird/ }).closest('tr')!;
-  expect(within(bluebird).getAllByText('Not reported')).toHaveLength(4);
+  expect(within(bluebird).getAllByText('Not reported')).toHaveLength(2);
   expect(within(table).getByText('CLI built-in')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'AI credits' }));
   const credits = screen.getByRole('list', { name: 'MCP server ranking by credits' });
   expect(within(credits).getAllByRole('listitem')[0]).toHaveTextContent('local');
   expect(within(credits).getAllByRole('listitem')[0]).toHaveTextContent('0.00 AIC');
-  fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
-  expect(screen.getByRole('list', { name: 'MCP server ranking by tokens' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Tokens' })).toBeNull();
+  expect(within(table).queryByRole('columnheader', { name: 'Input tokens' })).toBeNull();
+  expect(within(table).queryByRole('columnheader', { name: 'Output tokens' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Traffic' }));
   expect(screen.getByRole('list', { name: 'MCP server ranking by bytes' })).toBeInTheDocument();
 });
@@ -37,8 +38,7 @@ it('renders honest unavailable traffic and time for unmeasured remote servers', 
   ]} />);
   const table = screen.getByRole('table', { name: 'MCP server I/O' });
   const remote = within(table).getByRole('cell', { name: /remote/ }).closest('tr')!;
-  // 4 billing columns + traffic + total time all honestly unavailable, not 0 B / 0s.
-  expect(within(remote).getAllByText('Not reported')).toHaveLength(6);
+  expect(within(remote).getAllByText('Not reported')).toHaveLength(4);
   expect(within(remote).queryByText('0 B / 0 B')).toBeNull();
 });
 

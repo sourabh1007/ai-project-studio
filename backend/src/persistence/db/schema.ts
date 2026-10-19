@@ -419,6 +419,18 @@ const USAGE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'skill_usage',
+    ddl: `CREATE TABLE IF NOT EXISTS skill_usage (
+      event_id TEXT NOT NULL, feature_id TEXT NOT NULL, session_id TEXT NOT NULL,
+      provider TEXT NOT NULL, repo_id TEXT, identity TEXT NOT NULL, name TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('repository', 'ide', 'cli', 'unknown')),
+      kind TEXT NOT NULL CHECK (kind IN ('invocation', 'context-prepared', 'context-injected')),
+      scope TEXT NOT NULL CHECK (scope IN ('feature', 'internal')),
+      input_tokens INTEGER, output_tokens INTEGER, nano_aiu INTEGER, recorded_at TEXT NOT NULL,
+      PRIMARY KEY (provider, session_id, event_id)
+    )`,
+  },
+  {
     name: 'mcp_server_usage',
     ddl: `CREATE TABLE IF NOT EXISTS mcp_server_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -789,6 +801,14 @@ interface IndexSchema {
  * are created only once the column exists.
  */
 const INDEXES: readonly IndexSchema[] = [
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_skill_usage_scope_time ON skill_usage (scope, recorded_at DESC, event_id DESC)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_skill_usage_feature_time ON skill_usage (scope, feature_id, recorded_at DESC, event_id DESC)',
+  },
   {
     schema: 'main',
     ddl: 'CREATE INDEX IF NOT EXISTS main.idx_sessions_feature_id ON sessions (feature_id)',

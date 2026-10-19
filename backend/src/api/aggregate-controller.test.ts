@@ -34,6 +34,7 @@ const analyticsResult: FeatureAnalytics = {
   byModel: [{ model: 'm', ...totals }],
   byProvider: [{ provider: 'p', ...totals }],
   byDay: [{ day: '2025-01-01', ...totals }],
+  byMcpServer: [],
   bySession: [
     {
       sessionId: 's1',

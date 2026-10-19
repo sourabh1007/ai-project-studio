@@ -1,11 +1,11 @@
 import { Fragment, useState } from 'react';
 import type { McpServerBreakdown, McpToolBreakdown } from '../lib/types.js';
-import { formatAic, formatBytes, formatCompactNumber, formatCredits, formatDateTime, formatDuration, formatTokens } from '../lib/format.js';
+import { formatAic, formatBytes, formatCompactNumber, formatCredits, formatDateTime, formatDuration } from '../lib/format.js';
 
-type Metric = 'calls' | 'bytes' | 'tokens' | 'credits';
+type Metric = 'calls' | 'bytes' | 'credits';
 const METRICS: { id: Metric; label: string }[] = [
   { id: 'calls', label: 'Calls' }, { id: 'bytes', label: 'Traffic' },
-  { id: 'tokens', label: 'Tokens' }, { id: 'credits', label: 'AI credits' },
+  { id: 'credits', label: 'AI credits' },
 ];
 const COLORS = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--text-muted)'];
 const UNAVAILABLE = 'Not reported';
@@ -13,15 +13,14 @@ const UNAVAILABLE = 'Not reported';
 function valueOf(row: McpServerBreakdown, metric: Metric): number | null {
   if (metric === 'calls') return row.calls;
   if (metric === 'bytes') return row.inputBytes + row.outputBytes;
-  if (metric === 'credits') return row.nanoAiu ?? null;
-  return row.inputTokens == null || row.outputTokens == null ? null : row.inputTokens + row.outputTokens;
+  return row.nanoAiu ?? null;
 }
 
 function formatted(value: number | null, metric: Metric): string {
   if (value === null) return UNAVAILABLE;
   if (metric === 'bytes') return formatBytes(value);
   if (metric === 'credits') return `${formatAic(value)} AIC`;
-  return metric === 'tokens' ? formatTokens(value) : formatCompactNumber(value);
+  return formatCompactNumber(value);
 }
 
 function label(row: McpServerBreakdown) {
@@ -62,7 +61,7 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
       <div><strong>{measuredCredits.length ? `${formatAic(knownCredits)}${partialCredits ? '+' : ''}` : UNAVAILABLE}</strong>
         <span>{partialCredits && measuredCredits.length ? 'AIC (partial)' : 'Reported AIC'}</span></div>
     </div>
-    <p className="field-hint">Tokens and credits appear only when explicitly attributed to an MCP server. They are not estimated from traffic or allocated from session totals.</p>
+    <p className="field-hint">MCP servers do not report model tokens. Credits appear only when explicitly attributed to a server, never estimated from traffic or allocated from session totals.</p>
     <div className="mcp-usage-chart-grid">
       <figure className="mcp-ranking">
         <figcaption>Server ranking</figcaption>
@@ -79,7 +78,7 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
               <span className="dash-bar-track" aria-hidden="true">
                 <span className="dash-bar-fill" style={{ width: `${((value ?? 0) / max) * 100}%` }} />
               </span>
-              <span className="dash-num">{formatted(value, metric)}{value !== null && row.attribution === 'partial' && (metric === 'tokens' || metric === 'credits') ? ' (partial)' : ''}</span>
+              <span className="dash-num">{formatted(value, metric)}{value !== null && row.attribution === 'partial' && metric === 'credits' ? ' (partial)' : ''}</span>
             </li>;
           })}
         </ol>
@@ -103,7 +102,7 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
     </div>
     <div className="mcp-usage-table-scroll" tabIndex={0} role="region" aria-label="MCP server usage details">
       <table className="usage-table" aria-label="MCP server I/O">
-        <thead><tr><th>Server</th><th>Source</th><th>Calls</th><th>Input tokens</th><th>Output tokens</th>
+        <thead><tr><th>Server</th><th>Source</th><th>Calls</th>
           <th>AIC</th><th>Vendor credits</th><th>Traffic in / out</th><th>Total time</th><th>Last used</th></tr></thead>
         <tbody>{ranked.map((row) => {
           const key = label(row);
@@ -123,8 +122,6 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
               </td>
               <td>{row.origin === 'built-in' ? 'CLI built-in' : row.origin === 'configured' ? 'Configured' : 'Not identified'}</td>
               <td className="dash-num">{formatCompactNumber(row.calls)}</td>
-              <td className="dash-num">{reported(row.inputTokens, formatTokens)}</td>
-              <td className="dash-num">{reported(row.outputTokens, formatTokens)}</td>
               <td className="dash-num">{reported(row.nanoAiu, formatAic)}{row.attribution === 'partial' && row.nanoAiu != null ? ' (partial)' : ''}</td>
               <td className="dash-num">{reported(row.credits, formatCredits)}</td>
               <td className="dash-num">{row.inputBytes + row.outputBytes > 0
@@ -133,7 +130,7 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
               <td className="dash-num">{formatDateTime(row.lastCallAt ?? null)}</td>
             </tr>
             {isOpen && <tr className="mcp-usage-tools-row">
-              <td colSpan={10}>
+              <td colSpan={8}>
                 <ToolBreakdownTable tools={tools} />
               </td>
             </tr>}

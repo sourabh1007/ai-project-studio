@@ -45,9 +45,9 @@ function harness(
     listAll?: Session[];
     historySummary?: string | null;
     historyFirstUserMessage?: string | null;
-    resolveCwd?: (featureId: string) => string | undefined;
+    resolveCwd?: (featureId: string, taskCheckoutId?: string) => string | undefined;
     resolveEnvironment?: (featureId: string) => Promise<{ cwd: string | null; branch: string | null }>;
-    relaunchSession?: (session: Session) => Promise<void>;
+    relaunchSession?: (session: Session, taskCheckoutId?: string) => Promise<void>;
     getResult?: Session | null;
   } = {},
 ) {
@@ -84,6 +84,7 @@ function harness(
   const deleted: string[] = [];
   const renamed: Array<{ id: string; name: string | null }> = [];
   const admin = {
+    previewFeatureDeletion: async () => { throw new Error('not used'); },
     renameFeature: () => {
       throw new Error('not used');
     },
@@ -376,6 +377,26 @@ describe('session-controller', () => {
     );
     expect(result.status).toBe(404);
     expect(h.relaunched).toEqual([]);
+  });
+  it('passes an explicit task choice to headless launch resolution and relaunch', async () => {
+    const choices: Array<string | undefined> = [];
+    const h = harness(Promise.resolve(session), undefined, {
+      resolveCwd: (_id, choice) => { choices.push(choice); return 'C:\\task2'; },
+      relaunchSession: async (_session, choice) => { choices.push(choice); },
+    });
+    await pick(h.routes, 'post', '/features/:featureId/sessions')(req({
+      params: { featureId: 'f1' }, body: { prompt: 'P', taskCheckoutId: 't2' },
+    }));
+    expect(h.requests[0].cwd).toBe('C:\\task2');
+    expect(h.requests[0]).not.toHaveProperty('taskCheckoutId');
+    await pick(h.routes, 'post', '/sessions/:id/relaunch')(req({ params: { id: 's1' }, body: { taskCheckoutId: 't2' } }));
+    expect(choices).toEqual(['t2', 't2']);
+  });
+  it('rejects malformed worktree IDs and accepts a legacy empty relaunch body', async () => {
+    const h = harness(Promise.resolve(session));
+    const relaunch = pick(h.routes, 'post', '/sessions/:id/relaunch');
+    await expect(relaunch(req({ params: { id: 's1' }, body: { taskCheckoutId: '' } }))).rejects.toThrow();
+    await expect(relaunch(req({ params: { id: 's1' }, body: null }))).resolves.toMatchObject({ status: 200 });
   });
 
   it('deletes a session and returns its id', async () => {

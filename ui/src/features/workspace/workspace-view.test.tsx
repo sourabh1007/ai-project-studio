@@ -159,6 +159,67 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+it('persists sidebar and split sizing without changing the active tabs', async () => {
+  const state = { tabs: [sessionTab, featureTab(other)], activeId: sessionTab.id, splitId: 'feature:other' };
+  const view = mount(state);
+  const sidebar = screen.getByRole('separator', { name: 'Resize sidebar' });
+  fireEvent.keyDown(sidebar, { key: 'ArrowRight' });
+  expect(localStorage.getItem('cw-explorer-width')).toBe('270');
+  const split = screen.getByRole('separator', { name: 'Resize split view' });
+  fireEvent.keyDown(split, { key: 'ArrowRight', shiftKey: true });
+  expect(localStorage.getItem('cw-workspace-split-ratio')).toBe('60');
+  expect(view.container.querySelector('.editor-pane')).toHaveStyle({ flexGrow: '60' });
+  expect(view.container.querySelector('.editor-pane-secondary')).toHaveStyle({ flexGrow: '40' });
+  expect(stored().activeId).toBe(sessionTab.id);
+  fireEvent.keyDown(split, { key: 'Enter' });
+  expect(localStorage.getItem('cw-workspace-split-ratio')).toBe('50');
+  await screen.findByText('Terminal session');
+});
+
+it('shows recorded session details on demand without inventing model or exit information', async () => {
+  mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null });
+  const summary = await screen.findByText('Session details');
+  const details = summary.closest('details')!;
+  expect(details).not.toHaveAttribute('open');
+  expect(details).toHaveTextContent('Provider default');
+  expect(details).toHaveTextContent('Not reported');
+  expect(details).toHaveTextContent('copilot');
+  expect(details).toHaveTextContent('Recorded status');
+});
+
+it('supports roving tab focus, linked panels, arrow navigation and Delete with focus restoration', async () => {
+  mount({ tabs: [sessionTab, featureTab(other), repoTab], activeId: sessionTab.id, splitId: null });
+  await screen.findByText('Terminal session');
+  const tabs = screen.getAllByRole('tab');
+  expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+  expect(document.getElementById(tabs[0].getAttribute('aria-controls')!)).toHaveAttribute('aria-labelledby', tabs[0].id);
+  act(() => tabs[0].focus());
+  fireEvent.keyDown(tabs[0], { key: 'ArrowRight' });
+  expect(tabs[1]).toHaveFocus();
+  expect(tabs[1]).toHaveAttribute('aria-selected', 'true');
+  fireEvent.keyDown(tabs[1], { key: 'End' });
+  expect(tabs[2]).toHaveFocus();
+  fireEvent.keyDown(tabs[2], { key: 'ArrowRight' });
+  expect(tabs[0]).toHaveFocus();
+  fireEvent.keyDown(tabs[0], { key: 'Delete' });
+  expect(screen.queryByRole('tab', { name: 'Child session' })).not.toBeInTheDocument();
+  expect(screen.getByRole('tab', { selected: true })).toHaveFocus();
+  await screen.findByText('Repository dashboard');
+});
+
+it('offers keyboard-accessible tab actions with menu navigation and Escape focus restoration', async () => {
+  mount({ tabs: [sessionTab, featureTab(other)], activeId: sessionTab.id, splitId: null });
+  await screen.findByText('Terminal session');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+  const menu = screen.getByRole('menu', { name: 'Tab actions' });
+  expect(screen.getByRole('menuitem', { name: 'Close this' })).toHaveFocus();
+  fireEvent.keyDown(menu, { key: 'End' });
+  expect(screen.getByRole('menuitem', { name: 'Close all' })).toHaveFocus();
+  fireEvent.keyDown(menu, { key: 'Escape' });
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  expect(screen.getByRole('tab', { selected: true })).toHaveFocus();
+});
+
 describe('WorkspaceView deletion reconciliation', () => {
   it('retains each successful checkout and its new tracker against pre-import feature snapshots', async () => {
     const client = createClient();

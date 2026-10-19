@@ -23,6 +23,7 @@ files:
   - ipc-input.cjs
   - http-cache-cleanup.cjs
   - appearance-store.cjs
+  - stable-port.cjs
   - clipboard.cjs
   - backend-control.cjs
   - backend-identity.cjs

@@ -1,9 +1,11 @@
 import type { ClientMessage, ServerMessage, TerminalState } from './terminal-protocol.js';
 import type { TerminalSession } from './terminal-session.js';
 import { terminalDefaults } from './config.js';
+import type { ConfirmCheckoutRecovery } from '../session-worktree/checkout-recovery.js';
+import type { SelectSessionWorktree } from '../session-worktree/session-ref-resolver.js';
 
 interface ConnectionDeps {
-  launch(report: (message: string) => void, signal: AbortSignal): Promise<TerminalSession>;
+  launch(report: (message: string) => void, signal: AbortSignal, confirm: ConfirmCheckoutRecovery, select: SelectSessionWorktree): Promise<TerminalSession>;
   subscribe(listener: (terminal: TerminalSession | null, failed?: boolean) => void): () => void;
   observeInput(data: string): void;
   send(message: ServerMessage): void;
@@ -27,6 +29,40 @@ export function createTerminalConnection(deps: ConnectionDeps) {
   let geometry: Extract<ClientMessage, { type: 'resize' }> | undefined;
   let detach = () => {};
   let detachReadiness = () => {};
+  let recoveryId = 0;
+  let recovery: { id: number; settle(approved: boolean): void } | undefined;
+  let selectionId = 0;
+  let selection: { id: number; settle(choiceId: string | null): void } | undefined;
+  const selectWorktree: SelectSessionWorktree = (choices) => {
+    if (!connected || controller.signal.aborted || generation !== 0 || recovery || selection) return Promise.resolve(null);
+    rejectQueue('Choose a worktree first; queued input was not replayed.');
+    return new Promise<string | null>((resolve) => {
+      const cancel = () => settle(null);
+      const settle = (choiceId: string | null) => {
+        controller.signal.removeEventListener('abort', cancel);
+        selection = undefined;
+        resolve(choiceId);
+      };
+      selection = { id: ++selectionId, settle };
+      controller.signal.addEventListener('abort', cancel, { once: true });
+      deps.send({ type: 'worktree-selection', requestId: selection.id, choices });
+    });
+  };
+  const confirmRecovery: ConfirmCheckoutRecovery = (detail) => {
+    if (!connected || controller.signal.aborted || generation !== 0 || recovery || selection) return Promise.resolve(false);
+    rejectQueue('Checkout recovery requires confirmation; queued input was not replayed.');
+    return new Promise<boolean>((resolve) => {
+      const cancel = () => settle(false);
+      const settle = (approved: boolean) => {
+        controller.signal.removeEventListener('abort', cancel);
+        recovery = undefined;
+        resolve(approved);
+      };
+      recovery = { id: ++recoveryId, settle };
+      controller.signal.addEventListener('abort', cancel, { once: true });
+      deps.send({ type: 'checkout-recovery', requestId: recovery.id, detail });
+    });
+  };
   const setState = (next: TerminalState, detail?: string) => {
     state = next;
     deps.send({ type: 'state', version: 2, generation, state, inputLimit: deps.inputLimit, heartbeat: true, ...(detail ? { detail } : {}) });
@@ -114,10 +150,12 @@ export function createTerminalConnection(deps: ConnectionDeps) {
       try {
         bind(await deps.launch((message) => {
           if (connected && !controller.signal.aborted) setState(state, message);
-        }, controller.signal));
+        }, controller.signal, confirmRecovery, selectWorktree));
       } catch (error) {
         if (connected && !controller.signal.aborted) fail(error instanceof Error ? error.message : 'Terminal launch failed.');
       } finally {
+        recovery?.settle(false);
+        selection?.settle(null);
         clearTimeout(launchTimer);
       }
     },
@@ -128,6 +166,14 @@ export function createTerminalConnection(deps: ConnectionDeps) {
         return;
       }
       const current = message.generation === generation;
+      if (message.type === 'worktree-selection') {
+        if (current && selection?.id === message.requestId) selection.settle(message.choiceId);
+        return;
+      }
+      if (message.type === 'checkout-recovery') {
+        if (current && recovery?.id === message.requestId) recovery.settle(message.approved);
+        return;
+      }
       if (message.type === 'resize') {
         if (!current || state === 'closed' || state === 'failed' || state === 'reconnecting') return;
         geometry = message;
@@ -141,7 +187,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
       lastSeq = message.seq;
       // New user intent cancels older recovery even while PTY writes are blocked.
       if (current) deps.observeInput(message.data);
-      if (!current || state === 'closed' || state === 'failed' || state === 'reconnecting') {
+      if (!current || recovery || selection || state === 'closed' || state === 'failed' || state === 'reconnecting') {
         ack(message, 'rejected', 'Input does not belong to a writable terminal generation.');
         return;
       }

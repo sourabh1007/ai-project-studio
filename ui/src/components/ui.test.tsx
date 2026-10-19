@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Button, Modal, StatusBadge } from './ui.js';
 
@@ -60,6 +60,41 @@ describe('Button', () => {
 });
 
 describe('Modal', () => {
+  it('animates dismissal once while blocking repeated actions and restores focus after the exit', () => {
+    vi.useFakeTimers();
+    document.documentElement.style.setProperty('--motion-overlay-duration', '200ms');
+    const action = vi.fn();
+    const closed = vi.fn();
+    function Example() {
+      const [open, setOpen] = React.useState(false);
+      return <><button onClick={() => setOpen(true)}>Launch animated dialog</button>
+        {open && <Modal title="Animated" onClose={() => { closed(); setOpen(false); }}>
+          <button onClick={action}>Confirm action</button>
+        </Modal>}
+      </>;
+    }
+    try {
+      render(<Example />);
+      const launcher = screen.getByRole('button', { name: 'Launch animated dialog' });
+      launcher.focus();
+      fireEvent.click(launcher);
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(screen.getByRole('dialog')).toHaveAttribute('aria-busy', 'true');
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm action' }));
+      expect(action).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(199));
+      expect(closed).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(closed).toHaveBeenCalledTimes(1);
+      expect(launcher).toHaveFocus();
+    } finally {
+      cleanup();
+      document.documentElement.style.removeProperty('--motion-overlay-duration');
+      vi.useRealTimers();
+    }
+  });
+
   it('moves focus into the dialog and restores the launcher on close', () => {
     function Example() {
       const [open, setOpen] = React.useState(false);

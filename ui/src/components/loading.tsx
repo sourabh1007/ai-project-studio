@@ -6,22 +6,23 @@
  */
 import { useEffect, useState } from 'react';
 import { BrandMark } from './brand-mark.js';
+import { useMotion } from '../hooks/use-motion.js';
 
 /** A small inline spinner, sized to the surrounding text by default. */
 export function Spinner({
   size = 16,
   label = 'Loading',
+  showLabel = true,
 }: {
   size?: number;
   label?: string;
+  showLabel?: boolean;
 }) {
   return (
-    <span
-      className="spinner"
-      style={{ width: size, height: size }}
-      role="status"
-      aria-label={label}
-    />
+    <span className="loading-indicator">
+      <span className="spinner" style={{ width: size, height: size }} role="status" aria-label={label} />
+      {showLabel && <span className="motion-status-label" aria-hidden="true">{label}</span>}
+    </span>
   );
 }
 
@@ -30,6 +31,7 @@ export function Loader({ label = 'Loading' }: { label?: string }) {
   return (
     <div className="loader" role="status" aria-label={label}>
       <span className="spinner spinner-lg" aria-hidden="true" />
+      <span className="motion-status-label" aria-hidden="true">{label}</span>
     </div>
   );
 }
@@ -52,8 +54,9 @@ export function BrandedLoader({
   hints?: string[];
 }) {
   const [index, setIndex] = useState(0);
+  const motion = useMotion();
   useEffect(() => {
-    if (!hints || hints.length <= 1) {
+    if (motion !== 'full' || !hints || hints.length <= 1) {
       return;
     }
     const id = window.setInterval(
@@ -61,7 +64,7 @@ export function BrandedLoader({
       2200,
     );
     return () => window.clearInterval(id);
-  }, [hints]);
+  }, [hints, motion]);
   const hint = hints && hints.length > 0 ? hints[index % hints.length] : null;
   return (
     <div className="branded-loader" role="status" aria-live="polite">

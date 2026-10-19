@@ -33,6 +33,10 @@ function stubService(
   return {
     get: () => null,
     reset: () => null,
+    clarify: async () => { throw new Error('clarify is not used in hub tests'); },
+    refine: async () => { throw new Error('refine is not used in hub tests'); },
+    applyRefinedPlan: () => { throw new Error('applyRefinedPlan is not used in hub tests'); },
+    fileDiff: async () => { throw new Error('fileDiff is not used in hub tests'); },
     saveInputs: () => RUN,
     plan: async () => RUN,
     implement: async () => undefined,

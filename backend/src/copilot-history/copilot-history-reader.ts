@@ -50,6 +50,51 @@ export function isInjectedPrompt(text: string): boolean {
 }
 
 /**
+ * Separator that `composeBootstrappedPrompt` places between the launch-only
+ * bootstrap context and the human's actual request. A session launched with a
+ * prompt (planner/task/headless) sends both as a single CLI message, so the
+ * first turn's `user_message` is the whole bootstrap block with the request
+ * appended after this marker.
+ */
+const USER_REQUEST_MARKER = '\n\n## User Request\n\n';
+
+/**
+ * Extracts the human-authored request embedded in a launch prompt. Returns the
+ * trailing `## User Request` text so the very first prompt of a launched session
+ * shows in history like any typed one, or null when the injected block carries
+ * no request (pure bootstrap or an internal metasession scaffold).
+ */
+export function extractUserRequest(text: string): string | null {
+  const marker = text.indexOf(USER_REQUEST_MARKER);
+  if (marker < 0) {
+    return null;
+  }
+  const request = text.slice(marker + USER_REQUEST_MARKER.length).trim();
+  return request.length > 0 ? request : null;
+}
+
+/**
+ * Maps a raw CLI user message to the text shown in prompt history, or null when
+ * it should be hidden. Genuine typed prompts pass through (trimmed); blank
+ * messages and app-injected prompts are hidden — except a launch prompt, whose
+ * embedded `## User Request` is surfaced so a launched session's first prompt is
+ * never lost.
+ */
+export function toVisiblePrompt(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (isInjectedPrompt(trimmed)) {
+    const request = extractUserRequest(trimmed);
+    // A launch wrapper whose embedded request is itself an app template (e.g. an
+    // internal metasession) stays hidden; only a genuine request surfaces.
+    return request !== null && !isInjectedPrompt(request) ? request : null;
+  }
+  return trimmed;
+}
+
+/**
  * Turns the CLI store's raw session/checkpoint rows into per-session history.
  * Checkpoints are ordered newest-first, capped, and their overviews truncated
  * per config. Sessions with no history still appear (empty checkpoints, null
@@ -115,28 +160,38 @@ export function createCopilotHistoryReader(
       }
       const allRows = source.userMessages(sessionId).map((row) => ({
         index: row.turn_index,
-        text: (row.user_message ?? '').trim(),
+        text: toVisiblePrompt(row.user_message ?? ''),
         response: (row.assistant_response ?? '').trim(),
         at: row.timestamp ?? '',
       }));
       const rows = allRows.filter(
-        (row) => row.text.length > 0 && !isInjectedPrompt(row.text),
+        (row): row is typeof row & { text: string } => row.text !== null,
       );
       const eventMs = source
         .usageEventTimes(sessionId)
         .map((iso) => Date.parse(iso))
         .filter((ms) => !Number.isNaN(ms));
+      const live = deps.livePrompts?.latest(sessionId) ?? null;
+      const nowMs = now();
+      const latestEventMs = eventMs[eventMs.length - 1] ?? NaN;
+      const answering = !Number.isNaN(latestEventMs) &&
+        nowMs - latestEventMs <= config.activeAnswerWindowMs;
+      const latest = rows[rows.length - 1];
+      const matchesSaved = live !== null && latest !== undefined &&
+        toVisiblePrompt(live.text) === latest.text &&
+        (live.at === latest.at || !live.at || !latest.at ||
+          Date.parse(live.at) === Date.parse(latest.at));
       const prompts = rows.map((row, i): SessionPrompt => {
-        const hasResponse = row.response.length > 0;
         const isLast = i === rows.length - 1;
-        const status: SessionPrompt['status'] = hasResponse
-          ? 'answered'
-          : isLast
-            ? 'answering'
-            : 'unanswered';
-        const answeredAt = hasResponse
-          ? answerCompletedAt(row.at, rows[i + 1]?.at ?? null, eventMs)
-          : null;
+        const currentLive = isLast && matchesSaved ? live : null;
+        const response = currentLive?.response?.trim() || row.response || null;
+        const status: SessionPrompt['status'] =
+          currentLive && (!row.response || currentLive.completedAt !== undefined)
+            ? livePromptStatus(currentLive, response, answering)
+            : response ? 'answered' : isLast ? 'answering' : 'unanswered';
+        const answeredAt = status !== 'answered' ? null
+          : currentLive?.completedAt !== undefined ? currentLive.completedAt
+            : answerCompletedAt(row.at, rows[i + 1]?.at ?? null, eventMs);
         const promptMs = Date.parse(row.at);
         const durationMs =
           answeredAt && !Number.isNaN(promptMs)
@@ -146,7 +201,7 @@ export function createCopilotHistoryReader(
           index: row.index,
           text: row.text,
           at: row.at,
-          response: hasResponse ? row.response : null,
+          response,
           status,
           answeredAt,
           durationMs,
@@ -156,14 +211,25 @@ export function createCopilotHistoryReader(
         allRows,
         source.latestActivityTurn(sessionId),
         eventMs,
-        now(),
+        nowMs,
         config.activeAnswerWindowMs,
-        deps.livePrompts?.latest(sessionId) ?? null,
-        rows.length > 0 ? rows[rows.length - 1].text : null,
+        live,
+        matchesSaved,
       );
       return inFlight ? [...prompts, inFlight] : prompts;
     },
   };
+}
+
+function livePromptStatus(
+  live: LivePromptTurn,
+  response: string | null,
+  answering: boolean,
+): SessionPrompt['status'] {
+  if (live.completedAt !== undefined || !answering) {
+    return response ? 'answered' : 'unanswered';
+  }
+  return 'answering';
 }
 
 /**
@@ -173,12 +239,9 @@ export function createCopilotHistoryReader(
  * the user asks again.
  *
  * When a live event-log turn is supplied (`live`), it is authoritative: its
- * prompt differs from the newest persisted prompt exactly while the turn is
- * unsaved, so the row is shown with the real prompt text and the reply streamed
- * so far, and withdrawn the moment the store catches up (prompts match) — no
- * dependence on the activity window, so the latest prompt stays visible at idle.
- * The row reads as "answering" while usage events are still arriving and
- * "answered" once activity settles (the reply is saved shortly after).
+ * real prompt and reply remain visible even before persistence catches up.
+ * Recorded completion takes precedence over recent billing activity; the
+ * activity window is only a fallback for logs without a turn-end event.
  *
  * When no live turn is available (no event log, or it was unreadable), the
  * reader falls back to the legacy behaviour: usage events are written live as
@@ -193,17 +256,13 @@ function buildInFlightPrompt(
   nowMs: number,
   windowMs: number,
   live: LivePromptTurn | null,
-  persistedText: string | null,
+  matchesSaved: boolean,
 ): SessionPrompt | null {
   const maxTurn = rows.reduce((max, row) => Math.max(max, row.index), -1);
 
   if (live) {
-    const liveText = live.text.trim();
-    if (
-      liveText.length === 0 ||
-      isInjectedPrompt(liveText) ||
-      liveText === persistedText
-    ) {
+    const liveText = toVisiblePrompt(live.text);
+    if (liveText === null || matchesSaved) {
       return null;
     }
     const latestEventMs = eventMs.length ? eventMs[eventMs.length - 1] : NaN;
@@ -213,14 +272,18 @@ function buildInFlightPrompt(
       live.response && live.response.trim().length > 0
         ? live.response.trim()
         : null;
+    const answeredAt = response ? live.completedAt ?? null : null;
+    const promptMs = Date.parse(live.at);
     return {
       index: maxTurn + 1,
       text: liveText,
       at: live.at,
       response,
-      status: answering ? 'answering' : 'answered',
-      answeredAt: null,
-      durationMs: null,
+      status: livePromptStatus(live, response, answering),
+      answeredAt,
+      durationMs: answeredAt && !Number.isNaN(promptMs)
+        ? Math.max(0, Date.parse(answeredAt) - promptMs)
+        : null,
       pending: true,
     };
   }

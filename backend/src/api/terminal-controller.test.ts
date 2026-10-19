@@ -153,6 +153,32 @@ describe('terminal-controller', () => {
     expect(h.saved).toEqual([]);
   });
 
+  it('persists an optional preloaded task prompt', async () => {
+    const h = harness();
+    const result = await pick(
+      h.routes,
+      'post',
+      '/features/:featureId/terminal-sessions',
+    )(
+      req({
+        params: { featureId: 'feat-1' },
+        body: { model: 'gpt-5.4', prompt: 'Fix the login bug' },
+      }),
+    );
+
+    expect((result.body as Session).prompt).toBe('Fix the login bug');
+    expect(h.saved[0]?.prompt).toBe('Fix the login bug');
+  });
+
+  it('rejects an empty preloaded prompt', async () => {
+    const h = harness();
+    await expect(
+      pick(h.routes, 'post', '/features/:featureId/terminal-sessions')(
+        req({ params: { featureId: 'feat-1' }, body: { prompt: '' } }),
+      ),
+    ).rejects.toMatchObject({ kind: 'validation' });
+  });
+
   it('rejects an invalid model type', async () => {
     const h = harness();
     await expect(

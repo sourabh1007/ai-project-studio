@@ -18,6 +18,34 @@ function fixture() {
 }
 
 describe('terminal input delivery', () => {
+  it('discards queued input and dialog keystrokes during worktree selection', () => {
+    const f = fixture();
+    f.delivery.offer('before picker');
+    f.delivery.receive({ type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' }] });
+    f.delivery.offer('typing in picker');
+    f.state('ready');
+    expect(f.sent).toEqual([]);
+    f.delivery.offer('new intent');
+    expect(f.sent).toEqual([{ type: 'input', data: 'new intent', generation: 1, seq: 1 }]);
+  });
+  it('discards pre-launch input on recovery consent and does not replay typing from the dialog', () => {
+    const f = fixture();
+    f.delivery.offer('old input');
+    f.delivery.receive({ type: 'checkout-recovery', requestId: 1, detail: 'Replace?' });
+    f.delivery.offer('dialog keystrokes');
+    f.state('connecting', 0);
+    f.state('ready');
+    expect(f.sent).toEqual([]);
+    f.delivery.offer('new input');
+    expect(f.sent).toEqual([{ type: 'input', data: 'new input', generation: 1, seq: 1 }]);
+    const empty = fixture();
+    empty.delivery.receive({ type: 'checkout-recovery', requestId: 1, detail: 'Replace?' });
+    empty.delivery.disconnect(true);
+    empty.state('connecting', 0);
+    empty.delivery.offer('after reconnect');
+    empty.state('ready');
+    expect(empty.sent).toEqual([{ type: 'input', data: 'after reconnect', generation: 1, seq: 1 }]);
+  });
   it('buffers FIRST and SECOND once before ready, sends initial geometry and bounds outstanding bytes until ack', () => {
     const f = fixture();
     f.delivery.offer(''); f.delivery.offer('FIRST'); f.delivery.offer('SECOND');
@@ -139,4 +167,3 @@ describe('chunkByUtf8Bytes', () => {
     expect(chunkByUtf8Bytes('😀', 2)).toEqual(['😀']);
   });
 });
-

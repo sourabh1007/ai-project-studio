@@ -18,6 +18,7 @@ export interface SessionBootstrapDeps {
   contexts: Pick<RepositoryContextCoordinator, 'ensureFresh'>;
   sharedContext: Pick<ContextService, 'composeLayered'>;
   config: RepositoryContextConfig;
+  onSkillContextPrepared?: (session: Session) => void;
 }
 
 export interface SessionBootstrap {
@@ -181,6 +182,7 @@ export function createSessionBootstrap(
         skills ? section('Effective Skill Instructions', skills) : '',
       ].filter((value) => value.length > 0);
 
+      if (skills) deps.onSkillContextPrepared?.(session);
       return `# Session Bootstrap Context\n\n${sections.join('\n\n')}`;
     },
   };

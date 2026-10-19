@@ -520,7 +520,7 @@ describe('new-task-service refine', () => {
   });
 
   it('replies without proposing a change when nothing is revised', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '```json\n{"reply":"Here is why","revised":null}\n```',
       sessionId: 's',
     }));
@@ -540,7 +540,7 @@ describe('new-task-service refine', () => {
   });
 
   it('proposes a revised plan without applying it', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '```json\n{"reply":"Updated","revised":"  NEW PLAN  "}\n```',
       sessionId: 's',
     }));
@@ -554,7 +554,7 @@ describe('new-task-service refine', () => {
   });
 
   it('proposes nothing for a blank revised plan string', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '```json\n{"reply":"ok","revised":"   "}\n```',
       sessionId: 's',
     }));
@@ -565,7 +565,7 @@ describe('new-task-service refine', () => {
   });
 
   it('proposes nothing for a non-string revised payload', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '```json\n{"reply":"ok","revised":{"a":1}}\n```',
       sessionId: 's',
     }));
@@ -575,7 +575,7 @@ describe('new-task-service refine', () => {
     expect(result.run.plan).toBe('OLD PLAN');
   });
   it('handles a run with no plan yet', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '```json\n{"reply":"draft","revised":null}\n```',
       sessionId: 's',
     }));
@@ -630,7 +630,7 @@ describe('new-task-service applyRefinedPlan', () => {
 
 describe('new-task-service clarify', () => {
   it('runs an AI turn and returns the parsed clarification', async () => {
-    const runDetailed = vi.fn(async () => ({
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({
       text: '{"improvedProblem":"Make the dashboard list load in <1s","missingInfo":["affected endpoint","acceptance criteria"]}',
       sessionId: 's',
     }));
@@ -657,7 +657,7 @@ describe('new-task-service clarify', () => {
   });
 
   it('falls back to the original problem on unparseable output', async () => {
-    const runDetailed = vi.fn(async () => ({ text: 'oops', sessionId: 's' }));
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({ text: 'oops', sessionId: 's' }));
     const { service } = harness({ ai: { runDetailed } });
     const result = await service.clarify('f1', {
       problem: '  keep this  ',
@@ -674,7 +674,7 @@ describe('new-task-service clarify', () => {
   });
 
   it('forwards the abort signal to the AI turn', async () => {
-    const runDetailed = vi.fn(async () => ({ text: '{}', sessionId: 's' }));
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({ text: '{}', sessionId: 's' }));
     const { service } = harness({ ai: { runDetailed } });
     const controller = new AbortController();
     await service.clarify(
@@ -1046,7 +1046,7 @@ describe('new-task-service implement', () => {
   });
 
   it('passes the abort signal through to the planner', async () => {
-    const runDetailed = vi.fn(async () => ({ text: 'X', sessionId: 's' }));
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({ text: 'X', sessionId: 's' }));
     const { service } = harness({ ai: { runDetailed } });
     service.saveInputs('a1', 'f1', { problem: 'P', context: '' });
     const controller = new AbortController();
@@ -1055,7 +1055,7 @@ describe('new-task-service implement', () => {
   });
 
   it('requests the auto model so planning stays warm-pool eligible', async () => {
-    const runDetailed = vi.fn(async () => ({ text: 'X', sessionId: 's' }));
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>(async () => ({ text: 'X', sessionId: 's' }));
     const { service } = harness({ ai: { runDetailed } });
     service.saveInputs('a1', 'f1', { problem: 'P', context: '' });
     await service.plan('a1');

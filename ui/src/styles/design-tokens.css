@@ -91,6 +91,8 @@
   --transition-fast: 140ms var(--ease-out);
   --transition-med: 240ms var(--ease-smooth);
   --transition-slow: 420ms var(--ease-smooth);
+  --motion-panel-duration: 220ms;
+  --motion-overlay-duration: 200ms;
 
   /* Editor panel foreground. Per-theme below: the panel is bright in light
      mode (the terminal itself is themed white) and dark in dark mode. */
@@ -204,6 +206,55 @@
   --feature-color-6: #a78bfa;
   --feature-color-7: #f87171;
   --feature-color-8: #38bdf8;
+}
+
+/* Clarity changes surfaces only; typography, density and accent stay independent. */
+[data-appearance='clarity'][data-theme='light'] {
+  --bg: #e9edf2;
+  --surface: #ffffff;
+  --surface-strong: #f0f3f7;
+  --border: #a6b0bd;
+  --border-strong: #697586;
+  --text: #182230;
+  --text-muted: #39485a;
+  --text-faint: #48576a;
+  --panel-titlebar: #dfe5ed;
+  --panel-activitybar: #dfe5ed;
+  --panel-sidebar: #edf1f6;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #e7edf4;
+  --panel-hover: #dce5ef;
+  --item-hover: #e2eaf3;
+  --item-active: #d2dfef;
+  --activity-fg: #39485a;
+  --tree-guide: #a6b0bd;
+  --tree-selected: #d2dfef;
+  --shadow-soft: 0 1px 3px rgba(24, 34, 48, 0.08);
+}
+
+[data-appearance='clarity'][data-theme='dark'] {
+  --bg: #141820;
+  --surface: #202731;
+  --surface-strong: #2a3340;
+  --border: #627084;
+  --border-strong: #8c9aad;
+  --text: #f1f5fa;
+  --text-muted: #d0dae6;
+  --text-faint: #bac8d9;
+  --panel-titlebar: #303a48;
+  --panel-activitybar: #1a202a;
+  --panel-sidebar: #202731;
+  --panel-editor: #141820;
+  --panel: #202731;
+  --panel-inset: #1a202a;
+  --panel-hover: #354254;
+  --item-hover: #303d50;
+  --item-active: #3b4b62;
+  --activity-fg: #d0dae6;
+  --tree-guide: #627084;
+  --tree-selected: #3b4b62;
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.24);
 }
 
 /*
@@ -449,6 +500,12 @@ a:focus-visible,
     outline: 1px solid Highlight;
     outline-offset: -1px;
   }
+  [role='tab'][aria-selected='true'],
+  .segmented-item[aria-checked='true'],
+  .pane-resizer:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 :root[data-motion='reduced'],
@@ -480,44 +537,5 @@ a:focus-visible,
     transition-delay: 0ms !important;
     animation: none !important;
     scroll-behavior: auto !important;
-  }
-}
-
-/*
- * Essential progress/status indicators keep animating even under reduced
- * motion. A frozen spinner or a still "in progress" dot misinforms — it reads
- * as stuck rather than calm — so these small, in-place liveness cues are
- * exempted from the blanket animation kill above. This is the accessibility
- * carve-out for indicators that convey ongoing state, not decoration; large
- * decorative motion still honours the preference. The higher-specificity
- * selectors (a class beats the universal `*`) let these `!important`
- * re-declarations win over the kill switch.
- *
- * `data-motion='off'` is the user's explicit "no animation at all" choice and
- * is respected in full — it gets no exemption here.
- */
-:root[data-motion='reduced'] .spinner,
-:root[data-motion='reduced'] .spinner-lg,
-:root[data-motion='reduced'] .rb-nav-spin {
-  animation: spin 0.7s linear infinite !important;
-}
-:root[data-motion='reduced'] .new-task-spinner {
-  animation: new-task-spin 0.7s linear infinite !important;
-}
-:root[data-motion='reduced'] .rb-dot-reviewing {
-  animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinner,
-  .spinner-lg,
-  .rb-nav-spin {
-    animation: spin 0.7s linear infinite !important;
-  }
-  .new-task-spinner {
-    animation: new-task-spin 0.7s linear infinite !important;
-  }
-  .rb-dot-reviewing {
-    animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;
   }
 }

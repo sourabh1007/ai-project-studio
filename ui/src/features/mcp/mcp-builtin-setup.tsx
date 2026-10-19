@@ -74,7 +74,7 @@ export function McpBuiltinSetup({ providerId, server, onClose, onConfigured }: {
   }
 
   return (
-    <Modal title={`Configure ${name}`} onClose={() => { if (!locked.current) onClose(); }} size="lg">
+    <Modal title={`Configure ${name}`} dismissible={!busy} onClose={() => { if (!locked.current) onClose(); }} size="lg">
       <form className="mcp-builtin-setup" aria-busy={busy}
         onSubmit={(event) => { event.preventDefault(); void configure(); }}>
         <p>Choose options or enter your own. Saves for new Agency sessions.</p>

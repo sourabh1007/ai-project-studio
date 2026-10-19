@@ -98,10 +98,11 @@ const catalog: AgentCatalogItem = {
 
 function makeApi(): PlannerLaunchApi {
   return {
+    listFeatures: vi.fn(async () => []),
     createFeature: vi.fn(async () => feature),
     attachAgent: vi.fn(async () => attachment),
     getAgent: vi.fn(async () => catalog),
-    startSession: vi.fn(async () => session),
+    createTerminalSession: vi.fn(async () => session),
     renameSession: vi.fn(async () => ({ ...session, name: 'Fix the login bug' })),
     createPrFeature: vi.fn(async () => feature),
   };
@@ -231,6 +232,41 @@ describe('launchNewTask', () => {
     );
   });
 
+  it('reuses an existing dated bucket so same-day tasks share one folder', async () => {
+    const api = makeApi();
+    const dated: Feature = {
+      ...feature,
+      id: 'dated-1',
+      name: '2025-01-01',
+      parentFeatureId: null,
+      parentGroupId: null,
+    };
+    (api.listFeatures as ReturnType<typeof vi.fn>).mockResolvedValue([dated]);
+    await launchNewTask(api, makeTask(), 'r1');
+    // Only the child feature is created; the dated parent is reused.
+    expect(api.createFeature).toHaveBeenCalledTimes(1);
+    expect(api.createFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ parentFeatureId: 'dated-1' }),
+    );
+  });
+
+  it('does not reuse a same-named feature from a different repo or a nested one', async () => {
+    const api = makeApi();
+    (api.listFeatures as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...feature, id: 'other-repo', name: '2025-01-01', repoId: 'r2' },
+      { ...feature, id: 'nested', name: '2025-01-01', parentFeatureId: 'p' },
+      { ...feature, id: 'grouped', name: '2025-01-01', parentGroupId: 'g' },
+    ]);
+    await launchNewTask(api, makeTask(), 'r1');
+    // No usable bucket matched, so a fresh dated parent is created.
+    expect(api.createFeature).toHaveBeenNthCalledWith(1, {
+      name: '2025-01-01',
+      description: 'Fix the login bug',
+      repoId: 'r1',
+    });
+    expect(api.createFeature).toHaveBeenCalledTimes(2);
+  });
+
   it('passes a null repo through', async () => {
     const api = makeApi();
     await launchNewTask(api, makeTask(), null);
@@ -266,7 +302,7 @@ describe('launchSession', () => {
       repoId: 'r1',
       parentFeatureId: 'f1',
     });
-    expect(api.startSession).toHaveBeenCalledWith('f1', {
+    expect(api.createTerminalSession).toHaveBeenCalledWith('f1', {
       prompt: 'Fix the login bug\n\nn',
     });
     expect(api.renameSession).toHaveBeenCalledWith('s1', 'Fix the login bug');

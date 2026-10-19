@@ -97,6 +97,9 @@ import { createSessionFilesRoutes } from './session-files-controller.js';
 import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
+import { createSkillUsageRoutes } from './skill-usage-controller.js';
+import type { SkillUsageRepo } from '../skill-usage/skill-usage-contract.js';
+import type { SkillUsageConfig } from '../skill-usage/config.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
 import { createPlannerRoutes } from './planner-controller.js';
 import { createPlannerSummaryRoutes } from './planner-summary-controller.js';
@@ -150,7 +153,7 @@ export interface ApiRoutesDeps {
    * worktree for PR features, else repo checkout). Threaded to the session
    * launcher so `/features/:id/sessions` pins the cwd like the terminal path.
    */
-  resolveSessionCwd?: (featureId: string) => string | undefined;
+  resolveSessionCwd?: (featureId: string, taskCheckoutId?: string) => string | undefined;
   /**
    * Resolves a feature's full environment (cwd + current branch) for the
    * cross-feature move consent dialog.
@@ -161,7 +164,7 @@ export interface ApiRoutesDeps {
    * directory, so a consented cross-feature move switches the running CLI's
    * branch immediately.
    */
-  relaunchSession: (session: Session) => Promise<void>;
+  relaunchSession: (session: Session, taskCheckoutId?: string) => Promise<void>;
   providers: ProviderRegistry;
   /** Default provider + each provider's install state for the first-run UI. */
   providerBootstrapInfo: () => ProviderBootstrapInfo;
@@ -175,6 +178,7 @@ export interface ApiRoutesDeps {
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
   skills: SkillsService;
+  skillUsage?: { usage: SkillUsageRepo; config: SkillUsageConfig };
   sessionBootstrap: SessionBootstrap;
   /** Applies a freshly-tagged session skill to that session's live terminal. */
   injectSessionSkill?: (sessionId: string, skillId: string) => void;
@@ -355,6 +359,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       injectSessionSkill: deps.injectSessionSkill,
       removeSessionSkill: deps.removeSessionSkill,
     }),
+    ...(deps.skillUsage ? createSkillUsageRoutes(deps.skillUsage) : []),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
     ...createPlannerRoutes({ planner: deps.planner }),
     ...createPlannerSummaryRoutes({ plannerSummarizer: deps.plannerSummarizer }),

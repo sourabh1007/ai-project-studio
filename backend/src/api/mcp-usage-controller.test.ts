@@ -104,7 +104,7 @@ describe('createMcpUsageRoutes', () => {
     const mcpUsage = repo();
     const routes = routeMap(createMcpUsageRoutes({ mcpUsage, clock }));
     await expect(
-      routes.get('post /mcp-usage')!.handler({ params: {}, query: {} }),
+      routes.get('post /mcp-usage')!.handler({ params: {}, query: {}, body: undefined }),
     ).rejects.toThrow(/featureId/);
     expect(mcpUsage.record).not.toHaveBeenCalled();
   });

@@ -87,6 +87,8 @@ export interface McpLogCaptureDeps {
   sourcesPerTick: number;
   bytesPerSource: number;
   maxCachedSources: number;
+  /** Generic telemetry observers share the bounded provider log read. */
+  observeEvent?: (event: unknown, source: McpLogSource) => void;
 }
 
 /**
@@ -124,6 +126,7 @@ export function createMcpLogCapture(deps: McpLogCaptureDeps) {
             for (const line of page.lines) {
               let event: unknown;
               try { event = JSON.parse(line); } catch { malformed += 1; continue; }
+              deps.observeEvent?.(event, source);
               const call = mcpCallFromEvent(event);
               if (call) {
                 const owner = deps.owners.resolve(source, call.recordedAt);

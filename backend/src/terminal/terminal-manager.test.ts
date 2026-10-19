@@ -692,6 +692,82 @@ describe('createTerminalManager', () => {
     expect(env.writes).not.toContain('fix it');
   });
 
+  describe('first-launch task prompt seeding', () => {
+    it('auto-sends a preloaded task prompt on the first interactive launch', async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        await manager.getOrLaunch({ ...sampleSession(), prompt: 'do the task' });
+        env.emitData('? help');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(env.writes).toEqual(['do the task', '\r']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('seeds the bootstrap context before the task prompt', async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('BOOTSTRAP');
+        await manager.getOrLaunch({ ...sampleSession(), prompt: 'do the task' });
+        env.emitData('? help');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        env.emitData('? help');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(env.writes).toEqual(['BOOTSTRAP', '\r', 'do the task', '\r']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not re-send the task prompt when reopening an already-started session', async () => {
+      const { manager, env } = makeManager('');
+      await manager.getOrLaunch({
+        ...sampleSession(),
+        prompt: 'do the task',
+        status: 'running',
+      });
+      expect(env.writes).toEqual([]);
+    });
+
+    it('does not seed the task prompt for a meta session', async () => {
+      const { manager, env } = makeManager('');
+      await manager.getOrLaunch({
+        ...sampleSession(),
+        prompt: 'do the task',
+        kind: 'meta',
+      });
+      expect(env.writes).toEqual([]);
+    });
+
+    it('does not seed the task prompt for an internal session', async () => {
+      const { manager, env } = makeManager('');
+      await manager.getOrLaunch({
+        ...sampleSession(),
+        prompt: 'do the task',
+        scope: 'internal',
+      });
+      expect(env.writes).toEqual([]);
+    });
+
+    it('replays a recovery prompt instead of the preloaded task prompt', async () => {
+      vi.useFakeTimers();
+      try {
+        const { manager, env } = makeManager('');
+        await manager.getOrLaunch(
+          { ...sampleSession(), prompt: 'do the task' },
+          { replaySeed: 'confirmed replay' },
+        );
+        env.emitData('? help');
+        vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+        expect(env.writes).toEqual(['confirmed replay', '\r']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('self-recovery escalation', () => {
     const flush = async (times = 8): Promise<void> => {
       for (let i = 0; i < times; i += 1) {

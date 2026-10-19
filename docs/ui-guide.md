@@ -51,15 +51,59 @@ coordination is in `desktop/startup-splash.cjs` and `desktop/main.cjs`.
 
 ## Feature areas (`ui/src/features`)
 
+### Skill and MCP telemetry
+
+**Usage** and feature dashboards show skill activity separately from MCP servers.
+The skill table filters **Repository**, **IDE**, **CLI**, and **Not identified**
+sources and keeps same-named skills from different repositories/providers
+separate. Repository worktree copies share their repository-relative skill
+identity. CLI and repository invocations come from explicit `skill.invoked`
+events, not guesses based on prompts, file reads, or available skill lists.
+Historical and live events share the existing bounded provider-log reader;
+durable event identities prevent replay double-counting.
+
+IDE library skills record **Context prepared** at development bootstrap and
+**Context injected** only after a successful live-terminal injection. These
+are guidance-delivery activities, not proof of model execution, and are never
+merged into CLI invocation counts. Merely tagging a skill does not count as
+an invocation. Historical IDE applications before telemetry was enabled are
+not reconstructed from today's attachments.
+
+Each skill shows uses, distinct sessions, last activity, and tokens/AIC only
+when explicitly attributed to that skill. Unknown usage is **Not reported**;
+measured zero stays zero, and incomplete metric coverage is marked **partial**.
+Session/turn totals are never allocated between skills or MCP servers.
+MCP tables and rankings no longer show model-token metrics.
+
+Skill snapshots cover the latest `skillUsage.maxEvents` events in the selected
+workspace, IDE-metasession, or feature scope (5,000 by default, capped at 10,000),
+independently of the AI-usage period selector. A notice identifies truncated
+history; older events remain persisted. **Refresh skills** reloads the snapshot.
+Payloads and skill contents are not persisted by this telemetry.
+
 ### Session checkout and startup
 
-New non-PR sessions use the repository's existing checkout on `master`.
-PR sessions reuse the feature's existing PR checkout. Opening a session does
+New non-PR sessions use the repository's existing checkout on its default branch.
+Sessions under a feature with one planned New Task reuse that task's worktree;
+PR sessions reuse the feature's existing PR checkout. Normal session startup does
 not clone, fetch, add a worktree, generate a session branch or detach HEAD.
 Multiple sessions share the same working directory: branch changes, commits
 and edits are visible to all of them. Branch selection is serialized per
 checkout to avoid concurrent index locks. Git refuses a switch that would
-overwrite local edits; the app never forces, resets or stashes them.
+overwrite local edits; the app never resets or stashes them. Existing managed
+checkouts always keep their current branch and files, without a replacement
+confirmation. A deleted checkout is restored automatically from its last
+registered Git HEAD (including detached commits), or its recorded branch if
+that metadata is unavailable. If neither is available locally, recovery fetches
+the recorded ref, falling back to remote `master`, and creates a worktree at
+the original location. Recovery uses detached HEAD so it cannot move a branch
+used by another checkout. Deleted uncommitted files cannot be reconstructed.
+Locks, permissions and fetch failures are reported; no checkout is discarded
+or unlocked automatically. The primary clone is never replaced. See [New Task](features/new-task.md#where-the-work-lives)
+for recovery behavior. When several task checkouts exist, the terminal asks
+which branch/path to use and remembers the selection for that session. Cancel
+leaves the session unbound. Cross-feature moves offer a destination worktree
+picker and clear the previous binding without deleting its checkout.
 
 Reconnecting to a running terminal does not switch branches. Previously
 started shared sessions retain the checkout's current branch when reopened.
@@ -78,7 +122,7 @@ Startup shows real checkout progress, a spinner and elapsed time.
 Reconnecting views join the same preparation job rather than duplicating it.
 Disconnecting a view stops its terminal launch wait but lets shared preparation
 finish. Failures display the actual reason and offer **Reconnect**, without
-replaying input or substituting a different branch.
+replaying input. A `master` recovery fallback is explicitly shown in startup progress.
 
 `sessionWorktree.gitTimeoutMs` defaults to 20,000 ms for metadata commands;
 `checkoutTimeoutMs` is 600,000 ms for switching branches in large checkouts, with
@@ -86,7 +130,50 @@ replaying input or substituting a different branch.
 launch wait to 660,000 ms. A WebSocket not acknowledged within 30 seconds offers
 retry instead of showing an indefinite connection spinner.
 
+### Prompt history
+
+The session's Prompt history pane includes a search box that instantly filters
+the full prompt and response text, ignoring case and surrounding whitespace.
+The docked pane and full-screen history share the same query and show matching
+and total counts. **Clear search** restores the full list. Live polling keeps
+the active filter applied as new prompts and responses arrive; changing sessions
+clears the query. Loading, empty history, failed requests, and no search matches
+remain distinct states.
+
 ### Session diagnostics
+
+**Settings → Appearance → Clarity** is an opt-in surface treatment with stronger
+light/dark contrast, distinct panel headers, visible selection and keyboard-focus
+indicators, and separated history rows. It does not change fonts, text sizes,
+line heights, or the user's density and terminal preferences.
+
+The explorer, side-by-side editor split, and prompt history have persistent resize
+handles. Drag with a mouse or touch, or focus a handle and use Left/Right
+(Shift for larger steps), Home/End for limits, and Enter to reset. Double-click
+also resets. Narrow editor containers stack split panes vertically.
+Session tabs expose **Session details** for recorded provider/model, status,
+timestamps and exit code; unknown values remain unavailable rather than guessed.
+Prompt dialogs offer **Recorded turn details** for timestamps and duration.
+Terminal display-scale changes refit and repaint the glyph atlas even when the
+container's CSS dimensions are unchanged.
+
+Workspace tabs use Left/Right, Home/End and Delete with roving keyboard focus;
+their action menus support Up/Down, Home/End and Escape. Tab controls use shared
+SVG icons. Navigation and tab-action tooltips appear on keyboard focus as well
+as hover, can be dismissed with Escape, and stay within the viewport.
+The command palette exposes its search, result list and active option to
+screen readers.
+
+Explorer/history sliding (220 ms), dialogs/palette transitions (200 ms) and
+expandable detail sections share a restrained, reversible motion policy.
+Closing content stays mounted for the transition; closed panel content is
+inert, and dialogs retain focus ownership until dismissal completes.
+Terminal fitting is debounced until the layout settles. Both the operating
+system's reduced-motion preference and the app's Reduced/Off options disable
+sliding, pulsing and chart animations; loading controls show static status text
+instead. Narrow windows present the explorer and history as overlaid panels
+rather than squeezing the terminal. Copying a recorded response announces
+success and reports clipboard failures explicitly.
 
 The shared desktop style uses compact Segoe UI/system text, flat neutral
 light/dark surfaces, thin gray pane boundaries, and blue focus accents. Explorer

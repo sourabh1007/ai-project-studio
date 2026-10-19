@@ -29,7 +29,7 @@
             mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
           document.documentElement.setAttribute('data-theme', resolved);
 
-          /* Apply the persisted appearance (compact desktop vs. futuristic)
+          /* Apply the persisted appearance
              before first paint so the surface treatment never flashes. */
           var prefsRaw =
             (appearance && appearance.values['cw-ui-prefs']) ||
@@ -37,7 +37,12 @@
           var look = 'desktop';
           if (prefsRaw) {
             var parsed = JSON.parse(prefsRaw);
-            if (parsed && parsed.appearance === 'futuristic') look = 'futuristic';
+            if (parsed && (parsed.appearance === 'futuristic' || parsed.appearance === 'clarity')) {
+              look = parsed.appearance;
+            }
+            if (parsed && (parsed.motion === 'full' || parsed.motion === 'reduced' || parsed.motion === 'off')) {
+              document.documentElement.setAttribute('data-motion', parsed.motion);
+            }
           }
           document.documentElement.setAttribute('data-appearance', look);
         } catch (_) {

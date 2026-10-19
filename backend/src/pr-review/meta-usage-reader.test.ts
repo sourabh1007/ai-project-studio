@@ -74,7 +74,7 @@ describe('createMetaUsageReader', () => {
   it('falls back to a persisted warm record when no cold usage rows exist', () => {
     const reader = createMetaUsageReader({
       usage: { listBySession: () => [] },
-      warmUsage: { get: (sessionId) => (sessionId === 'warm-1' ? warmUsage() : null), save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
+      warmUsage: { get: (sessionId) => (sessionId === 'warm-1' ? warmUsage() : null), listRecent: () => [], save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
     });
 
     expect(reader.usageForSession('warm-1')).toEqual({
@@ -89,7 +89,7 @@ describe('createMetaUsageReader', () => {
   it('surfaces unavailable warm usage truthfully instead of inventing zeros', () => {
     const reader = createMetaUsageReader({
       usage: { listBySession: () => [] },
-      warmUsage: { get: () => warmUsage({ inputTokens: null, outputTokens: null }), save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
+      warmUsage: { get: () => warmUsage({ inputTokens: null, outputTokens: null }), listRecent: () => [], save: () => {}, deleteByFeature: () => {}, deleteBySession: () => {} },
     });
 
     expect(reader.usageForSession('warm-1')).toEqual({

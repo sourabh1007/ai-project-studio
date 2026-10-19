@@ -113,7 +113,9 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
     'UPDATE sessions SET worktree_path = ?, branch = ? WHERE id = ?',
   );
   const updatePlacement = db.prepare(
-    'UPDATE sessions SET feature_id = ?, group_id = ?, order_index = ? WHERE id = ?',
+    `UPDATE sessions SET feature_id = ?, group_id = ?, order_index = ?,
+      worktree_path = CASE WHEN feature_id = ? THEN worktree_path ELSE NULL END,
+      branch = CASE WHEN feature_id = ? THEN branch ELSE NULL END WHERE id = ?`,
   );
   const deleteOne = db.prepare('DELETE FROM sessions WHERE id = ?');
   const deleteByFeature = db.prepare('DELETE FROM sessions WHERE feature_id = ?');
@@ -170,6 +172,8 @@ export function createSessionRepo(db: DatabaseSync): SessionRepo {
         placement.featureId,
         textOrNull(placement.groupId),
         intOrNull(placement.orderIndex) ?? 0,
+        placement.featureId,
+        placement.featureId,
         id,
       );
     },

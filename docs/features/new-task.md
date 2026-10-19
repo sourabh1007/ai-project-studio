@@ -58,3 +58,26 @@ disturbs your checkout. The worktree persists after the PR is opened, which is
 how the file diffs stay viewable. See
 [backend-modules.md](../backend-modules.md) (`new-task/`) and
 [metasessions.md](../metasessions.md) for the internals.
+
+Interactive sessions under a feature with one planned New Task reuse that
+task's existing worktree and branch; they do not create per-session copies or
+switch the primary checkout. Once the feature becomes a PR review, sessions
+share its PR review checkout. An explicitly bound session keeps its recorded
+worktree. If a feature has several task worktrees and the session is not bound
+to one, its terminal asks which checkout to use, showing each branch and path.
+The selection is saved on the session and reused after reconnects and app
+restarts. Cancelling does not launch a CLI or select a default. If a task is
+removed or replanned while the picker is open, launch rejects the stale choice
+instead of using a different checkout.
+Moving a session to another feature clears its binding without removing files,
+and the move dialog asks for a destination checkout when needed. Headless API
+launches accept a `taskCheckoutId` rather than guessing an ambiguous checkout.
+
+Existing managed checkouts keep their current branch and all local files,
+without a replacement prompt. Deleted checkouts are restored through Git at
+their last recorded HEAD, including detached commits, or their saved branch.
+When neither is available locally, recovery fetches the saved ref, falling
+back to remote `master`, and adds a detached worktree at the original path.
+Deleted uncommitted files cannot be restored. Recovery never removes a
+directory, unlocks a worktree, or replaces the primary clone; Git and fetch
+failures remain visible. Queued terminal input is not replayed after recovery.

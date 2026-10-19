@@ -365,6 +365,54 @@ describe('Explorer row action trail', () => {
     } as unknown as ApiClient;
   }
 
+  it.each(['confirm', 'cancel'] as const)('requires an explicit destination task checkout before a cross-feature session move (%s)', async (action) => {
+    const source: Session = {
+      id: 's1', featureId: 'f1', name: 'Task session', provider: 'copilot', requestedModel: 'auto',
+      resolvedModel: null, status: 'completed', kind: 'dev', prompt: '', usageFilePath: '',
+      createdAt: '', startedAt: null, endedAt: null, exitCode: null,
+      worktreePath: 'C:\\original', branch: 'original-task',
+    };
+    const destination = { ...feature, id: 'f2', name: 'Destination feature' };
+    const client = {
+      ...fullClient(),
+      listFeatures: vi.fn().mockResolvedValue([feature, destination]),
+      listSessions: vi.fn(async (id: string) => id === 'f1' ? [source] : []),
+      getSession: vi.fn().mockResolvedValue(source),
+      getFeatureEnvironment: vi.fn(async (id: string) => id === 'f1'
+        ? { cwd: null, branch: null }
+        : { cwd: null, branch: null, worktrees: [
+          { id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' },
+          { id: 't2', checkoutPath: 'C:\\task2', ref: 'task2' },
+        ] }),
+      moveNode: vi.fn().mockResolvedValue(undefined),
+      relaunchSession: vi.fn().mockResolvedValue(source),
+    };
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+    </ApiProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    const sessionRow = await screen.findByRole('button', { name: 'Task session' });
+    fireEvent.dragStart(sessionRow.closest('.tree-draggable')!);
+    fireEvent.drop(screen.getByRole('button', { name: destination.name }).closest('.tree-branch')!);
+    const dialog = await screen.findByRole('dialog', { name: 'Switch branch?' });
+    expect(dialog).toHaveTextContent('original-task');
+    expect(client.moveNode).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move and switch branch' }));
+    expect(await within(dialog).findByText('Choose a destination task worktree.')).toBeInTheDocument();
+    expect(client.moveNode).not.toHaveBeenCalled();
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Destination task worktree' }), { target: { value: 't2' } });
+    if (action === 'cancel') {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(client.moveNode).not.toHaveBeenCalled();
+      expect(client.relaunchSession).not.toHaveBeenCalled();
+    } else {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move and switch branch' }));
+      await waitFor(() => expect(client.relaunchSession).toHaveBeenCalledWith('s1', 't2'));
+      expect(client.moveNode).toHaveBeenCalledWith(expect.objectContaining({ type: 'session', id: 's1', targetFeatureId: 'f2' }));
+    }
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
   it('groups the repository row actions in a collapsible hover trail', async () => {
     render(
       <ApiProvider value={fullClient()}>

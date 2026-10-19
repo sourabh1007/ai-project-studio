@@ -101,7 +101,10 @@ function usage(sessions: number): FeatureUsage {
 
 function renderDashboard(client: ApiClient) {
   return render(
-    <ApiProvider value={client}>
+    <ApiProvider value={{
+      ...client,
+      getFeatureSkillUsage: vi.fn().mockResolvedValue({ rows: [], limited: false, maxEvents: 5000 }),
+    }}>
       <FeatureDashboard featureId="feature-1" featureName="Feature 1" />
     </ApiProvider>,
   );

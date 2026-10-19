@@ -11,6 +11,13 @@ const createTerminalSessionSchema = z.object({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   kind: z.enum(['dev', 'meta']).optional(),
+  /**
+   * An optional task prompt to preload onto the session. When set, it is
+   * auto-sent into the interactive CLI the first time the terminal is opened
+   * (see `terminal-manager`'s first-launch seeding), so a Planner-launched
+   * session starts working on the task immediately instead of coming up blank.
+   */
+  prompt: z.string().min(1).optional(),
 });
 
 export interface TerminalControllerDeps {
@@ -47,7 +54,7 @@ export function createTerminalRoutes(deps: TerminalControllerDeps): Route[] {
           provider: selection.provider.id,
           requestedModel: selection.model,
           kind,
-          prompt: '',
+          prompt: input.prompt ?? '',
         });
         deps.sessions.save(session);
         // Return the persisted row, not the in-memory object: the creation

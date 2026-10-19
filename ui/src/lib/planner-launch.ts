@@ -20,10 +20,11 @@ export type WorkspaceLaunchIntent =
 /** The subset of the API client the launch helpers depend on. */
 export type PlannerLaunchApi = Pick<
   ApiClient,
+  | 'listFeatures'
   | 'createFeature'
   | 'attachAgent'
   | 'getAgent'
-  | 'startSession'
+  | 'createTerminalSession'
   | 'renameSession'
   | 'createPrFeature'
 >;
@@ -120,6 +121,12 @@ export function datedFeatureName(task: PlannerTask): string {
  * Creates (or reuses, when the task was already launched once) the dated parent
  * feature that a task's launches nest under, returning its id. Reuse avoids a
  * second parent when a task is launched into more than one surface.
+ *
+ * Launches of *different* tasks that fall on the same calendar day must share a
+ * single dated bucket rather than piling up duplicate same-named folders, so
+ * when the task carries no parent yet we first look for an existing top-level
+ * feature with the dated name in the same repository and reuse it. Only when no
+ * such bucket exists is a fresh one created.
  */
 async function resolveParentFeatureId(
   api: PlannerLaunchApi,
@@ -131,10 +138,22 @@ async function resolveParentFeatureId(
     return task.featureId;
   }
   onPhase?.('Preparing workspace…');
+  const name = datedFeatureName(task);
+  const targetRepoId = repoId;
+  const existing = (await api.listFeatures()).find(
+    (feature) =>
+      feature.name === name &&
+      feature.repoId === targetRepoId &&
+      !feature.parentFeatureId &&
+      !feature.parentGroupId,
+  );
+  if (existing) {
+    return existing.id;
+  }
   const parent = await api.createFeature({
-    name: datedFeatureName(task),
+    name,
     description: promptForTask(task),
-    repoId: repoId ?? null,
+    repoId: targetRepoId,
   });
   return parent.id;
 }
@@ -165,9 +184,10 @@ export async function launchNewTask(
 }
 
 /**
- * Creates a feature for the task and starts a CLI session seeded with the task
- * text, naming the session after the task. Returns an intent that opens that
- * session in the workspace.
+ * Creates a feature for the task and an interactive CLI session preloaded with
+ * the task text, naming the session after the task. The task prompt is
+ * auto-sent the first time the session's terminal is opened, so the CLI starts
+ * working on it immediately. Returns an intent that opens that session.
  */
 export async function launchSession(
   api: PlannerLaunchApi,
@@ -185,7 +205,7 @@ export async function launchSession(
     parentFeatureId,
   });
   onPhase?.('Starting session…');
-  const started = await api.startSession(feature.id, {
+  const started = await api.createTerminalSession(feature.id, {
     prompt: promptForTask(task),
   });
   const session = await api.renameSession(started.id, name);

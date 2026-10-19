@@ -39,7 +39,7 @@ export {
  * colour/surface tokens via `data-appearance` on `<html>`. It is orthogonal to
  * density, radius and typography, which remain independently user-controlled.
  */
-export type Appearance = 'desktop' | 'futuristic';
+export type Appearance = 'desktop' | 'clarity' | 'futuristic';
 export type TextSize = 'small' | 'default' | 'large' | 'x-large';
 export type Density = 'compact' | 'cozy' | 'comfortable';
 export type Radius = 'sharp' | 'soft' | 'round';
@@ -93,7 +93,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   plannerAutoformat: true,
 };
 
-export const APPEARANCES: readonly Appearance[] = ['desktop', 'futuristic'];
+export const APPEARANCES: readonly Appearance[] = ['desktop', 'clarity', 'futuristic'];
 export const TEXT_SIZES: readonly TextSize[] = [
   'small',
   'default',

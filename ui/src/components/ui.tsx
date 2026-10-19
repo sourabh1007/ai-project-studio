@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useAnimatedPresence } from '../hooks/use-motion.js';
 import { createPortal } from 'react-dom';
 import {
   CheckIcon,
@@ -21,17 +22,25 @@ export function Modal({
   children,
   size = 'md',
   className,
+  dismissible = true,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   className?: string;
+  dismissible?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = useRef<FocusTargetSnapshot | null>(null);
   const restoreFocusCapturedRef = useRef(false);
   const titleId = useId();
+  const [closing, setClosing] = useState(false);
+  const { present, exiting } = useAnimatedPresence(!closing, '--motion-overlay-duration', () => {
+    if (dismissible) onClose();
+    setClosing(false);
+  });
+  const dismiss = () => { if (dismissible) setClosing(true); };
   if (!restoreFocusCapturedRef.current) {
     restoreFocusRef.current = captureFocusTarget();
     restoreFocusCapturedRef.current = true;
@@ -47,8 +56,10 @@ export function Modal({
     });
   }, []);
 
+  if (!present) return null;
+
   return createPortal(
-    <div className="modal-overlay" onClick={onClose}>
+    <div className={`modal-overlay${exiting ? ' is-exiting' : ''}`} onClick={dismiss}>
       <div
         ref={dialogRef}
         className={`modal glass modal-${size}${className ? ` ${className}` : ''}`}
@@ -56,11 +67,23 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        aria-busy={exiting || undefined}
+        onClickCapture={(event) => {
+          if (exiting) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         onKeyDown={(event) => {
+          if (exiting) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            onClose();
+            dismiss();
           }
         }}
         onClick={(event) => event.stopPropagation()}
@@ -72,7 +95,8 @@ export function Modal({
             className="tree-action"
             title="Close"
             aria-label="Close"
-            onClick={onClose}
+            disabled={!dismissible || exiting}
+            onClick={dismiss}
           >
             <CloseIcon />
           </button>
@@ -355,7 +379,7 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   return (
-    <Modal title={title} onClose={busy ? () => {} : onCancel}>
+    <Modal title={title} dismissible={!busy} onClose={onCancel}>
       <div className="confirm-dialog">
         {icon ? (
           <span

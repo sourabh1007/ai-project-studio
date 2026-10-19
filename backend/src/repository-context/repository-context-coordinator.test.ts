@@ -92,6 +92,7 @@ function harness(options: {
   let revisionCalls = 0;
   let now = Date.parse('2026-08-02T00:00:00.000Z');
   const repos: RepoService = {
+    updateLocalPath: () => { throw new Error('not used in coordinator tests'); },
     create: () => repository,
     get: (id) => {
       const found = repositories.find((item) => item.id === id);

@@ -19,6 +19,16 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('reads source-aware skill telemetry in workspace, IDE and safely encoded feature scopes', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ rows: [], limited: false, maxEvents: 5000 }));
+    const client = createApiClient({ fetchImpl });
+    await client.getSkillUsage('feature');
+    await client.getSkillUsage('internal');
+    await client.getFeatureSkillUsage('one/two');
+    expect(calls.map(([path]) => path)).toEqual([
+      '/api/usage/skills?scope=feature', '/api/usage/skills?scope=internal', '/api/features/one%2Ftwo/skill-usage',
+    ]);
+  });
   it('supports cancellation and safely encodes active-session debug identities', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({}));
     const client = createApiClient({ fetchImpl });
@@ -334,6 +344,11 @@ describe('createApiClient', () => {
     expect(result).toEqual({ id: 's1' });
     expect(calls[0][0]).toBe('/api/sessions/s1/relaunch');
     expect(calls[0][1]?.method).toBe('POST');
+  });
+  it('includes the selected destination worktree ID when relaunching', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 's1' }));
+    await createApiClient({ fetchImpl }).relaunchSession('s1', 't2');
+    expect(calls[0][1]?.body).toBe(JSON.stringify({ taskCheckoutId: 't2' }));
   });
 
   it('creates an interactive terminal session', async () => {

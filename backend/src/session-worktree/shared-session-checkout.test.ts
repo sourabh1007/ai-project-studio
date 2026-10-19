@@ -32,6 +32,25 @@ describe('shared session checkout', () => {
     expect(await prepare(pr)).toBe('C:\\pr');
     expect(await prepare(target, undefined, false)).toBe('C:\\repo');
     expect(git).toHaveBeenCalledOnce();
+    expect(await prepare(pr, undefined, false)).toBe('C:\\pr');
+    expect(git).toHaveBeenCalledTimes(2);
+  });
+  it('checks a reopened managed checkout without switching its branch and can recover a missing path', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'cannot change to missing path' }));
+    const recover = vi.fn(async () => 'C:\\pr');
+    const target = { repoLocalPath: 'C:\\repo', ref: 'review', checkoutPath: 'C:\\pr' };
+    expect(await createSharedCheckoutPreparer({ git, recover })(target, undefined, false)).toBe('C:\\pr');
+    expect(recover).toHaveBeenCalledOnce();
+    const detached = vi.fn(async () => ({ code: 1, stdout: '', stderr: '' }));
+    expect(await createSharedCheckoutPreparer({ git: detached })(target, undefined, false)).toBe('C:\\pr');
+    expect(detached).toHaveBeenCalledOnce();
+  });
+  it('never opens a managed task or PR checkout on an unrelated default when its source ref is missing', async () => {
+    const git = vi.fn(async (args: string[]) => args.includes('checkout')
+      ? { code: 1, stdout: '', stderr: 'fatal: invalid reference: task' } : ok('other'));
+    const target = { repoLocalPath: 'C:\\repo', ref: 'task', checkoutPath: 'C:\\task' };
+    await expect(createSharedCheckoutPreparer({ git })(target)).rejects.toThrow('invalid reference');
+    expect(git).toHaveBeenCalledTimes(2);
   });
   it('opens the session as-is when the shared checkout is not a Git repository', async () => {
     const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }));
@@ -105,6 +124,71 @@ describe('shared session checkout', () => {
     const prepare = createSharedCheckoutPreparer({ git });
     await expect(prepare(target)).rejects.toThrow(stderr || 'Cannot switch the shared checkout to master');
     expect(git).toHaveBeenCalledTimes(2);
+  });
+  it('keeps an existing managed checkout without selecting a branch or invoking recovery', async () => {
+    const git = vi.fn(async () => ok());
+    const recover = vi.fn(async () => null);
+    const pathExists = vi.fn(async () => true);
+    const report = vi.fn();
+    await expect(createSharedCheckoutPreparer({ git, recover, pathExists })(
+      { ...target, checkoutPath: 'C:\\pr' }, report,
+    )).resolves.toBe('C:\\pr');
+    expect(git).not.toHaveBeenCalled();
+    expect(recover).not.toHaveBeenCalled();
+    expect(report).toHaveBeenLastCalledWith('Keeping the current managed checkout and its branch.');
+  });
+  it('recovers a deleted managed checkout rather than skipping it', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'not a git repository' }));
+    const recover = vi.fn(async () => 'C:\\pr');
+    await expect(createSharedCheckoutPreparer({ git, recover, pathExists: async () => false })(
+      { ...target, checkoutPath: 'C:\\pr' },
+    )).resolves.toBe('C:\\pr');
+    expect(recover).toHaveBeenCalledOnce();
+  });
+  it('pulls a fresh copy when a branch switch fails and recovery succeeds', async () => {
+    const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')
+      ? { code: 1, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: 'corrupt worktree' });
+    const recover = vi.fn(async () => 'C:\\fresh');
+    const pr = { ...target, checkoutPath: 'C:\\pr' };
+    const prepare = createSharedCheckoutPreparer({ git, recover });
+    expect(await prepare(pr)).toBe('C:\\fresh');
+    expect(recover).toHaveBeenCalledWith({ target: pr, cwd: 'C:\\pr', report: expect.any(Function), confirm: undefined });
+  });
+  it('forwards consent rather than treating a managed corrupt checkout as usable', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'not a git repository' }));
+    const confirm = vi.fn(async () => false);
+    const recover = vi.fn(async (input) => {
+      expect(await input.confirm('Replace?')).toBe(false);
+      throw new Error('Kept current checkout');
+    });
+    await expect(createSharedCheckoutPreparer({ git, recover })(
+      { ...target, checkoutPath: 'C:\\pr' }, undefined, true, confirm,
+    )).rejects.toThrow('Kept current checkout');
+    expect(confirm).toHaveBeenCalledWith('Replace?');
+  });
+  it('surfaces the failure when recovery declines (unsaved work or primary clone)', async () => {
+    const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref')
+      ? { code: 1, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: 'corrupt worktree' });
+    const recover = vi.fn(async () => null);
+    const prepare = createSharedCheckoutPreparer({ git, recover });
+    await expect(prepare(target)).rejects.toThrow('corrupt worktree');
+  });
+  it('pulls a fresh copy when the shared checkout is not a Git repository and recovery succeeds', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }));
+    const recover = vi.fn(async () => 'C:\\fresh');
+    const pr = { ...target, checkoutPath: 'C:\\pr' };
+    const prepare = createSharedCheckoutPreparer({ git, recover });
+    expect(await prepare(pr)).toBe('C:\\fresh');
+    expect(recover).toHaveBeenCalledOnce();
+  });
+  it('opens as-is for a non-recoverable non-Git checkout even with a recovery hook', async () => {
+    const git = vi.fn(async () => ({ code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' }));
+    const recover = vi.fn(async () => null);
+    const report = vi.fn();
+    const prepare = createSharedCheckoutPreparer({ git, recover });
+    expect(await prepare(target, report)).toBe(target.repoLocalPath);
+    expect(report).toHaveBeenLastCalledWith(expect.stringContaining('not a Git repository'));
+    await expect(prepare({ ...target, checkoutPath: 'C:\\pr' })).rejects.toThrow('not a git repository');
   });
   it('serializes concurrent opens of one shared checkout and keeps the queue usable after failure', async () => {
     let release!: () => void;

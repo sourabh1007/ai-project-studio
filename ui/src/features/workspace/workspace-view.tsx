@@ -1,15 +1,19 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session, AttachedAgent, PrReview } from '../../lib/types.js';
 import type { WorkspaceLaunchIntent } from '../../lib/planner-launch.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
-import { createDisposer } from '../../lib/disposer.js';
+import { PaneResizer } from '../../components/pane-resizer.js';
+import { formatDateTime } from '../../lib/format.js';
 import { ApiProvider, useApi } from '../../app/api-context.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
 import { EmptyState } from '../../components/ui.js';
-import { AiMagicIcon, PopOutIcon } from '../../components/icons.js';
+import { AiMagicIcon, CloseIcon, CollapseRightPanelIcon, MoreIcon, PopOutIcon, SplitViewIcon } from '../../components/icons.js';
+import { Tooltip } from '../../components/tooltip.js';
+import { Disclosure } from '../../components/disclosure.js';
+import { useAnimatedPresence } from '../../hooks/use-motion.js';
 import { SessionHistoryPane } from './session-history-pane.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
 import { isPoppableTab, type PoppableTab } from './tab-popout.js';
@@ -123,6 +127,31 @@ export function WorkspaceView({
   );
 
   const tabs = tabState.tabs;
+  const [splitRatio, setSplitRatio] = usePersistentState('cw-workspace-split-ratio', 50, {
+    validate: isFiniteNumber,
+    normalize: (value) => clampNumber(value, 25, 75),
+  });
+  const editorBodyRef = useRef<HTMLDivElement>(null);
+  const workspaceId = useId();
+  const tabButtons = useRef(new Map<string, HTMLButtonElement>());
+  const pendingTabFocus = useRef<string | null>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const sidebarPresence = useAnimatedPresence(sidebarOpen, '--motion-panel-duration');
+  useLayoutEffect(() => {
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    sidebar.toggleAttribute('inert', !sidebarOpen);
+    if (!sidebarOpen && sidebar.contains(document.activeElement)) {
+      const explorerToggle = document.querySelector<HTMLButtonElement>('.activitybar [aria-label="Explorer"]');
+      (explorerToggle ?? editorBodyRef.current)?.focus({ preventScroll: true });
+    }
+  }, [sidebarOpen]);
+  useLayoutEffect(() => {
+    if (pendingTabFocus.current === null) return;
+    const target = tabButtons.current.get(pendingTabFocus.current) ?? editorBodyRef.current;
+    target?.focus({ preventScroll: true });
+    pendingTabFocus.current = null;
+  }, [tabs, tabState.activeId]);
   const activeId = tabState.activeId;
   const [deletionRevision, setDeletionRevision] = useState(0);
   const knownFeatures = useRef<Feature[]>([]);
@@ -409,6 +438,9 @@ export function WorkspaceView({
   }
 
   function closeTab(id: string) {
+    if (tabButtons.current.get(id)?.closest('.tab')?.contains(document.activeElement)) {
+      pendingTabFocus.current = closeWorkspaceTab(tabState, id).activeId ?? '';
+    }
     setTabState((prev) => closeWorkspaceTab(prev, id));
   }
 
@@ -420,6 +452,18 @@ export function WorkspaceView({
     x: number;
     y: number;
   } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = tabMenuRef.current;
+    if (!tabMenu || !menu) return;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(tabMenu.x, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(tabMenu.y, window.innerHeight - rect.height - 8))}px`;
+    menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    return () => {
+      if (menu.contains(document.activeElement)) tabButtons.current.get(tabMenu.tabId)?.focus();
+    };
+  }, [tabMenu]);
   function openTabMenu(event: ReactMouseEvent, tabId: string) {
     event.preventDefault();
     setTabMenu({ tabId, x: event.clientX, y: event.clientY });
@@ -434,6 +478,9 @@ export function WorkspaceView({
     window.addEventListener('blur', dismiss);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (tabMenuRef.current?.contains(document.activeElement)) {
+          tabButtons.current.get(tabMenu.tabId)?.focus({ preventScroll: true });
+        }
         setTabMenu(null);
       }
     };
@@ -551,6 +598,19 @@ export function WorkspaceView({
     if (tab.kind === 'session') {
       return (
         <div key={tab.session.id} className="session-editor">
+          <Disclosure className="session-record-details" summary="Session details">
+            <dl className="clarity-details-grid">
+              <dt>Session ID</dt><dd>{tab.session.id}</dd>
+              <dt>Provider</dt><dd>{tab.session.provider}</dd>
+              <dt>Recorded status</dt><dd>{tab.session.status}</dd>
+              <dt>Requested model</dt><dd>{tab.session.requestedModel || 'Provider default'}</dd>
+              <dt>Resolved model</dt><dd>{tab.session.resolvedModel || 'Not reported'}</dd>
+              <dt>Created</dt><dd>{formatDateTime(tab.session.createdAt || null)}</dd>
+              <dt>Started</dt><dd>{formatDateTime(tab.session.startedAt)}</dd>
+              <dt>Ended</dt><dd>{formatDateTime(tab.session.endedAt)}</dd>
+              <dt>Exit code</dt><dd>{tab.session.exitCode ?? 'Not reported'}</dd>
+            </dl>
+          </Disclosure>
           <Suspense fallback={<ViewSkeleton label="terminal" />}>
             <TerminalView sessionId={tab.session.id} />
           </Suspense>
@@ -625,38 +685,6 @@ export function WorkspaceView({
     return null;
   }
 
-  // Owns teardown for the imperative explorer-resize drag listeners so they are
-  // removed even if the workspace unmounts while a drag is still in progress.
-  const resizeDisposer = useRef(createDisposer());
-  useEffect(() => {
-    const disposer = resizeDisposer.current;
-    return () => disposer.dispose();
-  }, []);
-
-  function startResize(event: ReactMouseEvent) {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = explorerWidth;
-    // Global drag listeners are attached imperatively (not via an effect), so
-    // route their teardown through a disposer that both the drag's own mouseup
-    // and the unmount effect can trigger — no leak if we unmount mid-drag.
-    const disposer = resizeDisposer.current;
-    disposer.dispose();
-    function onMove(move: MouseEvent) {
-      const next = Math.min(560, Math.max(200, startWidth + (move.clientX - startX)));
-      setExplorerWidth(next);
-    }
-    function onUp() {
-      disposer.dispose();
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.body.classList.add('is-resizing');
-    disposer.add(() => document.removeEventListener('mousemove', onMove));
-    disposer.add(() => document.removeEventListener('mouseup', onUp));
-    disposer.add(() => document.body.classList.remove('is-resizing'));
-  }
-
   return (
     <div
       className={`workspace ${sidebarOpen ? '' : 'is-collapsed'}`.trim()}
@@ -666,8 +694,9 @@ export function WorkspaceView({
           : undefined
       }
     >
-      {sidebarOpen && (
-        <>
+      <div ref={sidebarRef} className={`workspace-explorer${sidebarOpen ? '' : ' is-exiting'}`}
+        aria-hidden={!sidebarOpen || undefined}>
+      {sidebarPresence.present && (
           <ApiProvider value={explorerApi}>
             <Explorer
               live={live}
@@ -686,21 +715,23 @@ export function WorkspaceView({
               onCollapse={onToggleSidebar}
             />
           </ApiProvider>
-          <div
+      )}
+      </div>
+      {sidebarOpen && (
+          <PaneResizer
             className="explorer-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            title="Drag to resize · double-click to reset"
-            onMouseDown={startResize}
-            onDoubleClick={() => setExplorerWidth(260)}
+            label="Resize sidebar"
+            value={explorerWidth}
+            min={200}
+            max={560}
+            resetValue={260}
+            onChange={setExplorerWidth}
           />
-        </>
       )}
 
       <section className="editor">
         {tabs.length > 0 && (
-          <div className="tabs" role="tablist">
+          <div className="tabs" role="tablist" aria-label="Workspace tabs">
             {tabs.map((tab) => (
               <div
                 key={tab.id}
@@ -714,7 +745,31 @@ export function WorkspaceView({
                   type="button"
                   className="tab-label"
                   role="tab"
+                  id={`${workspaceId}-tab-${tab.id}`}
+                  aria-controls={`${workspaceId}-panel-${tab.id}`}
+                  tabIndex={tab.id === activeId ? 0 : -1}
+                  ref={(button) => {
+                    if (button) tabButtons.current.set(tab.id, button);
+                    else tabButtons.current.delete(tab.id);
+                  }}
                   aria-selected={tab.id === activeId}
+                  onKeyDown={(event) => {
+                    const index = tabs.findIndex((item) => item.id === tab.id);
+                    let next: WorkspaceTab | undefined;
+                    if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+                    else if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
+                    else if (event.key === 'Home') next = tabs[0];
+                    else if (event.key === 'End') next = tabs[tabs.length - 1];
+                    else if (event.key === 'Delete') {
+                      event.preventDefault();
+                      closeTab(tab.id);
+                    }
+                    if (next) {
+                      event.preventDefault();
+                      pendingTabFocus.current = next.id;
+                      setTabState((prev) => setWorkspaceSplit({ ...prev, activeId: next.id }, prev.splitId));
+                    }
+                  }}
                   onClick={() =>
                     setTabState((prev) =>
                       setWorkspaceSplit({ ...prev, activeId: tab.id }, prev.splitId),
@@ -730,7 +785,7 @@ export function WorkspaceView({
                   </span>
                 </button>
                 {canPopOut && isPoppableTab(tab) && (
-                  <button
+                  <Tooltip label="Open in separate window"><button
                     type="button"
                     className="tab-popout"
                     aria-label={`Open ${tab.label} in a separate window`}
@@ -738,39 +793,51 @@ export function WorkspaceView({
                     onClick={() => popOutTab(tab, tabDisplayLabel(tab))}
                   >
                     <PopOutIcon size={13} />
-                  </button>
+                  </button></Tooltip>
                 )}
                 {tab.id === splitId ? (
-                  <button
+                  <Tooltip label="Close side-by-side view"><button
                     type="button"
                     className="tab-split tab-split-active"
                     aria-label={`Close side-by-side view of ${tab.label}`}
                     title="Showing in side pane · click to close split"
                     onClick={() => closeSplit()}
                   >
-                    ⊟
-                  </button>
+                    <CollapseRightPanelIcon size={14} />
+                  </button></Tooltip>
                 ) : (
                   tab.id !== activeId && (
-                    <button
+                    <Tooltip label="Open side by side"><button
                       type="button"
                       className="tab-split"
                       aria-label={`Open ${tab.label} to the side`}
                       title="Open to the side"
                       onClick={() => openToSide(tab.id)}
                     >
-                      ⊞
-                    </button>
+                      <SplitViewIcon size={14} />
+                    </button></Tooltip>
                   )
                 )}
-                <button
+                <Tooltip label={`Close ${tabDisplayLabel(tab)}`}><button
                   type="button"
                   className="tab-close"
                   aria-label={`Close ${tab.label}`}
                   onClick={() => closeTab(tab.id)}
                 >
-                  ×
-                </button>
+                  <CloseIcon size={14} />
+                </button></Tooltip>
+                {tab.id === activeId && (
+                  <Tooltip label="Tab actions"><button type="button" className="tab-menu-trigger"
+                    aria-label={`Actions for ${tabDisplayLabel(tab)}`} aria-haspopup="menu"
+                    aria-expanded={tabMenu?.tabId === tab.id}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setTabMenu({ tabId: tab.id, x: rect.left, y: rect.bottom + 4 });
+                      event.stopPropagation();
+                    }}>
+                    <MoreIcon size={14} />
+                  </button></Tooltip>
+                )}
               </div>
             ))}
           </div>
@@ -787,16 +854,30 @@ export function WorkspaceView({
             const runAction = (
               action: (state: WorkspaceTabsState, id: string) => WorkspaceTabsState,
             ) => {
+              pendingTabFocus.current = action(tabState, menuTabId).activeId ?? '';
               setTabState((prev) => action(prev, menuTabId));
               setTabMenu(null);
             };
             return (
               <div
+                ref={tabMenuRef}
                 className="tab-context-menu"
                 role="menu"
+                aria-label="Tab actions"
                 style={{ left: tabMenu.x, top: tabMenu.y }}
                 onClick={(event) => event.stopPropagation()}
                 onContextMenu={(event) => event.preventDefault()}
+                onKeyDown={(event) => {
+                  const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                  const index = items.findIndex((item) => item === document.activeElement);
+                  let next: HTMLButtonElement | undefined;
+                  if (event.key === 'ArrowDown') next = items[(index + 1) % items.length];
+                  else if (event.key === 'ArrowUp') next = items[(index - 1 + items.length) % items.length];
+                  else if (event.key === 'Home') next = items[0];
+                  else if (event.key === 'End') next = items[items.length - 1];
+                  else if (event.key === 'Tab') setTabMenu(null);
+                  if (next) { event.preventDefault(); next.focus(); }
+                }}
               >
                 <button
                   type="button"
@@ -835,8 +916,16 @@ export function WorkspaceView({
               </div>
             );
           })()}
-        <div className={`editor-body${splitTab ? ' is-split' : ''}`}>
-          <div className="editor-pane">
+        {tabs.filter((tab) => tab.id !== activeId && tab.id !== splitId).map((tab) => (
+          <div key={tab.id} hidden role="tabpanel" id={`${workspaceId}-panel-${tab.id}`}
+            aria-labelledby={`${workspaceId}-tab-${tab.id}`} />
+        ))}
+        <div ref={editorBodyRef} tabIndex={-1} className={`editor-body${splitTab ? ' is-split' : ''}`}>
+          <div className="editor-pane" role={active ? 'tabpanel' : undefined}
+            id={active ? `${workspaceId}-panel-${active.id}` : undefined}
+            aria-labelledby={active ? `${workspaceId}-tab-${active.id}` : undefined}
+            tabIndex={active ? 0 : undefined}
+            style={splitTab ? { flexGrow: splitRatio } : undefined}>
             {splitTab && active && (
               <div className="pane-header">
                 <span
@@ -871,7 +960,7 @@ export function WorkspaceView({
                       tracks tokens, cost, and quota across your CLIs
                     </li>
                     <li>
-                      <span className="editor-empty-tip-key">⊞</span>
+                      <span className="editor-empty-tip-key"><SplitViewIcon size={14} /></span>
                       on any tab opens it side by side
                     </li>
                   </ul>
@@ -880,7 +969,23 @@ export function WorkspaceView({
             </div>
           </div>
           {splitTab && (
-            <div className="editor-pane editor-pane-secondary">
+            <PaneResizer
+              className="editor-split-resizer"
+              label="Resize split view"
+              value={splitRatio}
+              min={25}
+              max={75}
+              resetValue={50}
+              units="percent"
+              dragScale={() => Math.max(0, (editorBodyRef.current?.clientWidth ?? 0) - 7) / 100}
+              onChange={setSplitRatio}
+            />
+          )}
+          {splitTab && (
+            <div className="editor-pane editor-pane-secondary" role="tabpanel"
+              id={`${workspaceId}-panel-${splitTab.id}`}
+              aria-labelledby={`${workspaceId}-tab-${splitTab.id}`} tabIndex={0}
+              style={{ flexGrow: 100 - splitRatio }}>
               <div className="pane-header">
                 <span
                   className={`tab-dot tab-dot-${splitTab.kind}`}
@@ -899,7 +1004,7 @@ export function WorkspaceView({
                   title="Close split view"
                   onClick={() => closeSplit()}
                 >
-                  ×
+                  <CloseIcon size={14} />
                 </button>
               </div>
               <div className="pane-content">{renderTabBody(splitTab)}</div>

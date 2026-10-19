@@ -71,7 +71,7 @@ export function FindingCommentDialog({
   };
 
   return (
-    <Modal title="Leave a comment" onClose={() => { if (!locked.current) onClose(); }}>
+    <Modal title="Leave a comment" dismissible={!posting} onClose={() => { if (!locked.current) onClose(); }}>
       <form className="rb-post-finding" aria-busy={posting} onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <p>
           Post a comment to <a href={pullUrl} target="_blank" rel="noreferrer">PR #{pullNumber}</a>,

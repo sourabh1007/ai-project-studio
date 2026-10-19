@@ -29,6 +29,7 @@ function stubService(
   return {
     get: () => null,
     reset: () => null,
+    refine: async () => { throw new Error('refine is not used in hub tests'); },
     saveInputs: () => RUN,
     generatePrerequisites: async () => RUN,
     savePrerequisiteAnswers: () => RUN,

@@ -15,6 +15,7 @@ import {
 import { useApi } from '../../app/api-context.js';
 import { formatCompactNumber, formatDuration, nanoAiuToAic } from '../../lib/format.js';
 import { McpUsageCharts } from '../../components/mcp-usage-charts.js';
+import { SkillUsage } from '../../components/skill-usage.js';
 import { PrFeatureSummary, pullRequestUrl } from './pr-feature-summary.js';
 import { sessionDisplayName, sessionWorkTitle } from '../../lib/session-names.js';
 import { useAsync } from '../../hooks/use-async.js';
@@ -46,6 +47,7 @@ import { SkillTagger } from '../skills/skill-tagger.js';
 import { featureUsageRevision } from '../../lib/feature-usage-freshness.js';
 import type { LiveState } from '../../lib/stream.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
+import { useMotion } from '../../hooks/use-motion.js';
 
 const PALETTE = [
   '#818cf8',
@@ -673,6 +675,7 @@ export function FeatureDashboard({
       {showCharts && (
         <Charts data={data} featureId={featureId} featureName={featureName} />
       )}
+      <SkillUsage featureId={featureId} signal={`${revision}:${lastLoadedAt ?? ''}`} />
 
       <section className="dash-shared-context">
         <SharedContextPanel
@@ -699,6 +702,7 @@ function Charts({
   featureName: string;
 }) {
   const api = useApi();
+  const motion = useMotion();
   const [viewingUsage, setViewingUsage] = useState(false);
   const { totals, groups, byDay, byModel, bySession, byMcpServer, timing } = data;
   const totalAic = nanoAiuToAic(totals.nanoAiu);
@@ -858,7 +862,8 @@ function Charts({
                   stroke={AIC_COLOR}
                   strokeWidth={2}
                   fill="url(#aicFill)"
-                  animationDuration={600}
+                  isAnimationActive={motion === 'full'}
+                  animationDuration={220}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -876,7 +881,8 @@ function Charts({
                     outerRadius={60}
                     paddingAngle={2}
                     stroke="none"
-                    animationDuration={600}
+                    isAnimationActive={motion === 'full'}
+                    animationDuration={220}
                   >
                     {modelData.map((m, i) => (
                       <Cell key={m.name} fill={color(i)} />
@@ -923,14 +929,16 @@ function Charts({
                   name="input"
                   fill={TOKEN_IN}
                   radius={[3, 3, 0, 0]}
-                  animationDuration={600}
+                  isAnimationActive={motion === 'full'}
+                  animationDuration={220}
                 />
                 <Bar
                   dataKey="output"
                   name="output"
                   fill={TOKEN_OUT}
                   radius={[3, 3, 0, 0]}
-                  animationDuration={600}
+                  isAnimationActive={motion === 'full'}
+                  animationDuration={220}
                 />
               </BarChart>
             </ResponsiveContainer>

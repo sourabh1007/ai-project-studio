@@ -9,6 +9,9 @@ describe('terminal protocol v2', () => {
       { type: 'input', data: 'ls\r', generation: 1, seq: 1 },
       { type: 'resize', cols: 80, rows: 24, generation: 0 },
       { type: 'ping', seq: 1, generation: 0 },
+      { type: 'checkout-recovery', requestId: 1, generation: 0, approved: false },
+      { type: 'worktree-selection', requestId: 1, generation: 0, choiceId: 't1' },
+      { type: 'worktree-selection', requestId: 1, generation: 0, choiceId: null },
     ]) expect(decodeClientMessage(JSON.stringify(frame))).toEqual(frame);
   });
 
@@ -16,6 +19,12 @@ describe('terminal protocol v2', () => {
     for (const raw of ['not json', '42', 'null']) expect(decodeClientMessage(raw)).toBeNull();
     for (const frame of [
       {}, { generation: -1 }, { generation: 1, type: 'other' },
+      { type: 'worktree-selection', requestId: 0, generation: 0, choiceId: 't1' },
+      { type: 'worktree-selection', requestId: 1, generation: 0, choiceId: 2 },
+      { type: 'worktree-selection', requestId: 1, generation: 0, choiceId: '' },
+      { type: 'checkout-recovery', generation: 0, requestId: 0, approved: true },
+      { type: 'checkout-recovery', generation: 0, requestId: 1.5, approved: true },
+      { type: 'checkout-recovery', generation: 0, requestId: 1, approved: 'yes' },
       { generation: 1, type: 'ping', seq: 0 }, { generation: 1, type: 'ping', seq: 1.5 },
       { generation: 1, type: 'input', data: 5, seq: 1 },
       { generation: 1, type: 'input', data: '', seq: 1.5 },

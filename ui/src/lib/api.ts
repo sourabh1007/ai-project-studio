@@ -35,6 +35,7 @@ import type {
   IdeActivityFeed,
   UsageGranularity,
   UsageRollup,
+  SkillUsageSnapshot,
   PlanUsageState,
   ImportableSession,
   ImportSessionInput,
@@ -985,8 +986,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       })),
     deleteSession: (id: string) =>
       request<{ id: string }>(`/sessions/${id}`, del()),
-    relaunchSession: (id: string) =>
-      request<Session>(`/sessions/${id}/relaunch`, jsonBody({})),
+    relaunchSession: (id: string, taskCheckoutId?: string) =>
+      request<Session>(`/sessions/${id}/relaunch`, jsonBody({ taskCheckoutId })),
     getSession: (id: string) => request<Session>(`/sessions/${id}`),
     getFeatureEnvironment: (featureId: string) =>
       request<FeatureEnvironment>(`/features/${featureId}/environment`),
@@ -1039,6 +1040,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getIdeUsageRollup: (granularity: UsageGranularity) =>
       request<UsageRollup>(`/usage/ide/rollup?granularity=${granularity}`),
     getIdeActivity: () => request<IdeActivityFeed>('/usage/ide/activity'),
+    getSkillUsage: (scope: 'feature' | 'internal') =>
+      request<SkillUsageSnapshot>(`/usage/skills?scope=${scope}`),
+    getFeatureSkillUsage: (featureId: string) =>
+      request<SkillUsageSnapshot>(`/features/${encodeURIComponent(featureId)}/skill-usage`),
     getFeatureUsageRollup: (featureId: string, granularity: UsageGranularity) =>
       request<UsageRollup>(
         `/features/${featureId}/usage/rollup?granularity=${granularity}`,

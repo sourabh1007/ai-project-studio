@@ -425,22 +425,22 @@ describe('MCP categories and observational reads', () => {
 
   it('enables and disables global built-ins through the native toggle without rewriting the config file', async () => {
     const s = withSetup({ global: { mcps: { builtins: { ado: { enabled: false, organization: 'org' } } } } });
-    const enabled = await s.service.setServerEnabled('agency', 'global-builtins:ado', true);
+    const enabled = await s.service.setServerEnabled!('agency', 'global-builtins:ado', true);
     expect(s.setEnabled).toHaveBeenCalledWith('ado', true);
     expect(s.files.write).not.toHaveBeenCalled();
     expect(enabled.servers.find((entry) => entry.name === 'global-builtins:ado')).toMatchObject({
       enabled: true, spec: { organization: 'org' },
     });
-    const disabled = await s.service.setServerEnabled('agency', 'global-builtins:ado', false);
+    const disabled = await s.service.setServerEnabled!('agency', 'global-builtins:ado', false);
     expect(s.setEnabled).toHaveBeenLastCalledWith('ado', false);
     expect(disabled.servers.find((entry) => entry.name === 'global-builtins:ado')!.enabled).toBe(false);
-    await expect(s.service.setServerEnabled('agency', 'global-builtins:ado', 'nope' as unknown as boolean))
+    await expect(s.service.setServerEnabled!('agency', 'global-builtins:ado', 'nope' as unknown as boolean))
       .rejects.toThrow(/enabled must be a boolean/);
   });
 
   it('blocks native toggle on read-only resolved built-ins that have no native setter', async () => {
     const s = withSetup({ 'agency-native': { mcps: { builtins: { ado: true } } } });
-    await expect(s.service.setServerEnabled('agency', 'native-builtins:ado', false)).rejects.toThrow();
+    await expect(s.service.setServerEnabled!('agency', 'native-builtins:ado', false)).rejects.toThrow();
     expect(s.setEnabled).not.toHaveBeenCalled();
   });
 
@@ -449,7 +449,7 @@ describe('MCP categories and observational reads', () => {
     const servers = (await s.service.getServers('agency')).servers;
     const catalog = servers.find((entry) => entry.name === 'catalog:kusto')!;
     expect(catalog.capabilities!.toggle.supported).toBe(true);
-    await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+    await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
     expect(s.setEnabled).toHaveBeenCalledWith('kusto', false);
     expect(s.files.write).not.toHaveBeenCalled();
   });
@@ -458,7 +458,7 @@ describe('MCP categories and observational reads', () => {
     it('reports restarted sessions and a recycled pool after a toggle', async () => {
       const apply = vi.fn(async () => ({ restartedSessions: 2, recycledPool: true }));
       const s = withSetup({}, { applyGlobalBuiltinChange: apply });
-      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const config = await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
       expect(apply).toHaveBeenCalledWith('agency');
       expect(config.notices!.join(' ')).toContain('restarted 2 running sessions and recycled the warm metasession pool');
       expect(config.notices!.join(' ')).toContain('takes effect right away');
@@ -466,7 +466,7 @@ describe('MCP categories and observational reads', () => {
 
     it('uses singular wording for a single restarted session without a pool', async () => {
       const s = withSetup({}, { applyGlobalBuiltinChange: async () => ({ restartedSessions: 1, recycledPool: false }) });
-      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const config = await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
       const text = config.notices!.join(' ');
       expect(text).toContain('restarted 1 running session ');
       expect(text).not.toContain('recycled the warm metasession pool');
@@ -474,7 +474,7 @@ describe('MCP categories and observational reads', () => {
 
     it('reports only a recycled pool when no sessions needed restarting', async () => {
       const s = withSetup({}, { applyGlobalBuiltinChange: async () => ({ restartedSessions: 0, recycledPool: true }) });
-      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const config = await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
       const text = config.notices!.join(' ');
       expect(text).toContain('recycled the warm metasession pool');
       expect(text).not.toContain('restarted');
@@ -488,7 +488,7 @@ describe('MCP categories and observational reads', () => {
 
     it('surfaces an actionable notice when applying the change to sessions fails', async () => {
       const s = withSetup({}, { applyGlobalBuiltinChange: async () => { throw new Error('boom'); } });
-      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const config = await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
       const text = config.notices!.join(' ');
       expect(text).toContain('applying it to running sessions failed: boom');
       expect(text).toContain('Restart the affected sessions');
@@ -497,7 +497,7 @@ describe('MCP categories and observational reads', () => {
     it('stringifies a non-Error failure in the actionable notice', async () => {
       // eslint-disable-next-line @typescript-eslint/only-throw-error
       const s = withSetup({}, { applyGlobalBuiltinChange: async () => { throw 'plain failure'; } });
-      const config = await s.service.setServerEnabled('agency', 'catalog:kusto', false);
+      const config = await s.service.setServerEnabled!('agency', 'catalog:kusto', false);
       expect(config.notices!.join(' ')).toContain('applying it to running sessions failed: plain failure');
     });
   });

@@ -410,6 +410,20 @@ describe('session-repo', () => {
     expect(repo.get('s1')?.branch).toBe('main');
     db.close();
   });
+  it('retains a selected task checkout within a feature and clears the binding on cross-feature moves', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createSessionRepo(db);
+    repo.save(session());
+    repo.setWorktree('s1', { path: 'C:\\task1', branch: 'task1' });
+    repo.updatePlacement('s1', { featureId: 'f1', groupId: 'g1', orderIndex: 1 });
+    expect(createSessionRepo(db).get('s1')).toMatchObject({ worktreePath: 'C:\\task1', branch: 'task1' });
+    repo.updatePlacement('s1', { featureId: 'f2', groupId: null, orderIndex: 0 });
+    expect(repo.get('s1')).toMatchObject({ featureId: 'f2', worktreePath: null, branch: null });
+    repo.setWorktree('s1', { path: 'C:\\task2', branch: 'task2' });
+    repo.save(session({ featureId: 'f2', status: 'running' }));
+    expect(createSessionRepo(db).get('s1')).toMatchObject({ worktreePath: 'C:\\task2', branch: 'task2' });
+    db.close();
+  });
 
   it('re-homes a session to a group and sets its sort position', () => {
     const db = createDatabase({ databasePath: ':memory:' });

@@ -134,17 +134,12 @@ describe('motion accessibility stylesheet policy', () => {
     expect(APP_CSS).not.toContain('animation-duration: 1.6s !important;');
   });
 
-  it('exempts essential progress indicators from the reduced-motion kill switch', () => {
-    // Spinners and the review "in progress" dot stay animated under both the
-    // app-level reduced preference and OS reduced motion.
-    expect(DESIGN_TOKENS_CSS).toContain(":root[data-motion='reduced'] .spinner");
-    expect(DESIGN_TOKENS_CSS).toContain(
-      "animation: spin 0.7s linear infinite !important;",
-    );
-    expect(DESIGN_TOKENS_CSS).toContain(
-      "animation: rb-reviewing-pulse 1.2s ease-in-out infinite !important;",
-    );
-    // The explicit "off" choice is still honoured in full — no exemption.
+  it('uses static progress text instead of exempting spinners and pulses from reduced motion', () => {
+    expect(APP_CSS).toContain(":root:is([data-motion='reduced'], [data-motion='off']) .motion-status-label");
+    expect(cssBlock(APP_CSS, ":root:is([data-motion='reduced'], [data-motion='off']) .motion-status-label"))
+      .toContain('display: inline;');
+    expect(DESIGN_TOKENS_CSS).not.toContain('linear infinite !important');
+    expect(DESIGN_TOKENS_CSS).not.toContain('ease-in-out infinite !important');
     expect(DESIGN_TOKENS_CSS).not.toContain(":root[data-motion='off'] .spinner");
   });
 
@@ -155,6 +150,17 @@ describe('motion accessibility stylesheet policy', () => {
 });
 
 describe('shared desktop stylesheet', () => {
+  it('anchors narrow workspace overlays to the whole workspace rather than a single grid track', () => {
+    const narrow = cssBlock(
+      APP_CSS.slice(APP_CSS.indexOf('Narrow / resized window responsiveness.')),
+      '@media (max-width: 640px)',
+    );
+    expect(cssBlock(narrow, '.workspace-explorer {')).toContain('grid-column: 1 / -1;');
+    const history = cssBlock(narrow, '.history-pane:not(.is-collapsed)');
+    expect(history).toContain('grid-column: 1 / -1;');
+    expect(history).toContain('inset: 0 0 0 auto;');
+  });
+
   it('uses compact font and control tokens without overriding user font choices', () => {
     expect(DESIGN_TOKENS_CSS).toContain('--fs-body: 12px;');
     expect(DESIGN_TOKENS_CSS).toContain('--fs-meta: 11px;');
@@ -187,7 +193,7 @@ describe('shared desktop stylesheet', () => {
     expect(cssBlock(APP_CSS, '.glass')).toContain('box-shadow: none;');
     expect(cssBlock(APP_CSS, '.icon-badge-ai')).not.toContain('gradient');
     expect(cssBlock(APP_CSS, '.modal {')).toContain('box-shadow: var(--shadow-dialog);');
-    expect(cssBlock(APP_CSS, '.explorer {')).toContain('border-right: 1px solid var(--border-strong);');
+    expect(cssBlock(APP_CSS, '\n.explorer {')).toContain('border-right: 1px solid var(--border-strong);');
     expect(cssBlock(APP_CSS, '.inspector {')).toContain('border-left: 1px solid var(--border-strong);');
     expect(cssBlock(APP_CSS, '.rb-nav-item.is-active')).toContain('box-shadow: inset 2px 0 var(--accent);');
   });

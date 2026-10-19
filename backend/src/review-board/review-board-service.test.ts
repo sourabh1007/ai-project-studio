@@ -151,7 +151,7 @@ describe('createReviewBoardService.get', () => {
   it('coalesces concurrent requests for a perspective', async () => {
     const { deps, service } = persisted();
     let finish!: (result: MetaRunResult) => void;
-    deps.ai.runDetailed = vi.fn(() => new Promise((r) => { finish = r; }));
+    deps.ai.runDetailed = vi.fn(() => new Promise<MetaRunResult>((r) => { finish = r; }));
     const first = service.analyzePerspective('f9', 'security');
     const second = service.analyzePerspective('f9', 'security');
     // The reviewer awaits the (empty) existing-comment fetch before launching,

@@ -113,7 +113,7 @@ describe('App navigation journeys', () => {
 
     fireEvent.keyDown(window, { key: 'p', ctrlKey: true });
     const palette = await screen.findByRole('dialog', { name: 'Command palette' });
-    const search = screen.getByRole('textbox', { name: 'Command palette search' });
+    const search = screen.getByRole('combobox', { name: 'Command palette search' });
     fireEvent.change(search, { target: { value: 'skills' } });
     expect(within(palette).getByRole('option', { name: /Open Skills/ })).toBeInTheDocument();
     fireEvent.keyDown(search, { key: 'Enter' });
@@ -122,10 +122,10 @@ describe('App navigation journeys', () => {
 
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     const commandPalette = await screen.findByRole('dialog', { name: 'Command palette' });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Command palette search' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Command palette search' }), {
       target: { value: 'settings' },
     });
-    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command palette search' }), {
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Command palette search' }), {
       key: 'Enter',
     });
     expect(commandPalette).not.toBeInTheDocument();

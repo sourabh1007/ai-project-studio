@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { LivePromptSource, LivePromptTurn } from './copilot-history-contract.js';
-import { isInjectedPrompt } from './copilot-history-reader.js';
+import { toVisiblePrompt } from './copilot-history-reader.js';
 import { parseLatestLivePrompt } from './copilot-live-prompt-parser.js';
 
 export interface LivePromptFsReaderDeps {
@@ -45,7 +45,7 @@ export function createLivePromptFsReader(
           const newline = tail.indexOf('\n');
           tail = newline >= 0 ? tail.slice(newline + 1) : '';
         }
-        return parseLatestLivePrompt(tail, isInjectedPrompt);
+        return parseLatestLivePrompt(tail, toVisiblePrompt);
       } catch {
         return null;
       } finally {

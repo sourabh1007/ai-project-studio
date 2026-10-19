@@ -146,7 +146,7 @@ export function AppearanceSection({ embedded }: { embedded?: boolean } = {}) {
 
       <Segmented<(typeof APPEARANCES)[number]>
         label="Appearance"
-        hint="Compact desktop or a futuristic mission-control look"
+        hint="Clarity adds stronger contrast and panel hierarchy without changing typography"
         value={prefs.appearance}
         options={APPEARANCES}
         onChange={(appearance) => setPrefs({ appearance })}

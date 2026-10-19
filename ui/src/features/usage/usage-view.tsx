@@ -17,6 +17,7 @@ import {
 } from '../../lib/format.js';
 import { AiIcon, ClockIcon, McpIcon, UsageIcon, WorkspaceContextIcon } from '../../components/icons.js';
 import { McpUsageCharts } from '../../components/mcp-usage-charts.js';
+import { SkillUsage } from '../../components/skill-usage.js';
 
 type Scope = 'workspace' | 'ide';
 
@@ -111,6 +112,7 @@ export function UsageView({ signal }: { signal: number }) {
           </Section>
         </>
       )}
+      <SkillUsage scope={scope === 'ide' ? 'internal' : 'feature'} signal={signal} />
 
       {scope === 'ide' && (
         <ActivityFeed records={state.activity?.records ?? []} />

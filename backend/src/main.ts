@@ -8,8 +8,8 @@ import {
   writeFileSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
-import { access, readdir } from 'node:fs/promises';
+import { basename, dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
+import { access, readdir, realpath } from 'node:fs/promises';
 import { createSessionLaunchCwdResolver } from './session-worktree/session-launch-cwd.js';
 import {
   SESSION_WORKTREE_NAMESPACE, sessionWorktreeConfigSchema, sessionWorktreeDefaults,
@@ -207,6 +207,7 @@ import {
 } from './repo/azure-pr-lister.js';
 import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
 import { createSharedCheckoutPreparer } from './session-worktree/shared-session-checkout.js';
+import { createCheckoutRecovery } from './session-worktree/checkout-recovery.js';
 import { createSessionRefResolver } from './session-worktree/session-ref-resolver.js';
 import { favouriteAzureBranch } from './repo/azure-branch-favorites.js';
 import { createPrFeatureService } from './repo/pr-feature-service.js';
@@ -343,6 +344,9 @@ import {
 } from './meta/warm-route-policy.js';
 import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
 import { createMcpUsageRepo } from './persistence/mcp-usage-repo.js';
+import { createSkillUsageRepo } from './persistence/skill-usage-repo.js';
+import { recordIdeSkillContext, skillInvocationFromEvent } from './skill-usage/skill-usage.js';
+import { SKILL_USAGE_NAMESPACE, skillUsageConfigSchema, skillUsageDefaults, type SkillUsageConfig } from './skill-usage/config.js';
 import { createMcpAuthObservationRepo } from './persistence/mcp-auth-observation-repo.js';
 import { createMetaOperationRepo } from './persistence/meta-operation-repo.js';
 import { createMetaOperationOwnership } from './meta/meta-operation-ownership.js';
@@ -541,7 +545,7 @@ import {
 import { createNewTaskService } from './new-task/new-task-service.js';
 import { createNewTaskRunHub } from './new-task/new-task-run-hub.js';
 import type { NewTaskStreamEvent } from './new-task/new-task-run-hub.js';
-import { createNewTaskGit } from './new-task/new-task-git.js';
+import { createNewTaskGit, newTaskWorktreePath } from './new-task/new-task-git.js';
 import { createNewTaskPr } from './new-task/new-task-pr.js';
 import { createNewTaskTeam } from './new-task/new-task-team.js';
 import { createNewTaskRunRepo } from './persistence/new-task-run-repo.js';
@@ -610,6 +614,7 @@ function main(): void {
   registry.register({ namespace: SESSION_WORKTREE_NAMESPACE, schema: sessionWorktreeConfigSchema, defaults: sessionWorktreeDefaults });
   registry.register({ namespace: USAGE_NAMESPACE, schema: usageConfigSchema, defaults: usageDefaults });
   registry.register({ namespace: MCP_USAGE_NAMESPACE, schema: mcpUsageConfigSchema, defaults: mcpUsageDefaults });
+  registry.register({ namespace: SKILL_USAGE_NAMESPACE, schema: skillUsageConfigSchema, defaults: skillUsageDefaults });
   registry.register({ namespace: CREDIT_NAMESPACE, schema: creditConfigSchema, defaults: creditDefaults });
   registry.register({ namespace: AGGREGATION_NAMESPACE, schema: aggregationConfigSchema, defaults: aggregationDefaults });
   registry.register({ namespace: PERSISTENCE_NAMESPACE, schema: persistenceConfigSchema, defaults: persistenceDefaults });
@@ -897,6 +902,7 @@ function main(): void {
   const usageCaptureRepo = createUsageCaptureRepo(db);
   const metaUsageRepo = createMetaUsageRepo(db);
   const mcpUsageRepo = createMcpUsageRepo(db);
+  const skillUsageRepo = createSkillUsageRepo(db);
   const mcpAuthObservationRepo = createMcpAuthObservationRepo(db);
   const activeSessionsConfig = config[ACTIVE_SESSIONS_NAMESPACE] as ActiveSessionsConfig;
   const metaDebugTracker = createMetaDebugTracker(activeSessionsConfig);
@@ -1689,57 +1695,70 @@ function main(): void {
     return listGithubIssues(ghRun, repo.name, { filter });
   };
 
-  // Resolves the working directory a session's terminal runs in: a PR review's
-  // dedicated worktree when set, otherwise the local checkout of the repository
-  // its feature belongs to, falling back to the workspace cwd for repo-less
-  // (legacy) features.
-  const resolveSessionCwd = (featureId: string): string | undefined => {
-    const feature = featureRepo.get(featureId);
-    if (feature?.checkoutPath) {
-      return feature.checkoutPath;
-    }
-    const repoId = feature?.repoId;
-    if (!repoId) {
-      return undefined;
-    }
-    return repoService.list().find((r) => r.id === repoId)?.localPath;
-  };
-
-  // Resolves the branch a newly opened session defaults to (a PR feature's PR
-  // branch, otherwise master) and which existing checkout it shares
-  // from. Repo-less legacy features resolve to null and keep the pre-worktree
-  // cwd behaviour.
+  // Terminals, API launches and feature-move previews share checkout selection.
   const sessionRefResolver = createSessionRefResolver({
+    getTaskCheckouts: (featureId, repoLocalPath) => agentAttachmentRepo.listByFeature(featureId)
+      .flatMap((attachment) => {
+        const run = newTaskRunRepo.get(attachment.id);
+        return run?.branch ? [{
+          id: run.id,
+          checkoutPath: newTaskWorktreePath(repoLocalPath, run.id),
+          ref: run.branch,
+        }] : [];
+      }),
     isPrFeature: (featureId) => prReviewService.find(featureId) !== null,
     getPrBranch: (featureId) => prReviewService.find(featureId)?.pull.sourceBranch ?? null,
     getFeature: (featureId) => featureRepo.get(featureId),
     getRepo: (repoId) => repoService.list().find((r) => r.id === repoId) ?? null,
     branch: createGitBranchReader(),
   });
+  const resolveSessionCwd = (featureId: string, taskCheckoutId?: string) => sessionRefResolver.resolveCwd(featureId, taskCheckoutId);
 
   const sessionWorktreeConfig = config[SESSION_WORKTREE_NAMESPACE] as SessionWorktreeConfig;
+  const sessionPathExists = async (path: string): Promise<boolean> => {
+    try { await access(path); return true; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  };
+  const canonicalCheckoutPath = async (path: string): Promise<string> => {
+    try { return await realpath(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(path) === path) throw error;
+      return pathJoin(await canonicalCheckoutPath(dirname(path)), basename(path));
+    }
+  };
   const prepareSharedCheckout = createSharedCheckoutPreparer({
+    pathExists: sessionPathExists,
     git: (args, onProgress) => gitRun(args, {
       longRunning: args.includes('checkout'),
       timeoutMs: args.includes('checkout') ? sessionWorktreeConfig.checkoutTimeoutMs : sessionWorktreeConfig.gitTimeoutMs,
       onProgress,
     }),
     checkoutWorkers: sessionWorktreeConfig.checkoutWorkers,
+    // Never replace existing local files or request destructive recovery consent.
+    recover: createCheckoutRecovery({
+      pathExists: sessionPathExists,
+      canonicalPath: canonicalCheckoutPath,
+      git: (args, onProgress) => gitRun(args, {
+        longRunning: args.includes('worktree') || args.includes('fetch'),
+        timeoutMs: args.includes('worktree') || args.includes('fetch') ? sessionWorktreeConfig.checkoutTimeoutMs : sessionWorktreeConfig.gitTimeoutMs,
+        onProgress,
+      }),
+    }),
   });
-  const sessionPathExists = async (path: string): Promise<boolean> => {
-    try { await access(path); return true; } catch { return false; }
-  };
   const resolveSessionLaunchCwd = createSessionLaunchCwdResolver({
     own: (session, prepare) => applicationWork.own(prepare, { sessionId: session.id, featureId: session.featureId }),
     getSession: (id) => sessionRepo.get(id),
     pathExists: sessionPathExists,
-    resolveTarget: (featureId) => sessionRefResolver.resolve(featureId),
+    resolveTarget: (featureId, select, saved) => sessionRefResolver.resolve(featureId, select, saved),
+    bindSession: (id, worktree) => sessionRepo.setWorktree(id, worktree),
     fallbackCwd: resolveSessionCwd,
-    prepare: (session, target, report) => prepareSharedCheckout(target, report, session.startedAt === null),
+    prepare: (session, target, report, confirm) => prepareSharedCheckout(target, report, session.startedAt === null, confirm),
   });
   // the cross-feature move consent dialog to show the branch a session switches
   // to. The IDE owns this so a session always follows its feature's checkout.
   const featureEnvironmentResolver = createFeatureEnvironmentResolver({
+    choices: (featureId) => sessionRefResolver.choices(featureId),
     resolveCwd: resolveSessionCwd,
     branch: createGitBranchReader(),
   });
@@ -1761,9 +1780,23 @@ function main(): void {
   // tail that instead of the OTel file exporter (which the CLI TUI never emits).
   const cliUsageStore = createCliUsageStore({ databasePath: cliStorePath });
   const mcpUsageConfig = config[MCP_USAGE_NAMESPACE] as McpUsageConfig;
+  const skillLogOwners = createMcpLogOwners(db);
   const mcpLogCapture = createMcpLogCapture({
     ...mcpUsageConfig,
-    owners: createMcpLogOwners(db),
+    owners: skillLogOwners,
+    observeEvent: (event, source) => {
+      const invocation = skillInvocationFromEvent(event);
+      if (!invocation) return;
+      const owner = skillLogOwners.resolve(source, invocation.recordedAt);
+      if (!owner) {
+        logger.warn('Skill invocation has no unambiguous session owner; attribution skipped', { source: source.key });
+        return;
+      }
+      skillUsageRepo.record({
+        ...invocation, ...owner, provider: source.provider,
+        repoId: featureRepo.get(owner.featureId)?.repoId ?? null,
+      });
+    },
     reader: createCliMcpLogReader(pathJoin(homedir(), copilotHistoryConfig.subdir, 'session-state')),
     usage: mcpUsageRepo,
     logger: { warn: (message, data) => logger.warn(message, data) },
@@ -3357,6 +3390,11 @@ function main(): void {
     contexts: repositoryContextCoordinator,
     sharedContext: contextService,
     config: repositoryContextConfig,
+    onSkillContextPrepared: (session) => recordIdeSkillContext(skillUsageRepo, session,
+      sessionRepo.get(session.id) ? skillsService.effectiveForSession(session.id) : skillsService.listForFeature(session.featureId), {
+        repoId: featureRepo.get(session.featureId)?.repoId ?? null, recordedAt: clock.isoNow(),
+        kind: 'context-prepared', deliveryId: ids.next(),
+      }),
   });
   void applicationWork.own(() => repositoryContextCoordinator.synchronizeSaved()).catch((error) => {
     logger.error('Repository context startup check failed', error);
@@ -3764,9 +3802,11 @@ function main(): void {
       resolveSessionCwd,
       resolveSessionEnvironment: (featureId) =>
         featureEnvironmentResolver.resolve(featureId),
-      relaunchSession: async (session) => {
+      relaunchSession: async (session, taskCheckoutId) => {
+        if (taskCheckoutId !== undefined) resolveSessionCwd(session.featureId, taskCheckoutId);
         await terminalManager!.relaunch(session, {
-          cwd: await resolveSessionLaunchCwd(session),
+          cwd: await resolveSessionLaunchCwd(session, undefined, undefined, undefined,
+            taskCheckoutId === undefined ? undefined : async () => taskCheckoutId),
         });
       },
       providers,
@@ -3789,6 +3829,7 @@ function main(): void {
       sessionSummaries: sessionSummarizer,
       imports: sessionImportService,
       skills: skillsService,
+      skillUsage: { usage: skillUsageRepo, config: config[SKILL_USAGE_NAMESPACE] as SkillUsageConfig },
       sessionBootstrap,
       // Session-scoped skills can only be tagged after the session (and its
       // terminal) is open, so launch-time seeding never sees them. Inject them
@@ -3796,11 +3837,18 @@ function main(): void {
       injectSessionSkill: (sessionId, skillId) => {
         const instructions = skillsService.instructionsForSkill(skillId);
         if (instructions.length > 0) {
-          terminalManager!.injectInstructions(
+          const injected = terminalManager!.injectInstructions(
             sessionId,
             instructions,
             skillLabel(skillId),
           );
+          const session = sessionRepo.get(sessionId);
+          if (injected && session) {
+            recordIdeSkillContext(skillUsageRepo, session, [skillsService.getSkill(skillId)], {
+              repoId: featureRepo.get(session.featureId)?.repoId ?? null, recordedAt: clock.isoNow(),
+              kind: 'context-injected', deliveryId: ids.next(),
+            });
+          }
         }
       },
       // Reverse a session-scoped skill on its live terminal when it is removed,
@@ -4719,7 +4767,7 @@ function main(): void {
       config: terminalConfig,
       getSession: (id) => sessionRepo.get(id),
       cwd: terminalCwd,
-      resolveCwd: (session, report, signal) => resolveSessionLaunchCwd(session, report, signal),
+      resolveCwd: (session, report, signal, confirm, select) => resolveSessionLaunchCwd(session, report, signal, confirm, select),
       // Self-healing diagnosis: when a launch failure cannot be repaired
       // automatically, a read-only metasession explains the likely cause and
       // fix, surfaced in the terminal before the final error. Best-effort.

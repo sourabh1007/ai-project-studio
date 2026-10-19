@@ -139,7 +139,7 @@ function bootstrapFixture({ dev = false, exists = true, port = Promise.resolve(4
     IS_DEV: dev, DEV_URL: 'http://localhost:5173', HOST: '127.0.0.1', BACKEND_ENTRY: 'backend/dist/main.js',
     fs: { existsSync: () => exists }, isBackendShutdownConfirmed: () => true,
     ensureBackendDependencies: () => calls.push('provision'),
-    getFreePort: () => port, startBackend: () => calls.push('spawn'),
+    stablePort: { resolve: () => port }, startBackend: () => calls.push('spawn'),
     waitForBackend: () => backendReady, setAppOrigin: (url) => calls.push(url),
     createWindow: (_url, actualSplash) => { assert.equal(actualSplash, splash); calls.push('window'); },
     updateManager: { init: () => calls.push('updater') },

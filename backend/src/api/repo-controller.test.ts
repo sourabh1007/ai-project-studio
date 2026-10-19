@@ -155,6 +155,7 @@ function harness() {
     },
   ];
   const prFeatures: PrFeatureService = {
+    convertToPrFeature: async () => { throw new Error('not used in repo-controller tests'); },
     listPulls: async (repoId, filter = 'all') => {
       reviewed.push({ repoId, number: 0 });
       listedFilters.push(filter);

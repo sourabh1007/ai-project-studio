@@ -5,6 +5,8 @@
  */
 
 export type ClientMessage =
+  | { type: 'worktree-selection'; generation: number; requestId: number; choiceId: string | null }
+  | { type: 'checkout-recovery'; generation: number; requestId: number; approved: boolean }
   | { type: 'ping'; generation: number; seq: number }
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
@@ -12,6 +14,8 @@ export type ClientMessage =
 export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
+  | { type: 'worktree-selection'; requestId: number; choices: { id: string; checkoutPath: string; ref: string }[] }
+  | { type: 'checkout-recovery'; requestId: number; detail: string }
   | { type: 'state'; version: 2; generation: number; state: TerminalState; inputLimit: number; detail?: string; heartbeat?: boolean }
   | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
@@ -43,6 +47,17 @@ export function decodeClientMessage(raw: string): ClientMessage | null {
     return null;
   }
   if (!Number.isSafeInteger(parsed.generation) || (parsed.generation as number) < 0) return null;
+  if (parsed.type === 'worktree-selection') {
+    return Number.isSafeInteger(parsed.requestId) && (parsed.requestId as number) > 0 &&
+      (parsed.choiceId === null || (typeof parsed.choiceId === 'string' && parsed.choiceId.length > 0))
+      ? { type: 'worktree-selection', generation: parsed.generation as number, requestId: parsed.requestId as number, choiceId: parsed.choiceId }
+      : null;
+  }
+  if (parsed.type === 'checkout-recovery') {
+    return Number.isSafeInteger(parsed.requestId) && (parsed.requestId as number) > 0 && typeof parsed.approved === 'boolean'
+      ? { type: 'checkout-recovery', generation: parsed.generation as number, requestId: parsed.requestId as number, approved: parsed.approved }
+      : null;
+  }
   if (parsed.type === 'ping') {
     return Number.isSafeInteger(parsed.seq) && (parsed.seq as number) > 0
       ? { type: 'ping', generation: parsed.generation as number, seq: parsed.seq as number } : null;

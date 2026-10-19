@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { createFeatureEnvironmentResolver } from './feature-environment.js';
 
 describe('feature-environment resolver', () => {
+  it('offers ambiguous task worktrees rather than previewing an arbitrary branch', async () => {
+    const worktrees = [{ id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' }, { id: 't2', checkoutPath: 'C:\\task2', ref: 'task2' }];
+    const resolveCwd = vi.fn(() => 'C:\\primary');
+    const read = vi.fn(async () => 'main');
+    const resolver = createFeatureEnvironmentResolver({ choices: () => worktrees, resolveCwd, branch: { read } });
+    expect(await resolver.resolve('f1')).toEqual({ cwd: null, branch: null, worktrees });
+    expect(resolveCwd).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    worktrees.pop();
+    expect(await resolver.resolve('f1')).toEqual({ cwd: 'C:\\primary', branch: 'main' });
+  });
   it('returns the resolved cwd and its branch', async () => {
     const read = vi.fn(async () => 'pr-42');
     const resolver = createFeatureEnvironmentResolver({

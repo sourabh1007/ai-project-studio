@@ -18,6 +18,9 @@ function deps(): ApiRoutesDeps {
     providerBootstrapInfo: () => ({ defaultProvider: 'agency', providers: [] }),
     microsoftSignedIn: () => true,
     aggregates: empty,
+    usageRollups: empty,
+    metaUsageLookup: empty,
+    usageActivityLimit: 25,
     summarizer: empty,
     summaries: empty,
     workSummaries: empty,
@@ -116,6 +119,13 @@ function deps(): ApiRoutesDeps {
 }
 
 describe('createApiRoutes', () => {
+  it('registers source-aware skill usage routes when their store is injected', () => {
+    const routes = createApiRoutes({
+      ...deps(), skillUsage: { usage: {} as never, config: { maxEvents: 5000 } },
+    });
+    expect(routes.some((route) => route.path === '/usage/skills')).toBe(true);
+    expect(routes.some((route) => route.path === '/features/:featureId/skill-usage')).toBe(true);
+  });
   it('registers optional composition-owned active session debugger routes', () => {
     const routes = createApiRoutes({ ...deps(), activeSessions: {} as never });
     expect(routes.filter((route) => route.path.startsWith('/active-sessions')).map((route) => `${route.method} ${route.path}`)).toEqual([

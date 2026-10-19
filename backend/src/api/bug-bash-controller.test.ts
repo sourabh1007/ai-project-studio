@@ -34,6 +34,7 @@ function service(overrides: Partial<BugBashService> = {}): BugBashService {
     generate: async () => run({ status: 'generated' }),
     run: async () => undefined,
     reset: () => run(),
+    refine: async () => { throw new Error('refine is not used in this fixture'); },
     ...overrides,
   };
 }
@@ -152,7 +153,7 @@ describe('bug-bash-controller', () => {
       bugBash: service({
         generatePrerequisites: async (id) => {
           seen = id;
-          return run({ prerequisites: [{ id: 'prereq-1', question: 'Q', detail: '', answer: '' }] });
+          return run({ prerequisites: [{ id: 'prereq-1', question: 'Q', detail: '', options: [], answer: '' }] });
         },
       }),
     });

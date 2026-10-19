@@ -1207,6 +1207,8 @@ export interface Session {
   prompt: string;
   /** Fallback work/query title derived from CLI history when prompt is empty. */
   workTitle?: string | null;
+  worktreePath?: string | null;
+  branch?: string | null;
   usageFilePath: string;
   createdAt: string;
   startedAt: string | null;
@@ -1271,6 +1273,7 @@ export interface MoveNodeInput {
 export interface FeatureEnvironment {
   cwd: string | null;
   branch: string | null;
+  worktrees?: { id: string; checkoutPath: string; ref: string }[];
 }
 
 /** How a session touched a file, mirrored from the CLI store. */
@@ -1919,6 +1922,8 @@ export interface StartTerminalSessionInput {
   providerId?: string;
   model?: string;
   kind?: SessionKind;
+  /** Optional task prompt auto-sent when the terminal is first opened. */
+  prompt?: string;
 }
 
 export type SkillKind = 'instruction' | 'task-plan';
@@ -2251,4 +2256,28 @@ export interface RunAutomationInput {
     snapshotRunIds: string[];
     targetRunIds: string[];
   } | null;
+}
+export type SkillOrigin = 'repository' | 'ide' | 'cli' | 'unknown';
+export interface SkillUsageRow {
+  identity: string;
+  name: string;
+  source: SkillOrigin;
+  kind: 'invocation' | 'context-prepared' | 'context-injected';
+  provider: string;
+  repoId: string | null;
+  repoName: string | null;
+  uses: number;
+  sessions: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  nanoAiu: number | null;
+  reportedInput: number;
+  reportedOutput: number;
+  reportedAic: number;
+  lastUsedAt: string;
+}
+export interface SkillUsageSnapshot {
+  rows: SkillUsageRow[];
+  limited: boolean;
+  maxEvents: number;
 }

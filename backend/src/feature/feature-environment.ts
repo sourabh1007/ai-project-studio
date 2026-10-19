@@ -1,3 +1,5 @@
+import type { SessionWorktreeChoice } from '../session-worktree/session-ref-resolver.js';
+
 /**
  * The working directory and git branch a feature's sessions run in. The IDE
  * derives this centrally so a session always follows its feature: a PR-review
@@ -10,6 +12,7 @@ export interface FeatureEnvironment {
   cwd: string | null;
   /** The branch currently checked out at {@link cwd}, or null when unknown. */
   branch: string | null;
+  worktrees?: SessionWorktreeChoice[];
 }
 
 /** Reads the branch currently checked out in a working directory. */
@@ -24,6 +27,7 @@ export interface FeatureEnvironmentResolverDeps {
    */
   resolveCwd(featureId: string): string | undefined;
   branch: FeatureBranchReader;
+  choices?: (featureId: string) => SessionWorktreeChoice[];
 }
 
 export interface FeatureEnvironmentResolver {
@@ -40,6 +44,8 @@ export function createFeatureEnvironmentResolver(
 ): FeatureEnvironmentResolver {
   return {
     async resolve(featureId) {
+      const worktrees = deps.choices?.(featureId) ?? [];
+      if (worktrees.length > 1) return { cwd: null, branch: null, worktrees };
       const cwd = deps.resolveCwd(featureId) ?? null;
       const branch = cwd === null ? null : await deps.branch.read(cwd);
       return { cwd, branch };

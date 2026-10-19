@@ -15,6 +15,7 @@ import { formatAic } from './lib/format.js';
 import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { BrandMark } from './components/brand-mark.js';
+import { Tooltip } from './components/tooltip.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
 import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
@@ -403,6 +404,7 @@ export function App() {
       <div className={`ide-main${dockVisible ? '' : ' is-dock-hidden'}`}>
         <nav id="icon-dock" className="activitybar" aria-label="Primary" hidden={!dockVisible}>
           <div className="activitybar-group">
+            <Tooltip label="Command palette (Ctrl+K)">
             <button
               type="button"
               className="activitybar-brand"
@@ -412,6 +414,8 @@ export function App() {
             >
               <BrandMark size={28} />
             </button>
+            </Tooltip>
+            <Tooltip label="Explorer (Ctrl+B)">
             <button
               type="button"
               className={`activity-item ${
@@ -432,6 +436,8 @@ export function App() {
             >
               <FilesIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Planner">
             <button
               type="button"
               className={`activity-item ${view === 'planner' ? 'is-active' : ''}`.trim()}
@@ -442,6 +448,8 @@ export function App() {
             >
               <PlannerIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Skills">
             <button
               type="button"
               className={`activity-item ${view === 'skills' ? 'is-active' : ''}`.trim()}
@@ -452,6 +460,8 @@ export function App() {
             >
               <SkillsIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="MCP Servers">
             <button
               type="button"
               className={`activity-item ${view === 'mcp' ? 'is-active' : ''}`.trim()}
@@ -462,6 +472,8 @@ export function App() {
             >
               <McpIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Monitors">
             <button
               type="button"
               className={`activity-item ${
@@ -474,6 +486,8 @@ export function App() {
             >
               <AutomationIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Usage">
             <button
               type="button"
               className={`activity-item ${view === 'usage' ? 'is-active' : ''}`.trim()}
@@ -484,6 +498,8 @@ export function App() {
             >
               <UsageIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Agents">
             <button
               type="button"
               className={`activity-item ${view === 'agents' ? 'is-active' : ''}`.trim()}
@@ -494,6 +510,8 @@ export function App() {
             >
               <AiChatIcon size={22} />
             </button>
+            </Tooltip>
+            <Tooltip label="Settings">
             <button
               type="button"
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
@@ -504,8 +522,10 @@ export function App() {
             >
               <SettingsIcon size={22} />
             </button>
+            </Tooltip>
           </div>
           <div className="activitybar-group">
+            <Tooltip label={`Theme: ${themeModeLabel(mode)}; switch to ${theme === 'dark' ? 'light' : 'dark'}`}>
             <button
               type="button"
               className="activity-item"
@@ -515,6 +535,7 @@ export function App() {
             >
               {theme === 'dark' ? <SunIcon size={20} /> : <MoonIcon size={20} />}
             </button>
+            </Tooltip>
           </div>
         </nav>
 

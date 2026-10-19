@@ -165,6 +165,8 @@ describe('normalizeUiPreferences', () => {
 
   it('keeps a valid appearance and falls back for an invalid one', () => {
     expect(APPEARANCES).toContain('desktop');
+    expect(APPEARANCES).toContain('clarity');
+    expect(normalizeUiPreferences({ appearance: 'clarity' }).appearance).toBe('clarity');
     expect(APPEARANCES).toContain('futuristic');
     expect(DEFAULT_UI_PREFERENCES.appearance).toBe('desktop');
     expect(normalizeUiPreferences({ appearance: 'futuristic' }).appearance).toBe(
@@ -369,6 +371,38 @@ describe('futuristic appearance tokens', () => {
     expect(DESIGN_TOKENS_CSS).toContain(
       ":root[data-motion='off'][data-appearance='futuristic'] .tab-active::after",
     );
+  });
+});
+
+describe('clarity appearance', () => {
+  it('preserves every typography, spacing and terminal preference', () => {
+    const original = normalizeUiPreferences({
+      textSize: 'large', font: 'reading', density: 'comfortable',
+      terminalFont: 'cascadia', terminalTextSize: 'small',
+    });
+    const clarity = normalizeUiPreferences({ ...original, appearance: 'clarity' });
+    expect(deriveCssVariables(clarity, 'light')).toEqual(deriveCssVariables(original, 'light'));
+    expect(deriveCssVariables(clarity, 'dark')).toEqual(deriveCssVariables(original, 'dark'));
+    expect(terminalAppearance(clarity)).toEqual(terminalAppearance(original));
+    expect(optionLabel('clarity')).toBe('Clarity');
+  });
+
+  it.each(['light', 'dark'] as const)('meets AA text contrast on clarity %s surfaces', (theme) => {
+    const block = cssBlock(DESIGN_TOKENS_CSS, `[data-appearance='clarity'][data-theme='${theme}']`);
+    const token = (name: string) => {
+      const match = block.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})`));
+      if (!match) throw new Error(`Missing clarity token ${name}`);
+      return match[1];
+    };
+    for (const fg of ['--text', '--text-muted', '--text-faint']) {
+      for (const bg of ['--bg', '--surface', '--surface-strong', '--panel-titlebar', '--item-active']) {
+        expect(contrastRatio(token(fg), token(bg)), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    for (const accent of ACCENT_KEYS) {
+      expect(contrastRatio(accentColor(accent, theme), token('--surface'))).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(block).not.toMatch(/--(?:fs-|lh-|font-|space-)/);
   });
 });
 

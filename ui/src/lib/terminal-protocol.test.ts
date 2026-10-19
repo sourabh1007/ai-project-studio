@@ -7,6 +7,8 @@ describe('terminal protocol v2', () => {
       { type: 'input', data: 'ls\r', generation: 1, seq: 1 } as const,
       { type: 'resize', cols: 80, rows: 24, generation: 1 } as const,
       { type: 'ping', seq: 1, generation: 1 } as const,
+      { type: 'checkout-recovery', requestId: 1, generation: 0, approved: true } as const,
+      { type: 'worktree-selection', requestId: 1, generation: 0, choiceId: 't1' } as const,
     ]) expect(JSON.parse(encodeClientMessage(frame))).toEqual(frame);
   });
   const state = { type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 16 };
@@ -16,12 +18,27 @@ describe('terminal protocol v2', () => {
       state, { ...state, heartbeat: true }, { type: 'pong', generation: 1, seq: 1 },
       { ...state, detail: 'Updating files: 50%' }, ack, { type: 'output', data: 'hi' }, { type: 'resize', cols: 80, rows: 24 },
       { type: 'exit', code: 0 }, { type: 'exit', code: null },
+      { type: 'checkout-recovery', requestId: 1, detail: 'Discard local files?' },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 'C:\\task1', ref: 'task1' }] },
     ]) expect(decodeServerMessage(JSON.stringify(frame))).toEqual(frame);
   });
   it('rejects malformed and unsupported messages', () => {
     for (const raw of ['not json', '42', 'null']) expect(decodeServerMessage(raw)).toBeNull();
     for (const frame of [
       { ...state, generation: undefined }, { ...state, generation: -1 },
+      { type: 'worktree-selection', requestId: 0, choices: [] },
+      { type: 'worktree-selection', requestId: 1, choices: null },
+      { type: 'worktree-selection', requestId: 1, choices: [] },
+      { type: 'worktree-selection', requestId: 1, choices: [null] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 1 }] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: '' }] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 1 }] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: '' }] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 'C:\\task1', ref: 1 }] },
+      { type: 'worktree-selection', requestId: 1, choices: [{ id: 't1', checkoutPath: 'C:\\task1', ref: '' }] },
+      { type: 'checkout-recovery', requestId: 0, detail: '' },
+      { type: 'checkout-recovery', requestId: 1.5, detail: '' },
+      { type: 'checkout-recovery', requestId: 1, detail: false },
       { ...state, version: 1 }, { ...state, state: 'unknown' },
       { ...state, inputLimit: 1.5 }, { ...state, inputLimit: 0 },
       { ...state, detail: 42 },

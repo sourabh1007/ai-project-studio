@@ -28,7 +28,7 @@ function seed() {
 
 const unavailable = {
   inputTokens: null, outputTokens: null, nanoAiu: null, credits: null,
-  attribution: 'unavailable',
+  attribution: 'unavailable' as const,
 };
 
 /** A server whose every call shares one timestamp spans that single instant. */

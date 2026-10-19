@@ -56,6 +56,7 @@ it('renders the appearance heading by default and applies control changes', () =
   expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('radio', { name: 'Light' }));
   fireEvent.click(screen.getByRole('radio', { name: 'Futuristic' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Clarity' }));
   fireEvent.click(screen.getByRole('radio', { name: 'Blue' }));
   fireEvent.change(screen.getByLabelText('Accent color hex value'), { target: { value: '123456' } });
   fireEvent.change(screen.getByLabelText('Accent color hex value'), { target: { value: 'nope' } });
@@ -63,6 +64,9 @@ it('renders the appearance heading by default and applies control changes', () =
   expect(hooks.modeCalls).toContain('light');
   expect(hooks.prefsCalls).toContainEqual({ accent: 'blue' });
   expect(hooks.prefsCalls).toContainEqual({ appearance: 'futuristic' });
+  expect(hooks.prefsCalls).toContainEqual({ appearance: 'clarity' });
+  expect(hooks.prefsCalls).not.toContainEqual(expect.objectContaining({ font: expect.anything() }));
+  expect(hooks.prefsCalls).not.toContainEqual(expect.objectContaining({ textSize: expect.anything() }));
   expect(hooks.prefsCalls).toContainEqual({ accent: '#123456' });
   expect(hooks.resetCalls).toHaveLength(1);
 });
