@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing Android alpha tag pointing to this exact workflow SHA
         required: true
-        default: android-v0.1.0-alpha.1
+        default: android-v0.1.0-alpha.2
         type: string
 
 permissions:
@@ -24,6 +24,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      notes: ${{ steps.version.outputs.notes }}
     steps:
       - name: Checkout exact triggering SHA
         uses: actions/checkout@v5
@@ -44,7 +45,8 @@ jobs:
               || tag.length > 100) {
             throw new Error('Tag must be android-vMAJOR.MINOR.PATCH-alpha.N (N >= 1).');
           }
-          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nversion=${tag.slice(9)}\n`);
+          const version = tag.slice(9);
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nversion=${version}\nnotes=docs/releases/android-${version}.md\n`);
           NODE
 
       - name: Verify existing tag targets this exact SHA; reject existing release
@@ -52,6 +54,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.version.outputs.notes }}
         shell: bash
         run: |
           set -euo pipefail
@@ -75,7 +78,7 @@ jobs:
           }
           NODE
           rm tag-ref.json
-          test -f docs/releases/android-0.1.0-alpha.1.md
+          test -f "$RELEASE_NOTES"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -109,12 +112,15 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Install pinned Android platform and build tools
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
       - name: Setup pinned Gradle (no binary wrapper in source)
@@ -202,6 +208,7 @@ jobs:
       TAG: ${{ needs.verify.outputs.tag }}
       VERSION: ${{ needs.verify.outputs.version }}
       SOURCE_SHA: ${{ github.sha }}
+      RELEASE_NOTES: ${{ needs.verify.outputs.notes }}
     steps:
       - name: Checkout verified release notes
         uses: actions/checkout@v5
@@ -251,5 +258,5 @@ jobs:
           gh release create "$TAG" android-preview/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
             --title "AI Project Studio Android $VERSION — INTERNAL DEBUG PREVIEW" \
-            --notes-file docs/releases/android-0.1.0-alpha.1.md
+            --notes-file "$RELEASE_NOTES"
           echo "Draft only. Human review and complete application approval workflow are required before any release." >> "$GITHUB_STEP_SUMMARY"
