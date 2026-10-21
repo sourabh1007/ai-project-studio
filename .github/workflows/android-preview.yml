@@ -1,0 +1,255 @@
+name: Android internal preview (draft only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Android alpha tag pointing to this exact workflow SHA
+        required: true
+        default: android-v0.1.0-alpha.1
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-preview-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify source and all application gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout exact triggering SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate tag and version without shell interpolation
+        id: version
+        env:
+          PREVIEW_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const tag = process.env.PREVIEW_TAG;
+          if (!/^android-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-alpha\.[1-9]\d*$/.test(tag)
+              || tag.length > 100) {
+            throw new Error('Tag must be android-vMAJOR.MINOR.PATCH-alpha.N (N >= 1).');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nversion=${tag.slice(9)}\n`);
+          NODE
+
+      - name: Verify existing tag targets this exact SHA; reject existing release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > tag-ref.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          let object = JSON.parse(readFileSync('tag-ref.json', 'utf8')).object;
+          for (let depth = 0; object.type === 'tag' && depth < 8; depth++) {
+            object = JSON.parse(execFileSync('gh', ['api',
+              `repos/${process.env.GITHUB_REPOSITORY}/git/tags/${object.sha}`], { encoding: 'utf8' })).object;
+          }
+          if (object.type !== 'commit' || object.sha !== process.env.SOURCE_SHA) {
+            throw new Error('Existing tag must resolve to the exact triggering SHA.');
+          }
+          // Enumerate authenticated releases, including drafts. Any matching release is immutable here.
+          const pages = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp',
+            `repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`], { encoding: 'utf8' }));
+          if (pages.flat().some(release => release.tag_name === process.env.TAG)) {
+            throw new Error('Release already exists; refusing overwrite or reuse. Use a new tag/version.');
+          }
+          NODE
+          rm tag-ref.json
+          test -f docs/releases/android-0.1.0-alpha.1.md
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.20.0'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build backend and UI
+        run: npm run build
+      - name: Backend coverage gate
+        run: npm run test:coverage --workspace backend
+      - name: UI coverage gate
+        run: npm run test:coverage --workspace ui
+      - name: Desktop harness
+        run: npm run test:desktop:harness
+
+  android:
+    name: Test and package disposable debug APK
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      VERSION_CODE: ${{ github.run_number }}
+      TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - name: Checkout exact triggering SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install pinned Android platform and build tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Setup pinned Gradle (no binary wrapper in source)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Unit tests, Android lint and debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p mobile/android --no-daemon \
+            "-PpreviewVersion=$VERSION" "-PpreviewVersionCode=$VERSION_CODE" \
+            testDebugUnitTest lintDebug assembleDebug
+      - name: Verify debug signing and stage artifact manifest
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-preview
+          APK_NAME="ai-project-studio-android-preview-$VERSION.apk"
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk "android-preview/$APK_NAME"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            "android-preview/$APK_NAME" > android-preview/signature.txt
+          grep -F 'CN=Android Debug' android-preview/signature.txt
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const apk = `ai-project-studio-android-preview-${process.env.VERSION}.apk`;
+          const manifest = {
+            schemaVersion: 1,
+            applicationId: 'com.sourabh1007.aiprojectstudio.preview',
+            versionName: process.env.VERSION,
+            versionCode: Number(process.env.VERSION_CODE),
+            tag: process.env.TAG,
+            sourceSHA: process.env.SOURCE_SHA,
+            apk,
+            sha256: createHash('sha256').update(readFileSync(`android-preview/${apk}`)).digest('hex'),
+            build: {
+              repository: process.env.GITHUB_REPOSITORY,
+              runId: process.env.RUN_ID,
+              runAttempt: process.env.RUN_ATTEMPT,
+              url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.RUN_ID}`,
+              builtAt: new Date().toISOString(),
+              runner: 'ubuntu-24.04',
+              jdk: 'Temurin 17',
+              gradle: '8.11.1',
+              androidGradlePlugin: '8.9.2',
+              compileSdk: 35,
+              targetSdk: 35,
+              minSdk: 26,
+              buildTools: '35.0.0',
+              variant: 'debug'
+            },
+            signing: {
+              qualifier: 'DISPOSABLE DEBUG SIGNATURE — INTERNAL DEVELOPMENT PREVIEW ONLY',
+              productionSigned: false,
+              playReady: false,
+              warning: 'Generated debug key is not retained. Updates may require uninstall/reinstall, losing local cookies and host preferences.'
+            },
+            release: { draft: true, prerelease: true, productionApproval: false }
+          };
+          writeFileSync('android-preview/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+          writeFileSync('android-preview/SHA256SUMS', `${manifest.sha256}  ${apk}\n`);
+          NODE
+      - name: Upload verified APK and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-project-studio-android-preview
+          path: android-preview/
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Create draft prerelease only (never publish)
+    needs: [verify, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout verified release notes
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download verified build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-project-studio-android-preview
+          path: android-preview
+      - name: Reverify provenance, tag and absence of any existing release
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd android-preview && sha256sum --check SHA256SUMS)
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          const manifest = JSON.parse(readFileSync('android-preview/manifest.json', 'utf8'));
+          if (manifest.sourceSHA !== process.env.SOURCE_SHA || manifest.tag !== process.env.TAG
+              || manifest.versionName !== process.env.VERSION || manifest.signing.productionSigned !== false
+              || manifest.sha256 !== createHash('sha256')
+                .update(readFileSync(`android-preview/ai-project-studio-android-preview-${process.env.VERSION}.apk`)).digest('hex')) {
+            throw new Error('Artifact provenance verification failed.');
+          }
+          const api = path => JSON.parse(execFileSync('gh', ['api',
+            `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { encoding: 'utf8' }));
+          let object = api(`git/ref/tags/${process.env.TAG}`).object;
+          for (let depth = 0; object.type === 'tag' && depth < 8; depth++) {
+            object = api(`git/tags/${object.sha}`).object;
+          }
+          if (object.type !== 'commit' || object.sha !== process.env.SOURCE_SHA) {
+            throw new Error('Tag moved or does not resolve to verified source.');
+          }
+          const pages = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp',
+            `repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`], { encoding: 'utf8' }));
+          if (pages.flat().some(release => release.tag_name === process.env.TAG)) {
+            throw new Error('Release already exists; refusing overwrite/reuse, including drafts.');
+          }
+          NODE
+      - name: Create new draft prerelease with verified assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" android-preview/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+            --title "AI Project Studio Android $VERSION — INTERNAL DEBUG PREVIEW" \
+            --notes-file docs/releases/android-0.1.0-alpha.1.md
+          echo "Draft only. Human review and complete application approval workflow are required before any release." >> "$GITHUB_STEP_SUMMARY"

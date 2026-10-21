@@ -471,6 +471,7 @@ export function createNewTaskService(
       attachmentId,
       sink: NewTaskImplementSink,
       signal,
+      options,
     ) {
       let run = requireRun(attachmentId);
       if (run.status === 'pr-created') {
@@ -551,6 +552,12 @@ export function createNewTaskService(
           worktreePath,
           message: `Add implementation plan (${PLAN_DOC_PATH})`,
         });
+        if (options?.deferPublication) {
+          const files = await deps.git.changedFilesAgainst({ worktreePath, baseBranch: workspace.baseBranch });
+          run = touch(run, { status: 'planned', error: null });
+          sink.done(run, files);
+          return;
+        }
         sink.activity({ phase: 'creating-pr', line: 'Pushing the branch…' });
         await deps.git.pushBranch({ worktreePath, branch });
         sink.activity({ phase: 'creating-pr', line: 'Opening the pull request…' });

@@ -202,9 +202,12 @@ async function readClipboardAttachment(sessionId: string): Promise<ClipboardAtta
 export function TerminalView({
   sessionId,
   onExit,
+  apiBase,
 }: {
   sessionId: string;
   onExit?: (code: number | null) => void;
+  /** Mobile gateways must keep terminal traffic on the authenticated origin. */
+  apiBase?: string;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const focusTokenRef = useRef(0);
@@ -507,7 +510,7 @@ export function TerminalView({
       }
     };
 
-    const base = resolveApiBase(
+    const base = apiBase ?? resolveApiBase(
       typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
       import.meta.env.VITE_API_BASE,
     );
@@ -1167,7 +1170,7 @@ export function TerminalView({
       delete host.dataset.focusOwner;
       delete host.dataset.focusToken;
     };
-  }, [sessionId, connectionAttempt]);
+  }, [sessionId, connectionAttempt, apiBase]);
 
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     {worktreeSelection && <Modal title="Choose a task worktree" onClose={() => worktreeSelection.respond(null)} size="md">

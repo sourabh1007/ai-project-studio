@@ -4,6 +4,11 @@ AI Project Studio is a three-tier desktop app. This is the **application
 architecture design** document — it explains the layers, the main data flows, and
 the patterns that keep the backend testable.
 
+The optional [Android development preview](mobile-preview.md) adds a chat-first
+HTTPS companion. Git/CLI execution stays on the host; a separate loopback gateway
+exposes only mobile routes and explicitly approved terminal sessions. Desktop
+defaults and its existing New Task auto-publication behavior are unchanged.
+
 > Looking for how to *use* a feature instead? See the task-focused
 > **[feature guides](features/README.md)**. For the module-by-module code map see
 > **[backend-modules.md](backend-modules.md)**; for the UI structure see

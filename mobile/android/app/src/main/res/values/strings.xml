@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">AI Project Studio Preview</string>
+    <string name="heading">AI Project Studio</string>
+    <string name="preview_notice">INTERNAL DEVELOPMENT PREVIEW</string>
+    <string name="connection_help">Connect to your trusted AI Project Studio host over HTTPS. Sign in with your access key on the host page; this app does not save access keys.</string>
+    <string name="permissions_warning">Full terminal access has the host user’s permissions. Approve actions carefully. Only connect to a host you trust.</string>
+    <string name="session_help">Your host address may be saved. To end a secure session, use Sign out in the host UI; changing hosts does not sign you out.</string>
+    <string name="host_hint">https://studio.example.com</string>
+    <string name="host_label">HTTPS host origin</string>
+    <string name="connect">Connect securely</string>
+    <string name="change_host">Change host</string>
+    <string name="retry">Retry connection</string>
+    <string name="connecting">Connecting securely…</string>
+    <string name="connected">Internal development preview</string>
+    <string name="connection_failed">Could not connect securely. Check your host, connection and trusted HTTPS certificate, then retry. Certificate errors are never bypassed.</string>
+    <string name="external_link">Open external link in browser</string>
+    <string name="external_unavailable">No browser is available to open this link.</string>
+    <string name="blocked_link">This link is blocked. Only your configured HTTPS host can open inside the app.</string>
+    <string name="host_required">Enter an HTTPS host origin.</string>
+    <string name="host_invalid">Enter a valid HTTPS origin, for example https://studio.example.com.</string>
+    <string name="host_https">HTTPS is required; HTTP is not secure.</string>
+    <string name="host_credentials">Do not include a username, password or access key.</string>
+    <string name="host_origin_only">Use only the host origin: no path, query or fragment (a root / is allowed).</string>
+    <string name="host_port">Use a port between 1 and 65535.</string>
+</resources>

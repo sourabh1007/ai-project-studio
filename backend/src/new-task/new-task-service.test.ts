@@ -156,6 +156,32 @@ function sink(): NewTaskImplementSink & {
   };
 }
 
+describe('deferred mobile publication', () => {
+  it('commits local implementation without pushing, creating a PR, or converting the feature', async () => {
+    const h = harness();
+    const push = vi.spyOn(h.deps.git, 'pushBranch');
+    const pr = vi.spyOn(h.deps.pr, 'create');
+    const reviews = vi.spyOn(h.deps.reviews, 'makeEligible');
+    vi.spyOn(h.deps.git, 'changedFilesAgainst').mockResolvedValue([
+      { path: 'app.ts', changeType: 'modified' },
+      { path: PLAN_DOC_PATH, changeType: 'added' },
+    ]);
+    h.service.saveInputs('a', 'f', { problem: 'Improve the app', context: '' });
+    await h.service.plan('a');
+    const output = sink();
+    await h.service.implement('a', output, undefined, { deferPublication: true });
+    expect(output.failure).toBeNull();
+    expect(output.finished?.status).toBe('planned');
+    expect(h.planDocWrites).toHaveLength(1);
+    expect(output.finishedFiles).toEqual([
+      { path: 'app.ts', changeType: 'modified' }, { path: PLAN_DOC_PATH, changeType: 'added' },
+    ]);
+    expect(push).not.toHaveBeenCalled();
+    expect(pr).not.toHaveBeenCalled();
+    expect(reviews).not.toHaveBeenCalled();
+  });
+});
+
 describe('deriveTitle / derivePrBody / buildPlanDoc', () => {
   const base: NewTaskRun = {
     id: 'a1', featureId: 'f1', problem: 'P', context: 'CTX', plan: 'INLINEPLAN',

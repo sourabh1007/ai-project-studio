@@ -71,6 +71,7 @@ export default defineConfig({
         // its pure accounting (meter), config wrap and report builder are unit
         // tested, but the spawn wiring is exercised e2e like other adapters.
         'src/mcp/mcp-proxy.ts',
+        'src/mobile/mobile-gateway-adapter.ts',
       ],
       thresholds: {
         lines: 100,
