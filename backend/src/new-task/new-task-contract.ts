@@ -425,7 +425,6 @@ export interface NewTaskService {
     attachmentId: string,
     sink: NewTaskImplementSink,
     signal?: AbortSignal,
-    options?: { deferPublication: boolean },
   ): Promise<void>;
   /**
    * Run one plan refine-chat turn: the user challenges or asks to edit the

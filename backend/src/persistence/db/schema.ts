@@ -334,15 +334,6 @@ const CORE_TABLES: readonly TableSchema[] = [
     // One row per New Task agent run, keyed by the backing agent attachment id.
     // Holds the captured problem/context, the reviewed plan, and the lifecycle
     // through to the opened PR + its nested review feature ("PR task").
-    name: 'mobile_chats',
-    ddl: `CREATE TABLE IF NOT EXISTS mobile_chats (
-    id TEXT PRIMARY KEY,
-    body TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  },
-  {
     name: 'new_task_runs',
     ddl: `CREATE TABLE IF NOT EXISTS new_task_runs (
     id TEXT PRIMARY KEY,

@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from 'react';
+import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ApiProvider, apiClient } from './app/api-context.js';
 import { App } from './App.js';
@@ -10,8 +10,6 @@ import {
 } from './features/workspace/tab-popout.js';
 import './styles/design-tokens.css';
 import './styles/app.css';
-
-const MobileApp = lazy(() => import('./mobile/mobile-app.js'));
 
 const container = document.getElementById('root');
 if (!container) {
@@ -30,11 +28,7 @@ createRoot(container).render(
   <StrictMode>
     <ErrorBoundary>
       <ApiProvider value={apiClient}>
-        {window.location.pathname === '/mobile' ? (
-          <Suspense fallback={<p role="status">Loading mobile workspace…</p>}>
-            <MobileApp />
-          </Suspense>
-        ) : popout ? (
+        {popout ? (
           <TabPopout tab={popout.tab} label={popout.label} />
         ) : (
           <ProviderInstallGate>

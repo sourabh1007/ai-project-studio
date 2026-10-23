@@ -184,25 +184,6 @@ describe('TerminalView scrollback repaint', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps an explicit mobile API base on the authenticated origin', () => {
-    const urls: string[] = [];
-    const previous = window.__CW_API_BASE__;
-    window.__CW_API_BASE__ = 'https://desktop-only.example/api';
-    vi.stubGlobal('WebSocket', class extends MockWebSocket {
-      constructor(url: string) {
-        super();
-        urls.push(url);
-      }
-    });
-    try {
-      render(<TerminalView sessionId="mobile-session" apiBase="/api" />);
-      const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      expect(urls).toEqual([`${scheme}//${window.location.host}/api/terminal?sessionId=mobile-session`]);
-    } finally {
-      window.__CW_API_BASE__ = previous;
-    }
-  });
-
   it('re-arms display-scale monitoring and repaints at unchanged CSS dimensions without reconnecting', () => {
     vi.useFakeTimers();
     const listeners: Array<() => void> = [];

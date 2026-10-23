@@ -20,14 +20,6 @@ import { homedir } from 'node:os';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
-import { MOBILE_NAMESPACE, mobileConfigSchema, mobileDefaults, type MobileConfig } from './mobile/config.js';
-import { createMobileService } from './mobile/mobile-service.js';
-import { createMobilePublication } from './mobile/mobile-publication.js';
-import { createMobileGateway } from './mobile/mobile-gateway-adapter.js';
-import { createMobileRoutes } from './mobile/mobile-controller.js';
-import { createMobileChatRepo } from './persistence/mobile-chat-repo.js';
-import { importMobileRepository } from './mobile/mobile-repository.js';
-import { mobileHash } from './mobile/mobile-access.js';
 
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
@@ -543,7 +535,7 @@ import type {
 import { createAgentRegistry } from './agents/agent-registry.js';
 import { createAgentService } from './agents/agent-service.js';
 import { createReviewBoardAgent, REVIEW_BOARD_AGENT_ID } from './agents/review-board-agent.js';
-import { createNewTaskAgent, NEW_TASK_AGENT_ID } from './agents/new-task-agent.js';
+import { createNewTaskAgent } from './agents/new-task-agent.js';
 import {
   NEW_TASK_NAMESPACE,
   newTaskConfigSchema,
@@ -629,7 +621,6 @@ function main(): void {
   registry.register({ namespace: LOGGING_NAMESPACE, schema: loggingConfigSchema, defaults: loggingDefaults });
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
-  registry.register({ namespace: MOBILE_NAMESPACE, schema: mobileConfigSchema, defaults: mobileDefaults });
   registry.register({ namespace: SSE_NAMESPACE, schema: sseConfigSchema, defaults: sseDefaults });
   registry.register({ namespace: BACKGROUND_WORK_NAMESPACE, schema: backgroundWorkConfigSchema, defaults: backgroundWorkDefaults });
   registry.register({ namespace: RESOURCES_NAMESPACE, schema: resourcesConfigSchema, defaults: resourcesDefaults });
@@ -851,7 +842,6 @@ function main(): void {
   const summarizerConfig = config[SUMMARIZER_NAMESPACE] as SummarizerConfig;
   const contextConfig = config[CONTEXT_NAMESPACE] as ContextConfig;
   const apiConfig = config[API_NAMESPACE] as ApiConfig;
-  const mobileConfig = config[MOBILE_NAMESPACE] as MobileConfig;
   const resourceMonitor = createSystemResourceSampler(
     config[RESOURCE_PRESSURE_NAMESPACE] as ResourcePressureConfig,
   );
@@ -3224,11 +3214,6 @@ function main(): void {
   // task" by importing that PR (which nests a review feature and auto-attaches
   // the Review Board). All git/GitHub work runs behind narrow ports.
   const newTaskRunRepo = createNewTaskRunRepo(db);
-  const newTaskGit = createNewTaskGit({
-    git: (args) => gitRun(args, { longRunning: !args.includes('fetch') }),
-    pathExists: existsSync,
-    removeDir: (path) => rmSync(path, { recursive: true, force: true }),
-  });
   const newTaskService = createNewTaskService({
     repo: newTaskRunRepo,
     workspace: {
@@ -3247,7 +3232,16 @@ function main(): void {
         };
       },
     },
-    git: newTaskGit,
+    git: createNewTaskGit({
+      // Bound the network fetch so a slow/unreachable origin fails fast (default
+      // ~20s) and falls back to the local base branch instead of stalling
+      // planning for up to 15 minutes. Local operations (worktree add, commit,
+      // push) keep the long-running budget.
+      git: (args) =>
+        gitRun(args, { longRunning: !args.includes('fetch') }),
+      pathExists: existsSync,
+      removeDir: (path) => rmSync(path, { recursive: true, force: true }),
+    }),
     pr: createNewTaskPr({
       resolveRepo: (repoId) => repoService.get(repoId),
       gh: ghRun,
@@ -4809,112 +4803,6 @@ function main(): void {
   // so a wrapped server is never left pointing at the proxy after the app stops.
   // Best-effort: getServers already returns unwrapped specs, so re-persisting
   // them strips the on-disk wrapper.
-  let mobileGateway: ReturnType<typeof createMobileGateway> | undefined;
-  if (mobileConfig.enabled) {
-    if (!['127.0.0.1', 'localhost', '::1'].includes(apiConfig.host) || !terminalConfig.enabled ||
-        terminalConfig.wsPath !== '/api/terminal' || apiConfig.basePath !== '/api') {
-      throw new ValidationError('Mobile preview requires a loopback-only API, /api base path, and enabled /api/terminal WebSocket.');
-    }
-    const resolveMobileTask = (chat: { attachmentId: string; repoId: string }) => {
-      const run = newTaskRunRepo.get(chat.attachmentId);
-      const repo = repoService.get(chat.repoId);
-      if (!run?.branch || !repo.defaultBranch || repo.provider !== 'github') {
-        throw new ValidationError('The task needs a GitHub checkout with a discovered default branch and a completed plan.');
-      }
-      return {
-        worktreePath: newTaskGit.worktreePathFor(repo.localPath, run.id),
-        branch: run.branch, baseBranch: repo.defaultBranch, repoName: repo.name, remoteUrl: repo.remoteUrl,
-      };
-    };
-    const mobilePublication = createMobilePublication({
-      git: (args, signal) => gitRun(args, { timeoutMs: 120000, signal }),
-      gh: ghRun,
-      resolve: resolveMobileTask,
-      getRun: (id) => {
-        const run = newTaskRunRepo.get(id);
-        if (!run) throw new NotFoundError('Mobile task was deleted.');
-        return run;
-      },
-      saveRun: (run) => newTaskRunRepo.update(run),
-      now: () => clock.isoNow(),
-      makeEligible: async (chat, number) => {
-        const feature = await prFeatureService.convertToPrFeature(chat.repoId, number, chat.featureId);
-        return feature.id;
-      },
-    });
-    const mobileService = createMobileService({
-      config: mobileConfig, repo: createMobileChatRepo(db), task: newTaskService,
-      getRun: (id) => newTaskRunRepo.get(id),
-      saveRun: (run) => newTaskRunRepo.update(run),
-      repositories: () => repoService.list()
-        .filter((repo) => repo.provider === 'github' && repo.defaultBranch !== null && existsSync(repo.localPath))
-        .map((repo) => ({ id: repo.id, name: repo.name, remoteUrl: repo.remoteUrl, defaultBranch: repo.defaultBranch ?? undefined })),
-      createTask: (repoId, problem) => {
-        const feature = featureService.create({ name: problem.slice(0, 80), description: problem, repoId });
-        const attachment = agentService.attach(feature.id, NEW_TASK_AGENT_ID);
-        return { featureId: feature.id, attachmentId: attachment.id };
-      },
-      revision: mobilePublication.revision,
-      publish: mobilePublication.publish,
-      createTerminal: (chat, signal) => applicationWork.own(async (hostSignal) => {
-        const operationSignal = AbortSignal.any([signal, hostSignal]);
-        resolveMobileTask(chat);
-        await sessionBootstrap.assertFeatureReady(chat.featureId);
-        operationSignal.throwIfAborted();
-        const selection = await resolver.resolve({ model: 'auto' });
-        operationSignal.throwIfAborted();
-        const session = factory.build({
-          featureId: chat.featureId, provider: selection.provider.id,
-          requestedModel: selection.model, kind: 'dev', prompt: '',
-        });
-        sessionRepo.save(session);
-        return session.id;
-      }, { featureId: chat.featureId }),
-      endTerminal: async (id) => {
-        mobileGateway?.disconnectTerminal(id);
-        terminalManager!.close(id);
-        if (!await terminalManager!.quiesceSession(id, 5000)) {
-          throw new ValidationError('The terminal is still stopping. Wait before ending it again.');
-        }
-      },
-      terminalRunning: (id) => terminalManager!.get(id) !== undefined,
-      own: (run, featureId) => applicationWork.own(run, { featureId }),
-      now: () => clock.isoNow(), id: () => ids.next(),
-      report: (error) => logger.error('Mobile task failed', { message: error instanceof Error ? error.message : String(error) }),
-      importRepository: (name) => applicationWork.own(async (signal) => {
-        const root = mobileConfig.repositoryRoot || pathJoin(currentDataDir, 'mobile-repositories');
-        mkdirSync(root, { recursive: true });
-        return importMobileRepository({
-          list: () => repoService.list(), gh: ghRun,
-          git: (args, operationSignal) => gitRun(args, { signal: operationSignal, timeoutMs: 120000 }),
-          pathFor: (repoName) => pathJoin(root, mobileHash(repoName.toLowerCase()).slice(0, 24)),
-          pathExists: existsSync,
-          create: (input) => {
-            const repository = repoService.create(input);
-            repositoryContextCoordinator.initialize(repository.id);
-            return repository;
-          },
-        }, name, signal);
-      }),
-    });
-    const mobileUiDist = uiDist ?? pathJoin(dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui', 'dist');
-    if (!existsSync(pathJoin(mobileUiDist, 'index.html'))) {
-      throw new ValidationError('Build the UI before enabling the mobile gateway.');
-    }
-    mobileGateway = createMobileGateway({
-      config: mobileConfig, uiDist: mobileUiDist, routes: ownApplicationRoutes(createMobileRoutes(mobileService), applicationWork), logger,
-      terminalAllowed: mobileService.terminalAllowed,
-      terminalTarget: () => {
-        const address = server.address();
-        if (!address || typeof address === 'string') throw new ValidationError('The host API is not listening.');
-        return `ws://127.0.0.1:${address.port}${terminalConfig.wsPath}`;
-      },
-    });
-    void mobileGateway.listen().catch((error: unknown) => {
-      logger.error('Mobile gateway failed to listen', error);
-      void shutdown('mobile:startup-failed');
-    });
-  }
   const restoreMcpServers = async (): Promise<void> => {
     for (const provider of sessionMcpService.listProviders()) {
       try {
@@ -4977,9 +4865,7 @@ function main(): void {
     credentialWarmer,
     terminalManager: terminalManager!,
     server: {
-      close: async () => {
-        await mobileGateway?.close();
-        await new Promise<void>((resolve, reject) => {
+      close: () => new Promise<void>((resolve, reject) => {
         sse.close();
         server.close((error) => {
           if (error) reject(error);
@@ -4988,8 +4874,7 @@ function main(): void {
         for (const socket of terminalWs?.clients ?? []) socket.terminate();
         terminalWs?.close();
         server.closeAllConnections();
-        });
-      },
+      }),
     },
     db,
     settleOwnership: () => metaOperationShutdown.settleAfterPhysicalDrain(),
