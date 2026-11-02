@@ -10,9 +10,15 @@ export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
-  cost: number;
-  credits: number;
-  nanoAiu: number;
+  cost: number | null;
+  credits: number | null;
+  nanoAiu: number | null;
+  /** Known partial native amounts, never presented as complete totals. */
+  knownCost?: number;
+  knownCredits?: number;
+  knownNanoAiu?: number;
+  unavailableCharges?: number;
+  usdEstimate?: number | null;
 }
 
 export interface ModelBreakdown extends UsageTotals {
@@ -96,6 +102,8 @@ export interface WarmAgentSession {
  * rollups with the session lifecycle records.
  */
 export interface SessionBreakdown extends SessionUsage {
+  /** false when the session has no usage rows yet; its zero totals are a placeholder, not a measurement. */
+  usageRecorded?: false;
   provider: string;
   kind: SessionKind;
   status: SessionStatus;
@@ -158,6 +166,13 @@ export interface FeatureAnalytics {
   byMcpServer: McpServerBreakdown[];
   /** Groups in the feature's tree, so sessions can be nested under them. */
   groups: GroupInfo[];
+  /**
+   * Usage retained from deleted sessions, attributed to this feature at deletion
+   * time. Included in `totals`/`byModel`/`byProvider`/`byDay`, but it has no
+   * `bySession` row; omitted when nothing was retained. `sessions` counts the
+   * deleted sessions.
+   */
+  retained?: UsageTotals;
   timing: FeatureTiming;
 }
 
@@ -175,5 +190,7 @@ export interface AggregateReader {
   warmAgentSessions(featureId: string): WarmAgentSession[];
   /** Per-provider/server observed calls and proxy I/O for a feature. */
   byMcpServer(featureId: string): McpServerBreakdown[];
+  /** Totals of usage retained from deleted sessions of a feature. */
+  retainedTotals(featureId: string): UsageTotals;
   workspaceTotals(): UsageTotals;
 }

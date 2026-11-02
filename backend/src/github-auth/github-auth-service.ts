@@ -1,3 +1,5 @@
+import { credentialFromRead, type CredentialRead } from '../kernel/credential-read.js';
+
 /**
  * Thin, testable wrapper over the GitHub CLI (`gh`) auth commands. The IDE
  * reuses the same GitHub login that agency/`gh` already established, then
@@ -29,6 +31,7 @@ export interface GithubAuth {
   status(): Promise<GithubAuthStatus>;
   /** The current GitHub token, or null when unavailable / not logged in. */
   token(): Promise<string | null>;
+  readToken(): Promise<CredentialRead>;
   /**
    * Logs the IDE's GitHub account out via `gh auth logout` and returns the
    * resulting (unauthenticated) status. Succeeds even when already logged out.
@@ -49,7 +52,7 @@ export function parseGhLogin(output: string): string | null {
 export function createGithubAuth(deps: { run: GhRunner }): GithubAuth {
   return {
     async status() {
-      const res = await deps.run(['auth', 'status']);
+      const res = await deps.run(['auth', 'status', '--hostname', 'github.com']);
       if (res.code === 0) {
         return {
           authenticated: true,
@@ -65,8 +68,7 @@ export function createGithubAuth(deps: { run: GhRunner }): GithubAuth {
       // the stored token (read from the keyring without a network round-trip):
       // if one exists we still hold a credential, so report signed in rather
       // than stranding the user during a blip.
-      const stored = await deps.run(['auth', 'token']);
-      if (stored.code === 0 && stored.stdout.trim().length > 0) {
+      if (credentialFromRead(await this.readToken())) {
         return {
           authenticated: true,
           login: parseGhLogin(`${res.stdout}\n${res.stderr}`),
@@ -75,9 +77,15 @@ export function createGithubAuth(deps: { run: GhRunner }): GithubAuth {
       return { authenticated: false, login: null };
     },
     async token() {
-      const res = await deps.run(['auth', 'token']);
+      const read = await this.readToken();
+      return read.state === 'ready' ? read.token : null;
+    },
+    async readToken() {
+      const res = await deps.run(['auth', 'token', '--hostname', 'github.com']);
       const token = res.stdout.trim();
-      return res.code === 0 && token.length > 0 ? token : null;
+      if (res.code === 0) return token ? { state: 'ready', token } : { state: 'signed-out' };
+      return /\bno oauth token found\b|\bnot logged (?:in|into)\b/i.test(res.stderr)
+        ? { state: 'signed-out' } : { state: 'unavailable' };
     },
     async signOut() {
       await deps.run(['auth', 'logout', '--hostname', 'github.com']);

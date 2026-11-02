@@ -29,12 +29,20 @@ import {
 } from './bootstrap-instructions.js';
 import { createWorkTracker } from '../kernel/work-tracker.js';
 import type { Logger } from '../kernel/logger.js';
+import type { ProviderExecutionLease, ProviderExecutionPolicy } from '../provider/active-provider.js';
+import { ConflictError } from '../kernel/error-types.js';
+
+interface ProviderAttempt {
+  lease?: ProviderExecutionLease;
+  nativeStarted: boolean;
+}
 
 /** Max bytes of recent (ANSI-stripped) output scanned for the ready prompt. */
 const READY_SCAN_BYTES = 8192;
 
 export interface TerminalManagerDeps {
-  logger: Pick<Logger, 'error'>;
+  executionPolicy?: ProviderExecutionPolicy;
+  logger: Pick<Logger, 'error'> & Partial<Pick<Logger, 'warn'>>;
   spawner: PtySpawner;
   providers: ProviderRegistry;
   bus: EventBus<SessionEventMap>;
@@ -81,6 +89,7 @@ export interface TerminalManagerDeps {
   selfRecovery?: {
     enabled: boolean;
     useMetaAnalysis: boolean;
+    maxRestartCycles?: number;
     /** Analyzes the failing output via a metasession; rejects if it can't start. */
     analyze?: (errorText: string) => Promise<string | null>;
     /** Reports an unrecoverable failure to the UI status bar for a session. */
@@ -164,6 +173,7 @@ export interface TerminalManager {
 }
 
 export interface ManagedTerminalManager extends TerminalManager {
+  drainForProviderSwitch(timeoutMs: number): Promise<boolean>;
   waitForIdle(timeoutMs: number): Promise<boolean>;
   quiesceSession(sessionId: string, timeoutMs: number): Promise<boolean>;
   quiesceFeature(featureId: string, timeoutMs: number): Promise<boolean>;
@@ -186,6 +196,7 @@ export function createTerminalManager(
   // provider-confirmed request for a session. Browser input/new confirmations
   // bump it so delayed analysis cannot restart obsolete work.
   const replayEpochs = new Map<string, number>();
+  const recoveryCycles = new Map<string, { prompt: string; count: number }>();
   const listeners = new Map<string, Set<(terminal: TerminalSession | null, failed?: boolean) => void>>();
   let stopped = false;
   let generation = 0;
@@ -209,6 +220,7 @@ export function createTerminalManager(
   // must not be recorded as `session.ended` (which would re-persist the row we
   // are deleting); it is reported as `session.discarded` instead.
   const discarded = new Set<string>();
+  const switchCancelled = new Set<string>();
 
   function composeBootstrap(session: Session): Promise<string> {
     // Gating lives in `composeForSession`: dev sessions get the full bootstrap,
@@ -220,10 +232,12 @@ export function createTerminalManager(
     session: Session,
     options: LaunchOptions,
     bootstrap: string,
-    injectionDir?: string | null,
+    injectionDir: string | null | undefined,
+    attempt: ProviderAttempt,
   ): TerminalSession {
     assertLaunchable(session.id);
     const provider = deps.providers.get(session.provider);
+    const commandBootstrap = provider.capabilities?.interactiveBootstrap === 'command';
     const spec: SessionSpec = {
       sessionId: session.id,
       featureId: session.featureId,
@@ -232,6 +246,8 @@ export function createTerminalManager(
       kind: session.kind,
       otelFilePath: session.usageFilePath,
       cwd: options.cwd,
+      instructions: commandBootstrap ? bootstrap : undefined,
+      resume: session.startedAt !== null,
     };
 
     const started: Session = {
@@ -245,9 +261,10 @@ export function createTerminalManager(
     // When the bootstrap context is delivered as a discovered instructions
     // file, add its directory to the CLI's custom-instructions search path so
     // the context loads silently instead of being typed into the terminal.
-    const injectContext =
+    const injectFile =
       typeof injectionDir === 'string' && injectionDir.length > 0;
-    const spawnEnv = injectContext
+    const injectContext = commandBootstrap || injectFile;
+    const spawnEnv = injectFile
       ? withInstructionsDir(command.env, injectionDir)
       : command.env;
     assertLaunchable(session.id);
@@ -257,6 +274,7 @@ export function createTerminalManager(
     try {
       deps.bus.emit('session.started', started);
       assertLaunchable(session.id);
+      deps.executionPolicy?.assertActive(session.provider);
       pty = deps.spawner.spawn({
         command: command.command,
         args: command.args,
@@ -265,6 +283,7 @@ export function createTerminalManager(
         cols: options.cols ?? deps.config.defaultCols,
         rows: options.rows ?? deps.config.defaultRows,
       });
+      attempt.nativeStarted = true;
     } catch (error) {
       try {
         deps.bus.emit('session.ended', {
@@ -359,10 +378,12 @@ export function createTerminalManager(
       pty,
       inputReady: seeds.length === 0,
       scrollbackBytes: deps.config.scrollbackBytes,
+      maxGeometryBoundaries: deps.config.maxReplayGeometryBoundaries,
       transcriptBytes: deps.config.transcriptBytes,
       initialCols: options.cols ?? deps.config.defaultCols,
       initialRows: options.rows ?? deps.config.defaultRows,
       onExit: (code) => {
+        attempt.lease?.release();
         // Replacement waits for this completion; TerminalSession already deduplicates native exits.
         sessions.delete(session.id);
         retries.get(session.id)?.dispose();
@@ -371,7 +392,7 @@ export function createTerminalManager(
         // Remove the session's context instructions file on a genuine exit. A
         // discarded exit is a self-recovery restart that keeps the same session
         // id — its replacement still needs the file, so leave it in place.
-        if (!wasDiscarded && deps.bootstrapInstructions) {
+        if (!wasDiscarded && !commandBootstrap && deps.bootstrapInstructions) {
           void deps.bootstrapInstructions.clear(session.id).catch((error) => {
             deps.logger.error('Failed to clear bootstrap instructions', {
               sessionId: session.id,
@@ -380,7 +401,7 @@ export function createTerminalManager(
           });
         }
         finishExit({
-          code, discarded: wasDiscarded, cancelled: stopped, endedAt: deps.clock.isoNow(),
+          code, discarded: wasDiscarded, cancelled: switchCancelled.delete(session.id) || stopped, endedAt: deps.clock.isoNow(),
         });
         if (wasDiscarded) {
           // Deleted out from under us: drop the terminal without persisting an
@@ -445,18 +466,25 @@ export function createTerminalManager(
   async function launch(
     session: Session,
     options: LaunchOptions,
+    attempt: ProviderAttempt,
   ): Promise<TerminalSession> {
     const finishing = completions.get(session.id);
     if (finishing) await finishing;
     assertLaunchable(session.id);
+    const provider = deps.providers.get(session.provider);
+    if (provider.prepareInteractiveSession) {
+      await provider.prepareInteractiveSession();
+      assertLaunchable(session.id);
+    }
     // Compose first so repository-context readiness is enforced before any
     // lifecycle event is emitted or provider process is spawned.
     const bootstrap = await composeBootstrap(session);
     const injectionDir =
+      deps.providers.get(session.provider).capabilities?.interactiveBootstrap !== 'command' &&
       deps.bootstrapInstructions && bootstrap.length > 0
         ? await prepareContextInjection(session, bootstrap)
         : null;
-    return spawnTerminal(session, options, bootstrap, injectionDir);
+    return spawnTerminal(session, options, bootstrap, injectionDir, attempt);
   }
 
   /**
@@ -497,6 +525,25 @@ export function createTerminalManager(
       onExhausted:
         escalate && selfRecovery
           ? ({ prompt, line }) => {
+              const previous = recoveryCycles.get(session.id);
+              const count = previous?.prompt === prompt ? previous.count : 0;
+              if (count >= (selfRecovery.maxRestartCycles ?? 1)) {
+                selfRecovery.report(session.id, 'Automatic recovery restart limit reached. Please retry your request manually.');
+                return;
+              }
+              let lease: ProviderExecutionLease | undefined;
+              try {
+                lease = deps.executionPolicy?.acquire(session.provider, {
+                  kind: 'recovery', id: session.id, label: 'Terminal recovery',
+                });
+              } catch (error) {
+                if (!(error instanceof ConflictError)) throw error;
+                deps.logger.warn?.('Terminal recovery skipped because CLI execution is unavailable', {
+                  sessionId: session.id, error,
+                });
+                return;
+              }
+              recoveryCycles.set(session.id, { prompt, count: count + 1 });
               const epoch = currentReplayEpoch(session.id);
               const isCurrentRequest = () =>
                 !stopped &&
@@ -510,6 +557,7 @@ export function createTerminalManager(
                 line,
                 isCurrentRequest,
                 options,
+                lease,
               )).catch((error: unknown) => {
                 deps.logger.error('Terminal recovery failed', { sessionId: session.id, error });
               });
@@ -538,40 +586,45 @@ export function createTerminalManager(
     line: string,
     isCurrent: () => boolean,
     options: LaunchOptions,
+    lease: ProviderExecutionLease | undefined,
   ): Promise<void> {
-    const analyze = selfRecovery.analyze;
-    const coordinatorDeps: SelfRecoveryCoordinatorDeps = {
-      useMetaAnalysis: selfRecovery.useMetaAnalysis,
-      analyze: analyze
-        ? async (errorText) => {
-            const diagnosis = await analyze(errorText);
-            return isCurrent() ? diagnosis : null;
+    try {
+      const analyze = selfRecovery.analyze;
+      const coordinatorDeps: SelfRecoveryCoordinatorDeps = {
+        useMetaAnalysis: selfRecovery.useMetaAnalysis,
+        analyze: analyze
+          ? async (errorText) => {
+              const diagnosis = await analyze(errorText);
+              return isCurrent() ? diagnosis : null;
+            }
+          : undefined,
+        restart: async () => {
+          if (!isCurrent()) {
+            return true;
           }
-        : undefined,
-      restart: async () => {
-        if (!isCurrent()) {
-          return true;
-        }
-        return restartSession(
-          terminal,
-          session,
-          prompt,
-          options,
-          isCurrent,
-        );
-      },
-      notify: (text) => {
-        if (isCurrent()) {
-          terminal.notify(text);
-        }
-      },
-      report: (message) => {
-        if (isCurrent()) {
-          selfRecovery.report(session.id, message);
-        }
-      },
-    };
-    await createSelfRecoveryCoordinator(coordinatorDeps).escalate(line);
+          return restartSession(
+            terminal,
+            session,
+            prompt,
+            options,
+            isCurrent,
+          );
+        },
+        notify: (text) => {
+          if (isCurrent()) {
+            terminal.notify(text);
+          }
+        },
+        report: (message) => {
+          if (isCurrent()) {
+            selfRecovery.report(session.id, message);
+          }
+        },
+      };
+      await createSelfRecoveryCoordinator(coordinatorDeps).escalate(line);
+    } finally {
+      lease?.release();
+    }
   }
 
   /**
@@ -591,58 +644,70 @@ export function createTerminalManager(
   ): Promise<boolean> {
     const sourceOwnsSession = () =>
       generations.get(session.id) === source.generation;
-    try {
-      assertLaunchable(session.id);
-      retries.get(session.id)?.dispose();
-      retries.delete(session.id);
-      publish(session.id, null);
-      if (!source.exited) {
-        // The fresh launch re-emits session.started, not a failed teardown.
-        discarded.add(session.id);
-        const exited = awaitExit(source);
-        source.kill();
-        await exited;
-      }
-      const finishing = completions.get(session.id);
-      if (finishing) await finishing;
-      if (!isCurrentRequest() || !sourceOwnsSession()) {
-        if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
-        return false;
-      }
-      const bootstrap = await deps.bootstrap.composeForSession(session);
-      if (!isCurrentRequest() || !sourceOwnsSession()) {
-        if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
-        return false;
-      }
-      const injectionDir =
-        deps.bootstrapInstructions && bootstrap.length > 0
-          ? await prepareContextInjection(session, bootstrap)
-          : null;
-      let resolve!: (terminal: TerminalSession) => void;
-      let reject!: (error: unknown) => void;
-      const promise = new Promise<TerminalSession>((yes, no) => {
-        resolve = yes;
-        reject = no;
-      });
-      pending.set(session.id, promise);
+    const attempt: ProviderAttempt = { nativeStarted: false };
+    const restart = async (): Promise<boolean> => {
       try {
-        try {
-          resolve(
-            spawnTerminal(session, { ...options, replaySeed: prompt }, bootstrap, injectionDir),
-          );
-        } catch (error) {
-          reject(error);
+        attempt.lease = deps.executionPolicy?.acquire(session.provider, {
+          kind: 'terminal', id: session.id, label: 'Terminal recovery launch',
+        });
+        assertLaunchable(session.id);
+        retries.get(session.id)?.dispose();
+        retries.delete(session.id);
+        publish(session.id, null);
+        if (!source.exited) {
+          // The fresh launch re-emits session.started, not a failed teardown.
+          discarded.add(session.id);
+          const exited = awaitExit(source);
+          source.kill();
+          await exited;
         }
-        await promise;
-      } finally {
-        pending.delete(session.id);
+        const finishing = completions.get(session.id);
+        if (finishing) await finishing;
+        if (!isCurrentRequest() || !sourceOwnsSession()) {
+          if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
+          return false;
+        }
+        const bootstrap = await deps.bootstrap.composeForSession(session);
+        if (!isCurrentRequest() || !sourceOwnsSession()) {
+          if (sourceOwnsSession() && !pending.has(session.id)) publish(session.id, null, true);
+          return false;
+        }
+        const injectionDir =
+          deps.providers.get(session.provider).capabilities?.interactiveBootstrap !== 'command' &&
+          deps.bootstrapInstructions && bootstrap.length > 0
+            ? await prepareContextInjection(session, bootstrap)
+            : null;
+        let resolve!: (terminal: TerminalSession) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<TerminalSession>((yes, no) => {
+          resolve = yes;
+          reject = no;
+        });
+        pending.set(session.id, promise);
+        try {
+          try {
+            resolve(
+              spawnTerminal(session, { ...options, replaySeed: prompt }, bootstrap, injectionDir, attempt),
+            );
+          } catch (error) {
+            reject(error);
+          }
+          await promise;
+        } finally {
+          pending.delete(session.id);
+        }
+        return true;
+      } catch {
+        if (isCurrentRequest()) {
+          publish(session.id, null, true);
+        }
+        return false;
       }
-      return true;
-    } catch {
-      if (isCurrentRequest()) {
-        publish(session.id, null, true);
-      }
-      return false;
+    };
+    try {
+      return await restart();
+    } finally {
+      if (!attempt.nativeStarted) attempt.lease?.release();
     }
   }
 
@@ -971,12 +1036,19 @@ export function createTerminalManager(
   ): Promise<TerminalSession> {
     features.set(session.id, session.featureId);
     assertLaunchable(session.id);
+    deps.executionPolicy?.assertActive(session.provider);
     const launching = pending.get(session.id);
     if (launching) return launching;
     const existing = sessions.get(session.id);
     if (existing && !existing.exited) {
       return existing;
     }
+    const attempt: ProviderAttempt = {
+      nativeStarted: false,
+      lease: deps.executionPolicy?.acquire(session.provider, {
+        kind: 'terminal', id: session.id, label: 'Interactive terminal',
+      }),
+    };
     bumpReplayEpoch(session.id);
     let resolve!: (terminal: TerminalSession) => void;
     let reject!: (error: unknown) => void;
@@ -986,11 +1058,12 @@ export function createTerminalManager(
     });
     // Reserve before launch: internal sessions can emit lifecycle events synchronously.
     pending.set(session.id, promise);
-    void work.own(session.id, () => launch(session, options)).then(resolve, reject);
+    void work.own(session.id, () => launch(session, options, attempt)).then(resolve, reject);
     try {
       return await promise;
     } finally {
       pending.delete(session.id);
+      if (!attempt.nativeStarted) attempt.lease?.release();
     }
   }
 
@@ -1013,6 +1086,7 @@ export function createTerminalManager(
     attempt(errors, () => terminal.kill());
   };
   const close = (sessionId: string) => {
+    recoveryCycles.delete(sessionId);
     tombstones.add(sessionId);
     bumpReplayEpoch(sessionId);
     const errors: unknown[] = [];
@@ -1037,11 +1111,18 @@ export function createTerminalManager(
     if (!existing) {
       return undefined;
     }
-    discarded.add(session.id);
-    const exited = awaitExit(existing);
-    existing.kill();
-    await exited;
-    return getOrLaunch(session, options);
+    const lease = deps.executionPolicy?.acquire(session.provider, {
+      kind: 'terminal', id: session.id, label: 'Terminal relaunch',
+    });
+    try {
+      discarded.add(session.id);
+      const exited = awaitExit(existing);
+      existing.kill();
+      await exited;
+      return await getOrLaunch(session, options);
+    } finally {
+      lease?.release();
+    }
   };
 
   return {
@@ -1079,6 +1160,7 @@ export function createTerminalManager(
     },
     observeInput(sessionId, data) {
       if (data.length > 0) {
+        recoveryCycles.delete(sessionId);
         bumpReplayEpoch(sessionId);
       }
       retries.get(sessionId)?.observeInput(data);
@@ -1088,6 +1170,17 @@ export function createTerminalManager(
       retries.get(sessionId)?.confirmReplaySafeRequest(exactText);
     },
     close,
+    async drainForProviderSwitch(timeoutMs) {
+      const errors: unknown[] = [];
+      for (const terminal of [...sessions.values()]) {
+        switchCancelled.add(terminal.sessionId);
+        const previousErrors = errors.length;
+        requestTermination(terminal, errors);
+        if (errors.length > previousErrors) switchCancelled.delete(terminal.sessionId);
+      }
+      throwTerminationErrors(errors);
+      return work.waitForIdle(timeoutMs);
+    },
     waitForIdle: (timeoutMs) => work.waitForIdle(timeoutMs),
     async quiesceSession(sessionId, timeoutMs) {
       close(sessionId);
@@ -1104,6 +1197,7 @@ export function createTerminalManager(
     },
     shutdown() {
       stopped = true;
+      recoveryCycles.clear();
       const errors: unknown[] = [];
       for (const sessionId of listeners.keys()) {
         attempt(errors, () => publish(sessionId, null, true));

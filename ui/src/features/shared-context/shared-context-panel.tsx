@@ -3,6 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { Loader } from '../../components/loading.js';
 import { useDraft } from '../../hooks/use-draft.js';
+import { ApiError } from '../../lib/api.js';
 import type {
   ContextScope,
   ContextStatusPhase,
@@ -48,6 +49,7 @@ export function SharedContextPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const base = doc?.content ?? '';
@@ -56,28 +58,36 @@ export function SharedContextPanel({
     setValue: setDraft,
     isDirty: dirty,
     restored,
+    persistenceError,
     discard,
     clear,
   } = useDraft(`cw-shared-context-draft:${scope}:${scopeId}`, base);
+  const editor = useRef({ dirty, draft, doc });
+  editor.current = { dirty, draft, doc };
+  const requestId = useRef(0);
 
   const reload = useCallback(() => {
+    const id = ++requestId.current;
     let active = true;
     setError(null);
     api
       .getSharedContext(scope, scopeId)
       .then((result) => {
-        if (!active) {
+        if (!active || id !== requestId.current) {
           return;
+        }
+        if (editor.current.dirty && editor.current.doc?.content !== result?.content) {
+          setConflict(true);
         }
         setDoc(result);
       })
       .catch((err: unknown) => {
-        if (active) {
+        if (active && id === requestId.current) {
           setError(err instanceof Error ? err.message : String(err));
         }
       })
       .finally(() => {
-        if (active) {
+        if (active && id === requestId.current) {
           setLoading(false);
         }
       });
@@ -107,14 +117,20 @@ export function SharedContextPanel({
   }, [livePhase, reload]);
 
   async function save() {
+    const submitted = draft;
     setSaving(true);
     setError(null);
     try {
-      const saved = await api.saveSharedContext(scope, scopeId, draft);
+      const saved = await api.saveSharedContext(scope, scopeId, submitted);
       setDoc(saved);
-      clear();
+      setConflict(false);
+      if (editor.current.draft === submitted) clear();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      if (err instanceof ApiError && err.status === 409) {
+        setConflict(true);
+        reload();
+      }
     } finally {
       setSaving(false);
     }
@@ -180,11 +196,16 @@ export function SharedContextPanel({
             className="shared-context-editor"
             value={draft}
             spellCheck={false}
-            placeholder="No shared context yet. Add durable conventions, decisions, and gotchas that every future session should know."
+            placeholder={error && !doc ? 'Context could not be loaded. Your draft will stay on this device until the current context is available.' : 'No shared context yet. Add durable conventions, decisions, and gotchas that every future session should know.'}
             onChange={(e) => {
               setDraft(e.target.value);
             }}
           />
+          {conflict && <div role="alert">
+            Shared context changed in the background. Your unsaved draft is preserved. Compare it with the latest context before replacing it.
+            <details><summary>Latest saved context</summary><pre>{base || '(Empty context)'}</pre></details>
+            <Button variant="ghost" onClick={() => { discard(); setConflict(false); }}>Use latest context</Button>
+          </div>}
           {restored && dirty && (
             <div className="shared-context-draft" role="status">
               <span className="shared-context-draft-text">
@@ -200,6 +221,8 @@ export function SharedContextPanel({
             </div>
           )}
           <ErrorText error={error} />
+          <ErrorText error={persistenceError} />
+          {error && <Button variant="ghost" onClick={() => reload()}>Retry loading context</Button>}
           <div className="shared-context-actions">
             <span className="shared-context-note">
               Injected into every session in this scope.
@@ -223,8 +246,8 @@ export function SharedContextPanel({
               >
                 Attach file
               </Button>
-              <Button onClick={() => void save()} disabled={saving || !dirty}>
-                {saving ? 'Saving…' : 'Save'}
+              <Button onClick={() => void save()} disabled={saving || !dirty || Boolean(error && !doc)}>
+                {saving ? 'Saving…' : conflict ? 'Replace latest with draft' : 'Save'}
               </Button>
             </div>
           </div>

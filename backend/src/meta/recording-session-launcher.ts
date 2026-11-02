@@ -11,6 +11,7 @@ export interface RecordingSessionLauncherDeps {
   operations: Pick<MetaOperationRepo, 'create' | 'update' | 'complete'>;
   clock: Clock;
   newOperationId(): string;
+  onOperationChanged?(operationId: string): void;
 }
 
 function errorMessage(error: unknown): string {
@@ -39,6 +40,7 @@ export function createRecordingSessionLauncher(
       } else {
         deps.operations.update(op);
       }
+      deps.onOperationChanged?.(op.operationId);
     } catch {
       /* Recording is best-effort; never break the metasession it observes. */
     }

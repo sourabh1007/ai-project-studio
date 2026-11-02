@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
+import { createApiClient } from '../../lib/api.js';
 import type { FeatureUsage } from '../../lib/types.js';
 import type { LiveState } from '../../lib/stream.js';
 import { FeatureDashboard } from './feature-dashboard.js';
@@ -114,6 +115,23 @@ describe('FeatureDashboard usage freshness', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T12:00:00.000Z'));
+  });
+
+  it('keeps deleted-session usage in the feature tree and labels its retained contribution', async () => {
+    const data = usage(1);
+    data.retained = { ...data.totals, inputTokens: 20, outputTokens: 10, nanoAiu: 2e9 };
+    data.totals = { ...data.totals, sessions: 2, inputTokens: 30, outputTokens: 15, nanoAiu: 3e9 };
+    const client = createApiClient();
+    vi.spyOn(client, 'getFeatureUsage').mockResolvedValue(data);
+    vi.spyOn(client, 'listSessions').mockResolvedValue([]);
+    renderDashboard(client);
+    await act(async () => {});
+    const table = screen.getByRole('table', { name: 'Nested usage activity' });
+    const featureRow = within(table).getByText('Feature 1').closest<HTMLElement>('[role="row"]')!;
+    const retainedRow = within(table).getByText('Retained usage from deleted sessions').closest<HTMLElement>('[role="row"]')!;
+    expect(within(featureRow).getAllByRole('cell')[1]).toHaveTextContent('3.00');
+    expect(within(retainedRow).getAllByRole('cell')[1]).toHaveTextContent('2.00');
+    expect(within(retainedRow).getAllByRole('cell')[2]).toHaveTextContent('30');
   });
 
   it('shows snapshot freshness, refreshes on demand, and keeps prior data on refresh failure', async () => {

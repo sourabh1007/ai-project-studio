@@ -98,6 +98,7 @@ vi.mock('./features/workspace/workspace-view.js', () => ({
     <div>
       <input
         aria-label="Terminal shell"
+        className="xterm-helper-textarea"
         onKeyDown={(event) => h.terminalKeyDown(event.key)}
       />
     </div>
@@ -130,6 +131,40 @@ describe('App keyboard ownership and navigation semantics', () => {
   beforeEach(() => {
     h.terminalKeyDown.mockReset();
     window.localStorage.clear();
+  });
+
+  it('places the CLI picker immediately above theme and captures the platform shortcut from the focused terminal', async () => {
+    renderApp();
+    const shell = await screen.findByRole('textbox', { name: 'Terminal shell' });
+    const picker = screen.getByRole('button', { name: 'Choose active CLI' });
+    expect(picker.closest('.activitybar-group')?.querySelectorAll('button')[1]).toHaveAccessibleName('Theme: Dark');
+    shell.focus();
+    fireEvent.keyDown(shell, { key: 'L', ctrlKey: true, shiftKey: true, isComposing: true });
+    expect(screen.queryByRole('dialog', { name: 'Choose active CLI' })).toBeNull();
+    h.terminalKeyDown.mockClear();
+    fireEvent.keyDown(shell, { key: 'L', metaKey: true, shiftKey: true });
+    expect(await screen.findByRole('dialog', { name: 'Choose active CLI' })).toBeInTheDocument();
+    expect(h.terminalKeyDown).not.toHaveBeenCalled();
+  });
+
+  it('persists disabled and alternative CLI shortcuts without intercepting the default', async () => {
+    window.localStorage.setItem('cw-cli-shortcut', JSON.stringify('y'));
+    renderApp();
+    await screen.findByRole('textbox', { name: 'Terminal shell' });
+    fireEvent.keyDown(window, { key: 'L', ctrlKey: true, shiftKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Choose active CLI' })).toBeNull();
+    fireEvent.keyDown(window, { key: 'Y', ctrlKey: true, shiftKey: true });
+    expect(await screen.findByRole('dialog', { name: 'Choose active CLI' })).toBeInTheDocument();
+  });
+
+  it('keeps the picker clickable when shortcuts are disabled and leaves ordinary composers untouched', async () => {
+    window.localStorage.setItem('cw-cli-shortcut', JSON.stringify('off'));
+    renderApp();
+    await screen.findByRole('textbox', { name: 'Terminal shell' });
+    fireEvent.keyDown(window, { key: 'L', ctrlKey: true, shiftKey: true });
+    expect(screen.queryByRole('dialog', { name: 'Choose active CLI' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose active CLI' }));
+    expect(await screen.findByRole('dialog', { name: 'Choose active CLI' })).toBeInTheDocument();
   });
 
   it('hides and restores the icon dock without removing the workspace and remembers the choice', async () => {

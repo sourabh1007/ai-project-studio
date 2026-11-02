@@ -72,10 +72,12 @@ import type { PrDescriptionService } from '../pr-review/pr-description-contract.
 import type { RepositoryContextCoordinator } from '../repository-context/repository-context-coordinator.js';
 import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import { createRepoRoutes } from './repo-controller.js';
-import { createAggregateRoutes } from './aggregate-controller.js';
+import { createAggregateRoutes, type AggregateControllerDeps } from './aggregate-controller.js';
 import { createUsageDetailRoutes } from './usage-detail-controller.js';
 import { createMcpUsageRoutes } from './mcp-usage-controller.js';
 import { createConfigRoutes } from './config-controller.js';
+import { createCommandCatalogRoutes } from './command-catalog-controller.js';
+import type { CommandCatalogEntry } from '../tools/command-catalog.js';
 import { createSettingsAssistantRoutes } from './settings-assistant-controller.js';
 import type { SettingsAssistant } from '../config/settings-assistant.js';
 import type { FieldMeta } from '../config/config-schema-describe.js';
@@ -88,12 +90,15 @@ import {
 import type { MetaPoolsStatus } from '../meta/pooled-meta-runner.js';
 import { createFeatureRoutes } from './feature-controller.js';
 import { createProviderRoutes, type ProviderBootstrapInfo } from './provider-controller.js';
+import type { ProviderExecutionPolicy } from '../provider/active-provider.js';
 import { createMcpRoutes } from './mcp-controller.js';
 import { createSessionRoutes } from './session-controller.js';
 import { createTerminalRoutes } from './terminal-controller.js';
 import { createSummaryRoutes } from './summary-controller.js';
 import { createWorkSummaryRoutes } from './work-summary-controller.js';
 import { createSessionFilesRoutes } from './session-files-controller.js';
+import { createTextAttachmentRoutes } from './text-attachments-controller.js';
+import type { TextAttachments } from '../text-attachments/text-attachments-contract.js';
 import { createSessionSummaryRoutes } from './session-summary-controller.js';
 import { createSessionImportRoutes } from './session-import-controller.js';
 import { createSkillsRoutes } from './skills-controller.js';
@@ -113,6 +118,7 @@ import type { NewTaskService } from '../new-task/new-task-contract.js';
 import { createBugBashRoutes } from './bug-bash-controller.js';
 import type { BugBashService } from '../bug-bash/bug-bash-contract.js';
 import { createAgentRoutes } from './agent-controller.js';
+import type { ClientOperations } from '../client-operations/client-operations-contract.js';
 import type { AgentService } from '../agents/agent-service.js';
 import { createWorktreeRoutes } from './worktree-controller.js';
 import type { WorktreeService } from '../worktrees/worktree-contract.js';
@@ -131,11 +137,13 @@ import type { Route } from './http-contract.js';
 import { applyRouteOwnership } from './route-ownership.js';
 import type { SessionBootstrap } from '../session-bootstrap/session-bootstrap.js';
 import type { ContextService } from '../context-store/context-service.js';
-import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
+import type { PromptHistoryReader } from '../copilot-history/copilot-history-contract.js';
 import type { FeatureTasksRepo } from '../feature-tasks/feature-tasks-repo-port.js';
 import type { FeatureGroupsRepo } from '../feature-tree/feature-groups-repo-port.js';
 
 export interface ApiRoutesDeps {
+  /** Durable client operation keys making feature/session/agent creates idempotent. */
+  operations: ClientOperations;
   resources?: HealthControllerDeps['resources'];
   appResources?: ResourcesService;
   /** Optional read-only active-session debugger supplied by the composition root. */
@@ -147,7 +155,8 @@ export interface ApiRoutesDeps {
   factory: SessionFactory;
   sessionConfig: SessionConfig;
   sessions: SessionRepo;
-  sessionHistory: CopilotHistoryReader;
+  sessionHistory: PromptHistoryReader;
+  usageSummary?: AggregateControllerDeps['summary'];
   /**
    * Resolves the working directory a feature's sessions must launch in (PR
    * worktree for PR features, else repo checkout). Threaded to the session
@@ -168,6 +177,11 @@ export interface ApiRoutesDeps {
   providers: ProviderRegistry;
   /** Default provider + each provider's install state for the first-run UI. */
   providerBootstrapInfo: () => ProviderBootstrapInfo;
+  executionPolicy?: ProviderExecutionPolicy;
+  drainProviderWork?: () => Promise<void>;
+  updateInternalAgencyOptIn?: (enabled: boolean) => void;
+  isProviderEligible?: (providerId: string) => boolean;
+  isConfigNamespaceExposed?: (namespace: string) => boolean;
   /** True when signed in with a Microsoft identity (gates Agency exposure). */
   microsoftSignedIn: () => boolean;
   aggregates: FeatureAnalyticsService;
@@ -175,6 +189,7 @@ export interface ApiRoutesDeps {
   summaries: SummaryStore;
   workSummaries: FeatureWorkSummaryService;
   sessionFiles: Pick<SessionFilesStore, 'list'>;
+  textAttachments?: TextAttachments;
   sessionSummaries: SessionSummarizer;
   imports: SessionImportService;
   skills: SkillsService;
@@ -204,6 +219,7 @@ export interface ApiRoutesDeps {
   usageDetail: UsageDetailService;
   mcp: McpService;
   configRegistry: ConfigSchemaRegistry;
+  commandCatalog?: readonly CommandCatalogEntry[];
   currentConfig: ConfigObject;
   /**
    * Dotted config paths whose values were resolved from secret references and
@@ -317,7 +333,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createResourcesRoutes(deps.appResources),
     ...(deps.activeSessions ? createActiveSessionsRoutes(deps.activeSessions) : []),
     ...createIdentityRoutes(),
-    ...createFeatureRoutes({ features: deps.features, admin: deps.admin }),
+    ...createFeatureRoutes({ features: deps.features, admin: deps.admin, operations: deps.operations }),
     ...createSessionRoutes({
       launcher: deps.launcher,
       sessions: deps.sessions,
@@ -329,15 +345,24 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       relaunchSession: deps.relaunchSession,
     }),
     ...createTerminalRoutes({
+      executionPolicy: deps.executionPolicy,
       resolver: deps.resolver,
       factory: deps.factory,
       sessions: deps.sessions,
       config: deps.sessionConfig,
       bootstrap: deps.sessionBootstrap,
+      operations: deps.operations,
     }),
-    ...createProviderRoutes({ registry: deps.providers, bootstrapInfo: deps.providerBootstrapInfo, microsoftSignedIn: deps.microsoftSignedIn }),
+    ...createProviderRoutes({
+      registry: deps.providers, bootstrapInfo: deps.providerBootstrapInfo,
+      microsoftSignedIn: deps.microsoftSignedIn,
+      executionPolicy: deps.executionPolicy,
+      isProviderEligible: deps.isProviderEligible,
+      drainProviderWork: deps.drainProviderWork,
+      updateInternalAgencyOptIn: deps.updateInternalAgencyOptIn,
+    }),
     ...createMcpRoutes({ mcp: deps.mcp, controlToken: deps.controlToken }),
-    ...createAggregateRoutes({ analytics: deps.aggregates }),
+    ...createAggregateRoutes({ analytics: deps.aggregates, summary: deps.usageSummary }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
     ...createMcpUsageRoutes({
       mcpUsage: deps.mcpUsage,
@@ -350,6 +375,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     }),
     ...createWorkSummaryRoutes({ workSummaries: deps.workSummaries }),
     ...createSessionFilesRoutes({ sessionFiles: deps.sessionFiles }),
+    ...(deps.textAttachments ? createTextAttachmentRoutes(deps.textAttachments) : []),
     ...createSessionSummaryRoutes({
       sessionSummaries: deps.sessionSummaries,
     }),
@@ -374,7 +400,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard, reviewQueue: deps.reviewQueue }),
     ...createNewTaskRoutes({ newTask: deps.newTask }),
     ...createBugBashRoutes({ bugBash: deps.bugBash }),
-    ...createAgentRoutes({ agents: deps.agents }),
+    ...createAgentRoutes({ agents: deps.agents, operations: deps.operations }),
     ...createWorktreeRoutes({ worktrees: deps.worktrees }),
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createUsageRollupRoutes({
@@ -398,6 +424,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       current: deps.currentConfig,
       secretPaths: deps.configSecretPaths,
       overrides: deps.configOverrides,
+      isNamespaceExposed: deps.isConfigNamespaceExposed,
+    }),
+    ...createCommandCatalogRoutes({
+      entries: deps.commandCatalog ?? [],
+      exposed: deps.isConfigNamespaceExposed ?? (() => true),
     }),
     ...createSettingsAssistantRoutes({
       assistant: deps.settingsAssistant,

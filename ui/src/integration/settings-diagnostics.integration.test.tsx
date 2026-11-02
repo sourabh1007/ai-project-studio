@@ -39,10 +39,30 @@ function apiFor(
   worktrees: ManagedWorktree[],
   overrides: Partial<ApiClient> = {},
 ): ApiClient {
+  let activeProvider = 'copilot';
+  const bootstrap = () => ({
+    defaultProvider: activeProvider,
+    selectionRequired: false,
+    microsoftSignedIn: true,
+    providers: [
+      { id: 'copilot', installed: true },
+      { id: 'claude', installed: true },
+    ],
+  });
   return {
     getConfig: vi.fn().mockResolvedValue(config()),
+    getCommandCatalog: vi.fn().mockResolvedValue([]),
     getVersion: vi.fn().mockResolvedValue('0.11.5'),
     getAgencyStatus: vi.fn().mockResolvedValue({ installed: false }),
+    getProviderBootstrap: vi.fn().mockImplementation(async () => bootstrap()),
+    selectProvider: vi.fn().mockImplementation(async (providerId: string) => {
+      activeProvider = providerId;
+      return bootstrap();
+    }),
+    switchProvider: vi.fn().mockImplementation(async ({ providerId }: { providerId: string }) => {
+      activeProvider = providerId;
+      return bootstrap();
+    }),
     checkHealth: vi.fn().mockResolvedValue({ status: 'ok', uptimeMs: 12 }),
     listWorktrees: vi.fn().mockImplementation(async () => [...worktrees]),
     removeWorktree: vi.fn().mockImplementation(async (path: string) => {
@@ -106,7 +126,22 @@ describe('Settings renderer journeys', () => {
 
     const first = renderSettings(api);
     expect(await screen.findByText('Software updates')).toBeInTheDocument();
-    expect(screen.getByText('Agency CLI')).toBeInTheDocument();
+    expect(screen.queryByText('Agency CLI')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
+    const cli = within(await screen.findByRole('region', { name: 'CLI selection' }));
+    await waitFor(() => expect(cli.getByText('Active CLI:')).toHaveTextContent('Active CLI: Copilot'));
+    expect(cli.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
+    expect(cli.getByRole('button', { name: 'Use Claude Code' })).toBeEnabled();
+    expect(cli.queryByRole('button', { name: 'Use Agency' })).not.toBeInTheDocument();
+    expect(api.selectProvider).not.toHaveBeenCalled();
+    fireEvent.click(cli.getByRole('button', { name: 'Use Claude Code' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop CLI work and switch' }));
+    await waitFor(() => expect(cli.getByText('Active CLI:')).toHaveTextContent('Active CLI: Claude Code'));
+    expect(api.switchProvider).toHaveBeenCalledTimes(1);
+    expect(api.switchProvider).toHaveBeenCalledWith({ providerId: 'claude', remember: true, expectedRevision: 0 });
+    expect(cli.getByRole('button', { name: 'Use Claude Code' })).toBeEnabled();
+    expect(cli.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
     const appearance = await screen.findByRole('heading', { name: 'Appearance' });
@@ -144,6 +179,11 @@ describe('Settings renderer journeys', () => {
 
     first.unmount();
     renderSettings(api);
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
+    await waitFor(() => expect(
+      within(screen.getByRole('region', { name: 'CLI selection' })).getByText('Active CLI:'),
+    ).toHaveTextContent('Active CLI: Claude Code'));
+    expect(screen.getByRole('button', { name: 'Use Claude Code' })).toBeEnabled();
     fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }));
     expect(await screen.findByRole('radio', { name: 'Large' })).toHaveAttribute(
       'aria-checked',
@@ -151,6 +191,32 @@ describe('Settings renderer journeys', () => {
     );
     expect(screen.getByRole('radio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+  });
+
+  it.each([false, true])('offers Agency only when included in eligible bootstrap providers (eligible: %s)', async (eligible) => {
+    const api = apiFor([], {
+      getProviderBootstrap: vi.fn().mockResolvedValue({
+        defaultProvider: 'copilot',
+        selectionRequired: false,
+        microsoftSignedIn: true,
+        providers: [
+          { id: 'copilot', installed: true },
+          ...(eligible ? [{ id: 'agency', installed: true }] : []),
+        ],
+      }),
+    });
+    renderSettings(api);
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
+    const cli = within(screen.getByRole('region', { name: 'CLI selection' }));
+    await waitFor(() => expect(cli.getByText('Active CLI:')).toHaveTextContent('Active CLI: Copilot'));
+    expect(cli.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
+    if (eligible) {
+      expect(cli.getByRole('button', { name: 'Use Agency' })).toBeEnabled();
+    } else {
+      expect(cli.queryByRole('button', { name: 'Use Agency' })).not.toBeInTheDocument();
+      expect(cli.queryByRole('heading', { name: 'Agency' })).not.toBeInTheDocument();
+    }
+    expect(api.selectProvider).not.toHaveBeenCalled();
   });
 
   it('surfaces worktree removal failures without hiding the real section', async () => {

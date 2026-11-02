@@ -190,9 +190,44 @@ function registerAttachmentManagementIpc({ ipcMain, isTrustedSender, getStore, c
   });
 }
 
+/** DROPFILES uses a byte offset, a BOOL fWide, then a double-NUL file list. */
+function parseDropFiles(raw, decodeAnsi = (bytes) => {
+  // The host ANSI codepage is not available in Node. Never corrupt a path by
+  // guessing Windows-1252 on a machine configured for a different codepage.
+  if (bytes.some((value) => value > 0x7f)) throw fail('unsupported-ansi-paths');
+  return bytes.toString('ascii');
+}) {
+  if (!Buffer.isBuffer(raw) || raw.length < 20 || raw.length > LIMITS.sourceBytes) throw fail('invalid-paths');
+  const offset = raw.readUInt32LE(0);
+  const wide = raw.readUInt32LE(16) !== 0;
+  const step = wide ? 2 : 1;
+  if (offset < 20 || offset > raw.length - step * 2 || (wide && (offset % 2 || (raw.length - offset) % 2))) {
+    throw fail('invalid-paths');
+  }
+  const paths = [];
+  let start = offset;
+  const zero = (index) => wide ? raw.readUInt16LE(index) === 0 : raw[index] === 0;
+  for (let index = offset; index <= raw.length - step; index += step) {
+    if (!zero(index)) continue;
+    if (index === start) {
+      if (paths.length === 0 && (index + step >= raw.length || !zero(index + step))) throw fail('invalid-paths');
+      if (raw.subarray(index).some((value) => value !== 0)) throw fail('invalid-paths');
+      return paths;
+    }
+    const bytes = raw.subarray(start, index);
+    const value = wide ? bytes.toString('utf16le') : decodeAnsi(bytes);
+    if (!value.isWellFormed() || value.includes('\ufffd') || paths.length >= LIMITS.sourcePaths) throw fail('invalid-paths');
+    paths.push(value);
+    start = index + step;
+  }
+  throw fail('invalid-paths');
+}
+
 function readSourcePaths(clipboard, platform) {
   let paths = [];
-  if (platform === 'win32' && clipboard.has('FileNameW')) {
+  if (platform === 'win32' && clipboard.has('CF_HDROP')) {
+    paths = parseDropFiles(clipboard.readBuffer('CF_HDROP'));
+  } else if (platform === 'win32' && clipboard.has('FileNameW')) {
     const raw = clipboard.readBuffer('FileNameW');
     if (raw.length > LIMITS.sourceBytes || raw.length % 2) throw fail('invalid-paths');
     paths = raw.toString('utf16le').split('\0').filter(Boolean);
@@ -204,7 +239,7 @@ function readSourcePaths(clipboard, platform) {
       paths = raw.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).map((line) => {
         const url = new URL(line);
         if (url.protocol !== 'file:') throw fail('invalid-paths');
-        return fileURLToPath(url);
+        return fileURLToPath(url, { windows: platform === 'win32' });
       });
       break;
     }
@@ -220,17 +255,92 @@ function readClipboardAttachment({ clipboard, store, sessionId, platform = proce
   try {
     const paths = readSourcePaths(clipboard, platform);
     if (paths.length) return { status: 'ready', source: 'clipboard-files', paths };
+    // Legacy Electron decodes inside readImage; capacity can be checked first,
+    // but dimensions/encoded length cannot preflight that native decode.
+    store.assertCapacity();
     const image = clipboard.readImage();
     if (image.isEmpty()) return { status: 'none' };
     const { width, height } = image.getSize(1);
     if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 ||
         width > store.limits.dimension || height > store.limits.dimension ||
         width * height > store.limits.pixels) throw fail('image-too-large');
-    store.assertCapacity();
     return store.save(sessionId, image.toPNG({ scaleFactor: 1 }));
   } catch (error) {
     return { status: 'error', error: error.attachmentCode || 'attachment-unavailable' };
   }
 }
 
-module.exports = { createOwnedAttachmentStore, readClipboardAttachment, registerAttachmentManagementIpc, LIMITS };
+function createClipboardAttachmentReader({ clipboard, nativeImage, platform = process.platform, now = Date.now }) {
+  let pending = null;
+  let lastRead = -Infinity;
+  return function read({ store, sessionId }) {
+    if (!validSession(sessionId)) return { status: 'error', error: 'invalid-session' };
+    if (pending) return { status: 'error', error: 'clipboard-busy' };
+    if (now() - lastRead < 250) return { status: 'error', error: 'clipboard-busy' };
+    lastRead = now();
+    if (typeof clipboard.readImage === 'function') {
+      return readClipboardAttachment({ clipboard, store, sessionId, platform });
+    }
+    pending = (async () => {
+      try {
+        const items = await clipboard.read();
+        if (!Array.isArray(items) || items.length > LIMITS.sourcePaths) throw fail('invalid-paths');
+        const data = new Map();
+        let imageItem = null;
+        const rawFormat = (type) => /^electron application\/osclipboard;format="([^"]+)"$/.exec(type)?.[1];
+        for (const item of items) {
+          if (!Array.isArray(item.types) || item.types.length > 64) throw fail('invalid-paths');
+          for (const type of item.types) {
+            const format = rawFormat(type) || type;
+            if (!['CF_HDROP', 'FileNameW', 'text/uri-list', 'public.file-url', 'image/png'].includes(format)) continue;
+            if (format === 'image/png') {
+              if (imageItem) throw fail('invalid-image');
+              imageItem = { item, type };
+              continue;
+            }
+            if (data.has(format)) throw fail('invalid-paths');
+            const blob = await item.getType(type);
+            if (!Number.isSafeInteger(blob.size) || blob.size < 0 || blob.size > LIMITS.sourceBytes) {
+              throw fail('invalid-paths');
+            }
+            data.set(format, Buffer.from(await blob.arrayBuffer()));
+          }
+        }
+        const snapshot = {
+          has: (format) => data.has(format),
+          readBuffer: (format) => data.get(format),
+          read: (format) => data.get(format).toString('utf8'),
+        };
+        const paths = readSourcePaths(snapshot, platform);
+        if (paths.length) return { status: 'ready', source: 'clipboard-files', paths };
+        if (!imageItem) return { status: 'none' };
+        store.assertCapacity();
+        const blob = await imageItem.item.getType(imageItem.type);
+        if (!Number.isSafeInteger(blob.size) || blob.size <= 0 || blob.size > store.limits.fileBytes) throw fail('image-too-large');
+        const png = Buffer.from(await blob.arrayBuffer());
+        // Electron 44 exposes a Blob; reject oversized PNG dimensions before
+        // our own nativeImage decode. This does not bound OS clipboard work.
+        if (png.length < 33 || !png.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
+            png.readUInt32BE(8) !== 13 || png.toString('ascii', 12, 16) !== 'IHDR') throw fail('invalid-image');
+        const width = png.readUInt32BE(16);
+        const height = png.readUInt32BE(20);
+        if (!width || !height || width > store.limits.dimension || height > store.limits.dimension ||
+            width * height > store.limits.pixels) throw fail('image-too-large');
+        const image = nativeImage.createFromBuffer(png);
+        return readClipboardAttachment({
+          clipboard: { ...snapshot, readImage: () => image }, store, sessionId, platform,
+        });
+      } catch (error) {
+        return { status: 'error', error: error.attachmentCode || 'attachment-unavailable' };
+      }
+    })();
+    const attempt = pending;
+    void attempt.then(() => { if (pending === attempt) pending = null; });
+    return attempt;
+  };
+}
+
+module.exports = {
+  createOwnedAttachmentStore, readClipboardAttachment, createClipboardAttachmentReader,
+  parseDropFiles, registerAttachmentManagementIpc, LIMITS,
+};

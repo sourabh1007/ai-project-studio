@@ -59,11 +59,23 @@ export async function scanStorage(
     if (signal.aborted) throw new Error(signal.reason instanceof Error && signal.reason.name === 'TimeoutError'
       ? 'Storage inventory deadline exceeded; paths are incomplete.' : 'Storage scan cancelled.');
   };
+  const cancellable = async <T>(work: Promise<T>): Promise<T> => {
+    let cancel!: () => void;
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      cancel = () => {
+        try { check(); } catch (error) { reject(error); }
+      };
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel();
+    });
+    try { return await Promise.race([work, interrupted]); }
+    finally { signal.removeEventListener('abort', cancel); }
+  };
   const inventorySignal = AbortSignal.any([signal, AbortSignal.timeout(deps.config.scanTimeoutMs)]);
-  const roots = await deps.roots(inventorySignal, (message) => {
+  const roots = await cancellable(deps.roots(inventorySignal, (message) => {
     state.errors.push(inventorySignal.aborted && !signal.aborted
       ? `Storage inventory deadline exceeded (${deps.config.scanTimeoutMs}ms): ${message}` : message);
-  });
+  }));
   check();
   const seenPaths = new Set<string>();
   const seenFiles = new Set<string>();
@@ -105,13 +117,18 @@ export async function scanStorage(
             throw new Error('Broad profile or volume root refused; configure a scoped application directory.');
           }
           await assertRealPath(deps.fs, item.path);
+          check();
           const rootStat = await deps.fs.stat(item.path);
+          check();
           const volumeKey = rootStat.identity.split(':')[0]!;
           if (!seenVolumes.has(volumeKey)) {
             seenVolumes.add(volumeKey);
             try {
-              state.volumes.push({ path: item.path, ...await deps.fs.volume(item.path), measuredAt: deps.now(), error: null });
+              const volume = await deps.fs.volume(item.path);
+              check();
+              state.volumes.push({ path: item.path, ...volume, measuredAt: deps.now(), error: null });
             } catch (error) {
+              check();
               state.volumes.push({ path: item.path, totalBytes: null, freeBytes: null, availableBytes: null, measuredAt: deps.now(), error: errorText(error) });
             }
           }
@@ -124,6 +141,7 @@ export async function scanStorage(
             yield;
             if (path !== item.path && allPaths.has(canonicalPath(path))) return;
             const stat = await deps.fs.stat(path);
+            check();
             if (stat.kind === 'link') {
               item.excludedPaths ??= [];
               if (item.excludedPaths.length < 20) item.excludedPaths.push(path);
@@ -142,6 +160,7 @@ export async function scanStorage(
               item.bytes = bytes;
             } else if (stat.kind === 'directory') {
               await assertRealPath(deps.fs, path);
+              check();
               yield;
               for await (const name of deps.fs.entries(path)) {
                 try {
@@ -178,11 +197,11 @@ export async function scanStorage(
       try {
         for (let n = 0; n < Math.min(64, deps.config.maxScanEntries); n++) {
           check();
-          done = (await cursor.next()).done === true;
+          done = (await cancellable(cursor.next())).done === true;
           if (done || deps.now() - sliceStart >= Math.min(25, deps.config.scanTimeoutMs)) break;
         }
       } catch (error) {
-        await cursor.return(undefined);
+        void cursor.return(undefined).catch(() => {});
         throw error;
       }
       if (!done) cursors.push(cursor);
@@ -191,7 +210,9 @@ export async function scanStorage(
       await new Promise<void>((resolveYield) => setImmediate(resolveYield));
     }
   } finally {
-    for (const cursor of cursors) await cursor.return(undefined);
+    for (const cursor of cursors) {
+      void cursor.return(undefined).catch(() => {});
+    }
     for (const category of state.categories) for (const item of category.paths) {
       if (item.status === 'scanning' || item.status === 'pending') {
         item.status = item.bytes === null ? 'unavailable' : 'partial';

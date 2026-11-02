@@ -17,6 +17,12 @@ import type {
   NewTaskRun,
 } from './new-task-contract.js';
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 function inMemoryRepo(): NewTaskServiceDeps['repo'] {
   const store = new Map<string, NewTaskRun>();
   return {
@@ -312,6 +318,26 @@ describe('new-task-service plan', () => {
     expect(service.get('a1')).toMatchObject({ status: 'failed', error: 'planner down' });
   });
 
+  it('resumes the persisted task branch after planning fails instead of re-creating it', async () => {
+    let attempts = 0;
+    const h = harness({
+      ai: {
+        runDetailed: async () => {
+          if (attempts++ === 0) throw new Error('planner disconnected');
+          return { text: 'Recovered plan', sessionId: 'planner-retry' };
+        },
+      },
+    });
+    const prepare = vi.spyOn(h.deps.git, 'prepareWorktree');
+    h.service.saveInputs('a1', 'f1', { problem: 'Fix', context: '' });
+    await expect(h.service.plan('a1')).rejects.toThrow('planner disconnected');
+    const branch = h.service.get('a1')!.branch;
+    const recovered = await h.service.plan('a1');
+    expect(prepare.mock.calls[0][0].resume).toBe(false);
+    expect(prepare.mock.calls[1][0]).toMatchObject({ previousBranch: branch, resume: true });
+    expect(recovered).toMatchObject({ status: 'planned', branch, plan: 'Recovered plan' });
+  });
+
   it('stringifies a non-Error planner failure', async () => {
     const { service } = harness({
       // eslint-disable-next-line @typescript-eslint/no-throw-literal
@@ -504,6 +530,39 @@ describe('new-task-service refine', () => {
     h.deps.repo.update({ ...h.service.get('a1')!, plan: 'OLD PLAN' });
     return h;
   }
+
+  it.each(['planning', 'implementing'] as const)('rejects refinement and acceptance while %s', async (status) => {
+    const runDetailed = vi.fn<NewTaskServiceDeps['ai']['runDetailed']>();
+    const { service, deps } = await seededPlan({ ai: { runDetailed } });
+    deps.repo.update({ ...service.get('a1')!, status });
+    await expect(service.refine('a1', [], 'change it')).rejects.toMatchObject({ kind: 'conflict' });
+    expect(() => service.applyRefinedPlan('a1', 'NEW')).toThrow(/active task/);
+    expect(() => service.saveInputs('a1', 'f1', { problem: 'NEW', context: '' })).toThrow(/active task/);
+    expect(runDetailed).not.toHaveBeenCalled();
+    expect(service.get('a1')!.plan).toBe('OLD PLAN');
+  });
+
+  it('rejects a late proposal after implementation starts', async () => {
+    const { promise, resolve } = deferred<{ text: string; sessionId: string }>();
+    const { service, deps } = await seededPlan({ ai: { runDetailed: () => promise } });
+    const refining = service.refine('a1', [], 'change it');
+    const current = { ...service.get('a1')!, status: 'implementing' as const };
+    deps.repo.update(current);
+    resolve({ text: '{"reply":"updated","revised":"STALE"}', sessionId: 'refine' });
+    await expect(refining).rejects.toMatchObject({ kind: 'conflict' });
+    expect(service.get('a1')).toEqual(current);
+  });
+
+  it('rejects a late proposal after saved inputs change even at the same timestamp', async () => {
+    const { promise, resolve } = deferred<{ text: string; sessionId: string }>();
+    const { service, deps } = await seededPlan({ ai: { runDetailed: () => promise } });
+    const refining = service.refine('a1', [], 'change it');
+    const current = { ...service.get('a1')!, problem: 'User edit' };
+    deps.repo.update(current);
+    resolve({ text: '{"reply":"updated","revised":"STALE"}', sessionId: 'refine' });
+    await expect(refining).rejects.toMatchObject({ kind: 'conflict' });
+    expect(service.get('a1')).toEqual(current);
+  });
 
   it('rejects a blank message', async () => {
     const { service } = await seededPlan();

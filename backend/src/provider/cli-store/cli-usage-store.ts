@@ -145,6 +145,7 @@ export function createCliUsageStore(deps: CliUsageStoreDeps): CliUsageStore {
         const result: Extract<UsageCaptureRead, { status: 'ready' }> = {
           status: 'ready', sourceId, final: false,
           nextCursor: rows.length > limit ? String(page[page.length - 1].id) : null,
+          highWaterCursor: page.length > 0 ? String(page[page.length - 1].id) : cursor,
           rows: [],
         };
         for (const row of page) {

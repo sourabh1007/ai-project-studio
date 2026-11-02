@@ -14,9 +14,14 @@ interface UsageRow {
   input_tokens: number;
   output_tokens: number;
   reasoning_output_tokens: number;
-  cost: number;
-  credits: number;
-  nano_aiu: number;
+  cost: number | null;
+  credits: number | null;
+  nano_aiu: number | null;
+  charge_provenance: StoredUsage['chargeProvenance'] | null;
+  charge_unit: StoredUsage['chargeUnit'];
+  usd_estimate: number | null;
+  native_session_id: string | null;
+  native_message_id: string | null;
   service_request_id: string | null;
   started_at: string;
   ended_at: string;
@@ -37,7 +42,14 @@ function mapUsage(row: UsageRow): StoredUsage {
     reasoningOutputTokens: row.reasoning_output_tokens,
     cost: row.cost,
     credits: row.credits,
-    nanoAiu: Number(row.nano_aiu),
+    nanoAiu: row.nano_aiu === null ? null : Number(row.nano_aiu),
+    ...(row.charge_provenance === null ? {} : {
+      chargeProvenance: row.charge_provenance,
+      chargeUnit: row.charge_unit,
+      usdEstimate: row.usd_estimate,
+    }),
+    ...(row.native_session_id === null ? {} : { nativeSessionId: row.native_session_id }),
+    ...(row.native_message_id === null ? {} : { nativeMessageId: row.native_message_id }),
     serviceRequestId: row.service_request_id,
     startedAt: row.started_at,
     endedAt: row.ended_at,
@@ -47,12 +59,24 @@ function mapUsage(row: UsageRow): StoredUsage {
 /** SQLite-backed implementation of the UsageRepo port. */
 export function createUsageRepo(db: DatabaseSync): UsageRepo & UsageLookup {
   const upsert = db.prepare(
-    `INSERT OR REPLACE INTO usage_events
+    `INSERT INTO usage_events
       (session_id, feature_id, turn_index, kind, provider, requested_model,
        resolved_model, operation, input_tokens, output_tokens,
        reasoning_output_tokens, cost, credits, nano_aiu, service_request_id,
-       started_at, ended_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       started_at, ended_at, charge_provenance, charge_unit, usd_estimate, native_session_id, native_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, turn_index) DO UPDATE SET
+       requested_model=excluded.requested_model, resolved_model=excluded.resolved_model,
+       input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+       reasoning_output_tokens=excluded.reasoning_output_tokens, cost=excluded.cost,
+       credits=excluded.credits, nano_aiu=excluded.nano_aiu,
+       charge_provenance=excluded.charge_provenance, charge_unit=excluded.charge_unit,
+       usd_estimate=excluded.usd_estimate, service_request_id=excluded.service_request_id,
+       ended_at=excluded.ended_at
+     WHERE usage_events.provider=excluded.provider
+       AND usage_events.feature_id=excluded.feature_id
+       AND usage_events.native_session_id IS excluded.native_session_id
+       AND usage_events.native_message_id IS excluded.native_message_id`,
   );
   const selectBySession = db.prepare(
     'SELECT * FROM usage_events WHERE session_id = ? ORDER BY turn_index',
@@ -69,7 +93,7 @@ export function createUsageRepo(db: DatabaseSync): UsageRepo & UsageLookup {
     },
     saveAll(events) {
       for (const e of events) {
-        upsert.run(
+        const result = upsert.run(
           e.sessionId,
           e.featureId,
           e.turnIndex,
@@ -87,7 +111,13 @@ export function createUsageRepo(db: DatabaseSync): UsageRepo & UsageLookup {
           e.serviceRequestId,
           e.startedAt,
           e.endedAt,
+          e.chargeProvenance ?? null,
+          e.chargeUnit ?? null,
+          e.usdEstimate ?? null,
+          e.nativeSessionId ?? null,
+          e.nativeMessageId ?? null,
         );
+        if (Number(result.changes) === 0) throw new Error('Usage attribution is immutable');
       }
     },
     listBySession(sessionId) {

@@ -38,6 +38,92 @@ function setup(ops = [operation()]) {
   return { db, operations, read, onChanged, deps, capture: createMetaUsageCapture(deps) };
 }
 describe('meta usage capture', () => {
+  it('captures a newly finished cold operation ahead of 2000 historical rows without starving repair', () => {
+    const f = setup(Array.from({ length: 2000 }, (_, i) => operation({
+      operationId: `history-${String(i).padStart(4, '0')}`,
+    })));
+    const fresh = operation({
+      operationId: 'z-new', transport: 'session', state: 'completed', resultText: 'done',
+      sessionIds: ['cold-session'], sessionId: 'cold-session',
+    });
+    f.operations.create(fresh);
+    f.capture.prioritize('z-new');
+    f.capture.tick();
+    expect(f.operations.get('z-new')?.usage?.credits).toBe(2);
+    expect(f.read).toHaveBeenCalledTimes(1);
+    f.capture.prioritize('z-new');
+    f.capture.tick();
+    expect(f.operations.get('history-0000')?.usage?.credits).toBe(2);
+    f.capture.tick();
+    expect(f.onChanged).toHaveBeenCalledTimes(2);
+    f.db.close();
+  });
+
+  it('bounds lifecycle hints, deduplicates, skips deleted hints, and interleaves multipage priority reads', () => {
+    const f = setup([operation({ operationId: 'a-history' }), operation({
+      operationId: 'z-priority', transport: 'session', sessionIds: ['first', 'second'], sessionId: 'second',
+    })]);
+    for (let i = 0; i < 300; i++) f.capture.prioritize(`deleted-${i}`);
+    f.capture.prioritize('z-priority');
+    f.capture.prioritize('z-priority');
+    const get = vi.spyOn(f.operations, 'getSummary');
+    for (let i = 0; i < 520; i++) f.capture.tick();
+    expect(get).toHaveBeenCalledTimes(256);
+    expect(f.operations.get('z-priority')?.usage?.credits).toBe(4);
+    f.read.mockReturnValueOnce(page(1e9, 'more')).mockReturnValueOnce(page(5e9))
+      .mockReturnValueOnce(page(2e9)).mockReturnValue(page(3e9));
+    f.capture.prioritize('z-priority');
+    for (let i = 0; i < 8; i++) f.capture.tick();
+    expect(f.operations.get('z-priority')?.usage).not.toBeNull();
+    f.db.close();
+  });
+
+  it('allows failed priority capture and operations without identities to yield back to history', () => {
+    const f = setup([operation({ operationId: 'a' }), operation({ operationId: 'empty', providerSessionId: null })]);
+    f.capture.prioritize('a');
+    f.read.mockReturnValueOnce({ status: 'retrying', sourceId: 'vendor', reason: 'locked' });
+    f.capture.tick();
+    f.capture.prioritize('empty');
+    for (let i = 0; i < 5; i++) f.capture.tick();
+    expect(f.operations.get('a')?.usage?.credits).toBe(2);
+    f.capture.prioritize('a');
+    f.read.mockReturnValueOnce(page(null));
+    for (let i = 0; i < 4; i++) f.capture.tick();
+    f.db.close();
+  });
+
+  it('retries late cold usage promptly but bounds empty-source retries and admits newer lifecycle hints first', () => {
+    const f = setup([operation({ operationId: 'old' }), operation({ operationId: 'z-new', transport: 'session' })]);
+    f.capture.prioritize('old');
+    f.capture.prioritize('z-new');
+    f.read.mockReturnValueOnce(page(null));
+    f.capture.tick();
+    expect(f.read).toHaveBeenLastCalledWith('app', expect.objectContaining({ operationId: 'z-new' }), null, 2);
+    f.capture.tick();
+    f.read.mockReturnValueOnce(page(5e9));
+    f.capture.tick();
+    expect(f.operations.get('z-new')?.usage?.credits).toBe(5);
+    f.read.mockReturnValue(page(null));
+    f.capture.prioritize('z-new');
+    const get = vi.spyOn(f.operations, 'getSummary');
+    for (let i = 0; i < 20; i++) f.capture.tick();
+    expect(get).toHaveBeenCalledTimes(8); // Four bounded attempts for each queued operation.
+    f.db.close();
+  });
+  it('retains missing native charges while summing known tokens across mixed observations', () => {
+    const f = setup();
+    const known = page(1e9);
+    if (known.status !== 'ready') throw new Error('expected ready');
+    const event = known.rows[0].event;
+    f.read.mockReturnValue({ ...known, rows: [
+      { sourceKey: 'a', event },
+      { sourceKey: 'b', event: { ...event, provider: 'claude', cost: null, nanoAiu: null } },
+      { sourceKey: 'c', event },
+    ] });
+    f.capture.tick();
+    expect(f.operations.get('op')?.usage).toEqual({ inputTokens: 30, outputTokens: 6, nanoAiu: null, credits: null });
+    f.db.close();
+  });
   it('captures warm vendor usage while running, persists it for summary, and replaces corrections', () => {
     const f = setup();
     f.capture.tick();

@@ -83,7 +83,11 @@ export interface CopilotHistorySource {
   sessionSummaries(sessionIds: string[]): HistorySessionRow[];
   /** Checkpoint rows for the given session ids. */
   checkpoints(sessionIds: string[]): HistoryCheckpointRow[];
-  /** User-message rows for one session, ascending by turn index. */
+  /**
+   * User-message rows for one session, ascending by turn index. Empty only when
+   * the store is absent or has no turns; throws PromptHistoryUnavailableError
+   * when the store exists but the read fails (lock, corruption, schema drift).
+   */
   userMessages(sessionId: string): HistoryUserMessageRow[];
   /**
    * ISO timestamps of the assistant usage events recorded for one session,
@@ -123,6 +127,8 @@ export interface LivePromptTurn {
   response: string | null;
   /** Recorded turn-end time, null if missing/invalid; absent until completion. */
   completedAt?: string | null;
+  /** Timestamp of the newest valid event logged for this turn, when present. */
+  lastActivityAt?: string | null;
 }
 
 /**
@@ -131,13 +137,42 @@ export interface LivePromptTurn {
  * filesystem tail-read is the only IO-aware piece.
  */
 export interface LivePromptSource {
-  /** The latest live turn for one session, or null when none is readable. */
-  latest(sessionId: string): LivePromptTurn | null;
+  /**
+   * The latest live turn for one session, or null when the log does not exist.
+   * Rejects (rather than returning null) when the log exists but cannot be
+   * read, so callers can distinguish absence from a failed read. Aborting
+   * `signal` must stop the underlying work, not merely stop waiting for it.
+   */
+  latest(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<LivePromptTurn | null> | LivePromptTurn | null;
 }
 
 /** Aggregates raw CLI rows into per-session history. */
-export interface CopilotHistoryReader {
+export interface CopilotHistoryReader<
+  P extends Promise<SessionPrompt[]> | SessionPrompt[] = SessionPrompt[],
+> {
   read(sessionIds: string[]): SessionHistory[];
-  /** Every prompt the user sent in a session, oldest first, with timestamps. */
-  prompts(sessionId: string): SessionPrompt[];
+  /**
+   * Every prompt the user sent in a session, oldest first, with timestamps.
+   * Readers backed by non-blocking IO return a promise (see
+   * {@link PromptHistoryReader}); it rejects with
+   * {@link PromptHistoryUnavailableError} when the primary store exists but
+   * cannot be read, instead of reporting an empty history.
+   */
+  prompts(sessionId: string): P;
+}
+
+/** A history reader whose prompt read may be asynchronous (non-blocking IO). */
+export type PromptHistoryReader = CopilotHistoryReader<
+  Promise<SessionPrompt[]> | SessionPrompt[]
+>;
+
+/** The CLI store exists but prompt history could not be read right now. */
+export class PromptHistoryUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'PromptHistoryUnavailableError';
+  }
 }

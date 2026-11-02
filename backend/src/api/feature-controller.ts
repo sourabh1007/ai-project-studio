@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { Route } from './http-contract.js';
+import type { ClientOperations } from '../client-operations/client-operations-contract.js';
 import { parseInput } from './request-validation.js';
 
 const createFeatureSchema = z.object({
@@ -26,6 +27,7 @@ const moveFeatureSchema = z.object({
 export interface FeatureControllerDeps {
   features: FeatureService;
   admin: WorkspaceAdmin;
+  operations: ClientOperations;
 }
 
 /** Routes for creating, listing, reading, renaming and deleting features. */
@@ -36,7 +38,13 @@ export function createFeatureRoutes(deps: FeatureControllerDeps): Route[] {
       path: '/features',
       handler: (req) => {
         const input = parseInput(createFeatureSchema, req.body);
-        return { status: 201, body: deps.features.create(input) };
+        const key = deps.operations.keyFrom(req.headers);
+        return deps.operations.run(
+          { scope: 'feature.create', key, fingerprint: input },
+          async (commit) => {
+            commit(() => ({ status: 201, body: deps.features.create(input) }));
+          },
+        );
       },
     },
     {

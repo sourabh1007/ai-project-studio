@@ -1,7 +1,9 @@
 import type { AppResourceSnapshot, ResourceCleanup } from '../features/resources/resource-types.js';
 import type { ActiveSessionsSnapshot, ActiveSessionDebug } from '../features/active-sessions/active-session-types.js';
+import { TEXT_PASTE_TIMEOUT_MS, type TextAttachmentsSnapshot } from './terminal-paste.js';
 import type {
   ConfigResponse,
+  CommandCatalogEntry,
   ConfigUpdateResult,
   AgentCatalogItem,
   AgentAttachment,
@@ -29,6 +31,7 @@ import type {
   FeatureSummary,
   FeatureTask,
   FeatureUsage,
+  UsageSummary,
   FeatureWorkSummary,
   GithubStatus,
   IdeUsage,
@@ -51,6 +54,7 @@ import type {
   McpServerInput,
   McpServerStatus,
   ProviderInfo,
+  ProviderAutomationReadiness,
   ProviderMcpConfig,
   Repository,
   RepositoryContext,
@@ -141,13 +145,41 @@ export interface ApiClientOptions {
   getTimeoutMs?: number;
 }
 
+export interface ProviderSelectionInfo extends Omit<ProviderBootstrapInfo, 'providers'> {
+  selectionRequired?: boolean;
+  revision?: number;
+  remember?: boolean;
+  internalAgencyEnabled?: boolean;
+  blockers?: Array<{ kind: string; id: string; label: string }>;
+  providers: Array<{
+    id: string;
+    installed: boolean;
+    label?: string;
+    installCommand?: string;
+    installAvailable?: boolean;
+    configNamespace?: string;
+    automation?: ProviderAutomationReadiness;
+  }>;
+}
+
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** Machine-readable reason from the backend (e.g. `operation_pending`), when it sent one. */
+  readonly code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    if (code !== undefined) this.code = code;
   }
+}
+
+/** Header carrying a client operation key that makes a create safe to retry. */
+export const OPERATION_KEY_HEADER = 'Idempotency-Key';
+
+/** Optional per-call options for creates that support durable operation keys. */
+export interface OperationOptions {
+  operationKey?: string;
 }
 
 /** Typed client for the AI Project Studio backend API. */
@@ -155,22 +187,30 @@ export function createApiClient(options: ApiClientOptions = {}) {
   const baseUrl = options.baseUrl ?? '/api';
   const doFetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
 
-  async function errorMessage(
+  async function errorInfo(
     response: Response,
     path: string,
-  ): Promise<string> {
+  ): Promise<{ message: string; code?: string }> {
     try {
       const body = (await response.json()) as {
-        error?: { message?: unknown };
+        error?: { message?: unknown; code?: unknown };
       };
       const message = body?.error?.message;
       if (typeof message === 'string' && message.trim().length > 0) {
-        return message;
+        const code = body.error?.code;
+        return typeof code === 'string' ? { message, code } : { message };
       }
     } catch {
       // Non-JSON or empty error body; fall back to a generic message below.
     }
-    return `Request failed: ${path}`;
+    return { message: `Request failed: ${path}` };
+  }
+
+  async function errorMessage(
+    response: Response,
+    path: string,
+  ): Promise<string> {
+    return (await errorInfo(response, path)).message;
   }
 
   /**
@@ -269,11 +309,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
   // Only GETs are bounded — mutations and AI turns (POST/PUT) can legitimately
   // run long, so they are never aborted here.
   const GET_TIMEOUT_MS = options.getTimeoutMs ?? 20_000;
-  // MCP tool discovery is bounded on the backend at ~15s (it launches and tears
-  // down a server process); give the client call enough headroom above that
-  // bound to absorb spawn/cleanup overhead rather than aborting at the generic
-  // 20s guard and showing a misleading "backend may be busy" error.
-  const MCP_INSPECT_TIMEOUT_MS = 35_000;
+  const inspectionBudgets = new Map<string, number>();
+  async function getMcpServers(providerId: string): Promise<ProviderMcpConfig> {
+    const config = await request<ProviderMcpConfig>(
+      `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
+    );
+    const budget = config.inspectionTimeoutMs;
+    if (typeof budget === 'number' && Number.isFinite(budget) && budget > 0) {
+      inspectionBudgets.set(providerId, budget);
+    } else {
+      inspectionBudgets.delete(providerId);
+    }
+    return config;
+  }
 
   async function request<T>(
     path: string,
@@ -286,7 +334,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     timeoutMs?: number,
   ): Promise<T> {
     const method = (init?.method ?? 'GET').toUpperCase();
-    const bounded = method === 'GET';
+    const bounded = method === 'GET' || timeoutMs !== undefined;
     const controller = bounded ? new AbortController() : undefined;
     const timer = controller
       ? setTimeout(() => controller.abort(), timeoutMs ?? GET_TIMEOUT_MS)
@@ -312,7 +360,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
         throw error;
       }
       if (!response.ok) {
-        throw new ApiError(response.status, await errorMessage(response, path));
+        const failure = await errorInfo(response, path);
+        throw new ApiError(response.status, failure.message, failure.code);
       }
       // The body is read inside the timeout as well. Clearing the timer once
       // the headers arrived left a backend that died mid-response able to hang
@@ -346,10 +395,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
     }
   }
 
-  function jsonBody(body: unknown): RequestInit {
+  function jsonBody(body: unknown, operationKey?: string): RequestInit {
     return {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(operationKey === undefined ? {} : { [OPERATION_KEY_HEADER]: operationKey }),
+      },
       body: JSON.stringify(body),
     };
   }
@@ -967,8 +1019,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ removed: true }>('/worktrees/remove', jsonBody({ path })),
     listFeatures: () => request<Feature[]>('/features'),
     getFeature: (id: string) => request<Feature>(`/features/${id}`),
-    createFeature: (input: CreateFeatureInput) =>
-      request<Feature>('/features', jsonBody(input)),
+    createFeature: (input: CreateFeatureInput, operation?: OperationOptions) =>
+      request<Feature>('/features', jsonBody(input, operation?.operationKey)),
     renameFeature: (id: string, name: string) =>
       request<Feature>(`/features/${id}`, putBody({ name })),
     deleteFeature: (id: string) =>
@@ -989,6 +1041,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
     relaunchSession: (id: string, taskCheckoutId?: string) =>
       request<Session>(`/sessions/${id}/relaunch`, jsonBody({ taskCheckoutId })),
     getSession: (id: string) => request<Session>(`/sessions/${id}`),
+    createSessionTextAttachment: (id: string, body: Blob, signal: AbortSignal) =>
+      request<unknown>(`/sessions/${encodeURIComponent(id)}/text-attachments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body,
+        signal,
+      }),
+    listTextAttachments: (signal?: AbortSignal) =>
+      request<TextAttachmentsSnapshot>('/text-attachments', { signal }),
+    deleteTextAttachment: (id: string, signal?: AbortSignal) =>
+      request<{ attachmentId: string }>(`/text-attachments/${encodeURIComponent(id)}`, {
+        method: 'DELETE', signal,
+      }, undefined, TEXT_PASTE_TIMEOUT_MS),
     getFeatureEnvironment: (featureId: string) =>
       request<FeatureEnvironment>(`/features/${featureId}/environment`),
     renameSession: (id: string, name: string | null) =>
@@ -1017,22 +1082,29 @@ export function createApiClient(options: ApiClientOptions = {}) {
     createTerminalSession: (
       featureId: string,
       input: StartTerminalSessionInput,
+      operation?: OperationOptions,
     ) =>
       request<Session>(
         `/features/${featureId}/terminal-sessions`,
-        jsonBody(input),
+        jsonBody(input, operation?.operationKey),
       ),
     getFeatureUsage: (featureId: string) =>
       request<FeatureUsage>(`/features/${featureId}/usage`),
     getSessionUsageEvents: (sessionId: string) =>
       request<StoredUsage[]>(`/sessions/${sessionId}/usage`),
-    listSessionPrompts: (sessionId: string) =>
-      request<SessionPrompt[]>(`/sessions/${sessionId}/prompts`),
+    listSessionPrompts: (sessionId: string, options?: { signal?: AbortSignal }) =>
+      request<SessionPrompt[]>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompts`,
+        options,
+        (body) => Array.isArray(body) ? null : 'Prompt history returned an unexpected response. Please retry.',
+      ),
     getFeatureUsageEvents: (featureId: string) =>
       request<StoredUsage[]>(`/features/${featureId}/usage/events`),
     getRepoUsageEvents: (repoId: string) =>
       request<StoredUsage[]>(`/repos/${repoId}/usage/events`),
     getWorkspaceTotals: () => request<UsageTotals>('/usage/totals'),
+    getUsageSummary: (options?: { signal?: AbortSignal }) =>
+      request<UsageSummary>('/usage/summary', options),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
     getUsageRollup: (granularity: UsageGranularity) =>
@@ -1069,21 +1141,20 @@ export function createApiClient(options: ApiClientOptions = {}) {
     listModels: (providerId: string) =>
       request<ModelInfo[]>(`/providers/${providerId}/models`),
     listMcpProviders: () => request<McpProviderInfo[]>('/mcp/providers'),
-    getMcpServers: (providerId: string) =>
-      request<ProviderMcpConfig>(
-        `/mcp/providers/${encodeURIComponent(providerId)}/servers`,
-      ),
-    inspectMcpServer: (providerId: string, serverName: string) =>
-      request<McpServerEntry>(
+    getMcpServers,
+    inspectMcpServer: async (providerId: string, serverName: string) => {
+      if (!inspectionBudgets.has(providerId)) await getMcpServers(providerId);
+      const budget = inspectionBudgets.get(providerId);
+      if (budget === undefined) {
+        throw new ApiError(0, 'MCP inspection budget is unavailable. Refresh MCP configuration and retry; update the backend if this persists.');
+      }
+      return request<McpServerEntry>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/tools`,
         undefined,
         undefined,
-        // Discovery spawns and tears down a real MCP server process on the
-        // backend (bounded there at ~15s); allow comfortably more than the
-        // generic 20s GET guard so Windows spawn/cleanup overhead can't trip a
-        // premature "backend may be busy" abort before the backend answers.
-        MCP_INSPECT_TIMEOUT_MS,
-      ),
+        budget,
+      );
+    },
     getMcpServerStatus: (providerId: string, serverName: string) =>
       request<McpServerStatus>(
         `/mcp/providers/${encodeURIComponent(providerId)}/servers/${encodeURIComponent(serverName)}/status`,
@@ -1219,14 +1290,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<AttachedAgent[]>(`/features/${featureId}/agents`),
     listAvailableAgents: (featureId: string) =>
       request<AvailableAgent[]>(`/features/${featureId}/agents/available`),
-    attachAgent: (featureId: string, agentId: string) =>
+    attachAgent: (featureId: string, agentId: string, operation?: OperationOptions) =>
       request<AgentAttachment>(
         `/features/${featureId}/agents`,
-        jsonBody({ agentId }),
+        jsonBody({ agentId }, operation?.operationKey),
       ),
     detachAgent: (attachmentId: string) =>
       request<{ id: string }>(`/agents/attachments/${attachmentId}`, del()),
     getConfig: () => request<ConfigResponse>('/config'),
+    getCommandCatalog: () => request<CommandCatalogEntry[]>('/tools/commands'),
     updateConfig: (namespace: string, values: Record<string, unknown>) =>
       request<ConfigUpdateResult>(
         `/config/${encodeURIComponent(namespace)}`,
@@ -1258,7 +1330,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getSystemHealth: () => request<SystemHealthReport>('/system-health'),
     getProviderBootstrap: () =>
-      request<ProviderBootstrapInfo>('/providers/bootstrap'),
+      request<ProviderSelectionInfo>('/providers/bootstrap'),
+    selectProvider: (providerId: string, options?: { remember?: boolean }) =>
+      request<ProviderSelectionInfo>('/providers/selection', jsonBody({ providerId, ...options }), undefined, GET_TIMEOUT_MS),
+    switchProvider: (input: { providerId: string; remember: boolean; expectedRevision: number }) =>
+      request<ProviderSelectionInfo>('/providers/switch', jsonBody(input), undefined, GET_TIMEOUT_MS),
+    updateProviderPreferences: (input: { allowInternalAgency: boolean }) =>
+      request<ProviderSelectionInfo>('/providers/preferences', putBody(input), undefined, GET_TIMEOUT_MS),
+    stopIdleProviderWorkers: () =>
+      request<unknown>('/providers/background/stop', jsonBody({}), undefined, GET_TIMEOUT_MS),
     getGithubStatus: () => request<GithubStatus>('/github/status'),
     githubSignInStart: () =>
       request<DeviceCodeStart>('/github/signin/start', jsonBody({})),

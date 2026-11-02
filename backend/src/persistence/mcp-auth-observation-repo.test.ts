@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDatabase } from './db/connection.js';
+import { applySchema } from './db/schema.js';
 import { createMcpAuthObservationRepo } from './mcp-auth-observation-repo.js';
 import type { McpAuthObservation } from '../mcp/mcp-contract.js';
 
@@ -13,6 +14,25 @@ function observation(overrides: Partial<McpAuthObservation> = {}): McpAuthObserv
 }
 
 describe('mcp-auth-observation-repo', () => {
+  it('retains interrupted native challenges across repository recreation', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const value = observation({ state: 'unknown', interrupted: true });
+    createMcpAuthObservationRepo(db).put('interrupted', value);
+    expect(createMcpAuthObservationRepo(db).load()).toEqual([{ key: 'interrupted', state: value }]);
+    db.close();
+  });
+
+  it('upgrades old observation rows without losing their recorded state', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    db.exec('ALTER TABLE mcp_auth_observations DROP COLUMN interrupted');
+    db.prepare('INSERT INTO mcp_auth_observations (key, state, checked_at, message, recorded_at) VALUES (?, ?, ?, ?, ?)')
+      .run('legacy', 'required', null, 'Existing challenge', 'before upgrade');
+    applySchema(db);
+    expect(createMcpAuthObservationRepo(db).load()).toEqual([{
+      key: 'legacy', state: { state: 'required', checkedAt: null, message: 'Existing challenge' },
+    }]);
+    db.close();
+  });
   it('persists an observation and loads it back', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     const repo = createMcpAuthObservationRepo(db);

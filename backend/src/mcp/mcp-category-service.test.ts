@@ -36,6 +36,18 @@ function setup(initial: Record<string, McpConfigDocument> = {}, pathOverrides: P
 }
 
 describe('MCP categories and observational reads', () => {
+  it('applies changing category eligibility to lists and direct access without reading files or launching tools', async () => {
+    let agency = false;
+    const s = setup({}, {}, undefined, { categoryVisible: (id) => id !== 'agency' || agency });
+    expect(s.service.listProviders().map((entry) => entry.id)).not.toContain('agency');
+    await expect(s.service.getServers('agency')).rejects.toThrow(/Unknown MCP category/);
+    await expect(s.service.startAuthentication!('agency', 'any')).rejects.toThrow(/Unknown MCP category/);
+    expect(s.files.read).not.toHaveBeenCalled();
+    expect(s.inspect).not.toHaveBeenCalled();
+    agency = true;
+    expect(s.service.listProviders().map((entry) => entry.id)).toContain('agency');
+    expect((await s.service.getServers('agency')).providerId).toBe('agency');
+  });
   it('exposes canonical app inventory on inherited cards without launching their stored command', async () => {
     const probe = vi.fn(async (): Promise<McpServerStatus> => ({
       name: 'ai-project-studio', status: 'error', toolCount: 0, authRequired: false, authUrl: null, message: 'real failure',
@@ -182,11 +194,12 @@ describe('MCP categories and observational reads', () => {
     };
   }
 
-  it('persists observations through the store and reloads them on a fresh service', async () => {
+  it.each([false, true])('persists observations through the store and reloads them on a fresh service (interrupted=%s)', async (interrupted) => {
     const store = fakeStore();
     const runtime = { resolve: (name: string) => ({ supported: true as const, launch: { command: 'agency.exe', args: ['mcp', name] } }) };
     const first = withSetup({ 'agency-native': { mcps: { builtins: { ado: {} } } } }, { authObservationStore: store });
     first.categories[0].builtinRuntime = runtime;
+    first.inspect.mockResolvedValue({ ...good, authenticationInterrupted: interrupted });
     await first.service.inspectServer('agency', 'native-builtins:ado');
     expect(store.put).toHaveBeenCalledTimes(1);
     expect(store.map.size).toBe(1);
@@ -195,7 +208,10 @@ describe('MCP categories and observational reads', () => {
     second.categories[0].builtinRuntime = runtime;
     const config = await second.service.getServers('agency');
     expect(store.load).toHaveBeenCalled();
-    expect(config.servers.find((entry) => entry.builtinName === 'ado')!.authState!.state).toBe('ready');
+    const observed = config.servers.find((entry) => entry.builtinName === 'ado')!;
+    expect(observed.authState!.state).toBe(interrupted ? 'unknown' : 'ready');
+    expect(observed.authState!.interrupted).toBe(interrupted ? true : undefined);
+    expect(observed.authentication!.supported).toBe(false);
   });
 
   it('evicts the oldest observation from the store when the cache is bounded', async () => {
@@ -307,10 +323,14 @@ describe('MCP categories and observational reads', () => {
     const initial = (await s.service.getServers('agency')).servers.find((entry) => entry.name === 'global-builtins:ado')!;
     expect(initial.authState!.state).toBe('unknown');
     expect(initial.authentication!.supported).toBe(true);
-    s.inspect.mockImplementationOnce(async () => new Promise(() => undefined));
+    let acknowledge!: (value: McpToolInspection) => void;
+    s.inspect.mockImplementationOnce(async () => new Promise((resolve) => { acknowledge = resolve; }));
     const first = await s.service.startAuthentication!('agency', 'global-builtins:ado');
     expect(first.status).toBe('pending');
     await s.service.cancelAuthentication!('agency', 'global-builtins:ado', first.id);
+    await expect(s.service.startAuthentication!('agency', 'global-builtins:ado')).rejects.toThrow(/capacity/);
+    acknowledge({ status: 'failed', message: 'Cancelled', output: [], tools: [] });
+    await vi.waitFor(async () => expect((await s.service.authenticationStatus!('agency', 'global-builtins:ado', first.id)).status).toBe('cancelled'));
     await expect(s.service.startAuthentication!('copilot', 'user:other')).rejects.toThrow(/not supported/);
     s.inspect.mockResolvedValue({ status: 'failed', message: 'Timed out', output: [], tools: [] });
     const result = await s.service.inspectServer('agency', 'global-builtins:ado');
@@ -341,7 +361,7 @@ describe('MCP categories and observational reads', () => {
     s.jobs.close();
   });
 
-  it('retains explicit native authentication while pending, polls without inventory reads and returns tool inventory on completion', async () => {
+  it('retains explicit native authentication while pending but never confirms an interrupted live challenge from inventory', async () => {
     const s = nativeSetup();
     s.inspect.mockResolvedValueOnce({ status: 'failed', message: 'Authentication required', output: ['private diagnostics'], authUrl: 'https://example.test/token', tools: [] });
     const observed = await s.service.inspectServer('agency', 'global-builtins:ado');
@@ -354,17 +374,27 @@ describe('MCP categories and observational reads', () => {
     const job = await s.service.startAuthentication!('agency', 'global-builtins:ado');
     await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
     expect(s.inspect.mock.calls.at(-1)![0].timeoutMs).toBe(5000);
+    const read = s.files.read;
     s.files.read = vi.fn();
     expect(await s.service.authenticationStatus!('agency', 'global-builtins:ado', job.id))
       .toMatchObject({ status: 'pending', authUrl: 'https://microsoft.com/devicelogin', deviceCode: 'ABCD12345' });
     expect(s.files.read).not.toHaveBeenCalled();
     await expect(s.service.authenticationStatus!('copilot', 'global-builtins:ado', job.id)).rejects.toThrow(/unavailable/);
     complete(good);
-    await vi.waitFor(async () => expect((await s.service.authenticationStatus!('agency', 'global-builtins:ado', job.id)).status).toBe('completed'));
+    await vi.waitFor(async () => expect((await s.service.authenticationStatus!('agency', 'global-builtins:ado', job.id)).status).toBe('failed'));
     const completed = await s.service.authenticationStatus!('agency', 'global-builtins:ado', job.id);
     expect(completed.authUrl).toBeNull();
     expect(completed.server!.tools).toHaveLength(2);
     expect(completed.server!.authentication!.supported).toBe(false);
+    expect(completed.server!.authState!.interrupted).toBe(true);
+    expect(completed.server!.authState!.state).toBe('unknown');
+    expect(completed.server!.toolDiscovery!.status).toBe('failed');
+    expect(completed.message).toContain('before sign-in completion or credential caching could be confirmed');
+    s.files.read = read;
+    const reloaded = (await s.service.getServers('agency')).servers.find((entry) => entry.name === 'global-builtins:ado')!;
+    expect(reloaded.authState!.interrupted).toBe(true);
+    expect(reloaded.authentication!.supported).toBe(false);
+    await expect(s.service.startAuthentication!('agency', 'global-builtins:ado')).rejects.toThrow(/native CLI/);
     s.jobs.close();
   });
 
@@ -396,10 +426,10 @@ describe('MCP categories and observational reads', () => {
     const job = await s.service.startAuthentication!('agency', 'global-builtins:ado');
     await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
     expect(s.inspect.mock.calls.at(-1)![0].timeoutMs).toBe(100);
-    expect(await s.service.cancelAuthentication!('agency', 'global-builtins:ado', job.id)).toMatchObject({ status: 'cancelled', authUrl: null });
+    expect(await s.service.cancelAuthentication!('agency', 'global-builtins:ado', job.id)).toMatchObject({ status: 'pending', authUrl: null });
     expect(s.inspect.mock.calls.at(-1)![0].signal!.aborted).toBe(true);
     complete(good);
-    await Promise.resolve();
+    await vi.waitFor(async () => expect((await s.service.authenticationStatus!('agency', 'global-builtins:ado', job.id)).status).toBe('cancelled'));
     expect((await s.service.serverStatus('agency', 'global-builtins:ado')).authRequired).toBe(true);
     s.jobs.close();
   });

@@ -78,7 +78,7 @@ export function createMcpCategories(
       ],
     },
     {
-      info: { id: 'copilot', label: 'Copilot', kind: 'cli', description: 'MCP servers for Copilot. Copilot ships no built-in servers, so these are populated from your local Copilot configuration (user file and current-workspace files).', documentationUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers' },
+      info: { id: 'copilot', label: 'Copilot', kind: 'cli', description: 'Custom MCP configuration for Copilot (user and current-workspace files). The native built-in GitHub server is managed by Copilot and is not represented by these file declarations.', documentationUrl: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers' },
       sources: [
         copilot,
         { ...copilot, id: 'workspace', path: paths.workspaceMcp, scope: 'Copilot current workspace .mcp.json', allowBareMap: true, readOnlyReason: 'Workspace MCP files require native trust and precedence evaluation. Edit them in the native workspace configuration.' },

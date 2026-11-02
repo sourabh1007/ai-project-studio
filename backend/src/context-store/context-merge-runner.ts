@@ -1,4 +1,4 @@
-import { NotFoundError } from '../kernel/error-types.js';
+import { ConflictError, NotFoundError } from '../kernel/error-types.js';
 import type { FeatureService } from '../feature/feature-service.js';
 import type { SessionLauncher } from '../session/session-launcher.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
@@ -70,8 +70,9 @@ export function createContextMergeRunner(
         0,
         deps.config.maxMergeInputChars,
       );
-      const existing =
-        deps.service.get('feature', featureId)?.content.trim() ?? '';
+      const document = deps.service.get('feature', featureId);
+      const snapshot = JSON.stringify(document);
+      const existing = document?.content.trim() ?? '';
 
       const prompt = render(deps.config.mergePromptTemplate, {
         featureName: feature.name,
@@ -109,6 +110,10 @@ export function createContextMergeRunner(
 
       emit('saving');
       signal?.throwIfAborted();
+      if (JSON.stringify(deps.service.get('feature', featureId)) !== snapshot) {
+        emit('idle');
+        throw new ConflictError('Shared context changed while curating. Saved edits were preserved; try merging again.');
+      }
       const saved = deps.service.setContent({
         scope: 'feature',
         scopeId: featureId,

@@ -3,6 +3,7 @@ import type { PtyProcess, PtySpawner } from '../terminal/pty-contract.js';
 import type { PlanUsageProbe } from './plan-usage-contract.js';
 import type { PlanUsageProbeCommand } from './plan-usage-command.js';
 import { parsePlanUsage } from './plan-usage-parser.js';
+import { ConflictError } from '../kernel/error-types.js';
 
 export interface PtyPlanUsageProbeDeps {
   spawner: PtySpawner;
@@ -31,6 +32,8 @@ export interface PtyPlanUsageProbeDeps {
   retryMs?: number;
   /** Max time to wait for a process-admission permit before giving up (ms). */
   admitWaitMs?: number;
+  usageCommand?: () => string;
+  acquireExecution?: () => { release(): void };
 }
 
 /** A booted TUI kept alive between captures so refreshes reuse one process. */
@@ -39,8 +42,14 @@ interface LiveProbe {
   permit: ProcessPermit | null;
   buffer: string;
   alive: boolean;
+  execution: { release(): void } | null;
 }
 
+export interface ManagedPlanUsageProbe extends PlanUsageProbe {
+  stop(): void;
+  shutdown(): void;
+  isCapturing(): boolean;
+}
 /**
  * Real {@link PlanUsageProbe}: drives a `copilot`/`agency` pseudo-terminal,
  * issues the interactive `/usage` command, and returns the rendered panel text
@@ -56,13 +65,16 @@ interface LiveProbe {
  */
 export function createPtyPlanUsageProbe(
   deps: PtyPlanUsageProbeDeps,
-): PlanUsageProbe {
+): ManagedPlanUsageProbe {
   const timeoutMs = deps.timeoutMs ?? 45000;
   const bootMs = deps.bootMs ?? 3000;
   const retryMs = deps.retryMs ?? 4000;
   const admitWaitMs = deps.admitWaitMs ?? 20000;
 
   let live: LiveProbe | null = null;
+  let capturing = 0;
+  let stopped = false;
+  const admissions = new Set<AbortController>();
 
   const disposeLive = (): void => {
     const current = live;
@@ -76,8 +88,6 @@ export function createPtyPlanUsageProbe(
     } catch {
       // best effort — process may already be gone
     }
-    current.permit?.release();
-    current.permit = null;
   };
 
   const acquirePermit = async (): Promise<ProcessPermit | null | 'denied'> => {
@@ -89,6 +99,7 @@ export function createPtyPlanUsageProbe(
       return warm;
     }
     const controller = new AbortController();
+    admissions.add(controller);
     const timer = setTimeout(() => controller.abort(), admitWaitMs);
     timer.unref?.();
     try {
@@ -97,24 +108,41 @@ export function createPtyPlanUsageProbe(
       return 'denied';
     } finally {
       clearTimeout(timer);
+      admissions.delete(controller);
     }
   };
 
   const spawnLive = async (): Promise<LiveProbe | null> => {
-    const permit = await acquirePermit();
-    if (permit === 'denied') {
-      return null;
+    const execution = deps.acquireExecution?.() ?? null;
+    let permit: ProcessPermit | null = null;
+    let proc: PtyProcess;
+    try {
+      const admitted = await acquirePermit();
+      if (admitted === 'denied') {
+        execution?.release();
+        return null;
+      }
+      permit = admitted;
+      if (stopped) {
+        permit?.release();
+        execution?.release();
+        return null;
+      }
+      const command = deps.resolveCommand();
+      proc = deps.spawner.spawn({
+        command: command.command,
+        args: command.args,
+        env: deps.env,
+        cwd: deps.cwd,
+        cols: 140,
+        rows: 45,
+      });
+    } catch (error) {
+      permit?.release();
+      execution?.release();
+      throw error;
     }
-    const command = deps.resolveCommand();
-    const proc = deps.spawner.spawn({
-      command: command.command,
-      args: command.args,
-      env: deps.env,
-      cwd: deps.cwd,
-      cols: 140,
-      rows: 45,
-    });
-    const created: LiveProbe = { proc, permit, buffer: '', alive: true };
+    const created: LiveProbe = { proc, permit, execution, buffer: '', alive: true };
     proc.onData((data) => {
       created.buffer += data;
     });
@@ -122,10 +150,13 @@ export function createPtyPlanUsageProbe(
       created.alive = false;
       created.permit?.release();
       created.permit = null;
+      created.execution?.release();
+      created.execution = null;
       if (live === created) {
         live = null;
       }
     });
+    if (created.alive) live = created;
     permit?.onRetire(() => {
       if (live === created) {
         disposeLive();
@@ -176,7 +207,7 @@ export function createPtyPlanUsageProbe(
           return;
         }
         try {
-          current.proc.write('/usage\r');
+          current.proc.write(`${deps.usageCommand?.() ?? '/usage'}\r`);
         } catch {
           finish(null);
         }
@@ -196,13 +227,28 @@ export function createPtyPlanUsageProbe(
 
   return {
     async capture() {
-      if (!live || !live.alive) {
-        live = await spawnLive();
+      if (stopped) return null;
+      capturing += 1;
+      try {
+        if (!live || !live.alive) {
+          live = await spawnLive();
+        }
+        if (!live) return null;
+        return await scrape(live);
+      } finally {
+        capturing -= 1;
       }
-      if (!live) {
-        return null;
-      }
-      return scrape(live);
+    },
+    isCapturing: () => capturing > 0,
+    stop() {
+      if (capturing > 0) throw new ConflictError('The quota probe is still capturing; wait for it to finish');
+      stopped = true;
+      disposeLive();
+    },
+    shutdown() {
+      stopped = true;
+      for (const controller of admissions) controller.abort();
+      disposeLive();
     },
   };
 }

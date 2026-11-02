@@ -1,16 +1,13 @@
 import type { McpConfigDocument } from './mcp-contract.js';
+import { ValidationError } from '../kernel/error-types.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
- * Extracts the names of the MCP servers the CLI would load from a parsed
- * `mcp-config.json` document — i.e. every object-valued `mcpServers` entry that
- * is not explicitly disabled (`enabled: false`). Used to build the per-session
- * `--disable-mcp-server` flags that keep headless meta sessions from triggering
- * MCP browser/OAuth sign-ins on load. Returns an empty list for a missing or
- * malformed document.
+ * Legacy declaration helper, not an effective-session inventory or a headless
+ * safety check. Use headlessMcpServerNames for conservative suppression.
  */
 export function enabledMcpServerNames(
   document: McpConfigDocument | null,
@@ -19,9 +16,31 @@ export function enabledMcpServerNames(
   if (!isPlainObject(servers)) {
     return [];
   }
+
   return Object.entries(servers)
     .filter(
       ([, spec]) => isPlainObject(spec) && spec.enabled !== false,
     )
     .map(([name]) => name);
+}
+
+/** Do not execute untrusted workspace declarations to discover what they might load. */
+export function headlessMcpServerNames(sources: ReadonlyArray<{
+  label: string;
+  document: unknown;
+  allowBareMap?: boolean;
+}>): string[] {
+  const names = new Set<string>();
+  for (const source of sources) {
+    if (source.document === null) continue;
+    if (!isPlainObject(source.document)) throw new ValidationError(`Cannot safely suppress MCP from ${source.label}. Repair its configuration in the native CLI before running headless tasks.`);
+    const map = source.allowBareMap && !Object.hasOwn(source.document, 'mcpServers')
+      ? source.document : source.document.mcpServers;
+    if (map === undefined) continue;
+    if (!isPlainObject(map) || Object.entries(map).some(([name, spec]) => !name.trim() || name.startsWith('-') || !isPlainObject(spec))) {
+      throw new ValidationError(`Cannot safely suppress MCP from ${source.label}. Repair its configuration in the native CLI before running headless tasks.`);
+    }
+    for (const name of Object.keys(map)) names.add(name);
+  }
+  return [...names];
 }

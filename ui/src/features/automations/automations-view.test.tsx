@@ -98,6 +98,12 @@ function renderView(api: ApiClient, live = initialLiveState) {
 }
 
 describe('AutomationsView', () => {
+  it('distinguishes an unreadable monitor list from an empty list', async () => {
+    renderView(client([], { listAutomations: vi.fn().mockRejectedValue(new Error('503 monitors unavailable')) }));
+    await screen.findByText(/The list is unknown, not empty/);
+    expect(screen.queryByText('No monitors yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Refresh/ })).toBeEnabled();
+  });
   beforeEach(() => {
     resetMicrosoftSignedIn();
   });

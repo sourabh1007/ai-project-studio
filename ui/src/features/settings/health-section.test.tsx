@@ -77,6 +77,9 @@ it('still renders live endpoints when the system report is unavailable', async (
   await screen.findByText('GET /health');
   expect(screen.getByText('Subsystem report unavailable.')).toBeInTheDocument();
   expect(screen.getByText('Provider report unavailable.')).toBeInTheDocument();
+  expect(screen.getByText('System health unknown')).toBeInTheDocument();
+  expect(screen.queryByText('All systems operational')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Refresh/ })).toBeEnabled();
 });
 
 it('refreshes on demand', async () => {

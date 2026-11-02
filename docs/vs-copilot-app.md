@@ -14,15 +14,21 @@ observable workspace. The Copilot app is the *engine*; AI Project Studio is the
 | **Usage & cost visibility** | Per-response, ephemeral | **Live credit (AIC), token, cost & time** streamed over SSE and persisted per session/feature |
 | **Analytics dashboards** | None | **Feature dashboard**: AIC-over-time, AIC-by-model, time-by-session charts + KPI cards |
 | **Reusable instructions** | Manual copy/paste each session | **Skills** — instruction blocks tagged to features/sessions and auto-seeded into a session's first prompt |
-| **Task planning** | Ad hoc, in-conversation | **AI-generated feature task plans** with progress tracking |
+| **Task planning** | Ad hoc, in-conversation | **Planner** dated tasks/backlog, imports/exports, summaries and workspace launches; separate feature task plans |
 | **Summaries** | None persisted | **Automatic per-session and feature-level summaries** |
-| **PR review** | Manual prompting | **"Open a PR"** flow: dedicated review page, problem statement, blind proposal, syntactic + business-logic review, 0–100 scoring, and a navigable per-file **change graph** with inline code diffs |
-| **MCP servers** | Configured via CLI/config files | **MCP Servers view**: add/edit/**restart** servers, **discover tools**, and **toggle individual tools** live — applied to open sessions without a restart |
+| **PR review** | Manual prompting | **Review Board**: summary/change graph, evidence-grounded perspectives, file diffs, comments, reviewer sign-off and provider-backed approval |
+| **Feature agents** | Provider-specific automation | **New Task** plans/implements a change; **Bug Bash** prepares scenarios, runs testers and audits evidence |
+| **Monitors** | CLI-specific background tools | Workspace-global checks/actions, tracked subagents, progress and provider-aware sign-in recovery |
+| **MCP servers** | Configured via CLI/config files | Source/provenance-aware configuration and supported independent **tool inventory probes**; not generic live restarts/toggles |
 | **Metasession attribution** | N/A | Internal AI steps run as **metasessions** with **itemized, clearly-labeled** credit/token usage (the **IDE AI** figure) |
-| **History** | Provider-native store only | **Imports** provider-native (Copilot/Agency) history as workspace sessions |
-| **Provider support** | GitHub Copilot only | **Pluggable provider registry** — Copilot and Agency today, more behind one interface |
+| **History** | Provider-native store only | Provider-keyed history and capability-based import, including Agency and Claude |
+| **Provider support** | GitHub Copilot only | Copilot, authorized optional Agency and native **Claude Code v2**; Claude headless runs need operator-owned API/cloud credentials |
 | **Persistence** | CLI's own session store | **Local-first SQLite** (`node:sqlite`): features, sessions, usage, transcripts, summaries |
 | **Configuration** | CLI flags / config file | **Namespaced, editable config** surfaced in a Settings UI |
+
+These are this app's intended capabilities, not an exhaustive statement that
+every upstream Copilot client lacks equivalent features. Billing/quota can be
+unavailable; separately labelled USD estimates do not substitute for native AIC.
 
 ## When to use which
 

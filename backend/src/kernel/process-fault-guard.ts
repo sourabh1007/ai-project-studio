@@ -1,4 +1,4 @@
-import type { Logger } from './logger.js';
+import { createStderrSinkFailureReporter, failureErrorName, type Logger, type LogSinkFailureReporter } from './logger.js';
 
 /** The two process-level events that end a Node process by default. */
 export type ProcessFaultKind = 'uncaughtException' | 'unhandledRejection';
@@ -26,6 +26,8 @@ export interface ProcessFaultGuardDeps {
   logger: Pick<Logger, 'error'>;
   /** Notified after logging, e.g. to surface a degraded state to the desktop. */
   onFault?: (fault: ProcessFault) => void;
+  /** Receives failures of the logger or `onFault`; defaults to a stderr line. */
+  onReportFailure?: LogSinkFailureReporter;
 }
 
 /** Normalizes any thrown or rejected value into a reportable shape. */
@@ -65,15 +67,34 @@ export function describeFault(
 export function installProcessFaultGuard(
   deps: ProcessFaultGuardDeps,
 ): () => void {
+  const reportFailure = deps.onReportFailure ?? createStderrSinkFailureReporter();
+  let reportFailures = 0;
+  // A throw inside these handlers would itself be a fatal uncaught exception.
+  const contained = (name: string, action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      reportFailures += 1;
+      try {
+        reportFailure({
+          sink: name,
+          errorName: failureErrorName(error),
+          failures: reportFailures,
+        });
+      } catch {
+        // Nothing left to notify.
+      }
+    }
+  };
   const report = (kind: ProcessFaultKind) => (value: unknown): void => {
     const fault = describeFault(kind, value);
-    deps.logger.error(
+    contained('fault-guard.logger', () => deps.logger.error(
       kind === 'uncaughtException'
         ? 'Uncaught exception; the backend stayed up and continues serving'
         : 'Unhandled promise rejection; the backend stayed up and continues serving',
       fault,
-    );
-    deps.onFault?.(fault);
+    ));
+    contained('fault-guard.onFault', () => deps.onFault?.(fault));
   };
 
   const onException = report('uncaughtException');

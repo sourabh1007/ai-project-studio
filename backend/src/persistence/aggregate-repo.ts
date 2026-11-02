@@ -11,35 +11,50 @@ import type {
 import type { AggregationConfig } from '../aggregation/config.js';
 import { attachMcpTools, mcpRollupSource, mcpToolRollupSource, toMcpBreakdown, type McpRollupRow, type McpToolRollupRow } from './mcp-rollup.js';
 
-const TOTALS_COLUMNS = `
+export const TOTALS_COLUMNS = `
   COUNT(DISTINCT session_id) AS sessions,
   COALESCE(SUM(input_tokens), 0) AS inputTokens,
   COALESCE(SUM(output_tokens), 0) AS outputTokens,
   COALESCE(SUM(reasoning_output_tokens), 0) AS reasoningOutputTokens,
-  COALESCE(SUM(cost), 0) AS cost,
-  COALESCE(SUM(credits), 0) AS credits,
-  COALESCE(SUM(nano_aiu), 0) AS nanoAiu
+  CASE WHEN COUNT(*) = COUNT(cost) THEN COALESCE(SUM(cost), 0) END AS cost,
+  CASE WHEN COUNT(*) = COUNT(credits) THEN COALESCE(SUM(credits), 0) END AS credits,
+  CASE WHEN COUNT(*) = COUNT(nano_aiu) THEN COALESCE(SUM(nano_aiu), 0) END AS nanoAiu,
+  COALESCE(SUM(cost), 0) AS knownCost,
+  COALESCE(SUM(credits), 0) AS knownCredits,
+  COALESCE(SUM(nano_aiu), 0) AS knownNanoAiu,
+  COUNT(*) - COUNT(credits) AS unavailableCharges,
+  SUM(usd_estimate) AS usdEstimate
 `;
 
-interface TotalsRow {
+export interface TotalsRow {
   sessions: number | bigint;
   inputTokens: number | bigint;
   outputTokens: number | bigint;
   reasoningOutputTokens: number | bigint;
-  cost: number;
-  credits: number;
-  nanoAiu: number | bigint;
+  cost: number | null;
+  credits: number | null;
+  nanoAiu: number | bigint | null;
+  knownCost: number;
+  knownCredits: number;
+  knownNanoAiu: number;
+  unavailableCharges: number;
+  usdEstimate: number | null;
 }
 
-function toTotals(row: TotalsRow): UsageTotals {
+export function toTotals(row: TotalsRow): UsageTotals {
   return {
     sessions: Number(row.sessions),
     inputTokens: Number(row.inputTokens),
     outputTokens: Number(row.outputTokens),
     reasoningOutputTokens: Number(row.reasoningOutputTokens),
-    cost: Number(row.cost),
-    credits: Number(row.credits),
-    nanoAiu: Number(row.nanoAiu),
+    cost: row.cost === null ? null : Number(row.cost),
+    credits: row.credits === null ? null : Number(row.credits),
+    nanoAiu: row.nanoAiu === null ? null : Number(row.nanoAiu),
+    ...(row.unavailableCharges > 0 ? {
+      knownCost: Number(row.knownCost), knownCredits: Number(row.knownCredits),
+      knownNanoAiu: Number(row.knownNanoAiu), unavailableCharges: Number(row.unavailableCharges),
+    } : {}),
+    ...(row.usdEstimate === null ? {} : { usdEstimate: row.usdEstimate }),
   };
 }
 
@@ -72,32 +87,48 @@ export function createAggregateRepo(
   // detail, so those columns normalize to zero; `credits` is authoritative.
   const featureUsage = (alias: string): string => `(
     SELECT session_id, resolved_model, provider, input_tokens, output_tokens,
-           reasoning_output_tokens, cost, credits, nano_aiu, started_at
+           reasoning_output_tokens, cost, credits, nano_aiu, usd_estimate, started_at
       FROM usage_events
      WHERE feature_id = ? AND kind IN (${kindsPlaceholders})
     UNION ALL
     SELECT session_id, COALESCE(resolved_model, requested_model) AS resolved_model,
            provider_id AS provider, COALESCE(input_tokens, 0) AS input_tokens,
            COALESCE(output_tokens, 0) AS output_tokens, 0 AS reasoning_output_tokens,
-           0 AS cost, COALESCE(credits, 0) AS credits, COALESCE(nano_aiu, 0) AS nano_aiu,
+           CASE WHEN credits IS NULL THEN NULL ELSE 0 END AS cost, credits, nano_aiu, NULL AS usd_estimate,
            captured_at AS started_at
       FROM meta_usage_records
      WHERE feature_id = ?
+    UNION ALL
+    SELECT session_id, resolved_model, provider, input_tokens, output_tokens,
+           reasoning_output_tokens, cost, credits, nano_aiu, usd_estimate, day AS started_at
+      FROM retained_usage
+     WHERE feature_id = ?
   ) AS ${alias}`;
-  // Feature statements bind the feature id twice: once for each half of the
-  // union (usage_events with kinds, then meta_usage_records).
+  // Feature statements bind the feature id twice: once for each part of the
+  // union (usage_events with kinds, meta_usage_records, then retained_usage).
   const featureArgs = (featureId: string): Array<string | number> => [
     featureId,
     ...kinds,
+    featureId,
     featureId,
   ];
 
   const featureTotalsStmt = db.prepare(
     `SELECT ${TOTALS_COLUMNS} FROM ${featureUsage('usage')}`,
   );
+  // Usage summarized from deleted sessions keeps its original feature attribution;
+  // it stays in feature rollups so deleting a session never erases spent credits.
+  const retainedTotalsStmt = db.prepare(
+    `SELECT ${TOTALS_COLUMNS} FROM retained_usage WHERE feature_id = ?`,
+  );
   const workspaceTotalsStmt = db.prepare(
-    `SELECT ${TOTALS_COLUMNS} FROM usage_events
-     WHERE kind IN (${kindsPlaceholders}) AND ${visibleUsage}`,
+    `SELECT ${TOTALS_COLUMNS} FROM (
+       SELECT session_id, input_tokens, output_tokens, reasoning_output_tokens, cost, credits, nano_aiu, usd_estimate
+         FROM usage_events WHERE kind IN (${kindsPlaceholders}) AND ${visibleUsage}
+       UNION ALL
+       SELECT session_id, input_tokens, output_tokens, reasoning_output_tokens, cost, credits, nano_aiu, usd_estimate
+         FROM retained_usage WHERE source = 'cli' AND scope <> 'internal'
+     )`,
   );
   const byModelStmt = db.prepare(
     `SELECT resolved_model AS model, ${TOTALS_COLUMNS} FROM ${featureUsage('usage')}
@@ -136,6 +167,9 @@ export function createAggregateRepo(
   return {
     featureTotals(featureId) {
       return toTotals(featureTotalsStmt.get(...featureArgs(featureId)) as unknown as TotalsRow);
+    },
+    retainedTotals(featureId) {
+      return toTotals(retainedTotalsStmt.get(featureId) as unknown as TotalsRow);
     },
     workspaceTotals() {
       return toTotals(workspaceTotalsStmt.get(...kinds) as unknown as TotalsRow);

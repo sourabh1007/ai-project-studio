@@ -55,7 +55,7 @@ export function AzureStatusBadge() {
   const [error, setError] = useState<string | null>(null);
   const autoDetectedRef = useRef(false);
 
-  const { data, loading, reload } = useAsync<AzureDevOpsStatus>(
+  const { data, loading, error: statusError, reload } = useAsync<AzureDevOpsStatus>(
     () => api.getAzureStatus(org || undefined),
     [org],
   );
@@ -192,7 +192,7 @@ export function AzureStatusBadge() {
       'Signed in to Azure DevOps',
       username ? ` as ${username}` : '',
       connection ? ` · ${connection}` : '',
-      '. All sessions inherit this login automatically. Click to re-check.',
+      '. New sessions inherit the current credential; existing sessions may need restarting. Click to re-check.',
     ].join('');
     return (
       <div className="gh-status-wrap">
@@ -221,7 +221,7 @@ export function AzureStatusBadge() {
         >
           {signingOut ? <Spinner size={12} label="Signing out" /> : 'Sign out'}
         </button>
-        {error && <p className="az-signin-error">{error}</p>}
+        {(error || statusError) && <p className="az-signin-error" role="alert">{error || statusError}</p>}
       </div>
     );
   }
@@ -254,7 +254,8 @@ export function AzureStatusBadge() {
           {signingIn ? <Spinner size={13} label="Signing in" /> : 'Sign in'}
         </button>
       </div>
-      {error && <p className="az-signin-error">{error}</p>}
+      {statusError && <button type="button" className="az-signin-btn" onClick={reload} disabled={loading}>Retry account check</button>}
+      {(error || statusError) && <p className="az-signin-error" role="alert">{error || statusError}</p>}
     </div>
   );
 }

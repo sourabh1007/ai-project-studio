@@ -51,6 +51,18 @@ function harness() {
 }
 
 describe('usage-recorder', () => {
+  it('does not fabricate native credits from tokens or USD and distinguishes reported zero', () => {
+    const h = harness();
+    expect(h.recorder.record(usage({ cost: null, nanoAiu: null, usdEstimate: 3 }), 'dev')).toMatchObject({
+      cost: null, nanoAiu: null, credits: null, chargeProvenance: 'unavailable', chargeUnit: null, usdEstimate: 3,
+    });
+    expect(h.recorder.record(usage({ turnIndex: 1, cost: 0, nanoAiu: 0 }), 'dev')).toMatchObject({
+      credits: 0, chargeProvenance: 'reported', chargeUnit: 'aic', usdEstimate: null,
+    });
+    expect(h.recorder.record(usage({ turnIndex: 2, cost: null, nanoAiu: 0, chargeProvenance: 'estimated', chargeUnit: null }), 'dev')).toMatchObject({
+      credits: null, chargeProvenance: 'estimated', chargeUnit: null,
+    });
+  });
   it('credits, persists and emits a single usage event', () => {
     const h = harness();
     const stored = h.recorder.record(usage({ cost: 0.33 }), 'dev');

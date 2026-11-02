@@ -258,6 +258,107 @@ test('Explorer source paths remain structured, never acquire a lease or touch ow
   assert.equal(fs.existsSync(root), false);
 });
 
+function dropFiles(paths, wide = true, offset = 20) {
+    const list = Buffer.from(paths.join('\0') + '\0\0', wide ? 'utf16le' : 'ascii');
+    const header = Buffer.alloc(offset);
+    header.writeUInt32LE(offset, 0);
+    header.writeUInt32LE(wide ? 1 : 0, 16);
+    return Buffer.concat([header, list]);
+}
+
+test('CF_HDROP wins over single FileNameW and correctly handles header offsets, UTF16 and ANSI lists', (t) => {
+    const { store } = fixture(t);
+    const paths = ['C:\\source folder\\\u03b1.png', 'D:\\second\\b.txt'];
+    const raw = dropFiles(paths, true, 24);
+    const clipboard = {
+      has: (format) => ['CF_HDROP', 'FileNameW'].includes(format),
+      readBuffer: (format) => format === 'CF_HDROP' ? raw : assert.fail('do not truncate the list to FileNameW'),
+      readImage: () => assert.fail('do not decode a file list as an image'),
+    };
+    assert.deepEqual(attachments.readClipboardAttachment({ clipboard, store, sessionId: 's1', platform: 'win32' }),
+      { status: 'ready', source: 'clipboard-files', paths });
+    assert.deepEqual(attachments.parseDropFiles(dropFiles(['C:\\one.txt', 'D:\\two.txt'], false)), ['C:\\one.txt', 'D:\\two.txt']);
+});
+
+test('CF_HDROP malformed, unterminated and excessive inputs fail closed', () => {
+    const original = dropFiles(['C:\\a.txt']);
+    const badOffset = Buffer.from(original);
+    badOffset.writeUInt32LE(19, 0);
+    const unaligned = Buffer.from(original);
+    unaligned.writeUInt32LE(21, 0);
+    const badAnsi = dropFiles(['C:\\a.txt'], false);
+    badAnsi[23] = 0xff;
+    for (const raw of [Buffer.alloc(19), badOffset, unaligned, original.subarray(0, original.length - 2),
+      Buffer.concat([original, Buffer.from([1, 0])]), Buffer.alloc(attachments.LIMITS.sourceBytes + 1),
+      dropFiles(Array.from({ length: 33 }, () => 'C:\\a.txt'))]) {
+      assert.throws(() => attachments.parseDropFiles(raw), /invalid-paths/);
+    }
+    assert.throws(() => attachments.parseDropFiles(badAnsi), /unsupported-ansi-paths/);
+});
+
+test('full legacy storage rejects before native readImage and repeated paste attempts do not repeatedly decode', () => {
+    let reads = 0;
+    const clipboard = { has: () => false, readImage: () => { reads++; return { isEmpty: () => true }; } };
+    const full = { assertCapacity: () => { throw Object.assign(new Error(), { attachmentCode: 'quota' }); } };
+    assert.equal(attachments.readClipboardAttachment({ clipboard, store: full, sessionId: 's1' }).error, 'quota');
+    assert.equal(reads, 0);
+    let clock = 0;
+    const read = attachments.createClipboardAttachmentReader({ clipboard, now: () => clock });
+    const store = { assertCapacity() {} };
+    assert.equal(read({ store, sessionId: 's1' }).status, 'none');
+    assert.equal(read({ store, sessionId: 's1' }).error, 'clipboard-busy');
+    assert.equal(reads, 1);
+    clock = 250;
+    assert.equal(read({ store, sessionId: 's1' }).status, 'none');
+    assert.equal(reads, 2);
+});
+
+test('Electron 44 uses lazy URI-list payloads for all files without requesting an image or legacy methods', async () => {
+    const calls = [];
+    const clipboard = { read: async () => [{
+      types: ['image/png', 'text/uri-list'],
+      getType: async (type) => {
+        calls.push(type);
+        assert.equal(type, 'text/uri-list');
+        return new Blob(['file:///C:/source%20folder/a.txt\r\nfile:///D:/second.txt']);
+      },
+    }] };
+    const read = attachments.createClipboardAttachmentReader({ clipboard, nativeImage: {}, platform: 'win32' });
+    const result = await read({ store: { limits: attachments.LIMITS }, sessionId: 's1' });
+    assert.deepEqual(result, { status: 'ready', source: 'clipboard-files', paths: ['C:\\source folder\\a.txt', 'D:\\second.txt'] });
+    assert.deepEqual(calls, ['text/uri-list']);
+});
+
+test('Electron 44 preflights lazy image bytes and PNG dimensions before own decode; concurrent reads are refused', async () => {
+    let decodes = 0;
+    let payload = { size: attachments.LIMITS.fileBytes + 1, arrayBuffer: () => assert.fail('do not materialize oversized payload') };
+    let clock = 0;
+    let release;
+    const clipboard = { read: async () => [{ types: ['image/png'], getType: async () => payload }] };
+    const reader = attachments.createClipboardAttachmentReader({
+      clipboard, nativeImage: { createFromBuffer: () => { decodes++; assert.fail('do not decode invalid/oversized image'); } },
+      now: () => clock,
+    });
+    const store = { limits: attachments.LIMITS, assertCapacity() {} };
+    assert.equal((await reader({ store, sessionId: 's1' })).error, 'image-too-large');
+    clock += 250;
+    const png = Buffer.alloc(33);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(png);
+    png.writeUInt32BE(13, 8);
+    png.write('IHDR', 12);
+    png.writeUInt32BE(100000, 16);
+    png.writeUInt32BE(1, 20);
+    payload = new Blob([png]);
+    assert.equal((await reader({ store, sessionId: 's1' })).error, 'image-too-large');
+    assert.equal(decodes, 0);
+    clock += 250;
+    clipboard.read = () => new Promise((resolve) => { release = resolve; });
+    const pending = reader({ store, sessionId: 's1' });
+    assert.equal(reader({ store, sessionId: 's1' }).error, 'clipboard-busy');
+    release([]);
+    assert.equal((await pending).status, 'none');
+});
+
 test('URI clipboard decoding preserves escaped paths and rejects unsupported/truncated clipboard data', (t) => {
   const { root, store } = fixture(t);
   const clipboard = { has: (format) => format === 'text/uri-list', read: () => 'https://example.com/a' };
@@ -281,9 +382,17 @@ test('production main image handler and preload carry session context, structure
   const handler = main.slice(main.indexOf('  const getAttachmentStore ='), main.indexOf('  applyContentSecurityPolicy();'));
   let response = { response: 1, checkboxChecked: false };
   let confirmationOptions;
+  const png = Buffer.alloc(33);
+  Buffer.from('89504e470d0a1a0a', 'hex').copy(png);
+  png.writeUInt32BE(13, 8);
+  png.write('IHDR', 12);
+  png.writeUInt32BE(1, 16);
+  png.writeUInt32BE(1, 20);
+  const clipboard = { read: async () => [{ types: ['image/png'], getType: async () => new Blob([png]) }] };
   vm.runInNewContext(`let clipboardAttachmentStore = null;\n${handler}`, {
     ipcMain: { handle: (name, callback) => { handlers[name] = callback; } },
-    isTrustedSender: (event) => event.trusted, clipboard: imageClipboard(), path,
+    isTrustedSender: (event) => event.trusted, clipboard,
+    nativeImage: { createFromBuffer: () => imageClipboard().image }, path,
     app: { getPath: () => root }, require: () => attachments,
     dialog: { showMessageBox: async (options) => { confirmationOptions = options; return response; } },
   });

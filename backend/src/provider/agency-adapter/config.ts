@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { copilotCommandProfile, providerCommandProfileSchema } from '../provider-command-profile.js';
+import { executableSchema, optionalCommandArgsSchema, commandTokenSchema } from '../command-options.js';
 
 /** Configuration schema for the Agency CLI adapter. */
 export const AGENCY_NAMESPACE = 'agency';
@@ -11,9 +13,9 @@ const modelSchema = z.object({
 export const agencyConfigSchema = z.object({
   enabled: z.boolean(),
   /** Executable name or absolute path of the Agency CLI. */
-  executable: z.string().min(1),
+  executable: executableSchema,
   /** Wrapped provider subcommand; Agency forwards to the Copilot CLI. */
-  subcommand: z.string().min(1),
+  subcommand: commandTokenSchema.regex(/^[a-zA-Z0-9][a-zA-Z0-9-]*$/),
   /** Default model when a session does not specify one. */
   defaultModel: z.string().min(1),
   /** Pass --allow-all-tools to the wrapped Copilot CLI. */
@@ -21,7 +23,9 @@ export const agencyConfigSchema = z.object({
   /** Pass -s to the wrapped Copilot CLI. */
   silent: z.boolean(),
   /** Extra CLI arguments appended verbatim to the passthrough. */
-  extraArgs: z.array(z.string()),
+  extraArgs: optionalCommandArgsSchema,
+  interactiveArgs: optionalCommandArgsSchema.optional(),
+  headlessArgs: optionalCommandArgsSchema.optional(),
   /** Pass --screen-reader to interactive sessions for plain, unboxed output. */
   screenReader: z
     .boolean()
@@ -33,6 +37,7 @@ export const agencyConfigSchema = z.object({
     ),
   /** Selectable models exposed to the UI. Fully user-configurable. */
   models: z.array(modelSchema),
+  commandProfile: providerCommandProfileSchema.optional(),
 });
 
 export type AgencyConfig = z.infer<typeof agencyConfigSchema>;
@@ -45,7 +50,10 @@ export const agencyDefaults: AgencyConfig = {
   allowAllTools: true,
   silent: true,
   extraArgs: [],
+  interactiveArgs: [],
+  headlessArgs: [],
   screenReader: false,
+  commandProfile: { ...copilotCommandProfile, loginCommand: null },
   models: [
     { id: 'auto', label: 'Auto (Agency picks)' },
     { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },

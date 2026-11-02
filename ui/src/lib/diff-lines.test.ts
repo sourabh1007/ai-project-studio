@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { annotateDiffLines, rightSideLines } from './diff-lines.js';
+import { annotateDiffLines, fullFileDiffLines, rightSideLines } from './diff-lines.js';
 
 describe('rightSideLines', () => {
   it('returns [] for an empty diff', () => {
@@ -82,6 +82,79 @@ describe('annotateDiffLines', () => {
   it('returns [] for an empty diff', () => {
     expect(annotateDiffLines('')).toEqual([]);
     expect(annotateDiffLines('\n')).toEqual([]);
+  });
+
+  describe('fullFileDiffLines', () => {
+    it('keeps all unchanged context, including outside the hunks', () => {
+      expect(fullFileDiffLines('first\nnew\nlast\n', '@@ -2 +2 @@\n-old\n+new')).toEqual([
+        { raw: ' first', kind: 'ctx', rightLine: 1 },
+        { raw: '-old', kind: 'del', rightLine: null },
+        { raw: '+new', kind: 'add', rightLine: 2 },
+        { raw: ' last', kind: 'ctx', rightLine: 3 },
+      ]);
+    });
+
+    it('preserves context numbering across multiple insertions and deletion groups', () => {
+      const diff = [
+        'diff --git a/x b/x', '--- a/x', '+++ b/x',
+        '@@ -1,2 +1,3 @@', ' first', '+extra', ' next',
+        '@@ -4,3 +5,1 @@', '-old-a', '-old-b', ' last',
+        '\\ No newline at end of file',
+      ].join('\n');
+      expect(fullFileDiffLines('first\nextra\nnext\nmiddle\nlast', diff)).toEqual([
+        { raw: ' first', kind: 'ctx', rightLine: 1 },
+        { raw: '+extra', kind: 'add', rightLine: 2 },
+        { raw: ' next', kind: 'ctx', rightLine: 3 },
+        { raw: ' middle', kind: 'ctx', rightLine: 4 },
+        { raw: '-old-a', kind: 'del', rightLine: null },
+        { raw: '-old-b', kind: 'del', rightLine: null },
+        { raw: ' last', kind: 'ctx', rightLine: 5 },
+      ]);
+    });
+
+    it('places zero-length-range deletions after the named line, including EOF', () => {
+      expect(fullFileDiffLines('keep', '@@ -2,2 +1,0 @@\n-old-a\n-old-b')).toEqual([
+        { raw: ' keep', kind: 'ctx', rightLine: 1 },
+        { raw: '-old-a', kind: 'del', rightLine: null },
+        { raw: '-old-b', kind: 'del', rightLine: null },
+      ]);
+      expect(fullFileDiffLines('keep', '@@ -1 +0,0 @@\n-before')).toEqual([
+        { raw: '-before', kind: 'del', rightLine: null },
+        { raw: ' keep', kind: 'ctx', rightLine: 1 },
+      ]);
+    });
+
+    it('shows a deleted file without inventing new-side comment anchors', () => {
+      expect(fullFileDiffLines('', '@@ -1,2 +0,0 @@\n-one\n-two')).toEqual([
+        { raw: '-one', kind: 'del', rightLine: null },
+        { raw: '-two', kind: 'del', rightLine: null },
+      ]);
+    });
+
+    it('handles empty files and files without a patch', () => {
+      expect(fullFileDiffLines('', '')).toEqual([]);
+      expect(fullFileDiffLines('\n', '@@ -0,0 +1 @@\n+')).toEqual([
+        { raw: '+', kind: 'add', rightLine: 1 },
+      ]);
+      expect(fullFileDiffLines('one\r\n\r\ntwo\r\n', '')).toEqual([
+        { raw: ' one', kind: 'ctx', rightLine: 1 },
+        { raw: ' ', kind: 'ctx', rightLine: 2 },
+        { raw: ' two', kind: 'ctx', rightLine: 3 },
+      ]);
+    });
+
+    it('does not assign changes to malformed hunks', () => {
+      expect(fullFileDiffLines('one', '@@ malformed\n+one')).toEqual([
+        { raw: ' one', kind: 'ctx', rightLine: 1 },
+      ]);
+    });
+
+    it('highlights a newly added file', () => {
+      expect(fullFileDiffLines('one\ntwo', '@@ -0,0 +1,2 @@\n+one\n+two')).toEqual([
+        { raw: '+one', kind: 'add', rightLine: 1 },
+        { raw: '+two', kind: 'add', rightLine: 2 },
+      ]);
+    });
   });
 
   it('classifies file/meta lines before the first hunk with no anchor', () => {

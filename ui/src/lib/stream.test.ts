@@ -67,6 +67,33 @@ function usage(sessionId: string, turnIndex: number): StoredUsage {
   };
 }
 
+it('keeps mixed-provider missing charges unknown across live totals and late corrections', () => {
+  const unavailable = { ...usage('s', 0), provider: 'claude', nanoAiu: null, cost: null, credits: null };
+  let state = applyStreamEvent(initialLiveState, { type: 'usage.recorded', usage: unavailable });
+  state = applyStreamEvent(state, { type: 'usage.recorded', usage: usage('s', 1) });
+  expect(sessionLiveTotals(state, 's')).toMatchObject({ nanoAiu: null, cost: null, credits: null, inputTokens: 20 });
+  expect(workspaceLiveTotals(state)).toMatchObject({ nanoAiu: null, cost: null, credits: null, turns: 2 });
+  expect(resolveSessionMetrics({ nanoAiu: null, inputTokens: 20, outputTokens: 40 }, sessionLiveTotals(state, 's'))).toMatchObject({ nanoAiu: null });
+  state = applyStreamEvent(state, { type: 'usage.recorded', usage: { ...unavailable, inputTokens: 30 } });
+  expect(sessionLiveTotals(state, 's')).toMatchObject({ nanoAiu: null, inputTokens: 40, turns: 2 });
+  expect(workspaceLiveTotals(state)).toMatchObject({ nanoAiu: null, inputTokens: 40, turns: 2 });
+});
+
+it('does not count cumulative session charge snapshots as inference requests', () => {
+  let state = applyStreamEvent(initialLiveState, { type: 'usage.recorded', usage: usage('s', 0) });
+  const snapshot = {
+    ...usage('s', 1), operation: 'session-charge-estimate',
+    inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0,
+    cost: null, credits: null, nanoAiu: null, usdEstimate: 3,
+  };
+  state = applyStreamEvent(state, { type: 'usage.recorded', usage: snapshot });
+  expect(sessionLiveTotals(state, 's')).toMatchObject({ turns: 1, inputTokens: 10, outputTokens: 20 });
+  expect(workspaceLiveTotals(state)).toMatchObject({ turns: 1, inputTokens: 10, outputTokens: 20 });
+  state = applyStreamEvent(state, { type: 'usage.recorded', usage: { ...snapshot, usdEstimate: 4 } });
+  expect(sessionLiveTotals(state, 's').turns).toBe(1);
+  expect(workspaceLiveTotals(state).turns).toBe(1);
+});
+
 function repositoryContext(status: RepositoryContext['status']): RepositoryContext {
   return {
     repositoryId: 'r1',
@@ -674,7 +701,36 @@ describe('sessionLiveTotals', () => {
 });
 
 describe('resolveSessionMetrics', () => {
-  const liveTotals = {
+
+  it('counts repeated meta usage per feature and survives a reconnect without an epoch', () => {
+    let state = applyStreamEvent(initialLiveState, { type: 'meta.usage.updated', featureId: 'f', operationId: 'a' });
+    state = applyStreamEvent(state, { type: 'meta.usage.updated', featureId: 'f', operationId: 'b' });
+    expect(state.metaUsageByFeature).toEqual({ f: 2 });
+    const gap = applyStreamEvent({ ...initialLiveState, streamInterrupted: true }, { type: 'stream.reconnected' });
+    expect(gap.streamEpoch).toBe(1);
+  });
+  describe('unrecorded placeholder rows', () => {
+    const placeholder = { nanoAiu: 0, inputTokens: 0, outputTokens: 0, usageRecorded: false };
+    const live = (over: object = {}) => ({ nanoAiu: 0, inputTokens: 0, outputTokens: 0, credits: 0, cost: 0, turns: 0, ...over });
+    it('lets live usage win over the no-usage placeholder', () => {
+      expect(resolveSessionMetrics(placeholder, live({ turns: 1, nanoAiu: 500, inputTokens: 3 })))
+        .toEqual({ nanoAiu: 500, inputTokens: 3, outputTokens: 0 });
+      expect(resolveSessionMetrics(placeholder, live({ turns: 1 }))).toEqual({ nanoAiu: 0, inputTokens: 0, outputTokens: 0 });
+      expect(resolveSessionMetrics(placeholder, live({ nanoAiu: null }))).toEqual({ nanoAiu: null, inputTokens: 0, outputTokens: 0 });
+      expect(resolveSessionMetrics(placeholder, live({ outputTokens: 2 }))?.outputTokens).toBe(2);
+      expect(resolveSessionMetrics(placeholder, { nanoAiu: 0, inputTokens: 1, outputTokens: 0 })?.inputTokens).toBe(1);
+    });
+    it('keeps the placeholder zero when nothing was observed live', () => {
+      expect(resolveSessionMetrics(placeholder, live())).toEqual({ nanoAiu: 0, inputTokens: 0, outputTokens: 0 });
+      expect(resolveSessionMetrics(placeholder, { nanoAiu: 0, inputTokens: 0, outputTokens: 0 })).toEqual({ nanoAiu: 0, inputTokens: 0, outputTokens: 0 });
+    });
+    it('reports unknown when the live cache is incomplete, and keeps measured zero persisted rows', () => {
+      expect(resolveSessionMetrics(placeholder, live({ complete: false }))).toBeNull();
+      const measuredZero = { nanoAiu: 0, inputTokens: 0, outputTokens: 0, usageRecorded: true };
+      expect(resolveSessionMetrics(measuredZero, live({ turns: 2, nanoAiu: 9 }))).toEqual({ nanoAiu: 0, inputTokens: 0, outputTokens: 0 });
+      expect(resolveSessionMetrics({ nanoAiu: 0, inputTokens: 0, outputTokens: 0 }, live({ turns: 2, nanoAiu: 9 }))?.nanoAiu).toBe(0);
+    });
+  });  const liveTotals = {
     credits: 5,
     cost: 2,
     inputTokens: 11,

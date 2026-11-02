@@ -4,7 +4,7 @@ copyright: Copyright © 2026 sourabh1007
 
 # Electron is hoisted to the monorepo root, so electron-builder can't infer the
 # version from desktop/node_modules; pin it explicitly.
-electronVersion: 33.2.1
+electronVersion: 44.9.3
 
 directories:
   output: release
@@ -33,6 +33,7 @@ files:
   - provision-io.cjs
   - tool-provision.cjs
   - dependency-provision.cjs
+  - early-tool-settings.cjs
   - startup/**/*
   - owned-attachments.cjs
   - regression-isolation.cjs

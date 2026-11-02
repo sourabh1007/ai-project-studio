@@ -7,6 +7,11 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { resolveApiBase } from '../lib/api-base.js';
 import { buildTerminalWsUrl } from '../lib/terminal-url.js';
+import { ApiError, createApiClient } from '../lib/api.js';
+import {
+  classifyTextPaste, textPasteBody, textPasteReference,
+  INLINE_PASTE_BYTES, TEXT_PASTE_TIMEOUT_MS,
+} from '../lib/terminal-paste.js';
 import {
   decodeServerMessage,
   encodeClientMessage,
@@ -15,10 +20,16 @@ import {
 } from '../lib/terminal-protocol.js';
 import { createTerminalDelivery } from '../lib/terminal-delivery.js';
 import { createTerminalHealth, type TerminalHealth } from '../lib/terminal-health.js';
+import {
+  createTerminalInputDiagnostics,
+  type TerminalInputObservation,
+  type TerminalInputRecord,
+  type TerminalInputSource,
+} from '../lib/terminal-input-diagnostics.js';
 import { ActivityIcon } from './icons.js';
 import { Button, Modal } from './ui.js';
 import {
-  toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage,
+  toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage, copyFailureMessage,
   type ClipboardAttachmentResult, type DesktopClipboardBridge,
 } from '../lib/clipboard.js';
 import { copyText, isInternalClipboardFocusTransfer } from '../hooks/clipboard-write.js';
@@ -26,6 +37,7 @@ import {
   COLOR_QUERY_OSC_IDENTS,
   suppressOscColor,
   stripTerminalColorReports,
+  isTerminalReply,
 } from '../lib/terminal-input.js';
 import { hasOpenModalDialog } from '../lib/focus-ownership.js';
 import { desktopBridge as sharedDesktopBridge } from '../lib/desktop-bridge.js';
@@ -36,6 +48,11 @@ import {
 } from '../lib/ui-preferences.js';
 
 type ThemeMode = 'light' | 'dark';
+interface PendingTextPaste {
+  controller: AbortController;
+  timeout?: number;
+  startTimer?: number;
+}
 
 /** Reads the app theme from the `data-theme` attribute set on `<html>`. */
 function currentThemeMode(): ThemeMode {
@@ -211,7 +228,7 @@ export function TerminalView({
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const appearanceFitRef = useRef<(() => void) | null>(null);
   const repaintRef = useRef<(() => void) | null>(null);
   const { prefs } = useUiPreferences();
   const appearance = terminalAppearance(prefs);
@@ -227,6 +244,9 @@ export function TerminalView({
   const [startupSeconds, setStartupSeconds] = useState(0);
   const [health, setHealth] = useState<TerminalHealth | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [inputTrace] = useState(() => createTerminalInputDiagnostics(() => performance.now()));
+  const [traceEnabled, setTraceEnabled] = useState(false);
+  const [inputRecords, setInputRecords] = useState<TerminalInputRecord[]>([]);
   const sendEscapeRef = useRef<(() => void) | null>(null);
   const healthProblem = health?.connection === 'unresponsive' || (health?.pendingInputSeconds ?? 0) >= 10;
   const preparing = ['connecting', 'bootstrapping', 'reconnecting'].includes(connectionStatus.state);
@@ -251,6 +271,10 @@ export function TerminalView({
     return () => window.clearInterval(timer);
   }, [preparing, sessionId, connectionAttempt]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [savingTextPaste, setSavingTextPaste] = useState(false);
+  const [textPasteNotice, setTextPasteNotice] = useState<string | null>(null);
+  const cancelTextPasteRef = useRef<(() => void) | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(currentThemeMode);
   const themeModeRef = useRef(themeMode);
   themeModeRef.current = themeMode;
@@ -294,18 +318,9 @@ export function TerminalView({
     term.options.fontFamily = appearance.fontFamily;
     term.options.fontSize = appearance.fontSize;
     term.options.theme = xtermTheme(themeModeRef.current, appearance.foreground);
-    try {
-      fitRef.current?.fit();
-    } catch {
-      /* xterm throws if measured before layout; the resize burst will refit */
-    }
-    // Rebuild the WebGL texture atlas so the new font metrics and text colour
-    // take effect (and any cached background is cleared) instead of lingering.
-    if (repaintRef.current) {
-      repaintRef.current();
-    } else {
-      term.refresh(0, term.rows - 1);
-    }
+    // The same guarded path must update both xterm and the PTY grid. A direct
+    // FitAddon call here resized only the renderer, and bypassed replay/drag.
+    appearanceFitRef.current?.();
   }, [appearance.fontFamily, appearance.fontSize, appearance.foreground]);
 
   useEffect(() => {
@@ -314,6 +329,8 @@ export function TerminalView({
       return;
     }
     setAttachmentError(null);
+    setSavingTextPaste(false);
+    setTextPasteNotice(null);
     host.dataset.focusOwner = `terminal:${sessionId}`;
     host.dataset.focusToken = String(focusTokenRef.current);
 
@@ -351,7 +368,6 @@ export function TerminalView({
       ...windowsPtyOptions,
     });
     const fit = new FitAddon();
-    fitRef.current = fit;
     term.loadAddon(fit);
     const webLinks = new WebLinksAddon((_event, uri) => openExternal(uri));
     term.loadAddon(webLinks);
@@ -511,16 +527,41 @@ export function TerminalView({
       typeof window !== 'undefined' ? window.__CW_API_BASE__ : undefined,
       import.meta.env.VITE_API_BASE,
     );
+    const pasteApi = createApiClient({ baseUrl: base });
     let ws: WebSocket;
     let disposed = false;
     let reconnects = 0;
     let reconnectTimer: number | undefined;
     let handshakeTimer: number | undefined;
     let healthMonitor = createTerminalHealth(Date.now);
+    let inputGeneration = 0;
+    let terminalGeneration = 0;
+    let activePasteOperation: number | null = null;
+    let pasteDeliveryAccepted = true;
+    let injectingPaste = false;
+    let pendingTextPaste: PendingTextPaste | null = null;
+    const observeInput = (
+      source: TerminalInputSource,
+      fields: Partial<Pick<TerminalInputObservation,
+        'operation' | 'trusted' | 'outcome' | 'sequence' | 'cols' | 'rows' | 'composing' | 'fromPaste'>> = {},
+      text = '',
+    ) => {
+      if (!inputTrace.enabled()) return;
+      inputTrace.record({
+        source, operation: null, trusted: null, outcome: 'observed',
+        focused: host.contains(document.activeElement), generation: terminalGeneration,
+        focusEpoch: inputGeneration, bytes: new TextEncoder().encode(text).byteLength, ...fields,
+      });
+      setInputRecords(inputTrace.snapshot());
+    };
     const delivery = createTerminalDelivery({
       send: (message) => {
         if (ws.readyState !== WebSocket.OPEN) throw new Error('Socket is not open');
         ws.send(encodeClientMessage(message));
+        if (message.type === 'input') observeInput('transport-input', {
+          operation: activePasteOperation, sequence: message.seq,
+        }, message.data);
+        if (message.type === 'resize') observeInput('transport-resize', { cols: message.cols, rows: message.rows });
         healthMonitor.sent(message);
       },
       status: (state, notice) => setConnectionStatus({ state, notice }),
@@ -659,6 +700,19 @@ export function TerminalView({
       pendingFitForce ||= force;
       flushPendingFit();
     };
+    let appearanceRetryIds: number[] = [];
+    appearanceFitRef.current = () => {
+      for (const id of appearanceRetryIds) cancelTrackedTimeout(id);
+      requestFit({ repaint: true });
+      appearanceRetryIds = [60, 160, 320, 600].map((delay) =>
+        scheduleTimeout(() => requestFit({ repaint: true }), delay));
+    };
+    const onFontsLoaded = () => requestFit({ repaint: true });
+    const fonts = document.fonts;
+    fonts?.addEventListener('loadingdone', onFontsLoaded);
+    void fonts?.ready.then(() => {
+      if (!disposed) onFontsLoaded();
+    });
 
     // Coalesce bursts of resize events (e.g. the sidebar collapse/expand
     // animation fires the ResizeObserver on every frame) into a single fit at
@@ -686,16 +740,31 @@ export function TerminalView({
     }
 
     const dataSub = term.onData((data) => {
+      if (pendingTextPaste && !isTerminalReply(data)) return;
+      // Include bracketed-paste framing without allowing a bypass to feed an
+      // unbounded payload through xterm's input/transport callbacks.
+      if (data.length > INLINE_PASTE_BYTES + 12 ||
+          new TextEncoder().encode(data).byteLength > INLINE_PASTE_BYTES + 12) {
+        pasteDeliveryAccepted = false;
+        setAttachmentError('Large terminal input was blocked. Use Paste to save the text as a file instead.');
+        return;
+      }
       // Strip xterm's OSC color-query replies before they reach the PTY: the
       // hosted CLI mis-parses them and injects their printable body into its
       // input line, mixing garbage like `4;0;rgb:2e2e/3434/3636` into what the
       // user is typing. Keystrokes and CSI cursor/DA replies are unaffected.
       const outbound = stripTerminalColorReports(data);
-      delivery.offer(outbound);
+      observeInput('xterm-data', { operation: activePasteOperation }, outbound);
+      const accepted = delivery.offer(outbound);
+      if (injectingPaste && !accepted) pasteDeliveryAccepted = false;
     });
 
     const writeClipboard = (text: string) => {
-      return copyToClipboard(text);
+      const pending = copyToClipboard(text);
+      void pending.then((result) => {
+        if (!disposed) setCopyError(result.ok ? null : copyFailureMessage(result));
+      });
+      return pending;
     };
 
     // Copy-on-select, done right. The hosted CLI enables any-event mouse
@@ -741,9 +810,25 @@ export function TerminalView({
 
     const pasteGuard = createPasteGuard();
     let clipboardMounted = true;
-    let inputGeneration = 0;
-    let terminalGeneration = 0;
-    const invalidateClipboardRead = () => { inputGeneration++; };
+    const finishTextPaste = (pending: PendingTextPaste) => {
+      if (pendingTextPaste !== pending) return false;
+      pendingTextPaste = null;
+      cancelTrackedTimeout(pending.startTimer);
+      cancelTrackedTimeout(pending.timeout);
+      if (!disposed) setSavingTextPaste(false);
+      return true;
+    };
+    const cancelTextPaste = (message: string) => {
+      const pending = pendingTextPaste;
+      if (!pending || !finishTextPaste(pending)) return;
+      pending.controller.abort();
+      if (!disposed) setAttachmentError(message);
+    };
+    cancelTextPasteRef.current = () => cancelTextPaste('Text paste cancelled. Nothing was inserted; any saved file is retained.');
+    const invalidateClipboardRead = () => {
+      inputGeneration++;
+      cancelTextPaste('Text paste cancelled because the terminal target changed. Nothing was inserted.');
+    };
     const syncFocusToken = () => {
       host.dataset.focusOwner = `terminal:${sessionId}`;
       host.dataset.focusToken = String(focusTokenRef.current);
@@ -754,9 +839,11 @@ export function TerminalView({
     };
     const onClipboardFocusOut = (event: FocusEvent) => {
       if (!isInternalClipboardFocusTransfer(event)) invalidateClipboardRead();
+      observeInput('focusout', { trusted: event.isTrusted });
     };
     const onWindowBlur = () => {
       invalidateClipboardRead();
+      observeInput('window-blur');
       dragActive = false;
       selectedDuringDrag = false;
       lastSelection = '';
@@ -767,21 +854,97 @@ export function TerminalView({
       const generation = inputGeneration;
       const target = document.activeElement;
       return () => clipboardMounted && generation === inputGeneration &&
-        !!target && host.contains(target) && target === document.activeElement;
+        !hasOpenModalDialog() && !!target && host.contains(target) && target === document.activeElement;
     };
-    const paste = (text: string) => {
-      if (text) term.paste(text);
+    const paste = (text: string, operation: number | null) => {
+      if (!text) return;
+      observeInput('paste-call', { operation, outcome: 'accepted' }, text);
+      activePasteOperation = operation;
+      pasteDeliveryAccepted = true;
+      injectingPaste = true;
+      try {
+        term.paste(text);
+        if (!pasteDeliveryAccepted) throw new Error('Terminal input was not accepted');
+      } finally {
+        activePasteOperation = null;
+        injectingPaste = false;
+      }
+    };
+    const pasteText = (text: string, operation: number | null, ownsInput: () => boolean) => {
+      if (pendingTextPaste) {
+        setAttachmentError('A text paste is already being saved. Wait for it to finish or cancel it first.');
+        return;
+      }
+      const kind = classifyTextPaste(text);
+      if (kind === 'too-large') {
+        setAttachmentError('Pasted text exceeds the 4 MiB limit. Save it as a file and reference that file instead.');
+        return;
+      }
+      setAttachmentError(null);
+      setTextPasteNotice(null);
+      if (kind === 'inline') {
+        try {
+          paste(text, operation);
+        } catch {
+          setAttachmentError('Paste delivery is unconfirmed. Check the terminal before retrying; input was not replayed.');
+        }
+        return;
+      }
+      if (!delivery.writable()) {
+        setAttachmentError('The terminal is not ready. Nothing was pasted; wait for the session and retry.');
+        return;
+      }
+      const pending: PendingTextPaste = { controller: new AbortController() };
+      pendingTextPaste = pending;
+      setSavingTextPaste(true);
+      pending.timeout = scheduleTimeout(() => cancelTextPaste(
+        'Saving pasted text timed out. Nothing was inserted; file storage is unconfirmed. Retry explicitly.',
+      ), TEXT_PASTE_TIMEOUT_MS);
+      pending.startTimer = scheduleTimeout(() => {
+        pending.startTimer = undefined;
+        void (async () => {
+          try {
+            const body = textPasteBody(text);
+            const result = await pasteApi.createSessionTextAttachment(sessionId, body, pending.controller.signal);
+            if (pendingTextPaste !== pending) return;
+            if (!ownsInput() || !delivery.writable()) {
+              cancelTextPaste('The terminal target changed. The text may be saved, but nothing was inserted.');
+              return;
+            }
+            const reference = textPasteReference(result, sessionId, hostIsWindows());
+            finishTextPaste(pending);
+            try {
+              paste(reference, operation);
+              setAttachmentError(null);
+              setTextPasteNotice('Pasted text was saved as a file; only its reference was inserted. Press Enter when ready.');
+            } catch {
+              setAttachmentError('The text file was saved, but reference delivery is unconfirmed. Check the terminal before retrying; input was not replayed.');
+            }
+          } catch (error) {
+            if (!finishTextPaste(pending)) return;
+            setAttachmentError(error instanceof ApiError && error.code === 'quota'
+              ? 'Pasted-text storage is full. Manage retained text files in Settings > Diagnostics > Retained pasted text. Deleting files may break earlier prompts; nothing is deleted automatically.'
+              : error instanceof ApiError && error.status === 413
+              ? 'Pasted text exceeds the attachment size limit. Save it as a file and reference that file instead.'
+              : error instanceof Error && error.message.startsWith('Pasted text exceeds')
+                ? error.message
+                : 'Pasted text could not be saved or its response was invalid. Nothing was pasted; check session storage and retry explicitly.');
+          }
+        })();
+      }, 0);
     };
 
     // Bridge-based paste for the right-click path only (a context-menu paste
     // fires no native `paste` event, so xterm won't handle it). This path is
     // text-only; the keyboard path does NOT use it — see onPaste.
-    const pasteFromClipboard = async () => {
+    const pasteFromClipboard = async (operation: number | null) => {
       const ownsInput = captureInput();
       if (!ownsInput()) return;
       const text = await readClipboard();
       if (ownsInput() && text) {
-        paste(text);
+        pasteText(text, operation, ownsInput);
+      } else if (!ownsInput()) {
+        observeInput('context-menu', { operation, outcome: 'ownership-lost' });
       }
       // Deliberately TEXT-only. A right-click carries no paste intent for a
       // binary image, so silently attaching whatever bitmap happens to sit on
@@ -798,6 +961,19 @@ export function TerminalView({
         return true;
       }
       const mod = e.ctrlKey || e.metaKey;
+      if (pendingTextPaste) {
+        if (e.key === 'Escape' || (mod && e.key.toLowerCase() === 'c' && !e.shiftKey && !term.hasSelection())) {
+          cancelTextPaste('Text paste cancelled. Nothing was inserted; any saved file is retained.');
+          e.preventDefault();
+          return false;
+        } else if (!(mod && e.key.toLowerCase() === 'c')) {
+          e.preventDefault();
+          return false;
+        }
+      }
+      if (e.key === 'Enter' && !e.isComposing) observeInput('submit-key', {
+        operation: inputTrace.operation(e), trusted: e.isTrusted,
+      });
       if (!mod) {
         return true;
       }
@@ -815,6 +991,7 @@ export function TerminalView({
       }
 
       if (key === 'v') {
+        observeInput('paste-key', { operation: inputTrace.operation(e), trusted: e.isTrusted, composing: e.isComposing });
         // Only block xterm from emitting a literal ^V (0x16). Do NOT paste here:
         // returning false makes xterm ignore the key WITHOUT calling
         // preventDefault, so the browser still fires a native `paste` event —
@@ -843,32 +1020,38 @@ export function TerminalView({
       event.stopImmediatePropagation();
       const data = event.clipboardData;
       const text = data?.getData('text/plain') ?? '';
+      const operation = inputTrace.operation(event);
       const hasImageOrFile =
         !!data &&
         ((data.files?.length ?? 0) > 0 ||
           Array.from(data.items ?? []).some((it) => it.kind === 'file'));
-      const pasteSignature = text
-        ? `text:${text}`
-        : hasImageOrFile
-          ? `attachment:${data.files?.length ?? 0}:${Array.from(data.items ?? [])
-            .map((it) => `${it.kind}:${it.type}`)
-            .join(',')}`
-          : undefined;
       // JS-dispatched events are not native clipboard evidence. Browser/menu
       // editing events may be trusted; the menu must not create a second path.
-      if (!event.isTrusted || !pasteGuard.shouldPaste(event, pasteSignature, event.timeStamp)) {
+      if (!event.isTrusted) {
+        observeInput('paste-event', { operation, trusted: false, outcome: 'untrusted' },
+          text.length <= INLINE_PASTE_BYTES ? text : '');
+        return;
+      }
+      if (!pasteGuard.shouldPaste(event)) {
+        observeInput('paste-event', { operation, trusted: true, outcome: 'duplicate-event' },
+          text.length <= INLINE_PASTE_BYTES ? text : '');
         return;
       }
       const ownsInput = captureInput();
+      observeInput('paste-event', { operation, trusted: true, outcome: ownsInput() ? 'accepted' : 'ownership-lost' },
+        text.length <= INLINE_PASTE_BYTES ? text : '');
       if (!ownsInput()) return;
       if (text) {
-        paste(text);
+        pasteText(text, operation, ownsInput);
         return;
       }
       if (hasImageOrFile) {
         setAttachmentError(null);
         void readClipboardAttachment(sessionId).then((result) => {
-          if (!ownsInput()) return;
+          if (!ownsInput()) {
+            observeInput('paste-event', { operation, outcome: 'ownership-lost' });
+            return;
+          }
           if (!result || result.status === 'error' || result.status === 'none') {
             setAttachmentError(attachmentFailureMessage(result?.status === 'error' ? result.error : 'attachment-unavailable'));
             return;
@@ -882,7 +1065,7 @@ export function TerminalView({
             return;
           }
           try {
-            paste(text);
+            paste(text, operation);
           } catch {
             setAttachmentError('Attachment delivery is unconfirmed. Check the terminal before retrying; input was not replayed.');
           }
@@ -890,11 +1073,34 @@ export function TerminalView({
       }
     };
     host.addEventListener('paste', onPaste, { capture: true });
+    const onInputEvent = (event: Event) => {
+      if (event.type !== 'beforeinput' && event.type !== 'input' &&
+          event.type !== 'compositionstart' && event.type !== 'compositionend') return;
+      observeInput(event.type, {
+        operation: inputTrace.operation(event), trusted: event.isTrusted,
+        composing: event instanceof InputEvent && event.isComposing,
+        fromPaste: event instanceof InputEvent && event.inputType === 'insertFromPaste',
+      }, event instanceof InputEvent || event instanceof CompositionEvent ? event.data ?? '' : '');
+    };
+    const inputEventTypes = ['beforeinput', 'input', 'compositionstart', 'compositionend'] as const;
+    for (const type of inputEventTypes) host.addEventListener(type, onInputEvent, { capture: true });
     const onCopy = (event: ClipboardEvent) => {
       if (!term.hasSelection()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      void writeClipboard(term.getSelection());
+      const selection = term.getSelection();
+      // Filling the event's own clipboard data is synchronous and needs no focus
+      // or permission, so a native Copy cannot lose a race with focus changes.
+      try {
+        if (event.clipboardData) {
+          event.clipboardData.setData('text/plain', toClipboardText(selection, hostIsWindows()));
+          setCopyError(null);
+          return;
+        }
+      } catch {
+        /* fall through to the explicit bridge, which reports its own failure */
+      }
+      void writeClipboard(selection);
     };
     host.addEventListener('copy', onCopy, { capture: true });
 
@@ -902,6 +1108,8 @@ export function TerminalView({
     // Windows-terminal convention, so text can be copied without a shortcut.
     const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
+      const operation = inputTrace.operation(event);
+      observeInput('context-menu', { operation, trusted: event.isTrusted });
       if (term.hasSelection()) {
         const selection = term.getSelection();
         const ownsInput = captureInput();
@@ -909,7 +1117,7 @@ export function TerminalView({
           if (result.ok && ownsInput() && term.getSelection() === selection) term.clearSelection();
         });
       } else {
-        void pasteFromClipboard();
+        void pasteFromClipboard(operation);
       }
     };
     host.addEventListener('contextmenu', onContextMenu);
@@ -921,7 +1129,14 @@ export function TerminalView({
     const refocus = () => {
       flushPendingFit();
       focusTerminal(true);
+      // Occlusion, sleep/resume or a display change can leave the GPU canvas
+      // stale without changing CSS size, so nothing else would repaint it.
+      refreshViewport();
     };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') repaintViewport();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
     let refocusTimer: number | undefined;
     const onHostMouseDown = () => {
       // Start of a fresh interaction: reset the copy-on-select capture so a
@@ -950,13 +1165,14 @@ export function TerminalView({
       }
       dragActive = false;
       if (selectedDuringDrag && lastSelection) {
-        copyToClipboard(lastSelection);
+        writeClipboard(lastSelection);
       }
       flushPendingFit();
     };
     window.addEventListener('mouseup', onDocumentMouseUp);
     window.addEventListener('focus', refocus);
 
+    let renderedOutput = false;
     const connect = () => {
       setWorktreeSelection(null);
       let handshakeTimedOut = false;
@@ -1024,9 +1240,11 @@ export function TerminalView({
             invalidateFocusToken();
           }
           terminalGeneration = message.generation;
+          observeInput('generation');
           syncFocusToken();
         }
         delivery.receive(message);
+        if (message.type === 'ack') observeInput('input-ack', { sequence: message.seq });
         if (message.type === 'state' && message.state === 'closed') {
           sealReplayBarrier();
         }
@@ -1039,15 +1257,40 @@ export function TerminalView({
           }
         }
         if (message.type === 'output') {
+          renderedOutput = true;
           const onWritten = trackReplayWrite();
           if (onWritten) {
             term.write(message.data, onWritten);
           } else {
             term.write(message.data);
           }
+        } else if (message.type === 'resize' && message.phase === 'boundary') {
+          // A later size change inside the same replay. xterm parses queued
+          // writes asynchronously, so resize only after everything before this
+          // point has been parsed at the previous size; later writes queue behind it.
+          const onWritten = trackReplayWrite();
+          term.write('', () => {
+            if (disposed) return;
+            if (message.cols > 0 && message.rows > 0) {
+              try {
+                term.resize(message.cols, message.rows);
+              } catch {
+                /* xterm may reject before layout; the fit burst still recovers */
+              }
+            }
+            onWritten?.();
+          });
         } else if (message.type === 'resize') {
           // Replay uses the capture grid, then the existing fit path restores
           // the pane dimensions after the retained output has been written.
+          // The server sends this once per attach, immediately before it replays
+          // the retained stream. On a reconnect the old screen is still in xterm;
+          // replaying cursor-addressed frames over it duplicates rows and leaves
+          // stale cells, so start the replay from a clean terminal.
+          if (renderedOutput) {
+            term.reset();
+            renderedOutput = false;
+          }
           beginReplayBarrier();
           if (message.cols > 0 && message.rows > 0) {
             try {
@@ -1058,6 +1301,7 @@ export function TerminalView({
           }
         } else if (message.type === 'exit') {
           invalidateClipboardRead();
+          observeInput('terminal-exit');
           invalidateFocusToken();
           const footer = `\r\n\x1b[90m[session ended${
             message.code === null ? '' : ` · exit ${message.code}`
@@ -1089,6 +1333,7 @@ export function TerminalView({
         window.clearTimeout(handshakeTimer);
         if (disposed) return;
         invalidateClipboardRead();
+        observeInput('socket-close');
         invalidateFocusToken();
         cancelReplayBarrier();
         const retry = !handshakeTimedOut && event.code < 4400 && reconnects++ < 3;
@@ -1122,6 +1367,7 @@ export function TerminalView({
     return () => {
       clipboardMounted = false;
       disposed = true;
+      cancelTextPasteRef.current = null;
       window.clearInterval(healthTimer);
       sendEscapeRef.current = null;
       window.clearTimeout(reconnectTimer);
@@ -1137,12 +1383,15 @@ export function TerminalView({
       window.removeEventListener('resize', applyFitSettled);
       resolutionQuery?.removeEventListener('change', onResolutionChange);
       window.removeEventListener('focus', refocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('mouseup', onDocumentMouseUp);
       host.removeEventListener('mousedown', onHostMouseDown);
       host.removeEventListener('contextmenu', onContextMenu);
       host.removeEventListener('paste', onPaste, { capture: true });
+      for (const type of inputEventTypes) host.removeEventListener(type, onInputEvent, { capture: true });
       host.removeEventListener('copy', onCopy, { capture: true });
       observer?.disconnect();
+      fonts?.removeEventListener('loadingdone', onFontsLoaded);
       for (const id of rafIds) {
         cancelAnimationFrame(id);
       }
@@ -1162,12 +1411,12 @@ export function TerminalView({
       webLinks.dispose();
       term.dispose();
       termRef.current = null;
-      fitRef.current = null;
+      appearanceFitRef.current = null;
       repaintRef.current = null;
       delete host.dataset.focusOwner;
       delete host.dataset.focusToken;
     };
-  }, [sessionId, connectionAttempt]);
+  }, [sessionId, connectionAttempt, inputTrace]);
 
   return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
     {worktreeSelection && <Modal title="Choose a task worktree" onClose={() => worktreeSelection.respond(null)} size="md">
@@ -1225,8 +1474,28 @@ export function TerminalView({
           <button disabled={health.connection !== 'live' || health.pendingInputSeconds !== null} onClick={() => sendEscapeRef.current?.()}>Send Esc to CLI</button>
           <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect terminal</button>
         </div>
+        <label>
+          <input type="checkbox" checked={traceEnabled} onChange={(event) => {
+            const enabled = event.target.checked;
+            inputTrace.setEnabled(enabled);
+            setTraceEnabled(enabled);
+            setInputRecords([]);
+          }} /> Record terminal input metadata (opt-in)
+        </label>
+        {traceEnabled && <>
+          <p>Last 128 events, in memory only. No clipboard text, prompts, paths or content hashes.
+            Disable to erase. Operation IDs identify handler events, not physical gestures.
+            Buffered transport frames may have no operation ID.</p>
+          <pre aria-label="Terminal input metadata" style={{ maxHeight: 160, overflow: 'auto' }}>{JSON.stringify(inputRecords, null, 2)}</pre>
+        </>}
       </section>}
+    {savingTextPaste && <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>
+      <span className="spinner" aria-hidden="true" /> Saving pasted text as a file. Terminal input is paused.
+      <button type="button" onClick={() => cancelTextPasteRef.current?.()}>Cancel text paste</button>
+    </div>}
+    {textPasteNotice && <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>{textPasteNotice}</div>}
     {attachmentError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{attachmentError}</div>}
+    {copyError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{copyError}</div>}
     <div className="terminal-host" style={{ flex: 1, minHeight: 0 }} ref={hostRef} />
   </div>;
 }

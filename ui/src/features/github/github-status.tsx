@@ -19,7 +19,8 @@ export function GithubStatusBadge() {
   const api = useApi();
   const [signInOpen, setSignInOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-  const { data, loading, reload } = useAsync<GithubStatus>(
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const { data, loading, error, reload } = useAsync<GithubStatus>(
     () => api.getGithubStatus(),
     [],
   );
@@ -39,8 +40,12 @@ export function GithubStatusBadge() {
   const signOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
+    setSignOutError(null);
     try {
-      await api.githubSignOut();
+      const result = await api.githubSignOut();
+      if (result.authenticated) setSignOutError('GitHub sign-out did not complete. Retry signing out.');
+    } catch (err) {
+      setSignOutError(err instanceof Error ? err.message : 'GitHub sign-out failed.');
     } finally {
       setSigningOut(false);
       reload();
@@ -48,7 +53,9 @@ export function GithubStatusBadge() {
   };
 
   const label =
-    state === 'checking'
+    error && !data
+      ? 'GitHub · status unavailable'
+      : state === 'checking'
       ? 'GitHub · checking…'
       : authenticated
         ? `GitHub · ${data?.login ?? 'signed in'}`
@@ -62,8 +69,10 @@ export function GithubStatusBadge() {
         onClick={reload}
         disabled={loading}
         title={
-          authenticated
-            ? 'Signed in to GitHub. All sessions inherit this login automatically. Click to re-check.'
+          error
+            ? 'GitHub status could not be checked. Click to retry; existing account state was preserved.'
+            : authenticated
+            ? 'Signed in to GitHub. New sessions inherit the current credential; existing sessions may need restarting. Click to re-check.'
             : 'Not signed in. Click “Sign in” to authorize this device, or re-check if you signed in elsewhere.'
         }
       >
@@ -93,7 +102,7 @@ export function GithubStatusBadge() {
           )}
         </button>
       )}
-      {!authenticated && state !== 'checking' && (
+      {!authenticated && !error && state !== 'checking' && (
         <button
           type="button"
           className="az-signin-btn gh-signin-btn"
@@ -112,6 +121,7 @@ export function GithubStatusBadge() {
           }}
         />
       )}
+      {(signOutError || error) && <p className="az-signin-error" role="alert">{signOutError || error}</p>}
     </div>
   );
 }

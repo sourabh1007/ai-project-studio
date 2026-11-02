@@ -8,6 +8,13 @@ import {
   type TerminalReplayBuffer,
 } from './terminal-local-buffer.js';
 
+/**
+ * `attach` starts a replay (the client may discard what it shows); `boundary`
+ * is a later size change inside the same replay and must only resize, in order,
+ * between the surrounding output.
+ */
+export type ReplayGeometryPhase = 'attach' | 'boundary';
+
 /** A connected client that receives terminal output and the final exit code. */
 export interface TerminalOutputSink {
   send(data: string): void;
@@ -19,7 +26,7 @@ export interface TerminalOutputSink {
    * replayed full-screen TUI output stays aligned instead of garbling when the
    * client's pane width differs from the capture width.
    */
-  resize?(cols: number, rows: number): void;
+  resize?(cols: number, rows: number, phase?: ReplayGeometryPhase): void;
   /**
    * Marks this sink as one a user is watching, so it is muted while output is
    * suppressed (see {@link TerminalSession.suppressOutput}). Internal observers
@@ -50,6 +57,8 @@ export interface TerminalSessionDeps {
    */
   initialCols?: number;
   initialRows?: number;
+  /** Max retained size-change marks for replay; older text is dropped beyond it. Default 128. */
+  maxGeometryBoundaries?: number;
   /** Invoked once when the underlying process exits. */
   onExit: (code: number | null) => void;
 }
@@ -121,7 +130,8 @@ export function createTerminalSession(
   let cols = deps.initialCols ?? 0;
   let rows = deps.initialRows ?? 0;
   const scrollback: TerminalReplayBuffer =
-    createAnsiSafeUtf8TailBuffer(scrollbackBytes);
+    createAnsiSafeUtf8TailBuffer(scrollbackBytes, deps.maxGeometryBoundaries);
+  scrollback.noteGeometry(cols, rows);
   const transcript = createUtf8TailBuffer(transcriptBytes);
   const stripTranscriptAnsi = createAnsiStripper();
   let exited = false;
@@ -245,15 +255,16 @@ export function createTerminalSession(
       cols = nextCols;
       rows = nextRows;
       pty.resize(nextCols, nextRows);
+      scrollback.noteGeometry(nextCols, nextRows);
     },
     attach(sink) {
-      // Tell the client the capture size before replaying, so it can match its
-      // grid width to the scrollback and avoid garbled/overlapping redraws.
-      sink.resize?.(cols, rows);
-      const retained = scrollback.text();
-      if (retained.length > 0) {
-        sink.send(retained);
-      }
+      // Replay each retained span at the grid size it was drawn for, so
+      // cursor-addressed frames are not interpreted at a later width. The last
+      // span carries the active PTY size.
+      scrollback.replaySegments().forEach((segment, index) => {
+        sink.resize?.(segment.cols, segment.rows, index === 0 ? 'attach' : 'boundary');
+        if (segment.text.length > 0) sink.send(segment.text);
+      });
       if (exited) {
         sink.exit(exitCode);
         return () => {};

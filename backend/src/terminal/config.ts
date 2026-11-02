@@ -15,6 +15,11 @@ export const terminalConfigSchema = z.object({
   /** Max bytes of terminal output retained for replay to late-joining clients. */
   scrollbackBytes: z.number().int().positive(),
   /**
+   * Max distinct terminal-size boundaries retained alongside scrollback so replay
+   * can re-apply each width in order. Beyond this the oldest output is dropped.
+   */
+  maxReplayGeometryBoundaries: z.number().int().positive(),
+  /**
    * UTF-8 input limit advertised by protocol v2: maximum queued startup input,
    * individual input frame, and browser-side unacknowledged input bytes.
    */
@@ -84,6 +89,7 @@ export const terminalDefaults: TerminalConfig = {
   defaultCols: 120,
   defaultRows: 30,
   scrollbackBytes: 262144,
+  maxReplayGeometryBoundaries: 128,
   bootstrapInputBufferBytes: 65536,
   launchTimeoutMs: 660_000,
   transcriptBytes: 1048576,

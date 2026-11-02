@@ -1,4 +1,6 @@
 import { AGENCY_NAMESPACE } from '../provider/agency-adapter/config.js';
+import { ValidationError } from '../kernel/error-types.js';
+import { optionalCommandArgsSchema } from '../provider/command-options.js';
 
 /** A resolved executable + argument vector for the plan-usage probe. */
 export interface PlanUsageProbeCommand {
@@ -7,6 +9,7 @@ export interface PlanUsageProbeCommand {
 }
 
 export interface PlanUsageCommandInput {
+  extraArgs?: string[];
   /** Active meta provider id (e.g. `'copilot'` or `'agency'`). */
   providerId: string;
   /**
@@ -34,17 +37,20 @@ export interface PlanUsageCommandInput {
  * and exposes no quota of its own, so its `/usage` panel is the same underlying
  * budget — but launching through Agency uses Agency's own executable resolution
  * and environment, which is what a user on the Agency provider expects. Any
- * non-Agency provider uses the plain Copilot form.
+ * unsupported provider is rejected instead of borrowing another CLI's quota.
  */
 export function buildPlanUsageProbeCommand(
   input: PlanUsageCommandInput,
 ): PlanUsageProbeCommand {
-  const copilotArgs = ['--model', input.model, '--session-id', input.sessionId];
+  const copilotArgs = ['--model', input.model, '--session-id', input.sessionId, ...optionalCommandArgsSchema.parse(input.extraArgs ?? [])];
   if (input.providerId === AGENCY_NAMESPACE) {
     return {
       command: input.agency.executable,
       args: [input.agency.subcommand, '--', ...copilotArgs],
     };
   }
-  return { command: input.copilot.executable, args: copilotArgs };
+  if (input.providerId === 'copilot') {
+    return { command: input.copilot.executable, args: copilotArgs };
+  }
+  throw new ValidationError(`Plan AI-credit quota is unavailable for provider '${input.providerId}'`);
 }

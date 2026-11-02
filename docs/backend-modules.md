@@ -7,9 +7,9 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 | --- | --- | --- |
 | `feature/` | Core feature aggregate/service and feature-scoped work-summary contract. | `feature-service.ts`, `feature-contract.ts`, `feature-work-summary.ts` |
 | `session/` | Session lifecycle: contracts, state machine, factory, launcher, reconciliation, transcript capture. | `session-launcher.ts`, `session-factory.ts`, `session-state-machine.ts`, `session-repo-port.ts` |
-| `session-bootstrap/` | Gates repository-backed development sessions on ready context and composes launch-only repository, feature, prior-session-summary, and skill instructions. | `session-bootstrap.ts` |
+| `session-bootstrap/` | Composes launch-only available repository context, feature, prior-session-summary, and skill instructions without blocking session creation on background context. | `session-bootstrap.ts` |
 | `feature-tasks/` | Generate, parse, and run AI task plans attached to a feature; track progress. | `feature-tasks-service.ts`, `task-plan-runner.ts`, `task-plan-parser.ts` |
-| `pr-review/` | Generates and tracks the automated review of a pull-request review feature: collects a bounded PR diff, embeds the ready repository context, runs an internal meta AI session, parses the summary + core analysis, persists lifecycle state, and publishes `pr.review.updated`. | `pr-review-service.ts`, `pr-diff-collector.ts`, `pr-review-prompt.ts`, `pr-review-parser.ts`, `config.ts` |
+| `pr-review/` | PR evidence/diff/change-graph and persisted review support. Legacy summary/core-analysis helpers are not the mounted Review Board's scored-review UX; current perspective analysis and sign-off are described in [PR reviews](features/pr-reviews.md). | `pr-review-service.ts`, `pr-diff-collector.ts`, `pr-review-prompt.ts`, `pr-review-parser.ts`, `config.ts` |
 | `new-task/` | The New Task agent's engine: plans a change from a problem statement, then implements it as a parallel **team** (a lead agent decomposes the plan into file-disjoint slices; developer/tester sub-agents each lease a metasession and run concurrently), commits in an isolated git worktree, opens a PR, and makes the task Review-Board-eligible. Streams per-agent time/token/credit metrics and per-file diffs. | `new-task-service.ts`, `new-task-team.ts`, `new-task-prompt.ts`, `new-task-git.ts`, `new-task-pr.ts`, `new-task-run-hub.ts`, `new-task-contract.ts` |
 | `bug-bash/` | The Bug Bash agent's engine: a scenario analyst reads the feature + repository and generates reviewable edge-case scenarios; on approval a lead agent splits them round-robin across **tester** sub-agents that each lease a metasession and run concurrently, then merges verdicts into a compiled findings report. Read-only — no worktree, edits, or PR. Streams per-agent time/token/credit metrics. | `bug-bash-service.ts`, `bug-bash-team.ts`, `bug-bash-prompt.ts`, `bug-bash-scenarios.ts`, `bug-bash-run-hub.ts`, `bug-bash-contract.ts` |
 | `agents/` | The **agent platform**: a registry + service that make attachable feature agents (Review Board, New Task, Bug Bash) first-class — attachment persistence, prerequisite gating, namespaced routes/config, and per-agent usage roll-up — with no core hand-wiring. See [agents.md](agents.md). | `agent-contract.ts`, `agent-registry.ts`, `agent-service.ts`, `review-board-agent.ts`, `new-task-agent.ts`, `bug-bash-agent.ts` |
@@ -19,10 +19,10 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 ## Execution
 | Module | Responsibility | Key files |
 | --- | --- | --- |
-| `provider/` | Provider abstraction + registry/resolver + concrete CLI adapters + CLI stores/process kernel. | `provider-contract.ts`, `provider-registry.ts`, `provider-resolver.ts`, `copilot-adapter/`, `agency-adapter/`, `cli-store/` |
-| `terminal/` | PTY + WebSocket adapter for live interactive sessions; enforces bootstrap readiness and seeds repository/feature/memory/skill instructions after the prompt is ready. | `terminal-manager.ts`, `terminal-session.ts`, `node-pty-spawner.ts`, `executable-resolver.ts` |
+| `provider/` | Provider abstraction + registry/resolver + Copilot, optional Agency and native Claude v2 adapters + provider-owned history/usage/process boundaries. | `provider-contract.ts`, `provider-registry.ts`, `provider-resolver.ts`, `copilot-adapter/`, `agency-adapter/`, `claude-adapter/`, `cli-store/` |
+| `terminal/` | PTY + WebSocket adapter for live interactive sessions; enforces transport/prompt readiness and delivers available repository/feature/memory/skill instructions using provider capabilities. | `terminal-manager.ts`, `terminal-session.ts`, `node-pty-spawner.ts`, `executable-resolver.ts` |
 | `meta/` | Runs/parses provider-neutral headless AI sessions (**metasessions**) used for summaries, plans, repository analysis, PR reviews, and agents. A decorator chain composes them: owned → recording (Saved AI operations) → pooled → warm **ACP** pool, falling back to a cold launch. Accepts a working directory and hidden internal scope. See [metasessions.md](metasessions.md). | `meta-runner.ts`, `owned-meta-runner.ts`, `recording-meta-runner.ts`, `pooled-meta-runner.ts`, `acp/`, `meta-response-extractor.ts` |
-| `mcp/` | Manages Model Context Protocol servers per provider: reads/writes server specs, restarts servers, probes for available tools, and toggles individual tools; changes apply to open sessions. | `mcp-service.ts`, `mcp-contract.ts`, `mcp-tool-inspector-adapter.ts` |
+| `mcp/` | Mounted category/source manager: provenance, capability-aware read/write configuration and independent bounded tool probes. Ordinary changes apply to later CLI launches; not generic live restarts/tool toggles. | `mcp-category-service.ts`, `mcp-categories.ts`, `mcp-contract.ts`, `mcp-tool-inspector-adapter.ts` |
 
 ## Telemetry & cost
 | Module | Responsibility | Key files |
@@ -48,7 +48,7 @@ Every directory under `backend/src`. Each module owns its own `config.ts` (names
 | `config/` | Config infrastructure: schema registry, env loader, validation, secret resolution. | `config-schema-registry.ts`, `config-loader.ts`, `config-validator.ts` |
 | `persistence/` | SQLite connection, schema, and repos for every persisted aggregate. Storage is split across several sibling database files (see below) attached through one connection. `repository-context-repo.ts` atomically upserts lifecycle state, retains last-good content during later attempts, and deletes context with its repository. Internal-session scope is persisted for visibility filtering while meta usage remains available to IDE AI reports. | `db/connection.ts`, `db/schema.ts`, `repository-context-repo.ts`, `*-repo.ts` |
 | `workspace/` | Workspace admin/path utilities and migration helpers. | `workspace-admin-service.ts`, `workspace-paths.ts` |
-| `api/` | HTTP/SSE boundary: Express adapter, route table, controllers, validation, stream forwarding. Repository routes initialize context after add, expose `GET /repos/:id/context` and `POST /repos/:id/context/refresh`, clean it up on removal, and stream `repository.context.updated`. PR review routes expose `GET /features/:id/pr-review` and `POST /features/:id/pr-review/refresh` and stream `pr.review.updated`. Automation routes expose `/automations` CRUD/lifecycle operations and stream `automation.updated`, `automation.removed`, and `subagent.updated`. Terminal creation rejects repository-backed dev sessions until context is ready. | `routes.ts`, `repo-controller.ts`, `pr-review-controller.ts`, `automation-controller.ts`, `terminal-controller.ts`, `usage-stream.ts` |
+| `api/` | HTTP/SSE boundary: Express adapter, route table, controllers, validation, stream forwarding. Repository routes initialize/read/refresh background context and publish `repository.context.updated`. PR evidence/review and automation routes own their persisted lifecycle updates. Session creation does not wait for optional repository context; execution still requires the active-provider and transport readiness gates. | `routes.ts`, `repo-controller.ts`, `pr-review-controller.ts`, `automation-controller.ts`, `terminal-controller.ts`, `usage-stream.ts` |
 
 ## Persistence layout (multiple databases)
 
@@ -70,7 +70,9 @@ Rather than one monolithic file, the workspace is partitioned into several SQLit
 
 - `pending`, `generating`, `ready`, `stale`, and `failed` are persisted in `repository_contexts` with source revision, transition timestamps, and retryable failure details.
 - `repository-context-coordinator.ts` deduplicates background jobs. On startup it creates missing records, resumes interrupted states, and compares saved revisions with current Git `HEAD`; changed checkouts become stale and regenerate.
-- Generation and revision failures retain the last successful content. This keeps the viewer useful, but `session-bootstrap/` accepts only non-empty `ready` content.
+- Generation and revision failures retain the last successful content for the
+  viewer. Bootstrap uses non-empty ready content when available and continues
+  without optional repository context after its bounded lookup budget.
 - Generation runs as an ordered, tracked pipeline (`repository-context-steps.ts`): `collect-evidence` → `analyze` → `persist`. Each step's status (`pending`/`running`/`ok`/`failed`/`skipped`) and detail are persisted in `repository_contexts.steps` and streamed live; on failure the failing step key is stored in `failure_step` and remaining steps are skipped, so the UI shows exactly where collection stopped.
 - Evidence collection is tracked-file-only and bounded by file bytes, per-file characters, total characters, tree length, and file count. Binary, oversized, ignored-directory, absolute, and traversal paths are rejected.
 - Large repositories are grouped by top-level path, bounded by `maxChunks`/`maxChunkChars`, summarized per module, then synthesized. All prompts explicitly treat repository contents as untrusted, read-only evidence.
@@ -78,7 +80,18 @@ Rather than one monolithic file, the workspace is partitioned into several SQLit
 
 ## Session bootstrap
 
-`session-bootstrap/session-bootstrap.ts` is evaluated immediately before launch so memory and skills are current. It includes the ready repository summary, feature details, newest completed development-session summaries (bounded by item and character limits), and effective skills. One-shot launchers prepend it to the user request; interactive terminals seed it after prompt readiness. Meta/internal sessions are excluded, and PR worktrees reuse their base repository's context.
+`session-bootstrap/session-bootstrap.ts` is evaluated immediately before launch
+so memory and skills are current. Development context includes monitoring
+guidance, an available ready repository summary, layered Shared Context, feature
+details, bounded completed-development-session summaries and effective skills.
+One-shot launchers prepend it while preserving the user request; interactive
+delivery uses each provider's bootstrap capability. PR worktrees reuse their base
+repository's optional summary.
+
+User-authored Shared Context is owned separately by `context-store/`, composed
+from workspace/repository/feature layers even for internal runs. AI context
+merges compare the source document snapshot before saving; a concurrent manual
+change or deletion produces a conflict instead of overwriting newer guidance.
 
 ## Migration recovery
 
@@ -109,6 +122,8 @@ Current providers do not supply that confirmation, so errors surface manual
 retry guidance. New user input, cancellation, replacement and shutdown invalidate
 older recovery, including delayed analysis and submit keystrokes. Normal initial
 bootstrap still precedes queued user input.
+`selfRecovery.enabled` defaults to true, but does not bypass this provider
+confirmation gate or authorize replay of uncertain input.
 
 Persisted terminal transcripts use a per-session streaming ANSI filter. CSI,
 OSC and other control strings can span PTY chunks without leaking fragments
@@ -212,8 +227,8 @@ transaction; scoped deletion cascades to its index rows within usage storage.
 
 ## Shared headless process admission
 
-The `processAdmission` namespace defaults to 8 total process reservations, at
-most 4 warm ACP hosts, and 32 queued acquisitions shared between warm waiters
+The `processAdmission` namespace defaults to 16 total process reservations, at
+most 12 warm ACP hosts, and 32 queued acquisitions shared between warm waiters
 and cold launches. One admission instance is injected into every warm pool
 (including pools added live) and the headless session launcher. At least one
 slot is reserved from warm prefill for cold work; queued cold launches take

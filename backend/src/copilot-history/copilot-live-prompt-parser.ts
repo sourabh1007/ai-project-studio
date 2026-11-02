@@ -60,12 +60,14 @@ export function parseLatestLivePrompt(
 
   const parts: string[] = [];
   let completedAt: string | null | undefined;
+  let lastActivityAt: string | null = validTimestamp(foundAt);
   for (let i = userIndex + 1; i < events.length; i += 1) {
     const event = events[i];
     // A hidden/injected user turn must not complete the preceding visible turn.
     if (event.type === 'user.message') {
       break;
     }
+    lastActivityAt = validTimestamp(event.timestamp) ?? lastActivityAt;
     const data = event.data;
     if (event.type === 'assistant.turn_start' && turnId === null && typeof data?.turnId === 'string') {
       turnId = data.turnId;
@@ -89,6 +91,7 @@ export function parseLatestLivePrompt(
   return {
     text: foundText, at: foundAt, response: response.length > 0 ? response : null,
     ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(lastActivityAt !== null ? { lastActivityAt } : {}),
   };
 }
 
@@ -101,6 +104,10 @@ interface ParsedEvent {
     originatingMessageId?: unknown;
     turnId?: unknown;
   };
+}
+
+function validTimestamp(value: unknown): string | null {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
 function tryParse(line: string): ParsedEvent | null {

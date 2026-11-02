@@ -48,6 +48,15 @@ function scriptedSpawner(script: {
 }
 
 describe('createAgencyBootstrapper', () => {
+  it('reads the installer profile at execution time', async () => {
+    const { spawner, requests } = scriptedSpawner({ code: 0 });
+    const boot = createAgencyBootstrapper({
+      platform: 'linux', detect: () => false, spawner, env: {},
+      installConfig: () => ({ windowsExecutable: 'powershell', posixExecutable: '/custom/sh' }),
+    });
+    await boot.install(() => {});
+    expect(requests[0]?.command).toBe('/custom/sh');
+  });
   it('status reflects the detector', () => {
     const yes = createAgencyBootstrapper({
       platform: 'linux',

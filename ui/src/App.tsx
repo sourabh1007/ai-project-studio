@@ -17,11 +17,15 @@ import { ConnectionBanner } from './components/connection-banner.js';
 import { BrandMark } from './components/brand-mark.js';
 import { Tooltip } from './components/tooltip.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
+import { OperationNoticeBanner } from './components/operation-notice-banner.js';
 import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
+import { OPEN_TOOL_OWNER_EVENT } from './features/settings/tools-section.js';
 import { ViewSkeleton } from './components/view-skeleton.js';
-import { useMicrosoftIdentitySync, useMicrosoftSignedIn } from './hooks/use-microsoft-identity.js';
-import { isAgencyHidden } from './lib/microsoft-identity.js';
+import { useMicrosoftIdentitySync } from './hooks/use-microsoft-identity.js';
+import { CliSelector } from './features/bootstrap/cli-selector.js';
+import { CLI_SHORTCUT_CHANGED, CLI_SHORTCUT_KEY, PROVIDER_CHANGED, PROVIDER_PREFERENCES_CHANGED, cliShortcutBinding, cliShortcutLabel, isCliShortcut, ownsCliShortcut, type CliShortcut } from './lib/provider-selection.js';
+import type { ProviderSelectionInfo } from './lib/api.js';
 
 // Heavy views are code-split so the initial bundle stays small and non-active
 // views never load until first navigated to. Each import maps a named export to
@@ -97,6 +101,7 @@ import {
   MoonIcon,
   PlannerIcon,
   SettingsIcon,
+  SessionIcon,
   SkillsIcon,
   SunIcon,
   UsageIcon,
@@ -131,7 +136,22 @@ export function App() {
   }, [api]);
   const live = useUsageStream();
   useMicrosoftIdentitySync();
-  const microsoftSignedIn = useMicrosoftSignedIn();
+  const [internalAgencyAvailable, setInternalAgencyAvailable] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const changed = (event: Event) => {
+      const info = (event as CustomEvent<ProviderSelectionInfo>).detail;
+      setInternalAgencyAvailable(info.providers.some((provider) => provider.id === 'agency'));
+    };
+    void Promise.resolve().then(() => api.getProviderBootstrap()).then((info) => {
+      if (active) setInternalAgencyAvailable(info.providers.some((provider) => provider.id === 'agency'));
+    }).catch(() => {});
+    window.addEventListener(PROVIDER_PREFERENCES_CHANGED, changed);
+    return () => {
+      active = false;
+      window.removeEventListener(PROVIDER_PREFERENCES_CHANGED, changed);
+    };
+  }, [api]);
   const { mode, theme, cycle, toggle } = useTheme();
   useApplyUiPreferences(theme);
   const [view, setView] = usePersistentState<View>('cw-active-view', 'workspace', {
@@ -144,6 +164,27 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [networkOpen, setNetworkOpen] = useState(false);
+  const [cliOpen, setCliOpen] = useState(false);
+  const [cliShortcut, setCliShortcut] = usePersistentState<CliShortcut>(CLI_SHORTCUT_KEY, 'l', { validate: isCliShortcut });
+  const [providerSwitch, setProviderSwitch] = useState<{ providerId: string; nonce: number } | null>(null);
+  const shortcutBindings = useMemo(() => [...SHORTCUT_BINDINGS, ...cliShortcutBinding(cliShortcut)], [cliShortcut]);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const info = (event as CustomEvent<ProviderSelectionInfo>).detail;
+      setProviderSwitch((previous) => ({ providerId: info.defaultProvider, nonce: (previous?.nonce ?? 0) + 1 }));
+      setView('workspace');
+    };
+    const shortcutChanged = (event: Event) => {
+      const value: unknown = (event as CustomEvent<unknown>).detail;
+      if (isCliShortcut(value)) setCliShortcut(value);
+    };
+    window.addEventListener(PROVIDER_CHANGED, changed);
+    window.addEventListener(CLI_SHORTCUT_CHANGED, shortcutChanged);
+    return () => {
+      window.removeEventListener(PROVIDER_CHANGED, changed);
+      window.removeEventListener(CLI_SHORTCUT_CHANGED, shortcutChanged);
+    };
+  }, [setView, setCliShortcut]);
   const [worktreesRequest, setWorktreesRequest] = useState<number>();
   // A tab returned from a detached ("popped out") window re-opens in the
   // workspace. The nonce lets the workspace treat repeated returns of the same
@@ -227,12 +268,16 @@ export function App() {
       if (hasOpenModalDialog()) {
         return;
       }
-      const binding = matchShortcut(event, SHORTCUT_BINDINGS);
+      const binding = matchShortcut(event, shortcutBindings);
       if (!binding) return;
+      if (binding.id === 'switch-cli' && !ownsCliShortcut(event)) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
       switch (binding.id) {
+        case 'switch-cli':
+          setCliOpen((prev) => !prev);
+          break;
         case 'palette':
         case 'quick-open':
           setPaletteOpen((prev) => !prev);
@@ -258,7 +303,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
+  }, [shortcutBindings]);
 
   // A prompt "Edit in Settings" deep-link can fire from any view (e.g. the
   // review board inside the workspace); switch to Settings so its own listener
@@ -274,6 +319,15 @@ export function App() {
         OPEN_PROMPT_SETTINGS_EVENT,
         onOpenPromptSettings,
       );
+  }, [setView]);
+
+  useEffect(() => {
+    const openOwner = (event: Event) => {
+      const owner = (event as CustomEvent<unknown>).detail;
+      if (owner === 'mcp' || owner === 'automations') setView(owner);
+    };
+    window.addEventListener(OPEN_TOOL_OWNER_EVENT, openOwner);
+    return () => window.removeEventListener(OPEN_TOOL_OWNER_EVENT, openOwner);
   }, [setView]);
 
   const commands = useMemo<PaletteCommand[]>(() => {
@@ -341,6 +395,14 @@ export function App() {
         run: goto('settings'),
       },
       {
+        id: 'switch-cli',
+        title: 'Choose active CLI',
+        section: 'Navigation',
+        keywords: ['provider', 'claude', 'copilot', 'agency'],
+        shortcut: cliShortcutLabel(cliShortcut, navigator.platform),
+        run: () => setCliOpen(true),
+      },
+      {
         id: 'toggle-theme',
         title: `Theme: ${themeModeLabel(mode)} (cycle)`,
         section: 'Appearance',
@@ -378,7 +440,7 @@ export function App() {
         run: () => setShortcutsOpen(true),
       },
     ];
-  }, [mode, cycle]);
+  }, [mode, cycle, cliShortcut]);
 
   // Authoritative persisted stats, refreshed as live events arrive. The live
   // SSE feed alone is incomplete after reloads, so we never derive the status
@@ -397,10 +459,11 @@ export function App() {
       />
       <ShortcutsSheet
         open={shortcutsOpen}
-        bindings={SHORTCUT_BINDINGS}
+        bindings={shortcutBindings}
         onClose={() => setShortcutsOpen(false)}
       />
       <NetworkCenter open={networkOpen} onClose={() => setNetworkOpen(false)} />
+      {cliOpen && <CliSelector onClose={() => setCliOpen(false)} />}
       <div className={`ide-main${dockVisible ? '' : ' is-dock-hidden'}`}>
         <nav id="icon-dock" className="activitybar" aria-label="Primary" hidden={!dockVisible}>
           <div className="activitybar-group">
@@ -525,6 +588,13 @@ export function App() {
             </Tooltip>
           </div>
           <div className="activitybar-group">
+            <Tooltip label={`Choose active CLI (${cliShortcutLabel(cliShortcut, navigator.platform)})`}>
+              <button type="button" className="activity-item" aria-label="Choose active CLI"
+                title={`Choose active CLI — ${cliShortcutLabel(cliShortcut, navigator.platform)}`}
+                onClick={() => setCliOpen(true)}>
+                <SessionIcon size={20} />
+              </button>
+            </Tooltip>
             <Tooltip label={`Theme: ${themeModeLabel(mode)}; switch to ${theme === 'dark' ? 'light' : 'dark'}`}>
             <button
               type="button"
@@ -543,11 +613,13 @@ export function App() {
           <TopLoadingBar />
           <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
-          {!isAgencyHidden(microsoftSignedIn) && <AgencyUpdatePopup />}
+          <OperationNoticeBanner />
+          {internalAgencyAvailable && <AgencyUpdatePopup />}
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
               {view === 'workspace' ? (
                 <WorkspaceView
+                  providerSwitch={providerSwitch}
                   live={live}
                   sidebarOpen={sidebarOpen}
                   onToggleSidebar={() => setSidebarOpen((v) => !v)}

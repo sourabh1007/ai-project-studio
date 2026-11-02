@@ -1,3 +1,4 @@
+import { AutomationBoundary } from '../../app/automation-readiness.js';
 import { lazy, Suspense } from 'react';
 import type { WorkspaceTab } from './workspace-tabs.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
@@ -56,6 +57,7 @@ function TabBody({ tab }: { tab: PoppableTab }) {
   const AgentComponent = agentModule.component;
   return (
     <ErrorBoundary label={agentModule.title}>
+      <AutomationBoundary>
       <Suspense fallback={<ViewSkeleton label={agentModule.title} />}>
         <AgentComponent
           ctx={{
@@ -65,6 +67,7 @@ function TabBody({ tab }: { tab: PoppableTab }) {
           }}
         />
       </Suspense>
+      </AutomationBoundary>
     </ErrorBoundary>
   );
 }

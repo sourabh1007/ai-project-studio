@@ -83,6 +83,18 @@ describe('isoWeekBounds', () => {
 });
 
 describe('rollupUsage', () => {
+  it('preserves unknown native units in either order and folds USD estimates separately across groups', () => {
+    const unknown = row({ provider: 'claude', model: 'sonnet', cost: null, credits: null, nanoAiu: null, usdEstimate: 2 });
+    for (const rows of [
+      [unknown, row({}), { ...unknown, provider: 'other', model: 'opus', usdEstimate: null }],
+      [row({}), unknown, { ...unknown, provider: 'other', model: 'opus', usdEstimate: 0 }],
+      [{ ...unknown, usdEstimate: undefined }, row({}), { ...unknown, provider: 'other', model: 'opus', usdEstimate: 3 }],
+    ]) {
+      const totals = rollupUsage(rows, 'month', 'workspace').totals;
+      expect(totals).toMatchObject({ cost: null, credits: null, nanoAiu: null });
+      expect(totals.usdEstimate).toBeGreaterThanOrEqual(2);
+    }
+  });
   it('sums grand totals across every row', () => {
     const result = rollupUsage(
       [row({ credits: 2, nanoAiu: 100 }), row({ credits: 3, nanoAiu: 50 })],

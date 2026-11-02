@@ -6,6 +6,16 @@ import {
 } from './config.js';
 
 describe('repository-context config', () => {
+  it('allows skipping the optional context wait but rejects invalid launch budgets', () => {
+    expect(repositoryContextConfigSchema.parse({
+      ...repositoryContextDefaults, launchContextWaitMs: 0,
+    }).launchContextWaitMs).toBe(0);
+    for (const launchContextWaitMs of [-1, 0.5, Number.POSITIVE_INFINITY]) {
+      expect(() => repositoryContextConfigSchema.parse({
+        ...repositoryContextDefaults, launchContextWaitMs,
+      })).toThrow();
+    }
+  });
   it('exposes a namespace and complete valid defaults', () => {
     expect(REPOSITORY_CONTEXT_NAMESPACE).toBe('repositoryContext');
     expect(repositoryContextConfigSchema.parse(repositoryContextDefaults)).toEqual(
@@ -76,4 +86,3 @@ describe('repository-context config', () => {
     ).toThrow();
   });
 });
-

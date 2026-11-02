@@ -157,8 +157,8 @@ function seed() {
   return { db, reader: createUsageRollupRepo(db, ideUsageDefaults) };
 }
 
-function totalCredits(rows: { credits: number }[]): number {
-  return rows.reduce((sum, row) => sum + row.credits, 0);
+function totalCredits(rows: { credits: number | null }[]): number {
+  return rows.reduce((sum, row) => sum + (row.credits ?? 0), 0);
 }
 
 describe('createUsageRollupRepo', () => {

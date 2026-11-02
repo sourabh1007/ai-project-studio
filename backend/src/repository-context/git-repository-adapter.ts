@@ -50,10 +50,11 @@ export interface GitRepositoryAdapter
 /** Safe, read-only Git inspection adapter. */
 export function createGitRepositoryAdapter(
   executor: GitCommandExecutor = defaultExecutor,
+  executable = 'git',
 ): GitRepositoryAdapter {
   return {
     async getRevision(repositoryPath) {
-      const result = await executor.run('git', [
+      const result = await executor.run(executable, [
         '-C',
         repositoryPath,
         'rev-parse',
@@ -68,7 +69,7 @@ export function createGitRepositoryAdapter(
     },
 
     async listTrackedFiles(repositoryPath) {
-      const result = await executor.run('git', [
+      const result = await executor.run(executable, [
         '-C',
         repositoryPath,
         'ls-files',

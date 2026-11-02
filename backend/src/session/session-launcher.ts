@@ -6,6 +6,7 @@ import type { Logger } from '../kernel/logger.js';
 import type { MetaOperationPhysicalRegistration } from '../meta/meta-operation-contract.js';
 import type { ProcessAdmission, ProcessPermit } from '../kernel/process-admission.js';
 import type { ProviderResolver } from '../provider/provider-resolver.js';
+import type { ProviderExecutionLease, ProviderExecutionPolicy } from '../provider/active-provider.js';
 import type {
   RunningSession,
   SessionEvent,
@@ -65,6 +66,7 @@ export type SessionEventMap = {
 };
 
 export interface SessionLauncherDeps {
+  executionPolicy?: ProviderExecutionPolicy;
   physicalOwnership?: MetaOperationPhysicalRegistration;
   processAdmission?: ProcessAdmission;
   resolver: ProviderResolver;
@@ -131,6 +133,7 @@ interface LaunchOwner {
   markExited(): void;
   settle: (proof: 'not-started' | 'exited') => void;
   processPermit?: ProcessPermit;
+  providerLease?: ProviderExecutionLease;
 }
 
 function abortError(): Error {
@@ -178,6 +181,7 @@ export function createSessionLauncher(
   const settle = (owner: LaunchOwner) => {
     if (owner.pending.size === 0 && (!owner.nativeStarted || owner.exited)) {
       owner.processPermit?.release();
+      owner.providerLease?.release();
       owner.settle(owner.nativeStarted ? 'exited' : 'not-started');
     }
   };
@@ -222,7 +226,7 @@ export function createSessionLauncher(
         own(owner, () => {
           throwIfAborted(request.signal);
           return deps.resolver.resolve({
-            providerId: request.providerId,
+            providerId: owner.providerLease?.providerId ?? request.providerId,
             model: request.model,
           });
         }),
@@ -276,6 +280,7 @@ export function createSessionLauncher(
       try {
         deps.bus.emit('session.started', session);
         throwIfAborted(request.signal);
+        deps.executionPolicy?.assertActive(selection.provider.id);
         running = selection.provider.startSession(spec);
         owner.nativeStarted = true;
         void work.own(owner, () => owner.nativeExit);
@@ -381,23 +386,35 @@ export function createSessionLauncher(
       if (stopped || blockedFeatures.has(request.featureId)) {
         throw new ConflictError('Session launch blocked by shutdown or deletion');
       }
+      const providerLease = deps.executionPolicy?.acquire(request.providerId, {
+        kind: request.kind ?? deps.config.defaultKind,
+        id: request.featureId,
+        label: 'Session launch',
+      });
       let markExited!: () => void;
       const nativeExit = new Promise<void>((resolve) => { markExited = resolve; });
       const owner: LaunchOwner = {
         featureId: request.featureId, sessionId: null, controller: new AbortController(),
         pending: new Set(), nativeStarted: false, exited: false, settle: () => {},
-        nativeExit, markExited: () => { owner.exited = true; owner.processPermit?.release(); markExited(); },
+        providerLease,
+        nativeExit, markExited: () => { owner.exited = true; owner.processPermit?.release(); owner.providerLease?.release(); markExited(); },
       };
       if (request.operationId && deps.physicalOwnership) {
         const settled = new Promise<'not-started' | 'exited'>((resolve) => { owner.settle = resolve; });
-        deps.physicalOwnership.register(request.operationId, {
-          ownerId: deps.physicalOwnership.newOwnerId(), settled,
-          quiesce: async () => {
-            owner.controller.abort();
-            return owner.pending.size === 0 && (!owner.nativeStarted || owner.exited)
-              ? owner.nativeStarted ? 'exited' : 'not-started' : 'unconfirmed';
-          },
-        });
+        try {
+          deps.physicalOwnership.register(request.operationId, {
+            ownerId: deps.physicalOwnership.newOwnerId(), settled,
+            quiesce: async () => {
+              owner.controller.abort();
+              return owner.pending.size === 0 && (!owner.nativeStarted || owner.exited)
+                ? owner.nativeStarted ? 'exited' : 'not-started' : 'unconfirmed';
+            },
+          });
+        } catch (error) {
+          owner.providerLease?.release();
+          owner.settle('not-started');
+          throw error;
+        }
       }
       const abort = () => owner.controller.abort();
       const detach = () => request.signal?.removeEventListener('abort', abort);

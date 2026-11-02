@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { usePrImports } from '../../hooks/use-pr-imports.js';
 import type {
   RemotePullRequest,
   RepoProvider,
@@ -10,6 +11,7 @@ import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Avatar } from '../../components/avatar.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { CheckIcon, CloseIcon, PlusIcon } from '../../components/icons.js';
+import { AutomationReadinessNotice, useAutomationReadiness } from '../../app/automation-readiness.js';
 import {
   addTeamMember,
   isTeamMember,
@@ -95,8 +97,9 @@ export interface SelectedPull {
  * Modal for starting a PR review. Lists the repository's open pull requests
  * (with a paste-a-number/URL fallback) and lets the reviewer stage between one
  * and {@link MAX_BULK_PRS} of them. Confirming hands the selection to
- * `onConfirm`, which creates a "Bulk PR Review" feature, a review worktree per
- * PR, and opens each Review Board plus a live progress tracker.
+ * `onConfirm`, which only queues the import (see `prImportStore`) and closes
+ * the dialog: checkouts run in the background and report in the explorer's
+ * import status, so this dialog never blocks the UI while they work.
  */
 export function PrReviewPicker({
   repo,
@@ -105,12 +108,10 @@ export function PrReviewPicker({
 }: {
   repo: Repository;
   onClose: () => void;
-  onConfirm: (
-    pulls: SelectedPull[],
-    reportProgress: (message: string) => void,
-  ) => Promise<void>;
+  onConfirm: (pulls: SelectedPull[]) => void | Promise<void>;
 }) {
   const api = useApi();
+  const automation = useAutomationReadiness();
   const mine = useAsync<RemotePullRequest[]>(
     () => api.listRepoPulls(repo.id, 'mine'),
     [repo.id],
@@ -125,7 +126,23 @@ export function PrReviewPicker({
   );
   const [manual, setManual] = useState('');
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
+  const imports = usePrImports();
+  // Pull requests of this repo that are already queued, running, unresolved or
+  // imported, so they cannot be staged (and imported) a second time.
+  const importing = useMemo(
+    () =>
+      new Map(
+        imports
+          .filter(
+            (job) =>
+              job.repoId === repo.id &&
+              job.status !== 'failed' &&
+              job.status !== 'cancelled',
+          )
+          .map((job) => [job.number, job.status] as const),
+      ),
+    [imports, repo.id],
+  );
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<'mine' | 'assigned' | 'all' | 'team'>('all');
@@ -272,6 +289,10 @@ export function PrReviewPicker({
       setManual('');
       return;
     }
+    if (importing.has(number)) {
+      setError(`PR #${number} is already imported or importing.`);
+      return;
+    }
     if (atLimit) {
       setError(`You can review at most ${MAX_BULK_PRS} pull requests at once.`);
       return;
@@ -282,23 +303,24 @@ export function PrReviewPicker({
   }
 
   async function confirm() {
+    if (automation?.supported === false) return;
     if (selected.length === 0 || busy) {
       return;
     }
     setBusy(true);
     setError(null);
-    setProgress(null);
     try {
-      await onConfirm(selected, (message) => setProgress(message));
+      await onConfirm(selected);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
       setBusy(false);
-      setProgress(null);
     }
   }
 
   const renderItem = (pr: RemotePullRequest, showAge = false) => {
     const isSelected = selectedNumbers.has(pr.number);
+    const importState = importing.get(pr.number);
     const age = showAge ? formatReviewAge(pr.createdAt, now) : null;
     return (
       <button
@@ -306,7 +328,7 @@ export function PrReviewPicker({
         key={pr.number}
         className={`pr-list-item ${isSelected ? 'is-selected' : ''}`.trim()}
         onClick={() => togglePull(pr)}
-        disabled={busy || (!isSelected && atLimit)}
+        disabled={busy || importState !== undefined || (!isSelected && atLimit)}
         title={pr.url}
         aria-pressed={isSelected}
       >
@@ -322,6 +344,11 @@ export function PrReviewPicker({
             {pr.author ? ` · ${pr.author}` : ''}
           </span>
         </span>
+        {importState && (
+          <span className="pr-review-age">
+            {importState === 'succeeded' ? 'Imported' : 'Importing…'}
+          </span>
+        )}
         {age && (
           <span
             className="pr-review-age"
@@ -340,26 +367,9 @@ export function PrReviewPicker({
     <Modal
       title={`Open Pull Request · ${repo.name}`}
       size={tab === 'team' ? 'xl' : 'md'}
-      dismissible={!busy}
       onClose={onClose}
     >
       <div className="pr-picker">
-        {busy && (
-          <div className="pr-checkout-overlay" role="status" aria-live="polite">
-            <span className="spinner spinner-lg" aria-hidden="true" />
-            <div className="pr-checkout-title">
-              Preparing&nbsp;<strong>{selected.length}</strong>&nbsp;review
-              {selected.length === 1 ? '' : 's'}
-            </div>
-            <div className="pr-checkout-sub">
-              {progress ??
-                'Checking out an isolated worktree per pull request. Large ' +
-                  'repositories can take a minute the first time…'}
-            </div>
-            <span className="pr-checkout-bar" aria-hidden="true" />
-          </div>
-        )}
-
         {selected.length > 0 && (
           <div className="pr-selected">
             <div className="pr-selected-head">
@@ -664,12 +674,13 @@ export function PrReviewPicker({
         </div>
 
         <ErrorText error={error} />
+        <AutomationReadinessNotice />
 
         <div className="pr-picker-actions">
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={confirm} disabled={busy || selected.length === 0}>
+          <Button onClick={confirm} disabled={busy || selected.length === 0 || automation?.supported === false}>
             {busy ? (
               <Spinner size={13} label="Preparing" />
             ) : (

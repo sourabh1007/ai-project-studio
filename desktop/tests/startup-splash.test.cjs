@@ -141,8 +141,13 @@ function bootstrapFixture({ dev = false, exists = true, port = Promise.resolve(4
     ensureBackendDependencies: () => calls.push('provision'),
     stablePort: { resolve: () => port }, startBackend: () => calls.push('spawn'),
     waitForBackend: () => backendReady, setAppOrigin: (url) => calls.push(url),
+    releaseFailedUpdateGate() {},
     createWindow: (_url, actualSplash) => { assert.equal(actualSplash, splash); calls.push('window'); },
-    updateManager: { init: () => calls.push('updater') },
+    updateManager: { init: (options) => {
+      assert.equal(typeof options.beforeInstall, 'function');
+      assert.equal(options.onInstallFailure, context.releaseFailedUpdateGate);
+      calls.push('updater');
+    } },
     require: () => ({ createStartupSplash: () => { calls.push('splash'); return splash; } }),
   };
   const main = fs.readFileSync(path.join(desktop, 'main.cjs'), 'utf8');

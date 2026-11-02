@@ -33,6 +33,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
   let storage = initialStorage(supportsLogCleanup(deps.logs));
   let processRun: Promise<void> | undefined;
   let scanRun: Promise<void> | undefined;
+  let scanAbort: AbortController | undefined;
   let cleanupRunning = false;
   let disposed = false;
   const cleanups: ResourceCleanup[] = [];
@@ -85,6 +86,10 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
     }),
     sample() {
       if (disposed) return Promise.resolve();
+      if (!deps.config.processSamplingEnabled) {
+        app = { ...app, status: 'unavailable', errors: ['App process sampling is disabled; host pressure remains available.'] };
+        return Promise.resolve();
+      }
       if (processRun) return processRun;
       processRun = (async () => {
         try {
@@ -101,16 +106,19 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
       storage = initialStorage(supportsLogCleanup(deps.logs));
       storage.status = 'scanning';
       storage.startedAt = deps.now();
+      scanAbort = new AbortController();
+      const signal = AbortSignal.any([abort.signal, scanAbort.signal, AbortSignal.timeout(deps.config.maxScanDurationMs)]);
       scanRun = Promise.resolve().then(async () => {
         try {
-          await scanStorage(deps, storage, abort.signal);
+          await scanStorage(deps, storage, signal);
         } catch (error) {
-          storage.status = 'unavailable';
+          storage.status = storage.progress.visitedEntries > 0 ? 'partial' : 'unavailable';
           storage.errors.push(errorText(error));
         } finally {
           storage.completedAt = deps.now();
           storage.progress.currentPath = null;
           scanRun = undefined;
+          scanAbort = undefined;
         }
       });
       return { accepted: true, storage: storageSnapshot() };
@@ -170,6 +178,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
       } else {
         pendingCleanup = job;
         const scan = scanRun;
+        scanAbort?.abort();
         void Promise.resolve().then(async () => {
           if (scan) await scan;
           job.status = 'running';

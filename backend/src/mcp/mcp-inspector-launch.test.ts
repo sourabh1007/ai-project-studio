@@ -16,11 +16,19 @@ describe('MCP inspector Windows launch quoting', () => {
     ['node', ['server.js'], 'linux', false],
     ['C:\\Program Files\\nodejs\\node.exe', ['server.js'], 'win32', false],
     ['runner.COM', [], 'win32', false],
-    ['npx', ['-y', 'server'], 'win32', true],
-    ['npx.cmd', [], 'win32', true],
     ['cmd.exe', ['/c', 'echo fixture'], 'win32', false],
     ['cmd.exe', ['/d', '/q', '/c', 'echo fixture'], 'win32', false],
   ] as const)('keeps unrelated launch behavior for %s', (command, args, platform, shell) => {
-    expect(mcpInspectorLaunch(command, [...args], platform)).toEqual({ command, args, shell });
+    expect(mcpInspectorLaunch(command, [...args], platform, { fileExists: () => false })).toEqual({ command, args, shell });
+  });
+  it('resolves native PATH executables without interpreting structured spaced argv', () => {
+    expect(mcpInspectorLaunch('node', ['C:\\a folder\\server.cjs', '&echo not-a-shell'], 'win32', {
+      pathEnv: 'C:\\native tools', fileExists: (path) => path === 'C:\\native tools\\node.EXE',
+    })).toEqual({ command: 'C:\\native tools\\node.EXE', args: ['C:\\a folder\\server.cjs', '&echo not-a-shell'], shell: false });
+  });
+  it.each(['npx', 'npx.cmd', 'runner.bat'])('rejects implicit batch shim %s with actionable guidance', (command) => {
+    expect(() => mcpInspectorLaunch(command, [], 'win32', {
+      pathEnv: 'C:\\shims', fileExists: (path) => /\.cmd$/i.test(path),
+    })).toThrow(/Batch shims/);
   });
 });

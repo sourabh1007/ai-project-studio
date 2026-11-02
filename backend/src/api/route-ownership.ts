@@ -285,6 +285,7 @@ export function applyRouteOwnership(
     ['post /features/:id/move', (request) => featureMoveScope(deps, request)],
     ['put /sessions/:id', (request) => requireSessionScope(deps, request.params.id)],
     ['post /sessions/:id/relaunch', (request) => requireSessionScope(deps, request.params.id)],
+    ['post /sessions/:sessionId/text-attachments', (request) => requireSessionScope(deps, request.params.sessionId)],
     ['delete /sessions/:id', (request) => requireSessionScope(deps, request.params.id)],
     ['post /features/:featureId/sessions/:sessionId/summary', (request) =>
       requireSessionScope(deps, request.params.sessionId)],

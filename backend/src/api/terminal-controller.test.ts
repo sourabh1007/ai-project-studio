@@ -11,6 +11,15 @@ import type { Session } from '../session/session-contract.js';
 import type { SessionRepo } from '../session/session-repo-port.js';
 import type { HttpRequest, Route } from './http-contract.js';
 import { ConflictError } from '../kernel/error-types.js';
+import { createActiveProviderPolicy, type ProviderExecutionPolicy } from '../provider/active-provider.js';
+const operations = {
+  keyFrom: () => null,
+  run: async (_request: unknown, execute: (commit: (write: () => unknown) => unknown) => Promise<unknown>) => {
+    let result: unknown;
+    await execute((write) => (result = write()));
+    return result;
+  },
+} as never;
 
 function provider(): IAIProvider {
   return {
@@ -37,7 +46,7 @@ function req(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
 }
 
-function harness(ready = true, persisted?: Session | null) {
+function harness(ready = true, persisted?: Session | null, executionPolicy?: ProviderExecutionPolicy, bootstrapReady?: Promise<void>) {
   const registry = createProviderRegistry();
   registry.register(provider());
   const resolver = createProviderResolver(registry, {
@@ -62,16 +71,53 @@ function harness(ready = true, persisted?: Session | null) {
     config: sessionDefaults,
     bootstrap: {
       assertFeatureReady: async () => {
+        await bootstrapReady;
         if (!ready) {
           throw new ConflictError('Repository context is stale');
         }
       },
     },
+    executionPolicy,
+    operations,
   });
   return { routes, saved };
 }
 
 describe('terminal-controller', () => {
+  const policy = () => createActiveProviderPolicy({
+    enabledProviderIds: () => ['copilot', 'claude'],
+    isEligible: () => true,
+    initialProviderId: 'copilot',
+    saveSelected: () => {},
+  });
+
+  it('pins selection while an interactive record is waiting for bootstrap', async () => {
+    const executionPolicy = policy();
+    let ready!: () => void;
+    const bootstrap = new Promise<void>((resolve) => { ready = resolve; });
+    const h = harness(true, undefined, executionPolicy, bootstrap);
+    const pending = pick(h.routes, 'post', '/features/:featureId/terminal-sessions')(
+      req({ params: { featureId: 'feat-1' }, body: {} }),
+    );
+    expect(() => executionPolicy.select('claude')).toThrow(ConflictError);
+    ready();
+    expect((await pending).status).toBe(201);
+    expect(h.saved[0].provider).toBe('copilot');
+    expect(executionPolicy.get().blockers).toEqual([]);
+    expect(executionPolicy.select('claude').providerId).toBe('claude');
+  });
+
+  it('releases failed bootstrap preparation and rejects inactive requests before saving', async () => {
+    const executionPolicy = policy();
+    const h = harness(false, undefined, executionPolicy);
+    const create = pick(h.routes, 'post', '/features/:featureId/terminal-sessions');
+    await expect(create(req({ params: { featureId: 'feat-1' }, body: {} }))).rejects.toThrow(ConflictError);
+    expect(executionPolicy.get().blockers).toEqual([]);
+    await expect(create(req({
+      params: { featureId: 'feat-1' }, body: { providerId: 'claude' },
+    }))).rejects.toThrow(ConflictError);
+    expect(h.saved).toEqual([]);
+  });
   it('creates and persists an interactive session record (201)', async () => {
     const h = harness();
     const result = await pick(

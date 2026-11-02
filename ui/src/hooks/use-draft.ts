@@ -17,6 +17,8 @@ export interface DraftController {
   isDirty: boolean;
   /** True when a newer unsaved draft was restored over the base on load. */
   restored: boolean;
+  /** Local backup failed; working text is still available in the mounted editor. */
+  persistenceError: string | null;
   /** Reset the editor to the base value and drop the persisted draft. */
   discard: () => void;
   /** Drop the persisted draft without changing the current text (post-save). */
@@ -32,8 +34,14 @@ export interface DraftController {
  * clobbers in-progress edits.
  */
 export function useDraft(key: string, base: string): DraftController {
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const reportPersistence = useCallback((saved: boolean) => {
+    setPersistenceError(saved ? null
+      : 'Draft backup is unavailable. Keep this view open until you save or copy your text.');
+  }, []);
   const [stored, setStored] = usePersistentState<Draft | null>(key, null, {
     validate: isDraftOrNull,
+    onPersist: reportPersistence,
   });
 
   const initial = useRef(resolveDraft(stored, base));
@@ -84,6 +92,7 @@ export function useDraft(key: string, base: string): DraftController {
     setValue,
     isDirty: isDirty(value, base),
     restored,
+    persistenceError,
     discard,
     clear,
   };

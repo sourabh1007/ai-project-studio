@@ -34,12 +34,12 @@ function fakePty() {
 function recordingSink() {
   const output: string[] = [];
   const exits: Array<number | null> = [];
-  const resizes: Array<[number, number]> = [];
+  const resizes: Array<[number, number, string | undefined]> = [];
   return {
     sink: {
       send: (d: string) => output.push(d),
       exit: (c: number | null) => exits.push(c),
-      resize: (cols: number, rows: number) => resizes.push([cols, rows]),
+      resize: (cols: number, rows: number, phase?: string) => resizes.push([cols, rows, phase]),
     },
     output,
     exits,
@@ -309,8 +309,8 @@ describe('createTerminalSession', () => {
       const lateB = recordingSink();
       session.attach(lateA.sink);
       session.attach(lateB.sink);
-      expect(lateA.resizes).toEqual([[120, 30]]);
-      expect(lateB.resizes).toEqual([[120, 30]]);
+      expect(lateA.resizes).toEqual([[120, 30, 'attach']]);
+      expect(lateB.resizes).toEqual([[120, 30, 'attach']]);
       expect(lateA.output).toEqual([]);
       expect(lateB.output).toEqual([]);
 
@@ -467,7 +467,7 @@ describe('createTerminalSession', () => {
     const first = recordingSink();
     session.attach(first.sink);
     // Capture size arrives before the scrollback so the client can size its grid.
-    expect(first.resizes).toEqual([[120, 30]]);
+    expect(first.resizes).toEqual([[120, 30, 'attach']]);
     expect(first.output).toEqual(['history']);
 
     // A resize updates the tracked capture size forwarded to later joiners, and
@@ -476,7 +476,7 @@ describe('createTerminalSession', () => {
     expect(f.resizes).toEqual([[80, 24]]);
     const late = recordingSink();
     session.attach(late.sink);
-    expect(late.resizes).toEqual([[80, 24]]);
+    expect(late.resizes).toEqual([[120, 30, 'attach'], [80, 24, 'boundary']]);
   });
 
   it('replays without error to a sink that omits the optional resize hook', () => {
@@ -495,6 +495,113 @@ describe('createTerminalSession', () => {
     const plain = plainSink();
     session.attach(plain.sink);
     expect(plain.output).toEqual(['past']);
+  });
+
+  describe('geometry-aware replay', () => {
+    type Event = string;
+    function logSink() {
+      const events: Event[] = [];
+      return {
+        events,
+        sink: {
+          send: (d: string) => events.push(`out:${d}`),
+          exit: () => events.push('exit'),
+          resize: (c: number, r: number, phase?: string) => events.push(`${phase}:${c}x${r}`),
+        },
+      };
+    }
+    function build(opts: { scrollbackBytes?: number; max?: number } = {}) {
+      const f = fakePty();
+      const session = createTerminalSession({
+        sessionId: 's1', pty: f.pty, inputReady: true,
+        scrollbackBytes: opts.scrollbackBytes ?? 1000, transcriptBytes: 1000,
+        initialCols: 120, initialRows: 30, maxGeometryBoundaries: opts.max, onExit: () => {},
+      });
+      const replay = () => { const l = logSink(); session.attach(l.sink); return l.events; };
+      return { f, session, replay };
+    }
+
+    it('replays each span at the size it was drawn for, ending at the active size', () => {
+      const { f, session, replay } = build();
+      f.emitData('A');
+      session.resize(80, 24);
+      f.emitData('B');
+      session.resize(100, 40);
+      f.emitData('C');
+      session.resize(60, 20);
+      const expected = [
+        'attach:120x30', 'out:A', 'boundary:80x24', 'out:B', 'boundary:100x40', 'out:C', 'boundary:60x20',
+      ];
+      expect(replay()).toEqual(expected);
+      // A reconnect replays the same ordered stream; the PTY itself is untouched.
+      expect(replay()).toEqual(expected);
+      expect(f.resizes).toEqual([[80, 24], [100, 40], [60, 20]]);
+    });
+
+    it('collapses empty and identical sizes, keeping only the active size', () => {
+      const { f, session, replay } = build();
+      session.resize(120, 30);
+      session.resize(90, 20);
+      session.resize(70, 20);
+      expect(replay()).toEqual(['attach:70x20']);
+      f.emitData('x');
+      session.resize(70, 20);
+      expect(replay()).toEqual(['attach:70x20', 'out:x']);
+    });
+
+    it('keeps literal pipes and splits inside an in-progress ANSI sequence in order', () => {
+      const { f, session, replay } = build();
+      f.emitData('a | b \x1b[1;');
+      session.resize(80, 24);
+      f.emitData('50H|');
+      expect(replay()).toEqual(['attach:120x30', 'out:a | b \x1b[1;', 'boundary:80x24', 'out:50H|']);
+    });
+
+    it('never splits a surrogate pair across a size boundary', () => {
+      const { f, session, replay } = build();
+      f.emitData('x\ud83d');
+      session.resize(80, 24);
+      f.emitData('\ude00y');
+      expect(replay()).toEqual(['attach:120x30', 'out:x', 'boundary:80x24', 'out:😀y']);
+    });
+
+    it('drops trimmed spans but keeps the size in effect at the retained head', () => {
+      const { f, session, replay } = build({ scrollbackBytes: 6 });
+      f.emitData('aaaa');
+      session.resize(20, 5);
+      f.emitData('bbbb');
+      session.resize(30, 5);
+      f.emitData('cccc');
+      expect(replay()).toEqual(['attach:20x5', 'out:bb', 'boundary:30x5', 'out:cccc']);
+    });
+
+    it('bounds size metadata by discarding the oldest span, never relabelling it', () => {
+      const { f, session, replay } = build({ max: 2 });
+      f.emitData('aa');
+      session.resize(20, 5);
+      f.emitData('bb');
+      session.resize(30, 5);
+      f.emitData('cc');
+      expect(replay()).toEqual(['attach:20x5', 'out:bb', 'boundary:30x5', 'out:cc']);
+    });
+
+    it('sends the active size and exit for an exited session with history ended', () => {
+      const { f, session, replay } = build();
+      f.emitData('A');
+      session.resize(80, 24);
+      f.emitExit(0);
+      expect(replay()).toEqual(['attach:120x30', 'out:A', 'boundary:80x24', 'exit']);
+    });
+
+    it('forwards live output after replay without further size marks', () => {
+      const { f, session } = build();
+      f.emitData('A');
+      session.resize(80, 24);
+      const live = logSink();
+      session.attach(live.sink);
+      f.emitData('B');
+      expect(live.events).toEqual(['attach:120x30', 'out:A', 'boundary:80x24', 'out:B']);
+    });
   });
 
   it('forwards write, resize and kill to the pty', () => {

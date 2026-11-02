@@ -3,8 +3,38 @@ import type {
   RemoteIssue,
   RemotePullRequest,
   RemoteWorkItem,
+  PullFilter,
+  IssueFilter,
   WorkItemFilter,
 } from './types';
+import { isTeamMember } from './team-roster.js';
+import { compareByReviewAge, type ReviewAgeOrder } from './pr-review-age.js';
+
+export type ImportPullScope = PullFilter | 'team';
+
+export function isImportPullScope(value: unknown): value is ImportPullScope {
+  return value === 'mine' || value === 'assigned' || value === 'all' || value === 'team';
+}
+
+export function isImportIssueScope(value: unknown): value is IssueFilter {
+  return value === 'mine' || value === 'assigned' || value === 'all';
+}
+
+/** Refine only returned PRs, using the same roster and age ordering as Open PR. */
+export function refineImportPulls(
+  pulls: RemotePullRequest[],
+  scope: ImportPullScope,
+  roster: string[],
+  order: ReviewAgeOrder,
+): RemotePullRequest[] {
+  if (scope !== 'team') {
+    return pulls;
+  }
+  const now = Date.now();
+  return pulls.filter((pull) => roster.length === 0 ||
+    isTeamMember(roster, pull.author, pull.authorLogin))
+    .sort((a, b) => compareByReviewAge(a.createdAt, b.createdAt, order, now));
+}
 
 /**
  * Pure mappers turning items imported from a repository's provider (Azure

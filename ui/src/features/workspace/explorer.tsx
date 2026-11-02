@@ -1,6 +1,9 @@
+import { useAutomationReadiness } from '../../app/automation-readiness.js';
 import {
   Fragment,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -14,13 +17,15 @@ import { reviewBoardRunStore } from '../review-board-page/review-board-run-store
 import { useAsync } from '../../hooks/use-async.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { ApiError } from '../../lib/api.js';
+import { withOperationKey } from '../../lib/operation-keys.js';
 import type { LiveState } from '../../lib/stream.js';
 import {
-  liveSignal,
   mergeLive,
   resolveSessionMetrics,
   sessionLiveTotals,
 } from '../../lib/stream.js';
+import { featureUsageRevision, workspaceUsageRevision } from '../../lib/feature-usage-freshness.js';
+import { useUsageSummary } from '../../hooks/use-usage-summary.js';
 import type {
   Feature,
   FeatureDeletionWorktree,
@@ -31,8 +36,10 @@ import type {
   SessionBreakdown,
   TreeGroup,
   AttachedAgent,
+  UsageSummary,
+  UsageSummaryNode,
 } from '../../lib/types.js';
-import { formatAic, formatDuration } from '../../lib/format.js';
+import { formatAic, formatCost, formatDuration, formatTokens } from '../../lib/format.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { sessionWorkTitle } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
@@ -83,7 +90,10 @@ import {
 import { GroupPrPicker, type PickedPull } from './group-pr-picker.js';
 import { RepoPicker } from './repo-picker.js';
 import { PrReviewPicker } from './pr-review-picker.js';
-import { bulkReviewName, checkoutPulls } from './bulk-pr-checkout.js';
+import { bulkReviewName } from './bulk-pr-checkout.js';
+import { prImportStore } from '../../lib/pr-import-store.js';
+import { usePrImportEvents } from '../../hooks/use-pr-imports.js';
+import { PrImportStatus } from './pr-import-status.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
 import {
@@ -97,6 +107,53 @@ import {
  * the tree, short enough to feel like a direct response.
  */
 const HOVER_EXPAND_MS = 600;
+const UsageSummaryContext = createContext<{
+  snapshot: UsageSummary | null;
+  invalidate: () => void;
+} | null>(null);
+
+function UsageBadge({ node, label, onOpenEvents }: {
+  node: UsageSummaryNode | undefined;
+  label: string;
+  onOpenEvents: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!node) return null;
+  const { totals, state } = node;
+  const credits = state === 'partial'
+    ? `>= ${formatAic(totals.knownNanoAiu ?? 0)}`
+    : state === 'complete' ? formatAic(totals.nanoAiu) : 'n/a';
+  const tokens = totals.inputTokens + totals.outputTokens;
+  const status = state === 'none' ? 'No sessions'
+    : state === 'empty' ? 'Awaiting usage'
+    : state === 'complete' ? 'Reported'
+    : state === 'partial' ? 'Partial: known lower bound' : 'Charges not reported';
+  return <>
+    <button type="button" className="tree-usage-badge"
+      aria-label={`View ${label} usage`}
+      title={`${label}, including nested items: ${credits} AI credits, ${tokens.toLocaleString()} tokens. ${status}.`}
+      onClick={() => setOpen(true)}>
+      <span>{credits}</span><span className="muted">{formatTokens(tokens)} tok</span>
+    </button>
+    {open && <Modal title={`${label} usage`} onClose={() => setOpen(false)}>
+      <p>Totals include nested features and subcategories, with retained usage from deleted sessions.</p>
+      <dl className="usage-summary-details">
+        <dt>Status</dt><dd>{status}</dd>
+        <dt>AI credits</dt><dd>{credits}</dd>
+        <dt>Input tokens</dt><dd>{totals.inputTokens.toLocaleString()}</dd>
+        <dt>Output tokens</dt><dd>{totals.outputTokens.toLocaleString()}</dd>
+        <dt>Reasoning output tokens</dt><dd>{totals.reasoningOutputTokens.toLocaleString()}</dd>
+        <dt>Sessions</dt><dd>{totals.sessions.toLocaleString()}</dd>
+        <dt>Sessions awaiting usage</dt><dd>{node.sessionsWithoutUsage.toLocaleString()}</dd>
+        <dt>Events with unavailable charges</dt><dd>{totals.unavailableCharges ?? 0}</dd>
+        <dt>Reported USD estimate</dt><dd>{formatCost(totals.usdEstimate ?? null)}</dd>
+      </dl>
+      <Button variant="secondary" onClick={() => { setOpen(false); onOpenEvents(); }}>
+        Open this feature's own usage events
+      </Button>
+    </Modal>}
+  </>;
+}
 
 function SessionRow({
   session,
@@ -430,7 +487,9 @@ function AddAgentModal({
     setBusyId(agentId);
     setAttachError(null);
     try {
-      await api.attachAgent(feature.id, agentId);
+      await withOperationKey(`agent.attach:${feature.id}`, { agentId }, 'attachment', (operation) =>
+        api.attachAgent(feature.id, agentId, operation),
+      );
       onAttached();
       onClose();
     } catch (err) {
@@ -564,6 +623,8 @@ function FeatureNode({
 }) {
   const api = useApi();
   const nodeStore = useNodeDragStore();
+  const usageContext = useContext(UsageSummaryContext);
+  const summary = usageContext?.snapshot?.features[feature.id];
   const [expanded, setExpanded] = usePersistentState(
     `explorer.feature.${feature.id}.expanded`,
     false,
@@ -608,10 +669,7 @@ function FeatureNode({
   );
   const usage = useAsync(
     () => (expanded ? api.getFeatureUsage(feature.id) : Promise.resolve(null)),
-    // Re-fetch the authoritative rollup whenever a new usage/session event is
-    // observed so per-session metrics stay in lockstep with the status bar,
-    // which refreshes on the same signal.
-    [feature.id, expanded, liveSignal(live)],
+    [feature.id, expanded, treeRevision, featureUsageRevision(live, feature.id)],
   );
 
   // When the delete confirmation opens, load the exact on-disk worktrees (and
@@ -700,6 +758,7 @@ function FeatureNode({
       await action();
       groups.reload();
       sessions.reload();
+      usageContext?.invalidate();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : failure);
     }
@@ -954,6 +1013,7 @@ function FeatureNode({
             {feature.name}
           </button>
         )}
+        <UsageBadge node={summary} label={feature.name} onOpenEvents={() => setViewingUsage(true)} />
         <div className="tree-branch-trail">
           <button
             type="button"
@@ -1177,6 +1237,8 @@ function FeatureNode({
             onRenameGroup={handleRenameGroup}
             onDeleteGroup={handleDeleteGroup}
             renderGroupFeatures={renderGroupFeatures}
+            renderGroupUsage={(group) => <UsageBadge node={summary?.groups[group.id]}
+              label={group.name} onOpenEvents={() => setViewingUsage(true)} />}
             draggingFeature={draggingFeature}
             canNestInto={canNestInto}
             onMoveFeatureIntoGroup={onMoveFeatureIntoGroup}
@@ -1523,6 +1585,7 @@ function RepoNode({
 
   const renderFeatureNode = (feature: Feature): ReactNode => (
     <FeatureNode
+      key={feature.id}
       feature={feature}
       live={live}
       activeSessionId={activeSessionId}
@@ -1832,6 +1895,7 @@ export function Explorer({
 }) {
   const api = useApi();
   const repos = useAsync(() => api.listRepos(), []);
+  const automation = useAutomationReadiness();
   const features = useAsync(() => api.listFeatures(), []);
   const [addingRepo, setAddingRepo] = useState(false);
   const [reviewRepo, setReviewRepo] = useState<{
@@ -1839,11 +1903,6 @@ export function Explorer({
     parentFeatureId: string | null;
   } | null>(null);
   const [adding, setAdding] = useState(false);
-  const bulkReviewBatch = useRef<{ repoId: string; parent: Feature } | null>(null);
-  const [alreadyImported, setAlreadyImported] = useState<{
-    feature: Feature;
-    number: number;
-  } | null>(null);
   const [targetRepoId, setTargetRepoId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -1854,8 +1913,27 @@ export function Explorer({
   >({});
   const [draggingFeature, setDraggingFeature] = useState<Feature | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  usePrImportEvents(({ job }) => {
+    features.reload();
+    if (!job.feature) {
+      setMoveError('The pull request import completed without a feature. Check its import status.');
+      return;
+    }
+    if (job.batchSize > 1 || !job.alreadyImported) {
+      if (automation?.supported === false) {
+        setMoveError(automation.reason ?? 'The selected CLI cannot start automated reviews. Choose another CLI.');
+      } else {
+        reviewBoardRunStore.enqueueBulk([job.feature.id], api);
+      }
+    }
+  });
   const [movingFeature, setMovingFeature] = useState<Feature | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
+  const usageSummary = useUsageSummary(
+    `${treeRevision}:${workspaceUsageRevision(live)}:${JSON.stringify(
+      features.data?.map(({ id, parentFeatureId, parentGroupId }) => [id, parentFeatureId, parentGroupId]),
+    )}`,
+  );
   // A cross-feature session move that would switch the session's git branch is
   // held here until the user consents, since it relaunches the running CLI in
   // the new checkout (see confirmPendingMove).
@@ -1957,11 +2035,10 @@ export function Explorer({
     setSubmitting(true);
     setFormError(null);
     try {
-      await api.createFeature({
-        name: name.trim(),
-        description,
-        repoId: targetRepoId,
-      });
+      const input = { name: name.trim(), description, repoId: targetRepoId };
+      await withOperationKey(`feature.create:${targetRepoId ?? ''}`, input, 'feature', (operation) =>
+        api.createFeature(input, operation),
+      );
       setName('');
       setDescription('');
       setAdding(false);
@@ -1994,12 +2071,10 @@ export function Explorer({
     parentGroupId: string,
     featureName: string,
   ) {
-    await api.createFeature({
-      name: featureName,
-      description: '',
-      repoId,
-      parentGroupId,
-    });
+    const input = { name: featureName, description: '', repoId, parentGroupId };
+    await withOperationKey(`feature.create-in-group:${parentGroupId}`, input, 'feature', (operation) =>
+      api.createFeature(input, operation),
+    );
     features.reload();
   }
 
@@ -2250,6 +2325,13 @@ export function Explorer({
   );
 
   return (
+    <UsageSummaryContext.Provider value={{
+      snapshot: usageSummary.data,
+      invalidate: () => {
+        features.reload();
+        setTreeRevision((revision) => revision + 1);
+      },
+    }}>
     <div className="explorer">
       <div className="explorer-header">
         <span className="explorer-title">Explorer</span>
@@ -2274,6 +2356,23 @@ export function Explorer({
           </button>
         </div>
       </div>
+
+      <PrImportStatus
+        api={api}
+        onOpen={(job) => {
+          if (job.feature) onOpenPrReview(job.feature);
+          else setMoveError('This pull request does not have an imported feature yet.');
+        }}
+        onOpenBatch={(batch, jobs) => {
+          if (!batch.parent) {
+            setMoveError('This pull request batch does not have a parent feature yet.');
+            return;
+          }
+          onOpenBulkPrReview(batch.parent, jobs.flatMap((job) => job.feature
+            ? [{ feature: job.feature, number: job.number, title: job.title }]
+            : []));
+        }}
+      />
 
       {addingRepo && (
         <RepoPicker
@@ -2328,86 +2427,26 @@ export function Explorer({
       {reviewRepo && (
         <PrReviewPicker
           repo={reviewRepo.repo}
-          onClose={() => {
-            bulkReviewBatch.current = null;
-            setReviewRepo(null);
-          }}
-          onConfirm={async (pulls, reportProgress) => {
-            const repoId = reviewRepo.repo.id;
-            if (pulls.length === 1) {
-              const { feature, alreadyImported: existed } =
-                await api.createPrFeatureStreamed(
-                  repoId,
-                  pulls[0].number,
-                  (status) => reportProgress(status.message),
-                  reviewRepo.parentFeatureId ?? null,
-                );
-              features.reload();
-              setReviewRepo(null);
-              if (existed) {
-                // The PR was imported before: don't silently reuse it. Surface a
-                // professional notice and let the reviewer open the existing
-                // review rather than creating a confusing duplicate.
-                setAlreadyImported({ feature, number: pulls[0].number });
-                return;
-              }
-              reviewBoardRunStore.enqueueBulk([feature.id], api);
-              onOpenPrReview(feature);
+          onClose={() => setReviewRepo(null)}
+          onConfirm={(pulls) => {
+            if (automation?.supported === false) {
+              setMoveError(automation.reason ?? 'Choose another CLI before starting automated reviews.');
               return;
             }
-            const parent = bulkReviewBatch.current?.repoId === repoId
-              ? bulkReviewBatch.current.parent
-              : await api.createFeature({
-              name: bulkReviewName(),
-              description: `Reviewing ${pulls.length} pull requests from ${reviewRepo.repo.name}.`,
-              repoId,
+            const result = prImportStore.enqueue(api, {
+              repo: { id: reviewRepo.repo.id, name: reviewRepo.repo.name },
+              pulls,
               parentFeatureId: reviewRepo.parentFeatureId ?? null,
+              batchName: bulkReviewName(),
             });
-            bulkReviewBatch.current = { repoId, parent };
-            const imported: {
-              feature: Feature;
-              number: number;
-              title: string;
-              alreadyImported: boolean;
-            }[] = [];
-            let items;
-            try {
-              items = await checkoutPulls(api, repoId, parent.id, pulls, reportProgress,
-                (item) => {
-                  imported.push(item);
-                  reviewBoardRunStore.enqueueBulk([item.feature.id], api);
-                  onOpenBulkPrReview(parent, [...imported].sort((a, b) =>
-                    pulls.findIndex((pull) => pull.number === a.number) -
-                    pulls.findIndex((pull) => pull.number === b.number)));
-                });
-            } finally {
-              features.reload();
+            const queueFull = result.skipped.filter((item) => item.reason === 'queue-full');
+            if (queueFull.length > 0) {
+              throw new Error(`The import queue is full. PRs ${queueFull.map((item) => `#${item.number}`).join(', ')} were not queued. Your selection is kept; wait for an import to finish and try again.`);
+            }
+            if (result.skipped.length > 0) {
+              setMoveError(`PRs ${result.skipped.map((item) => `#${item.number}`).join(', ')} are already imported or have an import in progress. Use PR import status to open or check them.`);
             }
             setReviewRepo(null);
-            bulkReviewBatch.current = null;
-            onOpenBulkPrReview(parent, items);
-          }}
-        />
-      )}
-
-      {alreadyImported && (
-        <ConfirmDialog
-          title="Pull request already imported"
-          danger={false}
-          confirmLabel="Open existing review"
-          cancelLabel="Close"
-          message={
-            <p className="confirm-dialog-lead">
-              Pull request <strong>#{alreadyImported.number}</strong> has already
-              been imported. It can't be imported again — opening the existing
-              review instead.
-            </p>
-          }
-          onCancel={() => setAlreadyImported(null)}
-          onConfirm={() => {
-            const feature = alreadyImported.feature;
-            setAlreadyImported(null);
-            onOpenPrReview(feature);
           }}
         />
       )}
@@ -2506,6 +2545,13 @@ export function Explorer({
       )}
 
       <div className="explorer-body">
+        {!usageSummary.data && usageSummary.loading && <div className="explorer-usage-error" role="status">
+          Loading usage...
+        </div>}
+        {usageSummary.error && <div className="explorer-usage-error" role="status">
+          <span>{usageSummary.data ? 'Usage is stale. ' : ''}{usageSummary.error}</span>
+          <Button variant="secondary" disabled={usageSummary.loading} onClick={usageSummary.retry}>Retry usage</Button>
+        </div>}
         {(repos.loading || features.loading) && <SkeletonList rows={5} />}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
@@ -2601,7 +2647,6 @@ export function Explorer({
         )}
         </NodeDragStoreProvider>
       </div>
-
       <details className="explorer-footer">
         <summary>Accounts</summary>
         <div className="explorer-accounts">
@@ -2610,5 +2655,6 @@ export function Explorer({
         </div>
       </details>
     </div>
+    </UsageSummaryContext.Provider>
   );
 }

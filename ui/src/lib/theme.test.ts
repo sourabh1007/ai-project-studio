@@ -149,6 +149,63 @@ describe('motion accessibility stylesheet policy', () => {
   });
 });
 
+describe('workspace tab selection stylesheet', () => {
+  it('keeps the selected surface, boundary and static 3px rail on hover', () => {
+    const active = cssBlock(APP_CSS, '.tab.tab-active,\n.tab.tab-active:hover');
+    expect(active).toContain('background: var(--item-active);');
+    expect(active).toContain('color: var(--text);');
+    expect(active).toContain('border-right-color: var(--border-strong);');
+    expect(active).toContain('inset 0 3px 0 var(--accent)');
+    expect(active).toContain('inset 0 0 0 1px var(--border-strong)');
+    expect(active).toContain('transition: none;');
+    expect(cssBlock(APP_CSS, '.tab-active .tab-label')).toContain('font-weight: 600;');
+    expect(cssBlock(APP_CSS, '.tab:hover {')).toContain('background: var(--item-hover);');
+  });
+
+  it.each([
+    "[data-theme='light']",
+    "[data-theme='dark']",
+    "[data-appearance='clarity'][data-theme='light']",
+    "[data-appearance='clarity'][data-theme='dark']",
+    "[data-appearance='futuristic'][data-theme='light']",
+    "[data-appearance='futuristic'][data-theme='dark']",
+  ])('uses the existing configurable selection tokens in %s', (theme) => {
+    const block = cssBlock(DESIGN_TOKENS_CSS, theme);
+    const token = (name: string) => block.match(new RegExp(`--${name}: (#[a-f0-9]{6});`))?.[1];
+    expect(token('item-active')).toBeDefined();
+    expect(token('item-active')).not.toBe(token('panel-sidebar'));
+    expect(token('item-active')).not.toBe(token('item-hover'));
+    expect(token('border-strong')).toBeDefined();
+    expect(token('text')).toBeDefined();
+  });
+
+  it('shares the static selection across appearances and motion preferences', () => {
+    expect(DESIGN_TOKENS_CSS).not.toContain(".tab-active");
+    expect(DESIGN_TOKENS_CSS).not.toContain('fut-tab-in');
+    expect(APP_CSS).not.toContain("[data-appearance='clarity'] .tab-active");
+    expect(cssBlock(APP_CSS, '.tab.tab-active,\n.tab.tab-active:hover')).not.toMatch(/animation|gradient/);
+  });
+
+  it('distinguishes keyboard focus from the persistent selection rail', () => {
+    const focus = cssBlock(APP_CSS, '.tab .tab-label:focus-visible');
+    expect(focus).toContain('outline: 2px dashed var(--text);');
+    expect(focus).toContain('outline-offset: -2px;');
+    expect(focus).not.toMatch(/background|box-shadow/);
+  });
+
+  it('uses system-color borders and a rail when forced colors suppress shadows', () => {
+    const forced = cssBlock(APP_CSS, '@media (forced-colors: active)');
+    const active = cssBlock(forced, '.tab.tab-active,\n  .tab.tab-active:hover');
+    expect(active).toContain('background: Canvas;');
+    expect(active).toContain('color: CanvasText;');
+    expect(active).toContain('border-top: 3px solid Highlight;');
+    expect(active).toContain('outline: 1px solid Highlight;');
+    expect(cssBlock(forced, ".tab .tab-label[aria-selected='true']:not(:focus-visible)"))
+      .toContain('outline: none;');
+    expect(cssBlock(forced, '.tab .tab-label:focus-visible')).toContain('outline-color: CanvasText;');
+  });
+});
+
 describe('shared desktop stylesheet', () => {
   it('anchors narrow workspace overlays to the whole workspace rather than a single grid track', () => {
     const narrow = cssBlock(

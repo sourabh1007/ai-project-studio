@@ -16,7 +16,7 @@ From a **repository** row in the Explorer, choose **Open a PR**. This:
 
 For a bulk selection (up to ten PRs), two checkouts run concurrently while the
 rest queue. The batch is named **Bulk PR Review — <local creation date>**.
-Each PR reports its own live favourite, fetch, and worktree progress,
+Each PR reports its own durable import/fetch/worktree progress,
 with a count of finished checkouts. Imports fetch into separate PR refs rather
 than sharing `FETCH_HEAD`, so concurrent fetches cannot mix up commits.
 Failures do not stop other PRs: all running/queued work finishes before retry is
@@ -84,9 +84,9 @@ charged retries, rather than only the latest timed attempt. Missing billing is
 shown as unavailable or partial, never estimated from tokens. Older operations
 without a perspective identity contribute only to the board total.
 
-The PR-review feature appears in the Explorer like any other feature. It shows a
-**PR review panel** in its dashboard, and can be opened as a full **PR review
-page** editor tab.
+The PR-review feature appears in the Explorer like any other feature. Open its
+**Review Board** workspace tab for the current review surface; legacy PR review
+components are not the authority for its controls.
 
 The read-only PR review response includes the imported `pull.sourceBranch` and
 provider-reported `pull.author`. These survive explicit refreshes; authors are
@@ -95,12 +95,20 @@ is substituted for missing author metadata.
 
 ## What the review contains
 
-The AI review runs in the background and moves through *Analyzing → Ready* (or
-*Failed*, with a Retry). When ready it shows:
+The mounted Review Board combines:
 
-- **PR Summary** — a problem statement and high-level overview.
-- **Core Analysis** — a blind proposal, a **syntactic** review, a **business-logic**
-  review, and a **0–100 score**.
+- **Summary / Project details** — PR context, changed projects and captured
+  evidence.
+- **Change graph / files changed** — navigation into captured changed-file diffs.
+- **Perspectives** — selected review angles, their findings, evidence, status,
+  timing and reported usage. Analysis can be queued, active, complete, skipped,
+  or failed with a retry.
+- **Reviewer sign-off** — inspect findings and **mark perspectives reviewed**.
+  This is a human acknowledgement, not the same as AI analysis completion.
+- **Comments and Approve PR** — provider-backed actions against the reviewed
+  evidence, with explicit confirmation and eligibility checks.
+
+There is no mounted legacy **Core Analysis / 0–100 score** workflow.
 
 ## The change graph
 
@@ -145,7 +153,7 @@ bounds do not raise the worker deadline; a timed-out analysis remains failed.
 > the test changes on demand.
 
 > **Supported languages.** The graph is built by deterministic static analysis
-> (no AI, so it never hangs), one pluggable analyzer per language. Today it
+> (no AI, but still bounded and able to time out), one pluggable analyzer per language. Today it
 > understands **C#** (`.cs`), **JavaScript/TypeScript** (`.js/.jsx/.ts/.tsx` and
 > the `.mjs/.cjs/.mts/.cts` variants), **Java** (`.java`), **Rust** (`.rs`) and
 > **C/C++** (`.c/.cc/.cpp/.cxx/.h/.hpp/…`). It also understands **Azure Service
@@ -154,16 +162,17 @@ bounds do not raise the worker deadline; a timed-out analysis remains failed.
 > run from it to the service manifests it imports (`ServiceManifestName` /
 > `ServiceTypeName`) and to the settings sections its `<ConfigOverride>`s target —
 > a clean, uncluttered map of how the package is wired, grounded entirely in the
-> manifest XML. Every graph feature — edges, caller
-> blast-radius, the focused diagram, PR-description export — works for all of
-> them out of the box; adding another language is a single analyzer, no builder
-> or UI changes. To avoid false edges, a type name that appears only inside a
+> manifest XML. Graph navigation and caller
+> blast-radius work across these analyzers; adding another language uses its own
+> analyzer rather than provider-specific AI prompts. This does not imply
+> complete resolved call-graph coverage for every language construct.
+> To avoid false edges, a type name that appears only inside a
 > comment, a string/template literal, an `import`/`using`/`use` line, or a
 > `namespace`/`package` declaration never creates a reference.
 
-> If a change graph shows empty diffs, it was generated before a diff-collection
-> fix — click **Re-run all** (or a step's **Retry**) on the review page to
-> re-collect and repopulate the per-file diffs.
+> A missing diff can mean binary content, a collection bound, or a failed read;
+> inspect the explanation instead of assuming an old-version bug. Use explicit
+> graph retry/reset when fresh evidence is needed.
 
 ## Review Board analysis validation
 
@@ -203,27 +212,27 @@ vote and shows **Already approved** instead of casting a duplicate approval. On 
 DevOps the approval is cast against your organization identity, so it works even when
 your profile and organization ids differ.
 
-## Export to the PR description
+## Review state versus remote actions
 
-The **Add to PR description** button writes the review's **problem statement** and a
-Mermaid **change-graph diagram** into the pull request's description as a managed,
-idempotent Markdown block (delimited by `ai-project-studio:pr-review` markers).
-Re-running the export updates the block in place instead of appending a duplicate,
-and any text you authored around it is preserved. Works for both GitHub and Azure
-DevOps.
+Marking a perspective or PR **reviewed** records local reviewer sign-off; it
+does not post approval or edit the PR description. The mounted Review Board
+does not expose the legacy **Add to PR description** workflow. Comments and
+**Approve PR** are the explicit remote actions.
 
 ## Cleaning up worktrees
 
 Each review checks its branch out into an isolated git **worktree** under a sibling
 `.ai-worktrees` directory. These are removed automatically when you delete the
 PR-review feature. To reclaim disk from orphaned checkouts, open **Settings →
-Review worktrees**, which lists every app-managed worktree and lets you remove any
-of them (a forced `git worktree remove` + `prune`).
+System → Review worktrees** (also reachable through **Manage worktrees**).
+Removal reports progress/failure and protects primary or actively used
+checkouts; it is not permission to force-delete arbitrary directories.
 
 ## Re-running
 
-The review page exposes **Re-run all** and per-step **Retry** controls, so you can
-regenerate the whole review or just the step you need after code changes.
+Use **Retry incomplete** for unfinished perspectives. **Reset** explicitly
+prepares a fresh full review and invalidates obsolete evidence/results; merely
+opening the tab does not rerun analysis.
 
 ## Cost attribution
 

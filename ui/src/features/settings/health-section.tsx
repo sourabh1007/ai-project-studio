@@ -56,7 +56,8 @@ const OVERALL_HEADLINE: Record<HealthState, string> = {
   down: 'A subsystem is down',
 };
 
-function StateIcon({ state, size = 16 }: { state: HealthState; size?: number }) {
+function StateIcon({ state, size = 16 }: { state: HealthState | 'unknown'; size?: number }) {
+  if (state === 'unknown') return <InfoIcon size={size} />;
   if (state === 'ok') return <CheckIcon size={size} className="health-ic health-ic-ok" />;
   if (state === 'degraded')
     return <WarningIcon size={size} className="health-ic health-ic-degraded" />;
@@ -283,7 +284,7 @@ export function HealthSection({
   }, [pollMs, reload]);
 
   const report = data?.report ?? null;
-  const overall: HealthState = report?.overall ?? (error ? 'down' : 'ok');
+  const overall: HealthState | 'unknown' = error || !report ? 'unknown' : report.overall;
   const platform = typeof navigator === 'undefined' ? 'unknown' : navigator.platform;
 
   return (
@@ -295,7 +296,7 @@ export function HealthSection({
           <StateIcon state={overall} size={28} />
         </span>
         <span className="health-hero-text">
-          <strong className="health-hero-title">{OVERALL_HEADLINE[overall]}</strong>
+          <strong className="health-hero-title">{overall === 'unknown' ? 'System health unknown' : OVERALL_HEADLINE[overall]}</strong>
           <span className="health-hero-sub">
             {data
               ? `Last checked ${new Date().toLocaleTimeString()}`
@@ -322,6 +323,7 @@ export function HealthSection({
           try restarting the app.
         </p>
       )}
+      {!loading && !report && <p role="status">The subsystem and provider reports could not be loaded. A responsive API alone does not confirm that all systems are operational. Refresh to retry.</p>}
 
       <div className="health-info-grid">
         <InfoCard icon={<InfoIcon size={18} />} label="App version" value={version ?? '—'} />

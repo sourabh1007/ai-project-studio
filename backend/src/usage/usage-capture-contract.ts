@@ -8,7 +8,12 @@ export const usageCapturePayloadSchema: z.ZodType<UsageEvent> = z.object({
   turnIndex: count, provider: z.string().min(1).max(256),
   requestedModel: z.string().max(1024), resolvedModel: z.string().max(1024),
   operation: z.string().max(256), inputTokens: count, outputTokens: count,
-  reasoningOutputTokens: count, cost: z.number().finite().nonnegative(), nanoAiu: count,
+  reasoningOutputTokens: count, cost: z.number().finite().nonnegative().nullable(), nanoAiu: count.nullable(),
+  chargeProvenance: z.enum(['reported', 'estimated', 'unavailable']).optional(),
+  chargeUnit: z.literal('aic').nullable().optional(),
+  usdEstimate: z.number().finite().nonnegative().nullable().optional(),
+  nativeSessionId: z.string().min(1).max(1024).optional(),
+  nativeMessageId: z.string().min(1).max(1024).optional(),
   serviceRequestId: z.string().max(1024).nullable(),
   startedAt: z.string().min(1).max(128), endedAt: z.string().min(1).max(128),
 });
@@ -20,6 +25,8 @@ export interface UsageCaptureState {
   sourceId: string;
   /** Scan position, not proof of completeness; per-row acknowledgements are durable watermarks. */
   cursor: string | null;
+  /** Independent append high-water mark, preserved while cursor repairs history. */
+  appendCursor?: string | null;
   /** Independent bounded reconciliation position in the retained payload ledger. */
   replayCursor?: number | null;
   /** Durable proof and completion markers for one bounded reconciliation epoch. */
@@ -44,6 +51,8 @@ export type UsageCaptureRead =
       sourceId: string;
       rows: UsageCaptureRow[];
       nextCursor: string | null;
+      /** Append high-water mark, retained at EOF independently of repair pagination. */
+      highWaterCursor?: string | null;
       /** Incomplete rows can be revisited without starving later valid rows. */
       issue?: { status: 'retrying' | 'unsupported'; reason: string };
       /** Only an authoritative provider completion signal can assert this. */

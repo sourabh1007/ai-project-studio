@@ -68,7 +68,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     static getAllWindows() { return windows.filter((win) => !win.destroyed); }
     constructor(options) {
       super();
-      this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {} });
+      this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, send() {} });
       this.focuses = 0;
       this.options = options;
       this.shows = 0;
@@ -211,7 +211,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   vm.createContext(context);
   vm.runInContext(source('main.cjs') + `
     globalThis.owner = {
-      startBackend, stopBackend, runAfterBackendStop, createWindow, waitForBackend,
+      startBackend, stopBackend, runAfterBackendStop, releaseFailedUpdateGate, createWindow, openPopoutWindow, waitForBackend,
       reportStartupFailure, isBackendShutdownConfirmed,
       get backend() { return backend; },
       setSplash(splash) { startupSplash = splash; },
@@ -932,6 +932,42 @@ test('second-instance recovers an unexpectedly destroyed window without spawning
   assert.equal(f.windows[1].focuses, 1);
   assert.equal(f.owner.backend, child);
   assert.equal(f.counts().quits, 0);
+});
+
+test('a failed verified installer releases only its confirmed update gate so deliberate relaunch can recover', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const stopped = f.owner.runAfterBackendStop('update', () => true);
+  child.finish();
+  assert.equal(await stopped, true);
+  assert.equal(await f.ipc['app:relaunch']({ trusted: true }), false);
+  f.owner.releaseFailedUpdateGate();
+  assert.equal(await f.ipc['app:relaunch']({ trusted: true }), true);
+});
+
+test('second-instance focuses the owned main window rather than an older auxiliary window', () => {
+  const f = fixture();
+  f.spawn();
+  const auxiliary = f.owner.createWindow('file://documentation');
+  const main = f.owner.createWindow('http://127.0.0.1:1234/');
+  f.app.emit('second-instance');
+  assert.equal(main.focuses, 1);
+  assert.equal(auxiliary.focuses, 0);
+});
+
+test('closing the main window with owned popouts still waits for backend shutdown and closes the popouts', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const main = f.owner.createWindow('http://127.0.0.1:1234/');
+  assert.equal(f.owner.openPopoutWindow({ id: 'tab-1' }, 'Fixture tab'), true);
+  const popout = f.windows[1];
+  assert.equal(main.close().prevented, true);
+  assert.equal(main.isDestroyed(), false);
+  assert.equal(popout.isDestroyed(), false);
+  child.finish();
+  await tick();
+  assert.equal(main.isDestroyed(), true);
+  assert.equal(popout.isDestroyed(), true);
 });
 
 test('a rejected stop keeps the titlebar-close window visible and retryable', async () => {

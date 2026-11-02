@@ -9,6 +9,11 @@ request**, and hands the result to the [Review Board](pr-reviews.md).
 > linked repository; several can run on one feature, each solving a distinct
 > problem.
 
+New Task requires an active CLI that supports safe **metasessions**. Use
+Copilot, or Claude with safe/nonmanaged configuration and supported API/cloud
+credentials. Agency is currently interactive-only for IDE-launched AI
+automation; attaching New Task does not bypass that restriction.
+
 ## The flow
 
 ```
@@ -17,17 +22,26 @@ Describe ─▶ Plan ─▶ Review ─▶ Implement ─▶ Summary
  + context                     in parallel
 ```
 
-1. **Describe** — write the problem and any context.
+1. **Describe** — write the problem and any context; choose a **Base branch**
+   when offered. **Clarify & suggest** proposes a clearer problem statement and
+   missing-information chips so you can supply details before planning.
 2. **Plan** — a planner metasession reads the repo and produces a concrete,
    reviewable implementation plan. Live logs stream as it works.
-3. **Review** — read the plan. Approve it, or re-plan with a suggestion (a
-   re-plan discards the old branch and cuts a fresh one).
+3. **Review** — read the plan. Use **Refine with the planner** to discuss
+   improvements; a suggestion is a proposal, not consent to modify the plan.
+   Apply an accepted revision explicitly, or re-plan. Replanning must not
+   silently discard local work or reset an existing checkout.
 4. **Implement** — a **lead agent** decomposes the plan into file-disjoint
    slices and dispatches specialized **sub-agents** (developer / tester) that
    each lease their own metasession and work **in parallel**. The lead agent
    reviews the combined result and builds only the affected projects.
 5. **Summary** — the PR (title + a **Problem / Solution** description), the list
    of changed files, planning/implementation time, and AI credits.
+
+Use the plan's **Download** control to export the reviewed plan. **New
+session** hands the task's context and checkout to an interactive CLI session;
+it is not a second automatic implementation run. Changed-file links open a
+diff modal, including the full-file view where available.
 
 ## The agent team
 

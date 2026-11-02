@@ -286,6 +286,7 @@ describe('workspace and session integration', () => {
     });
 
     const bootstrap = createSessionBootstrap({
+      logger: { warn: () => {} },
       features: h.features,
       sessions: h.sessions,
       summaries: h.summaries,

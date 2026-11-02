@@ -4,7 +4,7 @@ import { terminalDefaults } from './config.js';
 import { createEventBus } from '../kernel/event-bus.js';
 import { createClock } from '../kernel/clock.js';
 import { createProviderRegistry } from '../provider/provider-registry.js';
-import type { IAIProvider } from '../provider/provider-contract.js';
+import type { IAIProvider, SessionSpec } from '../provider/provider-contract.js';
 import type { SessionEventMap } from '../session/session-launcher.js';
 import type { Session } from '../session/session-contract.js';
 import type { Transcript } from '../session/transcript-capture.js';
@@ -12,6 +12,7 @@ import type { PtyProcess, PtySpawnRequest, PtySpawner } from './pty-contract.js'
 import type { BootstrapInstructionsWriter } from './bootstrap-instructions-port.js';
 import { CUSTOM_INSTRUCTIONS_DIRS_ENV } from './bootstrap-instructions.js';
 import { ConflictError } from '../kernel/error-types.js';
+import { createActiveProviderPolicy, type ProviderExecutionPolicy } from '../provider/active-provider.js';
 
 function fakePtyEnv() {
   const requests: PtySpawnRequest[] = [];
@@ -176,12 +177,15 @@ function makeManager(
     trackModel?: boolean;
     withMcpScanner?: boolean;
     withRestartScanner?: boolean;
+    commandBootstrap?: boolean;
   } = {},
   isTransientFailure?: (line: string) => boolean,
   extra: {
+    executionPolicy?: ProviderExecutionPolicy;
     selfRecovery?: {
       enabled: boolean;
       useMetaAnalysis: boolean;
+      maxRestartCycles?: number;
       analyze?: (errorText: string) => Promise<string | null>;
       report: (sessionId: string, message: string) => void;
     };
@@ -191,19 +195,29 @@ function makeManager(
     save?: (transcript: Transcript) => Promise<void>;
     spawner?: PtySpawner;
     bootstrapInstructions?: BootstrapInstructionsWriter;
+    prepareInteractiveSession?: () => Promise<void>;
   } = {},
 ) {
   const env = fakePtyEnv();
   const bus = createEventBus<SessionEventMap>();
   const providers = createProviderRegistry();
-  providers.register(
-    interactiveProvider(
-      withScanner,
-      modelOpts.withModelScanner ?? false,
-      modelOpts.withMcpScanner ?? false,
-      modelOpts.withRestartScanner ?? false,
-    ),
+  const provider = interactiveProvider(
+    withScanner,
+    modelOpts.withModelScanner ?? false,
+    modelOpts.withMcpScanner ?? false,
+    modelOpts.withRestartScanner ?? false,
   );
+  const commands: SessionSpec[] = [];
+  provider.prepareInteractiveSession = extra.prepareInteractiveSession;
+  const buildCommand = provider.buildInteractiveCommand;
+  provider.buildInteractiveCommand = (spec) => {
+    commands.push(spec);
+    return buildCommand(spec);
+  };
+  if (modelOpts.commandBootstrap) {
+    Object.assign(provider, { capabilities: { interactiveBootstrap: 'command' } });
+  }
+  providers.register(provider);
   const ts = fakeTranscriptStore();
   const started: Session[] = [];
   const ended: Session[] = [];
@@ -219,8 +233,9 @@ function makeManager(
   const instructionCalls: string[] = [];
   const recorded: Array<{ sessionId: string; path: string; tool: string }> = [];
   const modelResolved: Array<{ sessionId: string; model: string }> = [];
-  const logger = { error: vi.fn() };
+  const logger = { error: vi.fn(), warn: vi.fn() };
   const manager = createTerminalManager({
+    executionPolicy: extra.executionPolicy,
     logger,
     spawner: extra.spawner ?? env.spawner,
     providers,
@@ -275,10 +290,163 @@ function makeManager(
     recorded,
     modelResolved,
     logger,
+    commands,
   };
 }
 
 describe('createTerminalManager', () => {
+  it('awaits provider-native readiness while retaining exclusive admission and releases failed preparation', async () => {
+    let ready!: () => void;
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    const prepareInteractiveSession = vi.fn(() => new Promise<void>((resolve) => { ready = resolve; }));
+    const h = makeManager('', false, undefined, {}, undefined, { executionPolicy: policy, prepareInteractiveSession });
+    const launching = h.manager.getOrLaunch(sampleSession());
+    await vi.waitFor(() => expect(prepareInteractiveSession).toHaveBeenCalledOnce());
+    expect(h.env.requests).toEqual([]);
+    expect(() => policy.select('claude')).toThrow('Stop all CLI');
+    ready();
+    await launching;
+    h.env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+    const failed = makeManager('', false, undefined, {}, undefined, {
+      executionPolicy: policy, prepareInteractiveSession: async () => { throw new Error('Unsupported CLI version'); },
+    });
+    await expect(failed.manager.getOrLaunch(sampleSession())).rejects.toThrow('Unsupported CLI version');
+    expect(policy.select('claude').providerId).toBe('claude');
+  });
+  it('drains for provider switching only after native exit and transcript completion without deleting history', async () => {
+    const h = makeManager();
+    const session = sampleSession();
+    await h.manager.getOrLaunch(session);
+    const draining = h.manager.drainForProviderSwitch(100);
+    expect(h.env.kills()).toBe(1);
+    expect(h.ended).toEqual([]);
+    h.env.emitExit(null);
+    expect(await draining).toBe(true);
+    expect(h.discarded).toEqual([]);
+    expect(h.ended[0]).toMatchObject({ id: session.id, provider: 'copilot', status: 'cancelled' });
+    expect(h.saved).toHaveLength(1);
+    await h.manager.getOrLaunch({ ...session, startedAt: h.ended[0].startedAt });
+    expect(h.commands[1].resume).toBe(true);
+    h.env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+  });
+
+  it('does not confirm switching when kill has no exit confirmation', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    const h = makeManager('', false, undefined, {}, undefined, { executionPolicy: policy });
+    await h.manager.getOrLaunch(sampleSession());
+    expect(await h.manager.drainForProviderSwitch(1)).toBe(false);
+    expect(() => policy.select('claude')).toThrow('Stop all CLI');
+    h.env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+    expect(policy.select('claude').providerId).toBe('claude');
+  });
+
+  it('supports idle drains and retains native ownership when termination requests throw', async () => {
+    const idle = makeManager();
+    expect(await idle.manager.drainForProviderSwitch(0)).toBe(true);
+    const env = fakePtyEnv();
+    const h = makeManager('', false, undefined, {}, undefined, {
+      spawner: { spawn: (request) => ({
+        ...env.spawner.spawn(request), kill: () => { throw new Error('native kill failed'); },
+      }) },
+    });
+    await h.manager.getOrLaunch(sampleSession());
+    await expect(h.manager.drainForProviderSwitch(1)).rejects.toThrow('termination requests failed');
+    expect(h.ended).toEqual([]);
+    env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+    expect(h.ended[0].status).toBe('completed');
+  });
+  it('delivers command-capability context once without instruction files or PTY bootstrap seeding', async () => {
+    const writer: BootstrapInstructionsWriter = { write: vi.fn(), clear: vi.fn(async () => {}) };
+    const h = makeManager('native context', false, undefined, { commandBootstrap: true }, undefined, {
+      bootstrapInstructions: writer,
+    });
+    const terminal = await h.manager.getOrLaunch(sampleSession());
+    expect(h.commands[0]).toMatchObject({ instructions: 'native context', resume: false });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(h.env.requests[0].env).toEqual({ OTEL: sampleSession().usageFilePath });
+    expect(terminal.inputReadiness).toBe('ready');
+    expect(h.env.writes).toEqual([]);
+    const restart = h.manager.relaunch({ ...sampleSession(), startedAt: '2026-10-23T00:00:00Z' });
+    h.env.emitExit(0);
+    await restart;
+    expect(h.commands[1]).toMatchObject({ instructions: 'native context', resume: true });
+    expect(writer.write).not.toHaveBeenCalled();
+    h.env.emitExit(0);
+    expect(await h.manager.waitForIdle(100)).toBe(true);
+    expect(writer.clear).not.toHaveBeenCalled();
+  });
+  it('leases pending/coalesced preparation, native execution and unconfirmed termination', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    let compose!: (text: string) => void;
+    const h = makeManager('', false, undefined, {}, undefined, {
+      executionPolicy: policy,
+      compose: () => new Promise<string>((resolve) => { compose = resolve; }),
+    });
+    const first = h.manager.getOrLaunch(sampleSession());
+    const coalesced = h.manager.getOrLaunch(sampleSession());
+    expect(policy.get().blockers).toHaveLength(1);
+    expect(() => policy.select('claude')).toThrow('Stop all CLI work');
+    await vi.waitFor(() => expect(compose).toBeTypeOf('function'));
+    compose('');
+    expect(await first).toBe(await coalesced);
+    expect(await h.manager.getOrLaunch(sampleSession())).toBe(await first);
+    h.manager.close(sampleSession().id);
+    expect(policy.get().blockers).toHaveLength(1);
+    h.env.emitExit(0);
+    h.env.emitExit(0);
+    await h.manager.waitForIdle(100);
+    expect(policy.get().blockers).toEqual([]);
+    policy.select('claude');
+    const other = makeManager('', false, undefined, {}, undefined, { executionPolicy: policy });
+    await expect(other.manager.getOrLaunch(sampleSession())).rejects.toThrow('not the active');
+  });
+
+  it('rejects setup-required and releases leases when bootstrap or physical spawn fails', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot'], isEligible: () => true,
+      initialProviderId: null, saveSelected: () => {},
+    });
+    const h = makeManager('', false, new Error('bad bootstrap'), {}, undefined, { executionPolicy: policy });
+    await expect(h.manager.getOrLaunch(sampleSession())).rejects.toThrow('Choose an active CLI');
+    policy.select('copilot');
+    await expect(h.manager.getOrLaunch(sampleSession())).rejects.toThrow('bad bootstrap');
+    expect(policy.get().blockers).toEqual([]);
+    const failed = makeManager('', false, undefined, {}, undefined, { executionPolicy: policy });
+    failed.env.failSpawns(new Error('spawn failed'));
+    await expect(failed.manager.getOrLaunch(sampleSession())).rejects.toThrow('spawn failed');
+    expect(policy.get().blockers).toEqual([]);
+  });
+
+  it('keeps provider ownership across deliberate relaunch and replacement bootstrap', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    const h = makeManager('', false, undefined, {}, undefined, { executionPolicy: policy });
+    await h.manager.getOrLaunch(sampleSession());
+    const replacement = h.manager.relaunch(sampleSession());
+    expect(policy.get().blockers).toHaveLength(2);
+    h.env.emitExit(0);
+    expect(() => policy.select('claude')).toThrow('Stop all CLI work');
+    await replacement;
+    expect(policy.get().blockers).toHaveLength(1);
+    h.env.emitExit(0);
+    await h.manager.waitForIdle(100);
+    expect(policy.get().blockers).toEqual([]);
+  });
   it('finalizes a started record when native PTY spawn fails', async () => {
     const h = makeManager();
     const error = new Error('ENOENT');
@@ -599,6 +767,24 @@ describe('createTerminalManager', () => {
     }
   });
 
+  it('passes the configured replay geometry bound to sessions', async () => {
+    const { manager, env } = makeManager('', false, undefined, {}, undefined,
+      { configOverride: { maxReplayGeometryBoundaries: 1 } });
+    const terminal = await manager.getOrLaunch(sampleSession());
+    env.emitData('wide');
+    terminal.resize(80, 24);
+    env.emitData('mid');
+    terminal.resize(60, 20);
+    env.emitData('narrow');
+    const frames: unknown[] = [];
+    terminal.attach({
+      send: (data) => frames.push(data),
+      resize: (cols, rows, phase) => frames.push([cols, rows, phase]),
+      exit: () => {},
+    });
+    expect(frames).toEqual([[60, 20, 'attach'], 'narrow']);
+  });
+
   it('shows manual retry guidance instead of replaying raw terminal input', async () => {
     const { manager, env } = makeManager(
       '',
@@ -769,7 +955,7 @@ describe('createTerminalManager', () => {
   });
 
   describe('self-recovery escalation', () => {
-    const flush = async (times = 8): Promise<void> => {
+    const flush = async (times = 20): Promise<void> => {
       for (let i = 0; i < times; i += 1) {
         await Promise.resolve();
       }
@@ -777,11 +963,14 @@ describe('createTerminalManager', () => {
 
     function makeSelfRecovering(
       opts: {
+        executionPolicy?: ProviderExecutionPolicy;
+        commandBootstrap?: boolean;
         analyze?: (errorText: string) => Promise<string | null>;
         composeFailOnCall?: number;
         instructions?: string;
         compose?: (call: number) => Promise<string>;
         bootstrapInstructions?: BootstrapInstructionsWriter;
+        maxRestartCycles?: number;
       } = {},
     ) {
       const report = vi.fn<(sessionId: string, message: string) => void>();
@@ -789,12 +978,14 @@ describe('createTerminalManager', () => {
         opts.instructions ?? '',
         false,
         undefined,
-        {},
+        { commandBootstrap: opts.commandBootstrap },
         (line) => line.includes('400'),
         {
+          executionPolicy: opts.executionPolicy,
           selfRecovery: {
             enabled: true,
             useMetaAnalysis: opts.analyze !== undefined,
+            maxRestartCycles: opts.maxRestartCycles,
             analyze: opts.analyze,
             report,
           },
@@ -807,6 +998,54 @@ describe('createTerminalManager', () => {
       );
       return { ...h, report };
     }
+
+    it.each([true, false])('skips retry exhaustion under the provider-switch fence without escaping PTY output (warning logger: %s)', async (withWarningLogger) => {
+      const policy = createActiveProviderPolicy({
+        enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+        initialProviderId: 'copilot', saveSelected: () => {},
+      });
+      const analyze = vi.fn(async () => 'analysis');
+      const h = makeSelfRecovering({ executionPolicy: policy, analyze });
+      const warning = h.logger.warn;
+      if (!withWarningLogger) Reflect.deleteProperty(h.logger, 'warn');
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.confirmReplaySafeRequest('sess-1', 'confirmed request');
+      let finishDrain!: () => void;
+      const switching = policy.switchTo('claude', true, 0, () => new Promise<void>((resolve) => { finishDrain = resolve; }));
+      expect(() => h.env.emitData('Error: 400 Bad Request\n')).not.toThrow();
+      await flush();
+      expect(analyze).not.toHaveBeenCalled();
+      expect(h.report).not.toHaveBeenCalled();
+      expect(h.env.requests).toHaveLength(1);
+      expect(h.env.kills()).toBe(0);
+      expect(h.logger.error).not.toHaveBeenCalled();
+      if (withWarningLogger) {
+        expect(warning).toHaveBeenCalledWith(
+          'Terminal recovery skipped because CLI execution is unavailable',
+          expect.objectContaining({ sessionId: 'sess-1', error: expect.any(ConflictError) }),
+        );
+      }
+      h.env.emitExit(0);
+      await h.manager.waitForIdle(100);
+      finishDrain();
+      expect(await switching).toMatchObject({ providerId: 'claude' });
+    });
+
+    it('does not mask unexpected admission failures in the synchronous retry-exhaustion path', async () => {
+      const policy = createActiveProviderPolicy({
+        enabledProviderIds: () => ['copilot'], isEligible: () => true,
+        initialProviderId: 'copilot', saveSelected: () => {},
+      });
+      const h = makeSelfRecovering({ executionPolicy: policy });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.confirmReplaySafeRequest('sess-1', 'confirmed request');
+      const failure = new Error('Admission state corrupted');
+      vi.spyOn(policy, 'acquire').mockImplementationOnce(() => { throw failure; });
+      expect(() => h.env.emitData('Error: 400 Bad Request\n')).toThrow(failure);
+      expect(h.logger.warn).not.toHaveBeenCalled();
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+    });
 
     it.each(['input', 'pending'] as const)(
       'does not replay recovery bootstrap invalidated by newer %s',
@@ -868,11 +1107,36 @@ describe('createTerminalManager', () => {
       });
     });
 
+    it('releases recovery provider leases even when replacement failure notification throws', async () => {
+      const executionPolicy = createActiveProviderPolicy({
+        enabledProviderIds: () => ['copilot'], isEligible: () => true,
+        initialProviderId: 'copilot', saveSelected: () => {},
+      });
+      const h = makeSelfRecovering({ composeFailOnCall: 2, executionPolicy });
+      const failure = new Error('replacement listener failed');
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.onTerminal('sess-1', (_terminal, failed) => { if (failed) throw failure; });
+      h.manager.confirmReplaySafeRequest('sess-1', 'old prompt');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
+      await flush();
+      expect(executionPolicy.get().blockers).toEqual([]);
+      expect(h.report).toHaveBeenCalledWith(
+        'sess-1', 'Automatic recovery failed. Restart the session to continue.',
+      );
+    });
+
     it('restarts the CLI and replays the prompt once re-submits are spent', async () => {
       const analyze = vi
         .fn<(text: string) => Promise<string | null>>()
         .mockResolvedValue('History too large; a restart clears it.');
-      const h = makeSelfRecovering({ analyze });
+      const executionPolicy = createActiveProviderPolicy({
+        enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+        initialProviderId: 'copilot', saveSelected: () => {},
+      });
+      const h = makeSelfRecovering({ analyze, executionPolicy });
       await h.manager.getOrLaunch(sampleSession());
       h.manager.observeInput('sess-1', 'do it\r');
       h.manager.confirmReplaySafeRequest('sess-1', 'do it');
@@ -891,6 +1155,47 @@ describe('createTerminalManager', () => {
       expect(h.discarded).toEqual(['sess-1']);
       expect(h.ended).toHaveLength(0);
       expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('caps recovery across relaunches of the same confirmed request and re-arms only on fresh activity', async () => {
+      const h = makeSelfRecovering();
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.confirmReplaySafeRequest('sess-1', 'same request');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+      expect(h.env.requests).toHaveLength(2);
+      h.manager.confirmReplaySafeRequest('sess-1', 'same request');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      expect(h.env.requests).toHaveLength(2);
+      expect(h.report).toHaveBeenCalledWith('sess-1', expect.stringContaining('restart limit'));
+      h.manager.observeInput('sess-1', 'new user activity');
+      h.manager.confirmReplaySafeRequest('sess-1', 'same request');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+      expect(h.env.requests).toHaveLength(3);
+      h.manager.confirmReplaySafeRequest('sess-1', 'different request');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+      expect(h.env.requests).toHaveLength(4);
+    });
+
+    it('can disable recovery relaunches without enabling replay or paid diagnosis', async () => {
+      const analyze = vi.fn(async () => 'diagnosis');
+      const h = makeSelfRecovering({ maxRestartCycles: 0, analyze });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.confirmReplaySafeRequest('sess-1', 'confirmed');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      expect(h.env.requests).toHaveLength(1);
+      expect(analyze).not.toHaveBeenCalled();
+      expect(h.report).toHaveBeenCalledWith('sess-1', expect.stringContaining('restart limit'));
     });
 
     it('re-prepares the context instructions file when it self-recovers', async () => {
@@ -922,6 +1227,26 @@ describe('createTerminalManager', () => {
         { sessionId: 'sess-1', content: 'ctx' },
       ]);
       expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('uses native command context rather than files or bootstrap replay during recovery', async () => {
+      const writer: BootstrapInstructionsWriter = { write: vi.fn(), clear: vi.fn(async () => {}) };
+      const h = makeSelfRecovering({
+        commandBootstrap: true, instructions: 'native context', bootstrapInstructions: writer,
+      });
+      await h.manager.getOrLaunch(sampleSession());
+      h.manager.confirmReplaySafeRequest('sess-1', 'safe request');
+      h.env.emitData('Error: 400 Bad Request\n');
+      await flush();
+      h.env.emitExit(0);
+      await flush();
+      expect(h.commands).toHaveLength(2);
+      expect(h.commands.map((spec) => spec.instructions)).toEqual(['native context', 'native context']);
+      expect(writer.write).not.toHaveBeenCalled();
+      expect(h.env.writes).toEqual([]);
+      h.manager.close('sess-1');
+      h.env.emitExit(0);
+      expect(await h.manager.waitForIdle(100)).toBe(true);
     });
 
     it('handles an exit during replacement notification and shares the recovery launch', async () => {
@@ -1042,7 +1367,11 @@ describe('createTerminalManager', () => {
 
     it('reports to the status bar when the restart cannot be carried out', async () => {
       // Fail the second compose (the relaunch) so restartSession returns false.
-      const h = makeSelfRecovering({ composeFailOnCall: 2 });
+      const executionPolicy = createActiveProviderPolicy({
+        enabledProviderIds: () => ['copilot'], isEligible: () => true,
+        initialProviderId: 'copilot', saveSelected: () => {},
+      });
+      const h = makeSelfRecovering({ composeFailOnCall: 2, executionPolicy });
       await h.manager.getOrLaunch(sampleSession());
       h.manager.observeInput('sess-1', 'do it\r');
       h.manager.confirmReplaySafeRequest('sess-1', 'do it');
@@ -1057,6 +1386,7 @@ describe('createTerminalManager', () => {
       );
       // Only the original spawn happened; the relaunch threw.
       expect(h.env.requests).toHaveLength(1);
+      expect(executionPolicy.get().blockers).toEqual([]);
     });
 
     it('reports to the status bar when the replacement spawn fails after pending was reserved', async () => {

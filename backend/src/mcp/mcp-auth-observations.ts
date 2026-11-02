@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { McpServerEntry, McpToolInspection } from './mcp-contract.js';
-import { nativeAuthenticationRequired, nativeCredentialsExpired } from './native-mcp-auth.js';
+import { nativeAuthenticationInterrupted, nativeAuthenticationRequired, nativeCredentialsExpired, NATIVE_AUTH_INTERRUPTED_MESSAGE } from './native-mcp-auth.js';
 
 function normalized(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalized);
@@ -16,6 +16,9 @@ export function mcpObservationKey(provider: string, canonical: string, launch: R
 }
 
 export function observedMcpAuth(result: McpToolInspection, checkedAt: string): NonNullable<McpServerEntry['authState']> {
+  if (nativeAuthenticationInterrupted(result)) return {
+    state: 'unknown', checkedAt, message: NATIVE_AUTH_INTERRUPTED_MESSAGE, interrupted: true,
+  };
   if (result.status === 'ok') return {
     state: 'ready', checkedAt, message: 'Tool inventory succeeded at this time. Authorization for individual tools has not been verified.',
   };

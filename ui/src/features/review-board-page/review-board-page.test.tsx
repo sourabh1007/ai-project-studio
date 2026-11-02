@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import { ReviewBoardPage } from './review-board-page.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { PrCommentThread, PrReview, ReviewBoard } from '../../lib/types.js';
 import { reviewBoardRunStore } from './review-board-run-store.js';
+import { AutomationBoundary, AutomationReadinessProvider } from '../../app/automation-readiness.js';
+import { PROVIDER_CHANGED } from '../../lib/provider-selection.js';
 
 vi.mock('../../hooks/use-agent-usage.js', () => ({
   useAgentUsage: () => ({
@@ -183,6 +185,57 @@ async function completedClient(value: ReviewBoard) {
 }
 
 describe('ReviewBoardPage sign-off identity', () => {
+  it('explains an interactive-only provider before mounting or generating an agent, and recovers after switching', async () => {
+    const value = board('f-policy-gate', 'sha-a');
+    const c = { ...client(vi.fn().mockResolvedValue(value)),
+      getProviderBootstrap: vi.fn().mockResolvedValue({
+        defaultProvider: 'interactive-cli', selectionRequired: false,
+        providers: [{ id: 'interactive-cli', installed: true, automation: {
+          supported: false, reason: 'Automated MCP suppression cannot be verified.',
+        } }],
+      }),
+    } as unknown as ApiClient;
+    render(<ApiProvider value={c}><AutomationReadinessProvider><AutomationBoundary>
+      <ReviewBoardPage featureId={value.featureId} />
+    </AutomationBoundary></AutomationReadinessProvider></ApiProvider>);
+    await screen.findByText(/Automated MCP suppression cannot be verified/);
+    expect(c.getReviewBoard).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Start Review' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose another CLI' })).toBeEnabled();
+    act(() => window.dispatchEvent(new CustomEvent(PROVIDER_CHANGED, { detail: {
+      defaultProvider: 'ready-cli', selectionRequired: false,
+      providers: [{ id: 'ready-cli', installed: true, automation: { supported: true, reason: null } }],
+    } })));
+    await waitFor(() => expect(c.getReviewBoard).toHaveBeenCalledWith(value.featureId));
+    expect(screen.queryByRole('region', { name: 'Automation unavailable' })).not.toBeInTheDocument();
+  });
+  it('ignores a late PR response after switching features and closes the previous diff', async () => {
+    const first = board('f-race-first', 'sha-first');
+    const second = board('f-race-second', 'sha-second');
+    const pending = deferred<PrReview>();
+    const newer = review(second.featureId, 'sha-second');
+    newer.changeGraph.projects = [{ id: 'new', name: 'Current project', path: 'current.proj' }];
+    newer.changeGraph.nodes = [{
+      path: 'new.ts', projectId: 'new', module: null, category: 'code', kind: 'changed',
+      changeKind: 'modified', diff: '+new', whatItDoes: '', whatChanged: '', review: [],
+    }];
+    const c = client(vi.fn(async (id: string) => id === first.featureId ? first : second));
+    c.getPrReview = vi.fn((id: string) => id === first.featureId ? pending.promise : Promise.resolve(newer));
+    const view = render(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={first.featureId} /></ApiProvider>);
+    await waitFor(() => expect(c.getPrReview).toHaveBeenCalledWith(first.featureId));
+    view.rerender(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={second.featureId} /></ApiProvider>);
+    await screen.findByText('Current project', { selector: 'summary span' });
+    const older = review(first.featureId, 'sha-first');
+    older.changeGraph.projects = [{ id: 'old', name: 'Obsolete project', path: 'old.proj' }];
+    older.changeGraph.nodes = [{ ...newer.changeGraph.nodes[0], projectId: 'old', path: 'old.ts' }];
+    await act(async () => pending.resolve(older));
+    expect(screen.queryByText('Obsolete project')).not.toBeInTheDocument();
+    expect(screen.getByText('Current project', { selector: 'summary span' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View 0 changed files' }));
+    expect(screen.getByRole('dialog', { name: 'Diff for Changed files' })).toBeInTheDocument();
+    view.rerender(<ApiProvider value={c as ApiClient}><ReviewBoardPage featureId={first.featureId} /></ApiProvider>);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Diff for Changed files' })).not.toBeInTheDocument());
+  });
   beforeEach(() => {
     window.localStorage.clear();
     Element.prototype.scrollIntoView = vi.fn();

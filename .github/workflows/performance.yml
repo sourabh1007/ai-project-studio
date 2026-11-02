@@ -1,0 +1,52 @@
+name: Backend performance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/performance.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/performance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance:
+    name: Isolated backend workloads (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build, test harness and run performance gate
+        run: npm run test:perf
+      - name: Preserve measurements and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-performance-${{ matrix.os }}
+          path: backend/coverage/performance/results.json
+          if-no-files-found: warn
+          retention-days: 14

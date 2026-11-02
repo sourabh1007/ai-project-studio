@@ -1,5 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { enabledMcpServerNames } from './mcp-server-names.js';
+import { enabledMcpServerNames, headlessMcpServerNames } from './mcp-server-names.js';
+
+describe('conservative headless MCP suppression', () => {
+  it('unions user, workspace and ancestor declarations without trusting enable flags', () => {
+    expect(headlessMcpServerNames([
+      { label: 'missing', document: null },
+      { label: 'empty', document: {} },
+      { label: 'user', document: { mcpServers: { alpha: { command: 'node' }, disabled: { enabled: false } } } },
+      { label: 'workspace', document: { alpha: {}, beta: {} }, allowBareMap: true },
+      { label: 'ancestor', document: { mcpServers: { gamma: {} } }, allowBareMap: true },
+    ])).toEqual(['alpha', 'disabled', 'beta', 'gamma']);
+  });
+  it.each([[], true, { mcpServers: [] }, { mcpServers: { broken: true } }, { mcpServers: { '': {} } }, { mcpServers: { '-bad': {} } }])
+    ('blocks malformed trusted source %j rather than loading it or guessing', (document) => {
+      expect(() => headlessMcpServerNames([{ label: 'workspace', document }])).toThrow(/Repair.*native CLI/);
+    });
+});
 
 describe('enabledMcpServerNames', () => {
   it('returns every object-valued server that is not disabled', () => {

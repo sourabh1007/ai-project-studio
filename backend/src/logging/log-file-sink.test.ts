@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDailyLogPathStrategy } from './config.js';
 import {
   combineSinks,
+  createFileLogLineWriter,
   createFileLogSink,
   defaultLogFileLstat,
   defaultLogFileStat,
@@ -51,6 +52,25 @@ afterEach(() => {
 });
 
 describe('formatLogLine', () => {
+  it('redacts sensitive keys in every naming style, including nested values', () => {
+    const line = formatLogLine({
+      level: 'info', message: 'creds',
+      data: {
+        apiKey: 'fixture-a', api_key: 'fixture-b', 'API-KEY': 'fixture-c',
+        Authorization: 'fixture-d', accessToken: 'fixture-e', password: 'fixture-f',
+        nested: [{ clientSecret: 'fixture-g', cookie: { id: 'fixture-h' } }],
+        emptyToken: null, inputTokens: 42, name: 'visible',
+      },
+    }, at);
+    expect(line).not.toMatch(/fixture-[a-h]/u);
+    expect(JSON.parse(line).data).toEqual({
+      apiKey: '[redacted]', api_key: '[redacted]', 'API-KEY': '[redacted]',
+      Authorization: '[redacted]', accessToken: '[redacted]', password: '[redacted]',
+      nested: [{ clientSecret: '[redacted]', cookie: '[redacted]' }],
+      emptyToken: null, inputTokens: 42, name: 'visible',
+    });
+  });
+
   it('never exposes values behind array or inherited custom serializers', () => {
     class Base {
       toJSON() { return 'redacted'; }
@@ -1125,5 +1145,81 @@ describe('combineSinks', () => {
     sink(record);
     expect(a).toEqual([record]);
     expect(b).toEqual([record]);
+  });
+});
+
+describe('combineSinks fault isolation', () => {
+  it('delivers to later sinks when an earlier one throws and reports the failure', () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((line) => { lines.push(String(line)); return true; });
+    const later: LogRecord[] = [];
+    const sink = combineSinks(() => { throw new Error('EPIPE'); }, (record) => later.push(record));
+    const record: LogRecord = { level: 'error', message: 'm' };
+    expect(() => sink(record)).not.toThrow();
+    spy.mockRestore();
+    expect(later).toEqual([record]);
+    expect(JSON.parse(lines[0])).toMatchObject({ component: 'log-sink', sink: 'sink-0', failures: 1 });
+  });
+});
+
+describe('createFileLogLineWriter', () => {
+  const lineFor = (message: string): string => formatLogLine({ level: 'info', message }, at);
+
+  it('writes pre-formatted lines in order and rotates by size like the record sink', () => {
+    const dir = ownedTempDir('line-writer');
+    const strategy = createDailyLogPathStrategy(dir, 'app');
+    const lines = ['a', 'b', 'c', 'd'].map((name) => lineFor(name + 'x'.repeat(400)));
+    const write = createFileLogLineWriter({
+      filePath: strategy.resolve(at, 0), pathStrategy: strategy,
+      maxFileBytes: 1024, retainedFileCount: 5, maxRecordBytes: 1024,
+    });
+    for (const line of lines) write(line, at);
+    const names = readdirSync(dir).sort();
+    expect(names.length).toBeGreaterThan(1);
+    const messages = names
+      .map((name) => ({ name, rank: parseManagedLogFileName(name)!.rotation || Number.MAX_SAFE_INTEGER }))
+      .sort((left, right) => left.rank - right.rank)
+      .flatMap(({ name }) => readJsonLines(join(dir, name)).map((entry) => entry.message));
+    expect(messages.map((message) => String(message)[0])).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('keeps retention bounded and refuses a symlinked target without writing through it', () => {
+    const appended: string[] = [];
+    const failures: FileLogSinkFailure[] = [];
+    const dir = ownedTempDir('line-writer-link');
+    const strategy = createDailyLogPathStrategy(dir, 'app');
+    const write = createFileLogLineWriter({
+      filePath: strategy.resolve(at, 0), pathStrategy: strategy,
+      append: (_path, line) => { appended.push(line); },
+      lstat: () => ({ size: 0, isFile: false, isSymbolicLink: true }),
+      onFailure: (failure) => failures.push(failure),
+    });
+    write(lineFor('x'), at);
+    expect(appended).toEqual([]);
+    expect(failures[0]).toMatchObject({ operation: 'stat', errorName: 'NonRegularFileError' });
+  });
+
+  it('touches no file system state until the first write and returns delivery proof', () => {
+    const calls: string[] = [];
+    let failing = true;
+    const failures: FileLogSinkFailure[] = [];
+    const dir = ownedTempDir('line-writer-proof');
+    const strategy = createDailyLogPathStrategy(dir, 'app');
+    const write = createFileLogLineWriter({
+      filePath: strategy.resolve(at, 0), pathStrategy: strategy,
+      ensureDir: () => { calls.push('ensure'); },
+      lstat: () => { calls.push('lstat'); return { size: 0, isFile: true, isSymbolicLink: false }; },
+      stat: () => ({ size: 0, isFile: true, isSymbolicLink: false }),
+      listDir: () => { calls.push('list'); return []; },
+      append: () => { calls.push('append'); if (failing) throw new Error('disk full'); },
+      onFailure: (failure) => failures.push(failure),
+      writeFailureLine: () => undefined,
+    });
+    expect(calls).toEqual([]);
+    expect(write(lineFor('a'), at)).toBe(false);
+    expect(write(lineFor('b'), at)).toBe(false);
+    expect(failures.filter((failure) => failure.kind === 'failure')).toHaveLength(1);
+    failing = false;
+    expect(write(lineFor('c'), at)).toBe(true);
   });
 });

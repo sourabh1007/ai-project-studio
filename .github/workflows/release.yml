@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
     steps:
       - name: Checkout exact release SHA
         uses: actions/checkout@v5
@@ -57,19 +57,45 @@ jobs:
       SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
       # Paid Apple Developer ID + notarization. All five secrets must be set.
       APPLE_SIGNING_ENABLED: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_CSC_LINK != '' && secrets.APPLE_CSC_KEY_PASSWORD != '' }}
+      APPLE_SIGNING_CONFIGURED: ${{ secrets.APPLE_ID != '' || secrets.APPLE_TEAM_ID != '' || secrets.APPLE_APP_SPECIFIC_PASSWORD != '' || secrets.APPLE_CSC_LINK != '' || secrets.APPLE_CSC_KEY_PASSWORD != '' }}
+      SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_ORGANIZATION_ID != '' || secrets.SIGNPATH_API_TOKEN != '' }}
+      SIGNPATH_ENABLED: ${{ secrets.SIGNPATH_ORGANIZATION_ID != '' && secrets.SIGNPATH_API_TOKEN != '' }}
+      AZURE_SIGNING_CONFIGURED: ${{ secrets.AZURE_TENANT_ID != '' || secrets.AZURE_CLIENT_ID != '' || secrets.AZURE_CLIENT_SECRET != '' || secrets.AZURE_CODE_SIGNING_ENDPOINT != '' || secrets.AZURE_CODE_SIGNING_ACCOUNT != '' || secrets.AZURE_CODE_SIGNING_PROFILE != '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             label: Windows
-          - os: macos-latest
-            label: macOS
+            arch: x64
+          - os: macos-15
+            label: macOS-arm64
+            arch: arm64
+          - os: macos-15-intel
+            label: macOS-x64
+            arch: x64
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
+
+      - name: Reject incomplete or conflicting signing configuration
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq 'macOS' -and
+              $env:APPLE_SIGNING_CONFIGURED -eq 'true' -and
+              $env:APPLE_SIGNING_ENABLED -ne 'true') {
+            throw 'Incomplete Apple signing configuration; refusing an ad-hoc fallback.'
+          }
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if ($env:SIGNPATH_CONFIGURED -eq 'true' -and $env:SIGNPATH_ENABLED -ne 'true') {
+              throw 'Incomplete SignPath configuration; refusing an unsigned fallback.'
+            }
+            if ($env:SIGNPATH_ENABLED -eq 'true' -and $env:AZURE_SIGNING_CONFIGURED -eq 'true') {
+              throw 'Choose one Windows signing service: SignPath or Azure Trusted Signing.'
+            }
+          }
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -133,7 +159,7 @@ jobs:
       - name: Build macOS installer (ad-hoc signed, unnotarized)
         if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true'
         working-directory: desktop
-        run: npm run dist:mac
+        run: npm run dist:mac -- --${{ matrix.arch }}
         # electron-builder `mac.identity: '-'` (electron-builder.yml) forces an
         # ad-hoc signature with no Developer-ID keychain lookup, so no
         # CSC_IDENTITY_AUTO_DISCOVERY override is needed. Ad-hoc signing keeps
@@ -149,10 +175,11 @@ jobs:
         # ID (auto-discovered from the CSC_LINK .p12 electron-builder imports),
         # turns Hardened Runtime on (required for notarization), and submits the
         # app to Apple's notary service via notarytool. Produces a fully signed,
-        # notarized, staple-ready DMG with no Gatekeeper prompt. Requires a paid
+        # notarized DMG; normal first-launch confirmation can still appear. Requires a paid
         # Apple Developer Program membership — see docs/development.md (Code signing).
         run: >
           npm run dist:mac --
+          --${{ matrix.arch }}
           -c.mac.identity="Developer ID Application"
           -c.mac.hardenedRuntime=true
           -c.mac.notarize=true
@@ -165,6 +192,30 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify Developer ID signature and notarization
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
+        shell: bash
+        env:
+          EXPECTED_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app_count=0
+          while IFS= read -r -d '' app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            actual_team="$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+            test "$actual_team" = "$EXPECTED_APPLE_TEAM_ID"
+            spctl --assess --type execute --verbose=2 "$app"
+            app_count=$((app_count + 1))
+          done < <(find desktop/release -maxdepth 3 -type d -name '*.app' -print0)
+          test "$app_count" -eq 1
+          dmg_count=0
+          for dmg in desktop/release/*.dmg; do
+            test -f "$dmg"
+            xcrun stapler validate "$dmg"
+            dmg_count=$((dmg_count + 1))
+          done
+          test "$dmg_count" -eq 1
 
       - name: Upload unsigned Windows installer for SignPath
         id: unsigned-win
@@ -239,11 +290,15 @@ jobs:
           const crypto = require('node:crypto');
           const version = require('./package.json').version;
           if (process.env.GITHUB_REF_NAME !== `v${version}`) throw new Error('Release tag/version mismatch');
-          for (const platform of ['win32', 'darwin']) {
-            const label = platform === 'win32' ? 'Windows' : 'macOS';
+          for (const [platform, arch, label] of [
+            ['win32', 'x64', 'Windows'],
+            ['darwin', 'arm64', 'macOS-arm64'],
+            ['darwin', 'x64', 'macOS-x64'],
+          ]) {
             const directory = `artifacts/ai-project-studio-${label}`;
-            const manifest = JSON.parse(fs.readFileSync(`${directory}/candidate-${platform}.json`, 'utf8'));
-            if (manifest.sourceSha !== process.env.GITHUB_SHA || manifest.version !== version ||
+            const manifest = JSON.parse(fs.readFileSync(`${directory}/candidate-${platform}-${arch}.json`, 'utf8'));
+            if (manifest.platform !== platform || manifest.arch !== arch ||
+                manifest.sourceSha !== process.env.GITHUB_SHA || manifest.version !== version ||
                 manifest.ci.runId !== process.env.GITHUB_RUN_ID ||
                 manifest.ci.runAttempt !== process.env.GITHUB_RUN_ATTEMPT) {
               throw new Error('Release provenance mismatch');

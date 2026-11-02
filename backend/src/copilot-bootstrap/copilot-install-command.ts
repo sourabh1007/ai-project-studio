@@ -1,3 +1,5 @@
+import { copilotBootstrapDefaults, copilotBootstrapConfigSchema, type CopilotBootstrapConfig } from './config.js';
+
 /**
  * Platform-specific command that installs the GitHub Copilot CLI (`@github/copilot`)
  * as a global npm package, exposing the `copilot` command. Pure so it is fully
@@ -17,9 +19,11 @@ const NPM_INSTALL = 'npm install -g @github/copilot';
  */
 export function copilotInstallCommand(
   platform: NodeJS.Platform,
+  config: CopilotBootstrapConfig = copilotBootstrapDefaults,
 ): CopilotInstallPlan {
+  const profile = copilotBootstrapConfigSchema.parse(config);
   if (platform === 'win32') {
-    return { command: 'cmd', args: ['/c', NPM_INSTALL] };
+    return { command: profile.windowsExecutable, args: ['/c', NPM_INSTALL] };
   }
-  return { command: 'sh', args: ['-c', NPM_INSTALL] };
+  return { command: profile.posixExecutable, args: ['-c', NPM_INSTALL] };
 }

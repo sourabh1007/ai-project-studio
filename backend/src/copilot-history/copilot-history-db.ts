@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import type {
-  CopilotHistorySource,
-  HistoryCheckpointRow,
-  HistorySessionRow,
-  HistoryUserMessageRow,
+import {
+  PromptHistoryUnavailableError,
+  type CopilotHistorySource,
+  type HistoryCheckpointRow,
+  type HistorySessionRow,
+  type HistoryUserMessageRow,
 } from './copilot-history-contract.js';
 
 export interface CopilotHistoryDbDeps {
@@ -19,31 +20,43 @@ function placeholders(count: number): string {
 /**
  * node:sqlite implementation of {@link CopilotHistorySource}. Opens the CLI
  * store read-only for each query so it always sees the latest committed state
- * while the CLI keeps writing (the store runs in WAL mode). Any failure —
- * missing file, lock, schema drift — degrades to empty results rather than
- * throwing, so the feature view never breaks because of the external store.
+ * while the CLI keeps writing (the store runs in WAL mode). Summary, checkpoint
+ * and usage-event reads degrade to empty results on failure so auxiliary views
+ * never break. The primary prompt read (`userMessages`) instead throws
+ * {@link PromptHistoryUnavailableError} when an existing store cannot be read,
+ * so a lock or schema drift is never reported as an empty history.
  */
 export function createCopilotHistoryDb(
   deps: CopilotHistoryDbDeps,
 ): CopilotHistorySource {
-  function query<T>(sql: string, ids: string[]): T[] {
+  function query<T>(sql: string, ids: string[], strict = false): T[] {
     if (ids.length === 0 || !existsSync(deps.databasePath)) {
       return [];
     }
+    const failed = (cause: unknown): T[] => {
+      if (strict) {
+        throw new PromptHistoryUnavailableError(
+          'The CLI history store could not be read.',
+          { cause },
+        );
+      }
+      return [];
+    };
     let db: DatabaseSync;
     try {
       db = new DatabaseSync(deps.databasePath, { readOnly: true });
-    } catch {
-      return [];
+    } catch (error) {
+      return failed(error);
     }
+    let rows: T[];
     try {
-      const rows = db.prepare(sql).all(...ids) as T[];
+      rows = db.prepare(sql).all(...ids) as T[];
+    } catch (error) {
       db.close();
-      return rows;
-    } catch {
-      db.close();
-      return [];
+      return failed(error);
     }
+    db.close();
+    return rows;
   }
 
   return {
@@ -73,6 +86,7 @@ export function createCopilotHistoryDb(
            WHERE session_id = ? AND user_message IS NOT NULL
            ORDER BY turn_index ASC`,
         [sessionId],
+        true,
       );
     },
     usageEventTimes(sessionId) {

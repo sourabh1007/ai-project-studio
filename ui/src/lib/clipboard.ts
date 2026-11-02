@@ -195,6 +195,20 @@ export function attachmentFailureMessage(error: string): string {
   return 'Clipboard attachment could not be prepared. Nothing was pasted; check the clipboard and retry explicitly.';
 }
 
+/** Explicit, non-claiming guidance for a copy that did not confirm success. */
+export function copyFailureMessage(result: Extract<ClipboardResult, { ok: false }>): string {
+  if (result.error === 'superseded') {
+    return 'This copy was replaced by a newer clipboard action, so it was not applied.';
+  }
+  if (result.writeState === 'written') {
+    return 'Copy is unconfirmed: the clipboard was written but could not be verified. Paste elsewhere to check before relying on it.';
+  }
+  if (result.writeState === 'unknown') {
+    return 'Copy is unconfirmed: the clipboard may or may not have changed. Paste elsewhere to check, then copy again if needed.';
+  }
+  return 'Text was not copied; the clipboard was left unchanged. Select the text and try copying again.';
+}
+
 export interface DesktopClipboardBridge {
   copyText?: (text: string) => Promise<ClipboardResult>;
   clearClipboard?: () => Promise<ClipboardResult>;
@@ -250,31 +264,16 @@ export async function writeClipboardText(
 }
 
 /**
- * Event identity defines the primary paste operation. Some hosts can also
- * deliver the same native paste as two trusted ClipboardEvent objects, so an
- * optional short signature window collapses that duplicate without affecting
- * non-DOM fixture calls or ordinary repeated pastes.
+ * Only event identity proves repeated handling of a paste. Content and timing
+ * cannot distinguish two intentional identical pastes from host duplication.
+ * Do not retain clipboard text or infer user intent from a debounce window.
  */
-export function createPasteGuard(windowMs = 50) {
+export function createPasteGuard() {
   const seen = new WeakSet<object>();
-  let recent: { signature: string; timeStamp: number } | null = null;
   return {
-    shouldPaste(event: object, signature?: string, timeStamp?: number) {
+    shouldPaste(event: object) {
       if (seen.has(event)) return false;
       seen.add(event);
-      if (
-        signature &&
-        timeStamp !== undefined &&
-        Number.isFinite(timeStamp) &&
-        recent?.signature === signature &&
-        timeStamp >= recent.timeStamp &&
-        timeStamp - recent.timeStamp <= windowMs
-      ) {
-        return false;
-      }
-      if (signature && timeStamp !== undefined && Number.isFinite(timeStamp)) {
-        recent = { signature, timeStamp };
-      }
       return true;
     },
   };

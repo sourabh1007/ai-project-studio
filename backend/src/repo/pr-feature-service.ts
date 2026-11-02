@@ -94,14 +94,25 @@ export interface PrFeatureService {
 export function createPrFeatureService(
   deps: PrFeatureServiceDeps,
 ): PrFeatureService {
-  return {
-    async listPulls(repoId, filter = 'all') {
-      const repo = deps.repos.get(repoId);
-      return deps.listPulls(repo, filter);
-    },
+  // One import per pull request at a time: a double click, a second window or a
+  // client that reconnects after a dropped stream joins the running import
+  // instead of racing it into a duplicate worktree and feature.
+  const inFlight = new Map<
+    string,
+    {
+      promise: Promise<CreateFromPullResult>;
+      listeners: Set<ProvisionStatusListener>;
+      last: Parameters<ProvisionStatusListener>[0] | null;
+    }
+  >();
 
-    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus) {
-      const repo = deps.repos.get(repoId);
+  async function importPull(
+    repo: Repository,
+    number: number,
+    parentFeatureId: string | null,
+    parentGroupId: string | null,
+    onStatus: ProvisionStatusListener,
+  ): Promise<CreateFromPullResult> {
       // Opening a PR that already has a review must not create a duplicate: reuse
       // its existing review feature (and its checked-out worktree) instead. If
       // the review record is stale — its feature was deleted but the row was
@@ -152,6 +163,41 @@ export function createPrFeatureService(
       });
       deps.onReviewFeatureCreated?.(feature.id);
       return { feature, alreadyImported: false };
+  }
+
+  return {
+    async listPulls(repoId, filter = 'all') {
+      const repo = deps.repos.get(repoId);
+      return deps.listPulls(repo, filter);
+    },
+
+    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus) {
+      const repo = deps.repos.get(repoId);
+      const key = `${repo.id}:${number}`;
+      const running = inFlight.get(key);
+      if (running) {
+        if (onStatus) {
+          running.listeners.add(onStatus);
+          if (running.last) onStatus(running.last);
+        }
+        const joined = await running.promise;
+        return { feature: joined.feature, alreadyImported: true };
+      }
+      const listeners = new Set<ProvisionStatusListener>();
+      if (onStatus) listeners.add(onStatus);
+      const entry = {
+        listeners,
+        last: null as Parameters<ProvisionStatusListener>[0] | null,
+        promise: null as unknown as Promise<CreateFromPullResult>,
+      };
+      entry.promise = importPull(repo, number, parentFeatureId, parentGroupId, (status) => {
+        entry.last = status;
+        for (const listener of listeners) listener(status);
+      }).finally(() => {
+        inFlight.delete(key);
+      });
+      inFlight.set(key, entry);
+      return entry.promise;
     },
 
     async convertToPrFeature(repoId, number, featureId) {

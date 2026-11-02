@@ -22,12 +22,12 @@ const ISOLATED_CONFIG_ENV = {
  * swallowing any failure (missing dir, not a repo, detached HEAD) into null so
  * the caller never throws while computing a feature's environment.
  */
-export function createGitBranchReader(): FeatureBranchReader {
+export function createGitBranchReader(executable = 'git'): FeatureBranchReader {
   return {
     async read(cwd) {
       try {
         const { stdout } = await execFile(
-          'git',
+          executable,
           ['-c', 'safe.directory=*', '-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'],
           {
             encoding: 'utf8',

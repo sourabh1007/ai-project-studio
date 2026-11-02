@@ -6,6 +6,7 @@ import { redactSecretPaths } from '../config/config-redactor.js';
 import { describeNamespaces } from '../config/config-schema-describe.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
+import { NotFoundError } from '../kernel/error-types.js';
 
 export interface ConfigControllerDeps {
   registry: ConfigSchemaRegistry;
@@ -19,6 +20,7 @@ export interface ConfigControllerDeps {
   secretPaths: readonly string[];
   /** Persisted, per-namespace override editing. */
   overrides: ConfigOverrideService;
+  isNamespaceExposed?: (namespace: string) => boolean;
 }
 
 const patchSchema = z.object({
@@ -31,6 +33,12 @@ const patchSchema = z.object({
  * `PUT`/`DELETE` persist per-namespace overrides that apply on the next launch.
  */
 export function createConfigRoutes(deps: ConfigControllerDeps): Route[] {
+  const isExposed = (namespace: string) => deps.isNamespaceExposed?.(namespace) ?? true;
+  const exposedValues = (values: ConfigObject): ConfigObject =>
+    Object.fromEntries(Object.entries(values).filter(([namespace]) => isExposed(namespace)));
+  const assertExposed = (namespace: string) => {
+    if (!isExposed(namespace)) throw new NotFoundError(`Unknown config namespace: ${namespace}`);
+  };
   return [
     {
       method: 'get',
@@ -38,16 +46,17 @@ export function createConfigRoutes(deps: ConfigControllerDeps): Route[] {
       handler: () => ({
         status: 200,
         body: {
-          namespaces: deps.registry.namespaces(),
-          defaults: deps.registry.defaults(),
+          namespaces: deps.registry.namespaces().filter(isExposed),
+          defaults: exposedValues(deps.registry.defaults()),
           // Per-setting schema metadata (type, bounds, enum options, nested
           // shape, description) so the UI can render typed, validated controls
           // for every registered setting without hardcoding any of them.
-          schema: describeNamespaces(deps.registry),
-          current: redactSecretPaths(deps.current, deps.secretPaths),
+          schema: exposedValues(describeNamespaces(deps.registry)),
+          current: exposedValues(redactSecretPaths(deps.current, deps.secretPaths)),
           overrides: Object.fromEntries(
             deps.registry
               .namespaces()
+              .filter(isExposed)
               .map((ns) => [ns, deps.overrides.getOverride(ns)]),
           ),
         },
@@ -57,6 +66,7 @@ export function createConfigRoutes(deps: ConfigControllerDeps): Route[] {
       method: 'put',
       path: '/config/:namespace',
       handler: (req) => {
+        assertExposed(req.params.namespace);
         const input = parseInput(patchSchema, req.body);
         const result = deps.overrides.update(
           req.params.namespace,
@@ -68,10 +78,13 @@ export function createConfigRoutes(deps: ConfigControllerDeps): Route[] {
     {
       method: 'delete',
       path: '/config/:namespace',
-      handler: (req) => ({
-        status: 200,
-        body: deps.overrides.reset(req.params.namespace),
-      }),
+      handler: (req) => {
+        assertExposed(req.params.namespace);
+        return {
+          status: 200,
+          body: deps.overrides.reset(req.params.namespace),
+        };
+      },
     },
   ];
 }

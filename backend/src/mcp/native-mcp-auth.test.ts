@@ -34,6 +34,20 @@ describe('observed native authentication evidence', () => {
     expect(timeout.message).toContain('No authentication requirement was confirmed');
   });
 
+  it('refuses to infer successful authentication when inventory arrives during a live challenge', () => {
+    const result = nativeToolInspection({
+      status: 'ok', message: null, tools: [], output: [
+        'To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345',
+      ],
+    });
+    expect(result).toMatchObject({
+      status: 'failed', authenticationInterrupted: true, authRequired: false, authUrl: null, output: [],
+    });
+    expect(result.message).toContain('before sign-in completion or credential caching could be confirmed');
+    expect(nativeToolInspection({ status: 'ok', message: null, tools: [], output: [], authenticationInterrupted: true }))
+      .toEqual(result);
+  });
+
   it('preserves a live Microsoft authorization-code URL and its callback state without inventing an endpoint', () => {
     const url = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?response_type=code&client_id=fixture&state=fixture-state&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback&code_challenge=fixture';
     expect(nativeAuthenticationPrompt([`To authenticate, open ${url}`])).toEqual({ authUrl: url, deviceCode: null });

@@ -1,5 +1,6 @@
 import type { SessionSpec } from '../provider-contract.js';
 import type { CopilotConfig } from './config.js';
+import { optionalCommandArgsSchema } from '../command-options.js';
 
 /**
  * The subset of flag toggles that shape the Copilot CLI argument vector. The
@@ -9,6 +10,8 @@ export interface CopilotFlagOptions {
   allowAllTools: boolean;
   silent: boolean;
   extraArgs: string[];
+  interactiveArgs?: string[];
+  headlessArgs?: string[];
   /**
    * When true, interactive sessions launch with `--screen-reader`, the CLI's
    * plain linear-output mode (no box borders/side rules). Only consumed by
@@ -65,7 +68,7 @@ export function buildCopilotArgs(
   if (config.silent) {
     args.push('-s');
   }
-  args.push(...config.extraArgs);
+  args.push(...optionalCommandArgsSchema.parse(config.extraArgs), ...optionalCommandArgsSchema.parse(config.headlessArgs ?? []));
   return args;
 }
 
@@ -95,7 +98,7 @@ export function buildCopilotInteractiveArgs(
   if (config.screenReader) {
     args.push('--screen-reader');
   }
-  args.push(...config.extraArgs);
+  args.push(...optionalCommandArgsSchema.parse(config.extraArgs), ...optionalCommandArgsSchema.parse(config.interactiveArgs ?? []));
   return args;
 }
 

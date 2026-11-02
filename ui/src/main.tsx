@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ApiProvider, apiClient } from './app/api-context.js';
 import { App } from './App.js';
+import { AutomationReadinessProvider } from './app/automation-readiness.js';
 import { ErrorBoundary } from './components/error-boundary.js';
 import { ProviderInstallGate } from './features/bootstrap/provider-install-gate.js';
 import {
@@ -28,6 +29,7 @@ createRoot(container).render(
   <StrictMode>
     <ErrorBoundary>
       <ApiProvider value={apiClient}>
+        <AutomationReadinessProvider>
         {popout ? (
           <TabPopout tab={popout.tab} label={popout.label} />
         ) : (
@@ -35,6 +37,7 @@ createRoot(container).render(
             <App />
           </ProviderInstallGate>
         )}
+        </AutomationReadinessProvider>
       </ApiProvider>
     </ErrorBoundary>
   </StrictMode>,

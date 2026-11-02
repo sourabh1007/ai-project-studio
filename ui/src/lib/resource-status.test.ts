@@ -9,6 +9,16 @@ const normal: ResourceSnapshot = {
 };
 
 describe('resource status', () => {
+  it('reports missing measurements as unknown, never zero or an exception', () => {
+    const view = resourceStatus({
+      ...normal, cpuPercent: null, freeMemoryBytes: null,
+      totalMemoryBytes: null, eventLoopDelayMs: null,
+    }, 'online', false, 1_000);
+    expect(view.detail).toContain('System CPU: unknown.');
+    expect(view.detail).toContain('Free memory: unknown.');
+    expect(view.detail).toContain('event-loop delay: unknown.');
+    expect(resourceStatus({ ...normal, totalMemoryBytes: null }, 'online', false, 1_000).detail).toContain('Free memory: unknown.');
+  });
   it('shows actual normal metrics, not a loading indicator', () => {
     const view = resourceStatus(normal, 'online', false, 1_001);
     expect(view.label).toBe('Resources normal');

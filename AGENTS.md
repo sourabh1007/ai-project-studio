@@ -4,7 +4,7 @@ This file orients AI agents (and new humans) working on **AI Project Studio**. R
 
 ## What this project is
 
-An Electron desktop app that wraps AI coding CLIs (GitHub Copilot, Agency) in an IDE-style workspace organized by **Feature → Session**, with live usage/cost analytics and AI-native features (skills, task plans, summaries). Monorepo with three npm workspaces:
+An Electron desktop app that wraps AI coding CLIs (GitHub Copilot, optional Agency, and native Claude Code v2) in an IDE-style workspace organized by **Feature → Session**, with provider-reported usage/cost analytics and AI-native features (skills, task plans, summaries). Monorepo with three npm workspaces:
 
 - `backend/` — Express API + domain modules (TypeScript, **ports & adapters**).
 - `ui/` — React + Vite front-end.
@@ -12,11 +12,11 @@ An Electron desktop app that wraps AI coding CLIs (GitHub Copilot, Agency) in an
 
 ## Golden rules (do not violate)
 
-1. **Backend has a 100% coverage gate.** Every backend line/branch/function/statement must be covered or CI fails. Add tests for every change. Run `npm run test:coverage --workspace backend`.
+1. **Backend has a 100% coverage gate.** Every included line/branch/function/statement must be covered or CI fails; thin IO exclusions are explicit in `backend/vitest.config.ts`. Add tests for every behavior change. The gate does not certify excluded native/vendor behavior. Run `npm run test:coverage --workspace backend`.
 2. **Keep IO at the edges.** Domain logic is pure and testable against **ports** (interfaces). Native/IO adapters (node-pty, node:sqlite, HTTP, fs, process spawning) are thin and excluded from coverage. Don't put logic in adapters.
 3. **Dependencies are injected via explicit `deps` objects**, wired only in `backend/src/main.ts` (the composition root). Don't reach for singletons/globals; add a dependency to the relevant `*Deps` interface and wire it in `main.ts`.
 4. **Every backend module owns its config** as a `{ NAMESPACE, zodSchema, defaults }` trio in `<module>/config.ts`, registered in `main.ts`. Add config there, never scatter `process.env` reads through the code.
-5. **Don't couple the core to a specific CLI.** Copilot/Agency are `provider` adapters behind `IAIProvider`. New tools and user-facing behaviors must go through generic provider/registry hooks — see [docs/adding-a-provider.md](docs/adding-a-provider.md).
+5. **Don't couple the core to a specific CLI.** Copilot, Agency, and Claude are `provider` adapters behind `IAIProvider`. New tools and user-facing behaviors must go through generic provider/registry hooks — see [docs/adding-a-provider.md](docs/adding-a-provider.md).
 6. **Prefer editing existing files** over adding new ones; match the surrounding style. Comment only where intent is non-obvious.
 7. **Commit trailers**: include the co-author/session trailers already used in this repo's history when committing.
 8. **Keep the API event loop responsive.** CPU-heavy parsing and repository-wide analysis belong in bounded, cancellable workers (`kernel/background-work-runner.ts`), not HTTP handlers. `async` alone does not isolate CPU work. Bound queues, memory and execution time; report queued/running/failure states, and test unrelated API responsiveness under concurrent load. Resource warnings must use measurements, not infer shortages from timeouts.
@@ -29,7 +29,7 @@ Electron (desktop/) ── spawns ──▶ Express API (backend/src/api)
         ▼                               ▼
    React UI (ui/) ◀── HTTP · SSE · WS ── api/usage-stream, controllers
                                         │
-  provider registry ─▶ Copilot / Agency CLIs ─▶ CLI session-store.db
+  provider registry ─▶ Copilot / Agency / Claude ─▶ provider-owned usage stores
                                         │              │ tailed by
   terminal (node-pty) runs the CLI TUI  ▼              ▼
                                 usage ─▶ credit ─▶ aggregation ─▶ API ─▶ UI
@@ -49,10 +49,10 @@ Full detail: [docs/architecture.md](docs/architecture.md) · module reference: [
 | Provider abstraction & adapters | `backend/src/provider/` (`provider-contract.ts`, `copilot-adapter/`, `agency-adapter/`) |
 | Persistence (repos + schema) | `backend/src/persistence/` |
 | Shared kernel | `backend/src/kernel/` |
-| UI shell (what's actually mounted) | `ui/src/App.tsx` → workspace, skills, settings views |
+| UI shell (what's actually mounted) | `ui/src/App.tsx` → workspace, planner, skills, MCP, automations, usage, agents, settings |
 | UI styles/tokens | `ui/src/styles/` |
 
-> **Dead code warning:** `ui/src/features/feature-board`, `.../feature-detail`, and `.../session-panel` are **not mounted** by `App.tsx`. The live app renders the **workspace**, **skills**, and **settings** views. Don't assume those unmounted components reflect current behavior.
+> **Dead code warning:** `ui/src/features/feature-board`, `.../feature-detail`, and `.../session-panel` are **not mounted** by `App.tsx`. Use the eight live views above and the workspace's Review Board/New Task/Bug Bash tabs as authority; don't infer current behavior from legacy components.
 
 ## Common tasks
 
@@ -77,7 +77,7 @@ Use the **smallest** targeted test while iterating (`npx vitest run <path>` insi
 
 ## Environment quirks (important on Windows)
 
-- Backend uses the **experimental `node:sqlite`** module → requires **Node ≥ 22.5**; run backend coverage from **inside `backend/`** (`vitest` has a sqlite shim there).
+- Use **Node ≥ 24.20.0**; source-build/CI and runtime provisioning pin **24.20.0**. Desktop runtime overrides must meet the same minimum. Packaged users do not need system Node. Run backend coverage from **inside `backend/`** (`vitest` has a sqlite shim there).
 - On Windows, ConPTY doesn't search PATH/PATHEXT — executables are resolved by `terminal/executable-resolver.ts`. The Copilot CLI is a `.EXE` shim and **requires a valid UUID `--session-id`**.
 - PowerShell: use `;` (not `&&`) before PS keywords; multi-line commit messages via here-strings.
 

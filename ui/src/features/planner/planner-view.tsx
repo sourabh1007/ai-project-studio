@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { useDraft } from '../../hooks/use-draft.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
-import { EmptyState, ErrorText, IconBadge } from '../../components/ui.js';
+import { Button, ConfirmDialog, EmptyState, ErrorText, IconBadge, Modal } from '../../components/ui.js';
+import { AutomationReadinessNotice, useAutomationReadiness } from '../../app/automation-readiness.js';
 import {
   AiIcon,
   AiMagicIcon,
@@ -36,17 +38,28 @@ import {
 } from '../../lib/planner-dates.js';
 import { detectIntent, type PlannerIntent } from '../../lib/planner-detect.js';
 import { autocorrect, autoformatTitle, suggestTitles } from '../../lib/planner-text.js';
+import { browserOperationKeyStore, KEY_RESET_WARNING, releaseAfterOutcome } from '../../lib/operation-keys.js';
 import {
   exportPlannerTasks,
   type PlannerExportFormat,
 } from '../../lib/planner-export.js';
 import {
   humanizeLaunchError,
+  isMissingLaunchTarget,
   launchNewTask,
   launchReview,
   launchSession,
   linkFromIntent,
   reopenTask,
+  acquireRetention,
+  launchKeysFor,
+  type LaunchRetention,
+  claimLaunchSlot,
+  launchRegistryFor,
+  releaseLaunchSlot,
+  setLaunchError,
+  setLaunchPhase,
+  UnknownLaunchOutcomeError,
   type PlannerLaunchApi,
   type WorkspaceLaunchIntent,
   type LaunchPhaseReporter,
@@ -63,6 +76,17 @@ const SUMMARY_SCOPES: Array<{ scope: PlannerSummaryScope; label: string }> = [
   { scope: 'month', label: 'Month' },
   { scope: 'year', label: 'Year' },
 ];
+
+/** Local-storage keys for the quick-add draft, so it survives view switches. */
+const TITLE_DRAFT_KEY = 'cw-planner-draft:title';
+const NOTES_DRAFT_KEY = 'cw-planner-draft:notes';
+
+/** Most launch retentions kept for retry; older attempts are dropped. */
+
+/** True for the Enter/Arrow/Escape keydowns an IME emits while composing. */
+function isImeKey(event: KeyboardEvent): boolean {
+  return event.nativeEvent.isComposing || event.keyCode === 229;
+}
 
 /** Static presentation (icon, label, accent) for each launch action. */
 const INTENTS: Record<
@@ -148,6 +172,7 @@ function launcherFor(
   task: PlannerTask,
   repoId: string | null,
   onPhase?: LaunchPhaseReporter,
+  retained?: LaunchRetention,
 ) => Promise<WorkspaceLaunchIntent> {
   if (intent === 'review') {
     return launchReview;
@@ -184,6 +209,7 @@ export function PlannerView({
   onLaunch: (intent: WorkspaceLaunchIntent) => void;
 }) {
   const api = useApi();
+  const automation = useAutomationReadiness();
   const { prefs } = useUiPreferences();
   const tasks = useAsync(() => api.listPlannerTasks(), []);
   const repos = useAsync(() => api.listRepos(), []);
@@ -191,18 +217,56 @@ export function PlannerView({
   const [mode, setMode] = useState<'planner' | 'backlog'>('planner');
   const [day, setDay] = useState(() => todayIso());
   const previousDayRef = useRef(day);
-  const [title, setTitle] = useState('');
+  const titleDraft = useDraft(TITLE_DRAFT_KEY, '');
+  const notesDraft = useDraft(NOTES_DRAFT_KEY, '');
+  const title = titleDraft.value;
+  const notes = notesDraft.value;
+  const draftBackupError =
+    (titleDraft.isDirty ? titleDraft.persistenceError : null) ??
+    (notesDraft.isDirty ? notesDraft.persistenceError : null);
+  const setTitle = titleDraft.setValue;
+  const setNotes = notesDraft.setValue;
+  const latestDraft = useRef({ title, notes });
+  latestDraft.current = { title, notes };
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const [notes, setNotes] = useState('');
-  const [showNotes, setShowNotes] = useState(false);
+  const [showNotes, setShowNotes] = useState(notes !== '');
   const [titleFocused, setTitleFocused] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [adding, setAdding] = useState(false);
+  // Keys of mutations in flight; checked synchronously so a fast double
+  // activation cannot start the same change twice before React re-renders.
+  const inflight = useRef(new Set<string>());
+  // Launch ownership lives outside this keyed view so remounting cannot bypass it.
+  const launchRegistry = useMemo(() => launchRegistryFor(api), [api]);
+  const launchState = useSyncExternalStore(
+    launchRegistry.subscribe,
+    launchRegistry.getSnapshot,
+  );
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const seenCompletions = useRef(launchState.completions);
+  useEffect(() => {
+    if (seenCompletions.current !== launchState.completions) {
+      seenCompletions.current = launchState.completions;
+      tasks.reload();
+    }
+  }, [launchState.completions, tasks]);
+  const [deleteTarget, setDeleteTarget] = useState<PlannerTask | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [repoId, setRepoId] = useState('');
-  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
-  const [busyPhase, setBusyPhase] = useState<string | null>(null);
-  const [launchError, setLaunchError] = useState<string | null>(null);
+  const busyTaskId = launchState.active?.taskId ?? null;
+  const busyPhase = launchState.active?.phase || null;
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const launchError = launchState.error ?? mutationError;
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -255,6 +319,11 @@ export function PlannerView({
     () => (prefs.plannerAutosuggest ? suggestTitles(title, titleHistory) : []),
     [prefs.plannerAutosuggest, title, titleHistory],
   );
+  const suggestOpen = titleFocused && !suggestionsDismissed && suggestions.length > 0;
+  const activeSuggestionId =
+    suggestOpen && activeSuggestion >= 0 && activeSuggestion < suggestions.length
+      ? `planner-suggest-${activeSuggestion}`
+      : undefined;
   const detected = useMemo(() => detectIntent(title.trim()), [title]);
   const daySlideDirection = plannerSlideDirection(previousDayRef.current, day);
   const dayContentClass =
@@ -287,6 +356,8 @@ export function PlannerView({
   const unfinishedCount = dayTasks.filter((t) => t.status !== 'done').length;
 
   function changeTitle(value: string) {
+    setActiveSuggestion(-1);
+    setSuggestionsDismissed(false);
     // Autocorrect the just-completed word once a word boundary is typed.
     if (prefs.plannerAutocorrect && /\s$/.test(value)) {
       setTitle(autocorrect(value));
@@ -301,7 +372,12 @@ export function PlannerView({
       setFormError('Type a task to get started.');
       return;
     }
+    if (inflight.current.has('add')) {
+      return;
+    }
+    inflight.current.add('add');
     const finalTitle = prefs.plannerAutoformat ? autoformatTitle(raw) : raw;
+    const submitted = { title, notes };
     setAdding(true);
     setFormError(null);
     try {
@@ -314,28 +390,118 @@ export function PlannerView({
         prUrl: intent.primary === 'review' ? finalTitle : '',
         repoId: effectiveRepoId,
       });
-      setTitle('');
-      setNotes('');
-      setShowNotes(false);
+      // Keep anything typed while the request was in flight.
+      if (latestDraft.current.title === submitted.title) {
+        titleDraft.discard();
+      }
+      if (latestDraft.current.notes === submitted.notes) {
+        notesDraft.discard();
+        setShowNotes(false);
+      }
       tasks.reload();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Could not add the task.');
     } finally {
+      inflight.current.delete('add');
       setAdding(false);
     }
   }
 
-  async function patchTask(
-    id: string,
-    patch: Parameters<typeof api.updatePlannerTask>[1],
-  ) {
-    await api.updatePlannerTask(id, patch);
-    tasks.reload();
+  /** Picks a suggestion into the quick-add box and closes the list. */
+  function pickSuggestion(suggestion: string) {
+    setTitle(suggestion);
+    setActiveSuggestion(-1);
+    setSuggestionsDismissed(true);
   }
 
-  async function removeTask(id: string) {
-    await api.removePlannerTask(id);
-    tasks.reload();
+  function onTitleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (isImeKey(e)) {
+      return;
+    }
+    if (suggestOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        setActiveSuggestion((i) =>
+          i < 0
+            ? step === 1 ? 0 : suggestions.length - 1
+            : (i + step + suggestions.length) % suggestions.length,
+        );
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSuggestionsDismissed(true);
+        setActiveSuggestion(-1);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey && activeSuggestionId) {
+        e.preventDefault();
+        pickSuggestion(suggestions[activeSuggestion]);
+        return;
+      }
+    }
+    // Enter adds the task; Shift+Enter inserts a newline so tasks can span
+    // multiple lines with their formatting preserved.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void addTask();
+    }
+  }
+
+  /**
+   * Runs one task mutation with synchronous duplicate admission. Failures are
+   * surfaced and reported as `false` so callers keep editors and drafts open.
+   */
+  async function mutate(key: string, run: () => Promise<unknown>): Promise<boolean> {
+    if (inflight.current.has(key)) {
+      return false;
+    }
+    inflight.current.add(key);
+    setMutationError(null);
+    try {
+      await run();
+      return true;
+    } catch (err) {
+      setMutationError(
+        err instanceof Error && err.message ? err.message : 'That change could not be saved.',
+      );
+      return false;
+    } finally {
+      inflight.current.delete(key);
+      tasks.reload();
+    }
+  }
+
+  function patchTask(
+    id: string,
+    patch: Parameters<typeof api.updatePlannerTask>[1],
+  ): Promise<boolean> {
+    return mutate(`task:${id}`, () => api.updatePlannerTask(id, patch));
+  }
+
+  async function confirmDelete() {
+    const target = deleteTarget;
+    const key = target ? `task:${target.id}` : '';
+    if (!target || inflight.current.has(key)) {
+      return;
+    }
+    inflight.current.add(key);
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await api.removePlannerTask(target.id);
+      setDeleteTarget(null);
+      tasks.reload();
+      window.setTimeout(() => titleRef.current?.focus(), 0);
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error && err.message ? err.message : 'Could not delete the task.',
+      );
+    } finally {
+      inflight.current.delete(key);
+      setDeleteBusy(false);
+    }
   }
 
   /** Opens the inline editor for a task's title and notes. */
@@ -353,8 +519,10 @@ export function PlannerView({
       return;
     }
     const finalTitle = prefs.plannerAutoformat ? autoformatTitle(title) : title;
-    setEditingId(null);
-    await patchTask(task.id, { title: finalTitle, notes: editNotes.trim() });
+    const saved = await patchTask(task.id, { title: finalTitle, notes: editNotes.trim() });
+    if (saved) {
+      setEditingId(null);
+    }
   }
 
   /** Moves every unfinished task on the viewed day to the next day. */
@@ -365,14 +533,10 @@ export function PlannerView({
       return;
     }
     setMovingAll(true);
-    setLaunchError(null);
     try {
-      await Promise.all(
-        pending.map((task) => api.updatePlannerTask(task.id, { date: next })),
+      await mutate('move', () =>
+        Promise.all(pending.map((task) => api.updatePlannerTask(task.id, { date: next }))),
       );
-      tasks.reload();
-    } catch (err) {
-      setLaunchError(err instanceof Error ? err.message : 'Could not move the tasks.');
     } finally {
       setMovingAll(false);
     }
@@ -395,6 +559,7 @@ export function PlannerView({
 
   /** Requests an AI summary of the current scope (day/month/year). */
   async function generateSummary() {
+    if (automation?.supported === false) return;
     setSummaryBusy(true);
     setSummaryError(null);
     try {
@@ -442,94 +607,168 @@ export function PlannerView({
     );
   }
 
-  /** Runs a fresh launch for `task`, records the link, and opens it. */
-  async function launchTask(task: PlannerTask, intent: PlannerIntent) {
-    setBusyTaskId(task.id);
-    setBusyPhase(`Starting ${INTENTS[intent].label}…`);
-    setLaunchError(null);
+  /** Creates the launch target, records the link on the task, and opens it. */
+  async function performLaunch(task: PlannerTask, intent: PlannerIntent) {
+    if (intent !== 'session' && automation?.supported === false) return;
+    const repo = task.repoId || effectiveRepoId;
+    const retention = acquireRetention(launchRegistry, task, intent, repo);
+    if (!retention) {
+      setLaunchError(
+        launchRegistry,
+        'Too many earlier launches have an unconfirmed result. Check the workspace for them, then reload the planner.',
+      );
+      return;
+    }
+    const { key, keep } = retention;
+    keep.keys ??= launchKeysFor(browserOperationKeyStore(), task, intent, repo);
+    const report = (phase: string) => setLaunchPhase(launchRegistry, phase);
+    report(`Starting ${INTENTS[intent].label}…`);
     try {
-      const repo = task.repoId || effectiveRepoId;
-      const result = await launcherFor(intent)(api, task, repo, setBusyPhase);
-      setBusyPhase('Opening…');
+      const result = await launcherFor(intent)(api, task, repo, report, keep);
+      report('Opening…');
       const link = linkFromIntent(result);
       await api.updatePlannerTask(task.id, { ...link, repoId: repo });
-      onLaunch(result);
-      tasks.reload();
-    } catch (err) {
-      setLaunchError(humanizeLaunchError(err));
-    } finally {
-      setBusyTaskId(null);
-      setBusyPhase(null);
-    }
-  }
-
-  /** Re-opens a launched task, recreating its target if it was deleted. */
-  async function openTask(task: PlannerTask) {
-    if (!task.launchKind) {
-      return;
-    }
-    setBusyTaskId(task.id);
-    setBusyPhase('Opening…');
-    setLaunchError(null);
-    try {
-      const intent = await reopenTask(api, task);
-      onLaunch(intent);
-    } catch {
-      // The underlying session/feature is gone — recreate it from the task.
-      await launchTask(task, task.launchKind);
-      return;
-    } finally {
-      setBusyTaskId(null);
-      setBusyPhase(null);
-    }
-  }
-
-  async function renameLaunch(task: PlannerTask) {
-    const name = renameValue.trim();
-    if (!name) {
-      setRenamingId(null);
-      return;
-    }
-    try {
-      if (task.launchKind === 'session' && task.sessionId) {
-        await api.renameSession(task.sessionId, name);
-      } else if (task.featureId) {
-        await api.renameFeature(task.featureId, name);
+      launchRegistry.retained.delete(key);
+      releaseAfterOutcome(() => keep.keys?.release());
+      if (mounted.current) {
+        onLaunch(result);
       }
-    } catch {
-      // The target may have been deleted; keep the task's own label in sync.
+    } catch (err) {
+      if (isMissingLaunchTarget(err)) {
+        launchRegistry.retained.delete(key);
+        releaseAfterOutcome(() => keep.keys?.release(), KEY_RESET_WARNING);
+      }
+      const reuse =
+        keep.feature && !(err instanceof UnknownLaunchOutcomeError)
+          ? ' Retrying continues with what was already created.'
+          : '';
+      setLaunchError(launchRegistry, `${humanizeLaunchError(err)}${reuse}`);
     }
-    await api.updatePlannerTask(task.id, { launchLabel: name });
-    setRenamingId(null);
-    tasks.reload();
   }
 
-  async function unlink(task: PlannerTask) {
-    await api.updatePlannerTask(task.id, {
-      launchKind: null,
-      featureId: null,
-      sessionId: null,
-      launchLabel: null,
+  /** Runs `work` for `task` holding the registry's single launch slot. */
+  async function withLaunchSlot(task: PlannerTask, work: () => Promise<void>) {
+    if (!claimLaunchSlot(launchRegistry, task.id)) {
+      return;
+    }
+    try {
+      await work();
+    } finally {
+      releaseLaunchSlot(launchRegistry);
+    }
+  }
+
+  function launchTask(task: PlannerTask, intent: PlannerIntent) {
+    if (intent !== 'session' && automation?.supported === false) return Promise.resolve();
+    return withLaunchSlot(task, () => performLaunch(task, intent));
+  }
+
+  /** Re-opens a launched task, recreating its target only if it is proven gone. */
+  function openTask(task: PlannerTask) {
+    const launchKind = task.launchKind;
+    if (!launchKind) {
+      return Promise.resolve();
+    }
+    return withLaunchSlot(task, async () => {
+      setLaunchPhase(launchRegistry, 'Opening…');
+      try {
+        const intent = await reopenTask(api, task);
+        if (mounted.current) {
+          onLaunch(intent);
+        }
+      } catch (err) {
+        if (isMissingLaunchTarget(err)) {
+          // Its feature/session is gone: rebuild it standalone from the task.
+          await performLaunch({ ...task, featureId: null, sessionId: null }, launchKind);
+        } else {
+          setLaunchError(launchRegistry, humanizeLaunchError(err));
+        }
+      }
     });
-    tasks.reload();
+  }
+
+  /** Renames the launch target; resolves true once nothing is left to retry. */
+  async function renameLaunch(task: PlannerTask): Promise<boolean> {
+    const name = renameValue.trim();
+    if (!name || name === (task.launchLabel ?? task.title)) {
+      setRenamingId(null);
+      return true;
+    }
+    const saved = await mutate(`task:${task.id}`, async () => {
+      try {
+        if (task.launchKind === 'session' && task.sessionId) {
+          await api.renameSession(task.sessionId, name);
+        } else if (task.featureId) {
+          await api.renameFeature(task.featureId, name);
+        }
+      } catch (err) {
+        // A deleted target only needs the task's own label kept in sync.
+        if (!isMissingLaunchTarget(err)) {
+          throw err;
+        }
+      }
+      await api.updatePlannerTask(task.id, { launchLabel: name });
+    });
+    if (saved) {
+      setRenamingId(null);
+    }
+    return saved;
+  }
+
+  function unlink(task: PlannerTask) {
+    return mutate(`task:${task.id}`, () =>
+      api.updatePlannerTask(task.id, {
+        launchKind: null,
+        featureId: null,
+        sessionId: null,
+        launchLabel: null,
+      }),
+    );
   }
 
   const DetectedIcon = INTENTS[detected.primary].Icon;
 
+  const deleteDialog = deleteTarget ? (
+    <ConfirmDialog
+      title="Delete task?"
+      message={
+        <p>
+          &ldquo;{deleteTarget.title}&rdquo; will be permanently deleted. This
+          cannot be undone.
+          {deleteTarget.launchKind || deleteTarget.featureId || deleteTarget.sessionId
+            ? ' Its linked workspace feature and sessions are not deleted and stay in the workspace.'
+            : ''}
+        </p>
+      }
+      busy={deleteBusy}
+      error={deleteError}
+      onConfirm={() => void confirmDelete()}
+      onCancel={() => setDeleteTarget(null)}
+    />
+  ) : null;
+
   if (mode === 'backlog') {
     return (
-      <BacklogView
-        tasks={backlogTasks}
-        onBack={() => setMode('planner')}
-        onRestore={(task, date) => void restoreFromBacklog(task, date)}
-        onDelete={(id) => void removeTask(id)}
-        error={tasks.error}
-      />
+      <>
+        <BacklogView
+          tasks={backlogTasks}
+          onBack={() => setMode('planner')}
+          onRestore={(task, date) => void restoreFromBacklog(task, date)}
+          onDelete={(task) => {
+            setDeleteError(null);
+            setDeleteTarget(task);
+          }}
+          error={tasks.error}
+        />
+        <ErrorText error={launchError} />
+        {deleteDialog}
+      </>
     );
   }
 
   return (
     <div className="planner">
+      <AutomationReadinessNotice />
       <header className="planner-masthead">
         <div className="planner-brandbar">
           <div className="page-header-main">
@@ -619,6 +858,7 @@ export function PlannerView({
             className="planner-ai-trigger"
             onClick={() => setSummaryOpen(true)}
             aria-label="AI summary"
+            disabled={automation?.supported === false}
             title="Summarize these tasks with AI"
           >
             <AiIcon size={15} />
@@ -690,27 +930,28 @@ export function PlannerView({
               onChange={(e) => changeTitle(e.target.value)}
               onFocus={() => setTitleFocused(true)}
               onBlur={() => window.setTimeout(() => setTitleFocused(false), 120)}
-              onKeyDown={(e) => {
-                // Enter adds the task; Shift+Enter inserts a newline so tasks
-                // can span multiple lines with their formatting preserved.
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void addTask();
-                }
-              }}
+              onKeyDown={onTitleKeyDown}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={suggestOpen}
+              aria-controls="planner-suggest-list"
+              aria-activedescendant={activeSuggestionId}
               aria-label="New task"
             />
-            {titleFocused && suggestions.length > 0 && (
-              <ul className="planner-suggest" role="listbox">
-                {suggestions.map((suggestion) => (
-                  <li key={suggestion}>
+            {suggestOpen && (
+              <ul className="planner-suggest" role="listbox" id="planner-suggest-list" aria-label="Suggestions">
+                {suggestions.map((suggestion, index) => (
+                  <li key={suggestion} role="presentation">
                     <button
                       type="button"
-                      className="planner-suggest-item"
+                      role="option"
+                      id={`planner-suggest-${index}`}
+                      aria-selected={index === activeSuggestion}
+                      tabIndex={-1}
+                      className={`planner-suggest-item${index === activeSuggestion ? ' is-active' : ''}`}
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        setTitle(suggestion);
-                        setTitleFocused(false);
+                        pickSuggestion(suggestion);
                       }}
                     >
                       {suggestion}
@@ -766,6 +1007,7 @@ export function PlannerView({
           />
         )}
         <ErrorText error={formError} />
+        <ErrorText error={draftBackupError} />
       </section>
 
       <ErrorText error={tasks.error} />
@@ -773,7 +1015,9 @@ export function PlannerView({
 
       <div className="planner-day-viewport">
       <div className={dayContentClass} key={day}>
-        {dayTasks.length === 0 ? (
+        {dayTasks.length === 0 ? tasks.error ? (
+          <p role="status">Tasks could not be loaded. The list is unknown, not empty. You can still add a task above. <Button variant="ghost" onClick={tasks.reload}>Retry loading tasks</Button></p>
+        ) : tasks.loading ? null : (
         <EmptyState
           title="Nothing planned for this day"
           description="Add a task above. Use the arrows to plan ahead or backfill a past day."
@@ -786,6 +1030,8 @@ export function PlannerView({
               key={task.id}
               task={task}
               busy={busyTaskId === task.id}
+              launchLocked={busyTaskId !== null}
+              automationBlocked={automation?.supported === false}
               busyPhase={busyTaskId === task.id ? busyPhase : null}
               renaming={renamingId === task.id}
               renameValue={renameValue}
@@ -810,10 +1056,13 @@ export function PlannerView({
                 setRenamingId(task.id);
                 setRenameValue(task.launchLabel ?? task.title);
               }}
-              onCommitRename={() => void renameLaunch(task)}
+              onCommitRename={() => renameLaunch(task)}
               onCancelRename={() => setRenamingId(null)}
               onUnlink={() => void unlink(task)}
-              onDelete={() => void removeTask(task.id)}
+              onDelete={() => {
+                setDeleteError(null);
+                setDeleteTarget(task);
+              }}
             />
           ))}
         </ul>
@@ -827,141 +1076,121 @@ export function PlannerView({
           repos={repoList}
           date={day}
           onClose={() => setImportOpen(false)}
-          onImported={(count) => {
+          onProgress={() => tasks.reload()}
+          onImported={() => {
             setImportOpen(false);
-            if (count > 0) {
-              tasks.reload();
-            }
           }}
         />
       )}
 
       {summaryOpen && (
-        <div
-          className="planner-summary-overlay"
-          role="presentation"
-          onClick={() => setSummaryOpen(false)}
+        <Modal title="AI task summary" size="lg" onClose={() => setSummaryOpen(false)}>
+          <div className="planner-summary-head">
+            <div className="planner-summary-scope" role="tablist" aria-label="Summary scope">
+              {SUMMARY_SCOPES.map(({ scope, label }) => (
+                <button
+                  key={scope}
+                  type="button"
+                  role="tab"
+                  aria-selected={summaryScope === scope}
+                  className={
+                    summaryScope === scope
+                      ? 'planner-summary-scope-btn is-active'
+                      : 'planner-summary-scope-btn'
+                  }
+                  onClick={() => setSummaryScope(scope)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        <label
+          className="planner-summary-prompt-label"
+          htmlFor="planner-summary-prompt"
         >
-          <div
-            className="planner-summary-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="AI task summary"
-            onClick={(e) => e.stopPropagation()}
+          Ask the AI how to summarize these tasks
+        </label>
+        <textarea
+          id="planner-summary-prompt"
+          className="planner-summary-prompt"
+          value={summaryPrompt}
+          onChange={(e) => setSummaryPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !isImeKey(e) && !summaryBusy) {
+              e.preventDefault();
+              void generateSummary();
+            }
+          }}
+          placeholder="e.g. focus on blockers, group by repo, highlight what shipped…"
+          rows={3}
+          aria-label="Summary guidance"
+        />
+        <div className="planner-summary-actions">
+          <button
+            type="button"
+            className="planner-ai-trigger is-generate"
+            onClick={() => void generateSummary()}
+            disabled={summaryBusy}
           >
-            <div className="planner-summary-head">
-              <span className="planner-summary-badge">
-                <AiIcon size={16} />
-              </span>
-              <span className="planner-summary-title">AI task summary</span>
-              <div className="planner-summary-scope" role="tablist">
-                {SUMMARY_SCOPES.map(({ scope, label }) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    role="tab"
-                    aria-selected={summaryScope === scope}
-                    className={
-                      summaryScope === scope
-                        ? 'planner-summary-scope-btn is-active'
-                        : 'planner-summary-scope-btn'
-                    }
-                    onClick={() => setSummaryScope(scope)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+            <AiMagicIcon size={15} />
+            {summaryBusy ? 'Generating…' : 'Generate summary'}
+          </button>
+          {summary && (
+            <div className="planner-summary-downloads">
               <button
                 type="button"
-                className="icon-button planner-mini"
-                onClick={() => setSummaryOpen(false)}
-                aria-label="Close AI summary"
-                title="Close"
+                className="planner-export-btn"
+                onClick={() => downloadSummaryMarkdown(summary)}
+                title="Download the summary as Markdown"
               >
-                <CloseIcon size={15} />
+                <DownloadMarkdownIcon size={14} /> .md
+              </button>
+              <button
+                type="button"
+                className="planner-export-btn"
+                onClick={() => downloadSummaryHtml(summary)}
+                title="Download the summary as HTML"
+              >
+                <DownloadHtmlIcon size={14} /> .html
               </button>
             </div>
-            <label
-              className="planner-summary-prompt-label"
-              htmlFor="planner-summary-prompt"
-            >
-              Ask the AI how to summarize these tasks
-            </label>
-            <textarea
-              id="planner-summary-prompt"
-              className="planner-summary-prompt"
-              value={summaryPrompt}
-              onChange={(e) => setSummaryPrompt(e.target.value)}
-              placeholder="e.g. focus on blockers, group by repo, highlight what shipped…"
-              rows={3}
-              aria-label="Summary guidance"
+          )}
+        </div>
+        <ErrorText error={summaryError} />
+        {summary && (
+          <div className="planner-summary-result">
+            <div className="planner-summary-meta">
+              {summary.range} · {summary.taskCount} task
+              {summary.taskCount === 1 ? '' : 's'}
+            </div>
+            <div
+              className="planner-summary-rendered"
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdownComment(summary.content),
+              }}
             />
-            <div className="planner-summary-actions">
-              <button
-                type="button"
-                className="planner-ai-trigger is-generate"
-                onClick={() => void generateSummary()}
-                disabled={summaryBusy}
-              >
-                <AiMagicIcon size={15} />
-                {summaryBusy ? 'Generating…' : 'Generate summary'}
-              </button>
-              {summary && (
-                <div className="planner-summary-downloads">
-                  <button
-                    type="button"
-                    className="planner-export-btn"
-                    onClick={() => downloadSummaryMarkdown(summary)}
-                    title="Download the summary as Markdown"
-                  >
-                    <DownloadMarkdownIcon size={14} /> .md
-                  </button>
-                  <button
-                    type="button"
-                    className="planner-export-btn"
-                    onClick={() => downloadSummaryHtml(summary)}
-                    title="Download the summary as HTML"
-                  >
-                    <DownloadHtmlIcon size={14} /> .html
-                  </button>
-                </div>
-              )}
-            </div>
-            <ErrorText error={summaryError} />
-            {summary && (
-              <div className="planner-summary-result">
-                <div className="planner-summary-meta">
-                  {summary.range} · {summary.taskCount} task
-                  {summary.taskCount === 1 ? '' : 's'}
-                </div>
-                <div
-                  className="planner-summary-rendered"
-                  dangerouslySetInnerHTML={{
-                    __html: renderMarkdownComment(summary.content),
-                  }}
-                />
-                {summaryTasks.length > 0 && (
-                  <div className="planner-summary-tasks">
-                    <div className="planner-summary-tasks-head">Task list</div>
-                    <ul>
-                      {summaryTasks.map((t) => (
-                        <li
-                          key={t.id}
-                          className={t.status === 'done' ? 'is-done' : ''}
-                        >
-                          <span className="planner-summary-task-date">{t.date}</span>
-                          <span className="planner-summary-task-title">{t.title}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+            {summaryTasks.length > 0 && (
+              <div className="planner-summary-tasks">
+                <div className="planner-summary-tasks-head">Task list</div>
+                <ul>
+                  {summaryTasks.map((t) => (
+                    <li
+                      key={t.id}
+                      className={t.status === 'done' ? 'is-done' : ''}
+                    >
+                      <span className="planner-summary-task-date">{t.date}</span>
+                      <span className="planner-summary-task-title">{t.title}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
-        </div>
+        )}
+        </Modal>
       )}
+      {deleteDialog}
     </div>
   );
 }
@@ -976,7 +1205,7 @@ function BacklogView({
   tasks: PlannerTask[];
   onBack: () => void;
   onRestore: (task: PlannerTask, date: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (task: PlannerTask) => void;
   error: string | null;
 }) {
   return (
@@ -1015,7 +1244,7 @@ function BacklogView({
               key={task.id}
               task={task}
               onRestore={(date) => onRestore(task, date)}
-              onDelete={() => onDelete(task.id)}
+              onDelete={() => onDelete(task)}
             />
           ))}
         </ul>
@@ -1079,6 +1308,8 @@ function BacklogRow({
 function PlannerRow({
   task,
   busy,
+  launchLocked,
+  automationBlocked,
   busyPhase,
   renaming,
   renameValue,
@@ -1103,6 +1334,9 @@ function PlannerRow({
 }: {
   task: PlannerTask;
   busy: boolean;
+  /** Another task's launch holds the single launch slot. */
+  launchLocked: boolean;
+  automationBlocked?: boolean;
   busyPhase: string | null;
   renaming: boolean;
   renameValue: string;
@@ -1120,11 +1354,39 @@ function PlannerRow({
   onLaunch: (intent: PlannerIntent) => void;
   onOpen: () => void;
   onStartRename: () => void;
-  onCommitRename: () => void;
+  onCommitRename: () => Promise<boolean>;
   onCancelRename: () => void;
   onUnlink: () => void;
   onDelete: () => void;
 }) {
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+  const renameSettled = useRef(false);
+  const wasEditing = useRef(false);
+  const wasRenaming = useRef(false);
+  // Return focus to the control that opened an editor once it closes.
+  useEffect(() => {
+    if (wasEditing.current && !editing) {
+      editButtonRef.current?.focus();
+    }
+    wasEditing.current = editing;
+  }, [editing]);
+  useEffect(() => {
+    if (renaming) {
+      renameSettled.current = false;
+    } else if (wasRenaming.current) {
+      renameButtonRef.current?.focus();
+    }
+    wasRenaming.current = renaming;
+  }, [renaming]);
+  const commitRename = () => {
+    renameSettled.current = true;
+    void onCommitRename().then((saved) => {
+      if (!saved) {
+        renameSettled.current = false;
+      }
+    });
+  };
   const launched = task.launchKind;
   const LaunchedIcon = launched ? INTENTS[launched].Icon : SessionIcon;
   const statusNode =
@@ -1146,7 +1408,11 @@ function PlannerRow({
             autoFocus
             onChange={(e) => onEditTitle(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeKey(e)) {
+                return;
+              }
               if (e.key === 'Enter') {
+                e.preventDefault();
                 onCommitEdit();
               } else if (e.key === 'Escape') {
                 onCancelEdit();
@@ -1160,8 +1426,14 @@ function PlannerRow({
             value={editNotes}
             onChange={(e) => onEditNotes(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeKey(e)) {
+                return;
+              }
               if (e.key === 'Escape') {
                 onCancelEdit();
+              } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                onCommitEdit();
               }
             }}
             rows={2}
@@ -1223,13 +1495,22 @@ function PlannerRow({
                 autoFocus
                 onChange={(e) => onRenameValue(e.target.value)}
                 onKeyDown={(e) => {
+                  if (isImeKey(e)) {
+                    return;
+                  }
                   if (e.key === 'Enter') {
-                    onCommitRename();
+                    e.preventDefault();
+                    commitRename();
                   } else if (e.key === 'Escape') {
+                    renameSettled.current = true;
                     onCancelRename();
                   }
                 }}
-                onBlur={onCommitRename}
+                onBlur={() => {
+                  if (!renameSettled.current) {
+                    commitRename();
+                  }
+                }}
                 aria-label="Rename"
               />
             ) : (
@@ -1237,7 +1518,7 @@ function PlannerRow({
                 type="button"
                 className="planner-open"
                 onClick={onOpen}
-                disabled={busy}
+                disabled={busy || launchLocked}
                 title={`Open ${INTENTS[launched].label}`}
               >
                 <LaunchedIcon size={14} />
@@ -1250,6 +1531,7 @@ function PlannerRow({
               <>
                 <button
                   type="button"
+                  ref={renameButtonRef}
                   className="icon-button planner-mini"
                   onClick={onStartRename}
                   aria-label="Rename"
@@ -1281,7 +1563,7 @@ function PlannerRow({
                     index === 0 ? 'is-primary' : ''
                   }`.trim()}
                   onClick={() => onLaunch(intent)}
-                  disabled={busy}
+                  disabled={busy || launchLocked || (automationBlocked && intent !== 'session')}
                   title={INTENTS[intent].verb}
                 >
                   <Icon size={14} /> {label}
@@ -1293,6 +1575,7 @@ function PlannerRow({
 
         <button
           type="button"
+          ref={editButtonRef}
           className="icon-button planner-mini"
           onClick={onStartEdit}
           disabled={busy}

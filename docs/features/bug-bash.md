@@ -10,28 +10,40 @@ team of parallel tester agents and compiles a **findings report**.
 > [New Task](new-task.md), Bug Bash **only reads** the repo — no worktree, no
 > code edits, no pull request.
 
+Bug Bash requires a safely isolated **metasession-capable** active CLI: Copilot,
+or Claude with safe/nonmanaged configuration and supported API/cloud
+credentials. Agency interactive sessions remain available, but IDE-launched
+AI automation is currently blocked by unverifiable native MCP overlays.
+
 ## The flow
 
 ```
-Describe ──▶ Generate ──▶ Review ──▶ Run ──────────▶ Report
- feature      (AI          accept    (tester team     pass/fail
- + setup      analyst)     scenarios  in parallel)    + findings
+Describe ─▶ Prepare ─▶ Generate ─▶ Review ─▶ Run ─▶ Report
+ inputs      Q&A       analyst     consent   testers  evidence
 ```
 
 1. **Describe** — write the **feature information** (what it does, its inputs
    and outputs) and optional **setup information** (doc/sample links, config,
-   instructions the testers need).
-2. **Generate** — a **scenario analyst** metasession reads the feature and the
+   instructions the testers need), plus **Other information**.
+2. **Prepare** — answer prerequisite/setup questions before scenario generation;
+   missing access or environment information should remain explicit.
+3. **Generate** — a **scenario analyst** metasession reads the feature and the
    repository and proposes concrete, reviewable edge-case scenarios. Live logs
    stream as it works.
-3. **Review** — read each scenario (input, steps, expected output, how to
-   confirm). Accept them, or regenerate.
-4. **Run** — a **lead agent** splits the accepted scenarios round-robin across
+4. **Review** — read each scenario (input, steps, expected output, how to
+   confirm). Use **Refine with the analyst** to discuss changes, explicitly
+   accept the revised scenarios, or regenerate.
+5. **Run** — a **lead agent** splits the accepted scenarios round-robin across
    specialized **tester** sub-agents that each lease their own metasession and
    run **in parallel**. The lead merges the verdicts and compiles the report.
-5. **Report** — pass / fail / blocked / **needs-access** tallies, the compiled
+6. **Report** — pass / fail / blocked / **needs-access** tallies, the compiled
    markdown findings, the agent team with time and AI credits, and every
    scenario's verdict with its **diagnostics**.
+
+An **Evidence Auditor** checks the support for findings. Inspect its
+`evidenceGaps` and runnable `reproScript` when present; generated repro text is
+not proof that it was executed. **Download detailed report** saves Markdown
+with the available scenarios, observations and diagnostics.
 
 ## Reading a verdict
 

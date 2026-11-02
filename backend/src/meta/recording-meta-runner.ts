@@ -12,6 +12,7 @@ export interface RecordingMetaRunnerDeps {
   ownership: MetaOperationOwnership;
   clock: Clock;
   newOperationId(): string;
+  onOperationChanged?(operationId: string): void;
   resolveIdentity(request: MetaOperationRequest): { providerId: string; requestedModel: string };
 }
 
@@ -52,6 +53,9 @@ function errorMessage(error: unknown): string {
 
 /** Records every routed request before dispatch, and full output before success. */
 export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRunner {
+  const hint = (operationId: string): void => {
+    try { deps.onOperationChanged?.(operationId); } catch { /* Metering hints cannot invalidate a durable operation. */ }
+  };
   const runDetailed = (request: MetaOperationRequest): Promise<RecordedMetaRunResult> => {
     const operationId = deps.newOperationId();
     const scope = {
@@ -74,6 +78,7 @@ export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRu
       let completed: RecordedMetaRunResult;
       const update = (): void => {
         if (!deps.operations.update(operation)) throw new MetaOperationRemovedError(operationId);
+        hint(operationId);
       };
       try {
         deps.operations.create(operation);
@@ -140,6 +145,7 @@ export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRu
         operation = { ...operation, state: 'completed', finishedAt: deps.clock.isoNow() };
         try {
           if (!deps.operations.complete(operation, warmUsage)) throw new MetaOperationRemovedError(operationId);
+          hint(operationId);
         } catch (error) {
           throw error instanceof MetaOperationRemovedError ? error : new MetaOperationPersistenceError(operationId, error);
         }

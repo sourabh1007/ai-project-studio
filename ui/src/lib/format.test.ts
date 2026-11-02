@@ -14,6 +14,15 @@ import {
   totalTokens,
 } from './format.js';
 
+it('keeps unavailable native accounting distinct from reported zero', () => {
+  expect(formatCredits(null)).toBe('Unavailable');
+  expect(formatCost(null)).toBe('Unavailable');
+  expect(formatAic(null)).toBe('Unavailable');
+  expect(nanoAiuToAic(null)).toBeNull();
+  expect(formatCredits(0)).toBe('0.00 credits');
+  expect(formatCost(0)).toBe('0.00');
+});
+
 describe('formatCredits', () => {
   it('formats to two decimals with a unit', () => {
     expect(formatCredits(1.2)).toBe('1.20 credits');

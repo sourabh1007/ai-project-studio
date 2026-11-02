@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ApiError } from './api';
 import type {
   AgentCatalogItem,
   AttachedAgent,
@@ -10,13 +11,24 @@ import {
   datedFeatureName,
   featureNameForTask,
   humanizeLaunchError,
+  isMissingLaunchTarget,
+  acquireRetention,
+  claimLaunchSlot,
+  launchRegistryFor,
+  MAX_RETAINED_LAUNCHES,
+  releaseLaunchSlot,
+  setLaunchError,
+  setLaunchPhase,
+  UnknownLaunchOutcomeError,
   launchNewTask,
   launchReview,
   launchSession,
   linkFromIntent,
+  MissingLaunchTargetError,
   parsePullNumber,
   promptForTask,
   reopenTask,
+  type LaunchRetention,
   type PlannerLaunchApi,
   type PlannerReopenApi,
 } from './planner-launch';
@@ -103,6 +115,8 @@ function makeApi(): PlannerLaunchApi {
     attachAgent: vi.fn(async () => attachment),
     getAgent: vi.fn(async () => catalog),
     createTerminalSession: vi.fn(async () => session),
+    listSessions: vi.fn(async () => []),
+    listFeatureAgents: vi.fn(async () => []),
     renameSession: vi.fn(async () => ({ ...session, name: 'Fix the login bug' })),
     createPrFeature: vi.fn(async () => feature),
   };
@@ -490,5 +504,264 @@ describe('reopenTask', () => {
     await expect(
       reopenTask(api, makeTask({ launchKind: 'review', featureId: null })),
     ).rejects.toThrow('nothing to open');
+  });
+});
+
+describe('launch retention', () => {
+  it('retains the feature when starting the session fails and resumes without a duplicate feature', async () => {
+    const api = makeApi();
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(new ApiError(422, 'spawn failed'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, makeTask(), 'r1', undefined, retained)).rejects.toThrow('spawn failed');
+    expect(retained.feature).toEqual(feature);
+    expect(retained.session).toBeUndefined();
+    vi.mocked(api.createFeature).mockClear();
+    await launchSession(api, makeTask(), 'r1', undefined, retained);
+    expect(api.createFeature).not.toHaveBeenCalled();
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the created session when naming fails so a retry only renames', async () => {
+    const api = makeApi();
+    vi.mocked(api.renameSession).mockRejectedValueOnce(new Error('rename failed'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, makeTask(), 'r1', undefined, retained)).rejects.toThrow('rename failed');
+    expect(retained.session).toEqual(session);
+    await launchSession(api, makeTask(), 'r1', undefined, retained);
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(1);
+    expect(api.renameSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the feature and attachment for the New Task agent', async () => {
+    const api = makeApi();
+    vi.mocked(api.attachAgent).mockRejectedValueOnce(new ApiError(409, 'attach failed'));
+    const retained: LaunchRetention = {};
+    await expect(launchNewTask(api, makeTask(), 'r1', undefined, retained)).rejects.toThrow('attach failed');
+    expect(retained.feature).toEqual(feature);
+    vi.mocked(api.createFeature).mockClear();
+    await launchNewTask(api, makeTask(), 'r1', undefined, retained);
+    expect(api.createFeature).not.toHaveBeenCalled();
+    expect(retained.attachment).toEqual(attachment);
+    await launchNewTask(api, makeTask(), 'r1', undefined, retained);
+    expect(api.attachAgent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('unknown create outcomes', () => {
+  const sessionTask = () => makeTask();
+
+  it('does not repeat a feature create whose outcome is unknown', async () => {
+    const api = makeApi();
+    vi.mocked(api.createFeature).mockResolvedValueOnce(feature).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('Failed to fetch');
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toBeInstanceOf(UnknownLaunchOutcomeError);
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow(/task workspace/);
+    expect(api.createFeature).toHaveBeenCalledTimes(2);
+  });
+
+  it('adopts the single matching session instead of creating another', async () => {
+    const api = makeApi();
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(new ApiError(504, 'timeout'));
+    vi.mocked(api.listSessions).mockResolvedValue([session]);
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('timeout');
+    const intent = await launchSession(api, sessionTask(), 'r1', undefined, retained);
+    expect(api.listSessions).toHaveBeenCalledWith(feature.id, { includeInternal: true });
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(1);
+    expect(intent.kind).toBe('session');
+    expect(retained.attempt).toBeUndefined();
+  });
+
+  it('blocks when found sessions are ambiguous or do not match', async () => {
+    const api = makeApi();
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(new ApiError(502, 'bad gateway'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow();
+    vi.mocked(api.listSessions).mockResolvedValue([session, { ...session, id: 's2' }]);
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toBeInstanceOf(UnknownLaunchOutcomeError);
+    vi.mocked(api.listSessions).mockResolvedValue([{ ...session, prompt: 'other' }]);
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toBeInstanceOf(UnknownLaunchOutcomeError);
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries after a server answer when reconciliation finds no session', async () => {
+    const api = makeApi();
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(new ApiError(500, 'boom'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('boom');
+    await launchSession(api, sessionTask(), 'r1', undefined, retained);
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks when no session is found but the request may still be in flight', async () => {
+    const api = makeApi();
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow();
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow(/0 found/);
+    expect(api.createTerminalSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a known attachment and never attaches the multi-attach agent twice', async () => {
+    const api = makeApi();
+    vi.mocked(api.attachAgent).mockRejectedValueOnce(new ApiError(500, 'boom'));
+    vi.mocked(api.listFeatureAgents).mockResolvedValue([
+      { attachment, manifest: catalog.manifest },
+      { attachment: { ...attachment, id: 'other', agentId: 'bug-bash' }, manifest: catalog.manifest },
+    ]);
+    const retained: LaunchRetention = {};
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('boom');
+    await launchNewTask(api, sessionTask(), 'r1', undefined, retained);
+    expect(api.attachAgent).toHaveBeenCalledTimes(1);
+    expect(retained.attachment).toEqual(attachment);
+  });
+
+  it('blocks on duplicate attachments, and on none while the request may be in flight', async () => {
+    const api = makeApi();
+    vi.mocked(api.attachAgent).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const retained: LaunchRetention = {};
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow();
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toBeInstanceOf(UnknownLaunchOutcomeError);
+    vi.mocked(api.listFeatureAgents).mockResolvedValue([
+      { attachment, manifest: catalog.manifest },
+      { attachment: { ...attachment, id: 'second' }, manifest: catalog.manifest },
+    ]);
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow(/2 found/);
+    expect(api.attachAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries an attach after a server answer when none is found', async () => {
+    const api = makeApi();
+    vi.mocked(api.attachAgent).mockRejectedValueOnce(new ApiError(503, 'busy'));
+    const retained: LaunchRetention = {};
+    await expect(launchNewTask(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('busy');
+    await launchNewTask(api, sessionTask(), 'r1', undefined, retained);
+    expect(api.attachAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats 408 as unknown but other 4xx as a definite rejection', async () => {
+    const api = makeApi();
+    vi.mocked(api.createFeature).mockResolvedValueOnce(feature).mockRejectedValueOnce(new ApiError(408, 'timeout'));
+    const retained: LaunchRetention = {};
+    await expect(launchSession(api, sessionTask(), 'r1', undefined, retained)).rejects.toThrow('timeout');
+    expect(retained.attempt).toEqual({ op: 'feature', answered: true });
+  });
+});
+
+describe('isMissingLaunchTarget', () => {
+  it('accepts only 404s and explicit missing-target errors', () => {
+    expect(isMissingLaunchTarget(new MissingLaunchTargetError('gone'))).toBe(true);
+    expect(isMissingLaunchTarget(new ApiError(404, 'nope'))).toBe(true);
+    expect(isMissingLaunchTarget(new ApiError(500, 'boom'))).toBe(false);
+    expect(isMissingLaunchTarget(new TypeError('Failed to fetch'))).toBe(false);
+    expect(isMissingLaunchTarget('x')).toBe(false);
+  });
+});
+
+describe('launch registry', () => {
+  it('is shared per API client and isolated between clients', () => {
+    const a = {};
+    expect(launchRegistryFor(a)).toBe(launchRegistryFor(a));
+    expect(launchRegistryFor({})).not.toBe(launchRegistryFor(a));
+  });
+
+  it('admits one launch at a time and publishes phase, error and completion', () => {
+    const registry = launchRegistryFor({});
+    const seen = vi.fn();
+    const unsubscribe = registry.subscribe(seen);
+    setLaunchPhase(registry, 'ignored');
+    expect(registry.getSnapshot().active).toBeNull();
+    expect(claimLaunchSlot(registry, 't1')).toBe(true);
+    expect(claimLaunchSlot(registry, 't2')).toBe(false);
+    setLaunchPhase(registry, 'Starting…');
+    expect(registry.getSnapshot().active).toEqual({ taskId: 't1', phase: 'Starting…' });
+    setLaunchError(registry, 'boom');
+    expect(registry.getSnapshot().error).toBe('boom');
+    releaseLaunchSlot(registry);
+    expect(registry.getSnapshot()).toMatchObject({ active: null, completions: 1, error: 'boom' });
+    expect(claimLaunchSlot(registry, 't2')).toBe(true);
+    expect(registry.getSnapshot().error).toBeNull();
+    unsubscribe();
+    const calls = seen.mock.calls.length;
+    releaseLaunchSlot(registry);
+    expect(seen.mock.calls.length).toBe(calls);
+  });
+
+  it('keeps one record per fingerprint and drops older input for the same task', () => {
+    const registry = launchRegistryFor({});
+    const first = acquireRetention(registry, makeTask(), 'session', 'r1')!;
+    expect(acquireRetention(registry, makeTask(), 'session', 'r1')!.keep).toBe(first.keep);
+    expect(acquireRetention(registry, makeTask(), 'session', null)!.keep).not.toBe(first.keep);
+    acquireRetention(registry, makeTask({ title: 'changed' }), 'session', 'r1');
+    expect(registry.retained.size).toBe(1);
+  });
+
+  it('evicts finished records for space but never records with an unknown outcome', () => {
+    const registry = launchRegistryFor({});
+    for (let i = 0; i < MAX_RETAINED_LAUNCHES; i += 1) {
+      acquireRetention(registry, makeTask({ id: `t${i}` }), 'session', 'r1');
+    }
+    expect(registry.retained.size).toBe(MAX_RETAINED_LAUNCHES);
+    expect(acquireRetention(registry, makeTask({ id: 'extra' }), 'session', 'r1')).not.toBeNull();
+    expect(registry.retained.size).toBe(MAX_RETAINED_LAUNCHES);
+    for (const record of registry.retained.values()) {
+      record.attempt = { op: 'session', answered: false };
+    }
+    const before = [...registry.retained.keys()];
+    expect(acquireRetention(registry, makeTask({ id: 'blocked' }), 'session', 'r1')).toBeNull();
+    expect([...registry.retained.keys()]).toEqual(before);
+  });
+});
+
+describe('key cleanup failures never replace the original error', () => {
+  const throwingKeys = () => ({
+    keyFor: () => 'op-key',
+    discard: vi.fn(() => { throw new Error('quota'); }),
+    release: vi.fn(),
+  });
+
+  it('keeps the conflict error and publishes a notice when a stage reset fails (launchSession)', async () => {
+    const { dismissOperationNotices, getOperationNotices } = await import('./operation-notices');
+    const { KEY_RESET_WARNING } = await import('./operation-keys');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = makeApi();
+    const conflict = new ApiError(409, 'different input', 'operation_key_conflict');
+    vi.mocked(api.createFeature).mockRejectedValueOnce(conflict);
+    const keys = throwingKeys();
+    await expect(launchSession(api, makeTask(), 'r1', undefined, { keys })).rejects.toBe(conflict);
+    expect(keys.discard).toHaveBeenCalledTimes(1);
+    expect(getOperationNotices()?.message).toBe(KEY_RESET_WARNING);
+    dismissOperationNotices();
+    warn.mockRestore();
+  });
+
+  it('keeps the original error when the parent-feature reset fails (launchReview path)', async () => {
+    const { dismissOperationNotices, getOperationNotices } = await import('./operation-notices');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = makeApi();
+    const conflict = new ApiError(409, 'different input', 'operation_key_conflict');
+    vi.mocked(api.createFeature).mockRejectedValueOnce(conflict);
+    const keys = throwingKeys();
+    await expect(launchNewTask(api, makeTask(), 'r1', undefined, { keys })).rejects.toBe(conflict);
+    expect(getOperationNotices()?.message).toMatch(/could not be reset/);
+    dismissOperationNotices();
+    warn.mockRestore();
+  });
+});
+
+describe('stage key reset failure in a create attempt', () => {
+  it('keeps the original rejection and publishes a notice', async () => {
+    const { dismissOperationNotices, getOperationNotices } = await import('./operation-notices');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = makeApi();
+    const rejection = new ApiError(400, 'invalid', 'bad_request');
+    vi.mocked(api.createTerminalSession).mockRejectedValueOnce(rejection);
+    const keys = { keyFor: () => 'op-key', discard: vi.fn(() => { throw new Error('quota'); }), release: vi.fn() };
+    await expect(launchSession(api, makeTask({ featureId: 'f1' }), 'r1', undefined, { keys })).rejects.toBe(rejection);
+    expect(keys.discard).toHaveBeenCalledWith('session');
+    expect(getOperationNotices()?.message).toMatch(/could not be reset/);
+    dismissOperationNotices();
+    warn.mockRestore();
   });
 });

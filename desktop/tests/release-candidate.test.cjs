@@ -26,7 +26,7 @@ function fixture(t, platform = 'win32') {
   fs.writeFileSync(path.join(releaseDir, installer), 'installer fixture');
   fs.writeFileSync(path.join(releaseDir, 'latest.yml'), 'feed fixture');
   fs.writeFileSync(path.join(releaseDir, 'ignored.log'), 'not a release artifact');
-  const options = { root, platform, sourceSha: 'a'.repeat(40), runId: '123', runAttempt: '2' };
+  const options = { root, platform, arch: 'x64', sourceSha: 'a'.repeat(40), runId: '123', runAttempt: '2' };
   return { root, releaseDir, stagedDir, installer, options };
 }
 
@@ -40,6 +40,7 @@ for (const platform of ['win32', 'darwin']) {
     assert.equal(manifest.signatureVerification, 'pending');
     assert.equal(manifest.packagedRuntimeVerification, 'pending');
     assert.equal(manifest.platform, platform);
+    assert.equal(manifest.arch, 'x64');
     assert.equal(manifest.sourceSha, f.options.sourceSha);
     assert.deepEqual(manifest.ci, { runId: '123', runAttempt: '2' });
     assert.equal(manifest.version, '1.2.3');
@@ -63,19 +64,19 @@ for (const platform of ['win32', 'darwin']) {
 test('refuses incomplete CI identity or an unsupported platform', async (t) => {
   const f = fixture(t);
   for (const invalid of [
-    { platform: 'linux' }, { sourceSha: 'main' }, { sourceSha: undefined },
+    { platform: 'linux' }, { arch: 'ia32' }, { sourceSha: 'main' }, { sourceSha: undefined },
     { runId: '' }, { runId: '0' }, { runAttempt: '-1' }, { runAttempt: undefined },
   ]) {
     await assert.rejects(writeCandidateManifest({ ...f.options, ...invalid }), /requires/);
   }
-  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32.json')), false);
+  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32-x64.json')), false);
 });
 
 test('refuses a changed staged lock before emitting provenance', async (t) => {
   const f = fixture(t);
   fs.appendFileSync(path.join(f.stagedDir, 'package-lock.json'), ' ');
   await assert.rejects(writeCandidateManifest(f.options), /lock differs/);
-  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32.json')), false);
+  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32-x64.json')), false);
 });
 
 test('refuses missing, empty, or non-file installers', async (t) => {
@@ -88,12 +89,12 @@ test('refuses missing, empty, or non-file installers', async (t) => {
   fs.rmSync(installer);
   fs.mkdirSync(installer);
   await assert.rejects(writeCandidateManifest(f.options), /nonempty regular file/);
-  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32.json')), false);
+  assert.equal(fs.existsSync(path.join(f.releaseDir, 'candidate-win32-x64.json')), false);
 });
 
 test('release workflow gates prereleases without publishing stable updates', () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8');
-  assert.match(workflow, /os: \[ubuntu-latest, windows-latest, macos-latest\]/);
+  assert.match(workflow, /os: \[ubuntu-latest, windows-latest, macos-15, macos-15-intel\]/);
   assert.match(workflow, /needs: verify/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /run: node desktop\/scripts\/release-candidate\.cjs/);
@@ -130,14 +131,15 @@ test('release workflow gates prereleases without publishing stable updates', () 
   assert.match(desktop.scripts['dist:mac'], /--publish never$/);
 });
 
-test('publication verifies both platforms independently even when diagnostic filenames collide', async (t) => {
+test('publication verifies both Mac architectures independently even when diagnostic filenames collide', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-publish-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"version":"1.2.3"}');
-  for (const [platform, label] of [['win32', 'Windows'], ['darwin', 'macOS']]) {
+  const targets = [['win32', 'x64', 'Windows'], ['darwin', 'arm64', 'macOS-arm64'], ['darwin', 'x64', 'macOS-x64']];
+  for (const [platform, arch, label] of targets) {
     const f = fixture(t, platform);
     fs.writeFileSync(path.join(f.releaseDir, 'builder-debug.yml'), `${platform} build configuration`);
-    await writeCandidateManifest(f.options);
+    await writeCandidateManifest({ ...f.options, arch });
     fs.cpSync(f.releaseDir, path.join(root, 'artifacts', `ai-project-studio-${label}`), { recursive: true });
   }
   const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8'));
@@ -151,13 +153,51 @@ test('publication verifies both platforms independently even when diagnostic fil
   });
   const valid = verify();
   assert.equal(valid.status, 0, valid.stderr);
-  for (const [platform, label] of [['win32', 'Windows'], ['darwin', 'macOS']]) {
+  for (const [platform, arch, label] of targets) {
     const diagnostic = path.join(root, 'artifacts', `ai-project-studio-${label}`, 'builder-debug.yml');
     fs.writeFileSync(diagnostic, 'changed bytes');
     const changed = verify();
     assert.notEqual(changed.status, 0);
     assert.match(changed.stderr, /Release artifact mismatch: builder-debug\.yml/);
     fs.writeFileSync(diagnostic, `${platform} build configuration`);
+    const manifestPath = path.join(root, 'artifacts', `ai-project-studio-${label}`, `candidate-${platform}-${arch}.json`);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, arch: arch === 'x64' ? 'arm64' : 'x64' }));
+    assert.match(verify().stderr, /Release provenance mismatch/);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  }
+});
+
+test('signing preflight precedes builds and macOS verification precedes provenance', () => {
+  const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml'), 'utf8'));
+  const steps = workflow.jobs.build.steps;
+  const preflight = steps.findIndex((step) => step.run?.includes('Incomplete Apple signing configuration'));
+  const builders = steps.map((step, index) => step.name?.startsWith('Build ') ? index : -1).filter((index) => index >= 0);
+  const signature = steps.findIndex((step) => step.name === 'Verify Developer ID signature and notarization');
+  const provenance = steps.findIndex((step) => step.run?.includes('node desktop/scripts/release-candidate.cjs'));
+  assert.ok(preflight >= 0 && builders.length > 0 && builders.every((index) => index > preflight));
+  assert.match(steps[preflight].run, /SIGNPATH_CONFIGURED/);
+  assert.match(steps[preflight].run, /AZURE_SIGNING_CONFIGURED/);
+  assert.ok(signature > Math.max(...builders) && provenance > signature);
+  for (const command of ['codesign --verify', 'TeamIdentifier=', 'spctl --assess', 'stapler validate']) {
+    assert.ok(steps[signature].run.includes(command), `Missing exact-artifact check: ${command}`);
+  }
+});
+
+test('ordinary CI and release builds cover native Intel and Apple Silicon runners', () => {
+  const root = path.join(__dirname, '..', '..');
+  const ci = yaml.load(fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8'));
+  const release = yaml.load(fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8'));
+  for (const os of ['macos-15', 'macos-15-intel']) {
+    assert.ok(ci.jobs.verify.strategy.matrix.os.includes(os));
+    assert.ok(release.jobs.verify.strategy.matrix.os.includes(os));
+  }
+  assert.deepEqual(release.jobs.build.strategy.matrix.include.filter((target) => target.os.startsWith('macos')), [
+    { os: 'macos-15', label: 'macOS-arm64', arch: 'arm64' },
+    { os: 'macos-15-intel', label: 'macOS-x64', arch: 'x64' },
+  ]);
+  for (const step of release.jobs.build.steps.filter((step) => step.name.startsWith('Build macOS installer'))) {
+    assert.match(step.run, /--\$\{\{ matrix\.arch \}\}/);
   }
 });
 

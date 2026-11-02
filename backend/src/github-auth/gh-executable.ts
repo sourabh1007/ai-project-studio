@@ -1,6 +1,7 @@
 import { resolveExecutable } from '../terminal/executable-resolver.js';
 
 export interface ResolveGhDeps {
+  executable?: string;
   /** PATH search string. Defaults to the process PATH. */
   pathEnv?: string;
   /** Windows executable extensions (PATHEXT). Ignored off Windows. */
@@ -64,7 +65,7 @@ export function resolveGhExecutable(deps: ResolveGhDeps = {}): string {
   const augmentedPath = [basePath, ...knownGhDirs(isWindows, env)]
     .filter((part) => part.length > 0)
     .join(delimiter);
-  return resolveExecutable('gh', {
+  return resolveExecutable(deps.executable ?? 'gh', {
     pathEnv: augmentedPath,
     pathExt: deps.pathExt,
     fileExists: deps.fileExists,

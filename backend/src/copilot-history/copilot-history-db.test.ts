@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCopilotHistoryDb } from './copilot-history-db.js';
+import { PromptHistoryUnavailableError } from './copilot-history-contract.js';
 
 let dir: string;
 let dbPath: string;
@@ -160,5 +161,40 @@ describe('createCopilotHistoryDb', () => {
     const source = createCopilotHistoryDb({ databasePath: dir });
     expect(source.sessionSummaries(['s1'])).toEqual([]);
     expect(source.checkpoints(['s1'])).toEqual([]);
+  });
+
+  it('throws instead of reporting empty prompts when an existing store cannot be read', () => {
+    const corrupt = join(dir, 'corrupt-prompts.db');
+    writeFileSync(corrupt, 'not a sqlite database');
+    for (const databasePath of [corrupt, dir]) {
+      const source = createCopilotHistoryDb({ databasePath });
+      expect(() => source.userMessages('s1')).toThrow(PromptHistoryUnavailableError);
+    }
+  });
+
+  it('throws on schema drift in the turns table but degrades auxiliary usage reads', () => {
+    const drifted = join(dir, 'drifted.db');
+    const db = new DatabaseSync(drifted);
+    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, summary TEXT);');
+    db.close();
+    const source = createCopilotHistoryDb({ databasePath: drifted });
+    expect(() => source.userMessages('s1')).toThrow(PromptHistoryUnavailableError);
+    expect(source.usageEventTimes('s1')).toEqual([]);
+    expect(source.latestActivityTurn('s1')).toBeNull();
+  });
+
+  it('keeps a database that a writer holds locked readable in WAL mode', () => {
+    const wal = join(dir, 'wal.db');
+    const writer = new DatabaseSync(wal);
+    writer.exec(`PRAGMA journal_mode = WAL;
+      CREATE TABLE turns (session_id TEXT, turn_index INTEGER, user_message TEXT, assistant_response TEXT, timestamp TEXT);
+      INSERT INTO turns VALUES ('s1', 0, 'one', NULL, 't');`);
+    writer.exec('BEGIN IMMEDIATE; INSERT INTO turns VALUES (\'s1\', 1, \'uncommitted\', NULL, \'t\');');
+    try {
+      const rows = createCopilotHistoryDb({ databasePath: wal }).userMessages('s1');
+      expect(rows.map((row) => row.user_message)).toEqual(['one']);
+    } finally {
+      writer.close();
+    }
   });
 });

@@ -41,6 +41,40 @@ const maxRecordBytesSchema = z
     'Maximum UTF-8 bytes a single emitted JSONL record may consume after truncation or omission.',
   );
 
+const asyncWriterSchema = z
+  .boolean()
+  .describe('When true, file logging goes through a bounded off-thread writer. Only the degraded synchronous fallback (used after the writer failed and its exit was confirmed) can touch the file on the API thread.');
+const queueMaxRecordsSchema = z
+  .number()
+  .int()
+  .positive()
+  .describe('Maximum log records buffered for the file writer; overflow is counted and reported, never silent.');
+const queueMaxBytesSchema = z
+  .number()
+  .int()
+  .min(MIN_LOG_RECORD_BYTES)
+  .describe('Maximum UTF-8 bytes buffered for the file writer.');
+const flushIntervalMsSchema = z
+  .number()
+  .int()
+  .positive()
+  .describe('Delay before buffered records are sent to the file writer.');
+const maxBatchRecordsSchema = z
+  .number()
+  .int()
+  .positive()
+  .describe('Maximum records sent to the file writer in one batch.');
+const writerAckTimeoutMsSchema = z
+  .number()
+  .int()
+  .positive()
+  .describe('How long a batch may stay unacknowledged before the file writer is treated as stalled.');
+const maxWriterRestartsSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .describe('Writer restarts attempted before logging degrades to the synchronous fallback.');
+
 export const loggingConfigFields = {
   level: logLevelSchema.describe('Minimum level written to the console and log file.'),
   directory: directorySchema,
@@ -49,6 +83,13 @@ export const loggingConfigFields = {
   maxFileBytes: maxFileBytesSchema,
   retainedFileCount: retainedFileCountSchema,
   maxRecordBytes: maxRecordBytesSchema,
+  asyncWriter: asyncWriterSchema,
+  queueMaxRecords: queueMaxRecordsSchema,
+  queueMaxBytes: queueMaxBytesSchema,
+  flushIntervalMs: flushIntervalMsSchema,
+  maxBatchRecords: maxBatchRecordsSchema,
+  writerAckTimeoutMs: writerAckTimeoutMsSchema,
+  maxWriterRestarts: maxWriterRestartsSchema,
 };
 
 const loggingConfigObjectSchema = z.object(loggingConfigFields);
@@ -57,6 +98,10 @@ export const loggingConfigSchema = loggingConfigObjectSchema
   .refine((value) => value.maxFileBytes >= value.maxRecordBytes, {
     message: 'maxFileBytes must be at least maxRecordBytes',
     path: ['maxFileBytes'],
+  })
+  .refine((value) => value.queueMaxBytes >= value.maxRecordBytes, {
+    message: 'queueMaxBytes must be at least maxRecordBytes',
+    path: ['queueMaxBytes'],
   });
 
 export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
@@ -75,6 +120,13 @@ export const loggingDefaults: LoggingConfig = {
   maxFileBytes: 10 * 1024 * 1024,
   retainedFileCount: 14,
   maxRecordBytes: 64 * 1024,
+  asyncWriter: true,
+  queueMaxRecords: 4096,
+  queueMaxBytes: 8 * 1024 * 1024,
+  flushIntervalMs: 50,
+  maxBatchRecords: 256,
+  writerAckTimeoutMs: 5_000,
+  maxWriterRestarts: 3,
 };
 
 const loggingRetentionSchema = z
@@ -100,6 +152,13 @@ export function resolveLoggingConfig(
     retainedFileCount:
       overrides.retainedFileCount ?? loggingDefaults.retainedFileCount,
     maxRecordBytes: overrides.maxRecordBytes ?? loggingDefaults.maxRecordBytes,
+    asyncWriter: overrides.asyncWriter ?? loggingDefaults.asyncWriter,
+    queueMaxRecords: overrides.queueMaxRecords ?? loggingDefaults.queueMaxRecords,
+    queueMaxBytes: overrides.queueMaxBytes ?? loggingDefaults.queueMaxBytes,
+    flushIntervalMs: overrides.flushIntervalMs ?? loggingDefaults.flushIntervalMs,
+    maxBatchRecords: overrides.maxBatchRecords ?? loggingDefaults.maxBatchRecords,
+    writerAckTimeoutMs: overrides.writerAckTimeoutMs ?? loggingDefaults.writerAckTimeoutMs,
+    maxWriterRestarts: overrides.maxWriterRestarts ?? loggingDefaults.maxWriterRestarts,
   });
 }
 

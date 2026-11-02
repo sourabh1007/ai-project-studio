@@ -32,13 +32,13 @@ export function createMetaUsageReader(deps: MetaUsageReaderDeps): MetaUsageReade
       }
       let inputTokens = 0;
       let outputTokens = 0;
-      let nanoAiu = 0;
-      let credits = 0;
+      let nanoAiu: number | null = 0;
+      let credits: number | null = 0;
       for (const event of events) {
         inputTokens += event.inputTokens;
         outputTokens += event.outputTokens;
-        nanoAiu += event.nanoAiu;
-        credits += event.credits;
+        nanoAiu = nanoAiu === null || event.nanoAiu === null ? null : nanoAiu + event.nanoAiu;
+        credits = credits === null || event.credits === null ? null : credits + event.credits;
       }
       return {
         sessionId,

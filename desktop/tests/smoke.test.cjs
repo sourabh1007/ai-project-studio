@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const {
   sha256, hashFile, loopbackUrl, boundedInteger, createFixture, isolatedEnv,
-  waitFor, inspectPackage, killTree, Cdp, launchOwned, quoteWindowsArg, resolvePowerShell,
+  waitFor, inspectPackage, killTree, Cdp, launchOwned, quoteWindowsArg, resolvePowerShell, removeFixtureEntries,
 } = require('../scripts/smoke-helpers.cjs');
 const { configure } = require('../regression-isolation.cjs');
 
@@ -69,6 +69,27 @@ test('numeric bounds reject unbounded fixture timing', () => {
   for (const value of ['oops', -1, 5001, 1.1, Infinity]) {
     assert.throws(() => boundedInteger(value, 0, 5000, 'delay'));
   }
+});
+
+test('smoke cleanup removes only owned entries and retains its manifest', async (t) => {
+  const f = fixture(t);
+  const sibling = path.join(path.dirname(f.root), `${path.basename(f.root)}-unrelated.txt`);
+  fs.writeFileSync(sibling, 'untouched');
+  t.after(() => fs.rmSync(sibling, { force: true }));
+  fs.writeFileSync(path.join(f.root, 'manifest.json'), 'retained');
+  fs.writeFileSync(path.join(f.root, 'profile', 'synthetic.data'), 'remove');
+  await removeFixtureEntries(f.root);
+  assert.deepEqual(fs.readdirSync(f.root), ['manifest.json']);
+  assert.equal(fs.readFileSync(sibling, 'utf8'), 'untouched');
+});
+
+test('smoke cleanup surfaces unrecoverable removal errors without erasing its manifest', async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, 'manifest.json'), 'retained');
+  const failure = Object.assign(new Error('Locked synthetic profile'), { code: 'EPERM' });
+  t.mock.method(fs.promises, 'rm', async () => { throw failure; });
+  await assert.rejects(removeFixtureEntries(f.root), (error) => error === failure);
+  assert.equal(fs.readFileSync(path.join(f.root, 'manifest.json'), 'utf8'), 'retained');
 });
 
 test('Windows command-line quoting preserves whitespace, quotes and trailing backslashes', () => {

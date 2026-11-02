@@ -352,24 +352,26 @@ describe('createAzureCommentsGateway', () => {
     await expect(gw.setStatus('5', 'active')).rejects.toThrow(/HTTP 500/);
   });
 
-  it('adds a 👍 via PUT and returns the viewer reaction', async () => {
-    const put = vi.fn(async () => resp(200, {}));
-    const gw = createAzureCommentsGateway(deps({ httpPut: put }), TARGET);
+  it('adds a 👍 via POST and refreshes the authoritative aggregate and viewer state', async () => {
+    const post = vi.fn(async () => resp(200, {}));
+    const gw = createAzureCommentsGateway(deps({ httpPost: post, viewerId: async () => 'viewer',
+      httpGet: async () => resp(200, { ...THREAD, comments: [{ ...THREAD.comments[0], usersLiked: [{ id: 'VIEWER' }, { id: 'other' }] }] }),
+    }), TARGET);
     const comment = await gw.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: true });
     expect(comment).toEqual({
       id: '1',
-      author: null,
-      authorAvatarUrl: null,
-      body: '',
-      createdAt: null,
-      reactions: [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }],
+      author: 'Alice',
+      authorAvatarUrl: 'https://ado/alice.png',
+      body: 'nit',
+      createdAt: '2026-01-01T00:00:00Z',
+      reactions: [{ content: 'THUMBS_UP', count: 2, viewerReacted: true }],
     });
-    expect(put).toHaveBeenCalledWith(likesUrl(TARGET, '5', '1'), 'tok', {});
+    expect(post).toHaveBeenCalledWith(likesUrl(TARGET, '5', '1'), 'tok', {});
   });
 
   it('removes a 👍 via DELETE and returns no reactions', async () => {
     const del = vi.fn(async () => resp(204, {}));
-    const gw = createAzureCommentsGateway(deps({ httpDelete: del }), TARGET);
+    const gw = createAzureCommentsGateway(deps({ httpDelete: del, httpGet: async () => resp(200, THREAD) }), TARGET);
     const comment = await gw.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: false });
     expect(comment.reactions).toEqual([]);
     expect(del).toHaveBeenCalledWith(likesUrl(TARGET, '5', '1'), 'tok');
@@ -384,7 +386,7 @@ describe('createAzureCommentsGateway', () => {
 
   it('throws when the like request returns an error status', async () => {
     const gw = createAzureCommentsGateway(
-      deps({ httpPut: async () => resp(500) }),
+      deps({ httpPost: async () => resp(500) }),
       TARGET,
     );
     await expect(
@@ -402,6 +404,37 @@ describe('likesUrl', () => {
 });
 
 describe('mapLikes', () => {
+  it('uses stable viewer identity, hides deleted/system comments, and preserves other users likes', () => {
+    expect(mapLikes([{ id: 'other' }, null, {}, { id: 2 }], 'viewer')).toEqual([{ content: 'THUMBS_UP', count: 4, viewerReacted: false }]);
+    expect(mapThread({ ...THREAD, comments: [
+      { id: 3, isDeleted: true, content: 'hidden' },
+      { id: 4, commentType: 'system', content: 'event' },
+      { id: 5, usersLiked: [{ id: 'viewer' }] },
+    ] }, 'viewer')?.comments).toHaveLength(1);
+    expect(parseThreads({ value: [{ ...THREAD, comments: [{ id: 5, usersLiked: [{ id: 'viewer' }] }] }] }, 'viewer')[0].comments[0].reactions[0].viewerReacted).toBe(true);
+  });
+
+  describe('Azure reaction refresh failures', () => {
+    it('retains the authenticated viewer reaction on list, creation, and status mutations', async () => {
+      const liked = { ...THREAD, comments: [{ ...THREAD.comments[0], usersLiked: [{ id: 'viewer' }, { id: 'other' }] }] };
+      const gateway = createAzureCommentsGateway(deps({
+        viewerId: async () => 'viewer',
+        httpGet: async () => resp(200, { value: [liked] }),
+        httpPost: async () => resp(201, liked),
+        httpPatch: async () => resp(200, liked),
+      }), TARGET);
+      const expected = [{ content: 'THUMBS_UP', count: 2, viewerReacted: true }];
+      expect((await gateway.list())[0].comments[0].reactions).toEqual(expected);
+      expect((await gateway.add({ body: 'new' })).comments[0].reactions).toEqual(expected);
+      expect((await gateway.setStatus('5', 'resolved')).comments[0].reactions).toEqual(expected);
+    });
+    it.each([resp(503), resp(200, { ...THREAD, comments: [] })])('does not invent aggregate state after successful mutation when refresh is unavailable', async (response) => {
+      const httpPost = vi.fn(async () => resp(200));
+      const gateway = createAzureCommentsGateway(deps({ httpPost, httpGet: async () => response }), TARGET);
+      await expect(gateway.react({ threadId: '5', commentId: '1', content: 'THUMBS_UP', on: true })).rejects.toThrow(/Reaction was applied/);
+      expect(httpPost).toHaveBeenCalledOnce();
+    });
+  });
   it('maps a non-empty usersLiked array to a 👍 reaction', () => {
     expect(mapLikes([{}, {}])).toEqual([
       { content: 'THUMBS_UP', count: 2, viewerReacted: false },

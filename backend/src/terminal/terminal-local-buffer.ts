@@ -9,6 +9,10 @@ export interface TerminalLocalBuffer {
 export interface TerminalReplayBuffer extends TerminalLocalBuffer {
   lateJoinState(): AnsiParserState | null;
   pendingHighSurrogate(): string | null;
+  /** Records the grid size now in effect, at the current stream position. */
+  noteGeometry(cols: number, rows: number): void;
+  /** Retained text split at each recorded size change; last entry is the active size. */
+  replaySegments(): GeometrySegment[];
 }
 
 interface TextBlock {
@@ -47,14 +51,21 @@ function createBlockBuffer(maxBytes: number, headParser?: AnsiParser) {
   let cached = '';
   let dirty = false;
 
+  // Monotonic UTF-16 positions in the retained (post-replacement) stream.
+  let consumed = 0;
+  let appended = 0;
+  let forceUntil = 0;
+
   const mustTrim = () =>
-    totalBytes > maxBytes || (headParser !== undefined && !headParser.atTextBoundary());
+    totalBytes > maxBytes || consumed < forceUntil ||
+    (headParser !== undefined && !headParser.atTextBoundary());
 
   const trim = () => {
     while (head && mustTrim()) {
       const block = head;
-      if (!headParser && block.bytes <= totalBytes - maxBytes) {
+      if (!headParser && consumed >= forceUntil && block.bytes <= totalBytes - maxBytes) {
         totalBytes -= block.bytes;
+        consumed += block.text.length - block.offset;
         head = block.next;
       } else {
         while (block.offset < block.text.length && mustTrim()) {
@@ -62,6 +73,7 @@ function createBlockBuffer(maxBytes: number, headParser?: AnsiParser) {
           const bytes = Buffer.byteLength(unit, 'utf8');
           headParser?.write(unit);
           block.offset += unit.length;
+          consumed += unit.length;
           block.bytes -= bytes;
           totalBytes -= bytes;
         }
@@ -85,6 +97,7 @@ function createBlockBuffer(maxBytes: number, headParser?: AnsiParser) {
       tail = block;
     }
     totalBytes += bytes;
+    appended += text.length;
     dirty = true;
     trim();
   };
@@ -151,6 +164,13 @@ function createBlockBuffer(maxBytes: number, headParser?: AnsiParser) {
       }
     },
     pendingHighSurrogate: () => pendingHigh,
+    appendedUnits: () => appended,
+    consumedUnits: () => consumed,
+    forceTrimTo(position: number) {
+      forceUntil = Math.max(forceUntil, position);
+      dirty = true;
+      trim();
+    },
   };
 }
 
@@ -162,15 +182,72 @@ export function createUtf8TailBuffer(maxBytes: number): TerminalLocalBuffer {
   return createBlockBuffer(maxBytes);
 }
 
+export const DEFAULT_MAX_GEOMETRY_BOUNDARIES = 128;
+
+/** Retained output that was produced at one terminal grid size. */
+export interface GeometrySegment {
+  cols: number;
+  rows: number;
+  text: string;
+}
+
 /**
  * The parser tracks the discarded prefix, not a periodically rescanned tail.
  * Trimming continues to a text boundary, or discards an unfinished control
  * string while retaining only its current parser state for late joiners.
+ *
+ * Geometry marks record the grid size in effect at stream positions so cursor-
+ * addressed output can be replayed at the size it was drawn for. Metadata is
+ * bounded: past `maxGeometryBoundaries` the oldest text segment is discarded
+ * (never silently re-labelled with the wrong size).
  */
-export function createAnsiSafeUtf8TailBuffer(maxBytes: number): TerminalReplayBuffer {
+export function createAnsiSafeUtf8TailBuffer(
+  maxBytes: number,
+  maxGeometryBoundaries = DEFAULT_MAX_GEOMETRY_BOUNDARIES,
+): TerminalReplayBuffer {
+  if (!Number.isSafeInteger(maxGeometryBoundaries) || maxGeometryBoundaries < 1) {
+    throw new Error('Terminal geometry boundaries must be a positive safe integer');
+  }
   const headParser = createAnsiParser();
+  const base = createBlockBuffer(maxBytes, headParser);
+  let marks: Array<{ pos: number; cols: number; rows: number }> = [];
+  // Marks at or before the trimmed head collapse into the one still in effect.
+  const collapse = () => {
+    const consumed = base.consumedUnits();
+    let keep = 0;
+    while (keep + 1 < marks.length && marks[keep + 1].pos <= consumed) keep += 1;
+    if (keep > 0) marks = marks.slice(keep);
+  };
   return {
-    ...createBlockBuffer(maxBytes, headParser),
+    ...base,
     lateJoinState: () => headParser.atTextBoundary() ? null : headParser.snapshot(),
+    noteGeometry(cols, rows) {
+      const pos = base.appendedUnits();
+      const last = marks[marks.length - 1];
+      if (last && last.cols === cols && last.rows === rows) return;
+      if (last && last.pos === pos) marks[marks.length - 1] = { pos, cols, rows };
+      else marks.push({ pos, cols, rows });
+      while (marks.length > maxGeometryBoundaries) {
+        base.forceTrimTo(marks[1].pos);
+        collapse();
+      }
+    },
+    replaySegments() {
+      collapse();
+      const consumed = base.consumedUnits();
+      const text = base.text();
+      const segments: GeometrySegment[] = [];
+      marks.forEach((mark, index) => {
+        const start = index === 0 ? 0 : mark.pos - consumed;
+        const end = index + 1 < marks.length ? marks[index + 1].pos - consumed : text.length;
+        const segment = text.slice(start, end);
+        // Empty interior segments carry no output; the last always carries
+        // the active size.
+        if (segment.length > 0 || index === marks.length - 1) {
+          segments.push({ cols: mark.cols, rows: mark.rows, text: segment });
+        }
+      });
+      return segments;
+    },
   };
 }

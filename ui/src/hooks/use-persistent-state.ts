@@ -12,6 +12,8 @@ interface Options<T> {
   normalize?: (value: T) => T;
   /** Storage to use; defaults to `window.localStorage` when available. */
   store?: KeyValueStore;
+  /** Reports whether the latest write succeeded, for data-loss-sensitive editors. */
+  onPersist?: (saved: boolean) => void;
 }
 
 function defaultStore(): KeyValueStore | null {
@@ -36,6 +38,8 @@ export function usePersistentState<T>(
   options: Options<T> = {},
 ): [T, (next: T | ((prev: T) => T)) => void] {
   const storeRef = useRef<KeyValueStore | null>(options.store ?? defaultStore());
+  const onPersist = useRef(options.onPersist);
+  onPersist.current = options.onPersist;
   const validate = options.validate ?? acceptAll<T>;
   const normalize = options.normalize;
 
@@ -49,9 +53,8 @@ export function usePersistentState<T>(
 
   useEffect(() => {
     const store = storeRef.current;
-    if (store) {
-      writePersisted(store, key, value);
-    }
+    const saved = store ? writePersisted(store, key, value) : false;
+    onPersist.current?.(saved);
   }, [key, value]);
 
   const set = useCallback(

@@ -14,7 +14,7 @@ export interface DiffRightLine {
   text: string;
 }
 
-const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
 /**
  * Parses a unified diff into the list of right-side lines a comment can anchor
@@ -127,6 +127,48 @@ export function annotateDiffLines(diff: string): DiffDisplayLine[] {
     } else {
       result.push({ raw, kind: 'ctx', rightLine: current });
       current += 1;
+    }
+  }
+  return result;
+}
+
+/** Expands a bounded patch with all current-file context, retaining removed lines. */
+export function fullFileDiffLines(content: string, diff: string): DiffDisplayLine[] {
+  const added = new Set<number>();
+  const removed = new Map<number, DiffDisplayLine[]>();
+  let position: number | null = null;
+  for (const line of annotateDiffLines(diff)) {
+    if (line.kind === 'hunk') {
+      const header = HUNK_HEADER.exec(line.raw);
+      // A zero-length new range names the line BEFORE the deletion.
+      position = header ? Number(header[1]) + (header[2] === '0' ? 1 : 0) : null;
+    } else if (position !== null) {
+      if (line.kind === 'del') {
+        const group = removed.get(position) ?? [];
+        group.push(line);
+        removed.set(position, group);
+      } else if (line.rightLine !== null) {
+        if (line.kind === 'add') {
+          added.add(line.rightLine);
+        }
+        position = line.rightLine + 1;
+      }
+    }
+  }
+
+  const body = content.replace(/\r\n/g, '\n').replace(/\n$/, '');
+  const source = content.length === 0 ? [] : body.split('\n');
+  const result: DiffDisplayLine[] = [];
+  for (let index = 0; index <= source.length; index += 1) {
+    const lineNumber = index + 1;
+    result.push(...(removed.get(lineNumber) ?? []));
+    if (index < source.length) {
+      const kind = added.has(lineNumber) ? 'add' : 'ctx';
+      result.push({
+        raw: `${kind === 'add' ? '+' : ' '}${source[index]}`,
+        kind,
+        rightLine: lineNumber,
+      });
     }
   }
   return result;

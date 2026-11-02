@@ -17,7 +17,7 @@ import type { Transcript } from '../session/transcript-capture.js';
 import { summarizerDefaults } from '../summarizer/config.js';
 import { contextDefaults } from './config.js';
 import type { ContextDocument } from './context-contract.js';
-import type { ContextService } from './context-service.js';
+import { createContextService, type ContextService } from './context-service.js';
 import { createContextMergeRunner } from './context-merge-runner.js';
 
 const feature: Feature = {
@@ -53,6 +53,8 @@ function harness(options: {
   existing?: string;
   withStatus?: boolean;
   onStatus?: (phase: string) => void;
+  service?: ContextService;
+  completion?: Promise<Session>;
 }) {
   const requests: StartSessionRequest[] = [];
   const statuses: string[] = [];
@@ -79,7 +81,7 @@ function harness(options: {
       const launched: LaunchedSession = {
         session: metaSession,
         running,
-        completion: Promise.resolve(metaSession),
+        completion: options.completion ?? Promise.resolve(metaSession),
       };
       return launched;
     },
@@ -89,7 +91,7 @@ function harness(options: {
     load: async () => options.transcript,
     delete: async () => undefined,
   };
-  const service = {
+  const service = options.service ?? {
     get: () =>
       options.existing !== undefined
         ? ({ content: options.existing } as ContextDocument)
@@ -113,6 +115,52 @@ function harness(options: {
 }
 
 describe('context-merge-runner', () => {
+  it.each(['edit', 'create', 'delete', 'merge'] as const)('preserves a concurrent %s while curation is awaiting the model', async (change) => {
+    let document: ContextDocument | null = null;
+    const updated = vi.fn();
+    const service = createContextService({
+      store: {
+        get: () => document,
+        save: (doc) => { document = doc; },
+        delete: () => { document = null; },
+      },
+      clock: { now: () => new Date(0), isoNow: () => 'same-timestamp' },
+      config: contextDefaults,
+      onUpdated: updated,
+    });
+    if (change !== 'create') {
+      service.setContent({ scope: 'feature', scopeId: 'f1', content: 'Prior context', updatedBy: 'manual' });
+    }
+    let complete!: (session: Session) => void;
+    const completion = new Promise<Session>((resolve) => { complete = resolve; });
+    const h = harness({
+      transcript: { sessionId: 'meta1', stdout: ['Stale rewritten context'], stderr: [], exitCode: 0 },
+      service,
+      completion,
+      withStatus: true,
+    });
+    const merging = h.runner.merge({ sessionId: 'dev1' });
+    // Let the runner capture its baseline and start the model before editing.
+    await vi.waitFor(() => expect(h.requests).toHaveLength(1));
+    if (change === 'delete') {
+      service.remove('feature', 'f1');
+    } else {
+      service.setContent({
+        scope: 'feature',
+        scopeId: 'f1',
+        content: 'New saved context',
+        updatedBy: change === 'merge' ? 'merge' : 'manual',
+      });
+    }
+    const saved = service.get('feature', 'f1');
+    const writes = updated.mock.calls.length;
+    complete(metaSession);
+    await expect(merging).rejects.toMatchObject({ kind: 'conflict' });
+    expect(service.get('feature', 'f1')).toEqual(saved);
+    expect(updated).toHaveBeenCalledTimes(writes);
+    expect(h.statuses).toEqual(['generating', 'saving', 'idle']);
+  });
+
   it.each(['dev1', 'meta1', 'saving'])('does not save after cancellation at %s', async (stage) => {
     const controller = new AbortController();
     const failure = new Error('Feature deletion');

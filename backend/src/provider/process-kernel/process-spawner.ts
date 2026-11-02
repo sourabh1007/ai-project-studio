@@ -12,6 +12,7 @@ export interface SpawnRequest {
   args: string[];
   env: Record<string, string>;
   cwd?: string;
+  stdin?: 'ignore';
 }
 
 /** Handle to a running process exposing line-oriented output and lifecycle. */
@@ -45,14 +46,14 @@ export interface RawChildProcess {
 export type RawSpawn = (
   command: string,
   args: string[],
-  options: { env: Record<string, string>; cwd?: string },
+  options: { env: Record<string, string>; cwd?: string; stdin?: 'ignore' },
 ) => RawChildProcess;
 
 const defaultRawSpawn: RawSpawn = (command, args, options) =>
   nodeSpawn(command, args, {
     env: options.env,
     cwd: options.cwd,
-    stdio: 'pipe',
+    stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'],
     shell: false,
   }) as unknown as RawChildProcess;
 
@@ -95,6 +96,7 @@ export function createProcessSpawner(
         child = rawSpawn(request.command, request.args, {
           env: request.env,
           cwd: request.cwd,
+          stdin: request.stdin,
         });
       } catch (error) {
         // spawn can throw synchronously (e.g. Windows EINVAL for a .cmd/.bat
@@ -161,7 +163,13 @@ export function createProcessSpawner(
         // through the same settle path as a null exit code, matching how
         // callers already interpret "process never produced a real exit
         // code" (e.g. agency-bootstrapper's install-failure message).
-        child.on('error', () => settle(null));
+        child.on('error', () => {
+          if (child.pid === undefined) {
+            settle(null);
+          } else {
+            for (const cb of stderrCbs) cb('Provider process reported an error; waiting for confirmed native exit.');
+          }
+        });
       });
 
       return {

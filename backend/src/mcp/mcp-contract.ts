@@ -27,6 +27,7 @@ export interface McpServerEntry {
     state: 'unknown' | 'required' | 'expired' | 'ready';
     checkedAt: string | null;
     message: string;
+    interrupted?: boolean;
   };
   source?: string;
   scope?: string;
@@ -59,6 +60,7 @@ export interface McpServerEntry {
 /** The MCP configuration currently seen for a provider. */
 export interface ProviderMcpConfig {
   providerId: string;
+  inspectionTimeoutMs?: number;
   /** Primary source: an absolute config path or an explicit native config command. */
   configPath: string;
   /** Whether any represented source was successfully read (not CLI installation/connection state). */
@@ -107,6 +109,10 @@ export interface McpToolDiscovery {
   authRequired?: boolean;
   /** A login/device-code URL the server printed, when one was detected. */
   authUrl?: string | null;
+  /** Inventory returned while a live native challenge was still unconfirmed. */
+  authenticationInterrupted?: boolean;
+  /** Cleanup was not acknowledged; admission remains blocked until restart. */
+  cleanupUnconfirmed?: boolean;
 }
 
 export type McpServerConnectionStatus =

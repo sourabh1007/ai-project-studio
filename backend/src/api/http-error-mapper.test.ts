@@ -28,6 +28,14 @@ describe('toErrorResult', () => {
     });
   });
 
+  it('maps unavailable to 503 and exposes a string error code only', () => {
+    const capacity = toErrorResult(new AppError('unavailable', 'full', { code: 'operation_capacity' }));
+    expect(capacity.status).toBe(503);
+    expect(capacity.body).toEqual({ error: { kind: 'unavailable', message: 'full', code: 'operation_capacity' } });
+    expect(toErrorResult(new ConflictError('x', { code: 7 })).body).toEqual({ error: { kind: 'conflict', message: 'x' } });
+    expect(toErrorResult(new ConflictError('x', null)).body).toEqual({ error: { kind: 'conflict', message: 'x' } });
+  });
+
   it('maps unknown errors to a generic 500', () => {
     const result = toErrorResult(new Error('boom'));
     expect(result.status).toBe(500);

@@ -367,10 +367,8 @@ describe('futuristic appearance tokens', () => {
     expect(DESIGN_TOKENS_CSS).toContain(
       "[data-appearance='futuristic'] .modal",
     );
-    // The explicit "off" motion preference cancels the indicator animation.
-    expect(DESIGN_TOKENS_CSS).toContain(
-      ":root[data-motion='off'][data-appearance='futuristic'] .tab-active::after",
-    );
+    expect(DESIGN_TOKENS_CSS).not.toContain('fut-tab-in');
+    expect(DESIGN_TOKENS_CSS).not.toContain(".tab-active::after");
   });
 });
 

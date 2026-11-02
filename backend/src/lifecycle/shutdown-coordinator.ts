@@ -50,6 +50,8 @@ export interface ShutdownCoordinatorDeps {
   acknowledge: () => Promise<void>;
   exit: (code: number) => void;
   timeoutMs: number;
+  /** Extra time a drain may overrun timeoutMs before the coordinator stops waiting on it. */
+  drainGraceMs?: number;
   reportError: (message: string, error: unknown) => void;
 }
 
@@ -86,12 +88,22 @@ export function createShutdownCoordinator(
       }
     };
     const drain = async (name: string, action: () => Promise<boolean>) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Drain exceeded its ${deps.timeoutMs}ms deadline`)),
+          deps.timeoutMs + (deps.drainGraceMs ?? 250),
+        );
+        timer.unref();
+      });
       try {
-        if (!await action()) {
+        if (!await Promise.race([action(), deadline])) {
           report(`Shutdown is unconfirmed: ${name} still owns work`, new Error('Drain timed out'));
         }
       } catch (error) {
         report(`Shutdown could not drain ${name}`, error);
+      } finally {
+        clearTimeout(timer);
       }
     };
 

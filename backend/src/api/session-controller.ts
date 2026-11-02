@@ -6,7 +6,10 @@ import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
 import type { Session } from '../session/session-contract.js';
-import type { CopilotHistoryReader } from '../copilot-history/copilot-history-contract.js';
+import {
+  PromptHistoryUnavailableError,
+  type PromptHistoryReader,
+} from '../copilot-history/copilot-history-contract.js';
 import type { FeatureEnvironment } from '../feature/feature-environment.js';
 
 const startSessionSchema = z.object({
@@ -28,7 +31,7 @@ export interface SessionControllerDeps {
   launcher: SessionLauncher;
   sessions: SessionRepo;
   admin: WorkspaceAdmin;
-  history?: CopilotHistoryReader;
+  history?: PromptHistoryReader;
   logger: Logger;
   /**
    * Resolves the feature-level working directory the very first (headless) run
@@ -67,7 +70,7 @@ function firstNonEmpty(...values: Array<string | null | undefined>): string | nu
 
 function enrichWorkTitles(
   sessions: Session[],
-  history: CopilotHistoryReader | undefined,
+  history: Pick<PromptHistoryReader, 'read'> | undefined,
 ): Session[] {
   if (!history || sessions.length === 0) {
     return sessions;
@@ -141,12 +144,24 @@ export function createSessionRoutes(deps: SessionControllerDeps): Route[] {
     {
       method: 'get',
       path: '/sessions/:id/prompts',
-      handler: (req) => {
+      handler: async (req) => {
         const session = deps.sessions.get(req.params.id);
         if (!session) {
           return { status: 404, body: { error: { kind: 'not_found', message: 'Unknown session' } } };
         }
-        return { status: 200, body: deps.history?.prompts(req.params.id) ?? [] };
+        // An unreadable history is an error, never an empty success, so clients
+        // keep what they already show and retry instead of wiping it.
+        if (!deps.history) {
+          return { status: 503, body: { error: { kind: 'unavailable', message: 'Prompt history is not available.' } } };
+        }
+        try {
+          return { status: 200, body: await deps.history.prompts(req.params.id) };
+        } catch (error) {
+          if (error instanceof PromptHistoryUnavailableError) {
+            return { status: 503, body: { error: { kind: 'unavailable', message: error.message } } };
+          }
+          throw error;
+        }
       },
     },
     {

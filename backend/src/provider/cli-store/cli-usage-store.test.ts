@@ -147,9 +147,12 @@ describe('createCliUsageStore with sub-agent rows', () => {
     expect(rows.map((r) => r.totalNanoAiu)).toEqual([3000000000, 5000000000]);
     expect(rows.map((r) => r.turnIndex)).toEqual([0, 1]);
     const page = store.readUsagePage('s1', ctx, null, 1);
-    expect(page).toMatchObject({ status: 'ready', nextCursor: '1', final: false });
+    expect(page).toMatchObject({ status: 'ready', nextCursor: '1', highWaterCursor: '1', final: false });
     const next = store.readUsagePage('s1', ctx, '1', 1);
-    expect(next).toMatchObject({ status: 'ready', nextCursor: null, rows: [{ sourceKey: '[3,"2025-01-01T00:00:03Z"]' }] });
+    expect(next).toMatchObject({ status: 'ready', nextCursor: null, highWaterCursor: '3', rows: [{ sourceKey: '[3,"2025-01-01T00:00:03Z"]' }] });
+    expect(store.readUsagePage('s1', ctx, '3', 1)).toMatchObject({ status: 'ready', highWaterCursor: '3', nextCursor: null, rows: [] });
+    expect(store.readUsagePage('missing', ctx, null, 1)).toMatchObject({ status: 'ready', highWaterCursor: null, nextCursor: null, rows: [] });
+    expect(store.readUsagePage('missing', ctx, '50', 1)).toMatchObject({ status: 'ready', highWaterCursor: '50', nextCursor: null, rows: [] });
   });
 });
 

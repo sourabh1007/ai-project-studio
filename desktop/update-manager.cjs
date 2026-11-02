@@ -4,9 +4,9 @@
  * Auto-update manager for the AI Project Studio desktop shell.
  *
  * Design goals (see docs/development.md ▸ "Auto-update"):
- *  - Windows (signed NSIS): `electron-updater` detects releases, but installation
- *    is guided because its public API cannot await installer-launch success
- *    before scheduling quit.
+ *  - Windows (NSIS): exact qualified release provenance, SHA-256 and a locally
+ *    pinned Authenticode signer gate installation, followed by backend shutdown
+ *    and an awaited installer spawn receipt. Missing trust fails closed.
  *  - macOS (currently unsigned, DMG-only): `electron-updater`'s mac path needs a
  *    signed `zip` artifact, so instead we do a lightweight GitHub Releases check
  *    (detect + release notes) and a *guided* install (open the release page).
@@ -22,7 +22,9 @@ const { app, shell } = require('electron');
 const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
+const { pipeline } = require('node:stream');
 
 const GITHUB_OWNER = 'sourabh1007';
 const GITHUB_REPO = 'ai-project-studio';
@@ -54,6 +56,8 @@ let installing = null;
 let installerAsset = null;
 let installerPath = null;
 let downloading = null;
+let installerCandidate = null;
+const RECOVERY = 'No unverified installer was started. Keep the app open, retry, or download a verified installer from the release page.';
 
 // The single source of truth for the update state, echoed to the renderer on
 // every change and returned by `getState()` for late-subscribing views.
@@ -71,9 +75,8 @@ function baseState() {
     releaseNotes: null,
     releaseName: null,
     error: null,
-    // electron-updater's public quitAndInstall API cannot confirm asynchronous
-    // NSIS launch before it schedules app.quit. Use guided installation until
-    // a supported, awaited launch receipt is available.
+    // Enabled only after an exact asset/manifest and packaged signer policy are
+    // available. The install boundary still verifies their actual evidence.
     canAutoInstall: false,
     platform: process.platform,
     releasePageUrl: RELEASES_PAGE,
@@ -129,8 +132,8 @@ function log(message) {
 /**
  * Initializes the manager. Safe to call once from `bootstrap()` after the
  * window exists. `deps.getWindow` returns the current BrowserWindow (or null);
- * Installation is guided: opening the release page never quits this process
- * or launches an installer behind the backend ownership gate.
+ * `beforeInstall` must confirm owned backend shutdown. Unsupported targets use
+ * the release page and never launch a local installer.
  */
 function init(options) {
   deps = options || {};
@@ -319,7 +322,13 @@ function checkGitHubLatest(manual) {
             const best = newestRelease(JSON.parse(body));
             if (best && isNewer(best.version, safeVersion())) {
               const json = best.release;
-              installerAsset = pickWindowsInstaller(json.assets);
+              const next = pickWindowsInstaller(json.assets, best.version, process.arch);
+              if (installerAsset?.url !== next?.url) {
+                installerPath = null;
+                installerCandidate = null;
+                downloaded = false;
+              }
+              installerAsset = next;
               setState({
                 status: Status.AVAILABLE,
                 availableVersion: best.version,
@@ -328,7 +337,7 @@ function checkGitHubLatest(manual) {
                 releasePageUrl: json.html_url || RELEASES_PAGE,
                 // Windows with a downloadable installer asset can install and
                 // relaunch in the background; everything else stays guided.
-                canAutoInstall: isWindows() && Boolean(installerAsset),
+                canAutoInstall: isWindows() && Boolean(installerAsset?.candidateUrl) && hasSignerPolicy(),
                 error: null,
               });
             } else {
@@ -393,20 +402,141 @@ function parseVersion(v) {
 }
 
 /** Chooses the Windows NSIS installer (.exe) asset from a release's assets. */
-function pickWindowsInstaller(assets) {
+function pickWindowsInstaller(assets, version, arch = process.arch) {
   if (!Array.isArray(assets)) {
     return null;
   }
-  const exe = assets.find(
-    (a) =>
-      a &&
-      typeof a.name === 'string' &&
-      /\.exe$/i.test(a.name) &&
-      !/\.blockmap$/i.test(a.name),
-  );
-  return exe && exe.browser_download_url
-    ? { url: exe.browser_download_url, name: exe.name }
-    : null;
+  if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(version ?? '') ||
+      !['x64', 'arm64'].includes(arch)) return null;
+  const name = `AI-Project-Studio-${version}-win-${arch}.exe`;
+  const expectedUrl = (file) =>
+    `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${version}/${file}`;
+  const matches = assets.filter((asset) => asset?.name === name);
+  if (matches.length !== 1 || matches[0].browser_download_url !== expectedUrl(name)) return null;
+  const candidateName = `candidate-win32-${arch}.json`;
+  const candidates = assets.filter((asset) => asset?.name === candidateName);
+  return {
+    url: expectedUrl(name), name, version, platform: 'win32', arch,
+    candidateUrl: candidates.length === 1 && candidates[0].browser_download_url === expectedUrl(candidateName)
+      ? expectedUrl(candidateName) : null,
+  };
+}
+
+function trustPolicy() {
+  if (deps?.trustPolicy) return deps.trustPolicy;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).updateTrust;
+  } catch {
+    return null;
+  }
+}
+
+function hasSignerPolicy() {
+  const policy = trustPolicy();
+  return !!policy && (policy.requireAuthenticode === false ||
+    (policy.requireAuthenticode === true && hasTrustedSigner(policy)));
+}
+
+function hasTrustedSigner(policy) {
+  const pins = policy.signerThumbprints;
+  const subjects = policy.signerSubjects;
+  return (Array.isArray(pins) && pins.length > 0 &&
+    pins.every((value) => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value))) ||
+    (Array.isArray(subjects) && subjects.length > 0 &&
+      subjects.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 2048 &&
+        /(?:^|,\s*)CN=[^,]+/.test(value) && !/[\x00-\x1f]/.test(value)));
+}
+
+function validateCandidate(candidate, asset, policy) {
+  if (!candidate || candidate.schemaVersion !== 1 || candidate.qualification !== 'passed' ||
+      candidate.version !== asset.version || candidate.platform !== asset.platform || candidate.arch !== asset.arch) {
+    throw new Error('Release candidate is missing, unqualified, or does not match this version/platform/architecture.');
+  }
+  const matches = Array.isArray(candidate.artifacts) ? candidate.artifacts.filter((item) => item?.name === asset.name) : [];
+  const artifact = matches[0];
+  if (matches.length !== 1 || !/^[a-f0-9]{64}$/i.test(artifact.sha256 ?? '') ||
+      !Number.isSafeInteger(artifact.bytes) || artifact.bytes <= 0 || artifact.bytes > 2 * 1024 ** 3) {
+    throw new Error('Release candidate has no exact bounded installer checksum.');
+  }
+  if (!policy || typeof policy.requireAuthenticode !== 'boolean') throw new Error('Packaged update trust policy is missing.');
+  const signed = policy.requireAuthenticode || candidate.authenticode?.required === true;
+  if (signed && (candidate.signatureVerification !== 'passed' || !hasTrustedSigner(policy))) {
+    throw new Error('Trusted Authenticode signer pins or qualified signature evidence are missing. Contact the release maintainer.');
+  }
+  return {
+    ...artifact, signed,
+    signerThumbprints: Array.isArray(policy.signerThumbprints) ? policy.signerThumbprints : [],
+    signerSubjects: Array.isArray(policy.signerSubjects) ? policy.signerSubjects : [],
+  };
+}
+
+function fetchCandidate(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (!url || new URL(url).protocol !== 'https:' || redirects > 5) {
+      reject(new Error('A trusted HTTPS release candidate manifest is required.'));
+      return;
+    }
+    const request = https.get(url, { headers: { 'User-Agent': 'ai-project-studio-updater' }, timeout: 15000 }, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        resolve(fetchCandidate(new URL(response.headers.location, url).href, redirects + 1));
+        return;
+      }
+      if (response.statusCode !== 200) { response.resume(); reject(new Error('Release candidate manifest is unavailable.')); return; }
+      let bytes = 0;
+      const chunks = [];
+      response.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > 1024 * 1024) response.destroy(new Error('Release candidate manifest exceeds its limit.'));
+        else chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('aborted', () => reject(new Error('Release candidate response was interrupted.')));
+      response.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (error) { reject(error); }
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('Release candidate request timed out.')));
+    request.on('error', reject);
+  });
+}
+
+async function hashInstaller(file) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+function verifyAuthenticode(file) {
+  return new Promise((resolve, reject) => {
+    const script = `$ErrorActionPreference='Stop'; $s=Get-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}'; ` +
+      `@{status=$s.Status.ToString();thumbprint=$s.SignerCertificate.Thumbprint;subject=$s.SignerCertificate.Subject}|ConvertTo-Json -Compress`;
+    const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    execFile(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { windowsHide: true, timeout: 30000, maxBuffer: 65536 }, (error, stdout) => {
+        if (error) { reject(new Error('Authenticode verification could not complete.')); return; }
+        try { resolve(JSON.parse(stdout)); } catch { reject(new Error('Authenticode verification returned invalid evidence.')); }
+      });
+  });
+}
+
+async function verifyInstaller(file, candidate) {
+  const io = deps?.fsImpl || fs;
+  const stat = io.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== candidate.bytes ||
+      (await (deps?.hashFile || hashInstaller)(file)).toLowerCase() !== candidate.sha256.toLowerCase()) {
+    throw new Error('Installer size or SHA-256 does not match the trusted release candidate.');
+  }
+  if (candidate.signed) {
+    const signature = await (deps?.verifySignature || verifyAuthenticode)(file);
+    const pinned = typeof signature?.thumbprint === 'string' && candidate.signerThumbprints.some((pin) =>
+      typeof pin === 'string' && pin.toLowerCase() === signature.thumbprint.toLowerCase());
+    const subject = typeof signature?.subject === 'string' && candidate.signerSubjects.some((value) =>
+      typeof value === 'string' && value === signature.subject);
+    if (signature?.status !== 'Valid' || (!pinned && !subject)) {
+      throw new Error('Installer Authenticode signature is invalid or its signer is not trusted.');
+    }
+  }
 }
 
 /**
@@ -432,7 +562,7 @@ async function downloadUpdate() {
 }
 
 /**
- * Downloads the Windows installer to a temp file with live progress, then hands
+ * Downloads the Windows installer to a private file with live progress, then hands
  * off to the silent installer. Guarded so repeated clicks share one download.
  */
 function downloadAndInstallWindows() {
@@ -440,8 +570,15 @@ function downloadAndInstallWindows() {
     return downloading;
   }
   downloading = (async () => {
+    let dest;
     try {
-      const dest = path.join(app.getPath('temp'), installerAsset.name);
+      const asset = installerAsset;
+      const candidate = validateCandidate(
+        await (deps?.fetchCandidate || fetchCandidate)(asset.candidateUrl), asset, trustPolicy());
+      const io = deps?.fsImpl || fs;
+      const directory = path.join(app.getPath('userData'), 'updates', randomUUID());
+      io.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      dest = path.join(directory, asset.name);
       setState({
         status: Status.DOWNLOADING,
         percent: 0,
@@ -449,7 +586,7 @@ function downloadAndInstallWindows() {
         total: 0,
         error: null,
       });
-      await downloadFile(installerAsset.url, dest, (transferred, total) => {
+      await (deps?.download || downloadFile)(asset.url, dest, (transferred, total) => {
         setState({
           status: Status.DOWNLOADING,
           transferred,
@@ -459,14 +596,23 @@ function downloadAndInstallWindows() {
               ? Math.max(0, Math.min(100, (transferred / total) * 100))
               : state?.percent ?? 0,
         });
-      });
+      }, candidate.bytes);
+      await verifyInstaller(dest, candidate);
+      if (asset !== installerAsset) throw new Error('The available release changed during download. Retry the current update.');
       installerPath = dest;
+      installerCandidate = candidate;
       downloaded = true;
       setState({ status: Status.DOWNLOADED, percent: 100, error: null });
       // Seamless finish: install + relaunch in the background.
-      runSilentInstall();
+      await runSilentInstall();
     } catch (err) {
-      reportError(err);
+      if (dest) {
+        try { (deps?.fsImpl || fs).rmSync(path.dirname(dest), { recursive: true, force: true }); } catch { /* private failed download */ }
+      }
+      installerPath = null;
+      installerCandidate = null;
+      downloaded = false;
+      reportError(new Error(`${err.message} ${RECOVERY}`));
     }
     return getState();
   })();
@@ -480,9 +626,9 @@ function downloadAndInstallWindows() {
 }
 
 /** Streams a URL to a local file, following redirects and reporting progress. */
-function downloadFile(url, dest, onProgress, redirects = 0) {
+function downloadFile(url, dest, onProgress, maxBytes, redirects = 0) {
   return new Promise((resolve, reject) => {
-    if (redirects > 5) {
+    if (new URL(url).protocol !== 'https:' || redirects > 5) {
       reject(new Error('Too many redirects while downloading the update'));
       return;
     }
@@ -500,29 +646,38 @@ function downloadFile(url, dest, onProgress, redirects = 0) {
         const location = res.headers.location;
         if (status >= 300 && status < 400 && location) {
           res.resume();
-          resolve(downloadFile(location, dest, onProgress, redirects + 1));
+          resolve(downloadFile(new URL(location, url).href, dest, onProgress, maxBytes, redirects + 1));
           return;
         }
-        if (status >= 400) {
+        if (status !== 200) {
           res.resume();
           reject(new Error(`Update download failed with HTTP ${status}`));
           return;
         }
         const total = Number.parseInt(res.headers['content-length'] || '0', 10) || 0;
+        if (total && total !== maxBytes) {
+          res.resume();
+          reject(new Error('Update download length differs from the release candidate'));
+          return;
+        }
         let transferred = 0;
-        const out = fs.createWriteStream(dest);
+        const out = fs.createWriteStream(dest, { flags: 'wx', mode: 0o600 });
         res.on('data', (chunk) => {
           transferred += chunk.length;
+          if (transferred > maxBytes) {
+            const error = new Error('Update download exceeds the release candidate size');
+            out.destroy(error);
+            res.destroy(error);
+            return;
+          }
           try {
             onProgress(transferred, total);
           } catch {
             /* progress reporting must never break the download */
           }
         });
-        res.on('error', reject);
-        out.on('error', reject);
-        out.on('finish', () => out.close(() => resolve()));
-        res.pipe(out);
+        res.on('aborted', () => out.destroy(new Error('Update download was interrupted')));
+        pipeline(res, out, (error) => error ? reject(error) : resolve());
       },
     );
     req.on('timeout', () => req.destroy(new Error('Update download timed out')));
@@ -536,25 +691,35 @@ function downloadFile(url, dest, onProgress, redirects = 0) {
  * electron-updater does internally, but for a manually-fetched asset.
  */
 function runSilentInstall() {
-  if (!isWindows() || !installerPath) {
+  if (installing) return installing;
+  const attempt = performSilentInstall();
+  installing = attempt;
+  void attempt.then(() => { if (installing === attempt) installing = null; });
+  return attempt;
+}
+
+async function performSilentInstall() {
+  if (!isWindows() || !installerPath || !installerCandidate) {
     return false;
   }
+  const file = installerPath;
+  const candidate = installerCandidate;
   try {
+    await verifyInstaller(file, candidate);
+    if (typeof deps?.beforeInstall !== 'function' || await deps.beforeInstall() !== true) {
+      throw new Error('Backend shutdown was not confirmed.');
+    }
     // Surface the install phase so the banner animates an honest "Installing…"
     // state instead of a frozen 100% bar while NSIS swaps the binaries.
     setState({ status: Status.INSTALLING, percent: 100, error: null });
-    const child = spawn(installerPath, ['/S', '--force-run'], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.on('error', (err) => {
-      log(`silent install spawn error: ${err}`);
-      setState({
-        status: Status.DOWNLOADED,
-        error: 'Automatic install could not start. Retry to install the downloaded update.',
+    await (deps?.launchInstaller || ((file) => new Promise((resolve, reject) => {
+      const child = spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('error', reject);
+      child.once('spawn', () => {
+        child.unref();
+        resolve();
       });
-    });
-    child.unref();
+    })))(file);
     // The installer is attaching; tell the UI we're about to relaunch so it can
     // show a calm "Restarting…" message with a spinner right up to the quit.
     setState({ status: Status.RESTARTING, percent: 100, error: null });
@@ -569,9 +734,10 @@ function runSilentInstall() {
     return true;
   } catch (err) {
     log(`silent install error: ${err}`);
+    try { deps?.onInstallFailure?.(); } catch { /* recovery cannot hide the install error */ }
     setState({
       status: Status.DOWNLOADED,
-      error: 'Automatic install could not start. Retry to install the downloaded update.',
+      error: `Automatic installation could not start or could not be verified. ${RECOVERY} If the backend has stopped, restart the app before retrying.`,
     });
     return false;
   }
@@ -590,10 +756,10 @@ function installNow() {
   }
   if (isWindows() && installerAsset) {
     if (installerPath) {
-      return Promise.resolve(runSilentInstall());
+      return runSilentInstall();
     }
     return downloadAndInstallWindows()
-      .then(() => true)
+      .then(() => getState().status === Status.RESTARTING)
       .catch(() => false);
   }
   if (installing) {
@@ -643,5 +809,9 @@ module.exports = {
   // Exported for potential reuse/testing.
   isNewer,
   newestRelease,
+  pickWindowsInstaller,
+  validateCandidate,
+  verifyInstaller,
+  downloadFile,
   Status,
 };

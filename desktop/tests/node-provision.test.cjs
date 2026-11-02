@@ -64,17 +64,28 @@ function harness({ platform = 'win32', arch = 'x64', env = {}, versions = {}, ru
 }
 
 test('accepts an explicit CW_NODE_BIN override that runs a usable Node', async () => {
-  const { provisioner } = harness({ env: { CW_NODE_BIN: '/opt/custom/node' }, versions: { '/opt/custom/node': 'v24.5.0' } });
+  const { provisioner } = harness({ env: { CW_NODE_BIN: '/opt/custom/node' }, versions: { '/opt/custom/node': 'v24.20.0' } });
   assert.equal(await provisioner.ensureNode(), '/opt/custom/node');
 });
 
 test('ignores a CW_NODE_BIN override that is too old and falls back', async () => {
   const { provisioner } = harness({
     env: { CW_NODE_BIN: '/opt/old/node' },
-    versions: { '/opt/old/node': 'v20.1.0', node: 'v24.9.0' },
+    versions: { '/opt/old/node': 'v20.1.0', node: 'v24.20.0' },
   });
   // Too-old override is rejected; a matching system Node is used instead.
   assert.equal(await provisioner.ensureNode(), 'node');
+});
+
+test('unsupported override/system versions cannot bypass the supported Node 24.20 runtime floor', async () => {
+  for (const version of ['v22.5.0', 'v22.15.0', 'v22.16.0', 'v24.19.9']) {
+    const { provisioner, events } = harness({
+      env: { CW_NODE_BIN: 'old-node' },
+      versions: { 'old-node': version, node: version, default: 'v24.20.0' },
+    });
+    assert.equal(await provisioner.ensureNode(), provisioner.managedBinary);
+    assert.ok(events.some((event) => event.phase === 'download'));
+  }
 });
 
 test('reuses an already-provisioned managed runtime without downloading', async () => {
@@ -96,7 +107,7 @@ test('reuses an already-provisioned managed runtime without downloading', async 
 });
 
 test('uses a system Node whose major matches the required ABI', async () => {
-  const { provisioner } = harness({ versions: { node: 'v24.19.0' } });
+  const { provisioner } = harness({ versions: { node: 'v24.20.0' } });
   assert.equal(await provisioner.ensureNode(), 'node');
 });
 

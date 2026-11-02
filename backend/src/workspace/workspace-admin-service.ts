@@ -15,6 +15,7 @@ import type { McpUsageRepo } from '../mcp-usage/mcp-usage-contract.js';
 import type { MetaOperationRepo } from '../meta/meta-operation-contract.js';
 import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
 import type { Clock } from '../kernel/clock.js';
+import { passthroughUnitOfWork, type UnitOfWork } from '../persistence/unit-of-work.js';
 import type {
   RetainedUsageWriter,
   RetentionReason,
@@ -101,6 +102,8 @@ export interface WorkspaceAdminDeps {
   retainedUsage?: RetainedUsageWriter;
   /** Optional: timestamps retention rows; required alongside `retainedUsage`. */
   clock?: Pick<Clock, 'isoNow'>;
+  /** Makes a session purge's ledger-summarize and live-row deletes one atomic step. */
+  unitOfWork?: UnitOfWork;
   metaUsage?: Pick<MetaUsageRepo, 'deleteByFeature' | 'deleteBySession'>;
   metaOperations?: Pick<MetaOperationRepo, 'deleteByFeature' | 'deleteBySession'>;
   /** Optional: purges proxy-measured MCP server usage on feature/session delete. */
@@ -212,27 +215,30 @@ export function createWorkspaceAdmin(deps: WorkspaceAdminDeps): WorkspaceAdmin {
     // purge it (which would leave a stray row and resurrect the feature).
     deps.liveUsage?.release(sessionId);
     deps.terminals.close(sessionId);
-    // Summarize the session's usage into the durable ledger BEFORE deleting the
-    // live rows, so deletion prunes history without shrinking month/year totals.
-    if (deps.retainedUsage && deps.clock) {
-      deps.retainedUsage.summarizeSession({
-        sessionId,
-        featureId: session.featureId,
-        featureName: featureNameOf(session.featureId),
-        sessionKind: session.kind,
-        scope: session.scope ?? 'feature',
-        reason,
-        retainedAt: deps.clock.isoNow(),
-      });
-    }
-    deps.usageCaptures?.deleteBySession(sessionId);
-    deps.metaUsage?.deleteBySession(sessionId);
-    deps.metaOperations?.deleteBySession(sessionId);
-    deps.mcpUsage?.deleteBySession(sessionId);
-    deps.plannerLinks?.clearLaunchBySession(sessionId);
-    deps.usage.deleteBySession(sessionId);
-    deps.sessionFiles.deleteBySession(sessionId);
-    deps.sessionSummaries?.delete(sessionId);
+    // Summarize the session's usage into the durable ledger and delete the live
+    // rows in ONE atomic step: a failure in between must never leave both the
+    // retained and live copies counted. Synchronous, so no await is inside it.
+    (deps.unitOfWork ?? passthroughUnitOfWork).run(() => {
+      if (deps.retainedUsage && deps.clock) {
+        deps.retainedUsage.summarizeSession({
+          sessionId,
+          featureId: session.featureId,
+          featureName: featureNameOf(session.featureId),
+          sessionKind: session.kind,
+          scope: session.scope ?? 'feature',
+          reason,
+          retainedAt: deps.clock.isoNow(),
+        });
+      }
+      deps.usageCaptures?.deleteBySession(sessionId);
+      deps.metaUsage?.deleteBySession(sessionId);
+      deps.metaOperations?.deleteBySession(sessionId);
+      deps.mcpUsage?.deleteBySession(sessionId);
+      deps.plannerLinks?.clearLaunchBySession(sessionId);
+      deps.usage.deleteBySession(sessionId);
+      deps.sessionFiles.deleteBySession(sessionId);
+      deps.sessionSummaries?.delete(sessionId);
+    });
     await deps.transcripts.delete(sessionId);
   }
 

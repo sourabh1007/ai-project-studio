@@ -6,7 +6,7 @@ import type { McpBuiltinSetup } from './agency-mcp-builtin-setup.js';
 import { mergeBuiltinSources } from './mcp-builtin-sources.js';
 import type { McpBuiltinRuntime } from './mcp-builtin-runtime.js';
 import type { McpAuthenticationJobs } from './mcp-authentication-jobs.js';
-import { nativeToolInspection } from './native-mcp-auth.js';
+import { nativeAuthenticationPrompt, nativeToolInspection, NATIVE_AUTH_INTERRUPTED_MESSAGE } from './native-mcp-auth.js';
 import { mcpCommandPreview } from './mcp-command-preview.js';
 import { mcpObservationKey, observedMcpAuth } from './mcp-auth-observations.js';
 import type { McpOptionsProvider } from './agency-mcp-options.js';
@@ -61,6 +61,7 @@ export interface McpCategory {
 
 export interface McpCategoryServiceDeps {
   categories: McpCategory[];
+  categoryVisible?: (id: string) => boolean;
   enabled: () => boolean;
   tools: McpToolInspector;
   probeTimeoutMs: number;
@@ -209,7 +210,8 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     });
   }
 
-  function authenticationCapability(state: NonNullable<McpServerEntry['authState']>['state']) {
+  function authenticationCapability(state: NonNullable<McpServerEntry['authState']>['state'], interrupted = false) {
+    if (interrupted) return { supported: false, reason: NATIVE_AUTH_INTERRUPTED_MESSAGE };
     const required = state === 'required' || state === 'expired';
     return {
       supported: !!deps.authenticationJobs && state !== 'ready',
@@ -225,7 +227,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
   function category(id: string): McpCategory {
     if (!deps.enabled()) throw new ValidationError('MCP server management is disabled');
     const found = deps.categories.find((item) => item.info.id === id);
-    if (!found) throw new NotFoundError(`Unknown MCP category '${id}'`);
+    if (!found || deps.categoryVisible?.(id) === false) throw new NotFoundError(`Unknown MCP category '${id}'`);
     return found;
   }
 
@@ -266,10 +268,10 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     const def = category(id);
     if (id === 'studio') {
       const server = studioEntry();
-      return { providerId: id, configPath: server.source!, exists: true, servers: [server], capabilities: server.capabilities, notices: [LIFECYCLE_NOTICE] };
+      return { providerId: id, inspectionTimeoutMs: deps.probeTimeoutMs + 5000, configPath: server.source!, exists: true, servers: [server], capabilities: server.capabilities, notices: [LIFECYCLE_NOTICE] };
     }
     if (def.unavailableReason) {
-      return { providerId: id, configPath: def.sources[0].path, exists: false, servers: [],
+      return { providerId: id, inspectionTimeoutMs: deps.probeTimeoutMs + 5000, configPath: def.sources[0].path, exists: false, servers: [],
         capabilities: capabilities(Object.fromEntries(OPERATIONS.map((op) => [op, def.unavailableReason]))),
         notices: [def.unavailableReason] };
     }
@@ -288,8 +290,8 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
           notices.push('Exclusive managed MCP configuration is present. Ordinary user/project configuration is suppressed and cannot be edited here.');
         }
       } catch {
-        return { providerId: id, configPath: source.path, exists: false, servers: [], capabilities: capabilities({}),
-          notices: ['Exclusive managed configuration cannot be read. Ordinary source edits are blocked until its policy is verified.'] };
+        return { providerId: id, inspectionTimeoutMs: deps.probeTimeoutMs + 5000, configPath: source.path, exists: false, servers: [], capabilities: capabilities({}),
+          notices: ['Exclusive managed configuration cannot be read. Ordinary source edits are blocked until its policy is verified. Ask your administrator to repair or grant access to this managed source; administrator policy and native safety controls will not be bypassed.'] };
       }
     }
     let disabled = new Set<string>();
@@ -300,7 +302,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
         reads.set(source.path, read);
         disabled = disabledNames(await read, source.segments);
       } catch {
-        return { providerId: id, configPath: source.path, exists: false, servers: [], capabilities: capabilities({}),
+        return { providerId: id, inspectionTimeoutMs: deps.probeTimeoutMs + 5000, configPath: source.path, exists: false, servers: [], capabilities: capabilities({}),
           notices: ['Native disabled-server settings cannot be read reliably. Use the native CLI to inspect and repair configuration.'] };
       }
     }
@@ -393,7 +395,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
             entry.authState = structuredClone(authObservations.get(authKey(id, entry, canonical, runtime.launch)) ?? {
               state: 'unknown', checkedAt: null, message: 'Not checked. Configuration does not establish authentication state.',
             });
-            entry.authentication = authenticationCapability(entry.authState.state);
+            entry.authentication = authenticationCapability(entry.authState.state, entry.authState.interrupted);
           }
           entry.capabilities!.tools = installed && entry.enabled !== false && runtime.supported
             ? { supported: true, reason: `${entry.catalog ? 'Explicit default-options probe; this does not configure the built-in. ' : ''}Native startup may initiate its own sign-in flow; a short probe will close its process. Tool inventory does not establish authorization of individual tools.` }
@@ -410,7 +412,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
       }
     }
     return {
-      providerId: id, configPath: sources[0].path, exists, servers: logicalServers,
+      providerId: id, inspectionTimeoutMs: deps.probeTimeoutMs + 5000, configPath: sources[0].path, exists, servers: logicalServers,
       capabilities: primaryAvailable ? sourceCapabilities(sources[0]) :
         capabilities(Object.fromEntries(OPERATIONS.map((op) => [op, 'The primary configuration source is unavailable or invalid. Repair it before editing.']))),
       notices,
@@ -469,16 +471,18 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
     if (entry.origin === 'app') return entry;
     if (activeProbes >= deps.maxConcurrentProbes) throw new ValidationError('MCP probe capacity is busy. Wait for the current probes to finish.');
     activeProbes += 1;
+    let cleanupUnconfirmed = false;
     try {
       const runtime = entry.builtinName ? category(id).builtinRuntime!.resolve(entry.builtinName, nativeConfiguration(entry)) : undefined;
       if (runtime && !runtime.supported) throw new ValidationError(runtime.reason);
       const result = await deps.tools.inspect({
         serverName: entry.displayName!, spec: runtime?.launch ?? entry.spec, timeoutMs: deps.probeTimeoutMs,
       });
+      cleanupUnconfirmed = result.cleanupUnconfirmed === true;
       const server = inspectedEntry(id, entry, source, result, !!runtime, runtime?.launch, runtime?.canonicalName);
       inspections.set(`${id}/${name}`, server);
       return server;
-    } finally { activeProbes -= 1; }
+    } finally { if (!cleanupUnconfirmed) activeProbes -= 1; }
   }
 
   function inspectedEntry(id: string, entry: McpServerEntry, source: McpCategorySource, raw: McpToolInspection, native: boolean, launch?: Record<string, unknown>, canonical?: string): McpServerEntry {
@@ -502,7 +506,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
         ...entry,
         tools: result.tools.map((tool) => ({ ...tool, enabled: filtered === null || filtered.includes(tool.name) })),
         toolDiscovery: { ...result, message: [PROBE_NOTICE, result.message].filter(Boolean).join(' '), output: [] },
-        ...(native ? { authentication: authenticationCapability(entry.authState!.state) } : {}),
+        ...(native ? { authentication: authenticationCapability(entry.authState!.state, entry.authState!.interrupted) } : {}),
       };
       return server;
   }
@@ -512,7 +516,7 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
   }
 
   return {
-    listProviders: () => deps.categories.map((item) => ({
+    listProviders: () => deps.categories.filter((item) => deps.categoryVisible?.(item.info.id) !== false).map((item) => ({
       ...item.info,
       capabilities: item.unavailableReason ? capabilities(Object.fromEntries(OPERATIONS.map((op) => [op, item.unavailableReason]))) :
         item.info.id === 'studio' ? studioEntry().capabilities : sourceCapabilities(item.sources[0]),
@@ -539,18 +543,24 @@ export function createMcpCategoryService(deps: McpCategoryServiceDeps): McpServi
       const runtime = def.builtinRuntime.resolve(entry.builtinName, nativeConfiguration(entry));
       if (!runtime.supported) throw new ValidationError(runtime.reason);
       const observation = authObservations.get(authKey(id, entry, runtime.canonicalName ?? entry.builtinName, runtime.launch));
-      if (!authenticationCapability(observation?.state ?? 'unknown').supported) {
-        throw new ValidationError('Tool inventory already succeeded for this configuration. Run a new explicit tools check if authentication may have changed.');
+      const capability = authenticationCapability(observation?.state ?? 'unknown', observation?.interrupted);
+      if (!capability.supported) {
+        throw new ValidationError(capability.reason);
       }
       return deps.authenticationJobs.start({
         owner: `${id}/${name}`, serverName: name,
         run: async (signal, onProgress) => {
+          let challengeObserved = false;
           const result = await deps.tools.inspect({
             serverName: entry.displayName!, spec: runtime.launch,
             timeoutMs: deps.authenticationTimeoutMs ?? deps.probeTimeoutMs,
-            signal, onProgress,
+            signal, onProgress: (output) => {
+              challengeObserved ||= nativeAuthenticationPrompt(output).authUrl !== null;
+              onProgress(output);
+            },
           });
-          const server = signal.aborted ? entry : inspectedEntry(id, entry, source, result, true, runtime.launch, runtime.canonicalName);
+          const observed = result.status === 'ok' && challengeObserved ? { ...result, authenticationInterrupted: true } : result;
+          const server = signal.aborted ? { ...entry, toolDiscovery: observed } : inspectedEntry(id, entry, source, observed, true, runtime.launch, runtime.canonicalName);
           if (!signal.aborted) inspections.set(`${id}/${name}`, server);
           return server;
         },

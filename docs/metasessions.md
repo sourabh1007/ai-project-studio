@@ -8,6 +8,13 @@ analysis, PR reviews, monitors, and the New Task agent — runs on metasessions.
 > Not the interactive terminal (that is a live `node-pty` session the user
 > types into). A metasession has no terminal; it runs a prompt and returns text.
 
+Interactive availability does not guarantee automated execution. Agency
+metasessions are currently blocked by native tool-isolation limits; Copilot and
+Claude preflight can also refuse unsafe/uninspectable configuration. Claude
+headless runs additionally require operator-owned API/cloud credentials.
+These failures do not authorize a silent provider switch or weaker safety flags.
+See [headless tool isolation](adding-a-provider.md#headless-tool-isolation).
+
 ## The MetaRunner port
 
 Every AI feature depends on one small port, never the launcher:
@@ -43,7 +50,9 @@ feature ─▶ owned ─▶ recording ─▶ pooled ─▶ warm pool (ACP hosts)
 | **cold** | `meta/meta-runner.ts` | Spawns a fresh headless CLI session on demand. |
 
 The warm pool is capacity-limited and demand-driven; `GET /meta/pools` and
-**Settings ▸ Metasession** expose live ready/warming counts and let you resize.
+**Settings ▸ Metasession** expose live ready/warming counts and supported pool
+target changes. Saved general capacity/admission limits remain restart-gated;
+a successful save alone does not prove a running process was retired.
 
 ## Internal scope & IDE AI
 

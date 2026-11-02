@@ -1,8 +1,9 @@
 # Integration qualification
 
 This matrix maps the app's user-facing capability groups to executable tests.
-Unit and component tests still cover individual branches; the suites below prove
-that real services, persistence, transports, and renderer composition cooperate.
+Unit and component tests cover individual branches; the suites below exercise
+their named service, persistence, transport and renderer boundaries. They do
+not by themselves prove the complete assembled desktop/native adapter path.
 External cloud services and installed AI CLIs are replaced with deterministic
 ports unless the row explicitly names a native smoke test.
 
@@ -18,7 +19,7 @@ ports unless the row explicitly names a native smoke test.
 | PR feature, analysis, change graph, and cleanup | `backend/src/integration/pr-review-journey.integration.test.ts` creates and reopens a persisted PR feature, generates/stores its review and deterministic graph, records usage, and verifies deletion cleanup. Language analyzers have fixture tests in `backend/src/pr-review/*-analyzer.test.ts`. |
 | Review Board | `backend/src/integration/pr-review-journey.integration.test.ts` discovers and analyzes multiple perspectives and proves the final retry escapes an unhealthy warm session through the forced-cold route. Renderer sign-off and identity handling are covered by `ui/src/features/review-board-page/*.test.*`. |
 | PR comments, approval, and description export | `backend/src/integration/pr-review-journey.integration.test.ts` exercises the provider-neutral services through deterministic gateways. GitHub and Azure request/response contracts are covered by `backend/src/repo/*-pr-comments.test.ts`, `*-pr-approval.test.ts`, and `*-pr-description.test.ts`. |
-| MCP server configuration and live reload | `backend/src/integration/mcp-management.integration.test.ts` persists real MCP configuration, discovers/toggles tools, restarts a server, and verifies reload of an active-session boundary. |
+| Legacy MCP service/configuration boundary | `backend/src/integration/mcp-management.integration.test.ts` exercises the legacy service with deterministic inspection/reload ports. It does **not** establish live reload in the mounted category manager. Current source/capability behavior is covered separately by `backend/src/mcp/mcp-category-service.test.ts`, controller and `ui/src/features/mcp/` tests. |
 | Usage, credits, aggregation, detail, IDE AI, and SSE | `backend/src/integration/usage-meta.integration.test.ts` records normalized usage through real credit calculation and SQLite persistence, reads aggregate/detail state, and verifies live event forwarding. Renderer stream behavior is covered by `ui/src/hooks/use-usage-stream.test.tsx`. |
 | Saved metasession operations | `backend/src/integration/usage-meta.integration.test.ts` persists an operation from creation through completion and reads its durable result. The renderer is covered by `ui/src/features/meta-operations/meta-operations-section.test.tsx`. |
 | Shared warm metasession pool | `backend/src/integration/warm-pool.integration.test.ts` verifies warm routing, forced-cold routing, live resize, and status through deterministic ACP clients. Pool mechanics and admission failure paths remain exhaustively covered under `backend/src/meta/acp/`. |
@@ -51,12 +52,26 @@ machine configuration. Release qualification must separately exercise:
 
 - live GitHub and Azure DevOps authentication, listing, comments, approval, and
   description updates against non-production test resources;
-- installed Copilot and Agency CLI launch, model selection, usage emission, and
-  a real warm metasession becoming busy;
-- real MCP child-server authentication and tool invocation;
+- installed Copilot, authorized optional Agency and native Claude v2 launch,
+  active-CLI setup/switch notification and remembered/deferred selection,
+  native model selection, history, usage emission and a real warm turn;
+- Claude interactive subscription authentication versus separately authorized
+  headless API/cloud credentials, and unavailable native AIC/plan quota;
+- headless tool-isolation refusals: Agency automated turns remain blocked while
+  interactive use is available; Copilot plugin/additional-source ambiguity and
+  Claude managed MCP policy must fail closed with actionable guidance;
+- current assembled MCP category/controller/renderer discovery and native
+  authentication/invocation; Windows spaced argv, configured Agency executable
+  detection, provider attribution without Agency opt-in, configured discovery
+  deadlines and confirmed native cancellation;
 - OS confirmation dialogs, file reveal, credential stores, and clipboard formats;
-- signed update download, installer handoff, and rollback on every shipped OS.
+- qualified Windows update manifest/hash/pinned-signer enforcement and installer
+  handoff, macOS guided installation, and upgrade/restore on every shipped OS;
+- Electron 44.9.3 native clipboard permission/format handling, macOS 13+ and
+  architecture-specific packaged runtime behavior.
 
-These are explicit environment checks, not untested application logic. Their
-request construction, state transitions, failure handling, and persistence are
-covered by the automated suites above.
+These are explicit environment checks, not claims of successful native/vendor
+verification. Deterministic tests cover named request/state/persistence contracts;
+100% backend coverage excludes configured IO surfaces and UI coverage targets
+`src/lib/**/*.ts`, so neither gate certifies all native paths. Record exact
+source/artifact hashes and actual results before declaring release qualification.

@@ -19,7 +19,11 @@ export const newTaskModule: AgentUiModule = {
   component: lazy(() =>
     import('../../features/new-task-page/new-task-page.js').then((m) => ({
       default: ({ ctx }: AgentUiProps) => (
-        <m.NewTaskPage feature={ctx.feature} attachmentId={ctx.attachmentId} />
+        <m.NewTaskPage
+          feature={ctx.feature}
+          attachmentId={ctx.attachmentId}
+          openSession={ctx.openSession}
+        />
       ),
     })),
   ),

@@ -8,7 +8,7 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { LogRecord, LogSink } from '../kernel/logger.js';
+import { guardSink, type LogRecord, type LogSink } from '../kernel/logger.js';
 import {
   createDailyLogPathStrategy,
   loggingDefaults,
@@ -93,6 +93,15 @@ const DEFAULT_SERIALIZER_DEPTH = 6;
 const DEFAULT_SERIALIZER_NODES = 128;
 const DEFAULT_SERIALIZER_ARRAY_ITEMS = 64;
 const DEFAULT_SERIALIZER_OBJECT_PROPERTIES = 64;
+
+const SENSITIVE_KEY_PATTERN =
+  /(?:apikey|password|passwd|passphrase|secret|token|authorization|cookie|credentials?|privatekey|accesskey|sessionkey)$/u;
+const REDACTED_VALUE = '[redacted]';
+
+// Normalizes camelCase, snake_case and kebab-case so apiKey, api_key and API-KEY all match.
+function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(key.toLowerCase().replace(/[^a-z0-9]/gu, ''));
+}
 
 class JsonOverflowError extends Error {}
 
@@ -202,7 +211,11 @@ function appendEnumerableObject(
     }
     appendJsonString(state, key);
     appendJsonPart(state, ':');
-    appendJsonValue(state, descriptor.value, depth + 1, ctx);
+    if (descriptor.value !== null && isSensitiveKey(key)) {
+      appendJsonString(state, REDACTED_VALUE);
+    } else {
+      appendJsonValue(state, descriptor.value, depth + 1, ctx);
+    }
     wrote = true;
   }
   appendJsonPart(state, '}');
@@ -599,7 +612,22 @@ function buildManagedLogFile(
   };
 }
 
+/**
+ * Writes already-formatted JSONL lines with the same rotation, retention and path safety as the sink.
+ * Returns true only when the line was appended; failure reports are de-duplicated, so callers needing
+ * delivery proof must use this result rather than the failure hook.
+ */
+export type FileLogLineWriter = (line: string, at: Date) => boolean;
+
 export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
+  return createFileLogEngine(deps).sink;
+}
+
+export function createFileLogLineWriter(deps: FileLogSinkDeps): FileLogLineWriter {
+  return createFileLogEngine(deps).writeLine;
+}
+
+function createFileLogEngine(deps: FileLogSinkDeps): { sink: LogSink; writeLine: FileLogLineWriter } {
   const now = deps.now ?? (() => new Date());
   const append = deps.append ?? appendFileSync;
   const ensureDir =
@@ -803,12 +831,13 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
     return pathStrategy!.resolve(date, rotation);
   };
 
-  return (record) => {
+  const targetFor = (at: Date): string => pathStrategy
+    ? pathStrategy.resolve(at, 0)
+    : deps.filePath;
+
+  const sink: LogSink = (record) => {
     const at = now();
-    const targetPath = pathStrategy
-      ? pathStrategy.resolve(at, 0)
-      : deps.filePath;
-    const directory = dirname(targetPath);
+    const targetPath = targetFor(at);
     let line: string;
     try {
       line = formatLogLine(record, at, limits.maxRecordBytes);
@@ -826,12 +855,18 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
       });
       return;
     }
+    writeLine(line, at);
+  };
+
+  function writeLine(line: string, at: Date): boolean {
+    const targetPath = targetFor(at);
+    const directory = dirname(targetPath);
     if (!ensureDirectoryReady(directory)) {
-      return;
+      return false;
     }
     const targetState = readTarget(targetPath, pathStrategy !== null);
     if (!targetState) {
-      return;
+      return false;
     }
     const lineBytes = utf8Bytes(line);
     const willCreateTarget = pathStrategy !== null && !targetState.exists;
@@ -845,7 +880,7 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
       const protectedPaths = targetState.exists && !replaceSingleFile ? [targetPath] : [];
       const additionalManagedFiles = willCreateTarget || willOverflowTarget ? 1 : 0;
       if (!enforceRetention(directory, protectedPaths, additionalManagedFiles)) {
-        return;
+        return false;
       }
       if (replaceSingleFile) {
         const remainingTarget = readTarget(targetPath, true);
@@ -856,7 +891,7 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
             managed: true,
             fileName: basename(directory),
           });
-          return;
+          return false;
         }
         targetState.exists = false;
         targetState.size = 0;
@@ -874,12 +909,12 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
         managed: false,
         fileName: basename(targetPath),
       });
-      return;
+      return false;
     }
     if (pathStrategy && targetState.exists && willOverflowTarget) {
       const archivePath = nextArchivePath(directory, at);
       if (!archivePath) {
-        return;
+        return false;
       }
       try {
         rename(targetPath, archivePath);
@@ -892,7 +927,7 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
           managed: true,
           fileName: basename(targetPath),
         });
-        return;
+        return false;
       }
     }
     try {
@@ -906,14 +941,19 @@ export function createFileLogSink(deps: FileLogSinkDeps): LogSink {
         managed: pathStrategy !== null,
         fileName: basename(targetPath),
       });
-      return;
+      return false;
     }
-  };
+    return true;
+  }
+
+  return { sink, writeLine };
 }
 
+/** Fans out to every sink; one failing sink is reported but never starves the others. */
 export function combineSinks(...sinks: LogSink[]): LogSink {
+  const guarded = sinks.map((sink, index) => guardSink(sink, `sink-${index}`));
   return (record) => {
-    for (const sink of sinks) {
+    for (const sink of guarded) {
       sink(record);
     }
   };

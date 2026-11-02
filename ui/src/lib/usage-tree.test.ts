@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildUsageTree } from './usage-tree.js';
+import { buildUsageTree, usageReliability, usageTotalsByNode } from './usage-tree.js';
 import type { GroupInfo, SessionBreakdown } from './types.js';
 
 function session(
@@ -32,6 +32,15 @@ function session(
 }
 
 describe('buildUsageTree', () => {
+  it('does not label mixed known and unavailable native charges as a complete zero or partial total', () => {
+    const unknown = { ...session('claude', null, 'user', 0), cost: null, credits: null, nanoAiu: null };
+    for (const members of [
+      [unknown, session('known', null, 'user', 100)],
+      [session('known', null, 'user', 100), unknown, session('later', null, 'user', 0)],
+    ]) {
+      expect(buildUsageTree([], members).totals).toMatchObject({ cost: null, credits: null, nanoAiu: null });
+    }
+  });
   it('returns an empty feature root for empty input', () => {
     expect(buildUsageTree([], [])).toEqual({
       type: 'feature',
@@ -155,4 +164,70 @@ describe('buildUsageTree', () => {
       totals: { sessions: 1 },
     });
   });
-});
+
+  it('keeps known partial amounts and reliability through nested groups', () => {
+    const groups = [
+      { id: 'a', name: 'A', kind: 'subcategory', parentGroupId: null },
+      { id: 'b', name: 'B', kind: 'subcategory', parentGroupId: 'a' },
+    ] as GroupInfo[];
+    const unknown = { ...session('c', 'b', 'user', 0), cost: null, credits: null, nanoAiu: null };
+    const partial = { ...session('p', 'b', 'ide', 0), cost: null, credits: null, nanoAiu: null,
+      knownCost: 1, knownCredits: 2, knownNanoAiu: 30, unavailableCharges: 1, usdEstimate: 0.5 };
+    const tree = buildUsageTree(groups, [unknown, partial, session('k', 'a', 'user', 100)]);
+    const byId = usageTotalsByNode(tree);
+    expect(byId.get('b')).toMatchObject({ sessions: 2, credits: null, knownCredits: 2, knownNanoAiu: 30, unavailableCharges: 2, usdEstimate: 0.5 });
+    expect(byId.get('a')).toMatchObject({ sessions: 3, knownCredits: 2.2, knownNanoAiu: 130, unavailableCharges: 2 });
+    expect(byId.get('feature')).toMatchObject({ sessions: 3, unavailableCharges: 2 });
+    expect(usageReliability(byId.get('b')!)).toBe('partial');
+    expect(usageReliability({ ...byId.get('b')!, knownCredits: 0, knownNanoAiu: 0 })).toBe('unavailable');
+    expect(usageReliability(byId.get('feature')!)).toBe('partial');
+    expect(usageReliability(buildUsageTree([], []).totals)).toBe('none');
+    expect(usageReliability(buildUsageTree([], [session('k', null, 'user', 1)]).totals)).toBe('complete');
+    expect(buildUsageTree([], [session('k', null, 'user', 1)]).totals).not.toHaveProperty('unavailableCharges');
+  });
+
+  it('never drops or double counts usage for cyclic, self-parented, or duplicate groups/sessions', () => {
+    const groups = [
+      { id: 'a', name: 'A', kind: 'subcategory', parentGroupId: 'b' },
+      { id: 'b', name: 'B', kind: 'subcategory', parentGroupId: 'a' },
+      { id: 's', name: 'S', kind: 'subcategory', parentGroupId: 's' },
+      { id: 's', name: 'S again', kind: 'subcategory', parentGroupId: null },
+    ] as GroupInfo[];
+    const tree = buildUsageTree(groups, [
+      session('x', 'a', 'user', 10), session('x', 'a', 'user', 10), session('y', 's', 'user', 10),
+    ]);
+    expect(tree.totals.sessions).toBe(2);
+    expect(tree.totals.nanoAiu).toBe(20);
+    expect([...usageTotalsByNode(tree).keys()].sort()).toEqual(['a', 'b', 'feature', 's']);
+  });
+  it('folds retained deleted-session usage into the root without a child row', () => {
+    const retained = { sessions: 2, inputTokens: 7, outputTokens: 1, reasoningOutputTokens: 0, cost: null, credits: null, nanoAiu: null,
+      knownCost: 0, knownCredits: 3, knownNanoAiu: 9, unavailableCharges: 1 };
+    const tree = buildUsageTree([], [session('k', null, 'user', 100)], retained);
+    expect(tree.children).toHaveLength(1);
+    expect(tree.totals).toMatchObject({ sessions: 3, inputTokens: 17, nanoAiu: null, knownNanoAiu: 109, knownCredits: 3.2, unavailableCharges: 1 });
+    expect(tree.retained).toMatchObject({ sessions: 2, activeMs: 0 });
+    expect(buildUsageTree([], [], { ...retained, sessions: 0 })).not.toHaveProperty('retained');
+    const complete = buildUsageTree([], [session('k', null, 'user', 100)], { ...retained, cost: 0, credits: 1, nanoAiu: 5, unavailableCharges: undefined });
+    expect(complete.totals).toMatchObject({ nanoAiu: 105 });
+    expect(complete.totals).not.toHaveProperty('unavailableCharges');
+  });
+  it('classifies reliability without known fields and tolerates cost-only gaps', () => {
+    const base = { sessions: 1, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, cost: 0, credits: null, nanoAiu: null, activeMs: 0 };
+    expect(usageReliability(base)).toBe('unavailable');
+    expect(usageReliability({ ...base, knownNanoAiu: 0, knownCredits: 5 })).toBe('partial');
+    expect(usageReliability({ ...base, knownNanoAiu: 4 })).toBe('partial');
+    const costGap = { ...session('c', null, 'user', 10), cost: null };
+    const retained = { sessions: 1, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, cost: null, credits: 1, nanoAiu: 5 };
+    const tree = buildUsageTree([], [costGap], retained);
+    expect(tree.totals).toMatchObject({ cost: null, credits: 1.2, nanoAiu: 15 });
+    expect(tree.totals).not.toHaveProperty('unavailableCharges');
+    const bare = buildUsageTree([], [{ ...session('m', null, 'user', 1), usdEstimate: 2 }], { ...retained, usdEstimate: 1 });
+    expect(bare.totals.usdEstimate).toBe(3);
+  });
+  it('treats null charges without known amounts as zero lower bounds when merging', () => {
+    const nulls = { ...session('n', null, 'user', 0), credits: null, nanoAiu: null, unavailableCharges: 0 };
+    const retained = { sessions: 1, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, cost: 0, credits: null, nanoAiu: null };
+    const tree = buildUsageTree([], [nulls], retained);
+    expect(tree.totals).toMatchObject({ credits: null, nanoAiu: null });
+  });});

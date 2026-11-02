@@ -4,6 +4,7 @@ import type { McpAuthenticationJob, McpServerEntry } from '../../lib/types.js';
 
 export function useMcpAuthentication(providerId: string, serverName: string, callbacks: {
   onCompleted: (server: McpServerEntry) => void;
+  onObserved?: (server: McpServerEntry) => void;
   onBackgroundError: (message: string) => void;
 }) {
   const api = useApi();
@@ -28,7 +29,7 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
       current.current = null;
       if (pending?.status === 'pending') {
         void api.cancelMcpAuthentication(providerId, serverName, pending.id).catch(() => {
-          handlers.current.onBackgroundError(`Could not confirm cancellation of ${serverName} sign-in. The attempt remains bounded by its expiry.`);
+          handlers.current.onBackgroundError(`Could not confirm cancellation of ${serverName} sign-in. Backend capacity may remain reserved until cleanup is confirmed.`);
         });
       }
     };
@@ -37,6 +38,7 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
   const accept = useCallback((result: McpAuthenticationJob) => {
     current.current = result;
     setJob(result);
+    if (result.server) handlers.current.onObserved?.(result.server);
     if (result.status === 'completed') {
       if (result.server) handlers.current.onCompleted(result.server);
       else setError('The connection ended without a verified tool inventory. Refresh tools to check again.');
@@ -58,7 +60,8 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
   }, [job?.id, job?.expiresAt, job?.status]);
 
   useEffect(() => {
-    if (!job || job.status !== 'pending' || busy || error || expired) return;
+    // Challenge expiry hides credentials, but process cleanup can finish later.
+    if (!job || job.status !== 'pending' || busy || error) return;
     const request = epoch.current;
     let active = true;
     const timer = setTimeout(() => {
@@ -73,7 +76,7 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
         });
     }, 1000);
     return () => { active = false; clearTimeout(timer); };
-  }, [api, providerId, serverName, job, busy, error, expired, accept]);
+  }, [api, providerId, serverName, job, busy, error, accept]);
 
   async function start() {
     if (locked.current || current.current?.status === 'pending') return;
@@ -88,14 +91,14 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
       if (epoch.current !== request) {
         if (result.status === 'pending') {
           await api.cancelMcpAuthentication(providerId, serverName, result.id).catch(() => {
-            handlers.current.onBackgroundError(`Could not confirm cancellation of ${serverName} sign-in after its dialog closed. The attempt remains bounded by its expiry.`);
+            handlers.current.onBackgroundError(`Could not confirm cancellation of ${serverName} sign-in after its dialog closed. Backend capacity may remain reserved until cleanup is confirmed.`);
           });
         }
         return;
       }
       accept(result);
     } catch (err) {
-      if (epoch.current === request) setError(`${err instanceof Error ? err.message : String(err)}. Sign-in was not confirmed; a server-side attempt may remain until expiry.`);
+      if (epoch.current === request) setError(`${err instanceof Error ? err.message : String(err)}. Sign-in was not confirmed; a server-side attempt may remain until cleanup is confirmed.`);
     } finally {
       if (epoch.current === request) {
         locked.current = false;
@@ -115,7 +118,7 @@ export function useMcpAuthentication(providerId: string, serverName: string, cal
       const result = await api.cancelMcpAuthentication(providerId, serverName, pending.id);
       if (epoch.current === request) accept(result);
     } catch (err) {
-      if (epoch.current === request) setError(`Cancellation was not confirmed: ${err instanceof Error ? err.message : String(err)}. The attempt remains bounded by its expiry.`);
+      if (epoch.current === request) setError(`Cancellation was not confirmed: ${err instanceof Error ? err.message : String(err)}. Backend capacity may remain reserved until cleanup is confirmed.`);
     } finally {
       if (epoch.current === request) {
         locked.current = false;

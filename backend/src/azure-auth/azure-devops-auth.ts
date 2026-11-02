@@ -1,3 +1,5 @@
+import { credentialFromRead, type CredentialRead } from '../kernel/credential-read.js';
+
 /**
  * Azure DevOps authentication that mirrors how Visual Studio / Git Credential
  * Manager (GCM) handle sign-in: enable the Windows broker (WAM) so GCM can do
@@ -68,6 +70,7 @@ export interface AzureDevOpsAuth {
    * Azure DevOps REST calls), or null when not signed in.
    */
   token(target: AzureTarget): Promise<string | null>;
+  readToken(target: AzureTarget): Promise<CredentialRead>;
 }
 
 /**
@@ -80,7 +83,10 @@ export function parseAzureTarget(
   input: string | null | undefined,
 ): AzureTarget {
   const fallback: AzureTarget = { host: 'dev.azure.com', org: null };
-  const raw = (input ?? '').trim();
+  const raw = (input ?? '').trim().replace(
+    /^git@ssh\.dev\.azure\.com:v3\//i,
+    'ssh://git@ssh.dev.azure.com/v3/',
+  );
   if (!raw) {
     return fallback;
   }
@@ -104,7 +110,8 @@ export function parseAzureTarget(
     return { host, org: host.split('.')[0] || null };
   }
   if (host === 'dev.azure.com' || host === 'ssh.dev.azure.com') {
-    return { host: 'dev.azure.com', org: segments[0] ?? null };
+    const org = host === 'ssh.dev.azure.com' && segments[0] === 'v3' ? segments[1] : segments[0];
+    return { host: 'dev.azure.com', org: org ?? null };
   }
   return { host, org: segments[0] ?? null };
 }
@@ -188,6 +195,18 @@ export function describeAzureFailure(stderr: string): string {
   return `Azure DevOps sign-in failed: ${firstLine}`;
 }
 
+function readCredentialResult(res: GitRunResult): CredentialRead {
+  if (res.code !== 0) {
+    if (/^(?:fatal:\s*)?Cannot prompt because (?:user interactivity has|terminal prompts have) been disabled\.\s*$/im.test(res.stderr)) {
+      return { state: 'interaction-required' };
+    }
+    return { state: 'unavailable' };
+  }
+  if (/^quit=(?:1|true)\s*$/im.test(res.stdout)) return { state: 'unavailable' };
+  const token = parseCredentialPassword(res.stdout);
+  return token ? { state: 'ready', token } : { state: 'signed-out' };
+}
+
 /** Builds the Azure DevOps auth facade from injected process runners. */
 export function createAzureDevOpsAuth(deps: {
   credential: GitCredentialRunner;
@@ -200,6 +219,7 @@ export function createAzureDevOpsAuth(deps: {
     const res = await deps.credential('get', buildCredentialQuery(target), {
       interactive,
     });
+    if (!interactive) credentialFromRead(readCredentialResult(res));
     if (res.code !== 0) {
       // A silent status check failing just means "not signed in yet"; surface a
       // reason only for an interactive sign-in the user explicitly triggered.
@@ -259,13 +279,14 @@ export function createAzureDevOpsAuth(deps: {
       return { authenticated: false, account: null, message: failure };
     },
     async token(target) {
+      const read = await this.readToken(target);
+      return read.state === 'ready' ? read.token : null;
+    },
+    async readToken(target) {
       const res = await deps.credential('get', buildCredentialQuery(target), {
         interactive: false,
       });
-      if (res.code !== 0) {
-        return null;
-      }
-      return parseCredentialPassword(res.stdout);
+      return readCredentialResult(res);
     },
   };
 }

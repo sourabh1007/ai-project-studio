@@ -1,6 +1,9 @@
 import type { ProcessSpawner } from '../provider/process-kernel/process-spawner.js';
 import type { AgencyDetector } from './agency-detector.js';
 import { agencyInstallCommand } from './agency-install-command.js';
+import type { AgencyBootstrapConfig } from './config.js';
+import { agencyBootstrapConfigSchema, agencyBootstrapDefaults } from './config.js';
+import { boundedProcess, boundedVersion } from '../tools/bounded-execution.js';
 
 /** Lifecycle of a background "keep agency up to date" upgrade run. */
 export type AgencyUpgradePhase =
@@ -41,6 +44,7 @@ export type AgencyInstallEvent =
   | { kind: 'error'; message: string };
 
 export interface AgencyBootstrapDeps {
+  installConfig?: () => AgencyBootstrapConfig;
   platform: NodeJS.Platform;
   detect: AgencyDetector;
   spawner: ProcessSpawner;
@@ -83,20 +87,26 @@ export function createAgencyBootstrapper(
   deps: AgencyBootstrapDeps,
 ): AgencyBootstrapper {
   let upgrade: AgencyUpgradeState = { phase: 'idle' };
+  let active = false;
+  const policy = () => agencyBootstrapConfigSchema.parse(deps.installConfig?.() ?? agencyBootstrapDefaults);
+  const readVersion = () => boundedVersion(deps.readVersion!, policy().versionTimeoutMs);
 
   /** Runs the platform install command once, streaming its output lines. */
   async function runInstall(
     onEvent: (event: AgencyInstallEvent) => void,
   ): Promise<number | null> {
-    const plan = agencyInstallCommand(deps.platform);
+    if (active) return null;
+    const plan = agencyInstallCommand(deps.platform, deps.installConfig?.());
     const handle = deps.spawner.spawn({
       command: plan.command,
       args: plan.args,
       env: deps.env,
     });
+    active = true;
+    void handle.done.finally(() => { active = false; });
     handle.onStdoutLine((line) => onEvent({ kind: 'line', line }));
     handle.onStderrLine((line) => onEvent({ kind: 'line', line }));
-    return await handle.done;
+    return await boundedProcess(handle, policy().installTimeoutMs);
   }
 
   return {
@@ -124,13 +134,13 @@ export function createAgencyBootstrapper(
     },
 
     async upgradeToLatest(onEvent) {
-      const previousVersion = deps.readVersion ? await deps.readVersion() : null;
+      const previousVersion = deps.readVersion ? await readVersion() : null;
       upgrade = { phase: 'upgrading' };
       const code = await runInstall(onEvent);
       const installed = deps.detect();
-      if (code === 0) {
+      if (code === 0 && installed) {
         if (deps.readVersion) {
-          const version = await deps.readVersion();
+          const version = await readVersion();
           const updated =
             version != null &&
             previousVersion != null &&

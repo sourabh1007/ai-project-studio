@@ -18,14 +18,16 @@ export function createRetainedUsageRepo(db: DatabaseSync): RetainedUsageWriter {
       id, feature_id, feature_name, session_id, session_kind, scope, source,
       reason, provider, resolved_model, day, sessions,
       input_tokens, output_tokens, reasoning_output_tokens, cost, credits,
-      nano_aiu, purpose, label, retained_at
+      nano_aiu, usd_estimate, purpose, label, retained_at
     )
     SELECT
       ? || ':cli:' || substr(started_at, 1, 10) || ':' || provider || ':' || resolved_model,
       ?, ?, ?, ?, ?, 'cli', ?, provider, resolved_model, substr(started_at, 1, 10),
       COUNT(DISTINCT session_id),
       SUM(input_tokens), SUM(output_tokens), SUM(reasoning_output_tokens),
-      SUM(cost), SUM(credits), SUM(nano_aiu), NULL, NULL, ?
+      CASE WHEN COUNT(*) = COUNT(cost) THEN SUM(cost) END,
+      CASE WHEN COUNT(*) = COUNT(credits) THEN SUM(credits) END,
+      CASE WHEN COUNT(*) = COUNT(nano_aiu) THEN SUM(nano_aiu) END, SUM(usd_estimate), NULL, NULL, ?
     FROM usage_events
     WHERE session_id = ?
     GROUP BY substr(started_at, 1, 10), provider, resolved_model
@@ -36,7 +38,7 @@ export function createRetainedUsageRepo(db: DatabaseSync): RetainedUsageWriter {
       id, feature_id, feature_name, session_id, session_kind, scope, source,
       reason, provider, resolved_model, day, sessions,
       input_tokens, output_tokens, reasoning_output_tokens, cost, credits,
-      nano_aiu, purpose, label, retained_at
+      nano_aiu, usd_estimate, purpose, label, retained_at
     )
     SELECT
       ? || ':meta:' || substr(captured_at, 1, 10) || ':' || provider_id || ':'
@@ -45,7 +47,7 @@ export function createRetainedUsageRepo(db: DatabaseSync): RetainedUsageWriter {
       provider_id, COALESCE(resolved_model, requested_model), substr(captured_at, 1, 10),
       1,
       COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), 0,
-      0, COALESCE(credits, 0), COALESCE(nano_aiu, 0), purpose, label, ?
+      CASE WHEN credits IS NULL THEN NULL ELSE 0 END, credits, nano_aiu, NULL, purpose, label, ?
     FROM meta_usage_records
     WHERE session_id = ?
   `);

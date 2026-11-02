@@ -22,6 +22,12 @@ function fence(json: string): string {
   return ['```json', json, '```'].join('\n');
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 function stepClock(): Clock {
   let ms = 1_000;
   return {
@@ -493,6 +499,46 @@ describe('bug-bash-service: generate', () => {
 });
 
 describe('bug-bash-service: refine', () => {
+  it.each(['generating', 'running'] as const)('rejects refinement while %s', async (status) => {
+    const { service } = makeService({
+      ...seeded({ status }),
+      runDetailed: async () => { throw new Error('must not launch'); },
+    });
+    await expect(service.refine('a1', [], 'change it')).rejects.toMatchObject({ kind: 'conflict' });
+    expect(() => service.saveInputs('a1', 'f1', { featureInfo: 'NEW', setupInfo: '', otherInfo: '' })).toThrow(/active bug bash/);
+  });
+
+  it.each(['running', 'reported'] as const)('does not overwrite a %s run with a late refinement', async (status) => {
+    const { promise, resolve } = deferred<MetaRunResult>();
+    const { service, repo } = makeService({
+      ...seeded({ status: 'generated', scenarios: [scenario()] }),
+      runDetailed: () => promise,
+    });
+    const refining = service.refine('a1', [], 'change it');
+    const current = { ...service.get('a1')!, status, report: 'User work' };
+    repo.update(current);
+    resolve({
+      text: fence('{"reply":"updated","revised":{"scenarios":[{"title":"STALE","steps":["x"]}]}}'),
+      sessionId: 'refine',
+    });
+    await expect(refining).rejects.toMatchObject({ kind: 'conflict' });
+    expect(service.get('a1')).toEqual(current);
+  });
+
+  it('preserves edits saved while a refinement is in flight at the same timestamp', async () => {
+    const { promise, resolve } = deferred<MetaRunResult>();
+    const { service, repo } = makeService({
+      ...seeded({ status: 'generated', scenarios: [scenario()] }),
+      runDetailed: () => promise,
+    });
+    const refining = service.refine('a1', [], 'change it');
+    const current = { ...service.get('a1')!, scenarios: [scenario({ title: 'User edit' })] };
+    repo.update(current);
+    resolve({ text: '{"reply":"updated","revised":null}', sessionId: 'refine' });
+    await expect(refining).rejects.toMatchObject({ kind: 'conflict' });
+    expect(service.get('a1')).toEqual(current);
+  });
+
   it('rejects a blank message', async () => {
     const { service } = makeService(seeded({ status: 'generated' }));
     await expect(service.refine('a1', [], '   ')).rejects.toThrow(
@@ -578,6 +624,61 @@ describe('bug-bash-service: refine', () => {
 });
 
 describe('bug-bash-service: run', () => {
+  it.each([1, 3])('recovers terminal state and tester evidence after %s failed completion writes', async (failures) => {
+    const repo = seeded({ status: 'generated', scenarios: [scenario()] }).repo;
+    const update = repo.update;
+    let remaining = 0;
+    repo.update = (run) => {
+      if (remaining > 0) {
+        remaining--;
+        throw new Error('database unavailable');
+      }
+      update(run);
+    };
+    const tested = scenario({ status: 'fail', actualOutput: 'Captured repro output', ran: true });
+    const { service } = makeService({
+      repo,
+      team: {
+        run: async () => {
+          remaining = failures;
+          return { scenarios: [tested], agents: [ANALYST], report: 'Saved tester evidence' };
+        },
+      },
+    });
+    const { sink, events } = makeSink();
+    await service.run('a1', sink);
+    expect(events.done).toEqual([]);
+    expect(events.failed).toEqual(['database unavailable']);
+    expect(service.get('a1')).toMatchObject({
+      status: 'failed',
+      report: 'Saved tester evidence',
+      scenarios: [tested],
+      agents: [ANALYST],
+      error: 'database unavailable',
+    });
+    expect(service.get('a1')!.status).toBe('failed');
+    expect(repo.get('a1')!.status).toBe('failed');
+  });
+
+  it('does not resurrect a deleted run while a failed terminal write is pending', async () => {
+    const repo = seeded({ status: 'generated', scenarios: [scenario()] }).repo;
+    const update = repo.update;
+    const { service } = makeService({
+      repo,
+      team: {
+        run: async () => {
+          repo.update = () => { throw new Error('offline'); };
+          return { scenarios: [], agents: [], report: 'Report' };
+        },
+      },
+    });
+    await service.run('a1', makeSink().sink);
+    repo.delete('a1');
+    repo.update = update;
+    expect(service.get('a1')).toBeNull();
+    expect(service.get('a1')).toBeNull();
+  });
+
   it('rejects when no run exists', async () => {
     const { service } = makeService();
     const { sink } = makeSink();

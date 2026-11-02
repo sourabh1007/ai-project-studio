@@ -53,7 +53,12 @@ vi.mock('../review-board-page/review-board-run-store.js', () => ({
 vi.mock('../../agent-host/agent-registry.js', () => ({
   getAgentModule: () => ({
     title: 'Review Board',
-    component: () => <div>Agent view</div>,
+    component: ({ ctx }: { ctx: { openSession?: (session: Session, label: string) => void } }) => (
+      <div>
+        Agent view
+        <button onClick={() => ctx.openSession?.(childSession, 'Agent opened')}>Open from agent</button>
+      </div>
+    ),
   }),
 }));
 
@@ -106,6 +111,14 @@ function createClient() {
   let agents = [attached];
   let repos = [repository];
   return {
+    getProviderBootstrap: vi.fn(async () => ({
+      defaultProvider: 'copilot', selectionRequired: false, providers: [{ id: 'copilot', installed: true }],
+    })),
+    createTerminalSession: vi.fn(async (_featureId: string, input: { providerId: string }) => {
+      const session = { ...childSession, id: 'new-compatible', provider: input.providerId };
+      sessions.push(session);
+      return session;
+    }),
     listFeatures: vi.fn(async () => features),
     listRepos: vi.fn(async () => repos),
     listSessions: vi.fn(async (featureId: string) => sessions.filter((s) => s.featureId === featureId)),
@@ -144,11 +157,11 @@ function stored(): WorkspaceTabsState {
   return JSON.parse(window.localStorage.getItem('cw-workspace-tabs')!);
 }
 
-function mount(state: WorkspaceTabsState, client = createClient()) {
+function mount(state: WorkspaceTabsState, client = createClient(), providerSwitch: { providerId: string; nonce: number } | null = null) {
   window.localStorage.setItem('cw-workspace-tabs', JSON.stringify(state));
   const view = render(
     <ApiProvider value={client as unknown as ApiClient}>
-      <WorkspaceView live={initialLiveState} sidebarOpen onToggleSidebar={() => {}} />
+      <WorkspaceView live={initialLiveState} sidebarOpen onToggleSidebar={() => {}} providerSwitch={providerSwitch} />
     </ApiProvider>,
   );
   return { ...view, client };
@@ -157,6 +170,37 @@ function mount(state: WorkspaceTabsState, client = createClient()) {
 beforeEach(() => {
   window.localStorage.clear();
   vi.clearAllMocks();
+});
+
+it('resumes a compatible provider session in the current feature without changing other sessions or replaying prompts', async () => {
+  const client = createClient();
+  const existing = { ...childSession, id: 'claude-existing', provider: 'claude', status: 'completed' as const, startedAt: '2026-10-01', prompt: 'already delivered' };
+  client.listSessions.mockResolvedValue([childSession, existing]);
+  mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null }, client, { providerId: 'claude', nonce: 1 });
+  await screen.findByText('Terminal claude-existing');
+  await waitFor(() => expect(screen.getByRole('tab', { selected: true })).toHaveFocus());
+  expect(client.createTerminalSession).not.toHaveBeenCalled();
+  expect(stored().tabs.some((tab) => tab.id === sessionTab.id)).toBe(true);
+  expect(stored().tabs.find((tab) => tab.id === sessionTab.id)).toMatchObject({ session: { provider: 'copilot' } });
+  expect(client.deleteSession).not.toHaveBeenCalled();
+});
+
+it('creates an empty compatible session when no matching native conversation exists', async () => {
+  const client = createClient();
+  mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null }, client, { providerId: 'claude', nonce: 2 });
+  await screen.findByText('Terminal new-compatible');
+  expect(client.createTerminalSession).toHaveBeenCalledWith(
+    leaf.id, { providerId: 'claude', kind: 'dev' }, expect.any(Object),
+  );
+  expect(client.createTerminalSession).toHaveBeenCalledTimes(1);
+  expect(client.deleteSession).not.toHaveBeenCalled();
+});
+
+it('defers session creation without a current feature and preserves inactive provider tabs as history', async () => {
+  const client = createClient();
+  mount({ tabs: [repoTab], activeId: repoTab.id, splitId: null }, client, { providerId: 'claude', nonce: 3 });
+  await screen.findByText('Repository dashboard');
+  expect(client.createTerminalSession).not.toHaveBeenCalled();
 });
 
 it('persists sidebar and split sizing without changing the active tabs', async () => {
@@ -176,6 +220,15 @@ it('persists sidebar and split sizing without changing the active tabs', async (
   await screen.findByText('Terminal session');
 });
 
+it('lets a hosted agent open a created session as the active workspace tab', async () => {
+  mount({ tabs: [agentTab], activeId: agentTab.id, splitId: null });
+  await act(async () => {});
+  fireEvent.click(await screen.findByRole('button', { name: 'Open from agent' }));
+  await screen.findByText('Terminal session');
+  const state = stored();
+  expect(state.activeId).toBe(childSession.id);
+});
+
 it('shows recorded session details on demand without inventing model or exit information', async () => {
   mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null });
   const summary = await screen.findByText('Session details');
@@ -185,6 +238,31 @@ it('shows recorded session details on demand without inventing model or exit inf
   expect(details).toHaveTextContent('Not reported');
   expect(details).toHaveTextContent('copilot');
   expect(details).toHaveTextContent('Recorded status');
+});
+
+it('keeps the visual selection on exactly the selected tab independently of hover and focus', async () => {
+  const view = mount({
+    tabs: [sessionTab, featureTab(other)], activeId: sessionTab.id, splitId: 'feature:other',
+  });
+  await screen.findByText('Terminal session');
+  const selected = screen.getByRole('tab', { name: 'Child session', selected: true });
+  const inactive = screen.getByRole('tab', { name: 'Other', selected: false });
+  expect(selected.closest('.tab')).toHaveClass('tab-active');
+  expect(inactive.closest('.tab')).not.toHaveClass('tab-active');
+
+  fireEvent.mouseEnter(selected);
+  act(() => inactive.focus());
+  expect(inactive).toHaveFocus();
+  expect(selected).toHaveAttribute('aria-selected', 'true');
+  expect(selected.closest('.tab')).toHaveClass('tab-active');
+  expect(inactive.closest('.tab')).not.toHaveClass('tab-active');
+
+  fireEvent.click(inactive);
+  expect(inactive).toHaveAttribute('aria-selected', 'true');
+  expect(inactive.closest('.tab')).toHaveClass('tab-active');
+  expect(selected).toHaveAttribute('aria-selected', 'false');
+  expect(selected.closest('.tab')).not.toHaveClass('tab-active');
+  expect(view.container.querySelectorAll('.tab-active')).toHaveLength(1);
 });
 
 it('supports roving tab focus, linked panels, arrow navigation and Delete with focus restoration', async () => {
@@ -197,6 +275,8 @@ it('supports roving tab focus, linked panels, arrow navigation and Delete with f
   fireEvent.keyDown(tabs[0], { key: 'ArrowRight' });
   expect(tabs[1]).toHaveFocus();
   expect(tabs[1]).toHaveAttribute('aria-selected', 'true');
+  expect(tabs[1].closest('.tab')).toHaveClass('tab-active');
+  expect(tabs[0].closest('.tab')).not.toHaveClass('tab-active');
   fireEvent.keyDown(tabs[1], { key: 'End' });
   expect(tabs[2]).toHaveFocus();
   fireEvent.keyDown(tabs[2], { key: 'ArrowRight' });

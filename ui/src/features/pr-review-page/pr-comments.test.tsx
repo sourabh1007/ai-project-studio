@@ -343,6 +343,37 @@ describe('CommentableDiff', () => {
     expect(await screen.findByText('a.cs:3')).toBeInTheDocument();
   });
 
+  it('shows additions and deletions in full context without shifting comment anchors', async () => {
+    const client: Partial<ApiClient> = {
+      listPrReviewComments: vi.fn().mockResolvedValue([]),
+      getPrReviewFileContent: vi.fn().mockResolvedValue({
+        path: 'src/a.cs', content: 'before\nnew\nafter',
+      }),
+    };
+    render(
+      <Harness client={client}>
+        {(c) => <CommentableDiff comments={c} path="src/a.cs" diff={'@@ -2 +2 @@\n-old\n+new'} />}
+      </Harness>,
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'Full file' }));
+    const added = await screen.findByLabelText('Comment on line 2');
+    expect(added).toHaveClass('cg-diff-add');
+    expect(added.querySelector('.cg-diff-marker')).toHaveTextContent('+');
+    const removed = screen.getByText('old').closest('.cg-diff-line');
+    expect(removed).toHaveClass('cg-diff-del');
+    expect(removed).not.toHaveAttribute('role', 'button');
+    expect(removed?.querySelector('.cg-diff-marker')).toHaveTextContent('−');
+    expect(screen.getByLabelText('Comment on line 1')).toHaveClass('cg-diff-ctx');
+    expect(screen.getByLabelText('Comment on line 3')).toHaveTextContent('after');
+    fireEvent.click(screen.getByLabelText('Comment on line 3'));
+    expect(screen.getByRole('form', { name: 'Comment on line 3' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Diff' }));
+    expect(screen.queryByText('before')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Full file' }));
+    expect(screen.getByText('before')).toBeInTheDocument();
+    expect(client.getPrReviewFileContent).toHaveBeenCalledTimes(1);
+  });
+
   it('reports when the full file cannot be read', async () => {
     const client: Partial<ApiClient> = {
       listPrReviewComments: vi.fn().mockResolvedValue([]),

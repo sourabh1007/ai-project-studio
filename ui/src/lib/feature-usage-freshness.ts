@@ -17,10 +17,20 @@ export function featureUsageRevision(
   live: LiveState,
   featureId: string,
 ): string {
+  return revision(live, featureId);
+}
+
+/** Same token across every feature: refresh signal for workspace-wide summaries. */
+export function workspaceUsageRevision(live: LiveState): string {
+  return revision(live, null);
+}
+
+function revision(live: LiveState, featureId: string | null): string {
+  const inScope = (id: string): boolean => featureId === null || id === featureId;
   let usageCount = 0;
   let latestUsageAt = '';
   for (const usage of Object.values(live.usageByKey)) {
-    if (usage.featureId !== featureId) continue;
+    if (!inScope(usage.featureId)) continue;
     usageCount += 1;
     // `endedAt` moves forward as turns land, so it distinguishes a replaced
     // entry from a genuinely new one even when the count is unchanged.
@@ -33,12 +43,17 @@ export function featureUsageRevision(
   // than one event too early.
   const sessionMarks: string[] = [];
   for (const session of Object.values(live.sessions)) {
-    if (session.featureId !== featureId) continue;
+    if (!inScope(session.featureId)) continue;
     sessionMarks.push(`${session.id}:${session.status}`);
   }
   // The live caches are bounded and evict, so iteration order is not stable.
   // Sorting keeps the token a function of content alone.
   sessionMarks.sort();
 
-  return `${usageCount}|${latestUsageAt}|${sessionMarks.join(',')}`;
+  const metaByFeature = live.metaUsageByFeature ?? {};
+  const metaCount = featureId === null
+    ? Object.values(metaByFeature).reduce((n, c) => n + c, 0)
+    : (metaByFeature[featureId] ?? 0);
+
+  return `${usageCount}|${latestUsageAt}|${sessionMarks.join(',')}|${metaCount}|${live.streamEpoch ?? 0}`;
 }

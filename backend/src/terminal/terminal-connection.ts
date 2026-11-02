@@ -116,7 +116,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
     detach = next.attach({
       suppressible: true,
       send: (data) => deps.send({ type: 'output', data }),
-      resize: (cols, rows) => deps.send({ type: 'resize', cols, rows }),
+      resize: (cols, rows, phase = 'attach') => deps.send({ type: 'resize', cols, rows, phase }),
       exit: (code) => deps.send({ type: 'exit', code }),
     });
     detachReadiness = next.onInputReadiness((readiness) => {

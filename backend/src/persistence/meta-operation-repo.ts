@@ -72,6 +72,8 @@ export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo & M
   const update = db.prepare(`UPDATE meta_operations SET ${fields.map((field) => `${field}=?`).join(',')}
     WHERE operation_id = ? AND state IN ('pending','running')`);
   const get = db.prepare('SELECT * FROM meta_operations WHERE operation_id = ?');
+  const getSummary = db.prepare(`SELECT ${metadata}, operation.result_text IS NOT NULL AS has_result
+    FROM meta_operations AS operation WHERE operation_id = ?`);
   const deleteFeature = db.prepare('DELETE FROM meta_operations WHERE feature_id = ?');
   const deleteAutomation = db.prepare('DELETE FROM meta_operations WHERE automation_id = ?');
   const deleteSession = db.prepare(`DELETE FROM meta_operations WHERE operation_id IN (
@@ -108,9 +110,13 @@ export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo & M
   };
 
   return {
+    getSummary(operationId) {
+      const row = getSummary.get(operationId) as unknown as (Omit<Row, 'result_text'> & { has_result: number }) | undefined;
+      return row ? { ...mapMetadata(row), hasResult: row.has_result === 1 } : null;
+    },
     refreshUsage(operationId, snapshot, capturedAt) {
       return write(() => {
-        const row = get.get(operationId) as unknown as Row | undefined;
+        const row = getSummary.get(operationId) as unknown as Omit<Row, 'result_text'> | undefined;
         if (!row || row.usage_json === JSON.stringify(snapshot)) return false;
         db.prepare(`UPDATE meta_operations SET usage_json = ?, usage_state = 'recorded'
           WHERE operation_id = ?`).run(JSON.stringify(snapshot), operationId);

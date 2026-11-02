@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { resolveGhExecutable } from './gh-executable.js';
 
 describe('resolveGhExecutable', () => {
+  it('resolves an explicit executable without silently substituting another gh', () => {
+    expect(resolveGhExecutable({
+      executable: 'C:\\custom gh\\gh.exe', isWindows: true, env: {}, pathExt: '.EXE',
+      fileExists: (candidate) => candidate === 'C:\\custom gh\\gh.exe',
+    })).toBe('C:\\custom gh\\gh.exe');
+  });
   it('finds gh in a well-known Windows install dir when not on PATH', () => {
     const resolved = resolveGhExecutable({
       isWindows: true,

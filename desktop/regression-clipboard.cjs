@@ -28,17 +28,20 @@ async function clipboardScenario(limit, marker) {
 }
 
 async function runClipboardSmoke(clipboard, evaluate) {
-  const formats = clipboard.availableFormats();
+  const formats = await clipboard.availableFormats();
   const supported = ['text/plain', 'text/html', 'text/rtf', 'image/png'];
   // File/custom formats cannot safely be reconstructed through Electron.write.
   if (formats.some((format) => !supported.includes(format))) {
     return { status: 'unsupported', reason: 'Clipboard has non-restorable formats; no mutation performed' };
   }
   const saved = {};
-  if (formats.includes('text/plain')) saved.text = clipboard.readText();
-  if (formats.includes('text/html')) saved.html = clipboard.readHTML();
-  if (formats.includes('text/rtf')) saved.rtf = clipboard.readRTF();
-  if (formats.includes('image/png')) saved.image = clipboard.readImage();
+  if (formats.includes('text/plain')) saved.text = await clipboard.readText();
+  if (formats.includes('text/html')) saved.html = await clipboard.readHTML();
+  if (formats.includes('text/rtf')) saved.rtf = await clipboard.readRTF();
+  if (formats.includes('image/png')) {
+    if (clipboard.readPng) saved.png = await clipboard.readPng();
+    else saved.image = clipboard.readImage();
+  }
   let outcome;
   let restoration = 'not-attempted';
   try {
@@ -48,18 +51,19 @@ async function runClipboardSmoke(clipboard, evaluate) {
   } finally {
     // Do not overwrite an intervening user's clipboard. An interrupted scenario
     // may leave test data behind: report it, never guess ownership.
-    if (clipboard.readText() !== MARKER) {
+    if (await clipboard.readText() !== MARKER) {
       restoration = 'skipped-ownership-lost';
     } else {
       try {
-        if (formats.length) clipboard.write(saved);
-        else clipboard.clear();
-        const restoredFormats = clipboard.availableFormats();
+        if (formats.length) await clipboard.write(saved);
+        else await clipboard.clear();
+        const restoredFormats = await clipboard.availableFormats();
         const matched = formats.length === restoredFormats.length &&
           formats.every((format) => restoredFormats.includes(format)) &&
-          (!('text' in saved) || clipboard.readText() === saved.text) &&
-          (!('html' in saved) || clipboard.readHTML() === saved.html) &&
-          (!('rtf' in saved) || clipboard.readRTF() === saved.rtf) &&
+          (!('text' in saved) || await clipboard.readText() === saved.text) &&
+          (!('html' in saved) || await clipboard.readHTML() === saved.html) &&
+          (!('rtf' in saved) || await clipboard.readRTF() === saved.rtf) &&
+          (!saved.png || (await clipboard.readPng()).equals(saved.png)) &&
           (!saved.image || clipboard.readImage().toPNG().equals(saved.image.toPNG()));
         restoration = matched ? 'passed' : 'failed';
       } catch {

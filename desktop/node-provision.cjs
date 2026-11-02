@@ -65,6 +65,8 @@ function parseVersion(text) {
 function isAcceptableMajor(version) {
   return version != null && version.major === REQUIRED_MAJOR;
 }
+const isSupportedRuntime = (version) => version != null &&
+  (version.major > 24 || (version.major === 24 && version.minor >= 20));
 
 /** Returns the installed version of a node binary via `node --version`, or null. */
 function readNodeVersion(binPath, runImpl = spawnSync) {
@@ -80,7 +82,7 @@ function readNodeVersion(binPath, runImpl = spawnSync) {
 /**
  * Ensures a Node runtime matching the pinned major is available, returning its
  * absolute path. Resolution order:
- *   1. An explicit `CW_NODE_BIN` override (trusted if it runs and is >= 22.5).
+ *   1. An explicit `CW_NODE_BIN` override (trusted if it runs and is >= 24.20).
  *   2. The managed pinned runtime already installed under `runtimeDir`.
  *   3. A system `node` on PATH whose major matches (avoids a needless download).
  *   4. Download + verify + extract the pinned runtime into `runtimeDir`.
@@ -116,12 +118,12 @@ function createNodeProvisioner(deps) {
     if (!override) return null;
     const version = runVersion(override);
     // An explicit override is a power-user/dev escape hatch: accept any Node new
-    // enough for node:sqlite, trusting the operator to match the native ABI.
-    if (version && (version.major > 22 || (version.major === 22 && version.minor >= 5))) {
+    // enough for the supported source runtime, trusting the operator to match the native ABI.
+    if (isSupportedRuntime(version)) {
       log(`using CW_NODE_BIN override at ${override} (v${version.raw.replace(/^v/, '')})`);
       return override;
     }
-    log(`ignoring CW_NODE_BIN override at ${override}: not a usable Node >= 22.5`);
+    log(`ignoring CW_NODE_BIN override at ${override}: not a usable Node >= 24.20 (prefer ${PINNED_VERSION})`);
     return null;
   }
 
@@ -155,7 +157,7 @@ function createNodeProvisioner(deps) {
 
   function systemBinary() {
     const version = runVersion('node');
-    if (isAcceptableMajor(version)) {
+    if (isAcceptableMajor(version) && isSupportedRuntime(version)) {
       log(`using system Node on PATH (v${version.raw.replace(/^v/, '')})`);
       return 'node';
     }

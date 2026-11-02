@@ -5,6 +5,7 @@ describe('meta-model labels', () => {
   it('maps known provider ids to friendly names', () => {
     expect(providerLabel('agency')).toBe('Agency');
     expect(providerLabel('copilot')).toBe('Copilot');
+    expect(providerLabel('claude')).toBe('Claude Code');
   });
 
   it('capitalizes unknown provider ids', () => {

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Session } from '../../lib/types.js';
 import { installedProviders } from '../../lib/providers.js';
 import { Button, ErrorText } from '../../components/ui.js';
+import { withOperationKey } from '../../lib/operation-keys.js';
 import { ProviderPicker } from '../../components/provider-picker.js';
 
 /**
@@ -25,11 +26,27 @@ export function NewSessionForm({
   const providers = useAsync(() => api.listProviders(), []);
   const bootstrap = useAsync(() => api.getProviderBootstrap(), []);
   const available = useMemo(
-    () => installedProviders(providers.data ?? []),
-    [providers.data],
+    () => bootstrap.data?.selectionRequired === true ? [] : installedProviders(providers.data ?? [])
+      .filter((provider) => provider.id === bootstrap.data?.defaultProvider),
+    [providers.data, bootstrap.data],
   );
   const [providerId, setProviderId] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const promptId = useId();
+  // Deliver a session created after unmount/cancel to the latest host callback.
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    promptRef.current?.focus();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,32 +61,67 @@ export function NewSessionForm({
   }, [available, bootstrap.loading, bootstrap.data, providerId]);
 
   async function create() {
+    if (startingRef.current || !providerId) return;
+    startingRef.current = true;
     setStarting(true);
     setError(null);
+    const initialPrompt = prompt.trim();
     try {
-      const session = await api.createTerminalSession(featureId, {
+      const input = {
         providerId,
-        kind: 'dev',
-      });
-      onCreated(session);
+        kind: 'dev' as const,
+        ...(initialPrompt ? { prompt: initialPrompt } : {}),
+      };
+      const session = await withOperationKey(`session.create:${featureId}`, input, 'session', (operation) =>
+        api.createTerminalSession(featureId, input, operation),
+      );
+      onCreatedRef.current(session);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setStarting(false);
+      startingRef.current = false;
+      if (mountedRef.current) setStarting(false);
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+      event.preventDefault();
+      if (!event.repeat) void create();
+    } else if (event.key === 'Escape' && !event.defaultPrevented && !starting && prompt.length === 0) {
+      event.preventDefault();
+      onCancel();
     }
   }
 
   return (
-    <div className="new-session glass">
+    <div className="new-session glass" onKeyDown={onKeyDown}>
       <div className="new-session-title">New session</div>
       <ProviderPicker
         providers={available}
         value={providerId}
         onChange={setProviderId}
       />
-      <ErrorText error={providers.error ?? error} />
+      <label className="field" htmlFor={promptId}>
+        <span>Initial prompt (optional)</span>
+        <textarea
+          id={promptId}
+          ref={promptRef}
+          className="session-prompt-input"
+          rows={3}
+          value={prompt}
+          readOnly={starting}
+          placeholder="Sent to the session when it opens. Ctrl/Cmd+Enter to open."
+          onChange={(event) => setPrompt(event.target.value)}
+        />
+      </label>
+      <ErrorText error={providers.error ?? bootstrap.error ?? error} />
+      {!bootstrap.loading && !bootstrap.error && available.length === 0 && <p>Select and install an active CLI in Settings → CLI before creating a session.</p>}
       <div className="new-session-actions">
-        <Button variant="ghost" onClick={onCancel}>
+        <Button variant="ghost" onClick={onCancel} disabled={starting}>
           Cancel
         </Button>
         <Button onClick={create} disabled={starting || !providerId}>

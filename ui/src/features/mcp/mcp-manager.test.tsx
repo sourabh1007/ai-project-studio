@@ -180,6 +180,17 @@ function renderManager(api: ApiClient) {
 }
 
 describe('McpManager', () => {
+  it('gives actionable enterprise Claude profile guidance without exposing an empty config', async () => {
+    const api = client({
+      listMcpProviders: vi.fn().mockResolvedValue([{ id: 'claude', label: 'Claude', capabilities }]),
+      getMcpServers: vi.fn().mockRejectedValue(new Error('Enterprise profile settings source is unavailable')),
+    });
+    render(<ApiProvider value={api}><McpManager /></ApiProvider>);
+    await screen.findByText(/Check the Claude CLI executable and the enterprise profile/);
+    expect(screen.queryByText('No MCP servers configured')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry load' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add server' })).toBeDisabled();
+  });
   it('checks only the app-owned bridge automatically and routes inherited app tools to Studio', async () => {
     const unsupported = { supported: false, reason: 'App-owned' };
     const inherited: McpServerEntry = {
@@ -787,9 +798,9 @@ describe('McpManager', () => {
     expect(within(dialog).getByText('Authentication required')).toBeInTheDocument();
     expect(api.inspectMcpServer).toHaveBeenCalledOnce();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Retry discovery' }));
-    expect(await within(dialog).findByText('No sign-in needed for this check.')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Tool inventory checked; tool authorization unverified.')).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Authenticate' })).toBeNull();
-    expect(within(dialog).getByText(/Individual tools may require additional permissions/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/This check listed tools without verifying permission to call them/)).toBeInTheDocument();
     open.mockRestore();
   });
 
@@ -828,7 +839,32 @@ describe('McpManager', () => {
     expect(within(dialog).queryByText(/without an outstanding sign-in request/)).toBeNull();
   });
 
-  it('proactively verifies unknown native auth in the background and enables sign-in from the card', async () => {
+  it('never launches native auth probes on mount, category change or remount', async () => {
+    const entries: McpServerEntry[] = ['configured', 'catalog'].map((name) => ({
+      ...makeServer(name, 'agency'), displayName: name, builtinName: 'ado',
+      origin: 'agency-built-in', enabled: true, catalog: name === 'catalog',
+      capabilities, authState: { state: 'unknown', checkedAt: null, message: 'Not checked.' },
+    }));
+    const api = client({
+      listMcpProviders: vi.fn().mockResolvedValue([{ id: 'agency' }, { id: 'copilot' }]),
+      getMcpServers: vi.fn(async (id: string) => makeConfig(id, entries)),
+    });
+    const first = renderManager(api);
+    await screen.findByText('configured');
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: 'copilot' } });
+    await waitFor(() => expect(api.getMcpServers).toHaveBeenLastCalledWith('copilot'));
+    await screen.findByText('configured');
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    first.unmount();
+    renderManager(api);
+    await screen.findByText('configured');
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    expect(api.getMcpServerStatus).not.toHaveBeenCalled();
+    expect(api.startMcpAuthentication).not.toHaveBeenCalled();
+  });
+
+  it('checks unknown native auth only after an explicit card action and then enables sign-in', async () => {
     const entry = {
       ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado', displayName: 'ado',
       capabilities, authentication: supported,
@@ -846,13 +882,65 @@ describe('McpManager', () => {
     });
     renderManager(api);
     const auth = await screen.findByRole('button', { name: 'Auth ado' });
-    await waitFor(() => expect(api.inspectMcpServer).toHaveBeenCalledWith('agency', 'global-builtins:ado'));
-    await waitFor(() => expect(auth).toHaveClass('is-danger'));
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    expect(api.startMcpAuthentication).not.toHaveBeenCalled();
+    expect(auth).not.toHaveClass('is-danger');
     expect(auth).toBeEnabled();
     fireEvent.click(auth);
     const connect = await screen.findByRole('button', { name: 'Continue Agency sign-in' });
+    expect(api.inspectMcpServer).toHaveBeenCalledOnce();
+    expect(api.inspectMcpServer).toHaveBeenCalledWith('agency', 'global-builtins:ado');
+    expect(auth).toHaveClass('is-danger');
     fireEvent.click(connect);
     await waitFor(() => expect(api.startMcpAuthentication).toHaveBeenCalledWith('agency', entry.name));
+  });
+
+  it('shows native-CLI guidance for an interrupted challenge without reprobes or futile continuation', async () => {
+    const message = 'Complete service sign-in in the native CLI; this check does not establish reusable authentication.';
+    const entry: McpServerEntry = {
+      ...makeServer('global-builtins:ado', 'agency'), builtinName: 'ado', displayName: 'ado', capabilities,
+      authentication: { supported: false, reason: message },
+      authState: { state: 'unknown', checkedAt: '2026-09-27T01:00:00Z', message, interrupted: true },
+      toolDiscovery: { status: 'failed', message, output: [], authenticationInterrupted: true },
+    };
+    const api = client({ getMcpServers: vi.fn().mockResolvedValue(makeConfig('agency', [entry])) });
+    renderManager(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Auth ado' }));
+    const dialog = screen.getByRole('dialog', { name: 'ado · authentication' });
+    expect(within(dialog).getAllByText(message).length).toBeGreaterThan(0);
+    expect(within(dialog).queryByRole('button', { name: 'Continue Agency sign-in' })).toBeNull();
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    expect(api.startMcpAuthentication).not.toHaveBeenCalled();
+  });
+
+  it('updates failed authentication observations and removes unsupported continuation immediately', async () => {
+    const entry = {
+      ...requiringAuth(makeServer('global-builtins:ado', 'agency')), builtinName: 'ado', displayName: 'ado',
+      capabilities, authentication: supported,
+      authState: { state: 'required' as const, checkedAt: null, message: 'Authentication required' },
+    };
+    const message = 'Complete service sign-in in the native CLI.';
+    const result: McpAuthenticationJob = {
+      id: 'auth-interrupted', serverName: entry.name, status: 'failed', message, authUrl: null, deviceCode: null,
+      expiresAt: new Date(Date.now() + 120000).toISOString(),
+      server: {
+        ...entry, authentication: { supported: false, reason: message },
+        authState: { state: 'unknown', checkedAt: null, message, interrupted: true },
+        toolDiscovery: { status: 'failed', message, output: [], authenticationInterrupted: true },
+      },
+    };
+    const api = client({
+      getMcpServers: vi.fn().mockResolvedValue(makeConfig('agency', [entry])),
+      startMcpAuthentication: vi.fn().mockResolvedValue(result),
+    });
+    renderManager(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Auth ado' }));
+    const dialog = screen.getByRole('dialog', { name: 'ado · authentication' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Continue Agency sign-in' }));
+    await waitFor(() => expect(within(dialog).queryByRole('button', { name: 'Continue Agency sign-in' })).toBeNull());
+    expect(api.startMcpAuthentication).toHaveBeenCalledOnce();
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    expect(within(dialog).getAllByText(message).length).toBeGreaterThan(0);
   });
 
   it.each([
@@ -875,6 +963,10 @@ describe('McpManager', () => {
         expect(button).toHaveClass('is-danger');
       } else {
         expect(button).not.toHaveClass('is-danger');
+      }
+      if (state === 'ready') {
+        expect(button).not.toHaveClass('is-ready');
+        expect(button).toHaveAttribute('title', expect.stringContaining('authorization for individual tools remains unverified'));
       }
     }
     expect(api.startMcpAuthentication).not.toHaveBeenCalled();
@@ -908,7 +1000,7 @@ describe('McpManager', () => {
     await waitFor(() => expect(api.getMcpAuthentication).toHaveBeenCalledWith('agency', entry.name, 'auth-1'), { timeout: 2500 });
     await act(async () => complete.resolve({ ...pending, status: 'completed',
       server: { ...entry, ...makeInspection(entry.name, [{ name: 'read_pr', enabled: true }]) } }));
-    expect(await within(dialog).findByText('No sign-in needed for this check.')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Tool inventory checked; tool authorization unverified.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auth ado' })).toBeEnabled();
     expect(within(dialog).queryByText('ABCD')).toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'Authenticate' })).toBeNull();
@@ -949,6 +1041,7 @@ describe('McpManager', () => {
         expiresAt: new Date(Date.now() - 1000).toISOString(),
       }),
     });
+
     renderManager(api);
     fireEvent.click(await screen.findByRole('button', { name: 'Auth ado' }));
     const dialog = screen.getByRole('dialog', { name: 'ado · authentication' });
@@ -958,6 +1051,35 @@ describe('McpManager', () => {
     expect(within(dialog).queryByRole('button', { name: 'Authenticate' })).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(api.cancelMcpAuthentication).toHaveBeenCalledWith('agency', entry.name, 'expired'));
+  });
+
+  it('keeps an expired cancellation pending and polls until backend cleanup is confirmed', async () => {
+    const entry = { ...requiringAuth(makeServer('global-builtins:ado', 'agency')), builtinName: 'ado', displayName: 'ado', capabilities };
+    const pending: McpAuthenticationJob = { id: 'cleanup-pending', serverName: entry.name, status: 'pending',
+      message: 'Waiting', authUrl: 'https://login.example.com/device', deviceCode: 'STALE',
+      expiresAt: new Date(Date.now() - 1000).toISOString() };
+    const cleanup = deferred<McpAuthenticationJob>();
+    const api = client({
+      getMcpServers: vi.fn().mockResolvedValue(makeConfig('agency', [entry])),
+      inspectMcpServer: vi.fn().mockResolvedValue({ ...entry, authentication: supported }),
+      startMcpAuthentication: vi.fn().mockResolvedValue(pending),
+      cancelMcpAuthentication: vi.fn().mockResolvedValue({ ...pending, authUrl: null, deviceCode: null,
+        message: 'Cancellation requested; waiting for cleanup. Capacity reserved.' }),
+      getMcpAuthentication: vi.fn().mockReturnValue(cleanup.promise),
+    });
+    renderManager(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Auth ado' }));
+    const dialog = screen.getByRole('dialog', { name: 'ado · authentication' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Continue Agency sign-in' }));
+    await within(dialog).findByText(/This sign-in prompt has expired/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel sign-in' }));
+    expect(await within(dialog).findByText(/Cancellation requested; waiting for cleanup/)).toBeInTheDocument();
+    expect(within(dialog).queryByText('STALE')).not.toBeInTheDocument();
+    await waitFor(() => expect(api.getMcpAuthentication).toHaveBeenCalledWith('agency', entry.name, pending.id), { timeout: 2500 });
+    await act(async () => cleanup.resolve({ ...pending, status: 'cancelled', message: 'Cleanup confirmed' }));
+    expect(within(dialog).getByText('Cleanup confirmed')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Cancel sign-in' })).not.toBeInTheDocument();
+    expect(api.startMcpAuthentication).toHaveBeenCalledOnce();
   });
 
   it('stops exposing sign-in prompts after a poll error without restarting authentication', async () => {

@@ -59,7 +59,7 @@ function config(current: ConfigResponse['current']): ConfigResponse {
 
 function renderSettings(client: Partial<ApiClient>) {
   return render(
-    <ApiProvider value={client as ApiClient}>
+    <ApiProvider value={{ getCommandCatalog: vi.fn().mockResolvedValue([]), ...client } as ApiClient}>
       <SettingsView />
     </ApiProvider>,
   );
@@ -98,6 +98,113 @@ function configWithSchema(
 }
 
 describe('SettingsView drafts', () => {
+  it('explains restart-gated admission limits and provider-gated recovery without changing flags', async () => {
+    openConfigNamespaces('processAdmission', 'selfRecovery');
+    const current = configWithSchema({
+      processAdmission: { maxProcesses: 8 }, selfRecovery: { enabled: true },
+    }, {});
+    const updateConfig = vi.fn();
+    renderSettings({ getConfig: vi.fn().mockResolvedValue(current), updateConfig });
+    fireEvent.click(screen.getByRole('tab', { name: /^Configuration/ }));
+    await screen.findByText(/Process admission limits apply after restarting/);
+    expect(screen.getByText(/current providers do not supply that confirmation/)).toBeInTheDocument();
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+  it('centralizes eligible CLI command editing in CLI settings with existing validation and persistence', async () => {
+    openConfigNamespaces('copilot');
+    const current = configWithSchema({
+      copilot: { executable: 'copilot', args: ['--interactive'], commandProfile: { usageCommand: '/usage', versionArgs: ['--version'], loginCommand: '/login' } },
+      agency: { executable: 'agency' },
+      'provider-selection': { providerId: 'copilot' },
+    }, {
+      copilot: { kind: 'object', fields: { executable: { kind: 'string' }, args: { kind: 'array' }, commandProfile: { kind: 'object', fields: {
+        usageCommand: { kind: 'string' }, versionArgs: { kind: 'array' }, loginCommand: { kind: 'string' },
+      } } } },
+      agency: { kind: 'object', fields: { executable: { kind: 'string' } } },
+    });
+
+    const updateConfig = vi.fn().mockResolvedValue({
+      namespace: 'copilot', effective: { executable: 'custom-copilot', args: ['--interactive'], commandProfile: { usageCommand: '/accounting', versionArgs: ['-v'], loginCommand: '/auth' } },
+      override: { executable: 'custom-copilot' }, requiresRestart: true,
+    });
+    renderSettings({
+      getConfig: vi.fn().mockResolvedValue(current), updateConfig,
+      getCommandCatalog: vi.fn().mockResolvedValue([{
+        id: 'copilot', label: 'Copilot', category: 'provider', description: 'Configured modes',
+        config: { namespace: 'copilot', keys: ['executable', 'args', 'commandProfile.usageCommand', 'commandProfile.versionArgs'] },
+        required: ['Session protocol'], sources: ['buildCopilotArgs'],
+      }]),
+      getProviderBootstrap: vi.fn().mockResolvedValue({
+        defaultProvider: 'copilot', selectionRequired: false, providers: [{ id: 'copilot', installed: true }],
+      }),
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
+    const executable = await screen.findByRole('textbox', { name: 'Executable' });
+    expect(screen.queryByDisplayValue('agency')).toBeNull();
+    fireEvent.change(executable, { target: { value: 'custom-copilot' } });
+    const args = screen.getByRole('textbox', { name: 'Args' });
+    fireEvent.change(args, { target: { value: 'not-json' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(updateConfig).not.toHaveBeenCalled();
+    fireEvent.change(args, { target: { value: '["--interactive"]' } });
+    expect(screen.queryByRole('textbox', { name: 'Command Profile Login Command' })).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command Profile Usage Command' }), { target: { value: '/accounting' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command Profile Version Args' }), { target: { value: '["-v"]' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledWith('copilot', {
+      executable: 'custom-copilot',
+      commandProfile: { usageCommand: '/accounting', versionArgs: ['-v'] },
+    }));
+    expect(await screen.findByText('Restart required')).toBeTruthy();
+  });
+
+  it('puts Git, GitHub and early Node settings in one location without running probes or duplicating editors', async () => {
+    openConfigNamespaces('git', 'githubCli', 'desktopRuntime');
+    const current = configWithSchema({
+      git: { executable: 'git' }, githubCli: { executable: 'gh' }, desktopRuntime: { nodeExecutable: '' },
+      other: { enabled: true },
+    }, {
+      git: { kind: 'object', fields: { executable: { kind: 'string' } } },
+      githubCli: { kind: 'object', fields: { executable: { kind: 'string' } } },
+      desktopRuntime: { kind: 'object', fields: { nodeExecutable: { kind: 'string' } } },
+    });
+    const updateConfig = vi.fn().mockResolvedValue({
+      namespace: 'git', effective: { executable: 'C:\\my git\\git.exe' }, override: { executable: 'C:\\my git\\git.exe' }, requiresRestart: true,
+    });
+    const resetConfig = vi.fn().mockResolvedValue({
+      namespace: 'githubCli', effective: { executable: 'gh' }, override: {}, requiresRestart: true,
+    });
+    current.overrides.githubCli = { executable: 'gh' };
+    const startMcpAuthentication = vi.fn(), listModels = vi.fn(), inspectMcpServer = vi.fn();
+    const client: Partial<ApiClient> = {
+      getConfig: vi.fn().mockResolvedValue(current), updateConfig, resetConfig, startMcpAuthentication, listModels, inspectMcpServer,
+      getProviderBootstrap: vi.fn().mockResolvedValue({ selectionRequired: true, providers: [] }),
+      getCommandCatalog: vi.fn().mockResolvedValue([
+        ['git', 'executable'], ['githubCli', 'executable'], ['desktopRuntime', 'nodeExecutable'],
+      ].map(([namespace, key]) => ({
+        id: namespace, label: namespace, category: 'repository', description: 'One owner',
+        config: { namespace, keys: [key] }, required: ['Direct argv'], sources: [namespace],
+      }))),
+    };
+    renderSettings(client);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Tools & CLIs' }));
+    const gitCard = (await screen.findByRole('button', { name: 'Git' })).closest('.config-module-card') as HTMLElement;
+    const ghCard = screen.getByRole('button', { name: /^Github CLI/ }).closest('.config-module-card') as HTMLElement;
+    expect(screen.getByRole('textbox', { name: 'Node Executable' })).toBeInTheDocument();
+    fireEvent.change(within(gitCard).getByRole('textbox', { name: 'Executable' }), { target: { value: 'C:\\my git\\git.exe' } });
+    fireEvent.click(within(gitCard).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledWith('git', { executable: 'C:\\my git\\git.exe' }));
+    fireEvent.click(within(ghCard).getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(resetConfig).toHaveBeenCalledWith('githubCli'));
+    expect(screen.getByText('Restart required')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /^Configuration/ }));
+    expect(screen.queryByRole('textbox', { name: 'Executable' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Node Executable' })).toBeNull();
+    expect(startMcpAuthentication).not.toHaveBeenCalled();
+    expect(listModels).not.toHaveBeenCalled();
+    expect(inspectMcpServer).not.toHaveBeenCalled();
+  });
+
   it('deep-links directly into diagnostics and reveals the Worktree list even when previously collapsed', async () => {
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;

@@ -4,6 +4,8 @@
  * decoupled from the filesystem and fully unit-testable.
  */
 export interface AgencyDetectorDeps {
+  configuredExecutable?: () => string;
+  resolveExecutable?: (command: string) => string;
   /**
    * Candidate install paths, recomputed on each probe. A thunk (rather than a
    * fixed array) so a version installed *during* this app run — into a brand-new
@@ -17,5 +19,11 @@ export type AgencyDetector = () => boolean;
 
 /** Builds a detector that reports installed when any candidate path exists. */
 export function createAgencyDetector(deps: AgencyDetectorDeps): AgencyDetector {
-  return () => deps.paths().some((path) => deps.pathExists(path));
+  return () => {
+    if (deps.configuredExecutable) {
+      const command = deps.configuredExecutable();
+      return deps.pathExists(deps.resolveExecutable ? deps.resolveExecutable(command) : command);
+    }
+    return deps.paths().some((path) => deps.pathExists(path));
+  };
 }

@@ -8,6 +8,7 @@ const STATUS_BY_KIND: Record<ErrorKind, number> = {
   provider: 502,
   config: 500,
   auth_required: 401,
+  unavailable: 503,
   internal: 500,
 };
 
@@ -17,9 +18,16 @@ const STATUS_BY_KIND: Record<ErrorKind, number> = {
  */
 export function toErrorResult(error: unknown): HttpResult {
   if (isAppError(error)) {
+    const code = (error.details as { code?: unknown } | null | undefined)?.code;
     return {
       status: STATUS_BY_KIND[error.kind],
-      body: { error: { kind: error.kind, message: error.message } },
+      body: {
+        error: {
+          kind: error.kind,
+          message: error.message,
+          ...(typeof code === 'string' ? { code } : {}),
+        },
+      },
     };
   }
   return {

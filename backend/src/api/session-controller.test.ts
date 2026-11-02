@@ -7,6 +7,7 @@ import { createLogger } from '../kernel/logger.js';
 import type { Session, StartSessionRequest } from '../session/session-contract.js';
 import type { RunningSession } from '../provider/provider-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
+import { PromptHistoryUnavailableError } from '../copilot-history/copilot-history-contract.js';
 
 const session: Session = {
   id: 's1',
@@ -49,6 +50,7 @@ function harness(
     resolveEnvironment?: (featureId: string) => Promise<{ cwd: string | null; branch: string | null }>;
     relaunchSession?: (session: Session, taskCheckoutId?: string) => Promise<void>;
     getResult?: Session | null;
+    prompts?: (id: string) => unknown;
   } = {},
 ) {
   const requests: StartSessionRequest[] = [];
@@ -113,13 +115,13 @@ function harness(
             : null,
         checkpoints: [],
       })),
-    prompts: (id: string) =>
+    prompts: (options.prompts ?? ((id: string) =>
       id === 's1'
         ? [
             { index: 0, text: 'first ask', at: '2025-01-01T00:00:00.000Z', response: 'first reply', status: 'answered' as const, answeredAt: '2025-01-01T00:00:30.000Z', durationMs: 30000 },
             { index: 1, text: 'second ask', at: '2025-01-01T00:05:00.000Z', response: null, status: 'answering' as const, answeredAt: null, durationMs: null },
           ]
-        : [],
+        : [])) as never,
   };
   const routes = createSessionRoutes({
     launcher,
@@ -341,14 +343,42 @@ describe('session-controller', () => {
     expect(result.status).toBe(404);
   });
 
-  it('returns an empty prompt history when history is unavailable', async () => {
+  it('reports unavailable instead of an empty success when no history reader is wired', async () => {
     const h = harness(Promise.resolve(session), undefined, {
       withHistory: false,
     });
     const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(
       req({ params: { id: 's1' } }),
     );
-    expect(result).toEqual({ status: 200, body: [] });
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ error: { kind: 'unavailable', message: 'Prompt history is not available.' } });
+  });
+
+  it('awaits asynchronous prompt readers', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      prompts: async () => [{ index: 0, text: 'late', at: '', response: null, status: 'answering', answeredAt: null, durationMs: null }],
+    });
+    const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(req({ params: { id: 's1' } }));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject([{ text: 'late' }]);
+  });
+
+  it('maps an unreadable history store to 503 rather than an empty history', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      prompts: async () => { throw new PromptHistoryUnavailableError('The CLI history store could not be read.'); },
+    });
+    const result = await pick(h.routes, 'get', '/sessions/:id/prompts')(req({ params: { id: 's1' } }));
+    expect(result).toEqual({
+      status: 503,
+      body: { error: { kind: 'unavailable', message: 'The CLI history store could not be read.' } },
+    });
+  });
+
+  it('does not mask unexpected prompt reader failures as unavailable', async () => {
+    const h = harness(Promise.resolve(session), undefined, {
+      prompts: () => { throw new Error('boom'); },
+    });
+    await expect(pick(h.routes, 'get', '/sessions/:id/prompts')(req({ params: { id: 's1' } }))).rejects.toThrow('boom');
   });
 
   it('resolves a feature environment (cwd + branch) for the move dialog', async () => {

@@ -2,13 +2,21 @@ import { describe, it, expect } from 'vitest';
 import { createAgentRoutes } from './agent-controller.js';
 import type { AgentService } from '../agents/agent-service.js';
 import type { HttpRequest } from './http-contract.js';
+const operations = {
+  keyFrom: () => null,
+  run: async (_request: unknown, execute: (commit: (write: () => unknown) => unknown) => Promise<unknown>) => {
+    let result: unknown;
+    await execute((write) => (result = write()));
+    return result;
+  },
+} as never;
 
 function request(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
 }
 
 function routes(service: Partial<AgentService>) {
-  const list = createAgentRoutes({ agents: service as AgentService });
+  const list = createAgentRoutes({ agents: service as AgentService, operations });
   return (method: string, path: string) => {
     const route = list.find((r) => r.method === method && r.path === path)!;
     return route.handler;

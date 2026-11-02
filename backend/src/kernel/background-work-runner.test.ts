@@ -100,8 +100,8 @@ describe('isolated background work', () => {
       config: { ...config, timeoutMs: 10 },
       spawn: () => ({ result: new Promise<number>(() => {}), terminate }),
     });
-    const first = expect(runner.run(0)).rejects.toThrow('exceeded 10ms');
-    const second = expect(runner.run(1)).rejects.toThrow('exceeded 10ms');
+    const first = expect(runner.run(0)).rejects.toThrow('exceeded 10ms including queue time');
+    const second = expect(runner.run(1)).rejects.toThrow('exceeded 10ms including queue time');
     await vi.advanceTimersByTimeAsync(10);
     await Promise.all([first, second]);
     expect(runner.stats()).toMatchObject({ active: 0, queued: 0 });
@@ -223,5 +223,97 @@ describe('isolated background work', () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe('stalled worker termination', () => {
+  const stalled = () => ({ result: new Promise<number>(() => {}), terminate: () => new Promise<void>(() => {}) });
+
+  it('validates the termination deadline bound', () => {
+    expect(backgroundWorkDefaults.terminateTimeoutMs).toBeGreaterThan(0);
+    expect(() => backgroundWorkConfigSchema.parse({ ...config, terminateTimeoutMs: 0 })).toThrow();
+  });
+
+  it('rejects the caller boundedly and keeps the slot held while the old worker may be alive', async () => {
+    vi.useFakeTimers();
+    const spawn = vi.fn(stalled);
+    const runner = createBackgroundWorkRunner<number, number>({
+      config: { ...config, timeoutMs: 30, terminateTimeoutMs: 50 }, spawn,
+    });
+    const first = expect(runner.run(0)).rejects.toThrow('termination could not be confirmed');
+    const queued = expect(runner.run(1)).rejects.toThrow('exceeded');
+    await vi.advanceTimersByTimeAsync(30 + 50);
+    await Promise.all([first, queued]);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(runner.stats()).toMatchObject({ active: 1, queued: 0 });
+    await expect(runner.run(2)).rejects.toThrow('stopped');
+  });
+
+  it('absorbs a late terminate rejection after the deadline', async () => {
+    vi.useFakeTimers();
+    let fail!: (error: Error) => void;
+    const runner = createBackgroundWorkRunner<number, number>({
+      config: { ...config, timeoutMs: 10, terminateTimeoutMs: 20 },
+      spawn: () => ({
+        result: new Promise<number>(() => {}),
+        terminate: () => new Promise<void>((_resolve, reject) => { fail = reject; }),
+      }),
+    });
+    const run = expect(runner.run(0)).rejects.toThrow('termination could not be confirmed');
+    await vi.advanceTimersByTimeAsync(30);
+    await run;
+    fail(new Error('late'));
+    await vi.advanceTimersByTimeAsync(1);
+  });
+
+  it('treats a synchronously throwing or empty-reason terminate as unconfirmed', async () => {
+    const throwing = createBackgroundWorkRunner<number, number>({
+      config,
+      spawn: () => ({ result: Promise.resolve(1), terminate: () => { throw undefined; } }),
+    });
+    await expect(throwing.run(0)).rejects.toThrow('termination could not be confirmed');
+    const rejecting = createBackgroundWorkRunner<number, number>({
+      config,
+      spawn: () => ({ result: Promise.resolve(1), terminate: () => Promise.reject(undefined) }),
+    });
+    await expect(rejecting.run(0)).rejects.toThrow('termination could not be confirmed');
+  });
+
+  it('closeWithin reports false at its deadline and close() throws without hanging', async () => {
+    vi.useFakeTimers();
+    const runner = createBackgroundWorkRunner<number, number>({
+      config: { ...config, timeoutMs: 60_000, terminateTimeoutMs: 1000 }, spawn: stalled,
+    });
+    const run = expect(runner.run(0)).rejects.toThrow('termination could not be confirmed');
+    const closing = runner.closeWithin(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await closing).toBe(false);
+    expect(runner.stats().active).toBe(1);
+    const closeError = expect(runner.close()).rejects.toThrow('did not confirm termination');
+    await vi.advanceTimersByTimeAsync(1000);
+    await closeError;
+    await run;
+  });
+
+  it('closeWithin is true when workers confirm exit', async () => {
+    const runner = createBackgroundWorkRunner<number, number>({
+      config,
+      spawn: () => ({ result: new Promise<number>(() => {}), terminate: async () => {} }),
+    });
+    const run = expect(runner.run(0)).rejects.toThrow('shutdown');
+    expect(await runner.closeWithin(1000)).toBe(true);
+    await run;
+  });
+});
+
+describe('legacy config without a termination deadline', () => {
+  it('falls back to the default deadline', async () => {
+    const { terminateTimeoutMs: _omit, ...legacy } = backgroundWorkDefaults;
+    const runner = createBackgroundWorkRunner<number, number>({
+      config: legacy,
+      spawn: () => ({ result: Promise.resolve(2), terminate: async () => {} }),
+    });
+    expect(await runner.run(0)).toBe(2);
+    expect(await runner.closeWithin()).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
     cols: number;
     options: Record<string, unknown>;
     refresh: ReturnType<typeof import('vitest').vi.fn>;
+    reset: ReturnType<typeof import('vitest').vi.fn>;
     scrollHandlers: Array<() => void>;
     selectionHandlers: Array<() => void>;
     dataHandlers: Array<(data: string) => void>;
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
     paste: ReturnType<typeof import('vitest').vi.fn>;
     write: ReturnType<typeof import('vitest').vi.fn>;
     writeCallbacks: Array<() => void>;
+    resize: ReturnType<typeof import('vitest').vi.fn>;
   },
   webgl: null as null | {
     clearTextureAtlas: ReturnType<typeof import('vitest').vi.fn>;
@@ -83,6 +85,7 @@ vi.mock('@xterm/xterm', () => {
     getSelection = vi.fn(() => '');
     hasSelection = vi.fn(() => false);
     clearSelection = vi.fn();
+    reset = vi.fn();
     paste = vi.fn();
     focus = vi.fn(() => this.textarea?.focus());
     writeCallbacks: Array<() => void> = [];
@@ -143,6 +146,9 @@ class MockWebSocket {
 import { TerminalView } from './terminal-view.js';
 import { Modal } from './ui.js';
 import { attachmentPasteText, type ClipboardAttachmentResult } from '../lib/clipboard.js';
+import * as preferenceHooks from '../hooks/use-ui-preferences.js';
+import { DEFAULT_UI_PREFERENCES } from '../lib/ui-preferences.js';
+import { INLINE_PASTE_BYTES, MAX_TEXT_PASTE_BYTES, TEXT_PASTE_TIMEOUT_MS } from '../lib/terminal-paste.js';
 
 describe('TerminalView scrollback repaint', () => {
   beforeEach(() => {
@@ -182,6 +188,212 @@ describe('TerminalView scrollback repaint', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  function textPasteFixture(fetchImpl: ReturnType<typeof vi.fn>) {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', fetchImpl);
+    const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    term.paste.mockImplementation((text: string) => term.dataHandlers[0](text));
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+      }) });
+    });
+    ws.send.mockClear();
+    const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
+      (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
+    const paste = (text: string) => {
+      const event = {
+        preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isTrusted: true,
+        clipboardData: { getData: () => text, files: [], items: [] },
+      } as unknown as ClipboardEvent;
+      act(() => { onPaste(event); onPaste(event); });
+    };
+    const input = () => ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'input');
+    return { view, term, ws, paste, input };
+  }
+
+  it.each([
+    { agent: 'Windows NT', path: 'C:\\owned text\\paste.txt' },
+    { agent: 'Macintosh; Intel Mac OS X', path: '/owned text/paste.txt' },
+  ])('stores a large UTF-8 native paste and sends only a short reference without submitting on $agent', async ({ agent, path }) => {
+    vi.stubGlobal('navigator', { userAgent: agent });
+    const text = '\u{1f600}\u754ce\u0301\r\n'.repeat(12000);
+    const fetchImpl = vi.fn(async () => ({
+      ok: true, status: 201, json: async () => ({ sessionId: 's1', path, attachmentId: 'a1', bytes: new Blob([text]).size }),
+    }));
+    const f = textPasteFixture(fetchImpl);
+    f.paste(text);
+    expect(f.term.paste).not.toHaveBeenCalled();
+    expect(f.term.options.disableStdin).not.toBe(true);
+    expect(f.view.getByText(/Saving pasted text as a file/)).toBeTruthy();
+    act(() => {
+      expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }))).toBe(false);
+      f.term.dataHandlers[0]('\r');
+    });
+    expect(f.input()).toEqual([]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0]).toMatchObject([
+      '/api/sessions/s1/text-attachments', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' } },
+    ]);
+    const request = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect((request[1].body as Blob).size).toBe(new Blob([text]).size);
+    expect(f.term.paste).toHaveBeenCalledOnce();
+    expect(f.term.paste.mock.calls[0][0]).toContain(path);
+    expect(f.term.paste.mock.calls[0][0].length).toBeLessThan(INLINE_PASTE_BYTES);
+    expect(JSON.stringify(f.ws.send.mock.calls)).not.toContain('\u{1f600}\u754c');
+    expect(f.input().map((frame) => frame.data).join('')).toBe(f.term.paste.mock.calls[0][0]);
+    expect(f.input().map((frame) => frame.data).join('')).not.toContain('\r');
+    expect(f.term.options.disableStdin).not.toBe(true);
+    act(() => f.term.dataHandlers[0]('\r'));
+    expect(f.input().at(-1).data).toBe('\r');
+  });
+
+  it('uses the same file-backed route for right-click text paste', async () => {
+    const text = 'p'.repeat(INLINE_PASTE_BYTES + 1);
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ sessionId: 's1', path: 'C:\\owned\\paste.txt' }) }));
+    const f = textPasteFixture(fetchImpl);
+    Object.assign(window, { desktop: { readText: vi.fn(async () => text) } });
+    await act(async () => {
+      fireEvent.contextMenu(f.view.container.querySelector('textarea')!);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(f.term.paste).toHaveBeenCalledOnce();
+    expect(f.term.paste.mock.calls[0][0]).toContain('C:\\owned\\paste.txt');
+    expect(f.term.paste).not.toHaveBeenCalledWith(text);
+  });
+
+  it.each(['focus', 'blur', 'session', 'generation', 'disconnect', 'cancel', 'escape', 'timeout'] as const)(
+    'cancels a pending large paste after %s and ignores its late success',
+    async (change) => {
+      let resolve!: (value: Response) => void;
+      const fetchImpl = vi.fn(() => new Promise<Response>((done) => { resolve = done; }));
+      const f = textPasteFixture(fetchImpl);
+      f.paste('x'.repeat(INLINE_PASTE_BYTES + 1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      const signal = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].signal!;
+      let other: HTMLInputElement | undefined;
+      act(() => {
+        if (change === 'focus') {
+          other = document.createElement('input');
+          document.body.appendChild(other);
+          other.focus();
+          f.view.container.querySelector('textarea')!.focus();
+        } else if (change === 'blur') {
+          window.dispatchEvent(new Event('blur'));
+        } else if (change === 'session') {
+          f.view.rerender(<TerminalView sessionId="s2" />);
+        } else if (change === 'generation') {
+          f.ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'ready', generation: 2, inputLimit: 65536 }) });
+        } else if (change === 'disconnect') {
+          f.ws.onclose?.({ code: 1006 });
+        } else if (change === 'cancel') {
+          fireEvent.click(f.view.getByRole('button', { name: 'Cancel text paste' }));
+        } else if (change === 'escape') {
+          expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))).toBe(false);
+        } else {
+          vi.advanceTimersByTime(TEXT_PASTE_TIMEOUT_MS);
+        }
+      });
+      expect(signal.aborted).toBe(true);
+      await act(async () => { resolve({ ok: true, status: 201, json: async () => ({ sessionId: 's1', path: 'C:\\late.txt' }) } as Response); });
+      expect(f.term.paste).not.toHaveBeenCalled();
+      expect(h.term!.paste).not.toHaveBeenCalled();
+      expect(f.input()).toEqual([]);
+      expect(f.view.queryByText(/Saving pasted text as a file/)).toBeNull();
+      other?.remove();
+    },
+  );
+
+  it.each(['http', 'quota', 'network', 'wrong-session', 'bad-path', 'unicode-limit'] as const)(
+    'reports %s failures without replaying raw text or exposing payloads',
+    async (failure) => {
+      const fetchImpl = vi.fn(async () => {
+        if (failure === 'network') throw new Error('PRIVATE pasted contents');
+        return {
+          ok: failure !== 'http' && failure !== 'quota', status: failure === 'http' || failure === 'quota' ? 507 : 201,
+          json: async () => failure === 'http' || failure === 'quota'
+            ? { error: { message: 'PRIVATE pasted contents', ...(failure === 'quota' ? { code: 'quota' } : {}) } }
+            : { sessionId: failure === 'wrong-session' ? 'other' : 's1', path: failure === 'bad-path' ? 'C:\\bad\npath' : 'C:\\owned.txt' },
+        };
+      });
+      const f = textPasteFixture(fetchImpl);
+      f.paste(failure === 'unicode-limit'
+        ? '\u{1f600}'.repeat(MAX_TEXT_PASTE_BYTES / 4 + 1)
+        : 'x'.repeat(INLINE_PASTE_BYTES + 1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      expect(f.view.getByRole('alert').textContent).not.toContain('PRIVATE');
+      expect(f.term.paste).not.toHaveBeenCalled();
+      expect(f.input()).toEqual([]);
+      expect(f.term.options.disableStdin).not.toBe(true);
+      if (failure === 'quota') expect(f.view.getByRole('alert').textContent).toContain('Settings > Diagnostics > Retained pasted text');
+      if (failure === 'unicode-limit') expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects extreme pastes before upload or full encoding and blocks unexpected bulk onData input', () => {
+    const fetchImpl = vi.fn();
+    const f = textPasteFixture(fetchImpl);
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    f.paste('x'.repeat(MAX_TEXT_PASTE_BYTES + 1));
+    expect(encode).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(f.view.getByRole('alert').textContent).toContain('4 MiB');
+    act(() => f.term.dataHandlers[0]('x'.repeat(INLINE_PASTE_BYTES + 13)));
+    expect(f.input()).toEqual([]);
+    expect(f.view.getByRole('alert').textContent).toContain('Large terminal input was blocked');
+  });
+
+  it('admits only one pending upload while keeping copy available and cancelling on Ctrl+C', async () => {
+    const fetchImpl = vi.fn(() => new Promise<Response>(() => {}));
+    const f = textPasteFixture(fetchImpl);
+    f.paste('x'.repeat(INLINE_PASTE_BYTES + 1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    f.paste('other'.repeat(INLINE_PASTE_BYTES));
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(f.view.getByRole('alert').textContent).toContain('already being saved');
+    act(() => {
+      expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'a', cancelable: true }))).toBe(false);
+      expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, cancelable: true }))).toBe(false);
+    });
+    expect(f.term.options.disableStdin).not.toBe(true);
+    expect(f.input()).toEqual([]);
+    expect((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].signal?.aborted).toBe(true);
+  });
+
+  it('continues device and cursor replies while file-backed paste pauses user input', async () => {
+    const f = textPasteFixture(vi.fn(() => new Promise<Response>(() => {})));
+    f.paste('x'.repeat(INLINE_PASTE_BYTES + 1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(f.term.options.disableStdin).not.toBe(true);
+    act(() => {
+      f.term.dataHandlers[0]('\x1b[?1;2c');
+      f.term.dataHandlers[0]('\x1b[12;34R');
+      f.term.dataHandlers[0]('typed while paused');
+      f.term.dataHandlers[0]('\u65e5\u672c\u8a9e');
+      expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Process', isComposing: true, cancelable: true }))).toBe(false);
+      f.term.dataHandlers[0]('\r');
+    });
+    expect(f.input().map((frame) => frame.data)).toEqual(['\x1b[?1;2c', '\x1b[12;34R']);
+  });
+
+  it('surfaces inline native and right-click paste failures without uncaught errors or retry', async () => {
+    const f = textPasteFixture(vi.fn());
+    f.term.paste.mockImplementation(() => { throw new Error('PRIVATE delivery error'); });
+    expect(() => f.paste('small')).not.toThrow();
+    expect(f.view.getByRole('alert').textContent).toContain('delivery is unconfirmed');
+    Object.assign(window, { desktop: { readText: async () => 'small right click' } });
+    await act(async () => { fireEvent.contextMenu(f.view.container.querySelector('textarea')!); });
+    expect(f.term.paste).toHaveBeenCalledTimes(2);
+    expect(f.view.getByRole('alert').textContent).not.toContain('PRIVATE');
+    expect(f.input()).toEqual([]);
   });
 
   it('re-arms display-scale monitoring and repaints at unchanged CSS dimensions without reconnecting', () => {
@@ -534,6 +746,249 @@ describe('TerminalView scrollback repaint', () => {
     );
   });
 
+  it.each([
+    { userAgent: 'Macintosh; Intel Mac OS X', modifier: 'metaKey', newline: '\n' },
+    { userAgent: 'Windows NT', modifier: 'ctrlKey', newline: '\r\n' },
+    { userAgent: 'X11; Linux x86_64', modifier: 'ctrlKey', newline: '\n' },
+  ])('leaves $modifier paste to one native event owner on $userAgent', ({ userAgent, modifier, newline }) => {
+    vi.stubGlobal('navigator', { userAgent });
+    const copyText = vi.fn(async () => ({ ok: true }));
+    const readText = vi.fn(async () => 'must-not-read');
+    (window as unknown as { desktop: unknown }).desktop = { copyText, readText };
+    const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const chord = (key: string, shiftKey = false) => new KeyboardEvent('keydown', {
+      key, [modifier]: true, shiftKey, cancelable: true,
+    });
+    for (const shiftKey of [false, true]) {
+      const key = chord('v', shiftKey);
+      expect(term.keyHandler?.(key)).toBe(false);
+      expect(key.defaultPrevented).toBe(false);
+    }
+    expect(term.paste).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+
+    const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
+      (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
+    const nativeEvent = {
+      preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isTrusted: true,
+      timeStamp: 1000, clipboardData: { getData: () => 'synthetic\n😀', files: [], items: [] },
+    } as unknown as ClipboardEvent;
+    onPaste(nativeEvent);
+    onPaste(nativeEvent);
+    expect(term.paste.mock.calls).toEqual([['synthetic\n😀']]);
+    expect(nativeEvent.preventDefault).toHaveBeenCalledTimes(2);
+    expect(nativeEvent.stopImmediatePropagation).toHaveBeenCalledTimes(2);
+    expect(readText).not.toHaveBeenCalled();
+
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue('synthetic\nselection');
+    const copy = chord('c');
+    expect(term.keyHandler?.(copy)).toBe(false);
+    expect(copy.defaultPrevented).toBe(true);
+    expect(copyText).toHaveBeenCalledTimes(1);
+    expect(copyText).toHaveBeenCalledWith(`synthetic${newline}selection`);
+    term.hasSelection.mockReturnValue(false);
+    expect(term.keyHandler?.(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))).toBe(true);
+    expect(term.keyHandler?.(chord('c', true))).toBe(false);
+    expect(term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Process', isComposing: true }))).toBe(true);
+
+    const external = document.createElement('input');
+    view.container.appendChild(external);
+    external.focus();
+    onPaste({ ...nativeEvent, timeStamp: 2000 } as ClipboardEvent);
+    expect(term.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { userAgent: 'Macintosh; Intel Mac OS X', newline: '\n' },
+    { userAgent: 'Windows NT', newline: '\r\n' },
+    { userAgent: 'X11; Linux x86_64', newline: '\n' },
+  ])('writes a native copy event synchronously exactly once on $userAgent', ({ userAgent, newline }) => {
+    vi.stubGlobal('navigator', { userAgent });
+    const copyText = vi.fn(async () => ({ ok: true }));
+    (window as unknown as { desktop: unknown }).desktop = { copyText };
+    const { container } = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue('first\nsecond');
+    const setData = vi.fn();
+    const event = new Event('copy', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { setData } });
+    container.querySelector('textarea')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(setData.mock.calls).toEqual([['text/plain', `first${newline}second`]]);
+    expect(copyText).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the async writer when the copy event cannot carry data', async () => {
+    const copyText = vi.fn(async () => ({ ok: true }));
+    (window as unknown as { desktop: unknown }).desktop = { copyText };
+    const { container } = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue('selected');
+    const throwing = new Event('copy', { bubbles: true, cancelable: true });
+    Object.defineProperty(throwing, 'clipboardData', {
+      value: { setData: () => { throw new Error('blocked'); } },
+    });
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(throwing); });
+    const absent = new Event('copy', { bubbles: true, cancelable: true });
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(absent); });
+    expect(copyText).toHaveBeenCalledTimes(2);
+    // No selection: the browser's default copy must be left alone.
+    term.hasSelection.mockReturnValue(false);
+    const untouched = new Event('copy', { bubbles: true, cancelable: true });
+    container.querySelector('textarea')!.dispatchEvent(untouched);
+    expect(untouched.defaultPrevented).toBe(false);
+  });
+
+  it.each(['keyboard', 'copy-on-select', 'copy-event'] as const)(
+    'reports a failed %s copy instead of staying silent, and clears it on success', async (path) => {
+      let result: unknown = { ok: false, error: 'native-write-failed', writeState: 'unknown' };
+      const copyText = vi.fn(async () => result);
+      (window as unknown as { desktop: unknown }).desktop = { copyText };
+      const { container, queryByRole } = render(<TerminalView sessionId="s1" />);
+      const term = h.term!;
+      const trigger = async () => {
+        if (path === 'keyboard') {
+          term.hasSelection.mockReturnValue(true);
+          term.getSelection.mockReturnValue('selected');
+          await act(async () => { term.keyHandler?.(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true })); });
+        } else if (path === 'copy-on-select') {
+          term.getSelection.mockReturnValue('selected');
+          await act(async () => {
+            container.querySelector('.terminal-host')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            term.selectionHandlers.forEach((handler) => handler());
+            window.dispatchEvent(new MouseEvent('mouseup'));
+          });
+        } else {
+          term.hasSelection.mockReturnValue(true);
+          term.getSelection.mockReturnValue('selected');
+          await act(async () => {
+            container.querySelector('textarea')!.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }));
+          });
+        }
+      };
+      await trigger();
+      expect(queryByRole('alert')?.textContent).toMatch(/copy.*unconfirmed|not.*copied/i);
+      result = { ok: true };
+      await trigger();
+      expect(queryByRole('alert')).toBeNull();
+    });
+
+  it.each([
+    ['unavailable', /unconfirmed/i],
+    ['target-changed', /not copied/i],
+    ['verification-failed', /unconfirmed/i],
+    ['write-unacknowledged', /unconfirmed/i],
+  ])('maps %s copy failure to explicit guidance', async (error, expected) => {
+    const writeState = error === 'verification-failed' ? 'written' : error === 'write-unacknowledged' ? 'unknown' : 'not-written';
+    (window as unknown as { desktop: unknown }).desktop = {
+      copyText: async () => ({ ok: false, error, writeState }),
+    };
+    const { queryByRole } = render(<TerminalView sessionId="s1" />);
+    h.term!.hasSelection.mockReturnValue(true);
+    h.term!.getSelection.mockReturnValue('selected');
+    await act(async () => { h.term!.keyHandler?.(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true })); });
+    expect(queryByRole('alert')?.textContent).toMatch(expected);
+  });
+
+  it('repaints the viewport when the window becomes visible or refocused', () => {
+    vi.useFakeTimers();
+    render(<TerminalView sessionId="s1" />);
+    act(() => { vi.advanceTimersByTime(800); });
+    const term = h.term!;
+    term.refresh.mockClear();
+    h.webgl!.clearTextureAtlas.mockClear();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('hidden');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(term.refresh).not.toHaveBeenCalled();
+    visibility.mockReturnValue('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(h.webgl!.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
+    term.refresh.mockClear();
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    expect(term.refresh).toHaveBeenCalledWith(0, term.rows - 1);
+  });
+
+  it('applies mid-replay size boundaries in stream order and leaves literal bytes untouched', () => {
+    render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    const send = (message: unknown) => act(() => { ws.onmessage?.({ data: JSON.stringify(message) }); });
+    send({ type: 'resize', cols: 120, rows: 30, phase: 'attach' });
+    send({ type: 'output', data: 'A | \x1b[1;' });
+    send({ type: 'resize', cols: 80, rows: 24, phase: 'boundary' });
+    send({ type: 'output', data: '50H|B' });
+    send({ type: 'resize', cols: 60, rows: 20, phase: 'boundary' });
+    expect(term.write.mock.calls.map(([data]) => data)).toEqual(['A | \x1b[1;', '', '50H|B', '']);
+    // Only the attach size is applied eagerly; boundaries wait for parsing of
+    // everything queued before them.
+    expect(term.resize.mock.calls).toEqual([[120, 30]]);
+    expect(term.reset).not.toHaveBeenCalled();
+    act(() => { term.writeCallbacks.shift()?.(); });
+    expect(term.resize.mock.calls).toEqual([[120, 30]]);
+    act(() => { term.writeCallbacks.shift()?.(); });
+    expect(term.resize.mock.calls).toEqual([[120, 30], [80, 24]]);
+    act(() => { term.writeCallbacks.shift()?.(); term.writeCallbacks.shift()?.(); });
+    expect(term.resize.mock.calls).toEqual([[120, 30], [80, 24], [60, 20]]);
+    expect(term.reset).not.toHaveBeenCalled();
+  });
+
+  it('ignores invalid boundary sizes and a throwing resize without losing later output', () => {
+    render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    const send = (message: unknown) => act(() => { ws.onmessage?.({ data: JSON.stringify(message) }); });
+    send({ type: 'resize', cols: 100, rows: 30, phase: 'attach' });
+    send({ type: 'resize', cols: 0, rows: 0, phase: 'boundary' });
+    term.resize.mockImplementationOnce(() => { throw new Error('layout'); });
+    send({ type: 'resize', cols: 90, rows: 20, phase: 'boundary' });
+    send({ type: 'output', data: 'after' });
+    act(() => { while (term.writeCallbacks.length) term.writeCallbacks.shift()?.(); });
+    expect(term.resize.mock.calls).toEqual([[100, 30], [90, 20]]);
+    expect(term.write).toHaveBeenLastCalledWith('after', expect.any(Function));
+  });
+
+  it('does not apply a pending boundary after unmount', () => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    act(() => { h.ws!.onmessage?.({ data: JSON.stringify({ type: 'resize', cols: 80, rows: 24, phase: 'boundary' }) }); });
+    view.unmount();
+    term.resize.mockClear();
+    term.writeCallbacks.shift()?.();
+    expect(term.resize).not.toHaveBeenCalled();
+  });
+
+  it('starts a reconnect replay from a clean terminal and writes replay bytes verbatim', () => {
+    render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    const send = (message: unknown) => act(() => { ws.onmessage?.({ data: JSON.stringify(message) }); });
+    // Fresh attach: nothing rendered yet, so there is nothing to discard.
+    send({ type: 'resize', cols: 120, rows: 40 });
+    send({ type: 'output', data: 'a | b ┃ █ \x1b[5;80H11:' });
+    expect(term.reset).not.toHaveBeenCalled();
+    // Live resize-free output never resets.
+    send({ type: 'output', data: 'live' });
+    expect(term.reset).not.toHaveBeenCalled();
+    // A later attach replays the retained stream over the old screen: reset first.
+    const order: string[] = [];
+    term.reset.mockImplementation(() => order.push('reset'));
+    term.write.mockImplementation((data: string) => order.push(`write:${data}`));
+    send({ type: 'resize', cols: 100, rows: 30 });
+    send({ type: 'output', data: 'a | b ┃ █' });
+    expect(order).toEqual(['reset', 'write:a | b ┃ █']);
+    expect(term.reset).toHaveBeenCalledTimes(1);
+    // Each later attach discards the screen it is about to replace.
+    send({ type: 'resize', cols: 100, rows: 30 });
+    expect(term.reset).toHaveBeenCalledTimes(2);
+  });
+
   it('focuses the terminal on open so copy shortcuts work before the socket connects', () => {
     render(<TerminalView sessionId="s1" />);
 
@@ -624,6 +1079,7 @@ describe('TerminalView scrollback repaint', () => {
     const onPaste = entry[1] as (event: ClipboardEvent) => void;
     const event = () => ({
       preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isTrusted: true,
+      timeStamp: 1000,
       clipboardData: { getData: () => '😀\r\nsame' },
     }) as unknown as ClipboardEvent;
     const first = event();
@@ -639,7 +1095,11 @@ describe('TerminalView scrollback repaint', () => {
     registrations.mockRestore();
   });
 
-  it('collapses duplicate native text paste events before they can send input twice', () => {
+  it.each([
+    { userAgent: 'Macintosh; Intel Mac OS X', modifier: 'metaKey' },
+    { userAgent: 'Windows NT', modifier: 'ctrlKey' },
+  ])('delivers $modifier+V into the ready CLI terminal once despite repeated paste-event handling on $userAgent', ({ userAgent, modifier }) => {
+    vi.stubGlobal('navigator', { userAgent });
     const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
     render(<TerminalView sessionId="s1" />);
     const term = h.term!;
@@ -654,6 +1114,13 @@ describe('TerminalView scrollback repaint', () => {
       }) });
     });
     ws.send.mockClear();
+    const shortcut = new KeyboardEvent('keydown', {
+      key: 'v', [modifier]: true, cancelable: true,
+    });
+    expect(term.keyHandler?.(shortcut)).toBe(false);
+    expect(shortcut.defaultPrevented).toBe(false);
+    expect(term.paste).not.toHaveBeenCalled();
+    expect(ws.send).not.toHaveBeenCalled();
     const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
       (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
     const event = (timeStamp: number) => ({
@@ -664,8 +1131,11 @@ describe('TerminalView scrollback repaint', () => {
       clipboardData: { getData: () => 'paste-once', files: [], items: [] },
     }) as unknown as ClipboardEvent;
 
-    onPaste(event(1000));
-    onPaste(event(1010));
+    // One native event visiting a handler twice is a duplicate. Two separate
+    // trusted events, even 10ms apart, do not prove a duplicate user action.
+    const nativePaste = event(1000);
+    onPaste(nativePaste);
+    onPaste(nativePaste);
 
     expect(term.paste).toHaveBeenCalledTimes(1);
     expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw as string))
@@ -675,7 +1145,132 @@ describe('TerminalView scrollback repaint', () => {
     registrations.mockRestore();
   });
 
-  it.each(['focus', 'blur', 'unmount', 'session'] as const)(
+  it.each([
+    'ascii', 'multiline-utf8', 'ime',
+  ] as const)('preserves one handler-fixture paste payload and a separate Enter (%s)', (kind) => {
+    const text = kind === 'ascii' ? 'one payload'
+      : '日本語😀e\u0301\r\nsecond line\nlast line';
+    const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    // Model xterm's onData boundary, not native keyboard or paste encoding.
+    term.paste.mockImplementation((value: string) => term.dataHandlers.forEach((handler) => handler(value)));
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+      }) });
+    });
+    ws.send.mockClear();
+    const target = view.container.querySelector('textarea')!;
+    if (kind === 'ime') {
+      fireEvent.compositionStart(target, { data: 'private composition' });
+      expect(term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Process', isComposing: true }))).toBe(true);
+      fireEvent.compositionEnd(target, { data: 'private composition' });
+    }
+    const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
+      (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
+    const event = {
+      preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isTrusted: true, timeStamp: 1000,
+      clipboardData: { getData: () => text, files: [], items: [] },
+    } as unknown as ClipboardEvent;
+    act(() => { onPaste(event); onPaste(event); });
+    const inputs = () => ws.send.mock.calls.map(([raw]) => JSON.parse(raw))
+      .filter((frame) => frame.type === 'input') as Array<{ data: string; seq: number }>;
+    let acknowledged = 0;
+    // Release the real delivery window until the complete large UTF-8 payload
+    // is sent. There must be neither truncation nor an automatic submit.
+    act(() => {
+      while (acknowledged < inputs().length) {
+        const frame = inputs()[acknowledged++];
+        ws.onmessage?.({ data: JSON.stringify({
+          type: 'ack', generation: 1, seq: frame.seq, outcome: 'written', reason: '',
+        }) });
+      }
+    });
+    expect(term.paste.mock.calls).toEqual([[text]]);
+    expect(inputs().map((frame) => frame.data).join('')).toBe(text);
+    expect(term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true);
+    act(() => { term.dataHandlers.forEach((handler) => handler('\r')); });
+    expect(inputs().at(-1)?.data).toBe('\r');
+    expect(inputs().map((frame) => frame.data).join('')).toBe(`${text}\r`);
+  });
+
+  it('cancels default insertion and blocks descendant and bubbling paste handlers', () => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const target = view.container.querySelector('textarea')!;
+    const descendant = vi.fn();
+    const bubbling = vi.fn();
+    const duplicateOwner = vi.fn();
+    target.addEventListener('paste', descendant);
+    view.container.addEventListener('paste', bubbling);
+    view.container.querySelector('.terminal-host')!.addEventListener('paste', duplicateOwner, { capture: true });
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    expect(target.dispatchEvent(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(descendant).not.toHaveBeenCalled();
+    expect(bubbling).not.toHaveBeenCalled();
+    expect(duplicateOwner).not.toHaveBeenCalled();
+    expect(h.term!.paste).not.toHaveBeenCalled();
+  });
+
+  it('records bounded opt-in metadata distinguishing duplicate handlers from separate events without content', () => {
+    const registrations = vi.spyOn(HTMLElement.prototype, 'addEventListener');
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    term.paste.mockImplementation((value: string) => term.dataHandlers[0](value));
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+      }) });
+    });
+    expect(view.queryByLabelText('Terminal input metadata')).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Session diagnostics' }));
+    fireEvent.click(view.getByRole('checkbox', { name: /Record terminal input metadata/ }));
+    const target = view.container.querySelector('textarea')!;
+    target.focus();
+    const onPaste = registrations.mock.calls.find(([name], index) => name === 'paste' &&
+      (registrations.mock.contexts[index] as HTMLElement).className === 'terminal-host')![1] as (event: ClipboardEvent) => void;
+    const event = {
+      preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), isTrusted: true, timeStamp: 1000,
+      clipboardData: { getData: () => 'PRIVATE😀', files: [], items: [] },
+    } as unknown as ClipboardEvent;
+    act(() => {
+      onPaste(event);
+      onPaste(event);
+      onPaste({ ...event, timeStamp: 1010 } as ClipboardEvent);
+      fireEvent.input(target, { inputType: 'insertFromPaste', data: 'PRIVATE😀', isComposing: false });
+      fireEvent.compositionStart(target, { data: 'PRIVATE' });
+      fireEvent.compositionEnd(target, { data: 'PRIVATE' });
+    });
+    const metadata = () => JSON.parse(view.getByLabelText('Terminal input metadata').textContent!);
+    const records = metadata() as Array<{ source: string; operation: number; bytes: number; trusted: boolean; outcome: string }>;
+    const pastes = records.filter((record) => record.source === 'paste-event');
+    expect(pastes).toEqual([
+      expect.objectContaining({ trusted: true, outcome: 'accepted', bytes: 11 }),
+      expect.objectContaining({ trusted: true, outcome: 'duplicate-event', bytes: 11 }),
+      expect.objectContaining({ trusted: true, outcome: 'accepted', bytes: 11 }),
+    ]);
+    expect(pastes[0].operation).toBe(pastes[1].operation);
+    expect(pastes[2].operation).not.toBe(pastes[0].operation);
+    expect(records.filter((record) => record.source === 'transport-input')).toHaveLength(2);
+    expect(JSON.stringify(records)).not.toContain('PRIVATE');
+    expect(JSON.stringify(records)).not.toContain('😀');
+    act(() => {
+      for (let i = 0; i < 140; i++) fireEvent.input(target);
+    });
+    expect(metadata()).toHaveLength(128);
+    fireEvent.click(view.getByRole('checkbox', { name: /Record terminal input metadata/ }));
+    expect(view.queryByLabelText('Terminal input metadata')).toBeNull();
+    fireEvent.input(target);
+    fireEvent.click(view.getByRole('checkbox', { name: /Record terminal input metadata/ }));
+    expect(metadata()).toEqual([]);
+  });
+
+  it.each(['focus', 'blur', 'unmount', 'session', 'modal'] as const)(
     'cancels delayed right-click paste after %s, even when focus returns', async (change) => {
       let resolve!: (text: string) => void;
       const readText = vi.fn(() => new Promise<string>((done) => { resolve = done; }));
@@ -688,6 +1283,10 @@ describe('TerminalView scrollback repaint', () => {
       if (change === 'unmount') view.unmount();
       else if (change === 'session') view.rerender(<TerminalView sessionId="s2" />);
       else if (change === 'blur') window.dispatchEvent(new Event('blur'));
+      else if (change === 'modal') view.rerender(<>
+        <TerminalView sessionId="s1" />
+        <Modal title="Pause paste" onClose={() => {}}><input autoFocus /></Modal>
+      </>);
       else {
         const input = document.createElement('input');
         document.body.appendChild(input);
@@ -963,19 +1562,109 @@ describe('TerminalView scrollback repaint', () => {
     act(() => {
       vi.advanceTimersByTime(600);
     });
-    expect(fit.fit).not.toHaveBeenCalled();
 
-    // Once the selection is released, the latest pending fit runs without
-    // waiting for another ResizeObserver notification.
+    expect(fit.fit).not.toHaveBeenCalled();
     term.hasSelection.mockReturnValue(false);
     term.getSelection.mockReturnValue('');
     act(() => {
-      for (const handler of term.selectionHandlers) {
-        handler();
-      }
+      for (const handler of term.selectionHandlers) handler();
     });
     expect(fit.fit).toHaveBeenCalled();
   });
+
+  it.each(['none', 'selection', 'drag', 'replay'] as const)(
+      'synchronizes font geometry through the guarded fit path (%s)', (guard) => {
+        vi.useFakeTimers();
+        const preferences = { prefs: { ...DEFAULT_UI_PREFERENCES }, setPrefs: vi.fn(), reset: vi.fn() };
+        vi.spyOn(preferenceHooks, 'useUiPreferences').mockImplementation(() => preferences);
+        const view = render(<TerminalView sessionId="s1" />);
+        const term = h.term!;
+        const ws = h.ws!;
+        act(() => {
+          ws.readyState = MockWebSocket.OPEN;
+          ws.onmessage?.({ data: JSON.stringify({
+            type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+          }) });
+          vi.advanceTimersByTime(800);
+        });
+        h.fit!.fit.mockImplementation(() => { term.cols = 64; term.rows = 18; });
+        h.fit!.fit.mockClear();
+        ws.send.mockClear();
+        if (guard === 'selection') term.hasSelection.mockReturnValue(true);
+        if (guard === 'drag') fireEvent.mouseDown(view.container.querySelector('.terminal-host')!);
+        if (guard === 'replay') act(() => {
+          ws.onmessage?.({ data: JSON.stringify({ type: 'resize', cols: 120, rows: 40 }) });
+          ws.onmessage?.({ data: JSON.stringify({ type: 'output', data: 'retained' }) });
+        });
+        preferences.prefs = { ...preferences.prefs, terminalTextSize: 'large', terminalFont: 'cascadia' };
+        view.rerender(<TerminalView sessionId="s1" />);
+        if (guard !== 'none') {
+          act(() => { vi.advanceTimersByTime(800); });
+          expect(h.fit!.fit).not.toHaveBeenCalled();
+          expect(ws.send.mock.calls.filter(([raw]) => JSON.parse(raw).type === 'resize')).toEqual([]);
+          act(() => {
+            term.hasSelection.mockReturnValue(false);
+            term.selectionHandlers.forEach((handler) => handler());
+            window.dispatchEvent(new MouseEvent('mouseup'));
+            if (guard === 'replay') {
+              ws.onmessage?.({ data: JSON.stringify({
+                type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+              }) });
+              term.writeCallbacks.shift()?.();
+            }
+          });
+        }
+        expect(h.fit!.fit).toHaveBeenCalled();
+        expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'resize'))
+          .toEqual([{ type: 'resize', cols: 64, rows: 18, generation: 1 }]);
+      },
+    );
+  it.each(['ready', 'loadingdone', 'disposed-ready'] as const)(
+    'fits delayed fonts through guarded geometry synchronization (%s)', async (source) => {
+      vi.useFakeTimers();
+      let ready!: () => void;
+      const fonts = Object.assign(new EventTarget(), { ready: new Promise<void>((resolve) => { ready = resolve; }) });
+      const original = Object.getOwnPropertyDescriptor(document, 'fonts');
+      Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+      try {
+        const view = render(<TerminalView sessionId="s1" />);
+        const term = h.term!;
+        const ws = h.ws!;
+        act(() => {
+          ws.readyState = MockWebSocket.OPEN;
+          ws.onmessage?.({ data: JSON.stringify({
+            type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+          }) });
+          vi.advanceTimersByTime(800);
+        });
+        h.fit!.fit.mockClear();
+        h.fit!.fit.mockImplementation(() => { term.cols = 70; term.rows = 20; });
+        ws.send.mockClear();
+        term.hasSelection.mockReturnValue(true);
+        if (source === 'disposed-ready') view.unmount();
+        await act(async () => {
+          if (source === 'loadingdone') fonts.dispatchEvent(new Event('loadingdone'));
+          else ready();
+        });
+        expect(h.fit!.fit).not.toHaveBeenCalled();
+        act(() => {
+          term.hasSelection.mockReturnValue(false);
+          term.selectionHandlers.forEach((handler) => handler());
+        });
+        if (source === 'disposed-ready') {
+          expect(h.fit!.fit).not.toHaveBeenCalled();
+        } else {
+          expect(h.fit!.fit).toHaveBeenCalledOnce();
+          expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'resize'))
+            .toEqual([{ type: 'resize', cols: 70, rows: 20, generation: 1 }]);
+        }
+        view.unmount();
+      } finally {
+        if (original) Object.defineProperty(document, 'fonts', original);
+        else Reflect.deleteProperty(document, 'fonts');
+      }
+    },
+  );
 
   it('forces a refit on a container resize even while a stale selection lingers', () => {
     vi.useFakeTimers();
@@ -1336,7 +2025,7 @@ describe('TerminalView scrollback repaint', () => {
       expect(h.ws).toBe(next);
     });
 
-    it('streams an oversized paste across frames instead of rejecting it', () => {
+    it('blocks oversized raw terminal input instead of streaming it into the CLI', () => {
       const view = render(<TerminalView sessionId="s1" />);
       const ws = h.ws!;
       act(() => {
@@ -1346,13 +2035,11 @@ describe('TerminalView scrollback repaint', () => {
         ws.readyState = MockWebSocket.OPEN;
         ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536 }) });
       });
-      // The paste is delivered as several in-flight input frames, not rejected.
       const inputs = ws.send.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('"input"'));
-      expect(inputs.length).toBeGreaterThan(1);
+      expect(inputs).toHaveLength(2);
       expect(inputs[0]).toContain('"data":"prefix"');
-      // No failure surfaced and no reconnect prompt.
-      expect(view.queryByRole('status')?.textContent ?? '').not.toContain('Paste rejected in full');
-      expect(view.queryByText(/not replayed/)).toBeNull();
+      expect(inputs[1]).toContain('"data":"\\r"');
+      expect(view.getByRole('alert').textContent).toContain('Use Paste');
     });
 
   it('strips OSC color-query replies from terminal input before sending to the PTY', () => {

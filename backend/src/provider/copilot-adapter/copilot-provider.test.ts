@@ -72,8 +72,12 @@ describe('copilot-provider', () => {
     const provider = createCopilotProvider(copilotDefaults, {
       spawner,
       baseEnv: {},
-      mcpServerNames: () => ['github', 'azure'],
+      mcpServerNames: (session) => {
+        expect(session.cwd).toBe('/work');
+        return ['github', 'azure'];
+      },
     });
+
     provider.startSession({ ...spec, kind: 'meta' });
     const req = requests[0];
     expect(req.args).toContain('--disable-builtin-mcps');
@@ -85,6 +89,21 @@ describe('copilot-provider', () => {
         'azure',
       ]),
     );
+  });
+
+  it('only evaluates workspace MCP policy for meta work and stamps the actual provider identity', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner, baseEnv: { STUDIO_PROVIDER_ID: 'wrong' },
+      mcpServerNames: () => { throw new Error('Unverified overlay'); },
+    });
+    expect(() => provider.startSession(spec)).not.toThrow();
+    expect(() => provider.startSession({ ...spec, kind: 'meta' })).toThrow('Unverified overlay');
+    expect(requests[0].env.STUDIO_PROVIDER_ID).toBe('copilot');
+    expect(provider.buildInteractiveCommand!(spec).env.STUDIO_PROVIDER_ID).toBe('copilot');
+    expect(provider.mcp?.defaultConfigPath()).toMatch(/mcp-config\.json$/);
+    const plain = createCopilotProvider(copilotDefaults, { spawner, baseEnv: {} });
+    expect(() => plain.startSession({ ...spec, kind: 'meta' })).toThrow(/suppression cannot be verified/);
   });
 
   it('buildInteractiveCommand yields the interactive TUI command + OTel env', () => {

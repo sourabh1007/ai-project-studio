@@ -18,4 +18,14 @@ describe('observed native auth state', () => {
     expect(observedMcpAuth({ ...result, status: 'failed', message: 'Timed out' }, 'time').state).toBe('unknown');
     expect(observedMcpAuth({ ...result, status: 'ok', output: ['expired credentials were refreshed'] }, 'time').state).toBe('ready');
   });
+  it.each([false, true])('keeps interrupted native sign-in unknown even when tools/list succeeded (progress=%s)', (progress) => {
+    const result = observedMcpAuth({
+      status: 'ok', message: null, tools: [],
+      output: progress ? [] : ['To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345'],
+      authenticationInterrupted: progress,
+    }, 'checked');
+    expect(result).toMatchObject({ state: 'unknown', checkedAt: 'checked', interrupted: true });
+    expect(result.message).toContain('credential caching could be confirmed');
+    expect(JSON.stringify(result)).not.toContain('ABCD12345');
+  });
 });

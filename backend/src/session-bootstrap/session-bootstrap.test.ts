@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { NotFoundError } from '../kernel/error-types.js';
 import { repositoryContextDefaults } from '../repository-context/config.js';
 import type { RepositoryContext } from '../repository-context/repository-context-contract.js';
@@ -71,6 +71,8 @@ function harness(options: {
   sharedContext?: string;
   featureThrows?: boolean;
   onSkillContextPrepared?: (session: Session) => void;
+  contextLookup?: () => Promise<RepositoryContext>;
+  launchContextWaitMs?: number;
 } = {}) {
   const loads: string[] = [];
   const instructions: string[] = [];
@@ -78,7 +80,9 @@ function harness(options: {
   const composeInputs: { repoId?: string | null; featureId?: string | null }[] =
     [];
   const allSessions = options.sessions ?? [];
+  const warnings: { message: string; details: unknown }[] = [];
   const bootstrap = createSessionBootstrap({
+    logger: { warn: (message, details) => { warnings.push({ message, details }); } },
     onSkillContextPrepared: options.onSkillContextPrepared,
     features: {
       get: () => {
@@ -120,6 +124,7 @@ function harness(options: {
     contexts: {
       ensureFresh: async (repositoryId) => {
         contextIds.push(repositoryId);
+        if (options.contextLookup) return options.contextLookup();
         if (options.contextError) {
           throw options.contextError;
         }
@@ -141,12 +146,66 @@ function harness(options: {
       maxFeatureMemoryChars: options.maxChars ?? 32_000,
       maxOutputChars:
         options.maxOutputChars ?? repositoryContextDefaults.maxOutputChars,
+      launchContextWaitMs: options.launchContextWaitMs ?? repositoryContextDefaults.launchContextWaitMs,
     },
   });
-  return { bootstrap, loads, instructions, contextIds, composeInputs };
+  return { bootstrap, loads, instructions, contextIds, composeInputs, warnings };
 }
 
 describe('session bootstrap', () => {
+  it('bounds slow revision IO while keeping the result usable for a later launch', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolve!: (context: RepositoryContext) => void;
+      const lookup = new Promise<RepositoryContext>((done) => { resolve = done; });
+      const h = harness({ contextLookup: () => lookup, launchContextWaitMs: 25 });
+      const launch = h.bootstrap.composeForSession(baseSession);
+      await vi.advanceTimersByTimeAsync(25);
+      const prompt = await launch;
+      expect(prompt).not.toContain('## Repository Context');
+      expect(prompt).toContain('## Feature');
+      expect(h.warnings).toEqual([{
+        message: 'Starting session without optional repository context after its lookup budget',
+        details: { repositoryId: 'repo-1', waitMs: 25 },
+      }]);
+      resolve(readyContext);
+      expect(await h.bootstrap.composeForSession(baseSession)).toContain('Repository summary');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds the initial session-record gate and observes late freshness failures', async () => {
+    vi.useFakeTimers();
+    try {
+      let reject!: (error: Error) => void;
+      const lookup = new Promise<RepositoryContext>((_resolve, fail) => { reject = fail; });
+      const h = harness({ contextLookup: () => lookup, launchContextWaitMs: 10 });
+      const gate = h.bootstrap.assertFeatureReady('feature-1');
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(gate).resolves.toBeUndefined();
+      reject(new Error('Revision read failed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.warnings).toHaveLength(2);
+      expect(h.warnings[1].message).toContain('lookup failed');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the launch timer when the freshness check completes promptly', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      expect(await h.bootstrap.composeForSession(baseSession)).toContain('Repository summary');
+      expect(h.warnings).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('observes IDE context preparation only when skill instructions are composed for development', async () => {
     const prepared: string[] = [];
     const h = harness({ onSkillContextPrepared: (value) => prepared.push(value.id) });

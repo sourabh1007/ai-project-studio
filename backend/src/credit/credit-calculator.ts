@@ -29,7 +29,7 @@ export function createCreditCalculator(
     calculate: (event) => ({
       strategy: active.id,
       unit: config.unit,
-      credits: active.compute(event),
+      credits: event.cost === null && event.nanoAiu === null ? null : active.compute(event),
     }),
   };
 }

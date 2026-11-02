@@ -4,6 +4,14 @@ import type { FeatureService } from '../feature/feature-service.js';
 import type { Feature } from '../feature/feature-contract.js';
 import type { Session } from '../session/session-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
+const operations = {
+  keyFrom: () => null,
+  run: async (_request: unknown, execute: (commit: (write: () => unknown) => unknown) => Promise<unknown>) => {
+    let result: unknown;
+    await execute((write) => (result = write()));
+    return result;
+  },
+} as never;
 
 const feature: Feature = {
   id: 'f1',
@@ -59,7 +67,7 @@ function harness() {
     deleteSession: async () => undefined,
   };
   return {
-    routes: createFeatureRoutes({ features: service, admin }),
+    routes: createFeatureRoutes({ features: service, admin, operations }),
     created,
     moved,
     renamed,

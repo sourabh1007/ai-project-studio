@@ -39,7 +39,7 @@ export function buildMcpUsageReport(
 ): McpUsageReport | null {
   const featureId = trimmed(env.STUDIO_FEATURE_ID);
   const server = trimmed(env.STUDIO_MCP_SERVER);
-  const provider = trimmed(env.STUDIO_MCP_PROVIDER);
+  const provider = trimmed(env.STUDIO_PROVIDER_ID) ?? trimmed(env.STUDIO_MCP_PROVIDER);
   if (!featureId || !server || !provider) {
     return null;
   }

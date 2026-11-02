@@ -587,6 +587,7 @@ export function ReviewBoardPage({
     allFiles?: boolean;
     focus?: { path: string; line: number } | null;
   } | null>(null);
+  useEffect(() => { setDiffTarget(null); }, [featureId]);
   const resolveNodeDiff = useCallback(
     (path: string): { path: string; diff: string } | null => {
       if (!changeGraph) return null;
@@ -675,6 +676,7 @@ export function ReviewBoardPage({
     let cancelled = false;
     if (!board) {
       setChangeGraph(null);
+      setGraphHeadSha(null);
       setGraphLoading(false);
       setGraphError(null);
       return;

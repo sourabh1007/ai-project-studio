@@ -76,6 +76,17 @@ function request(overrides: Partial<StartSessionRequest> = {}): StartSessionRequ
 }
 
 describe('createRecordingSessionLauncher', () => {
+  it('hints usage capture after the native session identity and completion are saved', async () => {
+    const rec = recorder();
+    const changed = vi.fn();
+    const runner = createRecordingSessionLauncher({
+      base: { start: async () => launched(Promise.resolve(session({ status: 'completed' }))) },
+      operations: rec.ops, clock, newOperationId: () => 'fresh', onOperationChanged: changed,
+    });
+    await (await runner.start(request())).completion;
+    expect(changed.mock.calls).toEqual([['fresh'], ['fresh']]);
+    expect(rec.completed[0].sessionId).toBe('sess-1');
+  });
   it('passes non-meta launches straight through without recording', async () => {
     const rec = recorder();
     const done = Promise.resolve(session({ status: 'completed' }));

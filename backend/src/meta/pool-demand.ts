@@ -27,18 +27,22 @@ interface DemandSample {
 /** Tracks concurrent demand for the shared warm pool over a rolling window. */
 export class PoolDemandTracker {
   private readonly samples: DemandSample[] = [];
+  private head = 0;
   private current = 0;
-  private peak = 0;
 
   constructor(private readonly config: DemandTrackerConfig) {}
 
   /** A turn started. */
   begin(): void {
     this.current += 1;
-    if (this.current > this.peak) {
-      this.peak = this.current;
+    const at = this.config.now();
+    this.prune(at);
+    const demand = Math.min(this.current, this.config.maxSize);
+    // A newer equal/higher peak dominates older samples until they expire.
+    while (this.samples.length > this.head && this.samples[this.samples.length - 1].demand <= demand) {
+      this.samples.pop();
     }
-    this.samples.push({ at: this.config.now(), demand: this.current });
+    this.samples.push({ at, demand });
   }
 
   /** A turn finished (success or failure). */
@@ -58,20 +62,19 @@ export class PoolDemandTracker {
    * below the current in-flight count), clamped to `[1, maxSize]`.
    */
   suggestion(): number {
-    this.prune();
-    let peak = this.current;
-    for (const sample of this.samples) {
-      if (sample.demand > peak) {
-        peak = sample.demand;
-      }
-    }
+    this.prune(this.config.now());
+    const peak = Math.max(this.current, this.samples[this.head]?.demand ?? 0);
     return Math.min(this.config.maxSize, Math.max(1, peak));
   }
 
-  private prune(): void {
-    const cutoff = this.config.now() - this.config.windowMs;
-    while (this.samples.length > 0 && this.samples[0].at < cutoff) {
-      this.samples.shift();
+  private prune(now: number): void {
+    const cutoff = now - this.config.windowMs;
+    while (this.head < this.samples.length && this.samples[this.head].at < cutoff) {
+      this.head += 1;
+    }
+    if (this.head > 0 && this.head * 2 >= this.samples.length) {
+      this.samples.splice(0, this.head);
+      this.head = 0;
     }
   }
 }

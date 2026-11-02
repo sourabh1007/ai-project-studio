@@ -7,9 +7,16 @@ roll-up, and the management view generically. Three ship today:
 
 | Agent | Attaches when | Does |
 | --- | --- | --- |
-| **Review Board** | the feature has a PR review | Scores and analyses a pull request ([PR reviews](features/pr-reviews.md)). |
+| **Review Board** | the feature has a PR review | Reviews a pull request through evidence-grounded perspectives ([PR reviews](features/pr-reviews.md)). |
 | **New Task** | the feature has a linked repository | Plans and implements a change, then opens a PR ([New Task](features/new-task.md)). |
 | **Bug Bash** | the feature has a linked repository | Generates edge-case test scenarios, runs them across a tester team, and reports what breaks ([Bug Bash](features/bug-bash.md)). |
+
+Attachment prerequisites do not guarantee AI execution readiness. All three
+agents require a metasession-capable active CLI: choose **Copilot** or **Claude
+with a safe/nonmanaged profile and supported API/cloud credentials**. Agency
+is currently **interactive-only for IDE-launched AI automation** because its
+native MCP overlays cannot be verifiably isolated. Installation/sign-in does
+not remove this intentional restriction.
 
 An agent:
 
@@ -23,6 +30,9 @@ An agent:
 > "Agent" here means an attachable *feature* agent. It is unrelated to the AI
 > coding agents that work on this repo (`AGENTS.md`) or to
 > `automation`/`subagent` background runs.
+> This file is `docs/agents.md`; the contributor agreement is the root
+> [`AGENTS.md`](../AGENTS.md). On case-insensitive filesystems, spelling this
+> document as `docs/AGENTS.md` does not identify a separate instruction file.
 
 ## Rules the host enforces
 
@@ -47,6 +57,10 @@ Warm ACP publishes its provider session identity before prompting so charges can
 be attributed while it runs, including attempts that fail. A bounded background
 scan repairs late usage and replaces persisted operation snapshots rather than
 adding a repeated capture. Warm usage is also saved for the IDE usage summary.
+Cold-session operations depend on background capture; new/changed operations
+receive a bounded priority pass independently of historical repair. A completed
+operation can still show unavailable/partial billing until its provider publishes
+the charge; completion is not proof of immediate billing availability.
 `meta.usage.updated` invalidates mounted agent meters; polling and reconnects
 recover missed updates.
 
@@ -77,7 +91,7 @@ perspective meters and `AgentUsageValue` to preserve unavailable/partial labels.
 | UI agent modules | `ui/src/agents/<id>/<id>-module.tsx` |
 
 Attachments are persisted (`agent_attachment(featureId, agentId)`, mirroring
-skill attachments) and both agents are registered in one array in `main.ts`
+skill attachments) and all three agents are registered in one array in `main.ts`
 (`createAgentRegistry([...])`).
 
 ## Host routes (generic)
@@ -101,6 +115,8 @@ nothing in core changes:
    `manifest` (id, title, icon, `allowMultiplePerFeature`, prerequisite,
    `usageLabel`), `promptFields`, and `routes(ctx)`. Drive metasessions via
    `ctx.ai.runDetailed(...)`; keep logic pure behind ports.
+   Prompt fields can declare `group` and `subgroup` for the Agents view's
+   grouped prompt tree; keep these labels with the owning agent.
 2. **Frontend** `ui/src/agents/<id>/<id>-module.tsx` — an `AgentUiModule` whose
    lazy `component` renders the tab through the injected `ctx` (no core imports).
 3. **Register** in `createAgentRegistry([...])` (backend) and the UI registry.

@@ -18,6 +18,7 @@ describe('usage capture persistence', () => {
         sessionId: 's',
         sourceId: 'source',
         cursor: null,
+        appendCursor: null,
         replayCursor: null,
         finalScan: false,
         replayClean: false,
@@ -57,10 +58,11 @@ describe('usage capture persistence', () => {
       });
       expect(captures.reserve('s', 'new', { ...event, startedAt: 'new' }).turnIndex).toBe(41);
       expect(captures.reserve('s', 'next', { ...event, startedAt: 'next' }).turnIndex).toBe(42);
-      captures.save({ ...state, cursor: 'source-cursor', status: 'retrying', reason: 'source-locked' });
+      captures.save({ ...state, cursor: 'source-cursor', appendCursor: 'append-high-water', status: 'retrying', reason: 'source-locked' });
       expect(captures.listUnfinished()).toEqual([{
         ...state,
         cursor: 'source-cursor',
+        appendCursor: 'append-high-water',
         replayCursor: null,
         status: 'retrying',
         reason: 'source-locked',

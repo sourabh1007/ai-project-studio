@@ -4,9 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hashFile } = require('./smoke-helpers.cjs');
 
-async function writeCandidateManifest({ root, platform, sourceSha, runId, runAttempt }) {
+async function writeCandidateManifest({ root, platform, arch = process.arch, sourceSha, runId, runAttempt }) {
   if (!['win32', 'darwin'].includes(platform)) {
     throw new Error('Candidate provenance requires a shipped platform');
+  }
+  if (!['x64', 'arm64'].includes(arch)) {
+    throw new Error('Candidate provenance requires a supported architecture');
   }
   if (!/^[a-f0-9]{40}$/i.test(sourceSha ?? '') ||
       !/^[1-9][0-9]*$/.test(runId ?? '') ||
@@ -46,13 +49,14 @@ async function writeCandidateManifest({ root, platform, sourceSha, runId, runAtt
     sourceSha,
     ci: { runId, runAttempt },
     platform,
+    arch,
     version: metadata.version,
     lockSha256,
     buildRuntime: { node: process.version, nodeModuleAbi: process.versions.modules },
     packagedRuntimeVerification: 'pending',
     artifacts,
   };
-  const output = path.join(releaseDir, `candidate-${platform}.json`);
+  const output = path.join(releaseDir, `candidate-${platform}-${arch}.json`);
   fs.writeFileSync(output, JSON.stringify(manifest, null, 2) + '\n');
   return { output, manifest };
 }

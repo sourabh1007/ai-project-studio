@@ -1,5 +1,5 @@
 import type { ComponentType, LazyExoticComponent } from 'react';
-import type { Feature } from '../lib/types.js';
+import type { Feature, Session } from '../lib/types.js';
 
 /**
  * Host services injected into an agent's workspace-tab component. An agent
@@ -13,6 +13,11 @@ export interface AgentUiContext {
   attachmentId: string;
   /** The agent id (matches the backend manifest id). */
   agentId: string;
+  /**
+   * Optional host hook to open a session as a workspace tab. Absent in hosts
+   * (e.g. a detached window) that cannot navigate the workspace.
+   */
+  openSession?: (session: Session, label: string) => void;
 }
 
 export interface AgentUiProps {

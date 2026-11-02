@@ -7,12 +7,13 @@ version IPC. It never imports the production backend or renders the production U
 
 ## Commands
 
-From the repository root (Node 22+ and existing npm dependencies):
+From the repository root (Node ≥24.20.0 and existing npm dependencies):
 
 ```powershell
 npm run test:desktop:harness
 npm run test:desktop:smoke -- --exe "C:\candidate\AI Project Studio.exe"
 npm run test:desktop:smoke -- --ready-delay-ms 500 --timeout-ms 30000 --seed 42
+npm run test:desktop:smoke -- --ready-delay-ms 5000 --timeout-ms 60000
 ```
 
 `--exe` or `CW_TEST_EXE` selects an **unpacked/installed executable**, not an
@@ -24,8 +25,13 @@ not qualified by WP00's Windows development run.
 `--out` selects a results parent (default `desktop/test-results`, ignored by git).
 Each invocation creates a fresh child directory; never supply a live profile as
 a fixture. `--timeout-ms` is bounded to 1–60 seconds, delayed readiness to 0–5
-seconds. Source/package preflight and hashing precede launch; CDP operations have
-their own five-second limits. Cleanup has separate bounded waits. The seed is
+seconds. Source/package preflight and hashing precede launch. Renderer runtime
+initialization/readiness probes use up to 15 seconds within the startup budget;
+ordinary CDP operations retain their five-second limits. Readiness diagnostics
+distinguish renderer attachment, document readiness and version acknowledgement.
+Cleanup has separate bounded waits and asynchronously retries transient Windows
+profile locks. Removal failures still fail the trial; only the manifest is
+retained after successful cleanup. Elapsed time includes cleanup. The seed is
 recorded for reproducibility; the current smoke does not randomize its inputs.
 
 Before execution, the harness compares packaged shell/fixture sources with the
@@ -94,9 +100,27 @@ run and recorded for the candidate/platform.
 
 ### Clipboard contract
 
+- Desktop pins **Electron 44.9.3** (64-bit only; macOS 13+). Electron 44's
+  asynchronous/lazy clipboard items require awaiting native reads and bounding
+  app-owned materialization. PNG byte/dimension checks before the app's own image
+  decode do not guarantee bounded OS-side extraction or permission-free reads.
+- Native Windows file lists use Electron 44's `text/uri-list` mapping to
+  `CF_HDROP`. The legacy raw-buffer fallback accepts validated UTF-16 and ASCII
+  ANSI paths; unsupported non-ASCII ANSI is rejected rather than decoded using
+  a guessed codepage.
+- macOS Edit menu copy/paste entries use Electron's native `copy`, `paste` and
+  `pasteAndMatchStyle` roles, including platform Command key equivalents and
+  focused-responder routing. Windows/Linux retain accelerator-free custom menu
+  clicks so keyboard paste does not gain a second menu dispatcher. Terminal
+  keyboard paste never reads the clipboard itself: the trusted editing event
+  remains the single paste owner. Simulated menu/renderer tests do not qualify
+  installed macOS keyboard behavior.
 - `desktop.copyText(text)` returns `Promise<ClipboardResult>`: `{ ok: true }`
-  only after a native write and exact readback; otherwise `{ ok: false, error,
-  writeState }`. `writeState` is `not-written`, `unknown` or `written`.
+  after a native write and supported verification; otherwise `{ ok: false,
+  error, writeState }`. macOS deliberately skips a programmatic post-write
+  readback to avoid making copy require paste permission. Native rejected
+  writes still fail; user-triggered paste reads remain permission-dependent.
+  `writeState` is `not-written`, `unknown` or `written`.
 - Generic URL/path validation stays at 32 Ki code units. Clipboard text has a
   separate **4 Mi UTF-16-code-unit / 8 MiB** allocation budget, checked after
   terminal normalization. This is a provisional practical ceiling, not a
@@ -115,13 +139,110 @@ run and recorded for the candidate/platform.
 - Terminal selections retain existing frame-cleaning and Windows CRLF policy;
   other UI text is unchanged. Paste event text/Unicode/newlines is passed to
   xterm unchanged (xterm owns terminal paste encoding). One capture listener
-  owns each native paste event. Event-identity guarding replaces the 40ms
-  text-based heuristic: separate identical actions are not suppressed.
+  owns each native paste event. Event identity rejects repeated handling of the
+  same event, including delayed repeated handling. Separate trusted events are
+  accepted even when their contents/timestamps match. The old 50ms signature
+  heuristic dropped deliberate identical pastes and could not identify delayed
+  host duplicates. There is no content/timing debounce or retained signature.
 - Async right-click/image reads are bound to the mounted terminal, input target
   and focus generation. Focus transfer, window blur and unmount invalidate them
   even if focus returns. JS-dispatched untrusted paste events remain rejected.
   Image/file reads still sample the current OS clipboard asynchronously; they
   do not claim an immutable snapshot of the triggering clipboard event.
+
+### Windows terminal input/geometry investigation
+
+Two deterministic renderer regressions are covered, not physical symptom closure:
+
+- Changing terminal font/size previously called `fit.fit()` directly: a mocked
+  80×24 → 64×18 measurement changed xterm without sending a PTY resize. It also
+  bypassed selection, drag and replay guards. Appearance changes now request the
+  shared guarded fit/resize/repaint path, with bounded measurement retries.
+  `document.fonts.ready`/`loadingdone` retry delayed metrics through that path;
+  display-scale monitoring still uses the existing settled resize mechanism.
+- Two separate handler-fixture trusted events with identical text and timestamp
+  were reduced to one payload by the 50ms signature heuristic. Event identity now
+  prevents repeated handling without dropping intentional repeated pastes.
+  A fixture marked `isTrusted: true` is **not** a physical Windows/macOS event.
+  Distinct duplicate events from one physical gesture remain unverified; their
+  contents/timing alone do not establish ownership or intent.
+
+For intermittent Windows duplication, use the production terminal's **Session
+diagnostics → Record terminal input metadata (opt-in)**. Return focus to the
+terminal after enabling. No tracing is enabled by default. The per-view recorder
+keeps only the latest **128** records in memory: relative monotonic milliseconds,
+operation IDs, source/trust, focus epoch, terminal generation, byte counts,
+transport sequence numbers, grid size and composition/paste-input flags. It
+never stores clipboard/prompt text, paths, content hashes or terminal output;
+there is no telemetry, persistence or automatic export. Disable to erase; closing
+the view also discards it. Reconnect observations can remain in the bounded trace.
+Operation IDs identify event objects/handler operations, **not physical gestures**;
+buffered transport frames can have a null operation ID.
+
+On a dedicated Windows desktop, with synthetic markers and an installed candidate:
+
+1. Record candidate/version, keyboard/IME, display scale and provider CLI version.
+   Perform exactly one physical Ctrl+V, then a separate Enter. Compare accepted
+   `paste-event`, `paste-call`, `xterm-data`, and `transport-input` byte counts/
+   sequence IDs (large pastes legitimately use multiple transport frames).
+   `submit-key` is separate. Test Edit menu paste and right-click independently.
+2. Repeat two deliberate identical pastes, including fast pairs. Same operation
+   ID plus `duplicate-event` identifies repeated handler invocation; two accepted
+   event IDs do **not** prove two user gestures. If DOM `input`/`beforeinput`
+   appears after the owned paste, note trust, composition/fromPaste flags and
+   sizes to locate any additional input path. Do not infer a fix from timing.
+3. Exercise LF/CRLF, emoji/wide/combining characters, >64 KiB UTF-8, IME
+   composition/commit, modal focus, tab changes, app blur/refocus, pending native
+   image/right-click reads and reconnect. No stale async read may reach a new
+   owner/generation. Repeat font changes, resize and monitor/DPI moves while
+   composing; compare renderer and PTY resize metadata.
+4. Retain metadata/counts only, then disable recording. Never capture real
+   prompts, clipboard content or file paths for this investigation.
+
+Handler-fixture tests verify one payload, deliberate repeats, separate Enter,
+large UTF-8 delivery, multiline/IME passthrough, capture cancellation, async
+ownership and replay/selection/drag/font guards. They cannot reproduce native
+default insertion or certify xterm/ConPTY/provider rendering on real displays.
+The intermittent Windows native duplicate cause and physical overlapping
+composer symptom remain open until this production path is exercised. No actual
+Mac was available; macOS physical qualification below remains required.
+
+### Required macOS physical-input qualification
+
+Run on a dedicated Mac with the candidate installed app and production UI/backend,
+not the synthetic smoke document. Record candidate SHA/artifact hash, macOS and
+Electron versions, architecture, keyboard/IME, display scale, provider CLI version
+and outcomes. Use synthetic prompt markers only; retain counts, timing and
+geometry, not prompts, clipboard contents, file paths or terminal transcripts.
+
+1. Verify Edit menu Copy/Paste/Paste and Match Style have native Command key
+   equivalents. Test physical Cmd+C/Cmd+V and menu clicks in a normal input,
+   textarea, modal field and a focused terminal; no terminal input may reach an
+   editable field's paste destination or vice versa.
+2. At a ready interactive CLI prompt, test ASCII, CRLF/LF multiline, emoji,
+   combining/wide characters and a paste larger than 64 KiB. One action inserts
+   one payload; paste itself must not submit. A separate Enter submits once.
+   Repeat identical deliberate pastes, including fast pairs, and compare intended
+   actions against observed insertions. Check Ctrl+C still interrupts without a
+   selection, Cmd+C copies a selection and explicit Shift variants do not add a
+   second paste owner. Verify Cmd+Option+Shift+V through the native menu role.
+3. Paste/copy during Japanese/Chinese IME composition and immediately after
+   committing it. Switch terminal tabs, open/close a modal, focus another field,
+   blur/refocus the app and reconnect during a pending image/right-click read:
+   no stale paste, redirected copy fallback or focus theft is allowed.
+4. Resize while pasting/typing; change font size/family and theme; move between
+   Retina/non-Retina displays and sleep/resume. Input counts must stay unchanged,
+   final PTY and xterm geometry must agree, and the composer must remain aligned
+   without lost text. Reconnect after acknowledged and unacknowledged input:
+   uncertain input must not replay, and a visible notice must explain discards.
+5. Check text, image and copied-file clipboard formats separately; failed or
+   cancelled attachment reads must never fall back to stale text or auto-retry.
+   Repeat keyboard/menu text cases in a supported browser on macOS to separate
+   Electron menu routing from browser input behavior.
+
+A source-level platform/menu regression pass and the opt-in clipboard IPC smoke
+are prerequisites, not substitutes for this evidence. CI/release builds on macOS
+alone do not establish physical keyboard, native focus or interactive PTY behavior.
 
 The retained `manifest.json` contains source HEAD/dirty status, tested source
 hashes, lockfile/harness hashes, executable and app.asar SHA-256, OS/Node/CDP/app

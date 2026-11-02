@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { createAggregateRoutes } from './aggregate-controller.js';
+import { describe, it, expect, vi } from 'vitest';
+import { createAggregateRoutes, type AggregateControllerDeps } from './aggregate-controller.js';
 import type { FeatureAnalyticsService } from '../aggregation/feature-analytics.js';
 import type {
   FeatureAnalytics,
@@ -53,16 +53,43 @@ const analyticsResult: FeatureAnalytics = {
   groups: [],
 };
 
-function harness() {
+function harness(summary?: AggregateControllerDeps['summary']) {
   const analytics: FeatureAnalyticsService = {
     forFeature: () => analyticsResult,
     workspaceTotals: () => totals,
     workspaceStats: () => ({ totals, activeSessions: 3, totalSessions: 5 }),
   };
-  return createAggregateRoutes({ analytics });
+  return createAggregateRoutes({ analytics, summary });
 }
 
 describe('aggregate-controller', () => {
+  it('awaits the hierarchy snapshot and forwards request cancellation', async () => {
+    const snapshot = { features: {}, unattributed: null };
+    const summary = vi.fn().mockResolvedValue(snapshot);
+    const controller = new AbortController();
+    const response = await pick(harness(summary), 'get', '/usage/summary')(
+      req({ signal: controller.signal }),
+    );
+    expect(summary).toHaveBeenCalledWith(controller.signal);
+    expect(response).toEqual({ status: 200, body: snapshot });
+  });
+
+  it('does not block unrelated routes while the snapshot worker is running', async () => {
+    let finish!: (value: { features: {}; unattributed: null }) => void;
+    const pending = new Promise<{ features: {}; unattributed: null }>((resolve) => { finish = resolve; });
+    const routes = harness(() => pending);
+    const snapshot = pick(routes, 'get', '/usage/summary')(req());
+    expect(await pick(routes, 'get', '/usage/totals')(req())).toEqual({ status: 200, body: totals });
+    finish({ features: {}, unattributed: null });
+    await snapshot;
+  });
+
+  it('propagates worker failures rather than returning an empty snapshot', async () => {
+    const failure = new Error('Summary worker could not read the database');
+    await expect(pick(harness(() => Promise.reject(failure)), 'get', '/usage/summary')(req()))
+      .rejects.toBe(failure);
+  });
+
   it('returns composed feature analytics', async () => {
     const result = await pick(harness(), 'get', '/features/:featureId/usage')(
       req({ params: { featureId: 'f1' } }),

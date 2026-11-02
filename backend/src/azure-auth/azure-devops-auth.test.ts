@@ -51,6 +51,18 @@ describe('parseAzureTarget', () => {
     ).toEqual({ host: 'dev.azure.com', org: 'contoso' });
   });
 
+  it.each([
+    'git@ssh.dev.azure.com:v3/contoso/project/repo',
+    'ssh://git@ssh.dev.azure.com/v3/contoso/project/repo',
+  ])('uses the real organization from an Azure SSH remote: %s', (remote) => {
+    expect(parseAzureTarget(remote)).toEqual({ host: 'dev.azure.com', org: 'contoso' });
+    expect(buildCredentialQuery(parseAzureTarget(remote))).toBe('protocol=https\nhost=dev.azure.com\npath=contoso\n\n');
+  });
+
+  it('does not mistake the SSH v3 prefix for an organization when the path is incomplete', () => {
+    expect(parseAzureTarget('ssh://git@ssh.dev.azure.com/v3/')).toEqual({ host: 'dev.azure.com', org: null });
+  });
+
   it('parses a legacy visualstudio.com URL, taking the org from the host', () => {
     expect(
       parseAzureTarget('https://contoso.visualstudio.com/_git/repo'),
@@ -349,15 +361,30 @@ describe('createAzureDevOpsAuth', () => {
     expect(result.message).toMatch(/not installed/);
   });
 
-  it('reports unauthenticated when the credential runner fails', async () => {
+  it('reports unauthenticated when the native credential helper requires sign-in', async () => {
     const auth = createAzureDevOpsAuth({
       config: async () => ok(''),
-      credential: async () => fail(),
+      credential: async () => fail('fatal: Cannot prompt because user interactivity has been disabled.'),
     });
 
     expect(
       await auth.status({ host: 'dev.azure.com', org: null }),
     ).toEqual({ authenticated: false, account: null, message: null });
+  });
+
+  it.each([fail('keyring unavailable'), fail('network timeout'), ok('quit=1\n')])(
+    'does not turn an unavailable native status check into a confirmed logout: %j',
+    async (result) => {
+      const auth = createAzureDevOpsAuth({ config: async () => ok(''), credential: async () => result });
+      await expect(auth.status({ host: 'dev.azure.com', org: null })).rejects.toMatchObject({ kind: 'unavailable' });
+    },
+  );
+
+  it('reports signed out when a silent credential check confirms no stored credential', async () => {
+    const auth = createAzureDevOpsAuth({ config: async () => ok(''), credential: async () => ok('') });
+    expect(await auth.status({ host: 'dev.azure.com', org: null })).toEqual({
+      authenticated: false, account: null, message: null,
+    });
   });
 
   it('token returns the cached OAuth password from a non-interactive get', async () => {
@@ -383,5 +410,19 @@ describe('createAzureDevOpsAuth', () => {
     });
 
     expect(await auth.token({ host: 'dev.azure.com', org: 'x' })).toBeNull();
+  });
+
+  it.each([
+    [ok('username=fixture\npassword=stored'), { state: 'ready', token: 'stored' }],
+    [ok(''), { state: 'signed-out' }],
+    [fail(), { state: 'unavailable' }],
+    [{ code: 1, stdout: '', stderr: 'fatal: Cannot prompt because user interactivity has been disabled.\n' }, { state: 'interaction-required' }],
+    [{ code: 1, stdout: '', stderr: 'Cannot prompt because terminal prompts have been disabled.' }, { state: 'interaction-required' }],
+    [{ code: 1, stdout: '', stderr: 'Network failed; diagnostic context: Cannot prompt because user interactivity has been disabled.' }, { state: 'unavailable' }],
+    [ok('quit=1\n\n'), { state: 'unavailable' }],
+    [ok('quit=true\r\n'), { state: 'unavailable' }],
+  ])('distinguishes a missing cached credential from an unavailable credential helper: %j', async (result, expected) => {
+    const auth = createAzureDevOpsAuth({ config: async () => ok(''), credential: async () => result });
+    expect(await auth.readToken({ host: 'dev.azure.com', org: 'fixture' })).toEqual(expected);
   });
 });

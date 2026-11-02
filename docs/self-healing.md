@@ -27,14 +27,14 @@ actions only).
 
 | Primitive | Location | Reused for |
 | --- | --- | --- |
-| Healer catalog (verify→heal→re-verify, streaming) | `backend/src/self-heal/` | UI live-status pattern, SSE route shape (`main.ts:4334`) |
+| Healer catalog (verify→heal→re-verify, streaming) | `backend/src/self-heal/`, `api/self-heal-controller.ts` | UI live-status pattern and controller-owned SSE route |
 | Session recovery ladder (analyze via metasession, restart) | `backend/src/self-recovery/` | coordinator shape, error matcher style |
 | Metasessions (headless AI turns, recorded + credited) | `backend/src/meta/`, `docs/metasessions.md` | discovery + remediation driver |
 | Health probes + report | `backend/src/health/` | capability-probe service shape, metrics surface |
 | **Persisted config overrides (SQLite)** | `backend/src/config/config-override-*`, `persistence/config-override-repo.ts` | durable descriptor storage ("permanent till next failure") |
 | Typed event bus | `backend/src/kernel/event-bus.ts` | `adaptation.*` events, hot-apply |
 | Cancellable background runner | `backend/src/kernel/background-work-runner.ts` | run heals off the HTTP path (AGENTS.md rule 8) |
-| MCP config-path self-discovery via metasession | `main.ts:2386-2440`, `provider-contract.ts` (`McpSupport`) | the healing template to copy |
+| MCP source/capability discovery | `mcp/mcp-category-service.ts`, `mcp/mcp-categories.ts`, `provider-contract.ts` (`McpSupport`) | source provenance and capability boundaries; do not infer native live reload |
 
 ## Core idea: descriptor-driven parsing, heal the descriptor
 
@@ -49,7 +49,7 @@ persist it as a config override.
 | Capability | Backs | Today's code | Current failure mode |
 | --- | --- | --- | --- |
 | `cli-store` | usage **and** history (same `session-store.db`) | `cli-usage-store`, `cli-session-store`, `copilot-history-db.ts` | silent `[]` on schema drift → **data loss, no alarm** |
-| `cli-otel` | fallback OTel JSONL path | `usage/cli-usage-tailer.ts` read path | parses to nothing |
+| `cli-otel` | proposed fallback OTel JSONL capability | provider-owned telemetry readers (not `usage/cli-usage-tailer.ts`, which consumes normalized provider usage pages) | format drift can leave telemetry unavailable |
 | `provider-cmd` | launch command, flags, model list | `provider/copilot-adapter/` | wrong flags → launch/usage break |
 
 `cli-store` is the dominant target: usage *and* history read the **same DB**, so
@@ -181,7 +181,7 @@ while adapting." No feature hard-breaks on drift.
   per step = the Settings timeline feed. Mirror `ide-usage-repo.ts`.
 - **API** (`api/routes.ts` + controller): `GET /adaptation/status`,
   `GET /adaptation/history` (paginated), `POST /adaptation/:capability/heal`
-  (manual, SSE — reuse `self-heal/:target/run` at `main.ts:4334`).
+  (manual, SSE — reuse `self-heal/:target/run` in `api/self-heal-controller.ts`).
 - **UI** `ui/src/features/settings/self-healing-section.tsx` in the existing
   **System** tab (beside `HealthSection` in `settings-view.tsx`):
   - per-capability chips: Healthy / Watching / Healing… / Needs attention

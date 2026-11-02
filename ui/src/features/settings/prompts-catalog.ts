@@ -158,59 +158,6 @@ export const PROMPT_CATALOG: PromptCatalogSection[] = [
     ],
   },
   {
-    id: 'cli-commands',
-    title: 'Provider CLI Commands',
-    description:
-      'The command lines the IDE builds to drive the underlying AI CLIs. These ' +
-      'are assembled from provider settings (executable, tools, extra args) on ' +
-      'the Configuration tab and are shown here read-only for transparency.',
-    fields: [],
-    readOnly: [
-      {
-        id: 'cli-copilot-headless',
-        label: 'Copilot — headless session',
-        command: true,
-        description:
-          'Non-interactive prompt-to-JSON run used for every analysis turn.',
-        text: [
-          'copilot -p <prompt>',
-          '        --model <model>',
-          '        --session-id <uuid>',
-          '        --output-format json',
-          '        --no-color',
-          '        [--attachment <path>]…',
-          '        [--allow-all-tools | --available-tools]',
-          '        [--disable-builtin-mcps]        (meta sessions)',
-          '        [--disable-mcp-server <name>]…',
-          '        [-s]                             (silent)',
-          '        [<extraArgs>…]',
-        ].join('\n'),
-      },
-      {
-        id: 'cli-copilot-interactive',
-        label: 'Copilot — interactive session',
-        command: true,
-        description:
-          'Starts the native interactive Copilot TUI (no -p / JSON output).',
-        text: [
-          'copilot --model <model>',
-          '        --session-id <uuid>',
-          '        [--attachment <path>]…',
-          '        [--allow-all-tools]',
-          '        [<extraArgs>…]',
-        ].join('\n'),
-      },
-      {
-        id: 'cli-agency',
-        label: 'Agency — Copilot passthrough',
-        command: true,
-        description:
-          'Runs the same Copilot session through the Agency CLI wrapper.',
-        text: '<agency> <subcommand> -- <copilot headless args…>',
-      },
-    ],
-  },
-  {
     id: 'settings-assistant',
     title: 'Settings Assistant',
     description:

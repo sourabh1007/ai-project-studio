@@ -83,6 +83,39 @@ describe('createShutdownCoordinator', () => {
     expect(await shutdown('confirmed')).toBe(true);
   });
 
+  it('stops waiting on a pool that ignores its deadline, reports it and stays retryable', async () => {
+    vi.useFakeTimers();
+    try {
+      const { deps, shutdown } = fixture();
+      deps.pools[0].closeAndWait.mockImplementation(() => new Promise<boolean>(() => {}));
+      const pending = shutdown('SIGTERM');
+      await vi.advanceTimersByTimeAsync(5 + 250);
+      expect(await pending).toBe(false);
+      expect(deps.reportError).toHaveBeenCalledWith('Shutdown could not drain warm pool', expect.objectContaining({ message: expect.stringContaining('deadline') }));
+      expect(deps.db.close).not.toHaveBeenCalled();
+      expect(deps.exit).not.toHaveBeenCalled();
+      deps.pools[0].closeAndWait.mockImplementation(async () => true);
+      const retry = shutdown('SIGTERM');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await retry).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honors a custom drain grace', async () => {
+    vi.useFakeTimers();
+    try {
+      const { deps } = fixture();
+      deps.requests.waitForIdle.mockImplementation(() => new Promise<boolean>(() => {}));
+      const pending = createShutdownCoordinator({ ...deps, drainGraceMs: 10 })('SIGTERM');
+      await vi.advanceTimersByTimeAsync(5 + 10);
+      expect(await pending).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still cancels other owners when a stop request throws, without closing the database', async () => {
     const { deps, shutdown } = fixture();
     deps.tailers[0].stop.mockImplementationOnce(() => { throw new Error('poller still running'); });

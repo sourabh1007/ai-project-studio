@@ -173,11 +173,12 @@ export interface NewTaskGitPort {
     name: string;
     /**
      * The branch a previous plan of this run left behind. When present the
-     * planner is re-planning: its worktree and branch are removed so a fresh
-     * branch is cut for the new plan (a clean slate, never stacked on stale
-     * work).
+     * planner is re-planning: a clean worktree is replaced with a fresh branch.
+     * The old branch and any uncommitted user work must never be discarded.
      */
     previousBranch?: string;
+    /** Retry a failed plan in its verified worktree instead of recreating it. */
+    resume?: boolean;
   }): Promise<NewTaskWorktree>;
   /** The deterministic worktree path for a run, without touching git. */
   worktreePathFor(repoLocalPath: string, runId: string): string;

@@ -4,6 +4,12 @@
 app. A monitor periodically runs a **check**, evaluates the result against a
 **condition**, and fires an **action** when the condition matches.
 
+AI checks, metasession/report actions and AI subagents require a safely isolated
+metasession-capable CLI: Copilot, or Claude with safe/nonmanaged configuration
+and supported API/cloud credentials. Agency is currently interactive-only for
+IDE-launched AI automation. This restriction does not itself disable plain
+shell/HTTP checks that do not launch an AI turn.
+
 ## Where to find it
 
 Open **Automations** from the activity bar. The page is split into categorized
@@ -16,6 +22,8 @@ lists:
 Each card shows the name, mode badge, status, origin, progress, planned next
 steps, last check result/time, next-run countdown, and run count. Open a card to
 see run history and the planned-steps timeline.
+Live cards can show **progress**, **ETA**, and the current **active step** when
+reported; missing progress is not invented.
 
 ## Create an automation
 
@@ -86,8 +94,9 @@ To recover:
 - If you are already signed in on this machine (in the IDE, or via
   `az login` / `gh auth login`), just click **Resume** — the monitor reuses
   that login.
-- Otherwise click **Sign in** on the monitor to authorize in a browser window
-  — no terminal needed — then the monitor resumes automatically.
+- Otherwise use the provider-aware **Sign in** recovery offered on the card
+  (GitHub or Azure/Microsoft). Complete the supported browser/native flow,
+  then resume as prompted. Sign-in success is not a guarantee of resource access.
 
 > Tip: `ci-pipeline` with `provider: "azure"` expects an Azure Pipelines repo,
 > not a classic release URL. To watch an Azure DevOps release, use an `http`
@@ -108,7 +117,8 @@ From the Automations page:
 1. Find the monitor or subagent card in its category.
 2. Use **Pause** to stop scheduling without deleting the record.
 3. Use **Resume** to continue a paused or sign-in-required monitor.
-4. Use **Run now** to trigger an immediate check/action cycle.
+4. Use **Run now** to trigger an immediate check/action cycle; a custom prompt
+   override applies to that run rather than silently replacing the monitor.
 5. Use **Cancel** to stop a running or scheduled automation.
 6. Use **Delete** to remove the automation.
 7. Open the detail view to inspect run history, report output, and the

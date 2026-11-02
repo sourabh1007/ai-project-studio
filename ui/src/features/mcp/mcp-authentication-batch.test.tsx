@@ -90,7 +90,7 @@ describe('McpAuthenticationBatch', () => {
     expect(screen.queryByText('custom')).not.toBeInTheDocument();
     await act(async () => { first.resolve(inspected('one')); });
     expect(inspect).toHaveBeenNthCalledWith(2, 'agency', 'two');
-    expect(resultRow('one')).toHaveTextContent('Tool access verified');
+    expect(resultRow('one')).toHaveTextContent('Inventory checked; tool authorization unverified');
     expect(resultRow('two')).toHaveTextContent('Checking');
     expect(screen.getByText(/1 of 2 checks finished/)).toBeInTheDocument();
     await act(async () => { second.resolve(inspected('two', 'failed', true)); });
@@ -164,7 +164,7 @@ describe('McpAuthenticationBatch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open sign-in page' }));
     expect(onOpenAuth).toHaveBeenCalledWith('https://login.example.test/device');
     await tick();
-    expect(resultRow('one')).toHaveTextContent('Tool access verified');
+    expect(resultRow('one')).toHaveTextContent('Inventory checked; tool authorization unverified');
     expect(api.startMcpAuthentication).toHaveBeenCalledTimes(2);
     expect(api.startMcpAuthentication).toHaveBeenLastCalledWith('agency', 'two');
     expect(screen.getByText('1 of 2 sign-ins verified.')).toBeInTheDocument();

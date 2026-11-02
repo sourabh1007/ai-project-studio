@@ -14,9 +14,10 @@ interface DayRow {
   inputTokens: number | bigint;
   outputTokens: number | bigint;
   reasoningOutputTokens: number | bigint;
-  cost: number;
-  credits: number;
-  nanoAiu: number | bigint;
+  cost: number | null;
+  credits: number | null;
+  nanoAiu: number | bigint | null;
+  usdEstimate: number | null;
 }
 
 function toDayRow(row: DayRow): UsageDayRow {
@@ -28,35 +29,36 @@ function toDayRow(row: DayRow): UsageDayRow {
     inputTokens: Number(row.inputTokens),
     outputTokens: Number(row.outputTokens),
     reasoningOutputTokens: Number(row.reasoningOutputTokens),
-    cost: Number(row.cost),
-    credits: Number(row.credits),
-    nanoAiu: Number(row.nanoAiu),
+    cost: row.cost === null ? null : Number(row.cost),
+    credits: row.credits === null ? null : Number(row.credits),
+    nanoAiu: row.nanoAiu === null ? null : Number(row.nanoAiu),
+    ...(row.usdEstimate === null ? {} : { usdEstimate: row.usdEstimate }),
   };
 }
 
 /** Live CLI turns, normalized to the shared day-grained row shape. */
-function cliSource(filter: string): string {
+export function cliSource(filter: string): string {
   return `SELECT substr(started_at, 1, 10) AS day, provider AS provider,
       resolved_model AS model, session_id AS session_id,
       input_tokens AS input_tokens, output_tokens AS output_tokens,
       reasoning_output_tokens AS reasoning_output_tokens, cost AS cost,
-      credits AS credits, nano_aiu AS nano_aiu
+      credits AS credits, nano_aiu AS nano_aiu, usd_estimate
     FROM usage_events WHERE ${filter}`;
 }
 
 /** Warm-ACP meta snapshots (no cost/reasoning columns), normalized. */
-function metaSource(filter: string): string {
+export function metaSource(filter: string): string {
   return `SELECT substr(captured_at, 1, 10), provider_id,
       COALESCE(resolved_model, requested_model), session_id,
       COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), 0,
-      0, COALESCE(credits, 0), COALESCE(nano_aiu, 0)
+      CASE WHEN credits IS NULL THEN NULL ELSE 0 END, credits, nano_aiu, NULL
     FROM meta_usage_records WHERE ${filter}`;
 }
 
 /** Summarized usage retained from deleted sessions/features, normalized. */
-function retainedSource(filter: string): string {
+export function retainedSource(filter: string): string {
   return `SELECT day, provider, resolved_model, session_id, input_tokens,
-      output_tokens, reasoning_output_tokens, cost, credits, nano_aiu
+      output_tokens, reasoning_output_tokens, cost, credits, nano_aiu, usd_estimate
     FROM retained_usage WHERE ${filter}`;
 }
 
@@ -67,9 +69,10 @@ function grouped(union: string): string {
       COALESCE(SUM(input_tokens), 0) AS inputTokens,
       COALESCE(SUM(output_tokens), 0) AS outputTokens,
       COALESCE(SUM(reasoning_output_tokens), 0) AS reasoningOutputTokens,
-      COALESCE(SUM(cost), 0) AS cost,
-      COALESCE(SUM(credits), 0) AS credits,
-      COALESCE(SUM(nano_aiu), 0) AS nanoAiu
+      CASE WHEN COUNT(*) = COUNT(cost) THEN COALESCE(SUM(cost), 0) END AS cost,
+      CASE WHEN COUNT(*) = COUNT(credits) THEN COALESCE(SUM(credits), 0) END AS credits,
+      CASE WHEN COUNT(*) = COUNT(nano_aiu) THEN COALESCE(SUM(nano_aiu), 0) END AS nanoAiu,
+      SUM(usd_estimate) AS usdEstimate
     FROM (${union})
     GROUP BY day, provider, model
     ORDER BY day, provider, model`;

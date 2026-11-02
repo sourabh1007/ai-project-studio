@@ -63,4 +63,24 @@ describe('PoolDemandTracker', () => {
     d.end();
     expect(d.inFlight).toBe(0);
   });
+
+  it('retains the boundary peak and prunes while writing without needing status polls', () => {
+    let t = 0;
+    const d = tracker({ now: () => t, windowMs: 1000 });
+    d.begin(); d.begin(); d.begin();
+    d.end(); d.end(); d.end();
+    t = 1000;
+    d.begin(); d.end();
+    expect(d.suggestion()).toBe(3);
+    t++;
+    expect(d.suggestion()).toBe(1);
+    for (let n = 0; n < 200000; n++) {
+      t++;
+      d.begin(); d.end();
+    }
+    expect(d.suggestion()).toBe(1);
+    expect((d as unknown as { samples: unknown[] }).samples.length).toBeLessThan(1001);
+    t += 1001;
+    expect(d.suggestion()).toBe(1);
+  });
 });

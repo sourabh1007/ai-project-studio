@@ -261,7 +261,7 @@ function backendStartupError(owner) {
 }
 
 /** Spawns the backend as a Node process. Electron's bundled Node lacks the
- * experimental `node:sqlite` builtin, so we use the system Node (>=22.5). */
+ * experimental `node:sqlite` builtin, so we provision Node 24.20.0. */
 function startBackend(port) {
   if (backend || shutdownAction || !isBackendShutdownConfirmed()) {
     throw new Error('The previous backend is still owned or shutdown is in progress.');
@@ -578,6 +578,12 @@ function reportShutdownFailure(action) {
   dialog.showErrorBox('Shutdown not confirmed', message);
 }
 
+function releaseFailedUpdateGate() {
+  if (shutdownAction?.action === 'update' && shutdownAction.confirmed && isBackendShutdownConfirmed()) {
+    shutdownAction = null;
+  }
+}
+
 function runAfterBackendStop(action, proceed, terminal = true) {
   if (shutdownAction) {
     if (shutdownAction.action === action) {
@@ -697,8 +703,9 @@ function showAboutDialog(win) {
 }
 
 /**
- * Copy/paste shortcuts belong entirely to the renderer/browser, so these Edit
- * entries carry NO keyboard accelerator. On Windows an `accelerator` with
+ * macOS needs native editing roles for the responder chain and Command key
+ * equivalents. Windows/Linux leave keyboard copy/paste to the renderer/browser
+ * and use accelerator-free menu clicks. On Windows an `accelerator` with
  * `registerAccelerator: false` still fires the menu item's click on the
  * keystroke (electron/electron#18295); for Paste that dispatches a SECOND
  * trusted `paste` event on top of the renderer's own handling, which is the
@@ -713,7 +720,11 @@ function installApplicationMenu() {
     { role: 'redo' },
     { type: 'separator' },
     { role: 'cut' },
-    {
+    ...(isMac ? [
+      { role: 'copy' },
+      { role: 'paste' },
+      { role: 'pasteAndMatchStyle' },
+    ] : [{
       label: 'Copy',
       click: (_item, win) => win?.webContents.copy(),
     },
@@ -725,7 +736,7 @@ function installApplicationMenu() {
     {
       label: 'Paste and Match Style',
       click: (_item, win) => win?.webContents.pasteAndMatchStyle(),
-    },
+    }]),
     { role: 'delete' },
     { role: 'selectAll' },
   ];
@@ -872,7 +883,7 @@ function createWindow(loadUrl, splash = null) {
   load();
   mainWindow = win;
   win.on('close', (event) => {
-    if (BrowserWindow.getAllWindows().filter((candidate) => candidate !== startupSplash?.window).length > 1 || canQuitDesktop()) {
+    if (canQuitDesktop()) {
       return;
     }
     event.preventDefault();
@@ -890,6 +901,11 @@ function createWindow(loadUrl, splash = null) {
     if (startupTimer) clearTimeout(startupTimer);
     if (mainWindow === win) {
       mainWindow = null;
+      // Pop-outs belong to the IDE window, not an independent headless app.
+      for (const { window } of popoutWindows.values()) {
+        if (!window.isDestroyed()) window.destroy();
+      }
+      popoutWindows.clear();
     }
   });
   return win;
@@ -986,7 +1002,7 @@ function openPopoutWindow(tab, label) {
     }
     // Returning a detached tab to the IDE must never lose it: re-open it in the
     // main window (if one is still alive) when the pop-out closes.
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!shutdownAction?.confirmed && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('tab:return', { tab, label: label ?? '' });
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -1219,11 +1235,12 @@ function initializeDesktop() {
   // unreliable under Electron's sandbox (writes silently reject when the
   // document isn't considered focused), so terminal copy/paste is routed
   // through the main process's native clipboard module instead.
-  require('./clipboard.cjs').registerClipboardIpc(ipcMain, clipboard, isTrustedSender);
+  const clipboardBridge = require('./clipboard.cjs').adaptClipboard(clipboard, require('electron').ClipboardItem);
+  require('./clipboard.cjs').registerClipboardIpc(ipcMain, clipboardBridge, isTrustedSender);
   if (regression) {
     ipcMain.handle('clipboard:smoke', (event) => {
       if (!isTrustedSender(event)) return { status: 'unsupported' };
-      return require('./regression-clipboard.cjs').runClipboardSmoke(clipboard,
+      return require('./regression-clipboard.cjs').runClipboardSmoke(clipboardBridge,
         (expression) => event.sender.executeJavaScript(expression));
     });
   }
@@ -1242,15 +1259,15 @@ function initializeDesktop() {
     });
     return clipboardAttachmentStore;
   };
+  const readAttachment = require('./owned-attachments.cjs').createClipboardAttachmentReader({
+    clipboard, nativeImage,
+  });
   // Return structured paths; only app-created images acquire an owned lease.
   ipcMain.handle('clipboard:readImage', (event, request) => {
     if (!isTrustedSender(event)) {
       return { status: 'error', error: 'untrusted' };
     }
-    const { readClipboardAttachment } = require('./owned-attachments.cjs');
-    return readClipboardAttachment({
-      clipboard, store: getAttachmentStore(), sessionId: request?.sessionId,
-    });
+    return readAttachment({ store: getAttachmentStore(), sessionId: request?.sessionId });
   });
   require('./owned-attachments.cjs').registerAttachmentManagementIpc({
     ipcMain, isTrustedSender, getStore: getAttachmentStore,
@@ -1279,11 +1296,12 @@ function initializeDesktop() {
  */
 async function ensureBackendDependencies(splash) {
   const { provisionDependencies } = require('./dependency-provision.cjs');
+  const early = require('./early-tool-settings.cjs').readEarlyToolSettings(app.getPath('userData'));
   splash.update('provisioning');
   const result = await provisionDependencies({
     platform: process.platform,
     arch: process.arch,
-    env: process.env,
+    env: early.env,
     runtimeDir: path.join(app.getPath('userData'), 'runtime'),
     signal: startupAbort.signal,
     log: (message) => safeWrite(process.stderr, `[desktop] provision: ${message}\n`),
@@ -1294,6 +1312,7 @@ async function ensureBackendDependencies(splash) {
       'The first launch downloads a small runtime — check your internet connection and reopen the app.',
     );
   });
+  process.env.CW_NODE_BIN_OVERRIDE = early.nodeOverride;
   process.env.CW_NODE_BIN = result.nodeBin;
   provisionedBinDirs = result.binDirs;
   return result;
@@ -1342,9 +1361,11 @@ async function bootstrap() {
   setAppOrigin(loadUrl);
   createWindow(loadUrl, splash);
 
-  // Updates use a guided release-page flow; no installer is launched on quit.
+  // Verified Windows installs still need the same owned-backend shutdown gate.
   updateManager.init({
     getWindow: () => mainWindow,
+    beforeInstall: () => runAfterBackendStop('update', () => true),
+    onInstallFailure: releaseFailedUpdateGate,
   });
 }
 
@@ -1372,7 +1393,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0] ||
+    const win = (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null) ||
       (lastWindowUrl && !isBackendShutdownConfirmed() ? createWindow(lastWindowUrl) : null);
     if (win) {
       if (win.isMinimized()) {
@@ -1385,7 +1406,8 @@ if (!gotLock) {
   app.whenReady().then(bootstrap).catch(reportStartupFailure);
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (startupSplash && !startupSplash.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed()) {
       if (lastWindowUrl && !isBackendShutdownConfirmed()) {
         createWindow(lastWindowUrl);
       } else {

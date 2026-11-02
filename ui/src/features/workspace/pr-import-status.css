@@ -1,0 +1,142 @@
+.pr-import-status {
+  margin: 6px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 12px;
+}
+.pr-import-status.has-attention {
+  border-color: var(--warning);
+}
+.pr-import-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pr-import-toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-import-title {
+  font-weight: 600;
+}
+.pr-import-summary {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-import-bar {
+  height: 3px;
+  margin: 4px 0;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border);
+}
+.pr-import-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.pr-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  margin: 4px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.pr-import-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.pr-import-glyph {
+  display: flex;
+  padding-top: 2px;
+  color: var(--text-muted);
+}
+.pr-import-row.is-succeeded .pr-import-glyph {
+  color: var(--success);
+}
+.pr-import-row.is-failed .pr-import-glyph,
+.pr-import-row.is-unknown .pr-import-glyph {
+  color: var(--danger);
+}
+.pr-import-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+.pr-import-name,
+.pr-import-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-import-detail {
+  color: var(--text-muted);
+}
+.pr-import-row.is-failed .pr-import-detail,
+.pr-import-row.is-unknown .pr-import-detail {
+  color: var(--danger);
+  white-space: normal;
+}
+.pr-import-number {
+  color: var(--text-muted);
+}
+.pr-import-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pr-import-action,
+.pr-import-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.pr-import-dismiss {
+  padding: 2px;
+  border-color: transparent;
+  background: none;
+}
+.pr-import-action:focus-visible,
+.pr-import-dismiss:focus-visible,
+.pr-import-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pr-import-batch {
+  width: 100%;
+  margin-top: 6px;
+  justify-content: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pr-import-bar-fill {
+    transition: none;
+  }
+}

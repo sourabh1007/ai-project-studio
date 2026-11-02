@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, use
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session, AttachedAgent, PrReview } from '../../lib/types.js';
 import type { WorkspaceLaunchIntent } from '../../lib/planner-launch.js';
+import { compatibleSession } from '../../lib/provider-selection.js';
+import { withOperationKey } from '../../lib/operation-keys.js';
 import { createSessionNameStore } from '../../lib/session-names.js';
 import { featureColor } from '../../lib/feature-color.js';
 import { PaneResizer } from '../../components/pane-resizer.js';
@@ -22,6 +24,7 @@ import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
+import { AutomationBoundary } from '../../app/automation-readiness.js';
 import {
   closeWorkspaceTab,
   closeAllWorkspaceTabs,
@@ -96,6 +99,7 @@ export function WorkspaceView({
   reopen = null,
   launch = null,
   onLaunchConsumed,
+  providerSwitch = null,
 }: {
   live: LiveState;
   sidebarOpen: boolean;
@@ -103,6 +107,7 @@ export function WorkspaceView({
   reopen?: { tab: PoppableTab; label: string; nonce: number } | null;
   launch?: { intent: WorkspaceLaunchIntent; nonce: number } | null;
   onLaunchConsumed?: () => void;
+  providerSwitch?: { providerId: string; nonce: number } | null;
 }) {
   const nameStore = useMemo(
     () => createSessionNameStore(window.localStorage),
@@ -127,6 +132,48 @@ export function WorkspaceView({
   );
 
   const tabs = tabState.tabs;
+  const [bootstrapProvider, setBootstrapProvider] = useState<string | null | undefined>(undefined);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const activeProvider = providerSwitch?.providerId ?? bootstrapProvider;
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => api.getProviderBootstrap()).then((info) => {
+      if (active) setBootstrapProvider(info.selectionRequired ? null : info.defaultProvider);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [api]);
+  const switchWork = useRef<{ nonce: number; work: Promise<Session | null> } | null>(null);
+  const pendingSwitchSessions = useRef(new Map<string, Session>());
+  useEffect(() => {
+    if (!providerSwitch) return;
+    let cancelled = false;
+    setSwitchError(null);
+    if (switchWork.current?.nonce !== providerSwitch.nonce) {
+      const current = tabState.tabs.find((tab) => tab.id === tabState.activeId);
+      const featureId = current && current.kind !== 'repo' ? tabFeatureId(current) : null;
+      const work = !featureId ? Promise.resolve(null) : (async () => {
+        const sessions = await api.listSessions(featureId);
+        const existing = compatibleSession(sessions, providerSwitch.providerId);
+        if (existing) return existing;
+        const input = { providerId: providerSwitch.providerId, kind: 'dev' as const };
+        return withOperationKey(`provider-switch:${featureId}`, input, 'session', (operation) =>
+          api.createTerminalSession(featureId, input, operation),
+        );
+      })();
+      switchWork.current = { nonce: providerSwitch.nonce, work };
+    }
+    void switchWork.current.work.then((session) => {
+      if (cancelled || !session) return;
+      pendingSwitchSessions.current.set(session.id, session);
+      pendingTabFocus.current = session.id;
+      setTabState((state) => openWorkspaceTab({ ...state, splitId: null }, {
+        kind: 'session', id: session.id, label: session.name ?? 'Session', session,
+      }));
+    }).catch((failure: unknown) => {
+      if (!cancelled) setSwitchError(`CLI changed, but the workspace session could not be opened: ${failure instanceof Error ? failure.message : String(failure)}`);
+    });
+    return () => { cancelled = true; };
+  }, [api, providerSwitch, setTabState]);
   const [splitRatio, setSplitRatio] = usePersistentState('cw-workspace-split-ratio', 50, {
     validate: isFiniteNumber,
     normalize: (value) => clampNumber(value, 25, 75),
@@ -290,6 +337,11 @@ export function WorkspaceView({
         return;
       }
       if (features) knownFeatures.current = [...features.values()];
+      for (const [id, session] of pendingSwitchSessions.current) {
+        const loaded = sessionsByFeature.get(session.featureId);
+        if (loaded?.has(id)) pendingSwitchSessions.current.delete(id);
+        else loaded?.set(id, session);
+      }
       for (const [featureId, agents] of agentsByFeature) {
         if (!agents) continue;
         for (const [id, attachment] of knownAttachments.current) {
@@ -612,7 +664,9 @@ export function WorkspaceView({
             </dl>
           </Disclosure>
           <Suspense fallback={<ViewSkeleton label="terminal" />}>
-            <TerminalView sessionId={tab.session.id} />
+            {activeProvider !== undefined && tab.session.provider !== activeProvider
+              ? <p>This session belongs to {tab.session.provider}. Its history is preserved. Choose that CLI to resume it.</p>
+              : <TerminalView sessionId={tab.session.id} />}
           </Suspense>
         </div>
       );
@@ -647,6 +701,7 @@ export function WorkspaceView({
       const AgentComponent = agentModule.component;
       return (
         <ErrorBoundary label={agentModule.title}>
+          <AutomationBoundary>
           <Suspense fallback={<ViewSkeleton label={agentModule.title} />}>
             <AgentComponent
               key={tab.id}
@@ -654,9 +709,11 @@ export function WorkspaceView({
                 feature: tab.feature,
                 attachmentId: tab.attachmentId,
                 agentId: tab.agentId,
+                openSession,
               }}
             />
           </Suspense>
+          </AutomationBoundary>
         </ErrorBoundary>
       );
     }
@@ -670,6 +727,7 @@ export function WorkspaceView({
     if (tab.kind === 'pr-review-tracker') {
       return (
         <ErrorBoundary label="Bulk PR Review">
+          <AutomationBoundary>
           <Suspense fallback={<ViewSkeleton label="bulk review" />}>
             <BulkReviewTracker
               key={tab.feature.id}
@@ -679,6 +737,7 @@ export function WorkspaceView({
               onOpen={focusReviewBoard}
             />
           </Suspense>
+          </AutomationBoundary>
         </ErrorBoundary>
       );
     }
@@ -694,6 +753,7 @@ export function WorkspaceView({
           : undefined
       }
     >
+      {switchError && <p role="alert">{switchError}</p>}
       <div ref={sidebarRef} className={`workspace-explorer${sidebarOpen ? '' : ' is-exiting'}`}
         aria-hidden={!sidebarOpen || undefined}>
       {sidebarPresence.present && (

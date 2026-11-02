@@ -11,7 +11,7 @@
 
 import type { Clock } from '../kernel/clock.js';
 import type { EventBus } from '../kernel/event-bus.js';
-import { NotFoundError, ValidationError } from '../kernel/error-types.js';
+import { ConflictError, NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { BugBashConfig } from './config.js';
 import { parseScenarios, parsePrerequisites } from './bug-bash-scenarios.js';
@@ -112,6 +112,27 @@ function runContext(run: BugBashRun): string {
 export function createBugBashService(
   deps: BugBashServiceDeps,
 ): BugBashService {
+  const pendingFailures = new Map<string, BugBashRun>();
+
+  function getRun(attachmentId: string): BugBashRun | null {
+    const stored = deps.repo.get(attachmentId);
+    const pending = pendingFailures.get(attachmentId);
+    if (pending) {
+      if (!stored) {
+        pendingFailures.delete(attachmentId);
+        return null;
+      }
+      try {
+        deps.repo.update(pending);
+        pendingFailures.delete(attachmentId);
+      } catch {
+        // Keep a terminal snapshot visible until persistence recovers.
+      }
+      return pending;
+    }
+    return stored;
+  }
+
   function touch(run: BugBashRun, patch: Partial<BugBashRun>): BugBashRun {
     const next: BugBashRun = {
       ...run,
@@ -119,6 +140,7 @@ export function createBugBashService(
       updatedAt: deps.clock.isoNow(),
     };
     deps.repo.update(next);
+    pendingFailures.delete(run.id);
     return next;
   }
 
@@ -132,20 +154,26 @@ export function createBugBashService(
   }
 
   function requireRun(attachmentId: string): BugBashRun {
-    const run = deps.repo.get(attachmentId);
+    const run = getRun(attachmentId);
     if (!run) {
       throw new NotFoundError(`No Bug Bash run for attachment: ${attachmentId}`);
     }
     return run;
   }
 
+  function requireEditable(run: BugBashRun): void {
+    if (run.status === 'generating' || run.status === 'running') {
+      throw new ConflictError('Wait for the active bug bash to finish before editing it.');
+    }
+  }
+
   return {
     get(attachmentId) {
-      return deps.repo.get(attachmentId);
+      return getRun(attachmentId);
     },
 
     reset(attachmentId) {
-      const run = deps.repo.get(attachmentId);
+      const run = getRun(attachmentId);
       if (!run) {
         return null;
       }
@@ -172,8 +200,9 @@ export function createBugBashService(
       const setupInfo = inputs.setupInfo.trim();
       const otherInfo = inputs.otherInfo.trim();
       const now = deps.clock.isoNow();
-      const existing = deps.repo.get(attachmentId);
+      const existing = getRun(attachmentId);
       if (existing) {
+        requireEditable(existing);
         // Re-editing discards prior scenarios/report and the stale prerequisite
         // questions (they are regenerated from the new description), returning
         // to a draft.
@@ -322,6 +351,8 @@ export function createBugBashService(
 
     async refine(attachmentId, history, message, signal) {
       const run = requireRun(attachmentId);
+      requireEditable(run);
+      const snapshot = JSON.stringify(run);
       const text = message.trim();
       if (text.length === 0) {
         throw new ValidationError('A message is required.');
@@ -362,6 +393,9 @@ export function createBugBashService(
         timeoutMs: deps.config.generateTimeoutMs,
         signal,
       });
+      if (JSON.stringify(requireRun(attachmentId)) !== snapshot) {
+        throw new ConflictError('The bug bash changed while refining. Review the current scenarios and try again.');
+      }
       const parsed = parseRefineResponse(result.text);
       let next = run;
       if (parsed.revised && typeof parsed.revised === 'object') {
@@ -420,12 +454,13 @@ export function createBugBashService(
         // Keep the analyst snapshot(s) from generation so the summary can still
         // show generation time/credits alongside the tester team.
         const analysts = run.agents.filter((agent) => agent.role === 'analyst');
-        run = touch(run, {
+        run = {
+          ...run,
           scenarios: team.scenarios,
           report: team.report,
           agents: [...analysts, ...team.agents],
-          status: 'reported',
-        });
+        };
+        run = touch(run, { status: 'reported' });
         emit(run, 'done', 'Bug bash complete.');
         sink.activity({ phase: 'done', line: 'Bug bash complete.' });
         sink.done(run);
@@ -438,7 +473,14 @@ export function createBugBashService(
           error instanceof MetaAbortError
             ? 'The bug bash was cancelled.'
             : errorMessage(error);
-        touch(run, { status: 'failed', error: message });
+        const failed: BugBashRun = {
+          ...run,
+          status: 'failed',
+          error: message,
+          updatedAt: deps.clock.isoNow(),
+        };
+        pendingFailures.set(run.id, failed);
+        getRun(run.id);
         sink.failed(message);
       }
     },

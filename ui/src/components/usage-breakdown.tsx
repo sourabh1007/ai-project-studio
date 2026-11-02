@@ -21,7 +21,7 @@ export type UsageScope =
 
 interface Totals {
   turns: number;
-  nanoAiu: number;
+  nanoAiu: number | null;
   inputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
@@ -30,8 +30,8 @@ interface Totals {
 function sum(events: StoredUsage[]): Totals {
   return events.reduce<Totals>(
     (acc, e) => ({
-      turns: acc.turns + 1,
-      nanoAiu: acc.nanoAiu + e.nanoAiu,
+      turns: acc.turns + (e.operation === 'session-charge-estimate' ? 0 : 1),
+      nanoAiu: acc.nanoAiu === null || e.nanoAiu === null ? null : acc.nanoAiu + e.nanoAiu,
       inputTokens: acc.inputTokens + e.inputTokens,
       outputTokens: acc.outputTokens + e.outputTokens,
       reasoningOutputTokens: acc.reasoningOutputTokens + e.reasoningOutputTokens,
@@ -47,15 +47,16 @@ function sum(events: StoredUsage[]): Totals {
 }
 
 /** Groups events by resolved model and sums their AIC, richest spender first. */
-function byModel(events: StoredUsage[]): { model: string; nanoAiu: number }[] {
-  const map = new Map<string, number>();
+function byModel(events: StoredUsage[]): { model: string; nanoAiu: number | null }[] {
+  const map = new Map<string, number | null>();
   for (const e of events) {
     const model = e.resolvedModel || e.requestedModel || 'unknown';
-    map.set(model, (map.get(model) ?? 0) + e.nanoAiu);
+    const prior = map.has(model) ? map.get(model)! : 0;
+    map.set(model, prior === null || e.nanoAiu === null ? null : prior + e.nanoAiu);
   }
   return [...map.entries()]
     .map(([model, nanoAiu]) => ({ model, nanoAiu }))
-    .sort((a, b) => b.nanoAiu - a.nanoAiu);
+    .sort((a, b) => (b.nanoAiu ?? -1) - (a.nanoAiu ?? -1));
 }
 
 function loadFor(
@@ -214,7 +215,7 @@ function UsageEventsTable({ events }: { events: StoredUsage[] }) {
               <td>{formatCompactNumber(e.inputTokens)}</td>
               <td>{formatCompactNumber(e.outputTokens)}</td>
               <td>{formatCompactNumber(e.reasoningOutputTokens)}</td>
-              <td>{nanoAiuToAic(e.nanoAiu).toFixed(4)}</td>
+              <td>{nanoAiuToAic(e.nanoAiu)?.toFixed(4) ?? 'Unavailable'}</td>
               <td className="usage-when">{formatDateTime(e.startedAt)}</td>
             </tr>
           ))}

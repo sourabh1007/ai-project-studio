@@ -242,4 +242,54 @@ describe('aggregate-repo', () => {
     expect(reader.byMcpServer('f3')).toEqual([]);
     db.close();
   });
+
+  it('keeps usage retained from deleted sessions in feature rollups with immutable attribution', () => {
+    const { db, reader } = seed();
+    const retain = (id: string, feature: string, session: string, credits: number | null) =>
+      db.prepare(
+        `INSERT INTO retained_usage (id, feature_id, feature_name, session_id, session_kind, scope, source,
+          reason, provider, resolved_model, day, sessions, input_tokens, output_tokens, reasoning_output_tokens,
+          cost, credits, nano_aiu, retained_at)
+         VALUES (?, ?, 'F', ?, 'dev', 'feature', 'cli', 'session-deleted', 'github', 'gpt-5.4', '2025-03-01', 1,
+          10, 2, 1, ?, ?, ?, '2025-03-02T00:00:00.000Z')`,
+      ).run(id, feature, session, credits === null ? null : 0, credits, credits === null ? null : 5);
+    const before = reader.featureTotals('f1');
+    retain('r1', 'f1', 'gone1', 3);
+    retain('r2', 'f2', 'gone2', 100);
+    const after = reader.featureTotals('f1');
+    expect(after.sessions).toBe(before.sessions + 1);
+    expect(after.credits).toBeCloseTo((before.credits ?? 0) + 3);
+    expect(after.inputTokens).toBe(before.inputTokens + 10);
+    expect(reader.byDay('f1').find((d) => d.day === '2025-03-01')?.credits).toBe(3);
+    expect(reader.byModel('f1').find((m) => m.model === 'gpt-5.4')?.inputTokens).toBeGreaterThan(10);
+    expect(reader.byProvider('f1').find((p) => p.provider === 'github')?.sessions).toBeGreaterThan(1);
+    expect(reader.bySession('f1').map((s) => s.sessionId)).toContain('gone1');
+    expect(reader.retainedTotals('f1')).toMatchObject({ sessions: 1, credits: 3, inputTokens: 10 });
+    expect(reader.retainedTotals('missing')).toMatchObject({ sessions: 0, credits: 0 });
+    retain('r3', 'f1', 'gone3', null);
+    expect(reader.retainedTotals('f1')).toMatchObject({ credits: null, knownCredits: 3, unavailableCharges: 1 });
+    db.close();
+  });
+
+  it('includes retained cli usage in workspaceTotals, excluding internal and meta-source retained rows', () => {
+    const { db, reader } = seed();
+    const ins = (id: string, scope: string, source: string, credits: number) =>
+      db.prepare(
+        `INSERT INTO retained_usage (id, feature_id, feature_name, session_id, session_kind, scope, source,
+          reason, provider, resolved_model, day, sessions, input_tokens, output_tokens, reasoning_output_tokens,
+          cost, credits, nano_aiu, usd_estimate, retained_at)
+         VALUES (?, 'f1', 'F', ?, 'dev', ?, ?, 'session-deleted', 'github', 'gpt-5.4', '2025-03-01', 1,
+          10, 2, 1, 0, ?, 5, 0.5, '2025-03-02T00:00:00.000Z')`,
+      ).run(id, id, scope, source, credits);
+    const before = reader.workspaceTotals();
+    ins('w1', 'feature', 'cli', 7);
+    ins('w2', 'internal', 'cli', 1000);
+    ins('w3', 'feature', 'meta', 2000);
+    const after = reader.workspaceTotals();
+    expect(after.credits).toBeCloseTo((before.credits ?? 0) + 7);
+    expect(after.inputTokens).toBe(before.inputTokens + 10);
+    expect(after.sessions).toBe(before.sessions + 1);
+    expect(after.usdEstimate).toBeCloseTo((before.usdEstimate ?? 0) + 0.5);
+    db.close();
+  });
 });

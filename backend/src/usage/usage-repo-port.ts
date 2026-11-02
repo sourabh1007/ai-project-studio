@@ -3,7 +3,7 @@ import type { UsageEvent } from './usage-contract.js';
 
 /** A UsageEvent enriched with computed credits and its session kind. */
 export interface StoredUsage extends UsageEvent {
-  credits: number;
+  credits: number | null;
   kind: SessionKind;
 }
 

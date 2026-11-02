@@ -14,10 +14,15 @@
     "dist:mac": "electron-builder --mac --config electron-builder.yml --publish never"
   },
   "devDependencies": {
-    "electron": "^33.2.1",
+    "electron": "44.9.3",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
+  },
+  "updateTrust": {
+    "requireAuthenticode": true,
+    "signerThumbprints": [],
+    "signerSubjects": []
   }
 }

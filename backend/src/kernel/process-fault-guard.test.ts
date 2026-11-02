@@ -123,3 +123,40 @@ describe('installProcessFaultGuard', () => {
     expect(has('unhandledRejection')).toBe(false);
   });
 });
+
+describe('fault guard reporter failures', () => {
+  it('contains a throwing logger and still notifies onFault', () => {
+    const host = fakeProcess();
+    const faults: ProcessFault[] = [];
+    const failures: Array<[string, string]> = [];
+    installProcessFaultGuard({
+      process: host.proc,
+      logger: { error: () => { throw new TypeError('EPIPE'); } },
+      onFault: (fault) => faults.push(fault),
+      onReportFailure: (f) => failures.push([f.sink, f.errorName]),
+    });
+    expect(() => host.emit('uncaughtException', new Error('boom'))).not.toThrow();
+    expect(faults).toHaveLength(1);
+    expect(failures).toEqual([['fault-guard.logger', 'TypeError']]);
+  });
+
+  it('contains a throwing onFault and a throwing failure reporter', () => {
+    const host = fakeProcess();
+    installProcessFaultGuard({
+      process: host.proc,
+      logger: { error: () => { throw new Error('a'); } },
+      onFault: () => { throw new Error('b'); },
+      onReportFailure: () => { throw new Error('c'); },
+    });
+    expect(() => host.emit('unhandledRejection', 'x')).not.toThrow();
+  });
+
+  it('defaults to a stderr failure line', () => {
+    const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const host = fakeProcess();
+    installProcessFaultGuard({ process: host.proc, logger: { error: () => { throw new Error('a'); } } });
+    host.emit('unhandledRejection', 'x');
+    expect(JSON.parse(String(spy.mock.calls[0][0])).sink).toBe('fault-guard.logger');
+    spy.mockRestore();
+  });
+});

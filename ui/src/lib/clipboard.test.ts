@@ -6,10 +6,18 @@ import {
   decodeOsc52,
   createPasteGuard,
   attachmentFailureMessage,
+  copyFailureMessage,
   writeClipboardText,
   type ClipboardResult,
   type ClipboardKeyEvent,
 } from './clipboard.js';
+
+it('never claims copy success for non-ok results and distinguishes unchanged from unconfirmed', () => {
+  expect(copyFailureMessage({ ok: false, error: 'unavailable', writeState: 'not-written' })).toMatch(/not copied.*unchanged/i);
+  expect(copyFailureMessage({ ok: false, error: 'x', writeState: 'unknown' })).toMatch(/unconfirmed.*may or may not/i);
+  expect(copyFailureMessage({ ok: false, error: 'verification-failed', writeState: 'written' })).toMatch(/unconfirmed.*written/i);
+  expect(copyFailureMessage({ ok: false, error: 'superseded', writeState: 'not-written' })).toMatch(/replaced by a newer/i);
+});
 
 it('routes attachment quota failures to the mounted manual manager without implying automatic cleanup', () => {
   const message = attachmentFailureMessage('quota');
@@ -219,15 +227,14 @@ describe('createPasteGuard', () => {
     expect(guard.shouldPaste({ text: 'same', time: 0 })).toBe(true);
   });
 
-  it('collapses separate event objects only inside a short matching signature window', () => {
-    const guard = createPasteGuard(50);
-
-    expect(guard.shouldPaste({ id: 1 }, 'text:same', 100)).toBe(true);
-    expect(guard.shouldPaste({ id: 2 }, 'text:same', 120)).toBe(false);
-    expect(guard.shouldPaste({ id: 3 }, 'text:other', 130)).toBe(true);
-    expect(guard.shouldPaste({ id: 4 }, 'text:other', 181)).toBe(true);
-    expect(guard.shouldPaste({ id: 5 }, 'text:other', Number.NaN)).toBe(true);
-    expect(guard.shouldPaste({ id: 6 }, 'text:other')).toBe(true);
+  it('never drops separate identical actions based on timestamps or retains their contents', () => {
+    const guard = createPasteGuard();
+    for (const timeStamp of [100, 100, 110, 151, 9999, Number.NaN]) {
+      const event = { text: 'same', timeStamp };
+      expect(guard.shouldPaste(event)).toBe(true);
+      event.timeStamp += 10_000;
+      expect(guard.shouldPaste(event)).toBe(false);
+    }
   });
 });
 

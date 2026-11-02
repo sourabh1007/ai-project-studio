@@ -1,6 +1,9 @@
 import type { ProcessSpawner } from '../provider/process-kernel/process-spawner.js';
 import type { CopilotDetector } from './copilot-detector.js';
 import { copilotInstallCommand } from './copilot-install-command.js';
+import type { CopilotBootstrapConfig } from './config.js';
+import { copilotBootstrapConfigSchema, copilotBootstrapDefaults } from './config.js';
+import { boundedProcess, boundedVersion } from '../tools/bounded-execution.js';
 
 /** Lifecycle of a background "keep Copilot up to date" upgrade run. */
 export type CopilotUpgradePhase = 'idle' | 'upgrading' | 'done' | 'error';
@@ -32,6 +35,7 @@ export type CopilotInstallEvent =
   | { kind: 'error'; message: string };
 
 export interface CopilotBootstrapDeps {
+  installConfig?: () => CopilotBootstrapConfig;
   platform: NodeJS.Platform;
   detect: CopilotDetector;
   spawner: ProcessSpawner;
@@ -72,19 +76,26 @@ export function createCopilotBootstrapper(
   deps: CopilotBootstrapDeps,
 ): CopilotBootstrapper {
   let upgrade: CopilotUpgradeState = { phase: 'idle' };
+  let active = false;
+  const policy = () => copilotBootstrapConfigSchema.parse(deps.installConfig?.() ?? copilotBootstrapDefaults);
+  const readVersion = () => boundedVersion(deps.readVersion!, policy().versionTimeoutMs);
 
   async function runInstall(
     onEvent: (event: CopilotInstallEvent) => void,
   ): Promise<number | null> {
-    const plan = copilotInstallCommand(deps.platform);
+    if (active) return null;
+    const plan = copilotInstallCommand(deps.platform, deps.installConfig?.());
     const handle = deps.spawner.spawn({
       command: plan.command,
       args: plan.args,
-      env: deps.env,
+      env: { ...deps.env, npm_config_ignore_scripts: policy().allowInstallScripts ? 'false' : 'true',
+        NPM_CONFIG_IGNORE_SCRIPTS: policy().allowInstallScripts ? 'false' : 'true' },
     });
+    active = true;
+    void handle.done.finally(() => { active = false; });
     handle.onStdoutLine((line) => onEvent({ kind: 'line', line }));
     handle.onStderrLine((line) => onEvent({ kind: 'line', line }));
-    return await handle.done;
+    return await boundedProcess(handle, policy().installTimeoutMs);
   }
 
   return {
@@ -112,13 +123,13 @@ export function createCopilotBootstrapper(
     },
 
     async upgradeToLatest(onEvent) {
-      const previousVersion = deps.readVersion ? await deps.readVersion() : null;
+      const previousVersion = deps.readVersion ? await readVersion() : null;
       upgrade = { phase: 'upgrading' };
       const code = await runInstall(onEvent);
       const installed = deps.detect();
-      if (code === 0) {
+      if (code === 0 && installed) {
         if (deps.readVersion) {
-          const version = await deps.readVersion();
+          const version = await readVersion();
           const updated =
             version != null &&
             previousVersion != null &&

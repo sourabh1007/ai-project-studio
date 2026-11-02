@@ -13,9 +13,15 @@ export interface UsageEvent {
   outputTokens: number;
   reasoningOutputTokens: number;
   /** Provider-reported cost in credits (github.copilot.cost). */
-  cost: number;
+  cost: number | null;
   /** Raw AI usage units in nano-AIU (github.copilot.nano_aiu). */
-  nanoAiu: number;
+  nanoAiu: number | null;
+  /** Native AIC charge provenance; USD estimates never populate AIC fields. */
+  chargeProvenance?: 'reported' | 'estimated' | 'unavailable';
+  chargeUnit?: 'aic' | null;
+  usdEstimate?: number | null;
+  nativeSessionId?: string;
+  nativeMessageId?: string;
   serviceRequestId: string | null;
   startedAt: string;
   endedAt: string;

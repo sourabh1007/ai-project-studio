@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRepoInsightsGitAdapter, type GitCommandExecutor } from './repo-insights-git-adapter.js';
 
 describe('repository scan Git cancellation and deadlines', () => {
+  it('shares the configured Git executable with every insights operation', async () => {
+    const run = vi.fn<GitCommandExecutor['run']>().mockResolvedValue({ stdout: 'origin/main\n' });
+    const git = createRepoInsightsGitAdapter({ run }, 123, 'C:\\custom git\\git.exe');
+    await git.resolveDefaultBranch('repo');
+    await git.listFiles('repo', 'main', 'docs');
+    await git.readFile('repo', 'main', 'file');
+    await git.fileExists('repo', 'main', 'file');
+    await git.lastCommitAuthor('repo', 'main', 'file');
+    expect(run.mock.calls.every((call) => call[0] === 'C:\\custom git\\git.exe')).toBe(true);
+  });
   it('forwards cancellation and the configured deadline for every operation', async () => {
     const run = vi.fn<GitCommandExecutor['run']>().mockResolvedValue({ stdout: 'origin/main\n' });
     const git = createRepoInsightsGitAdapter({ run }, 123);

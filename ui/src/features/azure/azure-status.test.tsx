@@ -144,4 +144,33 @@ describe('AzureStatusBadge', () => {
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
   });
+
+  it('preserves the signed-in account when its native credential helper becomes unavailable', async () => {
+    window.localStorage.setItem('azureDevOpsOrg', 'contoso');
+    const getAzureStatus = vi.fn<() => Promise<AzureDevOpsStatus>>()
+      .mockResolvedValueOnce({ authenticated: true, account: 'alice', message: null })
+      .mockRejectedValueOnce(new Error('Stored credentials could not be checked.'));
+    const client = makeClient({ getAzureStatus });
+    renderBadge(client);
+    const recheck = await screen.findByRole('button', { name: /Azure DevOps · alice/ });
+    await waitFor(() => expect(recheck).toBeEnabled());
+    fireEvent.click(recheck);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Stored credentials could not be checked.');
+    expect(screen.getByText('Azure DevOps · alice')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(client.azureSignIn).not.toHaveBeenCalled();
+  });
+
+  it('offers a silent retry for unavailable startup credentials rather than automatically signing in', async () => {
+    window.localStorage.setItem('azureDevOpsOrg', 'contoso');
+    const getAzureStatus = vi.fn<() => Promise<AzureDevOpsStatus>>()
+      .mockRejectedValueOnce(new Error('Keyring unavailable.'))
+      .mockResolvedValueOnce({ authenticated: true, account: 'alice', message: null });
+    const client = makeClient({ getAzureStatus });
+    renderBadge(client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry account check' }));
+    expect(await screen.findByText('Azure DevOps · alice')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(client.azureSignIn).not.toHaveBeenCalled();
+  });
 });

@@ -83,6 +83,7 @@ function harness(opts: {
   agents?: WarmAgentSession[];
   all?: Session[];
   groups?: TreeGroup[];
+  retained?: UsageTotals;
 }) {
   const reader: AggregateReader = {
     featureTotals: () => ({ ...zero, sessions: 1, credits: 9, nanoAiu: 42 }),
@@ -92,6 +93,7 @@ function harness(opts: {
     bySession: () => opts.usages,
     warmAgentSessions: () => opts.agents ?? [],
     byMcpServer: () => [],
+    retainedTotals: () => opts.retained ?? zero,
     workspaceTotals: () => ({ ...zero, credits: 77 }),
   };
   const sessions: SessionLister = {
@@ -106,6 +108,30 @@ function harness(opts: {
 }
 
 describe('sessionActiveMs', () => {
+  it('marks sessions without usage rows as unrecorded placeholders but not measured zeros', () => {
+    const result = harness({
+      members: [session({ id: 'none' }), session({ id: 'zero' })],
+      usages: [usage('zero', { inputTokens: 0, outputTokens: 0, credits: 0, nanoAiu: 0 })],
+    }).forFeature('f1');
+    expect(result.bySession.find((s) => s.sessionId === 'none')?.usageRecorded).toBe(false);
+    expect(result.bySession.find((s) => s.sessionId === 'zero')).not.toHaveProperty('usageRecorded');
+  });
+  it('counts deleted-session retained usage in totals and exposes it only when present', () => {
+    const retained = { ...zero, sessions: 2, credits: 4 };
+    const withRetained = harness({ members: [session({})], usages: [usage('s')], retained }).forFeature('f1');
+    expect(withRetained.totals.sessions).toBe(3);
+    expect(withRetained.retained).toEqual(retained);
+    const without = harness({ members: [session({})], usages: [usage('s')] }).forFeature('f1');
+    expect(without.totals.sessions).toBe(1);
+    expect(without).not.toHaveProperty('retained');
+  });
+  it('passes separate USD estimates through session analytics without converting missing native units', () => {
+    const result = harness({
+      members: [session({})],
+      usages: [usage('s', { cost: null, credits: null, nanoAiu: null, usdEstimate: 3 })],
+    }).forFeature('f1');
+    expect(result.bySession[0]).toMatchObject({ cost: null, credits: null, nanoAiu: null, usdEstimate: 3 });
+  });
   it('returns 0 when startedAt is null', () => {
     expect(sessionActiveMs(null, null, NOW)).toBe(0);
   });

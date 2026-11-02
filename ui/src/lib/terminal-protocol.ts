@@ -20,7 +20,7 @@ export type ServerMessage =
   | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
-  | { type: 'resize'; cols: number; rows: number }
+  | { type: 'resize'; cols: number; rows: number; phase: 'attach' | 'boundary' }
   | { type: 'exit'; code: number | null };
 
 export function encodeClientMessage(message: ClientMessage): string {
@@ -80,8 +80,11 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
       : null;
   }
   if (parsed.type === 'resize') {
-    return typeof parsed.cols === 'number' && typeof parsed.rows === 'number'
-      ? { type: 'resize', cols: parsed.cols, rows: parsed.rows }
+    // `phase` is absent only from an older backend, whose single resize was an attach.
+    const phase = parsed.phase ?? 'attach';
+    return typeof parsed.cols === 'number' && typeof parsed.rows === 'number' &&
+      (phase === 'attach' || phase === 'boundary')
+      ? { type: 'resize', cols: parsed.cols, rows: parsed.rows, phase }
       : null;
   }
   if (parsed.type === 'exit') {

@@ -63,6 +63,10 @@ export interface LiveState {
   streamInterrupted?: boolean;
   liveCacheTruncated?: boolean;
   usageHistoryTruncated?: boolean;
+  /** Bumps on every stream gap/overflow so consumers refetch authoritative usage. */
+  streamEpoch?: number;
+  /** Warm-meta usage updates observed per feature (PR review, Review Board). */
+  metaUsageByFeature?: Record<string, number>;
   cacheCharacters?: Partial<Record<LiveCollection, number>>;
   sessions: Record<string, Session>;
   usageByKey: Record<string, StoredUsage>;
@@ -274,9 +278,15 @@ export function applyStreamEvent(
 function reduceStreamEvent(state: LiveState, event: StreamEvent): LiveState {
   switch (event.type) {
     case 'meta.usage.updated':
-      return { ...state };
+      return {
+        ...state,
+        metaUsageByFeature: {
+          ...state.metaUsageByFeature,
+          [event.featureId]: (state.metaUsageByFeature?.[event.featureId] ?? 0) + 1,
+        },
+      };
     case 'stream.interrupted':
-      return { ...state, streamInterrupted: true, usageHistoryTruncated: true };
+      return { ...state, streamInterrupted: true, usageHistoryTruncated: true, streamEpoch: (state.streamEpoch ?? 0) + 1 };
     case 'stream.reconnected': {
       // Reconnection is not replay: events sent during the gap are gone, so the
       // derived live caches are stale in ways no incremental update can repair.
@@ -287,10 +297,10 @@ function reduceStreamEvent(state: LiveState, event: StreamEvent): LiveState {
       // puts the view exactly where a fresh load starts. Only then is clearing
       // the degraded flags honest.
       if (state.streamInterrupted !== true) return state;
-      return { ...initialLiveState };
+      return { ...initialLiveState, streamEpoch: (state.streamEpoch ?? 0) + 1 };
     }
     case 'stream.truncated':
-      return { ...state, liveCacheTruncated: true, usageHistoryTruncated: true };
+      return { ...state, liveCacheTruncated: true, usageHistoryTruncated: true, streamEpoch: (state.streamEpoch ?? 0) + 1 };
     case 'session.started':
     case 'session.ended':
     case 'session.updated':
@@ -350,11 +360,11 @@ export function reviewBoardActivityLines(
 
 export interface SessionLiveTotals {
   complete?: false;
-  credits: number;
-  cost: number;
+  credits: number | null;
+  cost: number | null;
   inputTokens: number;
   outputTokens: number;
-  nanoAiu: number;
+  nanoAiu: number | null;
   turns: number;
 }
 
@@ -373,12 +383,12 @@ export function sessionLiveTotals(
   };
   for (const usage of Object.values(state.usageByKey)) {
     if (usage.sessionId === sessionId) {
-      totals.credits += usage.credits;
-      totals.cost += usage.cost;
+      totals.credits = totals.credits === null || usage.credits === null ? null : totals.credits + usage.credits;
+      totals.cost = totals.cost === null || usage.cost === null ? null : totals.cost + usage.cost;
       totals.inputTokens += usage.inputTokens;
       totals.outputTokens += usage.outputTokens;
-      totals.nanoAiu += usage.nanoAiu;
-      totals.turns += 1;
+      totals.nanoAiu = totals.nanoAiu === null || usage.nanoAiu === null ? null : totals.nanoAiu + usage.nanoAiu;
+      if (usage.operation !== 'session-charge-estimate') totals.turns += 1;
     }
   }
   return state.usageHistoryTruncated ? { ...totals, complete: false } : totals;
@@ -386,9 +396,11 @@ export function sessionLiveTotals(
 
 /** The usage metrics rendered for a single session row. */
 export interface SessionMetrics {
-  nanoAiu: number;
+  nanoAiu: number | null;
   inputTokens: number;
   outputTokens: number;
+  /** `false` marks the backend's placeholder for a session with no usage rows yet. */
+  usageRecorded?: boolean;
 }
 
 /**
@@ -397,14 +409,25 @@ export interface SessionMetrics {
  * the backend together, so the rollup is complete across reloads whereas the
  * live SSE feed only carries events observed since the UI connected. Preferring
  * persisted keeps the per-session AIC in lockstep with the persisted-based
- * status bar. Live totals are used only as a fallback for brand-new sessions
- * whose first events have not yet been folded into the refreshed rollup.
+ * status bar. Live totals are used when no persisted row exists, or when the
+ * persisted row is only the "no usage recorded yet" placeholder (a measured
+ * zero is a real row and is kept) and live events have since arrived. If the
+ * live cache is incomplete the placeholder cannot be trusted, so it is unknown.
  */
 export function resolveSessionMetrics(
   persisted: SessionMetrics | undefined,
-  liveTotals: SessionMetrics & { complete?: false },
+  liveTotals: SessionMetrics & { complete?: false; turns?: number },
 ): SessionMetrics | null {
   if (persisted === undefined && liveTotals.complete === false) return null;
+  if (persisted?.usageRecorded === false) {
+    if (liveTotals.complete === false) return null;
+    const observed = (liveTotals.turns ?? 0) > 0 || liveTotals.nanoAiu !== 0 ||
+      liveTotals.inputTokens > 0 || liveTotals.outputTokens > 0;
+    if (!observed) {
+      return { nanoAiu: persisted.nanoAiu, inputTokens: persisted.inputTokens, outputTokens: persisted.outputTokens };
+    }
+    return { nanoAiu: liveTotals.nanoAiu, inputTokens: liveTotals.inputTokens, outputTokens: liveTotals.outputTokens };
+  }
   const source = persisted ?? liveTotals;
   return {
     nanoAiu: source.nanoAiu,
@@ -412,7 +435,6 @@ export function resolveSessionMetrics(
     outputTokens: source.outputTokens,
   };
 }
-
 /** Aggregates all live usage across every tracked session (status-bar total). */
 export function workspaceLiveTotals(state: LiveState): SessionLiveTotals {
   const totals: SessionLiveTotals = {
@@ -424,12 +446,12 @@ export function workspaceLiveTotals(state: LiveState): SessionLiveTotals {
     turns: 0,
   };
   for (const usage of Object.values(state.usageByKey)) {
-    totals.credits += usage.credits;
-    totals.cost += usage.cost;
+    totals.credits = totals.credits === null || usage.credits === null ? null : totals.credits + usage.credits;
+    totals.cost = totals.cost === null || usage.cost === null ? null : totals.cost + usage.cost;
     totals.inputTokens += usage.inputTokens;
     totals.outputTokens += usage.outputTokens;
-    totals.nanoAiu += usage.nanoAiu;
-    totals.turns += 1;
+    totals.nanoAiu = totals.nanoAiu === null || usage.nanoAiu === null ? null : totals.nanoAiu + usage.nanoAiu;
+    if (usage.operation !== 'session-charge-estimate') totals.turns += 1;
   }
   return state.usageHistoryTruncated ? { ...totals, complete: false } : totals;
 }

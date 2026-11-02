@@ -23,7 +23,7 @@ describe('parseLatestLivePrompt', () => {
     ].join('\n');
     expect(parseLatestLivePrompt(tail, visible)).toEqual({
       text: 'ask', at: '2024-01-01T00:00:00Z', response: 'Done.',
-      completedAt: '2024-01-01T00:00:03Z',
+      completedAt: '2024-01-01T00:00:03Z', lastActivityAt: '2024-01-01T00:00:04Z',
     });
   });
 
@@ -96,6 +96,7 @@ describe('parseLatestLivePrompt', () => {
     expect(parseLatestLivePrompt(tail, visible)).toEqual({
       text: 'latest prompt',
       at: '2024-01-01T00:05:00Z',
+      lastActivityAt: '2024-01-01T00:05:00Z',
       response: null,
     });
   });
@@ -213,5 +214,21 @@ describe('parseLatestLivePrompt', () => {
       at: 't',
       response: null,
     });
+  });
+
+  it('reports the newest valid event time of the turn as last activity, ignoring bad stamps and later turns', () => {
+    const tail = [
+      line({ type: 'user.message', data: { content: 'ask', messageId: 'm1' }, timestamp: '2024-01-01T00:00:00Z' }),
+      line({ type: 'tool.execution_start', timestamp: '2024-01-01T00:00:09Z' }),
+      line({ type: 'tool.execution_complete', timestamp: 'garbage' }),
+      line({ type: 'tool.execution_progress', timestamp: 42 }),
+      line({ type: 'user.message', data: { content: '   ', messageId: 'hidden' }, timestamp: '2024-01-01T09:00:00Z' }),
+    ].join('\n');
+    expect(parseLatestLivePrompt(tail, visible)).toMatchObject({ lastActivityAt: '2024-01-01T00:00:09Z' });
+  });
+
+  it('omits last activity when no event of the turn carries a valid timestamp', () => {
+    const tail = line({ type: 'user.message', data: { content: 'ask', messageId: 'm1' }, timestamp: 't' });
+    expect(parseLatestLivePrompt(tail, visible)).not.toHaveProperty('lastActivityAt');
   });
 });

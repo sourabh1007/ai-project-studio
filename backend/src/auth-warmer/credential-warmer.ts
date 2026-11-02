@@ -1,10 +1,8 @@
 /**
  * Keeps provider credentials (the GitHub token and the Azure DevOps OAuth
  * token) warm by periodically triggering a silent, non-interactive background
- * refresh. Each tick exercises the providers' cached refresh tokens before the
- * short-lived access tokens can lapse, so long-idle interactive sessions and
- * MCP servers never hit a stale credential and never need an interactive
- * (browser) re-authentication in the middle of a run.
+ * refresh. Future child processes can inherit the refreshed snapshot; existing
+ * children and service-specific native MCP caches are not updated by this loop.
  *
  * The actual provider refresh is injected (GitHub `gh auth token` + Azure GCM
  * `credential-manager get`, wired in main.ts) so this stays a pure, testable

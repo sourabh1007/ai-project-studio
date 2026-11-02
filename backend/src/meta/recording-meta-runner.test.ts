@@ -51,10 +51,27 @@ describe('durable recording meta runner with production SQLite', () => {
     const identity = vi.fn((request: MetaOperationRequest) => ({
       providerId: request.providerId ?? 'copilot', requestedModel: request.model ?? 'auto',
     }));
+    const changed = vi.fn();
     const runner = createRecordingMetaRunner({ base, operations: repo, ownership, clock,
-      newOperationId: () => `op-${++id}`, resolveIdentity: identity });
-    return { runner, base, ownership, identity };
+      newOperationId: () => `op-${++id}`, resolveIdentity: identity, onOperationChanged: changed });
+    return { runner, base, ownership, identity, changed };
   };
+
+  it('hints usage capture only after identities and terminal results are durable', async () => {
+    const h = setup();
+    const states: string[] = [];
+    h.changed.mockImplementation((id) => { states.push(repo.get(id)!.state); });
+    await h.runner.runDetailed({ featureId: 'f', prompt: 'go' });
+    expect(states).toEqual(['running', 'running', 'completed']);
+  });
+
+  it('does not retry or discard a durable result when the usage hint fails', async () => {
+    const h = setup();
+    h.changed.mockImplementation(() => { throw new Error('hint unavailable'); });
+    expect((await h.runner.runDetailed({ featureId: 'f', prompt: 'go' })).operationId).toBe('op-1');
+    expect(repo.get('op-1')?.state).toBe('completed');
+    expect(h.base.runDetailed).toHaveBeenCalledTimes(1);
+  });
 
   const preflightSetup = () => {
     let attemptId = 0;

@@ -5,6 +5,9 @@ import {
   pullToTask,
   defaultWorkItemFilter,
   isWorkItemFilter,
+  isImportPullScope,
+  isImportIssueScope,
+  refineImportPulls,
 } from './planner-import';
 import type {
   RemoteIssue,
@@ -44,6 +47,37 @@ const pull: RemotePullRequest = {
   author: 'Mona',
   body: 'Implements login with tests.',
 };
+
+describe('import scopes and team refinement', () => {
+  it.each(['mine', 'assigned', 'all'])('accepts supported server scope %s', (scope) => {
+    expect(isImportPullScope(scope)).toBe(true);
+    expect(isImportIssueScope(scope)).toBe(true);
+  });
+
+  it('accepts Team for pulls only and rejects corrupt persisted scopes', () => {
+    expect(isImportPullScope('team')).toBe(true);
+    expect(isImportIssueScope('team')).toBe(false);
+    for (const invalid of [undefined, null, {}, 1, 'unsupported']) {
+      expect(isImportPullScope(invalid)).toBe(false);
+      expect(isImportIssueScope(invalid)).toBe(false);
+    }
+  });
+
+  it('preserves provider ordering outside Team', () => {
+    const pulls = [pull];
+    expect(refineImportPulls(pulls, 'all', ['someone else'], 'longest')).toBe(pulls);
+  });
+
+  it('matches saved display names/logins case-insensitively and uses shared age ordering', () => {
+    const older = { ...pull, number: 1, authorLogin: 'octocat', createdAt: '2025-01-01' };
+    const newer = { ...pull, number: 2, author: 'Ada', createdAt: '2025-02-01' };
+    const unknown = { ...pull, number: 3, author: 'Someone else' };
+    const pulls = [newer, unknown, older];
+    expect(refineImportPulls(pulls, 'team', ['OCTOCAT', 'ada'], 'longest')).toEqual([older, newer]);
+    expect(refineImportPulls(pulls, 'team', [], 'newest')).toEqual([newer, older, unknown]);
+    expect(pulls).toEqual([newer, unknown, older]);
+  });
+});
 
 describe('workItemToTask', () => {
   it('maps a work item to a linked task with type, state, and assignee', () => {

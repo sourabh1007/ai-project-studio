@@ -11,10 +11,10 @@ describe('classifyMcpAuth', () => {
   it('flags auth and extracts the first login URL from output', () => {
     const result = classifyMcpAuth('unauthorized', [
       'Run the following to authenticate:',
-      'Open https://login.example.com/device?code=ABCD and enter the code',
+      'Open https://login.example.com/device?user_code=ABCD and enter the code',
     ]);
     expect(result.authRequired).toBe(true);
-    expect(result.authUrl).toBe('https://login.example.com/device?code=ABCD');
+    expect(result.authUrl).toBe('https://login.example.com/device?user_code=ABCD');
   });
 
   it('detects a 401 status code as an auth need', () => {
@@ -54,5 +54,32 @@ describe('classifyMcpAuth', () => {
     );
     expect(result.authRequired).toBe(true);
     expect(result.authUrl).toBe('https://auth.example.com/login');
+  });
+
+  it.each([
+    '403 Forbidden', 'Permission denied', 'credential helper configured',
+    'access token cache loaded', 'signed in successfully', 'Using login.example.com',
+    'Listening on port 401', 'Connection refused', 'Timed out',
+  ])('does not request reauthentication for unrelated diagnostics: %s', (message) => {
+    expect(classifyMcpAuth(message, ['See https://example.test/documentation']))
+      .toEqual({ authRequired: false, authUrl: null });
+  });
+
+  it.each([
+    'http://login.example.test/device', 'https://user@login.example.test/device',
+    'https://:password@login.example.test/device', 'https://login.example.test/device#private',
+    'https://login.example.test/device?access_token=private',
+    'https://login.example.test/device?client_secret=private',
+    'https://login.example.test/device?code=private',
+    'https://login.example.test/device?code_verifier=private', 'https://[',
+  ])('withholds unsafe or credential-bearing sign-in URLs: %s', (url) => {
+    expect(classifyMcpAuth('Authentication required', [url]))
+      .toEqual({ authRequired: true, authUrl: null });
+  });
+
+  it('skips an unsafe URL and retains the next safe sign-in link', () => {
+    expect(classifyMcpAuth('HTTP 401', [
+      'Open http://unsafe.test or https://login.example.test/device?client_id=public&scope=read',
+    ]).authUrl).toBe('https://login.example.test/device?client_id=public&scope=read');
   });
 });

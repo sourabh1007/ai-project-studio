@@ -54,4 +54,13 @@ describe('copilot-history config', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects a non-positive live prompt read timeout', () => {
+    expect(() =>
+      copilotHistoryConfigSchema.parse({
+        ...copilotHistoryDefaults,
+        livePromptTimeoutMs: 0,
+      }),
+    ).toThrow();
+  });
 });

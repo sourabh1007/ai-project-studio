@@ -1,6 +1,6 @@
 import type { SessionKind } from '../provider/provider-contract.js';
 import type { UsageRecorder } from './usage-recorder.js';
-import type { UsageCaptureRead, UsageCaptureRepo, UsageCaptureState } from './usage-capture-contract.js';
+import type { UsageCaptureRead, UsageCaptureRepo, UsageCaptureRow, UsageCaptureState } from './usage-capture-contract.js';
 import { UsageCaptureIdentityError } from './usage-capture-contract.js';
 
 export interface TailScheduler {
@@ -46,15 +46,36 @@ export function createCliUsageTailer(deps: CliUsageTailerDeps): CliUsageTailer {
   let handle: unknown;
   let running = false;
   let draining = false;
+  // Neither append progress nor EOF can substitute for historical finality proof.
+  let tailCursor = state.appendCursor ?? null;
+  let tailEnabled = tailCursor !== null;
 
   const save = (next: UsageCaptureState): void => {
-    deps.captures.save(next);
-    state = next;
+    const checkpoint = { ...next, appendCursor: tailCursor };
+    deps.captures.save(checkpoint);
+    state = checkpoint;
   };
   const drain = (): UsageCaptureState => {
     if (draining) return { ...state };
     draining = true;
     let stage = 'checkpoint-failed';
+    const record = (rows: UsageCaptureRow[]): void => {
+      const staged = rows.map((row) => {
+        stage = 'identity-reservation-failed';
+        if (row.event.sessionId !== deps.sessionId) throw new UsageCaptureIdentityError('source-session-mismatch');
+        const identity = deps.captures.reserve(deps.sessionId, row.sourceKey, row.event);
+        return { ...identity, sourceKey: row.sourceKey };
+      });
+      for (const row of staged) {
+        stage = 'usage-recording-failed';
+        deps.recorder.reconcile(row.event, deps.kind);
+        const fingerprint = JSON.stringify(row.event);
+        if (row.fingerprint !== fingerprint) {
+          stage = 'identity-checkpoint-failed';
+          deps.captures.acknowledge(deps.sessionId, row.sourceKey, fingerprint);
+        }
+      }
+    };
     try {
       if (state.reason === 'capture-in-progress') {
         // A prior pass died after checkpointing "in progress" but before it
@@ -102,6 +123,18 @@ export function createCliUsageTailer(deps: CliUsageTailerDeps): CliUsageTailer {
           finalScan: replayIssue ? false : state.finalScan,
         });
       }
+      if (tailEnabled) {
+        stage = 'source-read-failed';
+        const tail = deps.read(tailCursor, deps.pageSize);
+        if (tail.sourceId !== state.sourceId) throw new UsageCaptureIdentityError('source-identity-changed');
+        if (tail.status === 'ready') {
+          record(tail.rows);
+          tailCursor = tail.highWaterCursor ?? tail.nextCursor ?? tailCursor;
+          if (tail.issue) save({ ...state, sourceDone: false, finalScan: false });
+        } else {
+          save({ ...state, sourceDone: false, finalScan: false });
+        }
+      }
       if (state.sourceDone) {
         const complete = state.replayDone && state.finalScan;
         save({ ...state, status: complete ? 'complete' : 'pending', reason: complete ? null : 'source-finality-unknown' });
@@ -117,20 +150,10 @@ export function createCliUsageTailer(deps: CliUsageTailerDeps): CliUsageTailer {
       } else {
         // Retain every observed payload before attempting any sink write: a
         // failed first insert must not lose later rows if the provider prunes.
-        const staged = result.rows.map((row) => {
-          stage = 'identity-reservation-failed';
-          if (row.event.sessionId !== deps.sessionId) throw new UsageCaptureIdentityError('source-session-mismatch');
-          const identity = deps.captures.reserve(deps.sessionId, row.sourceKey, row.event);
-          return { ...identity, sourceKey: row.sourceKey };
-        });
-        for (const row of staged) {
-          stage = 'usage-recording-failed';
-          deps.recorder.reconcile(row.event, deps.kind);
-          const fingerprint = JSON.stringify(row.event);
-          if (row.fingerprint !== fingerprint) {
-            stage = 'identity-checkpoint-failed';
-            deps.captures.acknowledge(deps.sessionId, row.sourceKey, fingerprint);
-          }
+        record(result.rows);
+        if (!tailEnabled && result.nextCursor === null && result.highWaterCursor != null && !result.issue) {
+          tailCursor = result.highWaterCursor;
+          tailEnabled = true;
         }
         stage = 'checkpoint-failed';
         const finalScan = result.final && !result.issue && (state.cursor === null || state.finalScan === true);

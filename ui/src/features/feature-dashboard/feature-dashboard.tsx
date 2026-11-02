@@ -34,6 +34,7 @@ import type {
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText } from '../../components/ui.js';
 import { UsageBreakdownModal } from '../../components/usage-breakdown.js';
+import { formatAic } from '../../lib/format.js';
 import { Loader } from '../../components/loading.js';
 import {
   ActivityIcon,
@@ -361,7 +362,8 @@ function UsageTreeRows({
   );
 }
 
-function pctOf(aic: number, maxAic: number): number {
+function pctOf(aic: number | null, maxAic: number): number {
+  if (aic === null) return 0;
   return Math.min(100, Math.max(0, Math.round((aic / maxAic) * 100)));
 }
 
@@ -383,7 +385,7 @@ function TreeRow({
 }: {
   type: 'group' | 'session' | 'bucket';
   name: string;
-  aic: number;
+  aic: number | null;
   tokens: number;
   activeMs: number;
   swatch: string;
@@ -445,7 +447,7 @@ function TreeRow({
             style={{ width: `${pct}%`, background: swatch }}
           />
         </span>
-        <span className="dash-cell-value">{aic.toFixed(2)}</span>
+        <span className="dash-cell-value">{aic?.toFixed(2) ?? 'Unavailable'}</span>
       </span>
       <span className="dash-num" role="cell">
         {formatCompactNumber(tokens)}
@@ -550,7 +552,8 @@ function SessionBucket({
   colorIndex: (id: string) => number;
 }) {
   const [open, setOpen] = useState(false);
-  const nanoAiu = sessions.reduce((sum, s) => sum + s.totals.nanoAiu, 0);
+  const nanoAiu = sessions.reduce<number | null>((sum, s) =>
+    sum === null || s.totals.nanoAiu === null ? null : sum + s.totals.nanoAiu, 0);
   const tokens = sessions.reduce((sum, s) => sum + nodeTokens(s), 0);
   const activeMs = sessions.reduce((sum, s) => sum + s.totals.activeMs, 0);
   const aic = nanoAiuToAic(nanoAiu);
@@ -773,16 +776,16 @@ function Charts({
     () =>
       byModel
         .map((m) => ({ name: m.model || 'unknown', aic: nanoAiuToAic(m.nanoAiu) }))
-        .sort((a, b) => b.aic - a.aic),
+        .sort((a, b) => (b.aic ?? -1) - (a.aic ?? -1)),
     [byModel],
   );
 
   const usageTree = useMemo(
-    () => buildUsageTree(groups, bySession),
-    [groups, bySession],
+    () => buildUsageTree(groups, bySession, data.retained),
+    [groups, bySession, data.retained],
   );
   const maxAic = useMemo(
-    () => Math.max(1e-9, ...bySession.map((s) => nanoAiuToAic(s.nanoAiu))),
+    () => Math.max(1e-9, ...bySession.map((s) => nanoAiuToAic(s.nanoAiu) ?? 0)),
     [bySession],
   );
   const colorIndex = (id: string): number => {
@@ -802,7 +805,7 @@ function Charts({
       <Section icon={<OverviewIcon size={15} />} title="Overview">
         <div className="dash-kpis">
           <Kpi
-            value={totalAic.toFixed(2)}
+            value={totalAic?.toFixed(2) ?? 'Unavailable'}
             label="AIC used"
             accent={AIC_COLOR}
             onClick={() => setViewingUsage(true)}
@@ -825,10 +828,10 @@ function Charts({
       <Section
         icon={<UsageIcon size={15} />}
         title="Usage & cost"
-        hint={`${totalAic.toFixed(2)} AIC total`}
+        hint={`${totalAic?.toFixed(2) ?? 'Unavailable'} AIC total`}
       >
         <div className="dash-grid">
-          <Panel title="AIC over time" hint={`${totalAic.toFixed(2)} total`}>
+          <Panel title="AIC over time" hint={`${totalAic?.toFixed(2) ?? 'Unavailable'} total`}>
             <ResponsiveContainer width="100%" height={132}>
               <AreaChart data={dayData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
                 <defs>
@@ -896,7 +899,7 @@ function Charts({
                   <li key={m.name}>
                     <span className="dash-legend-dot" style={{ background: color(i) }} />
                     <span className="dash-legend-label">{m.name}</span>
-                    <span className="dash-legend-value">{m.aic.toFixed(2)}</span>
+                    <span className="dash-legend-value">{m.aic?.toFixed(2) ?? 'Unavailable'}</span>
                   </li>
                 ))}
               </ul>
@@ -959,7 +962,7 @@ function Charts({
       <Section
         icon={<ActivityIcon size={15} />}
         title="Usage tree"
-        hint={`${bySession.length} sessions · ${totalAic.toFixed(2)} AIC · ${formatDuration(timing.totalActiveMs)} active`}
+        hint={`${totals.sessions} sessions · ${totalAic?.toFixed(2) ?? 'Unavailable'} AIC · ${formatDuration(timing.totalActiveMs)} active`}
       >
       <div className="dash-table dash-usage-tree" role="table" aria-label="Nested usage activity">
           <div className="dash-table-head" role="row">
@@ -985,7 +988,7 @@ function Charts({
               />
             </span>
             <span className="dash-cell-value">
-              {nanoAiuToAic(usageTree.totals.nanoAiu).toFixed(2)}
+              {formatAic(usageTree.totals.nanoAiu)}
               </span>
           </span>
           <span className="dash-num" role="cell">
@@ -1002,6 +1005,12 @@ function Charts({
           colorIndex={colorIndex}
           labelFor={labelFor}
         />
+        {data.retained && <TreeRow type="bucket" name="Retained usage from deleted sessions"
+          aic={nanoAiuToAic(data.retained.nanoAiu)}
+          tokens={data.retained.inputTokens + data.retained.outputTokens}
+          activeMs={0} swatch={AIC_COLOR}
+          pct={pctOf(nanoAiuToAic(data.retained.nanoAiu), maxAic)}
+          depth={1} count={data.retained.sessions} />}
       </div>
       </Section>
 

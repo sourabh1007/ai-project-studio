@@ -25,7 +25,7 @@ export function ReviewContextSummary({
           <dt>Project type</dt><dd>{board.model.projectType}</dd>
           <dt>Projects</dt><dd>{projects.length
             ? projects.map((project) => <div key={project.id}>{project.name}{project.path && <> · <code>{project.path}</code></>}</div>)
-            : loading ? 'Loading project evidence…' : 'No project manifests identified in the change graph.'}</dd>
+            : loading ? 'Loading project evidence…' : error ? 'Project evidence unavailable. Retry loading changed files.' : 'No project manifests identified in the change graph.'}</dd>
           <dt>Languages</dt><dd>{languages.join(', ') || 'Not identified'}</dd>
           <dt>Components</dt><dd>{board.model.changedComponents.join(', ') || 'Not identified'}</dd>
           <dt>Modules</dt><dd>{board.model.changedModules.join(', ') || 'Not identified'}</dd>

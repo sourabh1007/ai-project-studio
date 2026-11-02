@@ -11,9 +11,18 @@ export interface EventBus<EventMap extends Record<string, unknown>> {
   handlerCount<K extends keyof EventMap>(event: K): number;
 }
 
+export interface EventBusOptions<EventMap extends Record<string, unknown>> {
+  /**
+   * Receives a subscriber failure so the emitter and sibling subscribers keep
+   * running. Without it, every subscriber still runs and the failure is then
+   * rethrown to the emitter rather than being swallowed.
+   */
+  onHandlerError?: (error: unknown, event: keyof EventMap) => void;
+}
+
 export function createEventBus<
   EventMap extends Record<string, unknown>,
->(): EventBus<EventMap> {
+>(options: EventBusOptions<EventMap> = {}): EventBus<EventMap> {
   const handlers = new Map<keyof EventMap, Set<EventHandler<never>>>();
 
   return {
@@ -33,8 +42,26 @@ export function createEventBus<
       if (!set) {
         return;
       }
+      const failures: unknown[] = [];
       for (const handler of set) {
-        (handler as EventHandler<EventMap[typeof event]>)(payload);
+        try {
+          (handler as EventHandler<EventMap[typeof event]>)(payload);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      for (const error of failures) {
+        if (!options.onHandlerError) continue;
+        try {
+          options.onHandlerError(error, event);
+        } catch {
+          // A failing reporter must not break the emitter or sibling subscribers.
+        }
+      }
+      if (!options.onHandlerError && failures.length > 0) {
+        throw failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, `${failures.length} event subscribers failed`);
       }
     },
     handlerCount(event) {

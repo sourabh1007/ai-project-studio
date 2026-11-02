@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createEventBus } from './event-bus.js';
 
 interface Events extends Record<string, unknown> {
@@ -43,5 +43,44 @@ describe('event-bus', () => {
     const bus = createEventBus<Events>();
     expect(() => bus.emit('other', 'x')).not.toThrow();
     expect(bus.handlerCount('other')).toBe(0);
+  });
+});
+
+describe('event-bus subscriber isolation', () => {
+  it('without a hook, runs every subscriber then rethrows the failure to the emitter', () => {
+    const bus = createEventBus<Events>();
+    const later: number[] = [];
+    bus.on('ping', () => { throw new Error('boom'); });
+    bus.on('ping', (p) => later.push(p.n));
+    expect(() => bus.emit('ping', { n: 1 })).toThrow('boom');
+    expect(later).toEqual([1]);
+  });
+
+  it('without a hook, aggregates multiple failures', () => {
+    const bus = createEventBus<Events>();
+    bus.on('ping', () => { throw new Error('a'); });
+    bus.on('ping', () => { throw new Error('b'); });
+    expect(() => bus.emit('ping', { n: 1 })).toThrow(AggregateError);
+  });
+
+  it('with a hook, reports each failure and never breaks the emitter or siblings', () => {
+    const reported: Array<[unknown, string]> = [];
+    const bus = createEventBus<Events>({ onHandlerError: (error, event) => reported.push([error, String(event)]) });
+    const later = vi.fn();
+    bus.on('ping', () => { throw new Error('a'); });
+    bus.on('ping', () => { throw new Error('b'); });
+    bus.on('ping', later);
+    expect(() => bus.emit('ping', { n: 1 })).not.toThrow();
+    expect(later).toHaveBeenCalledOnce();
+    expect(reported.map(([e, ev]) => [(e as Error).message, ev])).toEqual([['a', 'ping'], ['b', 'ping']]);
+  });
+
+  it('contains a throwing reporter', () => {
+    const bus = createEventBus<Events>({ onHandlerError: () => { throw new Error('reporter'); } });
+    const later = vi.fn();
+    bus.on('ping', () => { throw new Error('a'); });
+    bus.on('ping', later);
+    expect(() => bus.emit('ping', { n: 1 })).not.toThrow();
+    expect(later).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { AppError, NotFoundError } from '../kernel/error-types.js';
 import { createPrFeatureService } from './pr-feature-service.js';
 import type { Repository } from './repo-contract.js';
@@ -24,6 +24,14 @@ const pull: RemotePullRequest = {
 };
 
 function harness(overrides: {
+  provision?: (
+    onStatus?: (status: { phase: 'preparing'; message: string }) => void,
+  ) => Promise<{
+    worktreePath: string;
+    branch: string;
+    tracksPullRequest: boolean;
+    headSha: string;
+  }>;
   getPull?: () => Promise<RemotePullRequest | null>;
   findByPull?: (repoId: string, pullNumber: number) => string | null;
   find?: (featureId: string) => { repoId: string; pull: { number: number } } | null;
@@ -64,8 +72,9 @@ function harness(overrides: {
     },
     listPulls: () => Promise.resolve([pull]),
     getPull: overrides.getPull ?? (() => Promise.resolve(pull)),
-    provisionWorktree: () => {
+    provisionWorktree: (_repo, _pull, onStatus) => {
       provisioned.push(true);
+      if (overrides.provision) return overrides.provision(onStatus as never);
       return Promise.resolve({
         worktreePath: 'C:/wt/app-pr-12',
         branch: 'pr-12',
@@ -121,6 +130,75 @@ describe('pr-feature-service', () => {
   it('propagates an unknown repository from listPulls', async () => {
     const { svc } = harness();
     await expect(svc.listPulls('nope')).rejects.toThrow(AppError);
+  });
+
+  describe('concurrent imports of one pull request', () => {
+    const worktree = {
+      worktreePath: 'C:/wt/app-pr-12',
+      branch: 'pr-12',
+      tracksPullRequest: false,
+      headSha: 'sha',
+    };
+
+    it('joins the running import instead of provisioning a duplicate', async () => {
+      let release!: () => void;
+      let emit!: (m: string) => void;
+      const { svc, created, provisioned } = harness({
+        provision: (onStatus) => {
+          emit = (message) => onStatus?.({ phase: 'preparing', message });
+          return new Promise((resolve) => {
+            release = () => resolve(worktree);
+          });
+        },
+      });
+      const first: string[] = [];
+      const second: string[] = [];
+      const a = svc.createFromPull('r1', 12, null, null, (s) => first.push(s.message));
+      await vi.waitFor(() => expect(provisioned).toHaveLength(1));
+      emit('fetching');
+      const b = svc.createFromPull('r1', 12, null, null, (s) => second.push(s.message));
+      const c = svc.createFromPull('r1', 12);
+      emit('preparing');
+      release();
+      const [ra, rb, rc] = await Promise.all([a, b, c]);
+      expect(provisioned).toHaveLength(1);
+      expect(created).toHaveLength(1);
+      expect(ra.alreadyImported).toBe(false);
+      expect(rb).toEqual({ feature: ra.feature, alreadyImported: true });
+      expect(rc.alreadyImported).toBe(true);
+      expect(first).toEqual(['fetching', 'preparing']);
+      expect(second).toEqual(['fetching', 'preparing']);
+    });
+
+    it('shares a failure with joiners and lets a later attempt start fresh', async () => {
+      let fail = true;
+      let reject!: (e: Error) => void;
+      const { svc, provisioned } = harness({
+        provision: () =>
+          fail
+            ? new Promise((_, r) => {
+                reject = r;
+              })
+            : Promise.resolve(worktree),
+      });
+      const a = svc.createFromPull('r1', 12);
+      await vi.waitFor(() => expect(provisioned).toHaveLength(1));
+      const b = svc.createFromPull('r1', 12);
+      reject(new Error('fetch failed'));
+      await expect(a).rejects.toThrow('fetch failed');
+      await expect(b).rejects.toThrow('fetch failed');
+      fail = false;
+      await expect(svc.createFromPull('r1', 12)).resolves.toMatchObject({
+        alreadyImported: false,
+      });
+      expect(provisioned).toHaveLength(2);
+    });
+
+    it('does not join imports of different pull requests', async () => {
+      const { svc, provisioned } = harness();
+      await Promise.all([svc.createFromPull('r1', 12), svc.createFromPull('r1', 13)]);
+      expect(provisioned).toHaveLength(2);
+    });
   });
 
   it('creates a feature in the PR worktree', async () => {

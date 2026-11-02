@@ -4,6 +4,7 @@ import { createApiRoutes, type ApiRoutesDeps } from './routes.js';
 function deps(): ApiRoutesDeps {
   const empty = {} as never;
   return {
+    operations: empty,
     features: empty,
     admin: empty,
     launcher: empty,
@@ -119,6 +120,19 @@ function deps(): ApiRoutesDeps {
 }
 
 describe('createApiRoutes', () => {
+  it('wires a metadata-only catalog with configured and default exposure policies', async () => {
+    const entry = { id: 'git', label: 'Git', category: 'repository' as const, description: 'Git',
+      config: { namespace: 'git', keys: ['executable'] }, required: [], sources: [] };
+    const request = { params: {}, query: {}, body: undefined };
+    for (const options of [{ commandCatalog: [entry] }, { commandCatalog: [entry], isConfigNamespaceExposed: () => true }, {}]) {
+      const routes = createApiRoutes({ ...deps(), ...options });
+      expect((await routes.find((route) => route.path === '/tools/commands')!.handler(request)).status).toBe(200);
+    }
+  });
+  it('registers session-scoped text attachment creation only when storage is injected', () => {
+    const routes = createApiRoutes({ ...deps(), textAttachments: {} as never });
+    expect(routes.some((route) => route.method === 'post' && route.path === '/sessions/:sessionId/text-attachments')).toBe(true);
+  });
   it('registers source-aware skill usage routes when their store is injected', () => {
     const routes = createApiRoutes({
       ...deps(), skillUsage: { usage: {} as never, config: { maxEvents: 5000 } },
@@ -163,6 +177,9 @@ describe('createApiRoutes', () => {
       'post /features/:featureId/terminal-sessions',
       'get /providers',
       'get /providers/bootstrap',
+      'post /providers/selection',
+      'post /providers/switch',
+      'put /providers/preferences',
       'get /providers/:id/models',
       'get /mcp/providers/:providerId/servers/:serverName/options',
       'post /mcp/providers/:providerId/servers/:serverName/authentication',
@@ -283,6 +300,7 @@ describe('createApiRoutes', () => {
       'get /config',
       'put /config/:namespace',
       'delete /config/:namespace',
+      'get /tools/commands',
       'post /config/assistant',
       'get /meta/operations',
       'get /meta/operations/:operationId',

@@ -11,12 +11,27 @@ home-grown counter — and rolls those figures up across the whole hierarchy.
 - **Live credit meter:** each running session shows its own credits/tokens/time
   as they accrue.
 - **Feature dashboard:** open a feature to see its charts and KPI cards.
+- **Usage activity-bar view:** switch between **Workspace** and **IDE
+  metasessions**, select **Day / Week / Month / Year** rollups, and inspect
+  model usage, MCP server charts, skill telemetry and the IDE activity feed.
+- **Plan quota indicator:** provider-reported quota appears in the status bar
+  when supported. Unavailable quota is not zero usage or an unlimited plan.
+
+Amounts can be **unavailable** or **partial** when the provider has not reported
+native billing. Claude's native AIC and plan quota can be unavailable; separately
+labelled **USD estimates** are not AIC and are never substituted for it.
 
 ## What rolls up where
 
 Usage aggregates across the full **Feature → Group → Session** hierarchy, so a
 feature's numbers include every session (and group) beneath it, and the workspace
 totals include every feature.
+
+Global usage can include **retained usage from deleted features/sessions**.
+Deleting work is not a billing reset, so workspace totals need not equal a sum
+of only the currently visible Explorer rows. MCP and skill attribution have
+their own retention/availability boundaries; session charges are not distributed
+between tools or skills.
 
 Every AI call is tagged as either:
 

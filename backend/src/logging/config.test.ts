@@ -125,3 +125,34 @@ describe('logging/config', () => {
     expect(strategy.isManagedFile('workspace-2026-08-03.txt')).toBe(false);
   });
 });
+
+describe('logging/config async writer controls', () => {
+  it('defaults to a bounded async writer and validates every control', () => {
+    expect(loggingDefaults).toMatchObject({
+      asyncWriter: true, queueMaxRecords: 4096, flushIntervalMs: 50, maxBatchRecords: 256,
+      writerAckTimeoutMs: 5_000, maxWriterRestarts: 3,
+    });
+    expect(resolveLoggingConfig({
+      asyncWriter: false, queueMaxRecords: 1, queueMaxBytes: 1024, maxRecordBytes: 256, flushIntervalMs: 1,
+      maxBatchRecords: 1, writerAckTimeoutMs: 1, maxWriterRestarts: 0,
+    })).toMatchObject({ asyncWriter: false, queueMaxRecords: 1, maxWriterRestarts: 0 });
+    for (const bad of [
+      { queueMaxRecords: 0 }, { flushIntervalMs: 0 }, { maxBatchRecords: 0 },
+      { writerAckTimeoutMs: 0 }, { maxWriterRestarts: -1 }, { queueMaxBytes: MIN_LOG_RECORD_BYTES - 1 },
+    ]) {
+      expect(() => resolveLoggingConfig(bad)).toThrow();
+    }
+    expect(() => resolveLoggingConfig({ queueMaxBytes: loggingDefaults.maxRecordBytes - 1 }))
+      .toThrow(/queueMaxBytes/);
+  });
+
+  it('exposes the controls as editable described fields', () => {
+    const registry = createConfigSchemaRegistry();
+    registry.register({ namespace: LOGGING_NAMESPACE, schema: loggingConfigSchema, defaults: loggingDefaults });
+    const fields = describeNamespaces(registry).logging.fields!;
+    for (const key of ['queueMaxRecords', 'queueMaxBytes', 'flushIntervalMs', 'maxBatchRecords', 'writerAckTimeoutMs', 'maxWriterRestarts']) {
+      expect(fields[key]).toMatchObject({ kind: 'number' });
+    }
+    expect(fields.asyncWriter.kind).toBe('boolean');
+  });
+});

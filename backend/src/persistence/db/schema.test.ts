@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './connection.js';
+import { createUsageCaptureRepo } from '../usage-capture-repo.js';
 import {
   applySchema,
   type ApplySchemaOptions,
@@ -1371,7 +1372,7 @@ describe('db schema/connection', () => {
     db.close();
   });
 
-  it('adds durable finality columns to legacy usage capture state', () => {
+  it('adds durable append and finality columns to legacy usage capture state without changing the historical scan position', () => {
     const dir = makeWorkspaceDir('usage-capture-finality');
     try {
       const databasePath = join(dir, 'workspace.db');
@@ -1391,21 +1392,32 @@ describe('db schema/connection', () => {
       applySchema(db);
 
       expect(usageCaptureStateColumns(db)).toEqual(expect.arrayContaining([
+        'append_cursor',
         'final_scan',
         'replay_clean',
         'source_done',
         'replay_done',
       ]));
       expect(
-        db.prepare(`SELECT final_scan, replay_clean, source_done, replay_done
+        db.prepare(`SELECT cursor, append_cursor, final_scan, replay_clean, source_done, replay_done
           FROM usage.usage_capture_state WHERE session_id = 's1'`).get(),
       ).toEqual({
+        cursor: '5',
+        append_cursor: null,
         final_scan: 0,
         replay_clean: 0,
         source_done: 0,
         replay_done: 0,
       });
+      const captures = createUsageCaptureRepo(db);
+      captures.save({ ...captures.get('s1')!, appendCursor: '19' });
       db.close();
+      const reopened = createDatabase({ databasePath });
+      try {
+        expect(createUsageCaptureRepo(reopened).get('s1')).toMatchObject({
+          cursor: '5', appendCursor: '19', replayCursor: 3, status: 'retrying',
+        });
+      } finally { reopened.close(); }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

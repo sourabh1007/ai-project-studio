@@ -77,6 +77,7 @@ interface TreeContextValue {
   onDeleteGroup: (group: TreeGroup) => void;
   renderSession: (session: Session, ordinal: number) => ReactNode;
   renderGroupFeatures?: (groupId: string) => ReactNode;
+  renderGroupUsage?: (group: TreeGroup) => ReactNode;
   onNewFeature?: (parentGroupId: string) => void;
   /** The feature row currently being dragged, if any (feature DnD). */
   draggingFeature?: Feature | null;
@@ -258,6 +259,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
     onRenameGroup,
     onDeleteGroup,
     renderGroupFeatures,
+    renderGroupUsage,
     onNewFeature,
     draggingFeature,
     canNestInto,
@@ -398,6 +400,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
             {label}
           </button>
         )}
+        {renderGroupUsage?.(group)}
         <div className="tree-branch-trail">
           <button
             type="button"
@@ -537,6 +540,7 @@ export function FeatureTree(props: {
   onDeleteGroup: (group: TreeGroup) => void;
   renderSession: (session: Session, ordinal: number) => ReactNode;
   renderGroupFeatures?: (groupId: string) => ReactNode;
+  renderGroupUsage?: (group: TreeGroup) => ReactNode;
   onNewFeature?: (parentGroupId: string) => void;
   draggingFeature?: Feature | null;
   canNestInto?: (featureId: string) => boolean;

@@ -48,7 +48,7 @@ function originOf(session: Session): UsageOrigin {
 }
 
 /** Usage totals for a session row, or an empty (running) placeholder. */
-function totalsFor(usage: SessionUsage | undefined): UsageTotals {
+function totalsFor(usage: SessionUsage | undefined): UsageTotals & { usageRecorded?: false } {
   return usage
     ? {
         sessions: 1,
@@ -58,8 +58,9 @@ function totalsFor(usage: SessionUsage | undefined): UsageTotals {
         cost: usage.cost,
         credits: usage.credits,
         nanoAiu: usage.nanoAiu,
+        ...(usage.usdEstimate === undefined ? {} : { usdEstimate: usage.usdEstimate }),
       }
-    : EMPTY_USAGE;
+    : { ...EMPTY_USAGE, usageRecorded: false };
 }
 
 /**
@@ -165,9 +166,10 @@ export function createFeatureAnalytics(
           parentGroupId: group.parentGroupId ?? null,
         }));
 
+      const retained = reader.retainedTotals(featureId);
       const totals: UsageTotals = {
         ...reader.featureTotals(featureId),
-        sessions: bySession.length,
+        sessions: bySession.length + retained.sessions,
       };
       const totalActiveMs = bySession.reduce(
         (sum, session) => sum + session.activeMs,
@@ -182,6 +184,7 @@ export function createFeatureAnalytics(
         bySession,
         byMcpServer: reader.byMcpServer(featureId),
         groups: featureGroups,
+        ...(retained.sessions > 0 ? { retained } : {}),
         timing: { totalActiveMs },
       };
     },

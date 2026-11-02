@@ -1,7 +1,7 @@
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { userInfo } from 'node:os';
-import { ValidationError } from '../kernel/error-types.js';
+import { ConflictError, ValidationError } from '../kernel/error-types.js';
 import type {
   NewTaskCommit,
   NewTaskFileChange,
@@ -144,45 +144,57 @@ export function createNewTaskGit(deps: NewTaskGitDeps): NewTaskGitPort {
     runId: string;
     name: string;
     previousBranch?: string;
+    resume?: boolean;
   }): Promise<NewTaskWorktree> {
     const worktreePath = newTaskWorktreePath(input.repoLocalPath, input.runId);
     const username = (deps.resolveUser ?? (() => userInfo().username))();
+    const expectedBranch = input.previousBranch ?? newTaskBranch(username, input.name);
 
-    // Re-plan: tear down the previous plan's worktree + branch so the new plan
-    // starts from a clean slate on a brand new branch (best-effort; a missing
-    // worktree/branch is fine).
-    if (input.previousBranch) {
-      await deps.git([
-        '-C',
-        input.repoLocalPath,
-        'worktree',
-        'remove',
-        '--force',
-        worktreePath,
+    if (deps.pathExists(worktreePath)) {
+      const listed = await deps.git(['-C', input.repoLocalPath, 'worktree', 'list', '--porcelain']);
+      if (listed.code !== 0) {
+        throw new ValidationError(listed.stderr.trim() || 'Failed to inspect the task worktree');
+      }
+      const record = listed.stdout.split(/\r?\n\r?\n/).find((block) =>
+        block.split(/\r?\n/).some((line) =>
+          line.startsWith('worktree ') && resolve(line.slice(9)) === resolve(worktreePath),
+        ),
+      );
+      if (!record?.split(/\r?\n/).includes(`branch refs/heads/${expectedBranch}`)) {
+        throw new ConflictError('The task worktree is not on its expected branch. Existing files were preserved.');
+      }
+      if (input.resume || !input.previousBranch) {
+        return { worktreePath, branch: expectedBranch };
+      }
+      const status = await deps.git([
+        '-C', worktreePath, 'status', '--porcelain', '--untracked-files=all', '--ignored',
       ]);
-      await deps.git(['-C', input.repoLocalPath, 'worktree', 'prune']);
-      await deps.git([
-        '-C',
-        input.repoLocalPath,
-        'branch',
-        '-D',
-        input.previousBranch,
-      ]);
+      if (status.code !== 0) {
+        throw new ValidationError(status.stderr.trim() || 'Failed to inspect worktree changes');
+      }
+      if (status.stdout.trim()) {
+        throw new ConflictError('The task worktree contains work that must be preserved.');
+      }
+      // Git refuses to remove dirty/locked worktrees. Never force removal, and
+      // retain the previous branch so committed work remains recoverable.
+      const removed = await deps.git(['-C', input.repoLocalPath, 'worktree', 'remove', worktreePath]);
+      if (removed.code !== 0) {
+        throw new ConflictError(removed.stderr.trim() || 'The task worktree contains work that must be preserved.');
+      }
+    }
+
+    if (input.resume && input.previousBranch) {
+      const resumed = await deps.git(['-C', input.repoLocalPath, 'worktree', 'add', worktreePath, input.previousBranch]);
+      if (resumed.code !== 0) {
+        throw new ValidationError(resumed.stderr.trim() || 'Failed to resume the task worktree');
+      }
+      return { worktreePath, branch: input.previousBranch };
     }
 
     const token = input.previousBranch
       ? (deps.branchToken ?? (() => randomUUID().slice(0, 8)))()
       : undefined;
     const branch = newTaskBranch(username, input.name, token);
-
-    // A worktree directory can linger on disk even after `worktree remove`
-    // (an interrupted run, a Windows file lock, or a checkout git no longer
-    // tracks). `worktree add` refuses an existing path, so purge any leftover
-    // directory and prune the registry before recreating it.
-    if (deps.pathExists(worktreePath)) {
-      deps.removeDir(worktreePath);
-      await deps.git(['-C', input.repoLocalPath, 'worktree', 'prune']);
-    }
 
     // Best-effort refresh so the new branch is based on the latest base head.
     const fetched = await deps.git([
@@ -204,8 +216,7 @@ export function createNewTaskGit(deps: NewTaskGitDeps): NewTaskGitPort {
       input.repoLocalPath,
       'worktree',
       'add',
-      '--force',
-      '-B',
+      '-b',
       branch,
       worktreePath,
     ];

@@ -77,4 +77,47 @@ describe('GithubStatusBadge', () => {
     expect(client.githubSignInStart).toHaveBeenCalledTimes(1);
     vi.restoreAllMocks();
   });
+
+  it('preserves the signed-in account during an unavailable check instead of requesting sign-in again', async () => {
+    const getGithubStatus = vi.fn<() => Promise<GithubStatus>>()
+      .mockResolvedValueOnce({ authenticated: true, login: 'octocat' })
+      .mockRejectedValueOnce(new Error('Stored credentials could not be checked.'));
+    const client = makeClient({ getGithubStatus });
+    renderBadge(client);
+    const recheck = await screen.findByRole('button', { name: /GitHub · octocat/ });
+    await waitFor(() => expect(recheck).toBeEnabled());
+    fireEvent.click(recheck);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Stored credentials could not be checked.');
+    expect(screen.getByText('GitHub · octocat')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(client.githubSignInStart).not.toHaveBeenCalled();
+  });
+
+  it('retries an unknown account check without starting an unnecessary device flow', async () => {
+    const getGithubStatus = vi.fn<() => Promise<GithubStatus>>()
+      .mockRejectedValueOnce(new Error('Keyring unavailable.'))
+      .mockResolvedValueOnce({ authenticated: true, login: 'octocat' });
+    const client = makeClient({ getGithubStatus });
+    renderBadge(client);
+    const retry = await screen.findByRole('button', { name: 'GitHub · status unavailable' });
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    fireEvent.click(retry);
+    expect(await screen.findByText('GitHub · octocat')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(client.githubSignInStart).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('surfaces an incomplete sign-out without an unhandled rejection (rejected: %s)', async (rejected) => {
+    const githubSignOut = rejected
+      ? vi.fn().mockRejectedValue(new Error('Sign-out unavailable.'))
+      : vi.fn().mockResolvedValue({ authenticated: true, login: 'octocat' });
+    const client = makeClient({
+      getGithubStatus: vi.fn().mockResolvedValue({ authenticated: true, login: 'octocat' }),
+      githubSignOut,
+    });
+    renderBadge(client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(rejected ? 'Sign-out unavailable.' : 'sign-out did not complete');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled());
+  });
 });

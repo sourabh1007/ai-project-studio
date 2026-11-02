@@ -11,6 +11,7 @@ export const SELF_RECOVERY_NAMESPACE = 'selfRecovery';
 export const selfRecoveryConfigSchema = z.object({
   /** Master switch for automatic session self-recovery. */
   enabled: z.boolean(),
+  maxRestartCycles: z.number().int().min(0).max(5).default(1).describe('Maximum recovery relaunches for one provider-confirmed request, across terminal generations. Fresh user activity resets the budget; this never grants replay permission.'),
   /**
    * Whether, once in-session re-submits are exhausted, a metasession is used to
    * analyze the failure and surface a diagnosis before the last-resort restart.
@@ -24,5 +25,6 @@ export type SelfRecoveryConfig = z.infer<typeof selfRecoveryConfigSchema>;
 
 export const selfRecoveryDefaults: SelfRecoveryConfig = {
   enabled: true,
+  maxRestartCycles: 1,
   useMetaAnalysis: true,
 };

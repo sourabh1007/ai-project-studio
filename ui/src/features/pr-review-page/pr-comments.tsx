@@ -5,7 +5,7 @@ import { Avatar } from '../../components/avatar.js';
 import { RestoreIcon } from '../../components/icons.js';
 import {
   annotateDiffLines,
-  rightSideLines,
+  fullFileDiffLines,
   type DiffLineKind,
   type DiffDisplayLine,
 } from '../../lib/diff-lines.js';
@@ -698,8 +698,8 @@ export function CommentableDiffLines({
 }
 
 /**
- * The whole current file with the PR's changes highlighted (added lines get the
- * "add" colouring) so a reviewer can read a change in full context — not just
+ * The whole current file with added and removed lines highlighted, so a
+ * reviewer can read a change in full context — not just
  * the bounded diff hunks — and comment on ANY line, not only the lines the diff
  * happened to include. Existing threads render inline beneath their line and
  * file-level threads render above.
@@ -708,42 +708,26 @@ export function CommentableFullFile({
   comments,
   path,
   content,
-  changedLines,
+  diff,
 }: {
   comments: PrCommentsController;
   path: string;
   content: string;
-  changedLines: ReadonlySet<number>;
+  diff: string;
 }) {
-  const prepared = useMemo<PreparedLine[]>(() => {
-    const body = content.replace(/\n$/, '');
-    if (body.length === 0) {
-      return [];
-    }
-    return body.split('\n').map((text, i) => {
-      const lineNo = i + 1;
-      const changed = changedLines.has(lineNo);
-      return {
-        code: text,
-        marker: '',
-        // Highlight the PR's added lines; everything else reads as context.
-        kind: changed ? 'add' : 'ctx',
-        rightLine: lineNo,
-      };
-    });
-  }, [content, changedLines]);
+  const lines = useMemo(() => fullFileDiffLines(content, diff), [content, diff]);
 
   const presentLines = useMemo(() => {
     const set = new Set<number>();
-    for (const line of prepared) {
+    for (const line of lines) {
       if (line.rightLine !== null) {
         set.add(line.rightLine);
       }
     }
     return set;
-  }, [prepared]);
+  }, [lines]);
 
-  if (prepared.length === 0) {
+  if (lines.length === 0) {
     return <p className="muted">This file is empty.</p>;
   }
 
@@ -754,7 +738,7 @@ export function CommentableFullFile({
         path={path}
         presentLines={presentLines}
       />
-      <CommentableLines comments={comments} path={path} prepared={prepared} />
+      <CommentableDiffLines comments={comments} path={path} lines={lines} />
     </div>
   );
 }
@@ -784,16 +768,6 @@ export function CommentableDiff({
   const api = useApi();
   const featureId = comments.featureId;
   const lines = useMemo(() => annotateDiffLines(diff), [diff]);
-  const changedLines = useMemo(() => {
-    const set = new Set<number>();
-    for (const line of rightSideLines(diff)) {
-      if (line.kind === 'added') {
-        set.add(line.line);
-      }
-    }
-    return set;
-  }, [diff]);
-
   const [mode, setMode] = useState<'diff' | 'full'>('diff');
   const [full, setFull] = useState<{ content: string | null } | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
@@ -889,7 +863,7 @@ export function CommentableDiff({
           comments={comments}
           path={path}
           content={full.content}
-          changedLines={changedLines}
+          diff={diff}
         />
       ) : full !== null ? (
         <p className="muted">

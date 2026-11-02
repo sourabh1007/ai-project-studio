@@ -74,6 +74,10 @@ export interface SessionSpec {
   /** Absolute path where the provider must write its OTel usage JSONL. */
   otelFilePath: string;
   cwd?: string;
+  /** Shared context delivered through the provider's native command capability. */
+  instructions?: string;
+  /** Reattach a previously started native session rather than create a new id. */
+  resume?: boolean;
   /**
    * Restrict the run to zero tools, turning it into a pure prompt→text
    * completion with no agentic tool loops. Used by lightweight analysis steps
@@ -166,7 +170,14 @@ export interface McpSupport {
 /** A pluggable AI provider. Adding one requires only a new implementation. */
 export interface IAIProvider {
   readonly id: string;
+  readonly capabilities?: {
+    warmTransport?: 'acp';
+    planUsage?: 'aic-panel';
+    interactiveBootstrap?: 'command';
+  };
   listModels(): Promise<ModelInfo[]>;
+  /** Await non-billable native readiness before an interactive command is built. */
+  prepareInteractiveSession?(): Promise<void>;
   startSession(spec: SessionSpec): RunningSession;
   /**
    * Builds the command/env to run this provider interactively in a PTY. Adding

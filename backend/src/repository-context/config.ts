@@ -34,6 +34,8 @@ export const repositoryContextConfigSchema = z.object({
   synthesisPromptTemplate: z.string().min(1),
   /** Maximum persisted repository-context characters. */
   maxOutputChars: z.number().int().positive(),
+  /** Maximum launch-time wait for optional repository-context freshness checks. */
+  launchContextWaitMs: z.number().int().nonnegative(),
   /** Maximum prior-session summaries included in feature memory. */
   maxFeatureMemoryItems: z.number().int().positive(),
   /** Maximum total characters included as feature memory. */
@@ -131,6 +133,7 @@ export const repositoryContextDefaults: RepositoryContextConfig = {
     '{{chunkSummaries}}',
   ].join('\n'),
   maxOutputChars: 24_000,
+  launchContextWaitMs: 250,
   maxFeatureMemoryItems: 12,
   maxFeatureMemoryChars: 32_000,
 };

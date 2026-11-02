@@ -4,14 +4,18 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { useDraft } from '../../hooks/use-draft.js';
+import { sessionWorkTitle } from '../../lib/session-names.js';
 import { useAgentUsage } from '../../hooks/use-agent-usage.js';
 import { refreshAgentCredits } from '../../lib/agent-usage.js';
+import { withOperationKey } from '../../lib/operation-keys.js';
 import { AgentUsageValue } from '../../components/feature-agent-usage.js';
 import { ApiError } from '../../lib/api.js';
-import { Button, ErrorText } from '../../components/ui.js';
+import { Button, ErrorText, Modal } from '../../components/ui.js';
 import {
   ActivityIcon,
   AiMagicIcon,
@@ -39,7 +43,7 @@ import {
   type PlanExportFormat,
 } from '../../lib/plan-export.js';
 import { RefineChatPanel } from '../../components/refine-chat-panel.js';
-import { annotateDiffLines } from '../../lib/diff-lines.js';
+import { annotateDiffLines, fullFileDiffLines } from '../../lib/diff-lines.js';
 import type {
   Feature,
   NewTaskAgent,
@@ -48,11 +52,30 @@ import type {
   NewTaskFileDiff,
   NewTaskImplementEvent,
   NewTaskRun,
+  Session,
 } from '../../lib/types.js';
 
 interface NewTaskPageProps {
   feature: Feature;
   attachmentId: string;
+  /** Host hook to open a created session as a workspace tab, when supported. */
+  openSession?: (session: Session, label: string) => void;
+}
+
+/** Local-storage prefix for unsaved problem/context drafts (scoped per attachment). */
+const NEW_TASK_DRAFT_PREFIX = 'cw-new-task-draft';
+
+/** Ctrl/Cmd+Enter outside an active IME composition. */
+function isSubmitShortcut(event: ReactKeyboardEvent<HTMLElement>): boolean {
+  return (
+    event.key === 'Enter' &&
+    (event.ctrlKey || event.metaKey) &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !event.repeat &&
+    !event.nativeEvent.isComposing &&
+    event.keyCode !== 229
+  );
 }
 
 /** The ordered wizard steps the user walks through. */
@@ -323,35 +346,12 @@ function AgentLogModal({
   onClose: () => void;
 }) {
   return (
-    <div
-      className="new-task-modal-overlay"
-      role="presentation"
-      onClick={onClose}
-    >
-      <div
-        className="new-task-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${agent.title} activity`}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="new-task-modal-head">
-          <div>
-            <span className="new-task-agent-role">
-              {AGENT_ROLE_LABEL[agent.role]}
-            </span>
-            <strong>{agent.title}</strong>
-          </div>
-          <button
-            type="button"
-            className="new-task-modal-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </header>
+    <Modal title={`${agent.title} activity`} onClose={onClose} size="lg">
+      <div className="new-task-modal-content">
         <div className="new-task-modal-metrics">
+          <span className="new-task-agent-role">
+            {AGENT_ROLE_LABEL[agent.role]}
+          </span>
           <span>Status: {agent.status}</span>
           <span>Time: {formatDuration(agentDuration(agent, nowMs))}</span>
           <span>AIC: {formatCredits(agent.credits)}</span>
@@ -374,7 +374,7 @@ function AgentLogModal({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -399,20 +399,10 @@ function FileDiffModal({
   onClose: () => void;
 }) {
   const lines = diff ? annotateDiffLines(diff.diff) : [];
-  const fullLines = diff ? diff.content.replace(/\n$/, '').split('\n') : [];
+  const fullLines = diff ? fullFileDiffLines(diff.content, diff.diff) : [];
   return (
-    <div
-      className="new-task-modal-overlay"
-      role="presentation"
-      onClick={onClose}
-    >
-      <div
-        className="new-task-modal new-task-diff-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${path} diff`}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <Modal title={`${path} diff`} onClose={onClose} size="xl">
+      <div className="new-task-modal-content new-task-diff-modal">
         <header className="new-task-modal-head">
           <div className="new-task-diff-title">
             <FileIcon size={14} />
@@ -432,14 +422,6 @@ function FileDiffModal({
             >
               {showFull ? 'Show diff' : 'Show full file'}
             </button>
-            <button
-              type="button"
-              className="new-task-modal-close"
-              onClick={onClose}
-              aria-label="Close"
-            >
-              ✕
-            </button>
           </div>
         </header>
         <div className="new-task-diff-body">
@@ -453,9 +435,9 @@ function FileDiffModal({
                 <span className="muted">This file has no content on the branch.</span>
               ) : (
                 fullLines.map((line, i) => (
-                  <div key={i} className="new-task-diff-full-line">
-                    <span className="new-task-diff-gutter">{i + 1}</span>
-                    <span className="new-task-diff-text">{line || ' '}</span>
+                  <div key={i} className={`new-task-diff-full-line new-task-diff-line is-${line.kind}`}>
+                    <span className="new-task-diff-gutter">{line.rightLine ?? ''}</span>
+                    <span className="new-task-diff-text">{line.raw || ' '}</span>
                   </div>
                 ))
               )}
@@ -481,7 +463,7 @@ function FileDiffModal({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -753,11 +735,51 @@ function StepNav({
  * from the base, implement the change, open a PR, and report the branch, PR and
  * changed-file summary. The task then becomes Review-Board-eligible.
  */
-export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
+export function NewTaskPage(props: NewTaskPageProps) {
+  // Remount per attachment so drafts, streams and async results never cross
+  // feature/attachment boundaries.
+  return (
+    <NewTaskPageInner
+      key={`${props.feature.id}:${props.attachmentId}`}
+      {...props}
+    />
+  );
+}
+
+function NewTaskPageInner({
+  feature,
+  attachmentId,
+  openSession,
+}: NewTaskPageProps) {
   const api = useApi();
+  const aliveRef = useRef(true);
+  const planStartRef = useRef(false);
+  const cancelRef = useRef(false);
+  const sessionStartRef = useRef(false);
+  const diffRequestRef = useRef(0);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  const [startingSession, setStartingSession] = useState(false);
   const [run, setRun] = useState<NewTaskRun | null>(null);
-  const [problem, setProblem] = useState('');
-  const [context, setContext] = useState('');
+  const problemDraft = useDraft(
+    `${NEW_TASK_DRAFT_PREFIX}:${feature.id}:${attachmentId}:problem`,
+    run?.problem ?? '',
+  );
+  const contextDraft = useDraft(
+    `${NEW_TASK_DRAFT_PREFIX}:${feature.id}:${attachmentId}:context`,
+    run?.context ?? '',
+  );
+  const problem = problemDraft.value;
+  const context = contextDraft.value;
+  const setProblem = problemDraft.setValue;
+  const setContext = contextDraft.setValue;
+  const latestInputs = useRef({ problem, context });
+  const backupError = problemDraft.persistenceError ?? contextDraft.persistenceError;
+  latestInputs.current = { problem, context };
   const [baseBranch, setBaseBranch] = useState('');
   const [suggestion, setSuggestion] = useState('');
   const [clarifying, setClarifying] = useState(false);
@@ -800,8 +822,6 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   const hydrate = useCallback((next: NewTaskRun | null) => {
     setRun(next);
     if (next) {
-      setProblem(next.problem);
-      setContext(next.context);
       if (next.agents.length > 0) {
         setAgents((prev) => {
           const merged = { ...prev };
@@ -974,6 +994,8 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
 
   const runPlan = useCallback(
     async (withSuggestion: boolean) => {
+      if (planStartRef.current) return;
+      planStartRef.current = true;
       setError(null);
       setPlanning(true);
       setPlanLog([]);
@@ -987,6 +1009,10 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
           problem,
           context,
         });
+        // Only drop backups for text that was actually saved; newer text typed
+        // during the async save keeps its local backup.
+        if (latestInputs.current.problem === problem) problemDraft.clear();
+        if (latestInputs.current.context === context) contextDraft.clear();
         await api.planNewTask(
           feature.id,
           attachmentId,
@@ -1021,10 +1047,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
           setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
+        planStartRef.current = false;
         setPlanning(false);
       }
     },
-    [api, feature.id, attachmentId, problem, context, baseBranch, suggestion, hydrate, resetToDraft, applyAgentEvent],
+    [api, feature.id, attachmentId, problem, context, baseBranch, suggestion, hydrate, resetToDraft, applyAgentEvent, problemDraft.clear, contextDraft.clear],
   );
 
   // Ask the planner to sharpen the (possibly unsaved) problem statement before
@@ -1063,18 +1090,19 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     setClarifyResult((prev) =>
       prev ? { ...prev, improvedProblem: '' } : prev,
     );
-  }, [clarifyResult]);
+  }, [clarifyResult, setProblem]);
 
   // Fold one missing-info chip into the Context box as a labelled prompt line
   // the user then fills in, and mark the chip as added so it can't double-add.
   const addMissingInfo = useCallback((item: string) => {
-    setContext((prev) => {
-      const line = `${item}: `;
-      if (prev.includes(line)) return prev;
-      return prev.trim().length > 0 ? `${prev.trimEnd()}\n${line}` : line;
-    });
+    const line = `${item}: `;
+    if (!context.includes(line)) {
+      setContext(
+        context.trim().length > 0 ? `${context.trimEnd()}\n${line}` : line,
+      );
+    }
     setAddedInfo((prev) => (prev.includes(item) ? prev : [...prev, item]));
-  }, []);
+  }, [context, setContext]);
 
   const dismissClarify = useCallback(() => {
     setClarifyResult(null);
@@ -1128,44 +1156,76 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
     }
   }, [api, feature.id, attachmentId, hydrate, resetToDraft, applyAgentEvent]);
 
-  // Cancel-and-reset the in-flight run: stop the local stream at once, ask the
-  // backend to abort the metasession (terminating any attached agent process)
-  // and reset the run to a clean draft, then clear the UI.
+  // Cancel-and-reset the in-flight run. The local stream is only stopped once
+  // the backend confirms the cancellation; a rejected cancel keeps the real
+  // busy state and the live stream so the page never lies about an active run.
   const runCancel = useCallback(async () => {
+    if (cancelRef.current) return;
+    cancelRef.current = true;
     setCancelling(true);
     setError(null);
     try {
-      abortRef.current?.abort();
       const res = await api.cancelNewTask(feature.id, attachmentId);
+      abortRef.current?.abort();
       hydrate(res.run);
       resetToDraft();
     } catch (err: unknown) {
-      if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
+      cancelRef.current = false;
       setCancelling(false);
     }
   }, [api, feature.id, attachmentId, hydrate, resetToDraft]);
 
   const startSession = useCallback(async () => {
+    if (sessionStartRef.current) return;
+    sessionStartRef.current = true;
+    setStartingSession(true);
     setSessionNote(null);
+    const prompt = [run?.problem || problem, run?.context || context]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part, index) => (index === 0 ? part : `Context:\n${part}`))
+      .join('\n\n');
     try {
-      const session = await api.createTerminalSession(feature.id, {
-        kind: 'dev',
-      });
-      setSessionNote(`Started session ${session.id}.`);
+      const input = { kind: 'dev' as const, ...(prompt ? { prompt } : {}) };
+      const session = await withOperationKey(`session.create:${feature.id}`, input, 'session', (operation) =>
+        api.createTerminalSession(feature.id, input, operation),
+      );
+      if (!aliveRef.current) return;
+      if (openSession) {
+        openSession(
+          session,
+          sessionWorkTitle(
+            session.name,
+            session.prompt,
+            session.workTitle,
+            session.seq ?? 1,
+            64,
+            session.kind,
+          ),
+        );
+        setSessionNote('Opened the new session in a workspace tab.');
+      } else {
+        setSessionNote(`Started session ${session.id}.`);
+      }
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       const message =
         err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
       setError(message);
+    } finally {
+      sessionStartRef.current = false;
+      if (aliveRef.current) setStartingSession(false);
     }
-  }, [api, feature.id]);
+  }, [api, feature.id, openSession, run?.problem, run?.context, problem, context]);
 
   // Fetch and show one changed file's diff. Opens the modal in a loading state,
-  // then fills it (or an error) once the branch diff resolves.
+  // then fills it (or an error) once the branch diff resolves. Only the latest
+  // request may write results so a slow earlier file cannot replace a newer one.
   const openFile = useCallback(
     async (path: string) => {
+      const request = ++diffRequestRef.current;
       setOpenFilePath(path);
       setFileDiff(null);
       setFileDiffError(null);
@@ -1173,20 +1233,24 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
       setFileDiffLoading(true);
       try {
         const diff = await api.getNewTaskFileDiff(feature.id, attachmentId, path);
-        setFileDiff(diff);
+        if (request === diffRequestRef.current) setFileDiff(diff);
       } catch (err: unknown) {
-        setFileDiffError(err instanceof Error ? err.message : String(err));
+        if (request === diffRequestRef.current) {
+          setFileDiffError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
-        setFileDiffLoading(false);
+        if (request === diffRequestRef.current) setFileDiffLoading(false);
       }
     },
     [api, feature.id, attachmentId],
   );
 
   const closeFile = useCallback(() => {
+    diffRequestRef.current += 1;
     setOpenFilePath(null);
     setFileDiff(null);
     setFileDiffError(null);
+    setFileDiffLoading(false);
   }, []);
 
   const planHtml = useMemo(
@@ -1274,6 +1338,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
   // imply a fresh plan is already available.
   const isReplanning = (planning || status === 'planning') && hasPlan;
   const canPlan = problem.trim().length > 0;
+  const onPlanShortcut = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    if (canPlan && !locked && !planning) void runPlan(false);
+  };
 
   // Which steps the user may open. `describe` is always available; the rest
   // unlock as the run progresses (or when logs exist to review).
@@ -1335,9 +1404,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                 )}
               </span>
               <textarea
-                className="new-task-textarea-grow"
+                className="new-task-textarea new-task-textarea-grow"
+                aria-label="Problem statement"
                 value={problem}
-                disabled={locked || planning}
+                readOnly={locked || planning}
+                onKeyDown={onPlanShortcut}
                 placeholder="What needs to change, and why?"
                 onChange={(e) => setProblem(e.target.value)}
               />
@@ -1416,9 +1487,11 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
             <label className="new-task-field">
               <span className="new-task-field-label">Context (optional)</span>
               <textarea
+                className="new-task-textarea"
                 rows={4}
                 value={context}
-                disabled={locked || planning}
+                readOnly={locked || planning}
+                onKeyDown={onPlanShortcut}
                 placeholder="Relevant files, constraints, acceptance criteria…"
                 onChange={(e) => setContext(e.target.value)}
               />
@@ -1430,11 +1503,22 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
               <input
                 type="text"
                 value={baseBranch}
-                disabled={locked || planning}
+                readOnly={locked || planning}
+                onKeyDown={onPlanShortcut}
                 placeholder="Defaults to the repository's default branch"
                 onChange={(e) => setBaseBranch(e.target.value)}
               />
             </label>
+            {(problemDraft.restored || contextDraft.restored) && (
+              <p className="muted" role="status">
+                Restored your unsaved draft.
+              </p>
+            )}
+            {backupError && (problemDraft.isDirty || contextDraft.isDirty) && (
+              <ErrorText
+                error={`Draft is not being backed up: ${backupError} Your text is still in the editor and can be selected and copied; copy it elsewhere or use Plan change to save it to the server.`}
+              />
+            )}
             <StepNav>
               {!locked && (
                 <Button
@@ -1873,7 +1957,7 @@ export function NewTaskPage({ feature, attachmentId }: NewTaskPageProps) {
                 )}
 
                 <div className="new-task-result-actions">
-                  <Button variant="secondary" onClick={startSession}>
+                  <Button variant="secondary" onClick={() => void startSession()} loading={startingSession}>
                     New session
                   </Button>
                 </div>

@@ -29,6 +29,7 @@ export interface AzurePrTarget extends AzureRepoTarget {
 
 /** The deps an Azure comments gateway needs: a token plus the verbs used. */
 export interface AzureCommentsDeps {
+  viewerId?: (org: string) => Promise<string | null>;
   token: AzureTokenGetter;
   httpGet: AzureHttpGetter;
   httpPost: AzureHttpPoster;
@@ -96,6 +97,7 @@ interface AdoComment {
   publishedDate?: string;
   author?: AdoCommentAuthor | null;
   commentType?: string;
+  isDeleted?: boolean;
   usersLiked?: unknown[] | null;
 }
 
@@ -117,16 +119,19 @@ function stripLeadingSlash(path: string): string {
 }
 
 /** Maps Azure's `usersLiked` array to our reaction model (like → 👍 only). */
-export function mapLikes(usersLiked: unknown[] | null | undefined): PrReaction[] {
+export function mapLikes(usersLiked: unknown[] | null | undefined, viewerId: string | null = null): PrReaction[] {
   const count = Array.isArray(usersLiked) ? usersLiked.length : 0;
   if (count === 0) {
     return [];
   }
-  return [{ content: 'THUMBS_UP', count, viewerReacted: false }];
+  const viewerReacted = viewerId !== null && usersLiked!.some((user) =>
+    typeof user === 'object' && user !== null && 'id' in user && typeof user.id === 'string' &&
+    user.id.toLowerCase() === viewerId.toLowerCase());
+  return [{ content: 'THUMBS_UP', count, viewerReacted }];
 }
 
-function mapComment(comment: AdoComment): PrComment | null {
-  if (typeof comment?.id !== 'number') {
+function mapComment(comment: AdoComment, viewerId: string | null): PrComment | null {
+  if (typeof comment?.id !== 'number' || comment.isDeleted || comment.commentType === 'system') {
     return null;
   }
   return {
@@ -139,18 +144,18 @@ function mapComment(comment: AdoComment): PrComment | null {
       typeof comment.publishedDate === 'string' && comment.publishedDate
         ? comment.publishedDate
         : null,
-    reactions: mapLikes(comment.usersLiked),
+    reactions: mapLikes(comment.usersLiked, viewerId),
   };
 }
 
 /** Maps one Azure thread to our contract, or null when it should be hidden. */
-export function mapThread(thread: AdoThread): PrCommentThread | null {
+export function mapThread(thread: AdoThread, viewerId: string | null = null): PrCommentThread | null {
   if (typeof thread?.id !== 'number' || thread.isDeleted) {
     return null;
   }
   const comments: PrComment[] = [];
   for (const comment of thread.comments ?? []) {
-    const mapped = mapComment(comment);
+    const mapped = mapComment(comment, viewerId);
     if (mapped) {
       comments.push(mapped);
     }
@@ -172,14 +177,14 @@ export function mapThread(thread: AdoThread): PrCommentThread | null {
 }
 
 /** Parses the `value[]` of thread objects Azure returns for the list call. */
-export function parseThreads(body: unknown): PrCommentThread[] {
+export function parseThreads(body: unknown, viewerId: string | null = null): PrCommentThread[] {
   const value = (body as { value?: unknown })?.value;
   if (!Array.isArray(value)) {
     return [];
   }
   const threads: PrCommentThread[] = [];
   for (const item of value as AdoThread[]) {
-    const mapped = mapThread(item);
+    const mapped = mapThread(item, viewerId);
     if (mapped) {
       threads.push(mapped);
     }
@@ -235,7 +240,7 @@ export function createAzureCommentsGateway(
           `Failed to list Azure DevOps comments (HTTP ${res.status})`,
         );
       }
-      return parseThreads(res.body);
+      return parseThreads(res.body, await deps.viewerId?.(target.org) ?? null);
     },
     async add(input) {
       if (input.expectedHeadSha !== undefined) assertExpectedHeadSha(input.expectedHeadSha);
@@ -261,7 +266,7 @@ export function createAzureCommentsGateway(
           `Failed to post Azure DevOps comment (HTTP ${res.status})`,
         );
       }
-      const mapped = mapThread(res.body as AdoThread);
+      const mapped = mapThread(res.body as AdoThread, await deps.viewerId?.(target.org) ?? null);
       if (!mapped) {
         throw new ProviderError(
           'Azure DevOps did not return the created comment.',
@@ -279,7 +284,7 @@ export function createAzureCommentsGateway(
           `Failed to update Azure DevOps comment (HTTP ${res.status})`,
         );
       }
-      const mapped = mapThread(res.body as AdoThread);
+      const mapped = mapThread(res.body as AdoThread, await deps.viewerId?.(target.org) ?? null);
       return (
         mapped ?? {
           id: threadId,
@@ -299,23 +304,19 @@ export function createAzureCommentsGateway(
       const token = await authorize();
       const url = likesUrl(target, input.threadId, input.commentId);
       const res = input.on
-        ? await deps.httpPut(url, token, {})
+        ? await deps.httpPost(url, token, {})
         : await deps.httpDelete(url, token);
       if (res.status < 200 || res.status >= 300) {
         throw new ProviderError(
           `Failed to react to Azure DevOps comment (HTTP ${res.status})`,
         );
       }
-      return {
-        id: input.commentId,
-        author: null,
-        authorAvatarUrl: null,
-        body: '',
-        createdAt: null,
-        reactions: input.on
-          ? [{ content: 'THUMBS_UP', count: 1, viewerReacted: true }]
-          : [],
-      };
+      const refreshed = await deps.httpGet(threadUrl(target, input.threadId), token);
+      if (refreshed.status !== 200) throw new ProviderError(`Reaction was applied, but refreshing Azure DevOps comment failed (HTTP ${refreshed.status}). Refresh the comments before retrying.`);
+      const thread = mapThread(refreshed.body as AdoThread, await deps.viewerId?.(target.org) ?? null);
+      const comment = thread?.comments.find((item) => item.id === input.commentId);
+      if (!comment) throw new ProviderError('Reaction was applied, but the comment is no longer available. Refresh the comments.');
+      return comment;
     },
   };
 }

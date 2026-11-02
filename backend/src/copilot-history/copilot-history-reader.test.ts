@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createCopilotHistoryReader, isInjectedPrompt, extractUserRequest, toVisiblePrompt } from './copilot-history-reader.js';
-import type {
-  CopilotHistorySource,
-  HistoryCheckpointRow,
-  HistorySessionRow,
+import {
+  PromptHistoryUnavailableError,
+  type CopilotHistorySource,
+  type HistoryCheckpointRow,
+  type HistorySessionRow,
 } from './copilot-history-contract.js';
 import { copilotHistoryDefaults } from './config.js';
 import { parseLatestLivePrompt } from './copilot-live-prompt-parser.js';
@@ -32,7 +33,7 @@ function fakeSource(overrides: Partial<CopilotHistorySource> = {}): {
 }
 
 describe('createCopilotHistoryReader', () => {
-  it.each([false, true])('uses recorded completion with recent usage and delayed persistence (saved=%s)', (saved) => {
+  it.each([false, true])('uses recorded completion with recent usage and delayed persistence (saved=%s)', async (saved) => {
     const { source } = fakeSource({
       userMessages: () => saved ? [
         { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
@@ -47,14 +48,14 @@ describe('createCopilotHistoryReader', () => {
         JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' }, timestamp: '2024-01-01T00:00:05Z' }),
       ].join('\n'), toVisiblePrompt) },
     });
-    expect(reader.prompts('s1')).toEqual([{
+    expect((await reader.prompts('s1'))).toEqual([{
       index: 0, text: 'ask', at: '2024-01-01T00:00:00Z', response: 'Done.',
       status: 'answered', answeredAt: '2024-01-01T00:00:05Z', durationMs: 5000,
       ...(!saved ? { pending: true } : {}),
     }]);
   });
 
-  it.each([false, true])('keeps a partial live response generating until completion (saved=%s)', (saved) => {
+  it.each([false, true])('keeps a partial live response generating until completion (saved=%s)', async (saved) => {
     const { source } = fakeSource({
       userMessages: () => saved ? [
         { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
@@ -65,10 +66,10 @@ describe('createCopilotHistoryReader', () => {
       source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T00:00:10Z'),
       livePrompts: { latest: () => ({ text: 'ask', at: '2024-01-01T00:00:00Z', response: 'Checking…' }) },
     });
-    expect(reader.prompts('s1')[0]).toMatchObject({ response: 'Checking…', status: 'answering', answeredAt: null });
+    expect((await reader.prompts('s1'))[0]).toMatchObject({ response: 'Checking…', status: 'answering', answeredAt: null });
   });
 
-  it.each([false, true])('keeps completion without a recorded reply distinct from generating (saved=%s)', (saved) => {
+  it.each([false, true])('keeps completion without a recorded reply distinct from generating (saved=%s)', async (saved) => {
     const { source } = fakeSource({
       userMessages: () => saved ? [
         { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '' },
@@ -79,10 +80,10 @@ describe('createCopilotHistoryReader', () => {
       source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T00:00:10Z'),
       livePrompts: { latest: () => ({ text: 'ask', at: '', response: null, completedAt: null }) },
     });
-    expect(reader.prompts('s1')[0]).toMatchObject({ response: null, status: 'unanswered', answeredAt: null, durationMs: null });
+    expect((await reader.prompts('s1'))[0]).toMatchObject({ response: null, status: 'unanswered', answeredAt: null, durationMs: null });
   });
 
-  it('does not discard a repeated prompt entered in a new turn', () => {
+  it('does not discard a repeated prompt entered in a new turn', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'ask', assistant_response: 'Old answer', timestamp: '2024-01-01T00:00:00Z' },
@@ -95,11 +96,11 @@ describe('createCopilotHistoryReader', () => {
         completedAt: '2024-01-01T00:01:05Z',
       }) },
     });
-    expect(reader.prompts('s1')).toHaveLength(2);
-    expect(reader.prompts('s1')[1]).toMatchObject({ response: 'New answer', status: 'answered' });
+    expect((await reader.prompts('s1'))).toHaveLength(2);
+    expect((await reader.prompts('s1'))[1]).toMatchObject({ response: 'New answer', status: 'answered' });
   });
 
-  it.each([null, 'Finished reply'])('reconciles an idle saved prompt without inventing a response (%s)', (response) => {
+  it.each([null, 'Finished reply'])('reconciles an idle saved prompt without inventing a response (%s)', async (response) => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'ask', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
@@ -109,13 +110,13 @@ describe('createCopilotHistoryReader', () => {
       source, config: copilotHistoryDefaults, now: () => Date.parse('2024-01-01T01:00:00Z'),
       livePrompts: { latest: () => ({ text: 'ask', at: '2024-01-01T00:00:00.000Z', response }) },
     });
-    expect(reader.prompts('s1')).toHaveLength(1);
-    expect(reader.prompts('s1')[0]).toMatchObject({
+    expect((await reader.prompts('s1'))).toHaveLength(1);
+    expect((await reader.prompts('s1'))[0]).toMatchObject({
       response, status: response ? 'answered' : 'unanswered', answeredAt: null,
     });
   });
 
-  it('uses the recorded completion time over stored text and later billing timestamps', () => {
+  it('uses the recorded completion time over stored text and later billing timestamps', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'ask', assistant_response: 'Done.', timestamp: '2024-01-01T00:00:00Z' },
@@ -128,12 +129,12 @@ describe('createCopilotHistoryReader', () => {
         text: 'ask', at: '2024-01-01T00:00:00Z', response: null, completedAt: '2024-01-01T00:00:05Z',
       }) },
     });
-    expect(reader.prompts('s1')[0]).toMatchObject({
+    expect((await reader.prompts('s1'))[0]).toMatchObject({
       response: 'Done.', status: 'answered', answeredAt: '2024-01-01T00:00:05Z', durationMs: 5000,
     });
   });
 
-  it('returns an empty history per id when no ids are given', () => {
+  it('returns an empty history per id when no ids are given', async () => {
     const { source } = fakeSource();
     const reader = createCopilotHistoryReader({
       source,
@@ -142,7 +143,7 @@ describe('createCopilotHistoryReader', () => {
     expect(reader.read([])).toEqual([]);
   });
 
-  it('returns empty histories without querying when the source is unavailable', () => {
+  it('returns empty histories without querying when the source is unavailable', async () => {
     const { source, calls } = fakeSource({ available: () => false });
     const reader = createCopilotHistoryReader({
       source,
@@ -159,7 +160,7 @@ describe('createCopilotHistoryReader', () => {
     expect(calls.checkpoints).toHaveLength(0);
   });
 
-  it('joins summaries and checkpoints, newest checkpoint first', () => {
+  it('joins summaries and checkpoints, newest checkpoint first', async () => {
     const summaries: HistorySessionRow[] = [
       {
         id: 's1',
@@ -220,7 +221,7 @@ describe('createCopilotHistoryReader', () => {
     ]);
   });
 
-  it('coerces null titles/overviews to empty strings', () => {
+  it('coerces null titles/overviews to empty strings', async () => {
     const { source } = fakeSource({
       checkpoints: () => [
         {
@@ -245,7 +246,7 @@ describe('createCopilotHistoryReader', () => {
     });
   });
 
-  it('caps checkpoints and truncates overviews per config', () => {
+  it('caps checkpoints and truncates overviews per config', async () => {
     const rows: HistoryCheckpointRow[] = Array.from({ length: 5 }, (_, i) => ({
       session_id: 's1',
       checkpoint_number: i + 1,
@@ -269,7 +270,7 @@ describe('createCopilotHistoryReader', () => {
     expect(checkpoints[0].overview).toBe('abc…');
   });
 
-  it('returns no prompts when the source is unavailable', () => {
+  it('returns no prompts when the source is unavailable', async () => {
     const { source, calls } = fakeSource({
       available: () => false,
       userMessages: () => [
@@ -280,11 +281,11 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([]);
+    expect((await reader.prompts('s1'))).toEqual([]);
     expect(calls.summaries).toHaveLength(0);
   });
 
-  it('maps user messages to timestamped prompts and drops blank ones', () => {
+  it('maps user messages to timestamped prompts and drops blank ones', async () => {
     const { source } = fakeSource({
       userMessages: (sessionId) => {
         expect(sessionId).toBe('s1');
@@ -300,13 +301,13 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       { index: 0, text: 'First prompt', at: '2024-01-01T00:00:00Z', response: null, status: 'unanswered', answeredAt: null, durationMs: null },
-      { index: 3, text: 'Second prompt', at: '', response: null, status: 'answering', answeredAt: null, durationMs: null },
+      { index: 3, text: 'Second prompt', at: '', response: null, status: 'unanswered', answeredAt: null, durationMs: null },
     ]);
   });
 
-  it('enriches answered prompts with the windowed answer time and duration', () => {
+  it('enriches answered prompts with the windowed answer time and duration', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: '  A1  ', timestamp: '2024-01-01T00:00:00Z' },
@@ -324,19 +325,19 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: 'Q1', at: '2024-01-01T00:00:00Z', response: 'A1',
         status: 'answered', answeredAt: '2024-01-01T00:00:30.000Z', durationMs: 30000,
       },
       {
         index: 1, text: 'Q2', at: '2024-01-01T00:05:00Z', response: null,
-        status: 'answering', answeredAt: null, durationMs: null,
+        status: 'unanswered', answeredAt: null, durationMs: null,
       },
     ]);
   });
 
-  it('computes the answer time of an answered last turn with an open-ended window', () => {
+  it('computes the answer time of an answered last turn with an open-ended window', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Only ask', assistant_response: 'Only answer', timestamp: '2024-01-01T00:00:00Z' },
@@ -347,7 +348,7 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: 'Only ask', at: '2024-01-01T00:00:00Z', response: 'Only answer',
         status: 'answered', answeredAt: '2024-01-01T00:01:30.000Z', durationMs: 90000,
@@ -355,7 +356,7 @@ describe('createCopilotHistoryReader', () => {
     ]);
   });
 
-  it('appends a live answering row while the CLI is responding to an unsaved turn', () => {
+  it('appends a live answering row while the CLI is responding to an unsaved turn', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -368,7 +369,7 @@ describe('createCopilotHistoryReader', () => {
       config: copilotHistoryDefaults,
       now: () => Date.parse('2024-01-01T00:05:20Z'),
     });
-    const result = reader.prompts('s1');
+    const result = (await reader.prompts('s1'));
     expect(result).toHaveLength(2);
     expect(result[1]).toEqual({
       index: 1, text: '', at: '2024-01-01T00:05:10.000Z', response: null,
@@ -376,7 +377,7 @@ describe('createCopilotHistoryReader', () => {
     });
   });
 
-  it('surfaces the very first prompt as a live answering row before it is saved', () => {
+  it('surfaces the very first prompt as a live answering row before it is saved', async () => {
     const { source } = fakeSource({
       usageEventTimes: () => ['2024-01-01T00:00:00Z'],
       latestActivityTurn: () => 0,
@@ -386,7 +387,7 @@ describe('createCopilotHistoryReader', () => {
       config: copilotHistoryDefaults,
       now: () => Date.parse('2024-01-01T00:00:05Z'),
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: '', at: '2024-01-01T00:00:00.000Z', response: null,
         status: 'answering', answeredAt: null, durationMs: null, pending: true,
@@ -394,7 +395,7 @@ describe('createCopilotHistoryReader', () => {
     ]);
   });
 
-  it('omits the live row once the in-flight turn is persisted', () => {
+  it('omits the live row once the in-flight turn is persisted', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -407,10 +408,10 @@ describe('createCopilotHistoryReader', () => {
       config: copilotHistoryDefaults,
       now: () => Date.parse('2024-01-01T00:00:06Z'),
     });
-    expect(reader.prompts('s1')).toHaveLength(1);
+    expect((await reader.prompts('s1'))).toHaveLength(1);
   });
 
-  it('omits the live row when assistant activity has gone stale', () => {
+  it('omits the live row when assistant activity has gone stale', async () => {
     const { source } = fakeSource({
       usageEventTimes: () => ['2024-01-01T00:00:00Z'],
       latestActivityTurn: () => 0,
@@ -420,10 +421,10 @@ describe('createCopilotHistoryReader', () => {
       config: copilotHistoryDefaults,
       now: () => Date.parse('2024-01-01T00:02:00Z'),
     });
-    expect(reader.prompts('s1')).toEqual([]);
+    expect((await reader.prompts('s1'))).toEqual([]);
   });
 
-  it('omits the live row when no usage-event time is available', () => {
+  it('omits the live row when no usage-event time is available', async () => {
     const { source } = fakeSource({
       usageEventTimes: () => [],
       latestActivityTurn: () => 0,
@@ -433,10 +434,10 @@ describe('createCopilotHistoryReader', () => {
       config: copilotHistoryDefaults,
       now: () => 1000,
     });
-    expect(reader.prompts('s1')).toEqual([]);
+    expect((await reader.prompts('s1'))).toEqual([]);
   });
 
-  it('shows the live prompt and streamed reply for an unsaved in-flight turn', () => {
+  it('shows the live prompt and streamed reply for an unsaved in-flight turn', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -449,7 +450,7 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => ({ text: '  Latest prompt  ', at: '2024-01-01T00:05:00Z', response: '  reply so far  ' }) },
       now: () => Date.parse('2024-01-01T00:05:20Z'),
     });
-    const result = reader.prompts('s1');
+    const result = (await reader.prompts('s1'));
     expect(result).toHaveLength(2);
     expect(result[1]).toEqual({
       index: 1, text: 'Latest prompt', at: '2024-01-01T00:05:00Z', response: 'reply so far',
@@ -457,7 +458,7 @@ describe('createCopilotHistoryReader', () => {
     });
   });
 
-  it('keeps an idle live prompt visible without claiming an unrecorded answer', () => {
+  it('keeps an idle live prompt visible without claiming an unrecorded answer', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -470,13 +471,13 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => ({ text: 'Latest prompt', at: '2024-01-01T00:00:05Z', response: null }) },
       now: () => Date.parse('2024-01-01T01:00:00Z'),
     });
-    expect(reader.prompts('s1')[1]).toEqual({
+    expect((await reader.prompts('s1'))[1]).toEqual({
       index: 1, text: 'Latest prompt', at: '2024-01-01T00:00:05Z', response: null,
       status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
     });
   });
 
-  it('surfaces the very first live prompt before any turn is saved, with no events', () => {
+  it('surfaces the very first live prompt before any turn is saved, with no events', async () => {
     const { source } = fakeSource({
       usageEventTimes: () => [],
       latestActivityTurn: () => null,
@@ -487,7 +488,7 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => ({ text: 'First ever', at: '2024-01-01T00:00:00Z', response: '' }) },
       now: () => 1000,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: 'First ever', at: '2024-01-01T00:00:00Z', response: null,
         status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
@@ -495,7 +496,7 @@ describe('createCopilotHistoryReader', () => {
     ]);
   });
 
-  it('treats a whitespace-only live reply as no response yet', () => {
+  it('treats a whitespace-only live reply as no response yet', async () => {
     const { source } = fakeSource({ userMessages: () => [] });
     const reader = createCopilotHistoryReader({
       source,
@@ -503,10 +504,10 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => ({ text: 'Ask', at: 't', response: '   ' }) },
       now: () => 1000,
     });
-    expect(reader.prompts('s1')[0].response).toBeNull();
+    expect((await reader.prompts('s1'))[0].response).toBeNull();
   });
 
-  it('drops the live row once the in-flight prompt matches the newest saved turn', () => {
+  it('drops the live row once the in-flight prompt matches the newest saved turn', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Saved prompt', assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -519,13 +520,13 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => ({ text: 'Saved prompt', at: '2024-01-01T00:00:00Z', response: 'A1' }) },
       now: () => Date.parse('2024-01-01T00:00:06Z'),
     });
-    expect(reader.prompts('s1')).toHaveLength(1);
+    expect((await reader.prompts('s1'))).toHaveLength(1);
   });
 
-  it('ignores a blank or injected live prompt', () => {
+  it('ignores a blank or injected live prompt', async () => {
     const blank = fakeSource({ userMessages: () => [] });
     expect(
-      createCopilotHistoryReader({
+      await createCopilotHistoryReader({
         source: blank.source,
         config: copilotHistoryDefaults,
         livePrompts: { latest: () => ({ text: '   ', at: 't', response: null }) },
@@ -535,7 +536,7 @@ describe('createCopilotHistoryReader', () => {
 
     const injected = fakeSource({ userMessages: () => [] });
     expect(
-      createCopilotHistoryReader({
+      await createCopilotHistoryReader({
         source: injected.source,
         config: copilotHistoryDefaults,
         livePrompts: { latest: () => ({ text: '# Session Bootstrap Context\n\nx', at: 't', response: null }) },
@@ -544,7 +545,7 @@ describe('createCopilotHistoryReader', () => {
     ).toEqual([]);
   });
 
-  it('falls back to the activity indicator when the live source returns null', () => {
+  it('falls back to the activity indicator when the live source returns null', async () => {
     const { source } = fakeSource({
       usageEventTimes: () => ['2024-01-01T00:00:00Z'],
       latestActivityTurn: () => 0,
@@ -555,7 +556,7 @@ describe('createCopilotHistoryReader', () => {
       livePrompts: { latest: () => null },
       now: () => Date.parse('2024-01-01T00:00:05Z'),
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: '', at: '2024-01-01T00:00:00.000Z', response: null,
         status: 'answering', answeredAt: null, durationMs: null, pending: true,
@@ -563,7 +564,7 @@ describe('createCopilotHistoryReader', () => {
     ]);
   });
 
-  it('marks unanswered and answering turns and tolerates missing times/events', () => {
+  it('marks unanswered and answering turns and tolerates missing times/events', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: 'Q1', assistant_response: null, timestamp: '2024-01-01T00:00:00Z' },
@@ -577,15 +578,15 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       { index: 0, text: 'Q1', at: '2024-01-01T00:00:00Z', response: null, status: 'unanswered', answeredAt: null, durationMs: null },
       { index: 1, text: 'Q2', at: '2024-01-01T00:05:00Z', response: 'A2', status: 'answered', answeredAt: null, durationMs: null },
       { index: 2, text: 'Q3', at: '', response: 'A3', status: 'answered', answeredAt: null, durationMs: null },
-      { index: 3, text: 'Q4', at: '2024-01-01T00:20:00Z', response: null, status: 'answering', answeredAt: null, durationMs: null },
+      { index: 3, text: 'Q4', at: '2024-01-01T00:20:00Z', response: null, status: 'unanswered', answeredAt: null, durationMs: null },
     ]);
   });
 
-  it('drops app-injected prompts (bootstrap + metasession scaffolding)', () => {
+  it('drops app-injected prompts (bootstrap + metasession scaffolding)', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         {
@@ -624,21 +625,21 @@ describe('createCopilotHistoryReader', () => {
       source,
       config: copilotHistoryDefaults,
     });
-    expect(reader.prompts('s1')).toEqual([
-      { index: 4, text: 'Please add a dark mode toggle.', at: '2024-01-01T00:04:00Z', response: null, status: 'answering', answeredAt: null, durationMs: null },
+    expect((await reader.prompts('s1'))).toEqual([
+      { index: 4, text: 'Please add a dark mode toggle.', at: '2024-01-01T00:04:00Z', response: null, status: 'unanswered', answeredAt: null, durationMs: null },
     ]);
   });
 });
 
 describe('isInjectedPrompt', () => {
-  it('flags app-injected prompts by their leading sentinel', () => {
+  it('flags app-injected prompts by their leading sentinel', async () => {
     expect(isInjectedPrompt('# Session Bootstrap Context\n\nx')).toBe(true);
     expect(isInjectedPrompt('You maintain a durable, shared knowledge base …')).toBe(true);
     expect(isInjectedPrompt('An interactive AI coding CLI session failed to start')).toBe(true);
     expect(isInjectedPrompt('The MCP (Model Context Protocol) server "x" failed')).toBe(true);
   });
 
-  it('keeps genuine user prompts', () => {
+  it('keeps genuine user prompts', async () => {
     expect(isInjectedPrompt('Add a dark mode toggle')).toBe(false);
     expect(isInjectedPrompt('Why is the session bootstrap failing?')).toBe(false);
     expect(isInjectedPrompt('')).toBe(false);
@@ -646,13 +647,13 @@ describe('isInjectedPrompt', () => {
 });
 
 describe('extractUserRequest', () => {
-  it('returns the request embedded after the launch marker', () => {
+  it('returns the request embedded after the launch marker', async () => {
     const launch =
       '# Session Bootstrap Context\n\n## Feature\n\nName: X\n\n## User Request\n\nBuild the thing';
     expect(extractUserRequest(launch)).toBe('Build the thing');
   });
 
-  it('returns null when there is no embedded request', () => {
+  it('returns null when there is no embedded request', async () => {
     expect(extractUserRequest('# Session Bootstrap Context\n\njust context')).toBeNull();
     expect(
       extractUserRequest('# Session Bootstrap Context\n\n## User Request\n\n   '),
@@ -661,22 +662,22 @@ describe('extractUserRequest', () => {
 });
 
 describe('toVisiblePrompt', () => {
-  it('passes genuine prompts through trimmed', () => {
+  it('passes genuine prompts through trimmed', async () => {
     expect(toVisiblePrompt('  Add a toggle  ')).toBe('Add a toggle');
   });
 
-  it('hides blank and pure-injected prompts', () => {
+  it('hides blank and pure-injected prompts', async () => {
     expect(toVisiblePrompt('   ')).toBeNull();
     expect(toVisiblePrompt('You maintain a durable, shared knowledge base …')).toBeNull();
   });
 
-  it('unwraps a launch prompt to its embedded request', () => {
+  it('unwraps a launch prompt to its embedded request', async () => {
     expect(
       toVisiblePrompt('# Session Bootstrap Context\n\nctx\n\n## User Request\n\nFix the bug'),
     ).toBe('Fix the bug');
   });
 
-  it('hides a launch wrapper whose embedded request is itself an app template', () => {
+  it('hides a launch wrapper whose embedded request is itself an app template', async () => {
     expect(
       toVisiblePrompt(
         '# Session Bootstrap Context\n\nctx\n\n## User Request\n\nYou maintain a durable, shared knowledge base …',
@@ -689,7 +690,7 @@ describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
   const launch =
     '# Session Bootstrap Context\n\n## Feature\n\nName: X\n\n## User Request\n\nLaunch request';
 
-  it('surfaces the embedded request of a launched session first turn from the store', () => {
+  it('surfaces the embedded request of a launched session first turn from the store', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: launch, assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -697,11 +698,11 @@ describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
       ],
     });
     const reader = createCopilotHistoryReader({ source, config: copilotHistoryDefaults });
-    const result = reader.prompts('s1');
+    const result = (await reader.prompts('s1'));
     expect(result.map((p) => p.text)).toEqual(['Launch request', 'Typed follow-up']);
   });
 
-  it('surfaces the embedded request of a launch prompt that is still in-flight (live)', () => {
+  it('surfaces the embedded request of a launch prompt that is still in-flight (live)', async () => {
     const { source } = fakeSource({ userMessages: () => [] });
     const reader = createCopilotHistoryReader({
       source,
@@ -709,7 +710,7 @@ describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
       livePrompts: { latest: () => ({ text: launch, at: '2024-01-01T00:00:00Z', response: null }) },
       now: () => 1000,
     });
-    expect(reader.prompts('s1')).toEqual([
+    expect((await reader.prompts('s1'))).toEqual([
       {
         index: 0, text: 'Launch request', at: '2024-01-01T00:00:00Z', response: null,
         status: 'unanswered', answeredAt: null, durationMs: null, pending: true,
@@ -717,7 +718,7 @@ describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
     ]);
   });
 
-  it('drops the live launch row once the store persists the same unwrapped turn', () => {
+  it('drops the live launch row once the store persists the same unwrapped turn', async () => {
     const { source } = fakeSource({
       userMessages: () => [
         { turn_index: 0, user_message: launch, assistant_response: 'A1', timestamp: '2024-01-01T00:00:00Z' },
@@ -730,6 +731,148 @@ describe('createCopilotHistoryReader launch-prompt unwrapping', () => {
       livePrompts: { latest: () => ({ text: launch, at: '2024-01-01T00:00:00Z', response: 'A1' }) },
       now: () => Date.parse('2024-01-01T00:00:06Z'),
     });
-    expect(reader.prompts('s1')).toHaveLength(1);
+    expect((await reader.prompts('s1'))).toHaveLength(1);
+  });
+});
+
+describe('createCopilotHistoryReader freshness and read reliability', () => {
+  const NOW = Date.parse('2024-01-01T01:00:00.000Z');
+  const secondsAgo = (s: number) => new Date(NOW - s * 1000).toISOString();
+  const row = (turn_index: number, user_message: string, assistant_response: string | null, timestamp: string) =>
+    ({ turn_index, user_message, assistant_response, timestamp });
+  const build = (
+    overrides: Partial<CopilotHistorySource>,
+    deps: Partial<Parameters<typeof createCopilotHistoryReader>[0]> = {},
+  ) => createCopilotHistoryReader({
+    source: fakeSource(overrides).source,
+    config: { ...copilotHistoryDefaults, livePromptTimeoutMs: 20 },
+    now: () => NOW,
+    ...deps,
+  });
+
+  it('shows an unsaved turn and its streaming reply while the store is one turn behind', async () => {
+    const stored = [row(0, 'Q1', 'A1', secondsAgo(300))];
+    const live = { text: 'Q2', at: secondsAgo(20), response: 'partial', lastActivityAt: secondsAgo(2) };
+    const reader = build({ userMessages: () => stored, usageEventTimes: () => [secondsAgo(2)] }, {
+      livePrompts: { latest: async () => live },
+    });
+    const prompts = await reader.prompts('s1');
+    expect(prompts.map((p) => [p.index, p.text, p.response, p.status, p.pending])).toEqual([
+      [0, 'Q1', 'A1', 'answered', undefined],
+      [1, 'Q2', 'partial', 'answering', true],
+    ]);
+    stored.push(row(1, 'Q2', 'partial final', live.at));
+    const saved = await reader.prompts('s1');
+    expect(saved).toHaveLength(2);
+    expect(saved[1]).toMatchObject({ index: 1, response: 'partial final', status: 'answered' });
+    expect(saved[1].pending).toBeUndefined();
+  });
+
+  it('does not leave the previous saved turn spinning when a newer live turn exists', async () => {
+    const reader = build(
+      { userMessages: () => [row(0, 'Q1', null, secondsAgo(30))], usageEventTimes: () => [secondsAgo(1)] },
+      { livePrompts: { latest: () => ({ text: 'Q2', at: secondsAgo(5), response: null }) } },
+    );
+    const prompts = await reader.prompts('s1');
+    expect(prompts.map((p) => p.status)).toEqual(['unanswered', 'answering']);
+  });
+
+  it.each([
+    ['an old unanswered last turn', secondsAgo(3600), [] as string[], 'unanswered'],
+    ['a prompt entered moments ago without events yet', secondsAgo(3), [] as string[], 'answering'],
+    ['an old prompt with fresh billing activity', secondsAgo(3600), [secondsAgo(4)], 'answering'],
+    ['a prompt dated far in the future (clock skew)', new Date(NOW + 3_600_000).toISOString(), [] as string[], 'unanswered'],
+  ])('derives the last stored turn status from %s', async (_name, at, events, status) => {
+    const reader = build({ userMessages: () => [row(0, 'Q', null, at)], usageEventTimes: () => events });
+    expect((await reader.prompts('s1'))[0].status).toBe(status);
+  });
+
+  it('keeps a long tool-running live turn answering from log activity despite stale billing events', async () => {
+    const make = (lastActivityAt: string) => build(
+      { userMessages: () => [], usageEventTimes: () => [secondsAgo(600)] },
+      { livePrompts: { latest: () => ({ text: 'Run tests', at: secondsAgo(900), response: null, lastActivityAt }) } },
+    );
+    expect((await make(secondsAgo(3)).prompts('s1'))[0].status).toBe('answering');
+    expect((await make(secondsAgo(500)).prompts('s1'))[0].status).toBe('unanswered');
+  });
+
+  it.each([
+    ['stored text is longer than a tail-truncated live reply', undefined, 'stored full answer', 'live', 'stored full answer'],
+    ['live reply is newer and longer', undefined, 'old', 'old plus streaming', 'old plus streaming'],
+    ['the live turn completed, so it is authoritative', secondsAgo(1), 'stored full answer', 'final', 'final'],
+  ])('chooses the reply when %s', async (_name, completedAt, stored, liveText, expected) => {
+    const reader = build(
+      { userMessages: () => [row(0, 'Q', stored, secondsAgo(10))] },
+      { livePrompts: { latest: () => ({
+        text: 'Q', at: secondsAgo(10), response: liveText, ...(completedAt ? { completedAt } : {}),
+      }) } },
+    );
+    expect((await reader.prompts('s1'))[0].response).toBe(expected);
+  });
+
+  it.each([
+    ['rejects', () => Promise.reject(new Error('EBUSY: resource busy')), 'EBUSY'],
+    ['throws synchronously', () => { throw new Error('EPERM'); }, 'EPERM'],
+    ['hangs', () => new Promise<never>(() => undefined), 'exceeded 20ms'],
+  ])('reports unavailable, never older store-only history, when the live read %s', async (_name, latest, reason) => {
+    const failures: [string, unknown][] = [];
+    const reader = build(
+      { userMessages: () => [row(0, 'Q1', 'A1', secondsAgo(300))] },
+      { livePrompts: { latest }, onLiveReadFailure: (id, error) => failures.push([id, error]) },
+    );
+    await expect(reader.prompts('s1')).rejects.toBeInstanceOf(PromptHistoryUnavailableError);
+    expect(failures).toHaveLength(1);
+    expect(failures[0][0]).toBe('s1');
+    expect(String(failures[0][1])).toContain(reason);
+  });
+
+  it('aborts the underlying live read on timeout but not on success', async () => {
+    const signals: AbortSignal[] = [];
+    const hung = build({ userMessages: () => [] }, {
+      livePrompts: { latest: (_id, signal) => { signals.push(signal!); return new Promise<never>(() => undefined); } },
+    });
+    await expect(hung.prompts('s1')).rejects.toBeInstanceOf(PromptHistoryUnavailableError);
+    expect(signals[0].aborted).toBe(true);
+    const ok = build({ userMessages: () => [] }, {
+      livePrompts: { latest: (_id, signal) => { signals.push(signal!); return null; } },
+    });
+    await ok.prompts('s1');
+    expect(signals[1].aborted).toBe(false);
+  });
+
+  it('rejects as unavailable when the live read fails and no failure hook is wired', async () => {
+    const reader = build({ userMessages: () => [row(0, 'Q1', 'A1', secondsAgo(300))] }, {
+      livePrompts: { latest: () => Promise.reject(new Error('EBUSY')) },
+    });
+    await expect(reader.prompts('s1')).rejects.toThrow('Live prompt history could not be read');
+  });
+
+  it('never replaces a known live turn with older store-only history after a transient live failure', async () => {
+    const stored = [row(0, 'Q1', 'A1', secondsAgo(300))];
+    const live = { text: 'Q2', at: secondsAgo(20), response: 'streamed answer', lastActivityAt: secondsAgo(2) };
+    let mode: 'ok' | 'fail' | 'absent' = 'ok';
+    const failures: unknown[] = [];
+    const reader = build({ userMessages: () => stored, usageEventTimes: () => [secondsAgo(2)] }, {
+      livePrompts: { latest: () => {
+        if (mode === 'fail') return Promise.reject(new Error('timed out'));
+        return mode === 'ok' ? live : null;
+      } },
+      onLiveReadFailure: (_id, error) => failures.push(error),
+    });
+    expect((await reader.prompts('s1')).map((p) => p.response)).toEqual(['A1', 'streamed answer']);
+    mode = 'fail';
+    await expect(reader.prompts('s1')).rejects.toBeInstanceOf(PromptHistoryUnavailableError);
+    expect(failures).toHaveLength(1);
+    mode = 'absent';
+    expect((await reader.prompts('s1')).map((p) => p.text)).toEqual(['Q1']);
+    mode = 'ok';
+    expect((await reader.prompts('s1')).map((p) => p.response)).toEqual(['A1', 'streamed answer']);
+  });
+
+  it('propagates an unreadable store instead of returning an empty history', async () => {
+    const reader = build({
+      userMessages: () => { throw new PromptHistoryUnavailableError('locked'); },
+    });
+    await expect(reader.prompts('s1')).rejects.toBeInstanceOf(PromptHistoryUnavailableError);
   });
 });

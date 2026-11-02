@@ -23,7 +23,7 @@ interface Row {
 const labels: Record<Outcome, string> = {
   queued: 'Queued',
   checking: 'Checking',
-  available: 'Tool access verified',
+  available: 'Inventory checked; tool authorization unverified',
   required: 'Sign-in required',
   unknown: 'Unknown',
   failed: 'Check failed — access unknown',
@@ -109,6 +109,7 @@ function AuthenticationStep({ providerId, server, onCompleted, onStopped, onStop
     <p role="status">{auth.busy ? 'Updating sign-in…'
       : auth.expired ? 'Sign-in expired. Access is not confirmed. Cancel this attempt before starting another.'
         : auth.job?.message ?? (auth.error ? 'Sign-in status unknown.' : 'Starting sign-in…')}</p>
+    {auth.expired && pending && <p role="status">{auth.job?.message}</p>}
     <ErrorText error={auth.error} />
     {live && <>
       {url && <Button onClick={() => {
@@ -118,12 +119,12 @@ function AuthenticationStep({ providerId, server, onCompleted, onStopped, onStop
       {auth.job?.deviceCode && <p>Device code: <code>{auth.job.deviceCode}</code></p>}
       {auth.job?.authUrl && !url && <p className="field-hint">The supplied sign-in link could not be opened safely.</p>}
     </>}
-    {pending && auth.error && !auth.expired && <Button disabled={auth.busy} onClick={auth.retryStatus}>Retry status</Button>}
+    {pending && auth.error && <Button disabled={auth.busy} onClick={auth.retryStatus}>Retry status</Button>}
     <Button variant="ghost" disabled={auth.busy} onClick={() => {
       setStopping(true);
       onStopRequested();
       if (pending) void auth.cancel();
-      else onStopped('Sign-in stopped. Access is not confirmed; any server-side attempt remains bounded by expiry.');
+      else onStopped('Sign-in stopped. Access is not confirmed; any server-side attempt may remain until cleanup is confirmed.');
     }}>Stop reauthentication</Button>
   </section>;
 }

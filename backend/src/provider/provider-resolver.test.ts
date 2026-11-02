@@ -3,6 +3,7 @@ import { createProviderResolver } from './provider-resolver.js';
 import { createProviderRegistry } from './provider-registry.js';
 import type { IAIProvider, ModelInfo } from './provider-contract.js';
 import { ValidationError } from '../kernel/error-types.js';
+import { createActiveProviderPolicy } from './active-provider.js';
 
 const provider = (id: string, models: ModelInfo[]): IAIProvider => ({
   id,
@@ -28,6 +29,44 @@ function setup() {
 }
 
 describe('provider-resolver', () => {
+  it('uses the selected provider, denies inactive requests and rechecks after catalog awaits', async () => {
+    const executionPolicy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'agency'], isEligible: () => true,
+      initialProviderId: null, saveSelected: () => {},
+    });
+    const registry = setup();
+    const resolver = createProviderResolver(registry, {
+      executionPolicy, defaultProvider: 'copilot', defaultModelByProvider: {},
+    });
+    await expect(resolver.resolve({})).rejects.toThrow('Choose an active CLI');
+    executionPolicy.select('agency');
+    expect((await resolver.resolve({})).provider.id).toBe('agency');
+    await expect(resolver.resolve({ providerId: 'copilot' })).rejects.toThrow('not the active');
+    registry.get('agency').listModels = async () => {
+      expect(() => executionPolicy.select('copilot')).toThrow('Stop all CLI work');
+      return [{ id: 'model', label: 'Model' }];
+    };
+    expect((await resolver.resolve({ model: 'model' })).provider.id).toBe('agency');
+    expect(executionPolicy.get().blockers).toEqual([]);
+  });
+
+  it('rechecks eligibility after awaiting a model catalog and releases failed resolution', async () => {
+    let allowed = true;
+    const executionPolicy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot'], isEligible: () => allowed,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    const registry = setup();
+    registry.get('copilot').listModels = async () => {
+      allowed = false;
+      return [{ id: 'model', label: 'Model' }];
+    };
+    const resolver = createProviderResolver(registry, {
+      executionPolicy, defaultProvider: 'copilot', defaultModelByProvider: {},
+    });
+    await expect(resolver.resolve({ model: 'model' })).rejects.toThrow('Choose an active CLI');
+    expect(executionPolicy.get().blockers).toEqual([]);
+  });
   const config = {
     defaultProvider: 'copilot',
     defaultModelByProvider: { copilot: 'gpt-5.4' },

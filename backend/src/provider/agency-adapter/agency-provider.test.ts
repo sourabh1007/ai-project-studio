@@ -95,14 +95,32 @@ describe('agency-provider', () => {
       spawner,
       baseEnv: {},
       importStore: fakeStore(),
-      mcpServerNames: () => ['github'],
+      mcpServerNames: (session) => {
+        expect(session.cwd).toBe('/work');
+        return ['github'];
+      },
     });
+
     provider.startSession({ ...spec, kind: 'meta' });
     const req = requests[0];
     expect(req.args).toContain('--disable-builtin-mcps');
     expect(req.args).toEqual(
       expect.arrayContaining(['--disable-mcp-server', 'github']),
     );
+  });
+
+  it('only evaluates workspace MCP policy for meta work and stamps the actual provider identity', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner, baseEnv: { STUDIO_PROVIDER_ID: 'wrong' }, importStore: fakeStore(),
+      mcpServerNames: () => { throw new Error('Unverified overlay'); },
+    });
+    expect(() => provider.startSession(spec)).not.toThrow();
+    expect(() => provider.startSession({ ...spec, kind: 'meta' })).toThrow('Unverified overlay');
+    expect(requests[0].env.STUDIO_PROVIDER_ID).toBe('agency');
+    expect(provider.buildInteractiveCommand!(spec).env.STUDIO_PROVIDER_ID).toBe('agency');
+    const plain = createAgencyProvider(agencyDefaults, { spawner, baseEnv: {}, importStore: fakeStore() });
+    expect(() => plain.startSession({ ...spec, kind: 'meta' })).toThrow(/suppression cannot be verified/);
   });
 
   it('buildInteractiveCommand wraps interactive args in the agency passthrough', () => {

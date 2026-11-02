@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { basename, dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   createNewTaskGit,
   newTaskBranch,
@@ -85,6 +88,55 @@ describe('parseChangedFiles', () => {
 });
 
 describe('prepareWorktree', () => {
+  it('resumes its actual dirty worktree without resetting branches or deleting user work', async () => {
+    const root = join(process.cwd(), `.new-task-recovery-${randomUUID()}`);
+    const repoLocalPath = join(root, 'repo');
+    mkdirSync(repoLocalPath, { recursive: true });
+    const gitCommand = (...args: string[]) =>
+      execFileSync('git', ['-C', repoLocalPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    try {
+      gitCommand('init', '--initial-branch=main');
+      gitCommand('config', 'user.name', 'Local regression');
+      gitCommand('config', 'user.email', 'regression@example.invalid');
+      gitCommand('config', 'commit.gpgsign', 'false');
+      gitCommand('config', 'core.hooksPath', join(root, 'disabled-hooks'));
+      writeFileSync(join(repoLocalPath, 'base.txt'), 'base');
+      writeFileSync(join(repoLocalPath, '.gitignore'), '*.local\n');
+      gitCommand('add', '.');
+      gitCommand('commit', '-m', 'local fixture');
+      const port = createNewTaskGit({
+        git: async (args) => {
+          const result = spawnSync('git', args, { encoding: 'utf8', timeout: 10_000, windowsHide: true });
+          return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+        },
+        pathExists: existsSync,
+        removeDir: () => { throw new Error('Must never delete files'); },
+        resolveUser: () => 'me',
+        branchToken: () => 'next',
+      });
+      const input = { repoLocalPath, baseBranch: 'main', runId: 'run-1', name: 'fix' };
+      const first = await port.prepareWorktree(input);
+      writeFileSync(join(first.worktreePath, 'user-work.txt'), 'Uncommitted user work');
+      await expect(port.prepareWorktree(input)).resolves.toEqual(first);
+      await expect(port.prepareWorktree({ ...input, previousBranch: first.branch, resume: true })).resolves.toEqual(first);
+      await expect(port.prepareWorktree({ ...input, previousBranch: first.branch })).rejects.toMatchObject({ kind: 'conflict' });
+      await expect(port.prepareWorktree({ ...input, runId: 'different-run' })).rejects.toThrow();
+      expect(readFileSync(join(first.worktreePath, 'user-work.txt'), 'utf8')).toBe('Uncommitted user work');
+      expect(gitCommand('branch', '--show-current')).toBe('main');
+      execFileSync('git', ['-C', first.worktreePath, 'add', '.']);
+      execFileSync('git', ['-C', first.worktreePath, 'commit', '-m', 'Preserve this work'], { stdio: 'pipe' });
+      writeFileSync(join(first.worktreePath, 'private.local'), 'Ignored user work');
+      await expect(port.prepareWorktree({ ...input, previousBranch: first.branch })).rejects.toMatchObject({ kind: 'conflict' });
+      expect(readFileSync(join(first.worktreePath, 'private.local'), 'utf8')).toBe('Ignored user work');
+      rmSync(join(first.worktreePath, 'private.local'));
+      const replanned = await port.prepareWorktree({ ...input, previousBranch: first.branch });
+      expect(replanned.branch).not.toBe(first.branch);
+      expect(gitCommand('show', `${first.branch}:user-work.txt`)).toBe('Uncommitted user work');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it('bases the branch on the fetched remote head', async () => {
     const { git, calls } = scriptedRunner([OK, OK]);
     const port = createNewTaskGit({ git, pathExists: () => false,
@@ -149,11 +201,15 @@ describe('prepareWorktree', () => {
     ).rejects.toThrow('Failed to create the task worktree');
   });
 
-  it('re-plan tears down the old worktree + branch and cuts a fresh one', async () => {
-    const { git, calls } = scriptedRunner([OK, OK, OK, OK, OK]);
+  it('re-plan removes only the clean worktree and preserves the old branch', async () => {
+    const worktreePath = newTaskWorktreePath('/repo', 'a1');
+    const { git, calls } = scriptedRunner([
+      { ...OK, stdout: `worktree ${worktreePath}\nHEAD abc\nbranch refs/heads/users/me/fix\n\n` },
+      OK, OK, OK, OK,
+    ]);
     const port = createNewTaskGit({
       git,
-      pathExists: () => false,
+      pathExists: () => true,
       removeDir: () => {},
       branchToken: () => 'tok',
       resolveUser: () => 'me',
@@ -167,24 +223,16 @@ describe('prepareWorktree', () => {
     });
     expect(result.branch).toBe('users/me/fix-tok');
     expect(calls[0]).toEqual([
-      '-C',
-      '/repo',
-      'worktree',
-      'remove',
-      '--force',
-      newTaskWorktreePath('/repo', 'a1'),
+      '-C', '/repo', 'worktree', 'list', '--porcelain',
     ]);
-    expect(calls[1]).toEqual(['-C', '/repo', 'worktree', 'prune']);
-    expect(calls[2]).toEqual([
-      '-C',
-      '/repo',
-      'branch',
-      '-D',
-      'users/me/fix',
-    ]);
+    expect(calls[1]).toEqual(['-C', worktreePath, 'status', '--porcelain', '--untracked-files=all', '--ignored']);
+    expect(calls[2]).toEqual(['-C', '/repo', 'worktree', 'remove', worktreePath]);
     expect(calls[3]).toEqual(['-C', '/repo', 'fetch', 'origin', 'main']);
     expect(calls[4]).toContain('users/me/fix-tok');
+    expect(calls[4]).toContain('-b');
     expect(calls[4].at(-1)).toBe('origin/main');
+    expect(calls.flat()).not.toContain('-D');
+    expect(calls.flat()).not.toContain('--force');
   });
 
   it('re-plan uses a random token by default', async () => {
@@ -201,8 +249,8 @@ describe('prepareWorktree', () => {
     expect(result.branch).toMatch(/^users\/me\/fix-[0-9a-f]{4}$/);
   });
 
-  it('purges a leftover worktree directory and prunes before adding', async () => {
-    const { git, calls } = scriptedRunner([OK, OK, OK]);
+  it('refuses an unregistered leftover directory without deleting files', async () => {
+    const { git, calls } = scriptedRunner([OK]);
     const removed: string[] = [];
     const port = createNewTaskGit({
       git,
@@ -210,16 +258,98 @@ describe('prepareWorktree', () => {
       removeDir: (path) => removed.push(path),
       resolveUser: () => 'me',
     });
-    const result = await port.prepareWorktree({
+    await expect(port.prepareWorktree({
       repoLocalPath: '/repo',
       baseBranch: 'main',
       runId: 'a1',
       name: 'fix',
-    });
-    expect(removed).toEqual([newTaskWorktreePath('/repo', 'a1')]);
-    expect(calls[0]).toEqual(['-C', '/repo', 'worktree', 'prune']);
-    expect(calls[1]).toEqual(['-C', '/repo', 'fetch', 'origin', 'main']);
-    expect(result.branch).toBe('users/me/fix');
+    })).rejects.toMatchObject({ kind: 'conflict' });
+    expect(removed).toEqual([]);
+    expect(calls).toEqual([['-C', '/repo', 'worktree', 'list', '--porcelain']]);
+  });
+
+  it.each([undefined, 'users/me/fix'])('reuses the verified run worktree on retry (%s)', async (previousBranch) => {
+    const worktreePath = newTaskWorktreePath('/repo', 'a1');
+    const { git, calls } = scriptedRunner([
+      { ...OK, stdout: `worktree /other\nbranch refs/heads/other\n\nworktree ${worktreePath}\nHEAD abc\nbranch refs/heads/users/me/fix\n\n` },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => true, removeDir: () => { throw new Error('must preserve files'); }, resolveUser: () => 'me' });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+      previousBranch, resume: true,
+    })).resolves.toEqual({ worktreePath, branch: 'users/me/fix' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('restores a missing worktree only from the branch persisted on that run', async () => {
+    const { git, calls } = scriptedRunner([OK]);
+    const port = createNewTaskGit({ git, pathExists: () => false, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+      previousBranch: 'users/me/fix', resume: true,
+    })).resolves.toEqual({ worktreePath: newTaskWorktreePath('/repo', 'a1'), branch: 'users/me/fix' });
+    expect(calls).toEqual([['-C', '/repo', 'worktree', 'add', newTaskWorktreePath('/repo', 'a1'), 'users/me/fix']]);
+  });
+
+  it.each(['boom', ''])('reports a worktree resume failure without selecting a different branch (%s)', async (stderr) => {
+    const { git, calls } = scriptedRunner([{ ...FAIL, stderr }]);
+    const port = createNewTaskGit({ git, pathExists: () => false, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+      previousBranch: 'users/me/fix', resume: true,
+    })).rejects.toThrow(stderr || 'Failed to resume the task worktree');
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each(['boom', ''])('does not remove a worktree when inspection fails (%s)', async (stderr) => {
+    const { git, calls } = scriptedRunner([{ ...FAIL, stderr }]);
+    const port = createNewTaskGit({ git, pathExists: () => true, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+    })).rejects.toThrow(stderr || 'Failed to inspect the task worktree');
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each(['boom', ''])('stops re-planning when git refuses safe removal (%s)', async (stderr) => {
+    const worktreePath = newTaskWorktreePath('/repo', 'a1');
+    const { git, calls } = scriptedRunner([
+      { ...OK, stdout: `worktree ${worktreePath}\nbranch refs/heads/users/me/fix\n\n` },
+      OK,
+      { ...FAIL, stderr },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => true, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+      previousBranch: 'users/me/fix',
+    })).rejects.toThrow(stderr || 'The task worktree contains work that must be preserved.');
+    expect(calls).toHaveLength(3);
+    expect(calls.flat()).not.toContain('--force');
+  });
+
+  it.each(['boom', ''])('preserves the worktree when inspecting local changes fails (%s)', async (stderr) => {
+    const worktreePath = newTaskWorktreePath('/repo', 'a1');
+    const { git, calls } = scriptedRunner([
+      { ...OK, stdout: `worktree ${worktreePath}\nbranch refs/heads/users/me/fix\n\n` },
+      { ...FAIL, stderr },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => true, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix',
+      previousBranch: 'users/me/fix',
+    })).rejects.toThrow(stderr || 'Failed to inspect worktree changes');
+    expect(calls).toHaveLength(2);
+  });
+
+  it('refuses a registered path on an unexpected branch', async () => {
+    const worktreePath = newTaskWorktreePath('/repo', 'a1');
+    const { git, calls } = scriptedRunner([
+      { ...OK, stdout: `worktree ${worktreePath}\nbranch refs/heads/user-work\n\n` },
+    ]);
+    const port = createNewTaskGit({ git, pathExists: () => true, removeDir: () => {} });
+    await expect(port.prepareWorktree({
+      repoLocalPath: '/repo', baseBranch: 'main', runId: 'a1', name: 'fix', resume: true,
+    })).rejects.toMatchObject({ kind: 'conflict' });
+    expect(calls).toHaveLength(1);
   });
 });
 

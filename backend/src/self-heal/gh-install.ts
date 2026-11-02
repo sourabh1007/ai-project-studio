@@ -1,3 +1,5 @@
+import { selfHealDefaults, selfHealConfigSchema, type SelfHealConfig } from './config.js';
+
 /**
  * Pure, platform-specific plan for installing the GitHub CLI (`gh`). Kept free
  * of any process execution so it is fully unit-testable; the actual spawn lives
@@ -22,11 +24,12 @@ export interface GhInstallPlan {
  * - Linux: too distro-dependent to script safely, so we return an unsupported
  *   plan that points the user at the official instructions.
  */
-export function buildGhInstallPlan(platform: NodeJS.Platform): GhInstallPlan {
+export function buildGhInstallPlan(platform: NodeJS.Platform, config: SelfHealConfig = selfHealDefaults): GhInstallPlan {
+  const profile = selfHealConfigSchema.parse(config);
   if (platform === 'win32') {
     return {
       supported: true,
-      command: 'winget',
+      command: profile.wingetExecutable,
       args: [
         'install',
         '--id',
@@ -43,7 +46,7 @@ export function buildGhInstallPlan(platform: NodeJS.Platform): GhInstallPlan {
   if (platform === 'darwin') {
     return {
       supported: true,
-      command: 'brew',
+      command: profile.brewExecutable,
       args: ['install', 'gh'],
       help: 'Installing GitHub CLI via Homebrew…',
     };

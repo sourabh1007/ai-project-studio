@@ -7,7 +7,7 @@ const { parseArgs } = require('node:util');
 const { execFileSync } = require('node:child_process');
 const {
   hashFile, loopbackUrl, boundedInteger, createFixture,
-  waitFor, inspectPackage, killTree, Cdp, launchOwned,
+  waitFor, inspectPackage, killTree, Cdp, launchOwned, removeFixtureEntries,
 } = require('./smoke-helpers.cjs');
 
 const repo = path.resolve(__dirname, '..', '..');
@@ -138,15 +138,20 @@ async function main() {
     const page = targets.find((item) => item.id === target.targetId);
     if (!page) throw new Error('Owned renderer target missing');
     cdp = await Cdp.connect(page.webSocketDebuggerUrl);
+    manifest.observations = { rendererAttached: true, fixtureDocumentReady: false, preloadVersionAcknowledged: false };
+    // Initialize a navigating renderer within the startup budget, not the ordinary IPC budget.
+    const startupProbeTimeout = Math.min(timeout, 15000);
+    await cdp.call('Runtime.enable', {}, startupProbeTimeout);
     const expected = JSON.stringify(fixture.token);
     await waitFor(async () => {
       checkAlive();
       const result = await cdp.call('Runtime.evaluate', {
         expression: `document.readyState === 'complete' && document.body.dataset.fixture === ${expected} && typeof window.desktop?.getVersion === 'function'`,
         returnByValue: true,
-      });
+      }, startupProbeTimeout);
       return result.result.value === true;
     }, timeout, { signal: controller.signal });
+    manifest.observations.fixtureDocumentReady = true;
     const version = await cdp.call('Runtime.evaluate', {
       expression: 'window.desktop.getVersion()', awaitPromise: true, returnByValue: true,
     });
@@ -160,7 +165,7 @@ async function main() {
     manifest.pids.backend = backend.pid;
     manifest.ports = { backend: backend.port, cdp: Number(devtools.port) };
     manifest.runtime.appVersion = version.result.value;
-    manifest.observations = { fixtureDocumentReady: true, preloadVersionAcknowledged: true };
+    manifest.observations.preloadVersionAcknowledged = true;
     if (values.clipboard) {
       const probe = await cdp.call('Runtime.evaluate', {
         expression: 'window.desktop.runClipboardSmoke()', awaitPromise: true, returnByValue: true,
@@ -188,20 +193,16 @@ async function main() {
       manifest.cleanupError = error.message;
       manifest.status = 'failed';
     }
-    manifest.elapsedMs = Date.now() - started;
-    manifest.finishedAt = new Date().toISOString();
     // Retain only synthetic metadata, never raw renderer/desktop output or profile data.
     try {
-      for (const entry of fs.readdirSync(fixture.root)) {
-        if (entry !== 'manifest.json') fs.rmSync(path.join(fixture.root, entry), {
-          recursive: true, force: true, maxRetries: 5, retryDelay: 200,
-        });
-      }
+      await removeFixtureEntries(fixture.root);
     } catch (error) {
       manifest.cleanup = 'failed';
       manifest.cleanupError = `Synthetic profile removal failed (${error.code || 'unknown'})`;
       manifest.status = 'failed';
     }
+    manifest.elapsedMs = Date.now() - started;
+    manifest.finishedAt = new Date().toISOString();
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
     process.removeListener('SIGINT', abort);
     process.removeListener('SIGTERM', abort);

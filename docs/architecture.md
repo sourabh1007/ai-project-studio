@@ -23,12 +23,12 @@ the patterns that keep the backend testable.
 ## Backend patterns
 
 ### Ports & adapters (hexagonal)
-Domain logic depends on **interfaces** (ports), not concrete IO. Examples of ports: `session/session-repo-port.ts`, `usage/usage-repo-port.ts`, `summarizer/summary-store-port.ts`, `provider/provider-contract.ts`. Concrete adapters (SQLite repos, node-pty spawner, HTTP controllers) implement these ports and are kept thin so they can be excluded from the coverage gate.
+Domain logic depends on **interfaces** (ports), not concrete IO. Examples of ports: `session/session-repo-port.ts`, `usage/usage-repo-port.ts`, `summarizer/summary-store-port.ts`, `provider/provider-contract.ts`. Concrete adapters implement these ports. Keep policy, parsing and state machines in covered pure modules; exclude only genuinely thin IO wrappers, not logic merely because its file is named an adapter.
 
 ### Composition root
 `backend/src/main.ts` is the **only** place that constructs concrete adapters and wires them together. It:
 1. Registers every module's config namespace/schema.
-2. Loads + validates config from the environment (`CW` prefix).
+2. Loads + validates module config (`CW__<namespace>__<key>` environment keys).
 3. Builds kernel primitives, repos, services, and providers.
 4. Assembles the route table (`api/routes.ts`) and starts Express.
 
@@ -51,6 +51,13 @@ CLI writes usage rows ─▶ provider/cli-store/cli-usage-store.ts (reads sessio
                      ─▶ api/usage-stream.ts (SSE) + api/routes.ts (REST)
                      ─▶ ui/src/hooks/use-usage-stream.ts + use-workspace-stats.ts (render)
 ```
+
+Readers are selected by the persisted provider; native Claude logs use their
+own bounded reader, not another vendor's SQLite store. Live append capture keeps
+a high-water cursor independently of bounded historical correction scans, so
+reaching EOF does not require replaying the full history before seeing new rows.
+Provider-reported native amounts remain nullable; USD estimates and unavailable
+AIC are not interchangeable.
 
 ### Running an interactive session
 ```
@@ -77,15 +84,22 @@ saved checkout
 
 Repository text is treated as untrusted evidence: prompts require read-only analysis and forbid executing commands or following instructions found in files. Small repositories use one bounded analysis prompt. A repository is treated as large when its tracked-file count or collected text reaches the configured threshold; evidence is then grouped by top-level module, capped by chunk count/size, summarized sequentially, and passed through a final bounded synthesis. The limits and prioritized files live in `repository-context/config.ts`.
 
-The generated record moves through `pending → generating → ready`, with `stale` and `failed` states. Startup synchronization compares the saved `sourceRevision` with the checkout's current `HEAD`. A changed revision is published as `stale` and regenerated; missing or interrupted records are resumed. Manual refresh always starts a new generation against the current checkout. Jobs are deduplicated per repository. Failed refreshes retain the last successful content and source revision for inspection, but only a non-empty `ready` context permits new development sessions.
+The generated record moves through `pending → generating → ready`, with `stale` and `failed` states. Startup synchronization compares the saved `sourceRevision` with the checkout's current `HEAD`. A changed revision is published as `stale` and regenerated; missing or interrupted records are resumed. Manual refresh always starts a new generation against the current checkout. Jobs are deduplicated per repository. Failed refreshes retain the last successful content and source revision for inspection. Background context preparation does not itself block development-session creation.
 
 ### Session readiness and bootstrap
-Repository-backed features cannot create or launch a development session until their repository context is `ready`; the backend enforces this in addition to the UI. Repo-less features remain launchable. Immediately before each launch, `session-bootstrap/session-bootstrap.ts` composes fresh, provider-neutral context in this order:
+Repository context is optional launch enrichment, not a session-creation gate.
+Immediately before each launch, `session-bootstrap/session-bootstrap.ts`
+composes fresh, provider-neutral context in this order:
 
-1. the bounded ready repository summary;
-2. feature name and description;
-3. bounded summaries from the newest completed, visible development sessions;
-4. effective feature/session skill instructions.
+1. the app's monitoring policy;
+2. the bounded ready repository summary, when available;
+3. user-authored Shared Context (workspace → repository → feature);
+4. feature name and description;
+5. bounded summaries from the newest completed, visible development sessions;
+6. effective feature/session skill instructions.
+
+Internal/meta sessions receive applicable user-authored Shared Context, not
+the development-only feature brief, session memory, skills or monitoring policy.
 
 One-shot sessions prepend this bootstrap while retaining the user's request in a separate final section. Interactive sessions seed the same bootstrap after the CLI prompt is ready. PR worktree features use the saved base repository context while the provider process still runs in the feature checkout.
 
@@ -126,12 +140,12 @@ Existing explicit feature/session deletion removes observed calls alongside prox
 slices; model-usage retention does not retain deleted MCP activity.
 
 ### New Task agent (a metasession team)
-The **New Task** agent (`new-task/`, surfaced through the [agent platform](agents.md)) turns a problem statement into a merged pull request. It runs the change as a small **team of [metasessions](metasessions.md)** rather than one serial agent:
+The **New Task** agent (`new-task/`, surfaced through the [agent platform](agents.md)) turns a problem statement into a proposed pull request, not an automatic merge. It runs the change as a small **team of [metasessions](metasessions.md)** rather than one serial agent:
 
 ```
 Describe (problem + context)
   ─▶ new-task-service.ts: planner metasession reads the repo ─▶ reviewable plan
-  ─▶ user approves (or re-plans: old branch dropped, fresh worktree cut)
+  ─▶ user explicitly accepts the plan/refinement (replanning preserves dirty work)
   ─▶ new-task-team.ts: lead agent decomposes the plan into file-disjoint slices
        ─▶ N sub-agents (developer/tester), each leasing its own metasession, implement in parallel
        ─▶ lead agent reviews the merged result and builds only the affected projects
@@ -144,7 +158,8 @@ Every port is pure aside from the injected AI/clock, so the 100% gate exercises 
 ## Storage
 
 - `workspace.db` (SQLite via `node:sqlite`) plus attached sibling files — persistence is split by domain to keep each file light: the primary `workspace.db` holds the core catalog (features, sessions, repositories, skills) and one `repository_contexts` row per saved repository, while `usage.db` (usage events), `content.db` (transcripts, feature/session summaries, session files), `tasks.db` (feature tasks), and `automations.db` (monitors, runs, subagents) are `ATTACH`ed through the same connection. Table names stay globally unique so queries and cross-domain joins are unchanged; older single-file databases relocate their tables into the siblings on first open. See [docs/backend-modules.md](backend-modules.md#persistence-layout-multiple-databases). Context lifecycle writes use a single SQLite upsert; null content/revision/generated timestamps preserve the last good values during stale, generating, or failed transitions. Removing a repository deletes its context explicitly, with a foreign-key cascade as schema-level cleanup.
-- The CLI's own `session-store.db` — read-only source of truth for usage/telemetry (never written by this app).
+- Provider-owned `session-store.db` or native logs — read-only telemetry/history
+  sources selected by provider identity, never rewritten by this app.
 
 ## Repository context API
 
@@ -154,12 +169,23 @@ Every port is pure aside from the injected AI/clock, so the 100% gate exercises 
 
 ## PR review
 
-When a feature is created from a pull request (`repo/pr-feature-service.ts` `createFromPull`), `pr-review/pr-review-service.ts` starts a background review keyed by the feature id. The job collects a bounded PR diff (`pr-diff-collector.ts` computes a three-dot `origin/<base>...HEAD` range and clamps the patch to the configured budget), embeds the ready base-repository context, and runs one internal meta AI session in the PR worktree. The response is parsed into a **PR Summary** and **Core Analysis** (`pr-review-parser.ts`), persisted to `pr_reviews` in `content.db`, and published as `pr.review.updated`.
+PR import (`repo/pr-feature-service.ts`, `createFromPull`) persists a review
+feature/worktree and schedules the current **Review Board** workflow. A bounded
+deterministic change graph prepares evidence before perspective analysis.
+Perspective results are persisted against the PR head/evidence revision;
+read-only board loading never launches another analysis. Import/startup recovery
+own scheduling, while retry/reset are explicit actions.
 
-- The record moves through `pending → generating → ready`, with a `failed` state carrying failure detail. The upsert uses `COALESCE`, so a failed regeneration retains the last successful summary for inspection.
-- `GET /api/features/:id/pr-review` returns the persisted record; a non-PR feature has none (`404`).
-- `POST /api/features/:id/pr-review/refresh` regenerates against the current worktree; jobs are deduplicated in-flight and a review deleted with its feature suppresses late publishes.
-- These internal generation sessions are hidden from session lists/SSE like repository analysis, and their usage is included in **IDE AI** totals.
+- The mounted UI is `features/review-board-page/`, not the legacy scored
+  `pr-review-page` workflow. It combines summary, graph, perspectives, comments,
+  local reviewed marks and provider-backed approval.
+- Approval validates the displayed head/evidence and completed persisted
+  perspective analysis, then rechecks the provider head before remote approval.
+  Local reviewed marks are not remote votes or PR-description exports.
+- Graph/AI failures remain retryable without claiming successful review.
+  Replacement/deletion invalidates old work and suppresses late publication.
+- Internal review turns contribute to **IDE AI**; agent meters retain native
+  usage availability and perspective identity. See [PR reviews](features/pr-reviews.md).
 
 ## Monitors & Automations
 

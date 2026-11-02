@@ -10,7 +10,7 @@
 
 import type { Clock } from '../kernel/clock.js';
 import type { EventBus } from '../kernel/event-bus.js';
-import { NotFoundError, ValidationError } from '../kernel/error-types.js';
+import { ConflictError, NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { MetaAbortError, type MetaRunner } from '../meta/meta-runner.js';
 import type { NewTaskConfig } from './config.js';
 import { buildPlanPrompt } from './new-task-prompt.js';
@@ -195,6 +195,12 @@ export function createNewTaskService(
     return run;
   }
 
+  function requireEditable(run: NewTaskRun): void {
+    if (run.status === 'planning' || run.status === 'implementing') {
+      throw new ConflictError('Wait for the active task to finish before editing it.');
+    }
+  }
+
   return {
     get(attachmentId) {
       return deps.repo.get(attachmentId);
@@ -256,6 +262,7 @@ export function createNewTaskService(
       }
       const now = deps.clock.isoNow();
       if (existing) {
+        requireEditable(existing);
         // Re-editing resets the plan and any prior failure back to a draft.
         return touch(existing, {
           featureId,
@@ -318,6 +325,8 @@ export function createNewTaskService(
 
     async refine(attachmentId, history: RefineChatMessage[], message, signal) {
       const run = requireRun(attachmentId);
+      requireEditable(run);
+      const snapshot = JSON.stringify(run);
       const text = message.trim();
       if (text.length === 0) {
         throw new ValidationError('A message is required.');
@@ -343,6 +352,9 @@ export function createNewTaskService(
         timeoutMs: deps.config.planTimeoutMs,
         signal,
       });
+      if (JSON.stringify(requireRun(attachmentId)) !== snapshot) {
+        throw new ConflictError('The task changed while refining. Review the current plan and try again.');
+      }
       const parsed = parseRefineResponse(result.text);
       const proposal =
         typeof parsed.revised === 'string' && parsed.revised.trim().length > 0
@@ -355,6 +367,7 @@ export function createNewTaskService(
 
     applyRefinedPlan(attachmentId, plan) {
       const run = requireRun(attachmentId);
+      requireEditable(run);
       if (run.status === 'pr-created') {
         throw new ValidationError(
           'This task already has an open pull request; its plan is frozen.',
@@ -376,6 +389,7 @@ export function createNewTaskService(
       }
       const workspace = deps.workspace.resolve(run.featureId);
       const baseBranch = options?.baseBranch?.trim() || workspace.baseBranch;
+      const resume = run.status === 'failed';
       run = touch(run, { status: 'planning', error: null });
       try {
         const planPrompt = buildPlanPrompt(deps.config.planPromptTemplate, {
@@ -397,6 +411,7 @@ export function createNewTaskService(
           runId: run.id,
           name: run.problem,
           previousBranch: run.branch ?? undefined,
+          resume,
         });
         run = touch(run, { branch: worktree.branch });
         sink?.activity({

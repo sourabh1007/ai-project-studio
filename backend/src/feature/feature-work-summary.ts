@@ -8,7 +8,7 @@ import type {
 
 export interface FeatureWorkSummaryDeps {
   sessions: SessionRepo;
-  reader: CopilotHistoryReader;
+  reader: Pick<CopilotHistoryReader, 'read'>;
   summaries: SessionSummaryStore;
 }
 

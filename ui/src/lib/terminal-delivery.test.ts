@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { createTerminalDelivery, chunkByUtf8Bytes } from './terminal-delivery.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  createTerminalDelivery, chunkByUtf8Bytes, MAX_QUEUED_INPUT_BYTES, MAX_QUEUED_INPUT_FRAMES,
+} from './terminal-delivery.js';
 import type { ClientMessage, ServerMessage, TerminalState } from './terminal-protocol.js';
 
 function fixture() {
@@ -18,6 +20,60 @@ function fixture() {
 }
 
 describe('terminal input delivery', () => {
+  it('encodes only bounded prefixes rather than repeatedly encoding the whole remaining payload', () => {
+    const f = fixture();
+    const text = 'x'.repeat(128 * 1024);
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    try {
+      f.state('ready', 1, 16384);
+      f.delivery.offer(text);
+      for (let seq = 1; seq <= 8; seq++) f.ack(seq);
+      expect(f.sent.filter((message) => message.type === 'input').map((message) => message.data).join('')).toBe(text);
+      const work = encode.mock.calls.reduce((sum, [input]) => sum + (input?.length ?? 0), 0);
+      expect(work).toBeLessThanOrEqual(text.length * 4);
+      expect(encode.mock.calls.filter(([input]) => (input?.length ?? 0) > 16385)).toHaveLength(1);
+    } finally {
+      encode.mockRestore();
+    }
+  });
+
+  it('bounds queued bytes including outstanding input, rejects whole offers and recovers after acknowledgements', () => {
+    const f = fixture();
+    expect(f.delivery.writable()).toBe(false);
+    expect(f.delivery.offer('x'.repeat(MAX_QUEUED_INPUT_BYTES))).toBe(true);
+    expect(f.delivery.offer('overflow')).toBe(false);
+    expect(f.statuses.at(-1)?.notice).toContain('not queued');
+    f.state('ready', 1, 16384);
+    expect(f.delivery.writable()).toBe(true);
+    expect(f.delivery.offer('still full')).toBe(false);
+    f.ack(1);
+    expect(f.delivery.offer('new')).toBe(true);
+    expect(f.statuses.at(-1)?.notice).toBe('');
+    expect(f.delivery.offer('x'.repeat(MAX_QUEUED_INPUT_BYTES + 1))).toBe(false);
+    const unicode = fixture();
+    expect(unicode.delivery.offer('\u{1f600}'.repeat(MAX_QUEUED_INPUT_BYTES / 4 + 1))).toBe(false);
+    expect(unicode.sent).toEqual([]);
+    const recovering = fixture();
+    recovering.state('ready');
+    recovering.delivery.receive({ type: 'checkout-recovery', requestId: 1, detail: 'Replace?' });
+    expect(recovering.delivery.writable()).toBe(false);
+  });
+
+  it('bounds queued and in-flight frame counts even for tiny input and drains in order', () => {
+    const f = fixture();
+    for (let index = 0; index < MAX_QUEUED_INPUT_FRAMES; index++) expect(f.delivery.offer('x')).toBe(true);
+    expect(f.delivery.offer('overflow')).toBe(false);
+    f.state('ready', 1, MAX_QUEUED_INPUT_BYTES);
+    expect(f.sent).toHaveLength(256);
+    f.ack(1);
+    expect(f.sent).toHaveLength(257);
+    f.delivery.disconnect(true);
+    f.state('connecting', 0);
+    expect(f.delivery.offer('fresh')).toBe(true);
+    f.state('ready', 2);
+    expect(f.sent.at(-1)).toMatchObject({ data: 'fresh', generation: 2 });
+  });
+
   it('discards queued input and dialog keystrokes during worktree selection', () => {
     const f = fixture();
     f.delivery.offer('before picker');
@@ -147,6 +203,9 @@ describe('terminal input delivery', () => {
 });
 
 describe('chunkByUtf8Bytes', () => {
+  it.each([0, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])('rejects invalid chunk sizes without looping: %s', (size) => {
+    expect(() => chunkByUtf8Bytes('input', size)).toThrow(RangeError);
+  });
   it('returns an empty list for empty input', () => {
     expect(chunkByUtf8Bytes('', 4)).toEqual([]);
   });

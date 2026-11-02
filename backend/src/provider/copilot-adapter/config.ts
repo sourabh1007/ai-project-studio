@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { copilotCommandProfile, providerCommandProfileSchema } from '../provider-command-profile.js';
+import { executableSchema, optionalCommandArgsSchema } from '../command-options.js';
 
 /** Configuration schema for the GitHub Copilot CLI adapter. */
 export const COPILOT_NAMESPACE = 'copilot';
@@ -11,7 +13,7 @@ const modelSchema = z.object({
 export const copilotConfigSchema = z.object({
   enabled: z.boolean(),
   /** Executable name or absolute path of the Copilot CLI. */
-  executable: z.string().min(1),
+  executable: executableSchema,
   /** Default model when a session does not specify one. */
   defaultModel: z.string().min(1),
   /** Pass --allow-all-tools (required for non-interactive runs). */
@@ -19,7 +21,9 @@ export const copilotConfigSchema = z.object({
   /** Pass -s to emit only the agent response. */
   silent: z.boolean(),
   /** Extra CLI arguments appended verbatim. */
-  extraArgs: z.array(z.string()),
+  extraArgs: optionalCommandArgsSchema,
+  interactiveArgs: optionalCommandArgsSchema.optional(),
+  headlessArgs: optionalCommandArgsSchema.optional(),
   /** Pass --screen-reader to interactive sessions for plain, unboxed output. */
   screenReader: z
     .boolean()
@@ -31,22 +35,23 @@ export const copilotConfigSchema = z.object({
     ),
   /** Selectable models exposed to the UI. Fully user-configurable. */
   models: z.array(modelSchema),
+  commandProfile: providerCommandProfileSchema.optional(),
 });
 
 export type CopilotConfig = z.infer<typeof copilotConfigSchema>;
 
 export const copilotDefaults: CopilotConfig = {
-  // Enabled by default alongside Agency so the IDE can run either CLI. Which one
-  // is the *default* for new sessions is chosen at startup by the network
-  // environment (Microsoft corpnet prefers Agency; elsewhere prefers Copilot).
-  // Set COPILOT_ENABLED=false to unregister the Copilot provider entirely.
+  // Registers an option for explicit CLI selection; it does not activate or install it.
   enabled: true,
   executable: 'copilot',
   defaultModel: 'auto',
   allowAllTools: true,
   silent: true,
   extraArgs: [],
+  interactiveArgs: [],
+  headlessArgs: [],
   screenReader: false,
+  commandProfile: copilotCommandProfile,
   models: [
     { id: 'auto', label: 'Auto (Copilot picks)' },
     { id: 'gpt-5.4', label: 'GPT-5.4' },

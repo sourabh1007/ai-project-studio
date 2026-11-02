@@ -16,7 +16,7 @@ import type { UsageCaptureRead } from './usage-capture-contract.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.useRealTimers(); });
 
-function fixture() {
+function fixture(memoryTarget = false) {
   const dir = join(process.cwd(), `.usage-fixture-${randomUUID()}`);
   mkdirSync(dir);
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -28,7 +28,7 @@ function fixture() {
     input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
     total_nano_aiu INTEGER, request_multiplier REAL, created_at TEXT)`;
   source.exec(sourceSchema);
-  const targetPath = join(dir, 'target.db');
+  const targetPath = memoryTarget ? ':memory:' : join(dir, 'target.db');
   let db = createDatabase({ databasePath: targetPath });
   cleanups.push(() => db.close());
   db.exec(`INSERT INTO features (id, name, description, created_at) VALUES ('f1','f','','t');
@@ -67,6 +67,80 @@ function fixture() {
 }
 
 describe('durable CLI usage capture with real source and recorder databases', () => {
+  it('tails new charges on the next poll while a 2000-row historical correction sweep stays bounded', () => {
+    const f = fixture(true);
+    f.source.exec('BEGIN');
+    for (let id = 1; id <= 2000; id++) f.insert(id);
+    f.source.exec('COMMIT');
+    const deps = f.deps();
+    deps.pageSize = 128;
+    deps.finalDrainPages = 64;
+    deps.read = vi.fn(deps.read);
+    const tailer = createCliUsageTailer(deps);
+    tailer.finalize();
+    expect(f.usage()).toHaveLength(2000);
+    f.source.exec('UPDATE assistant_usage_events SET total_nano_aiu=7000000000 WHERE id=1');
+    f.insert(2001, 9);
+    vi.mocked(deps.read).mockClear();
+    tailer.drain();
+    expect(f.usage()).toHaveLength(2001);
+    expect(f.usage()[0].credits).toBe(7);
+    expect(deps.read).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.read).mock.calls[0][0]).toBe('2000');
+    for (let tick = 0; tick < 35; tick++) tailer.drain();
+    expect(f.usage().reduce((sum, event) => sum + event.credits!, 0)).toBe(2015);
+    expect(f.emitted).toHaveBeenCalledTimes(2002);
+  });
+
+  it('retains the append watermark through empty EOF and transient/partial reads without skipping durable repair', () => {
+    const f = fixture();
+    f.insert(1, 4);
+    const deps = f.deps();
+    const read = deps.read;
+    deps.read = vi.fn((cursor, limit) => {
+      const result = read(cursor, limit);
+      return result.status === 'ready' ? { ...result, highWaterCursor: '1' } : result;
+    });
+    const tailer = createCliUsageTailer(deps);
+    tailer.drain();
+    const empty = { status: 'ready' as const, sourceId: deps.sourceId, rows: [], nextCursor: null, final: false };
+    const mock = vi.mocked(deps.read);
+    mock.mockReturnValueOnce(empty);
+    tailer.drain();
+    expect(mock.mock.calls[1][0]).toBe('1');
+    mock.mockReturnValueOnce({ ...empty, nextCursor: '2' });
+    tailer.drain();
+    mock.mockReturnValueOnce({ ...empty, highWaterCursor: '3', issue: { status: 'retrying', reason: 'incomplete' } });
+    tailer.drain();
+    mock.mockReturnValueOnce({ status: 'retrying', sourceId: deps.sourceId, reason: 'locked' });
+    tailer.drain();
+    expect(mock.mock.calls.at(-2)![0]).toBe('3');
+    mock.mockReturnValueOnce({ ...empty, sourceId: 'replacement' });
+    expect(tailer.drain()).toMatchObject({ status: 'unsupported', reason: 'source-identity-changed' });
+    expect(f.usage().map((event) => event.credits)).toEqual([4]);
+  });
+
+  it('restores append progress independently of the checkpointed historical repair position', () => {
+    const f = fixture();
+    f.insert(1, 4);
+    const deps = f.deps();
+    const read = deps.read;
+    deps.read = vi.fn((cursor, limit) => {
+      const result = read(cursor, limit);
+      return result.status === 'ready' ? { ...result, highWaterCursor: result.nextCursor ?? '1' } : result;
+    });
+    deps.captures.save = vi.fn(deps.captures.save);
+    createCliUsageTailer(deps).drain();
+    const checkpoint = vi.mocked(deps.captures.save).mock.calls.at(-1)![0];
+    expect(checkpoint.appendCursor).toBe('1');
+    deps.captures.get = () => ({ ...checkpoint, cursor: null });
+    f.insert(2, 8);
+    vi.mocked(deps.read).mockClear();
+    createCliUsageTailer(deps).drain();
+    expect(vi.mocked(deps.read).mock.calls[0][0]).toBe('1');
+    expect(f.usage().map((event) => event.credits)).toEqual([4, 8]);
+    expect(f.emitted).toHaveBeenCalledTimes(2);
+  });
   it('persists stable identities, catches same-count corrections, out-of-order insertions and pruning without double-counting', () => {
     const f = fixture();
     f.insert(10, 3); f.insert(20, 5);

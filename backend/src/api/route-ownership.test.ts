@@ -32,6 +32,14 @@ import type { TreeGroup } from '../feature-tree/feature-tree-contract.js';
 import type { FeatureSummary } from '../summarizer/summarizer-contract.js';
 import type { SkillAttachment } from '../skills/skills-contract.js';
 import type { Automation, Subagent } from '../automation/automation-contract.js';
+const operations = {
+  keyFrom: () => null,
+  run: async (_request: unknown, execute: (commit: (write: () => unknown) => unknown) => Promise<unknown>) => {
+    let result: unknown;
+    await execute((write) => (result = write()));
+    return result;
+  },
+} as never;
 
 function request(overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { params: {}, query: {}, body: undefined, ...overrides };
@@ -268,6 +276,15 @@ describe('route ownership', () => {
     })))).resolves.toEqual({});
   });
 
+  it('scopes text attachment saves to their persisted session and feature', async () => {
+    const [route] = applyRouteOwnership([{
+      method: 'post', path: '/sessions/:sessionId/text-attachments', handler: () => ({ status: 201, body: null }),
+    }], ownershipDeps());
+    await expect(Promise.resolve(route.workScope!(request({ params: { sessionId: 'session-1' } })))).resolves.toEqual({
+      sessionId: 'session-1', featureId: 'feature-1',
+    });
+  });
+
   it('passes admission scope separately from tracking scope for deletes', async () => {
     const calls: unknown[] = [];
     const ownerController = new AbortController();
@@ -487,7 +504,7 @@ describe('route ownership', () => {
       }),
     };
     const routes = routeMap(ownApplicationRoutes(applyRouteOwnership([
-      ...createFeatureRoutes({ features, admin }),
+      ...createFeatureRoutes({ features, admin, operations }),
       ...createSummaryRoutes({
         summarizer,
         summaries: { save: () => {}, load: () => null, delete: () => {} },
@@ -584,7 +601,7 @@ describe('route ownership', () => {
       terminals: { close: () => {} },
     });
     const routes = routeMap(ownApplicationRoutes(applyRouteOwnership([
-      ...createFeatureRoutes({ features, admin }),
+      ...createFeatureRoutes({ features, admin, operations }),
       ...createFeatureTasksRoutes({ tasks }),
     ], {
       ...ownershipDeps(),

@@ -12,6 +12,7 @@ import {
   DownloadMarkdownIcon,
   ExpandIcon,
   RefreshIcon,
+  RestoreIcon,
   SearchIcon,
 } from '../../components/icons.js';
 import { Spinner } from '../../components/loading.js';
@@ -33,10 +34,37 @@ import type { PromptStatus, SessionPrompt } from '../../lib/types.js';
 interface SessionHistoryPaneProps {
   /** The session whose prompt history to show, or null when none is active. */
   sessionId: string | null;
+  /** Upper bound on one history request before it is abandoned and retried. */
+  pollTimeoutMs?: number;
 }
 
 /** How often the pane re-polls so new prompts and status changes appear live. */
 const POLL_INTERVAL_MS = 2000;
+/** Default bound on a single poll; a hung request must not stall the pane. */
+const POLL_TIMEOUT_MS = 15_000;
+const NO_PROMPTS: SessionPrompt[] = [];
+
+interface HistorySnapshot {
+  sessionId: string;
+  /** Last successfully loaded prompts, or null before the first success. */
+  prompts: SessionPrompt[] | null;
+  /** Why the latest refresh failed; cleared by the next success. */
+  error: string | null;
+}
+
+function failureMessage(error: unknown, timedOut: boolean): string {
+  if (timedOut) return 'The request took too long.';
+  return error instanceof Error && error.message ? error.message : 'Unknown error.';
+}
+
+/** Selects the detail entry that is still the same turn after a refresh. */
+function sameTurn(current: SessionPrompt, result: SessionPrompt[]): SessionPrompt {
+  return result.find((prompt) => prompt.index === current.index &&
+      (!current.text || prompt.text === current.text) &&
+      (!current.at || !prompt.at || prompt.at === current.at)) ??
+    result.find((prompt) => current.text && current.at &&
+      prompt.text === current.text && prompt.at === current.at) ?? current;
+}
 
 const STATUS_LABEL: Record<PromptStatus, string> = {
   answered: 'Answered',
@@ -75,7 +103,15 @@ function StatusIcon({ prompt, showLabel = true }: { prompt: SessionPrompt; showL
  * HTML document. Uses the browser Blob + anchor pattern so it works identically
  * in the Electron renderer on macOS and Windows.
  */
-function ResponseToolbar({ prompt }: { prompt: SessionPrompt }) {
+function ResponseToolbar({
+  prompt,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  prompt: SessionPrompt;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -157,49 +193,75 @@ function ResponseToolbar({ prompt }: { prompt: SessionPrompt }) {
         <DownloadHtmlIcon size={13} />
         <span>.html</span>
       </button>
+      <button
+        type="button"
+        className="history-detail-tool"
+        onClick={onToggleFullscreen}
+        title={fullscreen ? 'Exit response full screen' : 'Open response full screen'}
+        aria-label={fullscreen ? 'Exit response full screen' : 'Open response full screen'}
+      >
+        {fullscreen ? <RestoreIcon size={13} /> : <ExpandIcon size={13} />}
+        <span>{fullscreen ? 'Restore' : 'Full screen'}</span>
+      </button>
     </div>
   );
 }
 
 /** Full prompt + response popup, with timing and colour-coded roles. */
 function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () => void }) {
+  const [fullscreen, setFullscreen] = useState(false);
   const durationText =
     prompt.durationMs != null ? formatDuration(prompt.durationMs) : null;
   return (
-    <Modal title="Prompt & response" onClose={onClose} size="lg" className="history-detail">
-      <div className="history-detail-meta">
-        <StatusIcon prompt={prompt} showLabel={false} />
-        <span className="history-detail-status">{STATUS_LABEL[prompt.status]}</span>
-        {durationText && <span className="history-detail-duration">· took {durationText}</span>}
-      </div>
-      <Disclosure className="prompt-record-details" summary="Recorded turn details">
-        <dl className="clarity-details-grid">
-          <dt>Turn</dt><dd>{prompt.index + 1}</dd>
-          <dt>Prompt recorded</dt><dd>{formatDateTime(prompt.at || null)}</dd>
-          <dt>Answer recorded</dt><dd>{formatDateTime(prompt.answeredAt)}</dd>
-          <dt>Duration</dt><dd>{durationText ?? 'Not reported'}</dd>
-          <dt>History state</dt><dd>{prompt.pending ? 'Still being saved' : 'Recorded'}</dd>
-        </dl>
-      </Disclosure>
-      <section className="history-detail-block history-detail-block--prompt">
-        <header>
-          <span className="history-detail-role">You asked</span>
-          <time>{formatDateTime(prompt.at || null)}</time>
-        </header>
-        {prompt.text ? (
-          <div
-            className="history-detail-md pr-comment-body"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownComment(prompt.text) }}
-          />
-        ) : (
-          <p className="history-detail-pending">The prompt is still being saved…</p>
-        )}
-      </section>
+    <Modal
+      title={fullscreen ? 'Response' : 'Prompt & response'}
+      onClose={onClose}
+      size={fullscreen ? 'full' : 'lg'}
+      className={`history-detail${fullscreen ? ' history-response-fullscreen' : ''}`}
+    >
+      {!fullscreen && (
+        <>
+          <div className="history-detail-meta">
+            <StatusIcon prompt={prompt} showLabel={false} />
+            <span className="history-detail-status">{STATUS_LABEL[prompt.status]}</span>
+            {durationText && <span className="history-detail-duration">· took {durationText}</span>}
+          </div>
+          <Disclosure className="prompt-record-details" summary="Recorded turn details">
+            <dl className="clarity-details-grid">
+              <dt>Turn</dt><dd>{prompt.index + 1}</dd>
+              <dt>Prompt recorded</dt><dd>{formatDateTime(prompt.at || null)}</dd>
+              <dt>Answer recorded</dt><dd>{formatDateTime(prompt.answeredAt)}</dd>
+              <dt>Duration</dt><dd>{durationText ?? 'Not reported'}</dd>
+              <dt>History state</dt><dd>{prompt.pending ? 'Still being saved' : 'Recorded'}</dd>
+            </dl>
+          </Disclosure>
+          <section className="history-detail-block history-detail-block--prompt">
+            <header>
+              <span className="history-detail-role">You asked</span>
+              <time>{formatDateTime(prompt.at || null)}</time>
+            </header>
+            {prompt.text ? (
+              <div
+                className="history-detail-md pr-comment-body"
+                dangerouslySetInnerHTML={{ __html: renderMarkdownComment(prompt.text) }}
+              />
+            ) : (
+              <p className="history-detail-pending">The prompt is still being saved…</p>
+            )}
+          </section>
+        </>
+      )}
       <section className="history-detail-block history-detail-block--response">
         <header>
           <span className="history-detail-role">Response</span>
           <div className="history-detail-head-right">
-            {prompt.response && <ResponseToolbar prompt={prompt} />}
+            {prompt.response && (
+              <ResponseToolbar
+                prompt={prompt}
+                fullscreen={fullscreen}
+                onToggleFullscreen={() => setFullscreen((value) => !value)}
+              />
+            )}
             <time>{prompt.answeredAt ? formatDateTime(prompt.answeredAt) : '—'}</time>
           </div>
         </header>
@@ -294,18 +356,25 @@ function PromptList({
   loading,
   error,
   onSelect,
+  onRetry,
 }: {
   prompts: SessionPrompt[];
   totalCount: number;
   loading: boolean;
-  error: boolean;
+  error: string | null;
   onSelect: (prompt: SessionPrompt) => void;
+  onRetry: () => void;
 }) {
   if (loading && totalCount === 0) {
     return <p className="history-pane-empty">Loading…</p>;
   }
-  if (error) {
-    return <p className="history-pane-empty">Couldn’t load prompt history.</p>;
+  if (error && totalCount === 0) {
+    return (
+      <div className="history-pane-empty" role="alert">
+        <p>Couldn’t load prompt history. {error}</p>
+        <button type="button" className="history-detail-tool" onClick={onRetry}>Retry</button>
+      </div>
+    );
   }
   if (totalCount === 0) {
     return <p className="history-pane-empty">No prompts recorded yet.</p>;
@@ -314,17 +383,25 @@ function PromptList({
     return <p className="history-pane-empty">No prompts or responses match your search.</p>;
   }
   return (
-    <ol className="history-pane-list">
-      {prompts.map((prompt) => (
-        <PromptRow key={prompt.index} prompt={prompt} onSelect={onSelect} />
-      ))}
-    </ol>
+    <>
+      {error && (
+        <div className="history-pane-empty" role="alert">
+          <p>Couldn’t refresh prompt history — showing the last loaded prompts. {error}</p>
+          <button type="button" className="history-detail-tool" onClick={onRetry}>Retry</button>
+        </div>
+      )}
+      <ol className="history-pane-list">
+        {prompts.map((prompt) => (
+          <PromptRow key={prompt.index} prompt={prompt} onSelect={onSelect} />
+        ))}
+      </ol>
+    </>
   );
 }
 
 /**
  * Collapsible right-side pane listing the prompts a user asked in the active
- * session, oldest first. Each row shows a live status icon (answered /
+ * session, newest first. Each row shows a live status icon (answered /
  * answering / unanswered) with a tooltip, the prompt on a single line, and —
  * once answered — a single-line response preview in a distinct colour. While
  * the assistant is actively responding to a turn the CLI store hasn't saved
@@ -334,7 +411,7 @@ function PromptList({
  * The list re-polls so new prompts and status changes appear without a manual
  * refresh. The open/closed state is persisted.
  */
-export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
+export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS }: SessionHistoryPaneProps) {
   const api = useApi();
   const [open, setOpen] = usePersistentState('cw-history-pane-open', true);
   const historyPresence = useAnimatedPresence(open, '--motion-panel-duration');
@@ -342,29 +419,52 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
     validate: isFiniteNumber,
     normalize: (value) => clampNumber(value, 220, 560),
   });
-  const [prompts, setPrompts] = useState<SessionPrompt[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+  // Loaded data is keyed by session so a switch can never show another session's prompts.
+  const [snapshot, setSnapshot] = useState<HistorySnapshot | null>(null);
+  const current = snapshot?.sessionId === sessionId ? snapshot : null;
+  const prompts = current?.prompts ?? NO_PROMPTS;
+  const error = current?.error ?? null;
+  const loading = current === null || (current.prompts === null && current.error === null);
   const [reloadTick, setReloadTick] = useState(0);
-  const [selected, setSelected] = useState<SessionPrompt | null>(null);
+  const [selectedEntry, setSelectedEntry] = useState<{ sessionId: string; prompt: SessionPrompt } | null>(null);
+  const selected = selectedEntry?.sessionId === sessionId ? selectedEntry.prompt : null;
+  const setSelected = (prompt: SessionPrompt | null) =>
+    setSelectedEntry(prompt && sessionId ? { sessionId, prompt } : null);
+  const retry = () => setReloadTick((tick) => tick + 1);
   const detailOpen = selected !== null;
   const [expanded, setExpanded] = useState(false);
   const historyVisible = open || expanded || detailOpen;
   const [query, setQuery] = useState('');
   const needle = query.trim().toLowerCase();
   const matchingPrompts = useMemo(
-    () => needle
-      ? prompts.filter((prompt) =>
-          prompt.text.toLowerCase().includes(needle) ||
-          (prompt.response ?? '').toLowerCase().includes(needle))
-      : prompts,
+    () => {
+      const newestFirst = [...prompts].reverse();
+      return needle
+        ? newestFirst.filter((prompt) =>
+            prompt.text.toLowerCase().includes(needle) ||
+            (prompt.response ?? '').toLowerCase().includes(needle))
+        : newestFirst;
+    },
     [prompts, needle],
   );
 
   useEffect(() => {
     setQuery('');
-    setSelected(null);
   }, [sessionId]);
+
+  // Reconnect/foreground recovery: reload immediately instead of waiting out a
+  // stalled timer after the machine slept, the network returned or the tab woke.
+  useEffect(() => {
+    const wake = () => {
+      if (document.visibilityState !== 'hidden') retry();
+    };
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, []);
 
   useEffect(() => {
     if (!sessionId || !historyVisible) {
@@ -372,46 +472,53 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
     }
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = (showSpinner: boolean) => {
-      if (showSpinner) {
-        setLoading(true);
+    let inflight: AbortController | undefined;
+    const load = async () => {
+      const controller = new AbortController();
+      inflight = controller;
+      let timedOut = false;
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      // The race (not only the signal) bounds a request whose transport ignores abort.
+      const expired = new Promise<never>((_resolve, reject) => {
+        watchdog = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(new Error('timeout'));
+        }, pollTimeoutMs);
+      });
+      try {
+        const result = await Promise.race([
+          api.listSessionPrompts(sessionId, { signal: controller.signal }),
+          expired,
+        ]);
+        if (cancelled) return;
+        setSnapshot({ sessionId, prompts: result, error: null });
+        setSelectedEntry((entry) => entry && entry.sessionId === sessionId
+          ? { sessionId, prompt: sameTurn(entry.prompt, result) }
+          : entry);
+      } catch (cause) {
+        if (cancelled) return;
+        const message = failureMessage(cause, timedOut);
+        // A failed poll keeps what is already shown; it never fabricates an empty history.
+        setSnapshot((previous) => previous?.sessionId === sessionId
+          ? { ...previous, error: message }
+          : { sessionId, prompts: null, error: message });
+      } finally {
+        clearTimeout(watchdog);
       }
-      api
-        .listSessionPrompts(sessionId)
-        .then((result) => {
-          if (!cancelled) {
-            setPrompts(result);
-            setSelected((current) => current
-              ? result.find((prompt) => prompt.index === current.index &&
-                  (!current.text || prompt.text === current.text) &&
-                  (!current.at || !prompt.at || prompt.at === current.at)) ??
-                result.find((prompt) => current.text && current.at &&
-                  prompt.text === current.text && prompt.at === current.at) ?? current
-              : null);
-            setError(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setError(true);
-            setPrompts([]);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setLoading(false);
-            timer = setTimeout(() => load(false), POLL_INTERVAL_MS);
-          }
-        });
+      if (!cancelled && document.visibilityState !== 'hidden') {
+        timer = setTimeout(() => void load(), POLL_INTERVAL_MS);
+      }
     };
-    load(true);
+    void load();
     return () => {
       cancelled = true;
+      inflight?.abort();
       if (timer) {
         clearTimeout(timer);
       }
     };
-  }, [api, sessionId, historyVisible, reloadTick]);
+  }, [api, sessionId, historyVisible, reloadTick, pollTimeoutMs]);
 
   if (!sessionId) {
     return null;
@@ -475,7 +582,7 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
                 className="history-pane-refresh"
                 aria-label="Refresh prompt history"
                 title="Refresh"
-                onClick={() => setReloadTick((tick) => tick + 1)}
+                onClick={retry}
               >
                 <RefreshIcon size={13} />
               </button>
@@ -489,6 +596,7 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
               loading={loading}
               error={error}
               onSelect={setSelected}
+              onRetry={retry}
             />
           </div>
         </div>
@@ -507,7 +615,7 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
               className="history-pane-refresh"
               aria-label="Refresh prompt history"
               title="Refresh"
-              onClick={() => setReloadTick((tick) => tick + 1)}
+              onClick={retry}
             >
               <RefreshIcon size={14} />
             </button>
@@ -520,6 +628,7 @@ export function SessionHistoryPane({ sessionId }: SessionHistoryPaneProps) {
               loading={loading}
               error={error}
               onSelect={setSelected}
+              onRetry={retry}
             />
           </div>
         </Modal>

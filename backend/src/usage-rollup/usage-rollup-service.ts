@@ -28,9 +28,11 @@ function addTotals(base: UsageTotals, row: UsageTotals): UsageTotals {
     inputTokens: base.inputTokens + row.inputTokens,
     outputTokens: base.outputTokens + row.outputTokens,
     reasoningOutputTokens: base.reasoningOutputTokens + row.reasoningOutputTokens,
-    cost: base.cost + row.cost,
-    credits: base.credits + row.credits,
-    nanoAiu: base.nanoAiu + row.nanoAiu,
+    cost: base.cost === null || row.cost === null ? null : base.cost + row.cost,
+    credits: base.credits === null || row.credits === null ? null : base.credits + row.credits,
+    nanoAiu: base.nanoAiu === null || row.nanoAiu === null ? null : base.nanoAiu + row.nanoAiu,
+    ...(base.usdEstimate === undefined && row.usdEstimate === undefined ? {} :
+      { usdEstimate: (base.usdEstimate ?? 0) + (row.usdEstimate ?? 0) }),
   };
 }
 
@@ -153,13 +155,13 @@ export function rollupUsage(
     rows,
     (row) => row.model,
     (model, sums): ModelBreakdown => ({ model, ...sums }),
-  ).sort((a, b) => b.nanoAiu - a.nanoAiu || a.model.localeCompare(b.model));
+  ).sort((a, b) => (b.nanoAiu ?? -1) - (a.nanoAiu ?? -1) || a.model.localeCompare(b.model));
 
   const byProvider = foldBy(
     rows,
     (row) => row.provider,
     (provider, sums): ProviderBreakdown => ({ provider, ...sums }),
-  ).sort((a, b) => b.nanoAiu - a.nanoAiu || a.provider.localeCompare(b.provider));
+  ).sort((a, b) => (b.nanoAiu ?? -1) - (a.nanoAiu ?? -1) || a.provider.localeCompare(b.provider));
 
   return { scope, granularity, totals, periods, byModel, byProvider, byMcpServer: [] };
 }

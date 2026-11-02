@@ -1,51 +1,56 @@
 # MCP servers — Model Context Protocol
 
-The **MCP Servers** view manages the Model Context Protocol servers that a
-provider's CLI can use, and lets you enable or disable individual **tools** — with
-changes applying to already-open sessions without restarting the app.
+The **MCP Servers** view inspects and, where supported, edits documented MCP
+configuration sources. It is not a complete inventory of tools in an active CLI.
 
 ## Where to find it
 
-Click the **MCP** icon in the activity bar to open the **MCP Servers** view. It
-reflects the real config file the selected provider's CLI reports, so entries
-match what the CLI actually uses.
+Click **MCP** in the activity bar. Choose **Copilot**, authorized optional
+**Agency**, **Claude**, or **This App**. These are management categories, not an
+instruction to switch the active execution provider.
 
-An empty or whitespace-only config file loads as unconfigured instead of
-failing the page. UTF-8 BOM-prefixed JSON is supported. Nonempty malformed
-files are not silently reset: the error identifies the file to repair before
-using **Retry load**, without displaying its potentially sensitive contents.
-Saving writes a complete temporary file and atomically replaces the original;
-an interrupted or failed write leaves the previous configuration intact.
+Cards identify source scope and provenance. Workspace trust, overlays, inherited
+configuration and managed policy can affect what the CLI ultimately loads.
+Inherited/resolved sources can be read-only; a native provider can own settings
+that this app cannot safely edit. Use only actions the selected source advertises.
+**This App** describes the app's own tools, not a vendor's effective inventory.
 
-## Manage servers
+## Manage configuration
 
-For the selected provider, each configured server appears as a **card** showing
-its spec summary. From a card you can:
+For writable sources, **Add MCP server** and **Edit** accept a structured server
+specification (transport, command/arguments or URL as supported). Keep each
+argument separate, including Windows paths containing spaces. Avoid placing
+credentials in command text; use the source's supported environment/auth mechanism.
 
-- **Add** a server — click **Add MCP server** and fill in the spec
-  (type/command/args, etc.).
-- **Edit** a server — the pencil icon opens the same form pre-filled.
-- **Restart** a server — the refresh icon restarts it and re-runs tool discovery.
-  If the server needs **authentication**, the prompt surfaces as part of the
-  restart/discovery flow, so auth "just works" without leaving the app.
+Empty files load as unconfigured; UTF-8 BOM JSON is supported. Malformed nonempty
+files produce a repairable error, not a silent reset, and sensitive raw contents
+are withheld. Writes atomically replace the complete configuration.
 
-## Tools
+## Inspect tools
 
-Each card has a **Tools** button showing the discovered tool count. Click it to
-open the **tools modal**, which lists every tool the server exposes with a short
-description and a checkbox:
+**Tools** shows a verified tool inventory and descriptions where discovery is
+supported. **Refresh tools** makes an independent, bounded discovery connection.
+It does **not** restart a running CLI, reconnect its existing server, or prove
+that a native session has enabled those tools. There are no generic per-tool
+enable/disable checkboxes. Unsupported inspection remains explicitly unavailable.
 
-- **Check / uncheck** a tool to enable or disable it.
-- The modal also has a **Restart** button and shows discovery status/output
-  (including any device-code or auth messages).
+Authentication and permissions remain provider/server-owned. A probe can report
+that sign-in is required and show a safe supported sign-in link; this is not a
+promise that every OAuth flow can finish inside the app. Raw discovery output
+and credentials are not displayed. Retry after completing native authentication.
+Inspection uses the backend-reported discovery budget plus cleanup headroom;
+a timeout is a failed inspection, not proof of an authentication failure.
 
-## Live apply — no shell restart
+## When changes apply
 
-Both **tool toggles** and **server restarts** take effect for **already-open
-sessions**: the app sends the provider's live-reload command to affected sessions
-and reports how many were reloaded. New sessions always pick up the latest config.
+Ordinary configuration edits apply to **subsequent CLI launches**, not all open
+sessions. Explicit **Agency global built-in** changes have their own supported
+session-recycling path and report failures. Do not equate that exception with
+generic live reload, server restart, or Claude tool allow-list support.
 
 ## Related
 
-- [Sessions](sessions.md) — sessions that consume MCP tools.
-- [Architecture](../backend-modules.md) — the `mcp/` backend module.
+- [Sessions](sessions.md) — active CLI selection and native authentication.
+- [Backend module reference](../backend-modules.md) — MCP service boundaries.
+- [Integration qualification](../integration-qualification.md) — deterministic
+  coverage versus real server/authentication qualification.

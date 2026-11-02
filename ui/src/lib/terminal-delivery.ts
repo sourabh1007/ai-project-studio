@@ -9,6 +9,9 @@ interface DeliveryDeps {
  * so a large paste is pipelined as several in-flight frames rather than one
  * all-or-nothing block. Clamped to the server's advertised limit per session. */
 const CHUNK_TARGET_BYTES = 16384;
+export const MAX_QUEUED_INPUT_BYTES = 256 * 1024;
+export const MAX_QUEUED_INPUT_FRAMES = 4096;
+const MAX_IN_FLIGHT_INPUT_FRAMES = 256;
 
 const encoder = new TextEncoder();
 const utf8Len = (text: string): number => encoder.encode(text).length;
@@ -20,6 +23,7 @@ const utf8Len = (text: string): number => encoder.encode(text).length;
  * progress is always made. Returns `[]` for empty input.
  */
 export function chunkByUtf8Bytes(data: string, maxBytes: number): string[] {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new RangeError('Input chunk size must be a positive safe integer');
   if (data === '') return [];
   const bytes = encoder.encode(data);
   if (bytes.length <= maxBytes) return [data];
@@ -59,6 +63,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   // lazily in pump() against the current window so frame sizes always respect
   // the limit the server actually advertised.
   let outbox: string[] = [];
+  let queuedBytes = 0;
   const pending = new Map<number, number>();
   let bytes = 0;
   let notice = '';
@@ -71,6 +76,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
       notice = `${reason} ${outbox.length} unsent input frame(s) discarded; ${pending.size} unacknowledged frame(s) may have executed. Nothing replayed.`;
     }
     outbox = [];
+    queuedBytes = 0;
     pending.clear();
     bytes = 0;
   };
@@ -84,11 +90,11 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   // byte window has room, slicing each offered string into frames no larger than
   // the remaining window (capped so a big paste pipelines as several in-flight
   // frames). Whatever does not fit waits and is pumped again as acks free space,
-  // so an arbitrarily large paste streams through instead of being rejected. A
+  // while keeping both queued bytes and frame counts bounded. A
   // frame is always allowed out of an empty window — even a lone code point
   // wider than the window — so delivery can never stall.
   const pump = () => {
-    if (state !== 'ready') return;
+    if (state !== 'ready') return true;
     try {
       if (geometry) {
         const key = `${generation}:${geometry.cols}:${geometry.rows}`;
@@ -97,7 +103,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
           sentGeometry = key;
         }
       }
-      while (outbox.length) {
+      while (outbox.length && pending.size < MAX_IN_FLIGHT_INPUT_FRAMES) {
         const room = limit - bytes;
         let budget = Math.min(Math.max(room, 0), CHUNK_TARGET_BYTES);
         if (budget === 0) {
@@ -105,33 +111,50 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
           budget = CHUNK_TARGET_BYTES; // empty window, tiny limit: still progress
         }
         const head = outbox[0];
-        const piece = chunkByUtf8Bytes(head, budget)[0];
+        // Inspect only the next frame, not the entire remaining input on every
+        // acknowledgement. The extra code unit preserves a surrogate pair.
+        const piece = chunkByUtf8Bytes(head.slice(0, budget + 1), budget)[0];
         const pieceSize = utf8Len(piece);
         // A single code point can exceed the window; only force it out when
         // nothing is outstanding, else wait for acks to widen the window.
         if (pieceSize > room && bytes !== 0) break;
         if (piece.length === head.length) outbox.shift();
         else outbox[0] = head.slice(piece.length);
+        queuedBytes -= pieceSize;
         const id = ++seq;
         pending.set(id, pieceSize);
         bytes += pieceSize;
         deps.send({ type: 'input', data: piece, generation, seq: id });
       }
+      return true;
     } catch {
       fail('Connection write failed. Clear the CLI composer before retrying.');
+      return false;
     }
   };
   return {
     offer(data: string) {
-      if (!data) return;
+      if (!data) return true;
       if (recovering || state === 'failed' || state === 'closed' || state === 'reconnecting') {
         if (!notice) notice = 'Input not sent: terminal is not writable.';
         report();
-        return;
+        return false;
       }
+      const size = data.length > MAX_QUEUED_INPUT_BYTES ? MAX_QUEUED_INPUT_BYTES + 1 : utf8Len(data);
+      if (outbox.length >= MAX_QUEUED_INPUT_FRAMES || queuedBytes + bytes + size > MAX_QUEUED_INPUT_BYTES) {
+        notice = 'Terminal input queue is full. This input was not queued; wait for delivery before retrying.';
+        report();
+        return false;
+      }
+      if (notice.startsWith('Terminal input queue is full.')) {
+        notice = '';
+        report();
+      }
+      queuedBytes += size;
       outbox.push(data);
-      pump();
+      return pump();
     },
+    writable: () => state === 'ready' && !recovering,
     resize(cols: number, rows: number) {
       geometry = { cols, rows };
       pump();

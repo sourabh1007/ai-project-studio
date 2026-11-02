@@ -1,9 +1,11 @@
 import { ValidationError } from '../kernel/error-types.js';
 import type { AgentService } from '../agents/agent-service.js';
 import type { Route } from './http-contract.js';
+import type { ClientOperations } from '../client-operations/client-operations-contract.js';
 
 export interface AgentControllerDeps {
   agents: AgentService;
+  operations: ClientOperations;
 }
 
 /** Extracts and validates the `{ agentId }` of an attach request. */
@@ -56,10 +58,14 @@ export function createAgentRoutes(deps: AgentControllerDeps): Route[] {
       path: '/features/:featureId/agents',
       handler: (req) => {
         const { agentId } = assertAttach(req.body);
-        return {
-          status: 201,
-          body: deps.agents.attach(req.params.featureId, agentId),
-        };
+        const { featureId } = req.params;
+        const key = deps.operations.keyFrom(req.headers);
+        return deps.operations.run(
+          { scope: `agent.attach:${featureId}`, key, fingerprint: { agentId } },
+          async (commit) => {
+            commit(() => ({ status: 201, body: deps.agents.attach(featureId, agentId) }));
+          },
+        );
       },
     },
     {

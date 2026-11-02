@@ -24,6 +24,7 @@ import { createCopilotModelScanner } from '../copilot-adapter/copilot-model-scan
 import { createCopilotMcpScanner } from '../copilot-adapter/copilot-mcp-scanner.js';
 import { createCopilotRestartScanner } from '../copilot-adapter/copilot-restart-scanner.js';
 import { createCopilotMcpSupport } from '../copilot-adapter/copilot-mcp-support.js';
+import { ValidationError } from '../../kernel/error-types.js';
 
 export interface AgencyAdapterDeps {
   spawner: ProcessSpawner;
@@ -33,9 +34,9 @@ export interface AgencyAdapterDeps {
   /**
    * Names of the user-configured MCP servers to disable for headless meta
    * sessions so they never trigger a browser/OAuth sign-in on load. Read live
-   * so config edits are reflected without a restart. Omitted → none disabled.
+   * for the actual session cwd so config edits are reflected without a restart.
    */
-  mcpServerNames?: () => readonly string[];
+  mcpServerNames?: (spec: SessionSpec) => readonly string[];
 }
 
 /** Agency CLI provider. Wraps the Copilot CLI via `agency copilot -- ...`. */
@@ -45,16 +46,20 @@ export function createAgencyProvider(
 ): IAIProvider {
   return {
     id: AGENCY_NAMESPACE,
+    capabilities: { planUsage: 'aic-panel' },
     async listModels() {
       return listAgencyModels(config);
     },
     startSession(spec: SessionSpec) {
+      if (spec.kind === 'meta' && !deps.mcpServerNames) {
+        throw new ValidationError('Headless MCP suppression cannot be verified. Configure trusted effective MCP sources or repair the native CLI policy before starting meta tasks.');
+      }
       const { command, args } = buildAgencyCommand(
         spec,
         config,
-        deps.mcpServerNames?.() ?? [],
+        spec.kind === 'meta' ? deps.mcpServerNames!(spec) : [],
       );
-      const env = buildAgencyEnv(spec, deps.baseEnv);
+      const env = { ...buildAgencyEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE };
       const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
       return toRunningSession(spec.sessionId, handle);
     },
@@ -66,7 +71,7 @@ export function createAgencyProvider(
           '--',
           ...buildCopilotInteractiveArgs(spec, config),
         ],
-        env: buildAgencyEnv(spec, deps.baseEnv),
+        env: { ...buildAgencyEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE },
       };
     },
     createOutputScanner(ctx: SessionOutputScannerContext): SessionOutputScanner {
@@ -94,6 +99,6 @@ export function createAgencyProvider(
     },
     // Agency runs the Copilot CLI underneath, so it exposes the same
     // mcp-config.json; reuse Copilot's MCP support.
-    mcp: createCopilotMcpSupport(),
+    mcp: createCopilotMcpSupport(config.commandProfile?.liveReloadCommand),
   };
 }

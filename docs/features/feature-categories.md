@@ -5,9 +5,10 @@ work stays together and its cost is easy to measure.
 
 ```
 Repository            (an optional git checkout the work targets)
-└─ Feature           (a named unit of work — the main "category")
-   └─ Group          (optional sub-grouping, e.g. an attached pull request)
-      └─ Session     (one interactive CLI run)
+└─ Feature           (can contain nested sub-features)
+   ├─ Subcategory    (optional session grouping)
+   │  └─ Session    (one interactive CLI run)
+   └─ Agent tab      (Review Board, New Task, or Bug Bash)
 ```
 
 You do **not** have to use every level. The only required unit is a **Feature**;
@@ -29,9 +30,12 @@ session started under it.
 - **Add:** click **Add repository** in the Explorer header and point it at a
   local checkout (or provision one from a provider).
 - Each repository row shows a **context badge** — *Pending → Analyzing → Ready*
-  (or *Refreshing* / *Failed*). New repository-backed sessions stay disabled
-  until the badge is **Ready**. Click the badge (or **View context**) to see the
-  generated summary, per-step progress, and any failure detail.
+  (or *Refreshing* / *Failed*). Context generation is nonblocking: a summary
+  still being prepared or failing does not by itself disable new sessions.
+  Click the badge (or **View context**) for its summary, progress and errors.
+- Open the repository dashboard for **Repository Insights** (repository-wide
+  analysis) and its **Shared Context** surface. These are repository/workspace
+  panels, not additional activity-bar destinations.
 
 ### Feature — the primary category
 A **Feature** is the main organizing unit: a task, ticket, or area of work. It
@@ -43,13 +47,16 @@ can be attached to a repository or be repo-less.
 - **Rename / delete:** use the feature's overflow (`⋯`) menu.
 - Opening a feature shows its **dashboard** — charts, task plan, and summaries.
   See [Usage & cost](usage-and-cost.md).
+- Features can contain **nested sub-features**. Attach available agents from
+  the feature's agent controls; their work opens in dedicated workspace tabs.
+  Availability depends on prerequisites such as a linked repository or PR.
 
-### Group (optional)
-A **Group** sub-divides a feature. The most common use is attaching a **pull
-request** so its sessions and review live under one heading.
+### Subcategory (optional)
+A **subcategory** groups sessions within a feature; it is distinct from a nested
+feature and from an agent attachment.
 
-- **Create:** use **New group** on a feature, or **Attach pull request** to pull
-  in an existing PR as a group.
+- **Create:** use **New subcategory** on a feature. Use **Open Pull Request**
+  from a repository to import PR-review features, not to create a subcategory.
 
 ### Session
 A **Session** is a single interactive CLI run under a feature (or group). This is

@@ -4,6 +4,31 @@ import { createMcpToolInspector } from './mcp-tool-inspector-adapter.js';
 import { providerLaunchSpec } from './mcp-proxy-config.js';
 
 describe('MCP inspector real local protocol fixture', () => {
+  it.each(['unsupported-protocol', 'missing-capabilities', 'invalid-tools'])('refuses invalid negotiated %s', async (mode) => {
+    const script = fileURLToPath(new URL('./fixtures/stdio probe fixture.cjs', import.meta.url));
+    const result = await createMcpToolInspector().inspect({
+      serverName: 'fixture', spec: providerLaunchSpec(process.execPath, [script, mode]), timeoutMs: 3000,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.message).toContain('initialize');
+  });
+  it('does not request unadvertised tools', async () => {
+    const script = fileURLToPath(new URL('./fixtures/stdio probe fixture.cjs', import.meta.url));
+    const result = await createMcpToolInspector().inspect({
+      serverName: 'fixture', spec: providerLaunchSpec(process.execPath, [script, 'no-tools']), timeoutMs: 3000,
+    });
+    expect(result.status).toBe('ok');
+    expect(result.tools).toEqual([]);
+    expect(result.message).toContain('does not advertise');
+  });
+  it('discovers a spaced script through a bare Windows node command without a shell', async () => {
+    if (process.platform !== 'win32') return;
+    const script = fileURLToPath(new URL('./fixtures/stdio probe fixture.cjs', import.meta.url));
+    const result = await createMcpToolInspector().inspect({
+      serverName: 'fixture', spec: { command: 'node', args: [script] }, timeoutMs: 3000,
+    });
+    expect(result.status, result.message ?? '').toBe('ok');
+  });
   it('collects all tools/list pages and refuses a repeating cursor rather than claiming a complete inventory', async () => {
     const script = fileURLToPath(new URL('./fixtures/stdio probe fixture.cjs', import.meta.url));
     const result = await createMcpToolInspector().inspect({
@@ -29,6 +54,8 @@ describe('MCP inspector real local protocol fixture', () => {
     });
     expect(progress.flat().join(' ')).toContain('enter the code ABCD12345');
     expect(result.message).toBe('MCP inspection was cancelled');
+    const pid = Number(/fixture-pid=(\d+)/.exec(progress.flat().join(' '))![1]);
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 
   it('does not start a subprocess when the caller already cancelled', async () => {
@@ -38,6 +65,16 @@ describe('MCP inspector real local protocol fixture', () => {
       serverName: 'fixture', spec: { command: 'must-not-launch' }, timeoutMs: 1000, signal: controller.signal,
     });
     expect(result.message).toBe('MCP inspection was cancelled');
+  });
+
+  it('retains evidence of an unconfirmed live challenge when the native server advertises tools before sign-in', async () => {
+    const script = fileURLToPath(new URL('./fixtures/stdio probe fixture.cjs', import.meta.url));
+    const result = await createMcpToolInspector().inspect({
+      serverName: 'fixture', spec: providerLaunchSpec(process.execPath, [script, 'challenge-inventory']), timeoutMs: 3000,
+    });
+    expect(result.status).toBe('ok');
+    expect(result.authenticationInterrupted).toBe(true);
+    expect(result.tools).toHaveLength(1);
   });
 
   it('observes a JSON-RPC authentication error without losing its evidence', async () => {

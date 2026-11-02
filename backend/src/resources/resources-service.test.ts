@@ -21,6 +21,46 @@ function setup() {
   return { deps, fs, setNow: (n: number) => { now = n; }, service: createResourcesService(deps) };
 }
 describe('resource service concurrency and state', () => {
+  it('disables expensive process sampling without inventing host pressure', async () => {
+    const h = setup();
+    h.deps.config = { ...resourcesDefaults, processSamplingEnabled: false };
+    const service = createResourcesService(h.deps);
+    await service.sample();
+    expect(h.deps.processes).not.toHaveBeenCalled();
+    expect(service.snapshot().app.errors[0]).toContain('disabled');
+    expect(service.snapshot().host.status).toBe('unknown');
+  });
+
+  it('does not make queued cleanup wait for an unresponsive inventory adapter', async () => {
+    const h = setup();
+    vi.mocked(h.deps.roots).mockImplementation(async () => new Promise(() => {}));
+    h.service.refreshStorage();
+    await Promise.resolve();
+    expect(h.service.requestCleanup('logs').status).toBe('queued');
+    await vi.waitFor(() => expect(h.service.snapshot().cleanups[0].status).toBe('completed'));
+    expect(h.service.snapshot().storage.errors.join(' ')).toContain('cancelled');
+  });
+
+  it('bounds total scan lifetime even when a filesystem request never settles and preserves partial measurements', async () => {
+    const h = setup();
+    h.deps.config = { ...resourcesDefaults, maxScanDurationMs: 20 };
+    h.fs.add(at('measured'), 'file', 17);
+    h.fs.add(at('blocked'), 'file', 99);
+    const stat = vi.mocked(h.fs.fs.stat).getMockImplementation()!;
+    vi.mocked(h.fs.fs.stat).mockImplementation(async (path) =>
+      path === at('blocked') ? new Promise(() => {}) : stat(path));
+    const service = createResourcesService(h.deps);
+    service.refreshStorage();
+    await vi.waitFor(() => expect(service.snapshot().storage.status).toBe('partial'));
+    const result = service.snapshot().storage;
+    expect(result.progress.scannedBytes).toBe(17);
+    expect(result.errors.join(' ')).toContain('deadline exceeded');
+    expect(result.categories.find((category) => category.id === 'app')?.paths[0]).toMatchObject({
+      status: 'partial', bytes: 17,
+    });
+    expect((await service.cleanup('logs')).status).toBe('completed');
+    service.dispose();
+  });
   it('reports cancellation of a targeted scan, including cancellation before inventory', async () => {
     const { service, fs } = setup();
     vi.mocked(fs.fs.volume).mockImplementation(async () => {

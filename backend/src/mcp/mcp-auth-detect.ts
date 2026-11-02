@@ -6,38 +6,9 @@
  * matches the login/device-code language they conventionally use.
  */
 
-const AUTH_SIGNALS: readonly string[] = [
-  'unauthorized',
-  'not authenticated',
-  'authentication required',
-  'authentication failed',
-  'authenticate',
-  'please log in',
-  'please login',
-  'please sign in',
-  'sign in',
-  'sign-in',
-  'signed in',
-  'log in',
-  'login',
-  'az login',
-  'gh auth login',
-  'device code',
-  'devicecode',
-  'device_code',
-  'access token',
-  'token has expired',
-  'token expired',
-  'expired token',
-  'credential',
-  'no credentials',
-  'permission denied',
-  'forbidden',
-  '401',
-  '403',
-];
+import { nativeAuthenticationRequired } from './native-mcp-auth.js';
 
-const URL_PATTERN = /https?:\/\/[^\s"'<>)\]]+/i;
+const URL_PATTERN = /https?:\/\/[^\s"'<>)\]]+/gi;
 
 export interface McpAuthClassification {
   authRequired: boolean;
@@ -49,21 +20,28 @@ export function classifyMcpAuth(
   message: string | null,
   output: readonly string[],
 ): McpAuthClassification {
-  const haystack = [message ?? '', ...output].join('\n').toLowerCase();
-  const authRequired = AUTH_SIGNALS.some((signal) => haystack.includes(signal));
+  const haystack = [message ?? '', ...output].join('\n');
+  const authRequired = nativeAuthenticationRequired(message, output) ||
+    /\b(?:HTTP(?:\/[\d.]+)?|status(?:\s+code)?|request failed with)\s*[:=]?\s*401\b|\b401\s+unauthorized\b|\b(?:az login|gh auth login|login)\s+(?:is )?required\b/i.test(haystack);
   const authUrl = authRequired ? findAuthUrl(message, output) : null;
   return { authRequired, authUrl };
 }
 
-/** Returns the first http(s) URL printed alongside an auth prompt, if any. */
+/** Returns a safe HTTPS link only after an explicit authentication challenge. */
 function findAuthUrl(
   message: string | null,
   output: readonly string[],
 ): string | null {
   for (const line of [...output, message ?? '']) {
-    const match = URL_PATTERN.exec(line);
-    if (match) {
-      return match[0];
+    for (const match of line.matchAll(URL_PATTERN)) {
+      try {
+        const url = new URL(match[0]);
+        if (url.protocol !== 'https:' || url.username || url.password || url.hash) continue;
+        if ([...url.searchParams.keys()].some((key) => /(?:^|_)(?:token|secret|password|credential)$|^(?:code|code_verifier)$/i.test(key))) continue;
+        return url.href;
+      } catch {
+        // A malformed diagnostic URL is not a usable sign-in link.
+      }
     }
   }
   return null;

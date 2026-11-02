@@ -6,15 +6,16 @@ import type {
 } from '../aggregation/aggregation-contract.js';
 import type { IdeUsageReader } from '../ide-usage/ide-usage-contract.js';
 import type { IdeUsageConfig } from '../ide-usage/config.js';
+import { cliSource, metaSource, retainedSource } from './usage-rollup-repo.js';
 
 const TOTALS_COLUMNS = `
   COUNT(DISTINCT session_id) AS sessions,
   COALESCE(SUM(input_tokens), 0) AS inputTokens,
   COALESCE(SUM(output_tokens), 0) AS outputTokens,
   COALESCE(SUM(reasoning_output_tokens), 0) AS reasoningOutputTokens,
-  COALESCE(SUM(cost), 0) AS cost,
-  COALESCE(SUM(credits), 0) AS credits,
-  COALESCE(SUM(nano_aiu), 0) AS nanoAiu
+  CASE WHEN COUNT(*) = COUNT(cost) THEN COALESCE(SUM(cost), 0) END AS cost,
+  CASE WHEN COUNT(*) = COUNT(credits) THEN COALESCE(SUM(credits), 0) END AS credits,
+  CASE WHEN COUNT(*) = COUNT(nano_aiu) THEN COALESCE(SUM(nano_aiu), 0) END AS nanoAiu
 `;
 
 interface TotalsRow {
@@ -22,9 +23,9 @@ interface TotalsRow {
   inputTokens: number | bigint;
   outputTokens: number | bigint;
   reasoningOutputTokens: number | bigint;
-  cost: number;
-  credits: number;
-  nanoAiu: number | bigint;
+  cost: number | null;
+  credits: number | null;
+  nanoAiu: number | bigint | null;
 }
 
 function toTotals(row: TotalsRow): UsageTotals {
@@ -33,9 +34,9 @@ function toTotals(row: TotalsRow): UsageTotals {
     inputTokens: Number(row.inputTokens),
     outputTokens: Number(row.outputTokens),
     reasoningOutputTokens: Number(row.reasoningOutputTokens),
-    cost: Number(row.cost),
-    credits: Number(row.credits),
-    nanoAiu: Number(row.nanoAiu),
+    cost: row.cost === null ? null : Number(row.cost),
+    credits: row.credits === null ? null : Number(row.credits),
+    nanoAiu: row.nanoAiu === null ? null : Number(row.nanoAiu),
   };
 }
 
@@ -50,18 +51,20 @@ export function createIdeUsageRepo(
 ): IdeUsageReader {
   const kinds = config.metaKinds;
   const placeholders = kinds.map(() => '?').join(', ');
-  const filter = `kind IN (${placeholders})`;
+  // Same sources as the IDE rollup (live, warm-ACP and retained-after-delete)
+  // so the status bar never drops usage the analytics view still counts.
+  const union = `${cliSource(`kind IN (${placeholders})`)}
+    UNION ALL
+    ${metaSource('1 = 1')}
+    UNION ALL
+    ${retainedSource("source = 'meta' OR scope = 'internal'")}`;
 
-  const totalsStmt = db.prepare(
-    `SELECT ${TOTALS_COLUMNS} FROM usage_events WHERE ${filter}`,
-  );
+  const totalsStmt = db.prepare(`SELECT ${TOTALS_COLUMNS} FROM (${union})`);
   const byModelStmt = db.prepare(
-    `SELECT resolved_model AS model, ${TOTALS_COLUMNS} FROM usage_events
-     WHERE ${filter} GROUP BY resolved_model ORDER BY resolved_model`,
+    `SELECT model, ${TOTALS_COLUMNS} FROM (${union}) GROUP BY model ORDER BY model`,
   );
   const byDayStmt = db.prepare(
-    `SELECT substr(started_at, 1, 10) AS day, ${TOTALS_COLUMNS} FROM usage_events
-     WHERE ${filter} GROUP BY day ORDER BY day`,
+    `SELECT day, ${TOTALS_COLUMNS} FROM (${union}) GROUP BY day ORDER BY day`,
   );
 
   return {

@@ -18,13 +18,10 @@ describe('buildPlanUsageProbeCommand', () => {
     });
   });
 
-  it('falls back to the Copilot form for any unknown provider', () => {
-    expect(
-      buildPlanUsageProbeCommand({ ...base, providerId: 'something-else' }),
-    ).toEqual({
-      command: 'copilot',
-      args: ['--model', 'auto', '--session-id', 'sid-123'],
-    });
+  it.each(['something-else', 'claude'])('rejects unsupported quota providers without launching Copilot: %s', (providerId) => {
+    expect(() =>
+      buildPlanUsageProbeCommand({ ...base, providerId }),
+    ).toThrow(`Plan AI-credit quota is unavailable for provider '${providerId}'`);
   });
 
   it('wraps the probe through the Agency CLI for the agency provider', () => {

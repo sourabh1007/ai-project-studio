@@ -28,18 +28,26 @@ export function McpToolsView({ providerId, serverName, onOpenAuth, onBackgroundE
   const initial = useRef(initialServer);
   initial.current = initialServer;
   const authentication = useMcpAuthentication(providerId, serverName, {
-    onCompleted: (result) => {
+    onObserved: (result) => {
       setServer(result);
-      setError(null);
-      setNotice('Connection ready.');
       observed.current?.(result);
+    },
+    onCompleted: () => {
+      setError(null);
+      setNotice('Tool inventory refreshed. Authorization for individual tools remains unverified.');
     },
     onBackgroundError,
   });
 
   useEffect(() => {
     const request = ++epoch.current;
-    if (mode === 'auth' && revision === 0 && initial.current?.authentication?.supported) {
+    const knownChallenge = initial.current?.authState
+      ? initial.current.authState.state === 'required' || initial.current.authState.state === 'expired'
+      : initial.current?.toolDiscovery?.authRequired === true;
+    if (mode === 'auth' && revision === 0 && initial.current && (
+      initial.current.authState?.interrupted
+      || (initial.current.authentication?.supported && knownChallenge)
+    )) {
       setServer(initial.current);
       setLoading(false);
       setError(null);
@@ -96,7 +104,7 @@ export function McpToolsView({ providerId, serverName, onOpenAuth, onBackgroundE
             {loading ? showAuth ? 'Checking authentication...' : 'Loading tools...' : authPending ? 'Waiting for sign-in...'
               : authRequired ? 'Authentication required'
               : failed ? 'Tool discovery failed' : discovery?.status === 'ok'
-                ? showAuth ? 'No sign-in needed for this check.' : 'Available tools'
+                ? showAuth ? 'Tool inventory checked; tool authorization unverified.' : 'Available tools'
                   : showAuth && canConnect ? 'Ready to connect' : 'Check unavailable'}
           </p>
           {!showAuth && !loading && tools.length > 0 && <span className="mcp-tools-count-chip">
@@ -134,7 +142,7 @@ export function McpToolsView({ providerId, serverName, onOpenAuth, onBackgroundE
       )}
       {!loading && discovery?.message && <details open={failed || authRequired}><summary>Details</summary><p className="field-hint">{discovery.message}</p></details>}
       {showAuth && !loading && discovery?.status === 'ok' && !authRequired && (
-        <p className="field-hint">No reauthentication needed now. Individual tools may require additional permissions.</p>
+        <p className="field-hint">This check listed tools without verifying permission to call them. IDE account sign-in and the native CLI's service-specific sign-in are separate.</p>
       )}
       {!showAuth && authRequired && onRequestAuth && <Button variant="danger" onClick={onRequestAuth}>Open authentication</Button>}
       {showAuth && canConnect && !authPending && (
@@ -146,7 +154,7 @@ export function McpToolsView({ providerId, serverName, onOpenAuth, onBackgroundE
       {showAuth && authentication.job && <section className="mcp-auth-progress" aria-label="Sign-in progress">
         {authPending && <Spinner size={16} label="Waiting for Agency sign-in" />}
         <p role="status">{authentication.job.message}</p>
-        {authPending && <p className="field-hint">Complete sign-in. Closing this window cancels the attempt.</p>}
+        {authPending && <p className="field-hint">Closing this window requests cancellation. Backend capacity remains reserved until cleanup is confirmed.</p>}
         {authPending && (server?.commandPreview ?? initialServer?.commandPreview) && <code className="mcp-setup-command">{server?.commandPreview ?? initialServer?.commandPreview}</code>}
         {pendingPrompt && authentication.job.deviceCode && <p>Device code: <code>{authentication.job.deviceCode}</code></p>}
         {authentication.expired && authPending && <p role="status">This sign-in prompt has expired. Cancel this attempt, then check tools again; authentication is not confirmed.</p>}

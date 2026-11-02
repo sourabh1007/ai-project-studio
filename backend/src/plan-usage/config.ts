@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { optionalCommandArgsSchema } from '../provider/command-options.js';
 
 /**
  * Configuration for the plan-usage module, which surfaces the signed-in
@@ -10,6 +11,7 @@ import { z } from 'zod';
 export const PLAN_USAGE_NAMESPACE = 'planUsage';
 
 export const planUsageConfigSchema = z.object({
+  extraArgs: optionalCommandArgsSchema.optional(),
   /** Minutes between plan AI-credit refreshes (cache TTL and UI poll). */
   refreshMinutes: z.number().int().min(1),
   /**
@@ -24,6 +26,7 @@ export const planUsageConfigSchema = z.object({
 export type PlanUsageConfig = z.infer<typeof planUsageConfigSchema>;
 
 export const planUsageDefaults: PlanUsageConfig = {
+  extraArgs: [],
   refreshMinutes: 5,
   failureThreshold: 3,
 };

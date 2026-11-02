@@ -1,7 +1,8 @@
 import type { SessionStatus } from './types.js';
 
 /** Formats a credit amount to a fixed, human-readable precision. */
-export function formatCredits(credits: number): string {
+export function formatCredits(credits: number | null): string {
+  if (credits === null) return 'Unavailable';
   return `${credits.toFixed(2)} credits`;
 }
 
@@ -14,17 +15,22 @@ export function formatCredits(credits: number): string {
 export const NANO_AIU_PER_AIC = 1_000_000_000;
 
 /** Converts the vendor's raw nano-AIU into AI credits (AIC). */
-export function nanoAiuToAic(nanoAiu: number): number {
+export function nanoAiuToAic(nanoAiu: number): number;
+export function nanoAiuToAic(nanoAiu: number | null): number | null;
+export function nanoAiuToAic(nanoAiu: number | null): number | null {
+  if (nanoAiu === null) return null;
   return nanoAiu / NANO_AIU_PER_AIC;
 }
 
 /** Formats vendor nano-AIU as an AIC figure (e.g. 1742242500 → "1.74"). */
-export function formatAic(nanoAiu: number): string {
+export function formatAic(nanoAiu: number | null): string {
+  if (nanoAiu === null) return 'Unavailable';
   return nanoAiuToAic(nanoAiu).toFixed(2);
 }
 
 /** Formats the provider-reported cost value. */
-export function formatCost(cost: number): string {
+export function formatCost(cost: number | null): string {
+  if (cost === null) return 'Unavailable';
   return cost.toFixed(2);
 }
 

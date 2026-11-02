@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { optionalCommandArgsSchema } from '../provider/command-options.js';
 
 /**
  * Configuration for the shared meta-session runner: the reusable "invoke the
@@ -39,6 +40,8 @@ export const metaConfigSchema = z.object({
     enabled: z.boolean(),
     /** Absolute path to the copilot executable driving the ACP process. */
     executable: z.string().min(1),
+    extraArgs: optionalCommandArgsSchema.optional(),
+    modelCatalogExtraArgs: optionalCommandArgsSchema.optional(),
     /** Timeout (ms) for the one-time ACP `initialize` handshake. */
     initializeTimeoutMs: z.number().int().positive(),
     /** Timeout (ms) for a single warm turn (session/new + session/prompt). */
@@ -73,6 +76,8 @@ export const metaDefaults: MetaConfig = {
     enabled: true,
     // Resolved to the real copilot executable at startup in main.ts.
     executable: 'copilot',
+    extraArgs: [],
+    modelCatalogExtraArgs: [],
     initializeTimeoutMs: 120_000,
     turnTimeoutMs: 300_000,
     // 10-minute window: long enough to capture a burst of parallel AI work

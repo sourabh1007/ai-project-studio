@@ -19,6 +19,31 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('uploads pasted UTF-8 text without JSON expansion and preserves cancellation and session identity', async () => {
+    const saved = { sessionId: 'session/one', path: '/owned/paste.txt', attachmentId: 'a1', bytes: 5 };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(saved, 201));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    const body = new Blob(['hello'], { type: 'text/plain;charset=utf-8' });
+    await expect(client.createSessionTextAttachment('session/one', body, controller.signal)).resolves.toBe(saved);
+    expect(calls[0]).toEqual(['/api/sessions/session%2Fone/text-attachments', {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body, signal: controller.signal,
+    }]);
+  });
+
+  it('lists retained text files and bounds explicit per-file cleanup with safely encoded identities', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ attachmentId: 'one/two' }));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    await client.listTextAttachments(controller.signal);
+    await client.deleteTextAttachment('one/two', controller.signal);
+    expect(calls.map(([path]) => path)).toEqual(['/api/text-attachments', '/api/text-attachments/one%2Ftwo']);
+    expect(calls[1][1]?.method).toBe('DELETE');
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+    expect(calls[1][1]?.signal?.aborted).toBe(true);
+  });
+
   it('reads source-aware skill telemetry in workspace, IDE and safely encoded feature scopes', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ rows: [], limited: false, maxEvents: 5000 }));
     const client = createApiClient({ fetchImpl });
@@ -383,6 +408,18 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/sessions/s1/prompts');
   });
 
+  it('cancels, encodes and validates a session prompt history request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    await client.listSessionPrompts('a/b', { signal: controller.signal });
+    expect(calls[0][0]).toBe('/api/sessions/a%2Fb/prompts');
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+    const bad = createApiClient({ fetchImpl: mockFetch(jsonResponse({ error: 'x' })).fetchImpl });
+    await expect(bad.listSessionPrompts('s1')).rejects.toThrow('unexpected response');
+  });
+
   it('reads per-turn feature usage events', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse([]));
     const client = createApiClient({ fetchImpl });
@@ -402,6 +439,18 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl });
     await client.getWorkspaceTotals();
     expect(calls[0][0]).toBe('/api/usage/totals');
+  });
+
+  it('reads the workspace hierarchy summary and forwards cancellation', async () => {
+    const snapshot = { features: {}, unattributed: null };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(snapshot));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    expect(await client.getUsageSummary({ signal: controller.signal })).toEqual(snapshot);
+    expect(calls[0][0]).toBe('/api/usage/summary');
+    expect(calls[0][1]?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
   });
 
   it('reads workspace stats', async () => {
@@ -472,11 +521,47 @@ describe('createApiClient', () => {
         toolDiscovery: { status: 'ok', message: null, output: [] },
       }),
     );
-    const client = createApiClient({ fetchImpl });
-    await client.inspectMcpServer('a/b', 'Azure MCP');
+    const configFetch = vi.fn<FetchLike>()
+      .mockResolvedValueOnce(jsonResponse({ inspectionTimeoutMs: 65_000 }))
+      .mockImplementation(fetchImpl);
+    const budgetedClient = createApiClient({ fetchImpl: configFetch });
+    await budgetedClient.inspectMcpServer('a/b', 'Azure MCP');
+    expect(configFetch.mock.calls[0][0]).toBe('/api/mcp/providers/a%2Fb/servers');
     expect(calls[0][0]).toBe(
       '/api/mcp/providers/a%2Fb/servers/Azure%20MCP/tools',
     );
+  });
+
+  it('uses the advertised MCP budget without relaxing ordinary reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<FetchLike>()
+        .mockResolvedValueOnce(jsonResponse({ inspectionTimeoutMs: 65_000 }))
+        .mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }));
+      const client = createApiClient({ fetchImpl });
+      await client.getMcpServers('copilot');
+      const inspection = client.inspectMcpServer('copilot', 'slow');
+      const rejected = expect(inspection).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(fetchImpl.mock.calls[1][1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(25_000);
+      await rejected;
+      const ordinary = expect(client.listSkills()).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(20_000);
+      await ordinary;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([undefined, null, 0, -1, Infinity, '45000'])('does not guess a missing or invalid MCP budget: %s', async (inspectionTimeoutMs) => {
+    const fetchImpl = vi.fn<FetchLike>().mockResolvedValue(jsonResponse({ inspectionTimeoutMs }));
+    const client = createApiClient({ fetchImpl });
+    await client.getMcpServers('copilot');
+    await expect(client.inspectMcpServer('copilot', 'slow')).rejects.toThrow('inspection budget is unavailable');
+    expect(fetchImpl.mock.calls.every(([url]) => !url.endsWith('/tools'))).toBe(true);
   });
 
   it('reads a single MCP server status, encoding path params', async () => {
@@ -623,6 +708,13 @@ describe('createApiClient', () => {
     expect(calls[0][0]).toBe('/api/meta/pools');
   });
 
+  it('reads tool metadata without invoking probes or authentication endpoints', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse([]));
+    const client = createApiClient({ fetchImpl });
+    expect(await client.getCommandCatalog()).toEqual([]);
+    expect(calls.map(([url]) => url)).toEqual(['/api/tools/commands']);
+  });
+
   it('resizes the warm metasession pool with a JSON POST body', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ enabled: true }),
@@ -741,8 +833,8 @@ describe('createApiClient', () => {
     const info = {
       defaultProvider: 'copilot',
       providers: [
-        { id: 'copilot', installed: true },
-        { id: 'agency', installed: false },
+        { id: 'copilot', installed: true, automation: { supported: true, reason: null } },
+        { id: 'agency', installed: true, automation: { supported: false, reason: 'Interactive only: automation policy cannot be verified.' } },
       ],
     };
     const { fetchImpl, calls } = mockFetch(jsonResponse(info));
@@ -750,6 +842,88 @@ describe('createApiClient', () => {
     const result = await client.getProviderBootstrap();
     expect(result).toEqual(info);
     expect(calls[0][0]).toBe('/api/providers/bootstrap');
+  });
+
+  it('persists explicit CLI selection without installing', async () => {
+    const info = { defaultProvider: 'claude', selectionRequired: false, providers: [{ id: 'claude', installed: false }] };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(info));
+    const client = createApiClient({ fetchImpl });
+    expect(await client.selectProvider('claude')).toEqual(info);
+    expect(calls[0][0]).toBe('/api/providers/selection');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual({ providerId: 'claude' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('surfaces blocked CLI selection instead of treating it as success', async () => {
+    const { fetchImpl } = mockFetch(jsonResponse({ error: { message: 'Stop running work first.' } }, 409));
+    const client = createApiClient({ fetchImpl });
+    await expect(client.selectProvider('claude')).rejects.toMatchObject({ status: 409, message: 'Stop running work first.' });
+  });
+
+  it('sends explicit remember preference without changing legacy selection requests', async () => {
+    const info = { defaultProvider: 'claude', selectionRequired: false, remember: false, revision: 1, providers: [] };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(info));
+    const client = createApiClient({ fetchImpl });
+    expect(await client.selectProvider('claude', { remember: false })).toEqual(info);
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual({ providerId: 'claude', remember: false });
+  });
+
+  it('persists internal-only Agency opt-in as an explicit preference, not authentication or selection', async () => {
+    const info = { defaultProvider: 'copilot', internalAgencyEnabled: true, providers: [] };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(info));
+    expect(await createApiClient({ fetchImpl }).updateProviderPreferences({ allowInternalAgency: true })).toEqual(info);
+    expect(calls[0][0]).toBe('/api/providers/preferences');
+    expect(calls[0][1]?.method).toBe('PUT');
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual({ allowInternalAgency: true });
+  });
+
+  it('switches with confirmed consent, revision and persistence choice through the bounded API', async () => {
+    const info = { defaultProvider: 'claude', selectionRequired: false, remember: true, revision: 4, providers: [] };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(info));
+    const input = { providerId: 'claude', remember: true, expectedRevision: 3 };
+    expect(await createApiClient({ fetchImpl }).switchProvider(input)).toEqual(info);
+    expect(calls[0][0]).toBe('/api/providers/switch');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual(input);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuses timed-out switches without automatically retrying a destructive consent', async () => {
+    let calls = 0;
+    const client = createApiClient({
+      getTimeoutMs: 5,
+      fetchImpl: (_url, init) => {
+        calls++;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      },
+    });
+    await expect(client.switchProvider({ providerId: 'claude', remember: false, expectedRevision: 0 })).rejects.toThrow(/timed out/);
+    expect(calls).toBe(1);
+  });
+
+  it('stops idle workers only through the explicit mutation API', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ stopped: true }));
+    await createApiClient({ fetchImpl }).stopIdleProviderWorkers();
+    expect(calls[0][0]).toBe('/api/providers/background/stop');
+    expect(calls[0][1]?.method).toBe('POST');
+  });
+
+  it('bounds an unresponsive explicit CLI selection without retrying the mutation', async () => {
+    let calls = 0;
+    const client = createApiClient({
+      getTimeoutMs: 5,
+      fetchImpl: (_url, init) => {
+        calls++;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      },
+    });
+    await expect(client.selectProvider('copilot')).rejects.toThrow(/timed out/);
+    expect(calls).toBe(1);
   });
 
   it('gets the GitHub auth status', async () => {
@@ -1670,6 +1844,35 @@ describe('createApiClient', () => {
     });
   });
 
+  it('sends an operation key header on keyed creates only', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'x' }));
+    const client = createApiClient({ fetchImpl });
+    await client.createFeature({ name: 'n', description: 'd' }, { operationKey: 'op-feature-1' });
+    await client.createTerminalSession('f1', { prompt: 'p' }, { operationKey: 'op-session-1' });
+    await client.attachAgent('f1', 'a1', { operationKey: 'op-attach-1' });
+    await client.attachAgent('f1', 'a1');
+    expect(calls[0][1]?.headers).toEqual({
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'op-feature-1',
+    });
+    expect(calls[1][1]?.headers).toMatchObject({ 'Idempotency-Key': 'op-session-1' });
+    expect(calls[2][1]?.headers).toMatchObject({ 'Idempotency-Key': 'op-attach-1' });
+    expect(calls[3][1]?.headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  it('exposes the backend error code on ApiError', async () => {
+    const withCode = jsonResponse({ error: { message: 'busy', code: 'operation_pending' } }, 409);
+    const client = createApiClient({ fetchImpl: async () => withCode });
+    await expect(client.listFeatures()).rejects.toMatchObject({
+      status: 409,
+      message: 'busy',
+      code: 'operation_pending',
+    });
+    const noCode = jsonResponse({ error: { message: 'bad' } }, 400);
+    const plain = createApiClient({ fetchImpl: async () => noCode });
+    const error = await plain.listFeatures().catch((e: unknown) => e);
+    expect((error as ApiError).code).toBeUndefined();
+  });
   it('lists automations and reads one', async () => {
     const { fetchImpl, calls } = mockFetch(
       jsonResponse({ automations: [], subagents: [] }),

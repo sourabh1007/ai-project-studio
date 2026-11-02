@@ -321,6 +321,22 @@ const CORE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    // Durable client operation keys: one row per (scope, key) so a retried or
+    // reloaded create replays its original result instead of duplicating.
+    name: 'client_operations',
+    ddl: `CREATE TABLE IF NOT EXISTS client_operations (
+    scope TEXT NOT NULL,
+    op_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'succeeded')),
+    status INTEGER,
+    response_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (scope, op_key)
+  )`,
+  },
+  {
     // One row per completed one-shot agent backfill (e.g. auto-attaching the
     // Review Board to pre-existing PR features exactly once), so a later detach
     // is never undone by a subsequent startup.
@@ -393,9 +409,14 @@ const USAGE_TABLES: readonly TableSchema[] = [
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     reasoning_output_tokens INTEGER NOT NULL,
-    cost REAL NOT NULL,
-    credits REAL NOT NULL,
-    nano_aiu INTEGER NOT NULL,
+    cost REAL,
+    credits REAL,
+    nano_aiu INTEGER,
+    charge_provenance TEXT,
+    charge_unit TEXT,
+    usd_estimate REAL,
+    native_session_id TEXT,
+    native_message_id TEXT,
     service_request_id TEXT,
     started_at TEXT NOT NULL,
     ended_at TEXT NOT NULL,
@@ -450,6 +471,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     ddl: `CREATE TABLE IF NOT EXISTS mcp_auth_observations (
     key TEXT PRIMARY KEY,
     state TEXT NOT NULL CHECK (state IN ('unknown', 'required', 'expired', 'ready')),
+    interrupted INTEGER NOT NULL DEFAULT 0,
     checked_at TEXT,
     message TEXT NOT NULL,
     recorded_at TEXT NOT NULL
@@ -530,6 +552,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     session_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
     cursor TEXT,
+    append_cursor TEXT,
     replay_cursor INTEGER,
     final_scan INTEGER NOT NULL DEFAULT 0,
     replay_clean INTEGER NOT NULL DEFAULT 0,
@@ -577,9 +600,10 @@ const USAGE_TABLES: readonly TableSchema[] = [
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     reasoning_output_tokens INTEGER NOT NULL,
-    cost REAL NOT NULL,
-    credits REAL NOT NULL,
-    nano_aiu INTEGER NOT NULL,
+    cost REAL,
+    credits REAL,
+    nano_aiu INTEGER,
+    usd_estimate REAL,
     purpose TEXT,
     label TEXT,
     retained_at TEXT NOT NULL
@@ -811,6 +835,10 @@ const INDEXES: readonly IndexSchema[] = [
   },
   {
     schema: 'main',
+    ddl: 'CREATE INDEX IF NOT EXISTS main.idx_client_operations_state_updated ON client_operations (state, updated_at)',
+  },
+  {
+    schema: 'main',
     ddl: 'CREATE INDEX IF NOT EXISTS main.idx_sessions_feature_id ON sessions (feature_id)',
   },
   {
@@ -948,6 +976,7 @@ const ADDED_COLUMNS: readonly {
   ddl: string;
   schema?: string;
 }[] = [
+  { table: 'retained_usage', column: 'usd_estimate', schema: 'usage', ddl: 'ALTER TABLE usage.retained_usage ADD COLUMN usd_estimate REAL' },
   { table: 'sessions', column: 'name', ddl: 'ALTER TABLE sessions ADD COLUMN name TEXT' },
   {
     table: 'sessions',
@@ -1090,6 +1119,12 @@ const ADDED_COLUMNS: readonly {
   {
     table: 'usage_capture_state',
     schema: 'usage',
+    column: 'append_cursor',
+    ddl: 'ALTER TABLE usage.usage_capture_state ADD COLUMN append_cursor TEXT',
+  },
+  {
+    table: 'usage_capture_state',
+    schema: 'usage',
     column: 'replay_cursor',
     ddl: 'ALTER TABLE usage.usage_capture_state ADD COLUMN replay_cursor INTEGER',
   },
@@ -1173,6 +1208,12 @@ const ADDED_COLUMNS: readonly {
     table: 'bug_bash_runs',
     column: 'prerequisites',
     ddl: 'ALTER TABLE bug_bash_runs ADD COLUMN prerequisites TEXT',
+  },
+  {
+    table: 'mcp_auth_observations',
+    column: 'interrupted',
+    schema: 'usage',
+    ddl: 'ALTER TABLE usage.mcp_auth_observations ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0',
   },
   {
     // The public tool identifier each observed MCP call invoked, enabling the
@@ -2214,7 +2255,50 @@ export function applySchema(
     migration.run(db, { backupPath: null }, options);
     markMigrationCompleted(db, migration.id);
   }
+  migrateUsageAccounting(db);
+  migrateRetainedAccounting(db);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS usage.idx_usage_events_native_identity
+    ON usage_events(provider, native_session_id, operation, native_message_id)
+    WHERE native_session_id IS NOT NULL AND native_message_id IS NOT NULL`);
   for (const index of INDEXES) {
     db.exec(index.ddl);
+  }
+}
+
+/** Rebuild atomically: old amounts and attribution survive, including reported zero. */
+function migrateUsageAccounting(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA usage.table_info(usage_events)').all() as { name: string }[];
+  if (columns.some((column) => column.name === 'charge_provenance')) return;
+  const table = USAGE_TABLES.find((entry) => entry.name === 'usage_events')!;
+  db.exec('SAVEPOINT usage_accounting');
+  try {
+    db.exec('ALTER TABLE usage.usage_events RENAME TO usage_events_accounting_legacy');
+    db.exec(qualifyTable('usage', table));
+    const legacyColumns = USAGE_EVENTS_COLUMNS.join(', ');
+    db.exec(`INSERT INTO usage.usage_events (${legacyColumns}, charge_provenance, charge_unit)
+      SELECT ${legacyColumns}, 'reported', 'aic' FROM usage.usage_events_accounting_legacy`);
+    db.exec('DROP TABLE usage.usage_events_accounting_legacy');
+    db.exec('RELEASE usage_accounting');
+  } catch (error) {
+    db.exec('ROLLBACK TO usage_accounting; RELEASE usage_accounting');
+    throw error;
+  }
+}
+
+function migrateRetainedAccounting(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA usage.table_info(retained_usage)').all() as { name: string; notnull: number }[];
+  if (!columns.some((column) => column.name === 'cost' && column.notnull === 1)) return;
+  const table = USAGE_TABLES.find((entry) => entry.name === 'retained_usage')!;
+  db.exec('SAVEPOINT retained_accounting');
+  try {
+    db.exec('ALTER TABLE usage.retained_usage RENAME TO retained_usage_accounting_legacy');
+    db.exec(qualifyTable('usage', table));
+    const names = columns.map((column) => column.name).join(', ');
+    db.exec(`INSERT INTO usage.retained_usage (${names}) SELECT ${names} FROM usage.retained_usage_accounting_legacy`);
+    db.exec('DROP TABLE usage.retained_usage_accounting_legacy');
+    db.exec('RELEASE retained_accounting');
+  } catch (error) {
+    db.exec('ROLLBACK TO retained_accounting; RELEASE retained_accounting');
+    throw error;
   }
 }

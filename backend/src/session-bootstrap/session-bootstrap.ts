@@ -6,6 +6,7 @@ import type { SessionRepo } from '../session/session-repo-port.js';
 import type { SessionSummaryStore } from '../session-summary/session-summary-store-port.js';
 import type { SkillsService } from '../skills/skills-service.js';
 import type { ContextService } from '../context-store/context-service.js';
+import type { Logger } from '../kernel/logger.js';
 
 export interface SessionBootstrapDeps {
   features: Pick<FeatureService, 'get'>;
@@ -18,6 +19,7 @@ export interface SessionBootstrapDeps {
   contexts: Pick<RepositoryContextCoordinator, 'ensureFresh'>;
   sharedContext: Pick<ContextService, 'composeLayered'>;
   config: RepositoryContextConfig;
+  logger: Pick<Logger, 'warn'>;
   onSkillContextPrepared?: (session: Session) => void;
 }
 
@@ -55,14 +57,9 @@ const MONITORING_POLICY = [
 ].join(' ');
 
 /**
- * Resolves the repository context for a feature WITHOUT ever blocking a session
- * launch on it. Calling `ensureFresh` triggers (and keeps alive) the background
- * repository analysis, but analysis for a large repo can take a while. Rather
- * than gate the session behind it — which froze every session under a repo
- * until analysis finished — we return the summary only when it is already
- * `ready`, and otherwise return `null` so the session launches immediately
- * without the Repository Context section. A later session picks up the richer
- * context once the background analysis completes.
+ * Gives optional repository-context freshness checks a bounded launch budget.
+ * Slow revision checks and analysis continue in the background; a later launch
+ * can use their result without holding the interactive CLI behind Git IO.
  */
 async function repositoryContext(
   deps: SessionBootstrapDeps,
@@ -73,18 +70,35 @@ async function repositoryContext(
     return null;
   }
 
-  let context;
+  const repositoryId = feature.repoId;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    context = await deps.contexts.ensureFresh(feature.repoId);
-  } catch {
-    // Triggering/looking up analysis failed — never block the session on it;
-    // background analysis will retry and a future session can pick it up.
-    return null;
+    const lookup = Promise.resolve()
+      .then(() => deps.contexts.ensureFresh(repositoryId))
+      .catch((error: unknown) => {
+        deps.logger.warn('Repository context lookup failed during session startup', {
+          repositoryId, error,
+        });
+        return null;
+      });
+    const context = await Promise.race([
+      lookup,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => {
+          deps.logger.warn('Starting session without optional repository context after its lookup budget', {
+            repositoryId, waitMs: deps.config.launchContextWaitMs,
+          });
+          resolve(null);
+        }, deps.config.launchContextWaitMs);
+      }),
+    ]);
+    if (!context || context.status !== 'ready' || !context.content?.trim()) {
+      return null;
+    }
+    return context.content.slice(0, deps.config.maxOutputChars);
+  } finally {
+    clearTimeout(timeout);
   }
-  if (context.status !== 'ready' || !context.content?.trim()) {
-    return null;
-  }
-  return context.content.slice(0, deps.config.maxOutputChars);
 }
 
 function priorSessionMemory(

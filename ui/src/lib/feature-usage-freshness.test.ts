@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { featureUsageRevision } from './feature-usage-freshness.js';
-import { initialLiveState, type LiveState } from './stream.js';
+import { featureUsageRevision, workspaceUsageRevision } from './feature-usage-freshness.js';
+import { applyStreamEvent, initialLiveState, type LiveState } from './stream.js';
 import type { Session, StoredUsage } from './types.js';
 
 function usage(overrides: Partial<StoredUsage> = {}): StoredUsage {
@@ -115,6 +115,45 @@ describe('featureUsageRevision', () => {
   });
 
   it('is empty-but-defined for a feature with no activity', () => {
-    expect(featureUsageRevision(live(), 'f1')).toBe('0||');
+    expect(featureUsageRevision(live(), 'f1')).toBe('0|||0|0');
+  });
+
+  it('changes when warm-meta usage lands for that feature only', () => {
+    const before = featureUsageRevision(initialLiveState, 'f1');
+    const after = applyStreamEvent(initialLiveState, { type: 'meta.usage.updated', featureId: 'f1', operationId: 'op' });
+    expect(featureUsageRevision(after, 'f1')).not.toBe(before);
+    expect(featureUsageRevision(after, 'f2')).toBe(featureUsageRevision(initialLiveState, 'f2'));
+  });
+
+  it('changes across a stream gap even when no usage was cached', () => {
+    const before = featureUsageRevision(initialLiveState, 'f1');
+    let state = applyStreamEvent(initialLiveState, { type: 'stream.interrupted' });
+    state = applyStreamEvent(state, { type: 'stream.reconnected' });
+    expect(featureUsageRevision(state, 'f1')).not.toBe(before);
+    expect(featureUsageRevision(applyStreamEvent(state, { type: 'stream.truncated' }), 'f1'))
+      .not.toBe(featureUsageRevision(state, 'f1'));
+  });});
+
+describe('workspaceUsageRevision', () => {
+  const a = live({
+    usageByKey: { k1: usage({ featureId: 'f1' }), k2: usage({ featureId: 'f2', sessionId: 's2', endedAt: '2026-01-02T00:00:00.000Z' }) },
+    sessions: { s1: session(), s2: session({ id: 's2', featureId: 'f2' }) },
+    metaUsageByFeature: { f1: 1, f2: 2 },
+    streamEpoch: 3,
+  });
+
+  it('aggregates usage, sessions, meta usage and stream epoch across all features', () => {
+    expect(workspaceUsageRevision(a)).toBe('2|2026-01-02T00:00:00.000Z|s1:running,s2:running|3|3');
+  });
+
+  it('changes when any feature changes or the stream gaps', () => {
+    const base = workspaceUsageRevision(a);
+    expect(workspaceUsageRevision({ ...a, metaUsageByFeature: { f1: 1, f2: 3 } })).not.toBe(base);
+    expect(workspaceUsageRevision({ ...a, streamEpoch: 4 })).not.toBe(base);
+    expect(workspaceUsageRevision({ ...a, sessions: { ...a.sessions, s2: session({ id: 's2', featureId: 'f2', status: 'completed' }) } })).not.toBe(base);
+  });
+
+  it('is stable for an empty live state', () => {
+    expect(workspaceUsageRevision(live())).toBe('0|||0|0');
   });
 });

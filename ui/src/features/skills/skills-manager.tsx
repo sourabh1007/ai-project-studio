@@ -14,6 +14,7 @@ import {
 } from '../../components/icons.js';
 import { SkillKindIcon, skillKindLabel, SkillScopeBadge } from './skill-kind.js';
 import { SkillForm } from './skill-form.js';
+import { isDefiniteRejection } from '../../lib/operation-keys.js';
 
 function downloadJson(name: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -36,6 +37,9 @@ export function SkillsManager() {
   const [editing, setEditing] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [remaining, setRemaining] = useState<Array<{ key: string; payload: SkillExport }>>([]);
+  const outcomes = useRef(new Map<string, 'created' | 'unknown'>());
 
   async function create(input: {
     name: string;
@@ -84,21 +88,52 @@ export function SkillsManager() {
   }
 
   async function onUpload(file: File) {
+    if (uploading) return;
     setError(null);
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as SkillExport | SkillExport[];
       const list = Array.isArray(parsed) ? parsed : [parsed];
-      for (const payload of list) {
-        await api.importSkill(payload);
-      }
-      skills.reload();
+      const entries = list.map((payload, index) => ({ key: `${index}:${JSON.stringify(payload)}`, payload }));
+      await importRemaining(entries.filter((entry) => !outcomes.current.has(entry.key)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
+  async function importRemaining(entries: typeof remaining) {
+    setUploading(true);
+    setError(null);
+    let created = 0;
+    let index = 0;
+    try {
+      for (; index < entries.length; index += 1) {
+        const entry = entries[index]!;
+        await api.importSkill(entry.payload);
+        outcomes.current.set(entry.key, 'created');
+        created += 1;
+      }
+      setRemaining([]);
+    } catch (err) {
+      const uncertain = !isDefiniteRejection(err);
+      if (uncertain) outcomes.current.set(entries[index]!.key, 'unknown');
+      setRemaining(entries.slice(index + (uncertain ? 1 : 0)));
+      setError(`${created} skill(s) imported. ${err instanceof Error ? err.message : String(err)} ${
+        uncertain
+          ? 'The last skill may have been imported. Check the list before uploading it again; it is excluded from retry.'
+          : 'The rejected and unattempted skills can be retried.'
+      }`);
+    } finally {
+      // An uncertain request may also have committed on the backend.
+      skills.reload();
+      setUploading(false);
+    }
+  }
+
   const list = skills.data ?? [];
+  const uploadOutcomes = [...outcomes.current.values()];
+  const createdCount = uploadOutcomes.filter((outcome) => outcome === 'created').length;
+  const unknownCount = uploadOutcomes.filter((outcome) => outcome === 'unknown').length;
 
   return (
     <Card>
@@ -119,7 +154,7 @@ export function SkillsManager() {
           </div>
         </div>
         <div className="row">
-          <Button variant="ghost" onClick={() => fileInput.current?.click()}>
+          <Button variant="ghost" disabled={uploading} onClick={() => fileInput.current?.click()}>
             <span className="btn-icon">
               <UploadIcon size={15} />
             </span>
@@ -159,8 +194,15 @@ export function SkillsManager() {
       />
 
       <ErrorText error={error ?? skills.error} />
+      {(createdCount > 0 || unknownCount > 0) && <p role="status">
+        {createdCount} skill(s) imported in this batch. {unknownCount > 0 && `${unknownCount} outcome(s) remain unconfirmed. Check the list before uploading those skills again.`} Confirmed and unconfirmed entries are excluded from retry.
+      </p>}
+      {remaining.length > 0 && <Button disabled={uploading} onClick={() => void importRemaining(remaining)}>
+        Retry {remaining.length} remaining skill(s)
+      </Button>}
+      {skills.error && <p role="status">Skills could not be loaded. The list is unknown, not empty. <Button variant="ghost" onClick={skills.reload}>Retry loading skills</Button></p>}
       {skills.loading && <SkeletonCards cards={3} />}
-      {!skills.loading && list.length === 0 && (
+      {!skills.loading && !skills.error && list.length === 0 && (
         <EmptyState
           icon={<SkillsIcon size={20} />}
           title="No skills yet"

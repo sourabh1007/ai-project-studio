@@ -9,6 +9,6 @@ export function createProviderCostStrategy(config: {
 }): CreditStrategy {
   return {
     id: 'provider-cost',
-    compute: (event) => event.cost * config.multiplier,
+    compute: (event) => event.cost === null ? null : event.cost * config.multiplier,
   };
 }

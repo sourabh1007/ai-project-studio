@@ -35,6 +35,23 @@ export const copilotHistoryConfigSchema = z.object({
    * latest user turn virtually always lives within this window.
    */
   livePromptTailBytes: z.number().int().positive(),
+  /**
+   * Cap on bytes read backwards from the end of the live log to recover the
+   * latest user message when a long reply/tool run pushed it out of the tail.
+   */
+  livePromptMaxScanBytes: z.number().int().positive(),
+  /**
+   * Upper bound on one live event-log read. A hung read (stalled sync folder,
+   * network home directory) degrades that poll to store-only history instead
+   * of holding the prompt-history request open.
+   */
+  livePromptTimeoutMs: z.number().int().positive(),
+  /** Concurrent live-log scan workers (each is a bounded worker thread). */
+  livePromptMaxWorkers: z.number().int().positive(),
+  /** Scans allowed to wait for a worker before further reads are rejected. */
+  livePromptMaxQueued: z.number().int().nonnegative(),
+  /** V8 old-generation cap per scan worker, in MB. */
+  livePromptWorkerMemoryMb: z.number().int().positive(),
 });
 
 export type CopilotHistoryConfig = z.infer<typeof copilotHistoryConfigSchema>;
@@ -48,4 +65,9 @@ export const copilotHistoryDefaults: CopilotHistoryConfig = {
   sessionStateDir: 'session-state',
   eventsFile: 'events.jsonl',
   livePromptTailBytes: 524288,
+  livePromptMaxScanBytes: 16777216,
+  livePromptTimeoutMs: 2000,
+  livePromptMaxWorkers: 2,
+  livePromptMaxQueued: 8,
+  livePromptWorkerMemoryMb: 128,
 };

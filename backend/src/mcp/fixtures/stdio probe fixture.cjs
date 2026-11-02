@@ -7,7 +7,7 @@ lines.on('line', (line) => {
   if (process.argv[2] === 'hang') return;
   const message = JSON.parse(line);
   if (process.argv[2] === 'challenge' && message.method === 'initialize') {
-    process.stderr.write('To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345\n');
+    process.stderr.write(`To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345 fixture-pid=${process.pid}\n`);
     return;
   }
   if (process.argv[2] === 'auth-error') {
@@ -15,9 +15,18 @@ lines.on('line', (line) => {
     return;
   }
   if (message.method === 'initialize') {
+    const mode = process.argv[2];
+    if (process.argv[2] === 'challenge-inventory') {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0', method: 'notifications/message',
+        params: { data: 'To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345' },
+      }) + '\n');
+    }
     process.stdout.write(JSON.stringify({
       jsonrpc: '2.0', id: message.id,
-      result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } },
+      result: { protocolVersion: mode === 'unsupported-protocol' ? '1900-01-01' : '2024-11-05',
+        capabilities: mode === 'no-tools' ? {} : mode === 'invalid-tools' ? { tools: true } : mode === 'missing-capabilities' ? undefined : { tools: {} },
+        serverInfo: { name: 'fixture', version: '1' } },
     }) + '\n');
   } else if (message.method === 'tools/list') {
     if (process.argv[2] === 'pages') {

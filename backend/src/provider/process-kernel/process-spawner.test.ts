@@ -17,6 +17,7 @@ class FakeStream implements RawStream {
 }
 
 class FakeChild implements RawChildProcess {
+  pid?: number;
   stdout: FakeStream | null;
   stderr: FakeStream | null;
   killed = false;
@@ -104,6 +105,20 @@ describe('process-spawner', () => {
     expect(lines).toEqual(['l1', 'l2']);
   });
 
+  it('closes native stdin for prompt-only commands instead of waiting indefinitely for input', async () => {
+    const spawner = createProcessSpawner(clock);
+    const lines: string[] = [];
+    const handle = spawner.spawn({
+      command: process.execPath,
+      args: ['-e', "process.stdin.on('end', () => process.stdout.write('eof\\n')); process.stdin.resume();"],
+      env: process.env as Record<string, string>,
+      stdin: 'ignore',
+    });
+    handle.onStdoutLine((line) => lines.push(line));
+    expect(await handle.done).toBe(0);
+    expect(lines).toEqual(['eof']);
+  });
+
   it('settles done with a null exit code for a real missing executable instead of crashing the process', async () => {
     const spawner = createProcessSpawner(clock);
     const handle = spawner.spawn({
@@ -128,6 +143,23 @@ describe('process-spawner', () => {
     expect(code).toBeNull();
     expect(exits).toEqual([null]);
     expect(handle.snapshot().phase).toBe('exited');
+  });
+
+  it('does not manufacture exit proof for an error after a process has started', async () => {
+    const child = new FakeChild();
+    child.pid = 12345;
+    const handle = createProcessSpawner(clock, () => child).spawn({ command: 'x', args: [], env: {} });
+    const errors: string[] = [];
+    const exits: Array<number | null> = [];
+    handle.onStderrLine((line) => errors.push(line));
+    handle.onExit((code) => exits.push(code));
+    child.error(new Error('native process error'));
+    expect(exits).toEqual([]);
+    expect(handle.snapshot().phase).toBe('running');
+    expect(errors).toEqual(['Provider process reported an error; waiting for confirmed native exit.']);
+    child.close(1);
+    expect(await handle.done).toBe(1);
+    expect(exits).toEqual([1]);
   });
 
   it('settles done with a null exit code when spawn throws synchronously instead of crashing', async () => {

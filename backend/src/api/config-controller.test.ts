@@ -41,7 +41,7 @@ function inMemoryStore(): ConfigOverrideStore {
   };
 }
 
-function setup(current: ConfigObject = { demo: { enabled: false } }): {
+function setup(current: ConfigObject = { demo: { enabled: false } }, isNamespaceExposed?: (namespace: string) => boolean): {
   routes: Route[];
   overrides: ConfigOverrideService;
 } {
@@ -61,11 +61,32 @@ function setup(current: ConfigObject = { demo: { enabled: false } }): {
     current,
     secretPaths: [],
     overrides,
+    isNamespaceExposed,
   });
   return { routes, overrides };
 }
 
 describe('config-controller', () => {
+  it('hides ineligible namespaces on every read and write surface', async () => {
+    const { routes, overrides } = setup(undefined, () => false);
+    expect((await pick(routes, 'get', '/config')(req())).body).toEqual({
+      namespaces: [], defaults: {}, schema: {}, current: {}, overrides: {},
+    });
+    for (const method of ['put', 'delete']) {
+      expect(() => pick(routes, method, '/config/:namespace')(
+        req({ params: { namespace: 'demo' }, body: { values: { enabled: false } } }),
+      )).toThrow(NotFoundError);
+    }
+    expect(overrides.getOverride('demo')).toEqual({});
+  });
+
+  it('allows namespaces positively exposed by policy', async () => {
+    const { routes } = setup(undefined, () => true);
+    expect((await pick(routes, 'get', '/config')(req())).body).toMatchObject({ namespaces: ['demo'] });
+    expect((await pick(routes, 'put', '/config/:namespace')(
+      req({ params: { namespace: 'demo' }, body: { values: { enabled: false } } }),
+    )).status).toBe(200);
+  });
   it('exposes namespaces, defaults, current config and overrides', async () => {
     const { routes, overrides } = setup();
     overrides.update('demo', { label: 'custom' });

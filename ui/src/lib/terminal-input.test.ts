@@ -4,7 +4,23 @@ import {
   isColorQuery,
   stripTerminalColorReports,
   suppressOscColor,
+  isTerminalReply,
 } from './terminal-input.js';
+
+describe('isTerminalReply', () => {
+  it.each([
+    '\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[12;34R', '\x1b[0n',
+    '\x1b[I', '\x1b[O', '\x1b[<0;12;34M', '\x1b[8;24;80t',
+    '\x1b[?1;2c\x1b[12;34R',
+  ])('allows bounded terminal protocol replies: %j', (data) => {
+    expect(isTerminalReply(data)).toBe(true);
+  });
+  it.each(['', 'user text', '\r', '\x03', '\x1b[200~pasted text\x1b[201~', '\x1b[12;34Rtext', 'x'.repeat(257)])(
+    'does not classify user input or oversized data as a reply: %j', (data) => {
+      expect(isTerminalReply(data)).toBe(false);
+    },
+  );
+});
 
 describe('stripTerminalColorReports', () => {
   it('returns plain keystrokes untouched (fast path, no OSC)', () => {

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createMcpMeter } from './mcp-proxy-meter.js';
 import { postMcpUsage } from './mcp-proxy-report.js';
+import { mcpInspectorLaunch } from './mcp-inspector-launch.js';
 
 /**
  * MCP launch proxy. The CLI runs `node mcp-proxy.js <realCommand> [...args]`
@@ -17,15 +18,18 @@ if (!command) {
 }
 
 const meter = createMcpMeter();
-const child = spawn(command, args, {
+const launch = (() => {
+  try { return mcpInspectorLaunch(command, args, process.platform); }
+  catch (error) {
+    process.stderr.write(`mcp-proxy: ${(error as Error).message}\n`);
+    process.exit(2);
+  }
+})();
+const child = spawn(launch.command, launch.args, {
   stdio: ['pipe', 'pipe', 'inherit'],
   env: process.env,
-  // On Windows, npm-family launchers (npx/npm) are `.cmd` shims that Node's
-  // shell-less spawn cannot resolve, so the raw session launch fails with
-  // `spawn npx ENOENT` even though the MCP manager's probe — which spawns with
-  // a shell — reports the same server as connected. Use a shell here too so the
-  // real launch matches the probe and the two never disagree.
-  shell: process.platform === 'win32',
+  shell: launch.shell,
+  windowsVerbatimArguments: launch.windowsVerbatimArguments,
   windowsHide: true,
 });
 

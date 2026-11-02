@@ -133,6 +133,9 @@ function Totals({ rollup }: { rollup: UsageRollup }) {
     <section className="dash-kpis usage-kpis">
       <Kpi value={formatAic(t.nanoAiu)} label="AI credits (AIC)" accent="var(--accent)" />
       <Kpi value={formatCredits(t.credits)} label="Vendor credits" accent="#8b5cf6" />
+      {t.usdEstimate !== undefined && t.usdEstimate !== null && (
+        <Kpi value={`$${t.usdEstimate.toFixed(4)}`} label="USD estimate (not AIC)" accent="#8b5cf6" />
+      )}
       <Kpi value={String(t.sessions)} label="Sessions" accent="#0ea5e9" />
       <Kpi value={formatTokens(t.inputTokens)} label="Input tokens" accent="#22c55e" />
       <Kpi value={formatTokens(t.outputTokens)} label="Output tokens" accent="#f59e0b" />
@@ -158,7 +161,7 @@ function PeriodBreakdown({
   granularity: UsageGranularity;
 }) {
   const max = useMemo(
-    () => periods.reduce((m, p) => Math.max(m, p.nanoAiu), 0),
+    () => periods.reduce((m, p) => Math.max(m, p.nanoAiu ?? 0), 0),
     [periods],
   );
   if (periods.length === 0) {
@@ -177,14 +180,14 @@ function PeriodBreakdown({
       <div className="usage-periods">
         {periods.map((p) => {
           const aic = nanoAiuToAic(p.nanoAiu);
-          const pct = max > 0 ? Math.round((p.nanoAiu / max) * 100) : 0;
+          const pct = max > 0 && p.nanoAiu !== null ? Math.round((p.nanoAiu / max) * 100) : 0;
           return (
             <div className="usage-period-row" key={p.key} title={`${p.start} → ${p.end}`}>
               <span className="usage-period-label">{p.label}</span>
               <span className="dash-bar-track usage-period-bar" aria-hidden="true">
                 <span className="dash-bar-fill" style={{ width: `${pct}%` }} />
               </span>
-              <span className="usage-period-value dash-num">{aic.toFixed(2)} AIC</span>
+              <span className="usage-period-value dash-num">{aic?.toFixed(2) ?? 'Unavailable'} AIC</span>
               <span className="usage-period-sub muted">{p.sessions} sessions</span>
             </div>
           );
@@ -227,7 +230,7 @@ function ModelTable({ rows }: { rows: ModelBreakdown[] }) {
 
 function ProviderTable({ rows }: { rows: ProviderBreakdown[] }) {
   const maxNanoAiu = useMemo(
-    () => rows.reduce((max, r) => Math.max(max, r.nanoAiu), 0),
+    () => rows.reduce((max, r) => Math.max(max, r.nanoAiu ?? 0), 0),
     [rows],
   );
   return (
@@ -239,7 +242,7 @@ function ProviderTable({ rows }: { rows: ProviderBreakdown[] }) {
           <div className="usage-provider-graph">
             {rows.map((r) => {
               const pct =
-                maxNanoAiu > 0 ? Math.round((r.nanoAiu / maxNanoAiu) * 100) : 0;
+                maxNanoAiu > 0 && r.nanoAiu !== null ? Math.round((r.nanoAiu / maxNanoAiu) * 100) : 0;
               return (
                 <div className="usage-provider-row" key={r.provider}>
                   <span className="usage-provider-label">{r.provider}</span>

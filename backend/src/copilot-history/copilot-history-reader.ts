@@ -1,12 +1,13 @@
 import type { CopilotHistoryConfig } from './config.js';
-import type {
-  CheckpointSummary,
-  CopilotHistoryReader,
-  CopilotHistorySource,
-  LivePromptSource,
-  LivePromptTurn,
-  SessionHistory,
-  SessionPrompt,
+import {
+  PromptHistoryUnavailableError,
+  type CheckpointSummary,
+  type CopilotHistorySource,
+  type LivePromptSource,
+  type LivePromptTurn,
+  type PromptHistoryReader,
+  type SessionHistory,
+  type SessionPrompt,
 } from './copilot-history-contract.js';
 
 export interface CopilotHistoryReaderDeps {
@@ -20,6 +21,12 @@ export interface CopilotHistoryReaderDeps {
   livePrompts?: LivePromptSource;
   /** Wall clock used to bound the live "answering" indicator; defaults to Date.now. */
   now?: () => number;
+  /**
+   * Called when the live event log exists but could not be read in time (or at
+   * all). The prompt read then degrades to store-only history; this hook lets
+   * the composition root surface that degraded freshness.
+   */
+  onLiveReadFailure?: (sessionId: string, error: unknown) => void;
 }
 
 function truncate(text: string, max: number): string {
@@ -102,7 +109,7 @@ export function toVisiblePrompt(text: string): string | null {
  */
 export function createCopilotHistoryReader(
   deps: CopilotHistoryReaderDeps,
-): CopilotHistoryReader {
+): PromptHistoryReader {
   const { source, config } = deps;
   const now = deps.now ?? (() => Date.now());
 
@@ -154,10 +161,11 @@ export function createCopilotHistoryReader(
       });
     },
 
-    prompts(sessionId) {
+    async prompts(sessionId) {
       if (!source.available()) {
         return [];
       }
+      // Throws PromptHistoryUnavailableError when an existing store is unreadable.
       const allRows = source.userMessages(sessionId).map((row) => ({
         index: row.turn_index,
         text: toVisiblePrompt(row.user_message ?? ''),
@@ -171,24 +179,45 @@ export function createCopilotHistoryReader(
         .usageEventTimes(sessionId)
         .map((iso) => Date.parse(iso))
         .filter((ms) => !Number.isNaN(ms));
-      const live = deps.livePrompts?.latest(sessionId) ?? null;
+      const live = await readLive(sessionId);
       const nowMs = now();
       const latestEventMs = eventMs[eventMs.length - 1] ?? NaN;
-      const answering = !Number.isNaN(latestEventMs) &&
-        nowMs - latestEventMs <= config.activeAnswerWindowMs;
+      const windowMs = config.activeAnswerWindowMs;
       const latest = rows[rows.length - 1];
       const matchesSaved = live !== null && latest !== undefined &&
         toVisiblePrompt(live.text) === latest.text &&
         (live.at === latest.at || !live.at || !latest.at ||
           Date.parse(live.at) === Date.parse(latest.at));
+      const liveActive = live !== null && isRecent(
+        nowMs, windowMs, latestEventMs, Date.parse(live.lastActivityAt ?? ''), Date.parse(live.at),
+      );
+      const inFlight = buildInFlightPrompt(
+        allRows,
+        source.latestActivityTurn(sessionId),
+        eventMs,
+        nowMs,
+        windowMs,
+        live,
+        matchesSaved,
+        liveActive,
+      );
       const prompts = rows.map((row, i): SessionPrompt => {
-        const isLast = i === rows.length - 1;
-        const currentLive = isLast && matchesSaved ? live : null;
-        const response = currentLive?.response?.trim() || row.response || null;
+        const isLast = i === rows.length - 1 && !inFlight;
+        const currentLive = i === rows.length - 1 && matchesSaved ? live : null;
+        const liveResponse = currentLive?.response?.trim() || null;
+        // Prefer the final live text once the turn completed; mid-turn keep the
+        // longer of the live (tail-bounded) and stored text so neither can
+        // regress the visible reply.
+        const response = liveResponse && row.response &&
+          currentLive?.completedAt === undefined && row.response.length > liveResponse.length
+          ? row.response
+          : liveResponse || row.response || null;
+        // A turn nobody is working on any more must not spin forever.
+        const rowActive = isRecent(nowMs, windowMs, latestEventMs, Date.parse(row.at));
         const status: SessionPrompt['status'] =
           currentLive && (!row.response || currentLive.completedAt !== undefined)
-            ? livePromptStatus(currentLive, response, answering)
-            : response ? 'answered' : isLast ? 'answering' : 'unanswered';
+            ? livePromptStatus(currentLive, response, liveActive)
+            : response ? 'answered' : isLast && rowActive ? 'answering' : 'unanswered';
         const answeredAt = status !== 'answered' ? null
           : currentLive?.completedAt !== undefined ? currentLive.completedAt
             : answerCompletedAt(row.at, rows[i + 1]?.at ?? null, eventMs);
@@ -207,26 +236,51 @@ export function createCopilotHistoryReader(
           durationMs,
         };
       });
-      const inFlight = buildInFlightPrompt(
-        allRows,
-        source.latestActivityTurn(sessionId),
-        eventMs,
-        nowMs,
-        config.activeAnswerWindowMs,
-        live,
-        matchesSaved,
-      );
       return inFlight ? [...prompts, inFlight] : prompts;
     },
   };
+
+  /** Bounded live-log read. An absent log is null; a failed, hung or rejected read is unavailable. */
+  async function readLive(sessionId: string): Promise<LivePromptTurn | null> {
+    const livePrompts = deps.livePrompts;
+    if (!livePrompts) {
+      return null;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    try {
+      const turn = await Promise.race([
+        (async () => livePrompts.latest(sessionId, controller.signal))(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`Live prompt read exceeded ${config.livePromptTimeoutMs}ms`);
+            controller.abort(error);
+            reject(error);
+          }, config.livePromptTimeoutMs);
+        }),
+      ]);
+      clearTimeout(timer);
+      return turn;
+    } catch (error) {
+      clearTimeout(timer);
+      deps.onLiveReadFailure?.(sessionId, error);
+      // Older store-only history would silently erase a live turn the client already shows.
+      throw new PromptHistoryUnavailableError('Live prompt history could not be read. Showing the last loaded prompts.', { cause: error });
+    }
+  }
+}
+
+/** True when any finite timestamp lies within `windowMs` of now (either side, for clock skew). */
+function isRecent(nowMs: number, windowMs: number, ...timesMs: number[]): boolean {
+  return timesMs.some((ms) => !Number.isNaN(ms) && Math.abs(nowMs - ms) <= windowMs);
 }
 
 function livePromptStatus(
   live: LivePromptTurn,
   response: string | null,
-  answering: boolean,
+  active: boolean,
 ): SessionPrompt['status'] {
-  if (live.completedAt !== undefined || !answering) {
+  if (live.completedAt !== undefined || !active) {
     return response ? 'answered' : 'unanswered';
   }
   return 'answering';
@@ -240,8 +294,8 @@ function livePromptStatus(
  *
  * When a live event-log turn is supplied (`live`), it is authoritative: its
  * real prompt and reply remain visible even before persistence catches up.
- * Recorded completion takes precedence over recent billing activity; the
- * activity window is only a fallback for logs without a turn-end event.
+ * Recorded completion takes precedence over recent activity; the activity
+ * window is only a fallback for logs without a turn-end event.
  *
  * When no live turn is available (no event log, or it was unreadable), the
  * reader falls back to the legacy behaviour: usage events are written live as
@@ -257,6 +311,7 @@ function buildInFlightPrompt(
   windowMs: number,
   live: LivePromptTurn | null,
   matchesSaved: boolean,
+  liveActive: boolean,
 ): SessionPrompt | null {
   const maxTurn = rows.reduce((max, row) => Math.max(max, row.index), -1);
 
@@ -265,9 +320,6 @@ function buildInFlightPrompt(
     if (liveText === null || matchesSaved) {
       return null;
     }
-    const latestEventMs = eventMs.length ? eventMs[eventMs.length - 1] : NaN;
-    const answering =
-      !Number.isNaN(latestEventMs) && nowMs - latestEventMs <= windowMs;
     const response =
       live.response && live.response.trim().length > 0
         ? live.response.trim()
@@ -279,7 +331,7 @@ function buildInFlightPrompt(
       text: liveText,
       at: live.at,
       response,
-      status: livePromptStatus(live, response, answering),
+      status: livePromptStatus(live, response, liveActive),
       answeredAt,
       durationMs: answeredAt && !Number.isNaN(promptMs)
         ? Math.max(0, Date.parse(answeredAt) - promptMs)

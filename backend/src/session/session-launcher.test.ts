@@ -25,6 +25,7 @@ import { createAcpMetaRunner } from '../meta/acp/acp-meta-runner.js';
 import { MetaSessionPool, type PooledClient } from '../meta/acp/acp-pool.js';
 import { AcpRequestError } from '../meta/acp/acp-client.js';
 import { createProcessAdmission, type ProcessAdmission } from '../kernel/process-admission.js';
+import { createActiveProviderPolicy, type ProviderExecutionPolicy } from '../provider/active-provider.js';
 
 function fakeRunning(killImpl?: () => void) {
   const handlers = new Set<(event: SessionEvent) => void>();
@@ -61,6 +62,7 @@ function fakeRunning(killImpl?: () => void) {
 }
 
 function harness(options: {
+  executionPolicy?: ProviderExecutionPolicy;
   physicalOwnership?: MetaOperationPhysicalRegistration;
   processAdmission?: ProcessAdmission;
   failSave?: boolean;
@@ -123,6 +125,7 @@ function harness(options: {
   bus.on('session.output', (o) => outputs.push(o));
 
   const launcher = createSessionLauncher({
+    executionPolicy: options.executionPolicy,
     physicalOwnership: options.physicalOwnership,
     processAdmission: options.processAdmission,
     resolver,
@@ -170,6 +173,56 @@ function harness(options: {
 }
 
 describe('cold physical operation ownership', () => {
+  it.each([true, false])('releases a provider lease if physical registration fails (policy=%s)', async (withPolicy) => {
+    const executionPolicy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    const h = harness({
+      executionPolicy: withPolicy ? executionPolicy : undefined,
+      physicalOwnership: {
+        newOwnerId: () => 'owner',
+        register: () => { throw new Error('registration failed'); },
+      },
+    });
+    await expect(h.launcher.start({ featureId: 'f', prompt: 'x', operationId: 'op' })).rejects.toThrow('registration failed');
+    expect(executionPolicy.get().blockers).toEqual([]);
+  });
+  it('owns provider admission before preparation and retains it through an unconfirmed kill', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot', 'claude'], isEligible: () => true,
+      initialProviderId: 'copilot', saveSelected: () => {},
+    });
+    let ready!: () => void;
+    const h = harness({ executionPolicy: policy, readiness: () => new Promise<void>((resolve) => { ready = resolve; }) });
+    const starting = h.launcher.start({ featureId: 'f', prompt: 'hello' });
+    expect(policy.get().blockers).toHaveLength(1);
+    expect(() => policy.select('claude')).toThrow('Stop all CLI work');
+    await vi.waitFor(() => expect(ready).toBeTypeOf('function'));
+    ready();
+    const launched = await starting;
+    h.launcher.shutdown();
+    expect(policy.get().blockers).toHaveLength(1);
+    h.rs.finish(0);
+    await launched.completion;
+    expect(policy.get().blockers).toEqual([]);
+    policy.select('claude');
+    await expect(harness({ executionPolicy: policy }).launcher.start({
+      featureId: 'f', prompt: 'x', providerId: 'copilot',
+    })).rejects.toThrow('not the active');
+  });
+
+  it('releases provider admission for failed preparation and rejects missing setup', async () => {
+    const policy = createActiveProviderPolicy({
+      enabledProviderIds: () => ['copilot'], isEligible: () => true,
+      initialProviderId: null, saveSelected: () => {},
+    });
+    const h = harness({ executionPolicy: policy, composeError: new Error('bootstrap failed') });
+    await expect(h.launcher.start({ featureId: 'f', prompt: 'x' })).rejects.toThrow('Choose an active CLI');
+    policy.select('copilot');
+    await expect(h.launcher.start({ featureId: 'f', prompt: 'x' })).rejects.toThrow('bootstrap failed');
+    expect(policy.get().blockers).toEqual([]);
+  });
   it('enforces one shared warm+cold native ceiling and a bounded cancellable acquisition queue', async () => {
     const budget = createProcessAdmission({ maxProcesses: 2, maxWarmProcesses: 1, maxQueued: 1 });
     let exited!: () => void;

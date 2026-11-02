@@ -20,6 +20,12 @@
 // excluding ESC/BEL from the body keeps each match bounded to a single report.
 const COLOR_REPORT = /\x1b\](?:4|1[0-2]);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
+/** Device, cursor, status, focus and SGR mouse replies must not wait on a file upload. */
+export function isTerminalReply(data: string): boolean {
+  return data.length > 0 && data.length <= 256 &&
+    /^(?:\x1b\[(?:[<=>?]?[0-9;]{0,80}[cRnMmt]|[IO]))+$/.test(data);
+}
+
 /** Removes OSC color-query replies from data xterm is about to send to the PTY. */
 export function stripTerminalColorReports(data: string): string {
   if (!data.includes('\x1b]')) {

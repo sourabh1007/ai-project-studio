@@ -52,6 +52,7 @@ const defaultExecutor: GitCommandExecutor = {
 export function createRepoInsightsGitAdapter(
   executor: GitCommandExecutor = defaultExecutor,
   timeoutMs = repoInsightsDefaults.gitTimeoutMs,
+  executable = 'git',
 ): RepoInsightsGit {
   const run = async (
     repositoryPath: string,
@@ -60,7 +61,7 @@ export function createRepoInsightsGitAdapter(
   ): Promise<string | null> => {
     try {
       signal?.throwIfAborted();
-      const result = await executor.run('git', ['-C', repositoryPath, ...args], {
+      const result = await executor.run(executable, ['-C', repositoryPath, ...args], {
         signal,
         timeout: timeoutMs,
       });

@@ -5,16 +5,21 @@ import type {
   ModelCatalogProbe,
 } from './model-catalog-contract.js';
 import { parseAvailableModels } from './model-catalog-parser.js';
+import type { ProcessAdmission } from '../../kernel/process-admission.js';
 
 export interface AcpModelCatalogProbeOptions {
   /** Absolute path to the copilot executable driving the ACP process. */
   executable: string;
+  extraArgs?: string[];
   /** Timeout (ms) for the one-time ACP `initialize` handshake. */
   initializeTimeoutMs: number;
   /** Timeout (ms) for the `session/new` request that carries the catalog. */
   turnTimeoutMs: number;
   /** Working directory for the throwaway session. */
   cwd?: string;
+  admission?: ProcessAdmission;
+  acquireExecution?: () => { release(): void };
+  registerPhysical?: (process: { kill(): void; done: Promise<void> }) => void;
 }
 
 /**
@@ -32,13 +37,29 @@ export function createAcpModelCatalogProbe(
 ): ModelCatalogProbe {
   return {
     async fetch(): Promise<MetaModelOption[] | null> {
-      const client = new AcpClient(
-        new AcpProcessAdapter({ executable: options.executable }),
-        {
-          initializeTimeoutMs: options.initializeTimeoutMs,
-          turnTimeoutMs: options.turnTimeoutMs,
-        },
-      );
+      const execution = options.acquireExecution?.();
+      let permit: Awaited<ReturnType<ProcessAdmission['acquireCold']>> | undefined;
+      let client: AcpClient;
+      try {
+        permit = await options.admission?.acquireCold(AbortSignal.timeout(options.initializeTimeoutMs));
+        client = new AcpClient(
+          new AcpProcessAdapter({ executable: options.executable, extraArgs: options.extraArgs }),
+          {
+            initializeTimeoutMs: options.initializeTimeoutMs,
+            turnTimeoutMs: options.turnTimeoutMs,
+          },
+        );
+      } catch (error) {
+        permit?.release();
+        execution?.release();
+        throw error;
+      }
+      client.onExit(() => {
+        permit?.release();
+        execution?.release();
+      });
+      const done = new Promise<void>((resolve) => { client.onExit(resolve); });
+      options.registerPhysical?.({ kill: () => client.kill(), done });
       try {
         await client.initialize();
         const result = await client.newSession(options.cwd);

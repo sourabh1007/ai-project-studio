@@ -23,6 +23,8 @@ import { createCopilotOutputScanner } from './copilot-output-scanner.js';
 import { createCopilotModelScanner } from './copilot-model-scanner.js';
 import { createCopilotMcpScanner } from './copilot-mcp-scanner.js';
 import { createCopilotRestartScanner } from './copilot-restart-scanner.js';
+import { ValidationError } from '../../kernel/error-types.js';
+import { createCopilotMcpSupport } from './copilot-mcp-support.js';
 
 export interface CopilotAdapterDeps {
   spawner: ProcessSpawner;
@@ -30,9 +32,9 @@ export interface CopilotAdapterDeps {
   /**
    * Names of the user-configured MCP servers to disable for headless meta
    * sessions, so they never trigger a browser/OAuth sign-in on load. Read live
-   * so config edits are reflected without a restart. Omitted → none disabled.
+   * for the actual session cwd so config edits are reflected without a restart.
    */
-  mcpServerNames?: () => readonly string[];
+  mcpServerNames?: (spec: SessionSpec) => readonly string[];
 }
 
 /** GitHub Copilot CLI provider. Spawns `copilot -p ...` and captures usage. */
@@ -42,16 +44,21 @@ export function createCopilotProvider(
 ): IAIProvider {
   return {
     id: COPILOT_NAMESPACE,
+    capabilities: { warmTransport: 'acp', planUsage: 'aic-panel' },
+    mcp: createCopilotMcpSupport(config.commandProfile?.liveReloadCommand),
     async listModels() {
       return listCopilotModels(config);
     },
     startSession(spec: SessionSpec) {
+      if (spec.kind === 'meta' && !deps.mcpServerNames) {
+        throw new ValidationError('Headless MCP suppression cannot be verified. Configure trusted effective MCP sources or repair the native CLI policy before starting meta tasks.');
+      }
       const { command, args } = buildCopilotCommand(
         spec,
         config,
-        deps.mcpServerNames?.() ?? [],
+        spec.kind === 'meta' ? deps.mcpServerNames!(spec) : [],
       );
-      const env = buildCopilotEnv(spec, deps.baseEnv);
+      const env = { ...buildCopilotEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: COPILOT_NAMESPACE };
       const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
       return toRunningSession(spec.sessionId, handle);
     },
@@ -59,7 +66,7 @@ export function createCopilotProvider(
       return {
         command: config.executable,
         args: buildCopilotInteractiveArgs(spec, config),
-        env: buildCopilotEnv(spec, deps.baseEnv),
+        env: { ...buildCopilotEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: COPILOT_NAMESPACE },
       };
     },
     createOutputScanner(ctx: SessionOutputScannerContext): SessionOutputScanner {

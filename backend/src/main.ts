@@ -8,8 +8,8 @@ import {
   writeFileSync,
   rmSync,
 } from 'node:fs';
-import { basename, dirname, join as pathJoin, delimiter as pathDelimiter } from 'node:path';
-import { access, readdir, realpath } from 'node:fs/promises';
+import { basename, dirname, join as pathJoin, delimiter as pathDelimiter, resolve as pathResolve } from 'node:path';
+import { access, open, opendir, readdir, realpath } from 'node:fs/promises';
 import { createSessionLaunchCwdResolver } from './session-worktree/session-launch-cwd.js';
 import {
   SESSION_WORKTREE_NAMESPACE, sessionWorktreeConfigSchema, sessionWorktreeDefaults,
@@ -24,11 +24,12 @@ import express from 'express';
 import { createClock } from './kernel/clock.js';
 import { createIdGenerator } from './kernel/id-generator.js';
 import { createProcessAdmission } from './kernel/process-admission.js';
+import { createWorkTracker } from './kernel/work-tracker.js';
 import {
   PROCESS_ADMISSION_NAMESPACE, processAdmissionConfigSchema, processAdmissionDefaults,
   type ProcessAdmissionConfig,
 } from './kernel/process-admission-config.js';
-import { createLogger, type LogLevel } from './kernel/logger.js';
+import { createLogger, guardSink, failureErrorName, type LogLevel, type LogSinkFailure } from './kernel/logger.js';
 import { installProcessFaultGuard } from './kernel/process-fault-guard.js';
 import {
   LOGGING_NAMESPACE,
@@ -39,15 +40,35 @@ import {
 } from './logging/config.js';
 import {
   createFileLogSink,
+  createFileLogLineWriter,
   combineSinks,
+  type FileLogSinkFailure,
 } from './logging/log-file-sink.js';
+import { createQueuedFileLogging } from './logging/queued-file-logging.js';
+import { spawnLogWriterWorker } from './logging/log-writer-worker-entry.js';
+import {
+  CLIENT_OPERATIONS_NAMESPACE, clientOperationsConfigSchema, clientOperationsDefaults,
+  type ClientOperationsConfig,
+} from './client-operations/config.js';
+import { createClientOperations } from './client-operations/client-operations-service.js';
+import { createClientOperationRepo } from './persistence/client-operation-repo.js';
+import { createSqliteUnitOfWork } from './persistence/sqlite-unit-of-work.js';
 import { createEventBus, type EventBus } from './kernel/event-bus.js';
-import { ValidationError, NotFoundError } from './kernel/error-types.js';
+import { ConflictError, ProviderError, ValidationError, NotFoundError } from './kernel/error-types.js';
 
 import { createConfigSchemaRegistry } from './config/config-schema-registry.js';
 import { buildConfig } from './config/config-validator.js';
 import { envSource, mergeSources } from './config/config-loader.js';
 import { collectSecretPaths } from './config/config-redactor.js';
+import { createEarlyConfigOverrides, EARLY_CONFIG_NAMESPACES, legacyExecutableSource } from './config/early-config-overrides.js';
+import { createEarlyConfigFileStore } from './config/early-config-file-adapter.js';
+import { GIT_NAMESPACE, gitConfigSchema, gitDefaults, type GitConfig } from './git/config.js';
+import { GITHUB_CLI_NAMESPACE, githubCliConfigSchema, githubCliDefaults, type GithubCliConfig } from './github-auth/config.js';
+import { DESKTOP_RUNTIME_NAMESPACE, desktopRuntimeConfigSchema, desktopRuntimeDefaults } from './desktop-runtime/config.js';
+import { providerCommands, repositoryCommands, mcpCommands, internalCommands } from './tools/command-catalog.js';
+import { AGENCY_BOOTSTRAP_NAMESPACE, agencyBootstrapConfigSchema, agencyBootstrapDefaults, type AgencyBootstrapConfig } from './agency-bootstrap/config.js';
+import { COPILOT_BOOTSTRAP_NAMESPACE, copilotBootstrapConfigSchema, copilotBootstrapDefaults, type CopilotBootstrapConfig } from './copilot-bootstrap/config.js';
+import { SELF_HEAL_NAMESPACE, selfHealConfigSchema, selfHealDefaults, type SelfHealConfig } from './self-heal/config.js';
 
 import {
   COPILOT_NAMESPACE,
@@ -61,6 +82,14 @@ import {
   agencyDefaults,
   type AgencyConfig,
 } from './provider/agency-adapter/config.js';
+import {
+  CLAUDE_NAMESPACE, claudeConfigSchema, claudeDefaults, type ClaudeConfig,
+} from './provider/claude-adapter/config.js';
+import {
+  createClaudeProvider, claudeProbeCommands, claudeVersionCapabilities, parseClaudeAuthStatus, assertClaudeHeadlessAuth,
+} from './provider/claude-adapter/claude-provider.js';
+import { buildClaudeInstallCommand, claudeInstallationPlan } from './provider/claude-adapter/claude-commands.js';
+import { createClaudeNativeHistoryStore } from './provider/claude-adapter/claude-native-history.js';
 import {
   SESSION_NAMESPACE,
   sessionConfigSchema,
@@ -126,15 +155,18 @@ import {
 } from './agency-bootstrap/agency-install-paths.js';
 import { createCopilotBootstrapper } from './copilot-bootstrap/copilot-bootstrapper.js';
 import { createCopilotDetector } from './copilot-bootstrap/copilot-detector.js';
+import { copilotInstallCommand } from './copilot-bootstrap/copilot-install-command.js';
+import { createActiveProviderPolicy } from './provider/active-provider.js';
+import { createProviderSwitchDrain } from './provider/provider-switch-drain.js';
+import { createExclusiveMetaRunner } from './provider/exclusive-meta-runner.js';
 import {
-  explicitNetworkOverride,
-  envIndicatesMicrosoftNetwork,
-  resolveMicrosoftNetwork,
-} from './provider/network-environment.js';
-import { selectDefaultProvider } from './provider/default-provider-selection.js';
-import { isProviderExposed } from './provider/default-provider-selection.js';
+  PROVIDER_SELECTION_NAMESPACE, providerSelectionConfigSchema, providerSelectionDefaults,
+} from './provider/provider-selection/config.js';
+import { copilotCommandProfile } from './provider/provider-command-profile.js';
+import { createProviderHistoryReader } from './copilot-history/provider-history-reader.js';
+import { createProviderUsageRouter, type ProviderUsageSource } from './usage/provider-usage-router.js';
+import { createProviderUsageReader } from './usage/provider-usage-reader.js';
 import { createMicrosoftIdentity } from './provider/microsoft-identity.js';
-import { probeMicrosoftInstallEndpoint } from './provider/microsoft-network-probe.js';
 import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
 import {
   createGithubAuth,
@@ -154,8 +186,7 @@ import {
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
 import { createCopilotMcpSupport } from './provider/copilot-adapter/copilot-mcp-support.js';
-import { enabledMcpServerNames } from './mcp/mcp-server-names.js';
-import type { McpConfigDocument } from './mcp/mcp-contract.js';
+import { headlessMcpServerNames } from './mcp/mcp-server-names.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
 import { createProviderResolver } from './provider/provider-resolver.js';
 
@@ -204,6 +235,8 @@ import {
   getAzurePull,
   parseAzureRepoUrl,
   fetchAzureUser,
+  connectionDataUrl,
+  parseAuthenticatedUser,
 } from './repo/azure-pr-lister.js';
 import { provisionPrWorktree } from './repo/pr-worktree-provisioner.js';
 import { createSharedCheckoutPreparer } from './session-worktree/shared-session-checkout.js';
@@ -249,6 +282,9 @@ import {
   type AuthWarmerConfig,
 } from './auth-warmer/config.js';
 import { createCredentialWarmer } from './auth-warmer/credential-warmer.js';
+import { createCredentialRefresh } from './auth-warmer/credential-refresh.js';
+import { credentialFromRead } from './kernel/credential-read.js';
+import { readAccountCredential, readAccountStatus, readFirstCredential } from './auth-warmer/credential-access.js';
 import {
   SELF_RECOVERY_NAMESPACE,
   selfRecoveryConfigSchema,
@@ -567,6 +603,8 @@ import type { BugBashEventMap } from './bug-bash/bug-bash-contract.js';
 import { createAgentAttachmentRepo } from './persistence/agent-attachment-repo.js';
 import { createAgentUsageReader } from './persistence/agent-usage-reader.js';
 import { createBackgroundWorkRunner } from './kernel/background-work-runner.js';
+import { spawnUsageSummaryWorker, type UsageSummaryWorkInput } from './usage-summary/usage-summary-worker-adapter.js';
+import type { UsageSummary } from './usage-summary/usage-summary-contract.js';
 import {
   RESOURCE_PRESSURE_NAMESPACE,
   resourcePressureConfigSchema,
@@ -590,15 +628,21 @@ import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
 import { createPrReviewRepo } from './persistence/pr-review-repo.js';
 
 import { createApiRoutes } from './api/routes.js';
+import { createTextAttachmentBody } from './api/text-attachments-body.js';
+import { createTextAttachments } from './text-attachments/text-attachments-service.js';
+import { createTextAttachmentStorage } from './text-attachments/text-attachments-fs-adapter.js';
+import type { TextAttachmentFailureReporter } from './text-attachments/text-attachments-contract.js';
+import { TEXT_ATTACHMENTS_NAMESPACE, textAttachmentsConfigSchema, textAttachmentsDefaults, type TextAttachmentsConfig } from './text-attachments/config.js';
 import { toErrorResult } from './api/http-error-mapper.js';
 import { ownApplicationRoutes } from './api/route-ownership.js';
+import { guardDatabaseRoutes } from './api/database-health-guard.js';
 import { mountRoutes } from './api/express-adapter.js';
 import { subscribeStream, type StreamEventMap } from './api/usage-stream.js';
 import { createBoundedSse } from './api/bounded-sse.js';
 import { SSE_NAMESPACE, sseConfigSchema, sseDefaults, type SseConfig } from './api/sse-config.js';
 import type { ConfigObject } from './config/config-contract.js';
 import type { Session } from './session/session-contract.js';
-import type { IAIProvider } from './provider/provider-contract.js';
+import type { IAIProvider, RunningSession, SessionEvent, SessionSpec } from './provider/provider-contract.js';
 
 const ENV_PREFIX = 'CW';
 
@@ -608,8 +652,16 @@ function ensureDir(filePath: string): void {
 
 function main(): void {
   const registry = createConfigSchemaRegistry();
+  registry.register({ namespace: GIT_NAMESPACE, schema: gitConfigSchema, defaults: gitDefaults });
+  registry.register({ namespace: GITHUB_CLI_NAMESPACE, schema: githubCliConfigSchema, defaults: githubCliDefaults });
+  registry.register({ namespace: DESKTOP_RUNTIME_NAMESPACE, schema: desktopRuntimeConfigSchema, defaults: desktopRuntimeDefaults });
+  registry.register({ namespace: AGENCY_BOOTSTRAP_NAMESPACE, schema: agencyBootstrapConfigSchema, defaults: agencyBootstrapDefaults });
+  registry.register({ namespace: COPILOT_BOOTSTRAP_NAMESPACE, schema: copilotBootstrapConfigSchema, defaults: copilotBootstrapDefaults });
+  registry.register({ namespace: SELF_HEAL_NAMESPACE, schema: selfHealConfigSchema, defaults: selfHealDefaults });
   registry.register({ namespace: COPILOT_NAMESPACE, schema: copilotConfigSchema, defaults: copilotDefaults });
   registry.register({ namespace: AGENCY_NAMESPACE, schema: agencyConfigSchema, defaults: agencyDefaults });
+  registry.register({ namespace: CLAUDE_NAMESPACE, schema: claudeConfigSchema, defaults: claudeDefaults });
+  registry.register({ namespace: PROVIDER_SELECTION_NAMESPACE, schema: providerSelectionConfigSchema, defaults: providerSelectionDefaults });
   registry.register({ namespace: SESSION_NAMESPACE, schema: sessionConfigSchema, defaults: sessionDefaults });
   registry.register({ namespace: SESSION_WORKTREE_NAMESPACE, schema: sessionWorktreeConfigSchema, defaults: sessionWorktreeDefaults });
   registry.register({ namespace: USAGE_NAMESPACE, schema: usageConfigSchema, defaults: usageDefaults });
@@ -619,6 +671,7 @@ function main(): void {
   registry.register({ namespace: AGGREGATION_NAMESPACE, schema: aggregationConfigSchema, defaults: aggregationDefaults });
   registry.register({ namespace: PERSISTENCE_NAMESPACE, schema: persistenceConfigSchema, defaults: persistenceDefaults });
   registry.register({ namespace: LOGGING_NAMESPACE, schema: loggingConfigSchema, defaults: loggingDefaults });
+  registry.register({ namespace: CLIENT_OPERATIONS_NAMESPACE, schema: clientOperationsConfigSchema, defaults: clientOperationsDefaults });
   registry.register({ namespace: SUMMARIZER_NAMESPACE, schema: summarizerConfigSchema, defaults: summarizerDefaults });
   registry.register({ namespace: API_NAMESPACE, schema: apiConfigSchema, defaults: apiDefaults });
   registry.register({ namespace: SSE_NAMESPACE, schema: sseConfigSchema, defaults: sseDefaults });
@@ -636,6 +689,7 @@ function main(): void {
     defaults: processAdmissionDefaults,
   });
   registry.register({ namespace: TERMINAL_NAMESPACE, schema: terminalConfigSchema, defaults: terminalDefaults });
+  registry.register({ namespace: TEXT_ATTACHMENTS_NAMESPACE, schema: textAttachmentsConfigSchema, defaults: textAttachmentsDefaults });
   registry.register({ namespace: COPILOT_HISTORY_NAMESPACE, schema: copilotHistoryConfigSchema, defaults: copilotHistoryDefaults });
   registry.register({ namespace: SESSION_IMPORT_NAMESPACE, schema: sessionImportConfigSchema, defaults: sessionImportDefaults });
   registry.register({ namespace: SKILLS_NAMESPACE, schema: skillsConfigSchema, defaults: skillsDefaults });
@@ -730,7 +784,22 @@ function main(): void {
       record.data ?? '',
     );
   };
-  let logger = createLogger(logLevel, consoleSink);
+  let logSinkFailureReports = 0;
+  let fileLogFailureReports = 0;
+  let diagnosticWriteFailures = 0;
+  const stderrReport = (record: Record<string, unknown>): void => {
+    try {
+      process.stderr.write(JSON.stringify({ ts: new Date().toISOString(), ...record }) + '\n');
+    } catch {
+      diagnosticWriteFailures += 1;
+    }
+  };
+  const onSinkFailure = (failure: LogSinkFailure): void => {
+    logSinkFailureReports += 1;
+    stderrReport({ component: 'log-sink', ...failure });
+  };
+  const guardedConsoleSink = guardSink(consoleSink, 'console', onSinkFailure);
+  let logger = createLogger(logLevel, guardedConsoleSink, { onSinkFailure });
   // Installed before any service starts: an unhandled rejection during startup
   // would otherwise terminate the backend silently, and the desktop does not
   // respawn it, so the whole IDE would come up dead.
@@ -741,7 +810,10 @@ function main(): void {
   const clock = createClock();
   const STUDIO_MCP_SERVER_NAME = 'ai-project-studio';
   const ids = createIdGenerator();
-  const bus = createEventBus<StreamEventMap>();
+  const bus = createEventBus<StreamEventMap>({
+    onHandlerError: (error, eventType) =>
+      logger.error('Event subscriber failed', { eventType, errorName: failureErrorName(error) }),
+  });
 
   // One-time migration from the pre-rebrand storage location. The app's data
   // directory identifier changed with the "Copilot Workspace" → "AI Project
@@ -784,36 +856,92 @@ function main(): void {
   // Persistence.
   ensureDir(persistenceConfig.databasePath);
   const db = createDatabase({ databasePath: persistenceConfig.databasePath });
+  let databaseClosed = false;
+  let databaseCloseFailureReports = 0;
+  const closeDatabase = (): void => {
+    if (databaseClosed) return;
+    db.close();
+    databaseClosed = true;
+  };
 
   // Phase 2 (effective): now that the database is open, layer persisted,
   // user-editable overrides beneath the environment and rebuild the config.
   // Overrides win over defaults; the environment still wins over both.
-  const configOverrideRepo = createConfigOverrideRepo(db);
+  const configOverrideRepo = createEarlyConfigOverrides(createConfigOverrideRepo(db), new Map(
+    EARLY_CONFIG_NAMESPACES.map((namespace) => [
+      namespace, createEarlyConfigFileStore(namespace, pathJoin(dirname(persistenceConfig.databasePath), 'config-overrides', `${namespace}.json`)),
+    ]),
+  ));
   const overridesSource = {
     origin: 'overrides',
     data: overridesToConfig(configOverrideRepo.all()),
   };
   const config: ConfigObject = buildConfig({
     registry,
-    sources: [overridesSource, envSource(process.env, ENV_PREFIX)],
+    sources: [overridesSource, envSource(process.env, ENV_PREFIX), legacyExecutableSource(process.env)],
     secretLookup: (name) => process.env[name],
   });
   const effectiveLogging = config[LOGGING_NAMESPACE] as LoggingConfig;
+  const gitConfig = config[GIT_NAMESPACE] as GitConfig;
+  const githubCliConfig = config[GITHUB_CLI_NAMESPACE] as GithubCliConfig;
+  const databaseUnitOfWork = createSqliteUnitOfWork(db, {
+    onPoisoned: () => {
+      stderrReport({ component: 'database', state: 'restart_required', transactionOutcome: 'unknown' });
+      try {
+        closeDatabase();
+      } catch (error) {
+        databaseCloseFailureReports += 1;
+        stderrReport({ component: 'database', state: 'close_unconfirmed', errorName: failureErrorName(error) });
+      }
+    },
+  });
+  const clientOperations = createClientOperations({
+    repo: createClientOperationRepo(db),
+    unitOfWork: databaseUnitOfWork,
+    clock,
+    config: config[CLIENT_OPERATIONS_NAMESPACE] as ClientOperationsConfig,
+  });
   const logPaths = createDailyLogPathStrategy(
     effectiveLogging.directory,
     effectiveLogging.filePrefix,
   );
-  logger = createLogger(
-    (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? effectiveLogging.level,
-    effectiveLogging.toFile
-      ? combineSinks(consoleSink, createFileLogSink({
-        filePath: logPaths.resolve(new Date(), 0),
-        pathStrategy: logPaths,
+  const fileLogDeps = {
+    filePath: logPaths.resolve(new Date(), 0),
+    pathStrategy: logPaths,
+    maxFileBytes: effectiveLogging.maxFileBytes,
+    retainedFileCount: effectiveLogging.retainedFileCount,
+    maxRecordBytes: effectiveLogging.maxRecordBytes,
+    onFailure: (failure: FileLogSinkFailure): void => {
+      fileLogFailureReports += 1;
+      stderrReport({ component: 'file-log-sink', ...failure });
+    },
+  };
+  let fallbackFileWriter: ReturnType<typeof createFileLogLineWriter> | undefined;
+  const queuedFileLogging = effectiveLogging.toFile && effectiveLogging.asyncWriter
+    ? createQueuedFileLogging({
+      config: effectiveLogging,
+      spawnWriter: () => spawnLogWriterWorker({
+        directory: effectiveLogging.directory,
+        filePrefix: effectiveLogging.filePrefix,
         maxFileBytes: effectiveLogging.maxFileBytes,
         retainedFileCount: effectiveLogging.retainedFileCount,
         maxRecordBytes: effectiveLogging.maxRecordBytes,
-      }))
-      : consoleSink,
+      }, {
+        closeGraceMs: effectiveLogging.writerAckTimeoutMs,
+        onFailure: fileLogDeps.onFailure,
+      }),
+      fallback: (line, at) => (fallbackFileWriter ??= createFileLogLineWriter(fileLogDeps))(line, at),
+      onEvent: (event) => stderrReport({ component: 'log-queue', ...event }),
+    })
+    : undefined;
+  logger = createLogger(
+    (process.env.CW_LOG_LEVEL as LogLevel | undefined) ?? effectiveLogging.level,
+    effectiveLogging.toFile
+      ? combineSinks(guardedConsoleSink, guardSink(
+        queuedFileLogging?.sink ?? createFileLogSink(fileLogDeps), 'file', onSinkFailure,
+      ))
+      : guardedConsoleSink,
+    { onSinkFailure },
   );
   const configOverrideService = createConfigOverrideService({
     store: configOverrideRepo,
@@ -835,6 +963,10 @@ function main(): void {
 
   const copilotConfig = config[COPILOT_NAMESPACE] as CopilotConfig;
   const agencyConfig = config[AGENCY_NAMESPACE] as AgencyConfig;
+  const claudeConfig = config[CLAUDE_NAMESPACE] as ClaudeConfig;
+  // Operator attestation only; Agency itself enforces native authentication.
+  let allowInternalAgency = providerSelectionConfigSchema.parse(config[PROVIDER_SELECTION_NAMESPACE]).allowInternalAgency;
+  const isProviderEligible = (id: string): boolean => id !== AGENCY_NAMESPACE || allowInternalAgency;
   const sessionConfig = config[SESSION_NAMESPACE] as SessionConfig;
   const usageConfig = config[USAGE_NAMESPACE] as UsageConfig;
   const creditConfig = config[CREDIT_NAMESPACE] as CreditConfig;
@@ -846,6 +978,17 @@ function main(): void {
     config[RESOURCE_PRESSURE_NAMESPACE] as ResourcePressureConfig,
   );
   const processAdmission = createProcessAdmission(config[PROCESS_ADMISSION_NAMESPACE] as ProcessAdmissionConfig);
+  type ProviderProbeProcess = { kill(): void; done: Promise<unknown> };
+  const providerProbeHandles = new Set<ProviderProbeProcess>();
+  const providerProbeWork = createWorkTracker<ProviderProbeProcess>();
+  const trackProviderProbe = (handle: ProviderProbeProcess): void => {
+    providerProbeHandles.add(handle);
+    void providerProbeWork.own(handle, () => handle.done).then(() => {
+      providerProbeHandles.delete(handle);
+    }).catch((error: unknown) => {
+      logger.error('CLI probe completion could not be confirmed', { error });
+    });
+  };
   const sse = createBoundedSse({ config: config[SSE_NAMESPACE] as SseConfig, logger });
   const terminalConfig = config[TERMINAL_NAMESPACE] as TerminalConfig;
   const copilotHistoryConfig = config[COPILOT_HISTORY_NAMESPACE] as CopilotHistoryConfig;
@@ -882,6 +1025,15 @@ function main(): void {
   const repoService = createRepoService({ repo: repoRepo, ids, clock });
   const repositoryContextRepo = createRepositoryContextRepo(db);
   const sessionRepo = createSessionRepo(db);
+  const textAttachmentsConfig = config[TEXT_ATTACHMENTS_NAMESPACE] as TextAttachmentsConfig;
+  const reportTextAttachmentFailure: TextAttachmentFailureReporter = (failure) =>
+    logger.error('Text attachment storage failure', failure);
+  const textAttachments = createTextAttachments({
+    sessions: sessionRepo,
+    config: textAttachmentsConfig,
+    reportFailure: reportTextAttachmentFailure,
+    storage: createTextAttachmentStorage(pathJoin(currentDataDir, 'text-attachments'), textAttachmentsConfig, reportTextAttachmentFailure),
+  });
   const sessionReconciler = createSessionReconciler({
     sessions: sessionRepo,
     clock,
@@ -970,8 +1122,33 @@ function main(): void {
   // the versioned-folder probe stays robust on a machine with no agency yet.
   const listDir = (dir: string): string[] =>
     existsSync(dir) ? readdirSync(dir) : [];
-  const currentAgencyPaths = (): string[] =>
-    agencyInstallPaths(process.platform, process.env, homedir(), listDir);
+  const currentAgencyPaths = (): string[] => {
+    const configured = resolveExecutable(agencyConfig.executable);
+    return agencyConfig.executable === 'agency'
+      ? [...new Set([configured, ...agencyInstallPaths(process.platform, process.env, homedir(), listDir)])]
+      : [configured];
+  };
+  const readInstalledCliVersion = (
+    executable: string,
+    args: string[],
+    timeoutMs: number,
+  ): Promise<string | null> => {
+    if (process.platform === 'win32' && !/\.(?:exe|com)$/i.test(executable)) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const child = execFile(executable, args, {
+        timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 65_536,
+        encoding: 'utf8', windowsHide: true, shell: false,
+        env: process.env,
+      }, (error, stdout, stderr) => {
+        resolve(error ? null : parseAgencyVersion(stdout || stderr));
+      });
+      trackProviderProbe({
+        kill: () => { child.kill('SIGKILL'); },
+        done: new Promise<number | null>((acknowledge) => { child.once('close', acknowledge); }),
+      });
+      child.stdin?.end();
+    });
+  };
   // Reads the installed agency version by spawning `agency --version` off the
   // event loop (never execFileSync — AGENTS rule #8). Resolves null when agency
   // isn't resolvable or prints nothing parseable, so a failed probe simply
@@ -981,24 +1158,16 @@ function main(): void {
     if (!exe) {
       return null;
     }
-    const handle = spawner.spawn({
-      command: exe,
-      args: ['--version'],
-      env: process.env as Record<string, string>,
-    });
-    const lines: string[] = [];
-    handle.onStdoutLine((line) => lines.push(line));
-    handle.onStderrLine((line) => lines.push(line));
-    const code = await handle.done;
-    if (code !== 0) {
-      return null;
-    }
-    return parseAgencyVersion(lines.join('\n'));
+    return readInstalledCliVersion(exe,
+      (agencyConfig.commandProfile ?? copilotCommandProfile).versionArgs,
+      agencyBootstrapConfigSchema.parse(config[AGENCY_BOOTSTRAP_NAMESPACE]).versionTimeoutMs);
   };
   const agencyBootstrapper = createAgencyBootstrapper({
+    installConfig: () => config[AGENCY_BOOTSTRAP_NAMESPACE] as AgencyBootstrapConfig,
     platform: process.platform,
     detect: createAgencyDetector({
       paths: currentAgencyPaths,
+      configuredExecutable: () => resolveAgencyExecutable(currentAgencyPaths(), existsSync) ?? agencyConfig.executable,
       pathExists: existsSync,
     }),
     spawner,
@@ -1025,32 +1194,7 @@ function main(): void {
       process.env.PATH = current ? `${dir}${pathDelimiter}${current}` : dir;
     }
   };
-  refreshAgencyPath();
-
-  // Keep the agency CLI current automatically so it never nags for an upgrade
-  // inside a working session. When agency is already installed we re-run the
-  // InstallTool bootstrap in the background (it fast-paths when already latest);
-  // the fresh version lands in a new versioned folder without disrupting running
-  // sessions, and we refresh PATH so subsequently-spawned terminals pick it up.
-  // A not-installed agency is handled by the first-run install gate instead.
-  if (agencyBootstrapper.status().installed) {
-    void agencyBootstrapper
-      .upgradeToLatest((event) => {
-        if (event.kind === 'line') {
-          logger.debug('agency upgrade', { line: event.line });
-        } else if (event.kind === 'error') {
-          logger.warn('agency upgrade failed', { message: event.message });
-        }
-      })
-      .then((status) => {
-        if (status.installed) {
-          refreshAgencyPath();
-        }
-      })
-      .catch((error) => {
-        logger.error('agency auto-upgrade crashed', error);
-      });
-  }
+  if (isProviderEligible(AGENCY_NAMESPACE)) refreshAgencyPath();
 
   // GitHub Copilot CLI bootstrapper — mirrors the agency path so the IDE can
   // auto-install and keep the `copilot` CLI current. Detection resolves the
@@ -1069,21 +1213,12 @@ function main(): void {
     if (!exe) {
       return null;
     }
-    const handle = spawner.spawn({
-      command: exe,
-      args: ['--version'],
-      env: process.env as Record<string, string>,
-    });
-    const lines: string[] = [];
-    handle.onStdoutLine((line) => lines.push(line));
-    handle.onStderrLine((line) => lines.push(line));
-    const code = await handle.done;
-    if (code !== 0) {
-      return null;
-    }
-    return parseAgencyVersion(lines.join('\n'));
+    return readInstalledCliVersion(exe,
+      (copilotConfig.commandProfile ?? copilotCommandProfile).versionArgs,
+      copilotBootstrapConfigSchema.parse(config[COPILOT_BOOTSTRAP_NAMESPACE]).versionTimeoutMs);
   };
   const copilotBootstrapper = createCopilotBootstrapper({
+    installConfig: () => config[COPILOT_BOOTSTRAP_NAMESPACE] as CopilotBootstrapConfig,
     platform: process.platform,
     detect: copilotDetector,
     spawner,
@@ -1107,36 +1242,59 @@ function main(): void {
     }
   };
   refreshCopilotPath();
-  // Keep copilot current in the background when it is already installed, mirroring
-  // the agency auto-upgrade. A not-installed copilot is handled by the first-run
-  // install gate (which installs whichever provider is the network default).
-  if (copilotConfig.enabled && copilotBootstrapper.status().installed) {
-    void copilotBootstrapper
-      .upgradeToLatest((event) => {
-        if (event.kind === 'line') {
-          logger.debug('copilot upgrade', { line: event.line });
-        } else if (event.kind === 'error') {
-          logger.warn('copilot upgrade failed', { message: event.message });
-        }
-      })
-      .then((status) => {
-        if (status.installed) {
-          refreshCopilotPath();
-        }
-      })
-      .catch((error) => {
-        logger.error('copilot auto-upgrade crashed', error);
+  const resolveClaudePath = (): string | null => {
+    const configured = resolveCopilotPath(claudeConfig.executable);
+    if (configured || claudeConfig.executable !== 'claude') return configured;
+    const local = pathJoin(homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude');
+    return existsSync(local) ? local : null;
+  };
+  const refreshClaudePath = (): void => {
+    const executable = resolveClaudePath();
+    if (!executable) return;
+    const directory = dirname(executable);
+    if (!(process.env.PATH ?? '').split(pathDelimiter).includes(directory)) {
+      process.env.PATH = [directory, process.env.PATH].filter(Boolean).join(pathDelimiter);
+    }
+  };
+  refreshClaudePath();
+  const claudeBootstrapper: Pick<ReturnType<typeof createCopilotBootstrapper>, 'status' | 'install'> = {
+    status: () => ({ installed: resolveClaudePath() !== null }),
+    async install(onEvent) {
+      if (resolveClaudePath()) {
+        onEvent({ kind: 'done' });
+        return { installed: true };
+      }
+      const plan = buildClaudeInstallCommand(claudeConfig, process.platform);
+      if (plan === null) {
+        throw new ValidationError('Claude Code installation is unsupported on this platform');
+      }
+      const handle = spawner.spawn({
+        ...plan,
+        env: process.env as Record<string, string>,
+        stdin: 'ignore',
       });
-  }
-
-  // Decide the default AI provider by environment. Microsoft corpnet defaults to
-  // Agency; everywhere else defaults to the GitHub Copilot CLI. Strong signals
-  // (explicit override, corp-domain env vars) resolve synchronously; a weak,
-  // best-effort endpoint-reachability probe refines the decision shortly after
-  // startup without blocking it. Both providers stay registered so the user can
-  // switch (or run across) CLIs at any time.
-  const networkOverride = explicitNetworkOverride(process.env);
-  const envMicrosoft = envIndicatesMicrosoftNetwork(process.env);
+      handle.onStdoutLine((line) => onEvent({ kind: 'line', line }));
+      handle.onStderrLine((line) => onEvent({ kind: 'line', line }));
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        onEvent({ kind: 'error', message: 'Claude Code installation timed out. Waiting for the installer to stop before allowing another CLI.' });
+        try { handle.kill(); }
+        catch (error) { logger.warn('Claude installer termination could not be requested', { error }); }
+      }, claudeConfig.installTimeoutMs);
+      timer.unref();
+      let exitCode: number | null;
+      try { exitCode = await handle.done; }
+      finally { clearTimeout(timer); }
+      refreshClaudePath();
+      const installed = !timedOut && exitCode === 0 && resolveClaudePath() !== null;
+      onEvent(installed ? { kind: 'done' } : {
+        kind: 'error', message: 'Claude Code installation did not complete. Check the displayed command and installer output.',
+      });
+      return { installed };
+    },
+  };
+  const claudeHistoryStore = createClaudeNativeHistoryStore(claudeConfig, { baseEnv: process.env, home: homedir() });
   const installedProviderIds = (): Set<string> => {
     const ids = new Set<string>();
     if (copilotConfig.enabled && copilotBootstrapper.status().installed) {
@@ -1145,6 +1303,7 @@ function main(): void {
     if (agencyConfig.enabled && agencyBootstrapper.status().installed) {
       ids.add('agency');
     }
+    if (claudeConfig.enabled && claudeBootstrapper.status().installed) ids.add(CLAUDE_NAMESPACE);
     return ids;
   };
   // reads ~/.copilot/settings.json at launch and has no flag/env for this, so we
@@ -1176,7 +1335,7 @@ function main(): void {
   // (missing `C:\Program Files\GitHub CLI`), so a bare `execFile('gh')` would
   // ENOENT even though `gh` works in a terminal. Resolving up-front makes every
   // gh invocation below (status, token, sign-in) find the binary regardless.
-  const ghCommand = resolveGhExecutable();
+  const ghCommand = resolveGhExecutable({ executable: githubCliConfig.executable });
   // The GitHub token we propagate to sessions is injected into THIS process's
   // env (below). But `gh` itself reads `GH_TOKEN`/`GITHUB_TOKEN` from its env
   // and, when present, treats that as the active credential — which makes
@@ -1235,43 +1394,25 @@ function main(): void {
   // event loop until `gh` returns (up to 15s, longer if gh stalls on a locked
   // keychain/credential prompt), freezing every HTTP request and terminal
   // WebSocket — i.e. the entire IDE hangs. `execFile` keeps the loop responsive.
-  const refreshGithubCredentialEnv = (): Promise<void> =>
-    new Promise((resolve) => {
-      execFile(
-        ghCommand,
-        ['auth', 'token'],
-        {
-          encoding: 'utf8',
-          windowsHide: true,
-          timeout: 15_000,
-          env: ghEnvWithoutToken(),
-        },
-        (err, stdout) => {
-          const token = !err ? (stdout ?? '').trim() : '';
-          if (token) {
-            for (const [key, value] of Object.entries(
-              buildGithubCredentialEnv(token),
-            )) {
-              process.env[key] = value;
-            }
-            logger.info('GitHub auth propagated to sessions', {});
-          } else {
-            // No keyring token (signed out here or elsewhere): drop the stale
-            // propagated credential so new sessions don't inherit a revoked
-            // token and /github/status reflects the signed-out state.
-            for (const key of Object.keys(buildGithubCredentialEnv('token'))) {
-              delete process.env[key];
-            }
-          }
-          resolve();
-        },
-      );
-    });
-  void refreshGithubCredentialEnv();
+  const githubCredentialRefresh = createCredentialRefresh<string | null>({
+    read: async () => credentialFromRead(await githubAuth.readToken()),
+    maxConcurrentReads: authWarmerConfig.maxConcurrentReads,
+    apply: (token) => {
+      if (token) {
+        for (const [key, value] of Object.entries(buildGithubCredentialEnv(token))) {
+          process.env[key] = value;
+        }
+        logger.info('GitHub auth propagated to future sessions', {});
+      } else {
+        for (const key of Object.keys(buildGithubCredentialEnv('token'))) delete process.env[key];
+      }
+    },
+  });
+  const refreshGithubCredentialEnv = () => githubCredentialRefresh.refresh();
+  void refreshGithubCredentialEnv().catch(() => logger.warn('Initial GitHub credential refresh failed', {}));
   // A unified background credential warm loop (created after azureAuth below)
-  // re-reads the GitHub token and silently refreshes the Azure OAuth tokens on a
-  // single interval, so a long-running IDE never spawns sessions with an expired
-  // credential and never needs an interactive re-authentication mid-session.
+  // re-reads the GitHub token and silently refreshes Azure DevOps credentials.
+  // Native MCP/CLI authentication has separate resource and cache contracts.
 
   // In-app GitHub sign-in via the OAuth device flow, for users who have never
   // run `gh auth login`. The minted token is handed to `gh auth login
@@ -1310,7 +1451,7 @@ function main(): void {
       new Promise((resolve) => {
         const child = execFile(
           ghCommand,
-          ['auth', 'login', '--with-token'],
+          ['auth', 'login', '--hostname', 'github.com', '--with-token'],
           { windowsHide: true, timeout: 20_000, env: ghEnvWithoutToken() },
           (err, _stdout, stderr) => {
             const enoent =
@@ -1330,8 +1471,10 @@ function main(): void {
   // On a successful in-app sign-in, immediately propagate the new token to
   // sessions rather than waiting for the hourly refresh.
   const githubSignInPoll = async (deviceCode: string) => {
-    const result = await githubDeviceAuth.poll(deviceCode);
-    if (result.status === 'success') {
+    const generation = githubCredentialRefresh.generation();
+    const result = await githubCredentialRefresh.run(() => githubDeviceAuth.poll(deviceCode));
+    if (result.status === 'success' && generation === githubCredentialRefresh.generation()) {
+      githubCredentialRefresh.invalidate();
       await refreshGithubCredentialEnv();
     }
     return result;
@@ -1339,9 +1482,10 @@ function main(): void {
   // Sign out via `gh auth logout`, then immediately clear the propagated
   // credential from sessions rather than waiting for the hourly refresh.
   const githubSignOut = async () => {
-    const status = await githubAuth.signOut();
-    await refreshGithubCredentialEnv();
-    return status;
+    const resume = await githubCredentialRefresh.suspend(null);
+    try {
+      return await githubAuth.signOut();
+    } finally { resume(); }
   };
 
   // Azure DevOps auth, handled the way Visual Studio / Git Credential Manager
@@ -1358,7 +1502,7 @@ function main(): void {
   ): Promise<GitRunResult> =>
     new Promise((resolve) => {
       const child = execFile(
-        'git',
+        gitConfig.executable,
         args,
         {
           windowsHide: true,
@@ -1467,33 +1611,18 @@ function main(): void {
   const azureTokenFor = async (input: string): Promise<string | null> => {
     const target = parseAzureTarget(input);
     rememberAzureTarget(target);
-    const token = await azureAuth.token(target);
-    if (token) {
-      applyAzureCredentialEnv(token);
-    }
-    return token;
+    return readAccountCredential(azureCredentialRefresh, () => azureAuth.readToken(target));
   };
-  const refreshAzureDevOpsCredentialEnv = async (): Promise<void> => {
-    for (const target of azureWarmTargets.values()) {
-      const token = await azureAuth.token(target);
-      if (token) {
-        applyAzureCredentialEnv(token);
-        return;
-      }
-    }
-    applyAzureCredentialEnv(null);
-  };
+  const azureCredentialRefresh = createCredentialRefresh<string | null>({
+    read: async () => credentialFromRead(await readFirstCredential(
+      azureWarmTargets.values(), (target) => azureAuth.readToken(target),
+    )),
+    apply: applyAzureCredentialEnv,
+    maxConcurrentReads: authWarmerConfig.maxConcurrentReads,
+  });
+  const refreshAzureDevOpsCredentialEnv = () => azureCredentialRefresh.refresh();
   rememberAzureTarget({ host: 'dev.azure.com', org: null });
-  void refreshAzureDevOpsCredentialEnv();
-  void azureAuth
-    .configure()
-    .then(() =>
-      logger.info('Azure DevOps OAuth sign-in configured for sessions', {}),
-    )
-    .catch(() => {
-      // git / GCM missing — Azure DevOps sign-in stays a no-op; sessions keep
-      // whatever git credentials the host already provides.
-    });
+  void refreshAzureDevOpsCredentialEnv().catch(() => logger.warn('Initial Azure DevOps credential refresh failed', {}));
 
   // Repository layer wiring. Repos are cloned/attached with the same git + auth
   // the IDE already configured, and listed from each provider using the login
@@ -1581,6 +1710,17 @@ function main(): void {
     azureHttpSend('PUT', url, token, payload);
   const azureHttpDelete = (url: string, token: string) =>
     azureHttpSend('DELETE', url, token, undefined);
+  const azureCommentViewerId = async (org: string): Promise<string | null> => {
+    try {
+      const token = await azureTokenFor(org);
+      if (!token) return null;
+      const response = await azureHttpGet(connectionDataUrl(org), token);
+      return response.status === 200 ? parseAuthenticatedUser(response.body).id : null;
+    } catch {
+      logger.warn('Azure DevOps comment viewer identity could not be verified', { org });
+      return null;
+    }
+  };
   const listAzureReposFor = (org: string) =>
     listAzureRepos(
       {
@@ -1710,7 +1850,7 @@ function main(): void {
     getPrBranch: (featureId) => prReviewService.find(featureId)?.pull.sourceBranch ?? null,
     getFeature: (featureId) => featureRepo.get(featureId),
     getRepo: (repoId) => repoService.list().find((r) => r.id === repoId) ?? null,
-    branch: createGitBranchReader(),
+    branch: createGitBranchReader(gitConfig.executable),
   });
   const resolveSessionCwd = (featureId: string, taskCheckoutId?: string) => sessionRefResolver.resolveCwd(featureId, taskCheckoutId);
 
@@ -1760,7 +1900,7 @@ function main(): void {
   const featureEnvironmentResolver = createFeatureEnvironmentResolver({
     choices: (featureId) => sessionRefResolver.choices(featureId),
     resolveCwd: resolveSessionCwd,
-    branch: createGitBranchReader(),
+    branch: createGitBranchReader(gitConfig.executable),
   });
 
   const cliStorePath = pathJoin(
@@ -1779,6 +1919,43 @@ function main(): void {
   // own session-store.db (keyed by the same --session-id we launch with), so we
   // tail that instead of the OTel file exporter (which the CLI TUI never emits).
   const cliUsageStore = createCliUsageStore({ databasePath: cliStorePath });
+  const claudeHistoryAbort = new AbortController();
+  let claudeHistoryRefresh: Promise<void> | null = null;
+  let claudeHistoryError: string | null = null;
+  const refreshClaudeHistory = (): void => {
+    if (claudeHistoryRefresh || claudeHistoryAbort.signal.aborted) return;
+    claudeHistoryRefresh = applicationWork.own(() => claudeHistoryStore.refresh(claudeHistoryAbort.signal))
+      .then(() => { claudeHistoryError = null; })
+      .catch((error: unknown) => {
+        if (claudeHistoryAbort.signal.aborted) return;
+        claudeHistoryError = 'Claude history refresh failed. Check the configured history directory and resource limits.';
+        logger.warn(claudeHistoryError, { reason: error instanceof Error ? error.message : 'Unknown worker failure' });
+      })
+      .finally(() => { claudeHistoryRefresh = null; });
+  };
+  const claudeHistoryTimer = setInterval(refreshClaudeHistory, usageConfig.livePollIntervalMs);
+  claudeHistoryTimer.unref();
+  refreshClaudeHistory();
+  const claudeSourceId = 'claude-native-transcripts';
+  const claudeUsageSource: ProviderUsageSource = {
+    sourceId: claudeSourceId,
+    readUsagePage: (sessionId, context, cursor, limit) => {
+      if (claudeHistoryError) return { status: 'retrying', sourceId: claudeSourceId, reason: claudeHistoryError };
+      const session = sessionRepo.get(sessionId);
+      if (!session) return { status: 'retrying', sourceId: claudeSourceId, reason: 'Workspace session attribution is unavailable' };
+      return createProviderUsageReader({
+        provider: CLAUDE_NAMESPACE, sourceId: claudeSourceId,
+        session: { id: sessionId, featureId: context.featureId, requestedModel: context.requestedModel, createdAt: session.createdAt },
+        readPage: (after, count) => claudeHistoryStore.readUsagePage(sessionId, after, count),
+      })(cursor, limit);
+    },
+  };
+  const providerUsageRouter = createProviderUsageRouter({
+    sessions: sessionRepo,
+    sources: new Map<string, ProviderUsageSource>([
+      [COPILOT_NAMESPACE, cliUsageStore], [AGENCY_NAMESPACE, cliUsageStore], [CLAUDE_NAMESPACE, claudeUsageSource],
+    ]),
+  });
   const mcpUsageConfig = config[MCP_USAGE_NAMESPACE] as McpUsageConfig;
   const skillLogOwners = createMcpLogOwners(db);
   const mcpLogCapture = createMcpLogCapture({
@@ -1805,7 +1982,7 @@ function main(): void {
   mcpUsageTimer.unref();
   const metaUsageCapture = createMetaUsageCapture({
     operations: metaOperationRepo,
-    read: (sessionId, operation, cursor, limit) => cliUsageStore.readUsagePage(sessionId, {
+    read: (sessionId, operation, cursor, limit) => providerUsageRouter.readUsagePage(sessionId, {
       featureId: operation.featureId,
       provider: operation.providerId ?? '',
       requestedModel: operation.requestedModel ?? '',
@@ -1822,27 +1999,260 @@ function main(): void {
     catch (error) { logger.error('Meta usage reconciliation failed', error); }
   }, usageConfig.livePollIntervalMs);
   metaUsageTimer.unref();
-  // Headless meta sessions disable MCP so servers never trigger their own
-  // interactive browser OAuth (which they can't complete anyway). We read the
-  // shared copilot mcp-config.json live so config edits apply without restart.
-  const mcpConfigPath = createCopilotMcpSupport().defaultConfigPath();
-  const readMcpServerNames = (): readonly string[] => {
-    try {
-      const raw = readFileSync(mcpConfigPath, 'utf8');
-      return enabledMcpServerNames(JSON.parse(raw) as McpConfigDocument);
-    } catch {
+  const copilotHome = process.env.COPILOT_HOME || pathJoin(homedir(), '.copilot');
+  const mcpConfigPath = process.env.COPILOT_HOME
+    ? pathJoin(copilotHome, 'mcp-config.json')
+    : createCopilotMcpSupport(copilotConfig.commandProfile?.liveReloadCommand).defaultConfigPath();
+  const headlessInventories = new WeakMap<SessionSpec, readonly string[]>();
+  const readMcpServerNames = (spec: SessionSpec): readonly string[] => {
+    const inventory = headlessInventories.get(spec);
+    if (!inventory) throw new ValidationError('Trusted MCP source inventory was not verified for this headless launch.');
+    return inventory;
+  };
+  const prepareHeadlessMcpInventory = async (
+    spec: Pick<SessionSpec, 'cwd' | 'kind' | 'noTools'>,
+    providerId: string,
+    signal: AbortSignal,
+  ): Promise<readonly string[]> => {
+    const unavailable = (source: string): ValidationError => new ValidationError(
+      `Headless MCP suppression cannot be verified for ${source}. Inspect the effective configuration in the native CLI or choose a provider with verifiable sources. Native trust and administrator safety policies will not be bypassed.`,
+    );
+    if (providerId === AGENCY_NAMESPACE) {
+      // Agency can inject built-ins/plugins before Copilot sees passthrough flags.
+      throw unavailable('Agency native runtime defaults and overlays');
+    }
+    let remainingBytes = 4 * 1_048_576;
+    const readDocument = async (path: string): Promise<unknown> => {
+      signal.throwIfAborted();
+      let file: Awaited<ReturnType<typeof open>>;
+      try { file = await open(path, 'r'); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw unavailable(path);
+      }
+      try {
+        const info = await file.stat();
+        if (!info.isFile() || info.size > 1_048_576 || info.size > remainingBytes) throw unavailable(path);
+        const bytes = Buffer.alloc(Math.min(1_048_576, remainingBytes) + 1);
+        let bytesRead = 0;
+        while (bytesRead < bytes.length) {
+          const chunk = await file.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+          signal.throwIfAborted();
+          if (chunk.bytesRead === 0) break;
+          bytesRead += chunk.bytesRead;
+        }
+        if (bytesRead >= bytes.length) throw unavailable(path);
+        remainingBytes -= bytesRead;
+        try {
+          const document: unknown = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'));
+          if (!document || typeof document !== 'object' || Array.isArray(document)) throw unavailable(path);
+          return document;
+        }
+        catch { throw unavailable(path); }
+      } finally { await file.close(); }
+    };
+    if (providerId === CLAUDE_NAMESPACE) {
+      const managed = process.platform === 'win32'
+        ? pathJoin(process.env.ProgramFiles || 'C:\\Program Files', 'ClaudeCode', 'managed-mcp.json')
+        : process.platform === 'darwin'
+          ? '/Library/Application Support/ClaudeCode/managed-mcp.json'
+          : '/etc/claude-code/managed-mcp.json';
+      if (await readDocument(managed) !== null) {
+        throw new ValidationError('Administrator-managed Claude MCP configuration is present. This headless/no-tools profile requires strict empty MCP safety flags that conflict with exclusive managed policy. Ask your administrator for an approved compatible setup or choose another provider; the app will not remove those flags or bypass policy.');
+      }
       return [];
     }
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value && /^COPILOT_.*(?:PLUGIN|MCP_CONFIG|CONFIG_PATH|CONFIG_DIR)/i.test(key)) throw unavailable(key);
+    }
+    const hasEntries = async (path: string): Promise<boolean> => {
+      signal.throwIfAborted();
+      try {
+        const directory = await opendir(path);
+        try { return await directory.read() !== null; }
+        finally { await directory.close(); }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw unavailable(path);
+      }
+    };
+    const hasOverlay = (value: unknown, depth = 0): boolean => {
+      if (!value || typeof value !== 'object') return false;
+      if (depth >= 8) return true;
+      return Object.entries(value).some(([key, item]) =>
+        /^(?:plugins?|enabledPlugins|installedPlugins|pluginSources|marketplaces|mcpServers|additionalMcpConfig|mcpConfig)$/i.test(key)
+          ? item !== null && item !== false &&
+            (typeof item !== 'object' ? item !== '' : Object.keys(item).length > 0)
+          : hasOverlay(item, depth + 1));
+    };
+    const sources: Parameters<typeof headlessMcpServerNames>[0][number][] = [];
+    for (const home of new Set([copilotHome, pathJoin(homedir(), '.copilot')])) {
+      sources.push({ label: pathJoin(home, 'mcp-config.json'), document: await readDocument(pathJoin(home, 'mcp-config.json')) });
+      for (const filename of ['config.json', 'settings.json', 'settings.local.json']) {
+        const path = pathJoin(home, filename);
+        if (hasOverlay(await readDocument(path))) throw unavailable(path);
+      }
+      for (const name of ['plugins', 'installed-plugins']) {
+        const path = pathJoin(home, name);
+        if (await hasEntries(path)) throw unavailable(path);
+      }
+    }
+    const cwd = pathResolve(spec.cwd ?? process.env.CW_WORKSPACE_CWD ?? process.cwd());
+    const canonicalCwd = await realpath(cwd);
+    const visited = new Set<string>();
+    for (const root of new Set([cwd, canonicalCwd])) {
+      let directory = root;
+      let bounded = false;
+      for (let depth = 0; depth < 64; depth += 1) {
+        signal.throwIfAborted();
+        if (!visited.has(directory)) {
+          visited.add(directory);
+          for (const path of [
+            pathJoin(directory, '.mcp.json'), pathJoin(directory, '.github', 'mcp.json'),
+            pathJoin(directory, '.copilot', 'mcp-config.json'),
+          ]) {
+            sources.push({ label: path, document: await readDocument(path), allowBareMap: true });
+          }
+          for (const filename of ['config.json', 'settings.json', 'settings.local.json']) {
+            const path = pathJoin(directory, '.copilot', filename);
+            if (hasOverlay(await readDocument(path))) throw unavailable(path);
+          }
+          for (const path of [pathJoin(directory, '.copilot', 'plugins'), pathJoin(directory, '.github', 'plugins')]) {
+            if (await hasEntries(path)) throw unavailable(path);
+          }
+        }
+        if (dirname(directory) === directory) {
+          bounded = true;
+          break;
+        }
+        directory = dirname(directory);
+      }
+      if (!bounded) throw unavailable('workspace ancestor depth');
+    }
+    return headlessMcpServerNames(sources);
   };
+  const withHeadlessMcpInventory = (provider: IAIProvider): IAIProvider => ({
+    ...provider,
+    ...(provider.mcp ? { mcp: { ...provider.mcp, defaultConfigPath: () => mcpConfigPath } } : {}),
+    startSession(spec): RunningSession {
+      if (spec.kind !== 'meta' && !(provider.id === CLAUDE_NAMESPACE && spec.noTools)) return provider.startSession(spec);
+      const controller = new AbortController();
+      const handlers = new Set<(event: SessionEvent) => void>();
+      let running: RunningSession | undefined;
+      let finished = false;
+      let resolveDone!: (code: number | null) => void;
+      const done = new Promise<number | null>((resolve) => { resolveDone = resolve; });
+      const emit = (event: SessionEvent): void => {
+        for (const handler of handlers) {
+          try { handler(event); }
+          catch { logger.warn('Headless session event subscriber failed', { sessionId: spec.sessionId }); }
+        }
+      };
+      const finish = (code: number | null): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        headlessInventories.delete(spec);
+        emit({ type: 'exit', code });
+        resolveDone(code);
+      };
+      const timer = setTimeout(() => {
+        controller.abort();
+        emit({ type: 'stderr', line: 'Trusted MCP source inventory timed out; no CLI was launched.' });
+        finish(1);
+      }, mcpConfig.discoveryTimeoutMs);
+      void prepareHeadlessMcpInventory(spec, provider.id, controller.signal).then((names) => {
+        controller.signal.throwIfAborted();
+        if (finished) return;
+        clearTimeout(timer);
+        headlessInventories.set(spec, names);
+        running = provider.startSession(spec);
+        headlessInventories.delete(spec);
+        running.onEvent((event) => { if (event.type !== 'exit') emit(event); });
+        return running.done.then(finish);
+      }).catch((error: unknown) => {
+        if (finished) return;
+        emit({ type: 'stderr', line: error instanceof Error ? error.message : 'Trusted MCP source inventory could not be verified; no CLI was launched.' });
+        finish(1);
+      });
+      return {
+        sessionId: spec.sessionId, done,
+        onEvent: (handler) => { handlers.add(handler); },
+        kill() {
+          controller.abort();
+          if (running) running.kill();
+          else finish(null);
+        },
+      };
+    },
+  });
   const providers = createProviderRegistry();
+  let claudeVersion = claudeVersionCapabilities('');
+  let claudeAuthMethod: string | null = null;
+  let claudeReadinessError: string | null = null;
+  let claudeReadiness: Promise<void> | null = null;
+  const automationReadiness = new Map<string, { supported: boolean; reason: string | null }>();
+  const automationChecks = new Set<string>();
+  const checkingAutomation = {
+    supported: false,
+    reason: 'Automated AI readiness is being checked against trusted MCP policy. Interactive sessions remain available. Refresh CLI status shortly or choose another provider.',
+  };
+  const refreshAutomationReadiness = (providerId: string): void => {
+    if (providerId === AGENCY_NAMESPACE) {
+      automationReadiness.set(providerId, {
+        supported: false,
+        reason: 'Agency is interactive-only in this application: its native runtime can inject MCP defaults and plugins before passthrough exclusions, so automated planners and agent generation cannot safely verify suppression. Interactive sessions remain available. Choose another provider for automated AI; administrator and trust policies will not be bypassed.',
+      });
+      return;
+    }
+    if (automationChecks.has(providerId)) return;
+    automationChecks.add(providerId);
+    if (!automationReadiness.has(providerId)) automationReadiness.set(providerId, checkingAutomation);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      automationReadiness.set(providerId, {
+        supported: false,
+        reason: 'Trusted MCP policy readiness timed out. No CLI was launched. Refresh CLI status to retry or choose another provider for automated AI.',
+      });
+    }, mcpConfig.discoveryTimeoutMs);
+    timer.unref();
+    void prepareHeadlessMcpInventory({
+      cwd: process.env.CW_WORKSPACE_CWD ?? process.cwd(), kind: 'meta', noTools: true,
+    }, providerId, controller.signal).then(() => {
+      controller.signal.throwIfAborted();
+      if (providerId === CLAUDE_NAMESPACE) assertClaudeHeadlessAuth(process.env, claudeAuthMethod);
+      automationReadiness.set(providerId, { supported: true, reason: null });
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      automationReadiness.set(providerId, {
+        supported: false,
+        reason: `${error instanceof Error ? error.message : 'Trusted MCP policy readiness could not be verified.'} Interactive sessions remain available; choose another provider for automated AI.`,
+      });
+    }).finally(() => {
+      clearTimeout(timer);
+      automationChecks.delete(providerId);
+    });
+  };
+  const providerAutomationReadiness = (providerId: string) => {
+    const snapshot = automationReadiness.get(providerId) ?? checkingAutomation;
+    refreshAutomationReadiness(providerId);
+    return providerId === AGENCY_NAMESPACE ? automationReadiness.get(providerId)! : snapshot;
+  };
   const providerDescriptors: Array<{
     namespace: string;
+    label: string;
+    installCommand?: string;
+    installAvailable?: boolean;
     enabled: boolean;
     defaultModel: string;
     create: () => IAIProvider;
   }> = [
     {
       namespace: COPILOT_NAMESPACE,
+      label: 'GitHub Copilot CLI',
+      installCommand: copilotInstallCommand(process.platform, config[COPILOT_BOOTSTRAP_NAMESPACE] as CopilotBootstrapConfig).args.at(-1),
+      installAvailable: true,
       enabled: copilotConfig.enabled,
       defaultModel: copilotConfig.defaultModel,
       create: () =>
@@ -1854,6 +2264,7 @@ function main(): void {
     },
     {
       namespace: AGENCY_NAMESPACE,
+      label: 'Agency',
       enabled: agencyConfig.enabled,
       defaultModel: agencyConfig.defaultModel,
       create: () =>
@@ -1864,6 +2275,29 @@ function main(): void {
           mcpServerNames: readMcpServerNames,
         }),
     },
+    {
+      namespace: CLAUDE_NAMESPACE,
+      label: 'Claude Code',
+      installCommand: claudeInstallationPlan(claudeConfig, process.platform).installCommand ?? undefined,
+      installAvailable: claudeInstallationPlan(claudeConfig, process.platform).supported,
+      enabled: claudeConfig.enabled,
+      defaultModel: claudeConfig.defaultModel,
+      create: () => createClaudeProvider(claudeConfig, {
+        spawner, baseEnv: process.env, logger,
+        authMethod: () => claudeAuthMethod,
+        waitUntilReady: async () => {
+          if (claudeVersion.status !== 'supported') refreshClaudeReadiness();
+          if (claudeReadiness) await claudeReadiness;
+        },
+        assertReady: () => {
+          if (claudeVersion.status !== 'supported') {
+            throw new ProviderError(claudeReadinessError ??
+              'Claude Code version checks are still pending. Retry after the CLI readiness probe finishes.');
+          }
+        },
+        listImportableSessions: () => claudeHistoryStore.listImportable(),
+      }),
+    },
   ];
 
   const enabledProviders: IAIProvider[] = [];
@@ -1872,71 +2306,126 @@ function main(): void {
     if (!descriptor.enabled) {
       continue;
     }
-    const provider = descriptor.create();
+    const provider = withHeadlessMcpInventory(descriptor.create());
     providers.register(provider);
     enabledProviders.push(provider);
     defaultModelByProvider[descriptor.namespace] = descriptor.defaultModel;
+    refreshAutomationReadiness(descriptor.namespace);
   }
   if (enabledProviders.length === 0) {
     throw new Error('No providers are enabled; enable at least one provider in config.');
   }
 
-  // Initial default from the synchronous (strong) signals; the async endpoint
-  // probe below refines it in place if the environment is still ambiguous.
-  // Agency is an internal Microsoft tool, so it is only ever exposed/selected
-  // when the user is signed in with a Microsoft identity (Azure DevOps). The
-  // identity store flips live on sign-in/sign-out, and the default is recomputed
-  // in place so Agency appears/disappears everywhere with no restart.
   const microsoftIdentity = createMicrosoftIdentity(false);
   const enabledProviderIds = enabledProviders.map((provider) => provider.id);
-  let lastEndpointReachable: boolean | null = null;
-  const computeDefaultProvider = (endpointReachable: boolean | null): string =>
-    selectDefaultProvider({
-      microsoftNetwork: resolveMicrosoftNetwork({
-        override: networkOverride,
-        envMicrosoft,
-        endpointReachable,
-      }),
-      enabled: enabledProviderIds,
-      installed: installedProviderIds(),
-      microsoftSignedIn: microsoftIdentity.isSignedIn(),
-    });
+  const installed = installedProviderIds();
+  const fallbackProvider = enabledProviderIds.find((id) => isProviderEligible(id) && installed.has(id)) ??
+    enabledProviderIds.find(isProviderEligible);
+  if (!fallbackProvider) throw new Error('No eligible AI providers are enabled');
+  let refreshProviderWorkers = (_resetCaches = false): void => {};
+  let extraProviderBlockers = (): Array<{ kind: string; id: string; label: string }> => [];
+  const executionPolicy = createActiveProviderPolicy({
+    enabledProviderIds: () => enabledProviderIds,
+    isEligible: isProviderEligible,
+    initialProviderId: providerSelectionConfigSchema.parse(config[PROVIDER_SELECTION_NAMESPACE]).providerId,
+    defaultProviderId: fallbackProvider,
+    saveSelected: (providerId) => {
+      const previousProvider = executionPolicy.get().providerId;
+      configOverrideService.update(PROVIDER_SELECTION_NAMESPACE, { providerId });
+      config[PROVIDER_SELECTION_NAMESPACE] = { ...config[PROVIDER_SELECTION_NAMESPACE] as object, providerId };
+      queueMicrotask(() => {
+        if (executionPolicy.get().providerId !== previousProvider) refreshProviderWorkers(true);
+      });
+    },
+    onSwitchFailed: () => {
+      try {
+        refreshProviderWorkers(true);
+      } catch (error) {
+        logger.warn('Failed to restore active CLI workers after a refused switch', { error });
+      }
+    },
+    externalBlockers: () => {
+      const stats = processAdmission.stats();
+      return [
+        ...extraProviderBlockers(),
+        ...(stats.warmProcesses > 0 ? [{
+          kind: 'warm', id: 'warm-processes', label: `${stats.warmProcesses} warm or quota CLI workers`,
+        }] : []),
+        ...(stats.processes > stats.warmProcesses ? [{
+          kind: 'process', id: 'cold-processes', label: `${stats.processes - stats.warmProcesses} AI CLI processes`,
+        }] : []),
+        ...(stats.queued > 0 ? [{
+          kind: 'queued', id: 'queued-processes', label: `${stats.queued} queued CLI requests`,
+        }] : []),
+      ];
+    },
+  });
   const resolverConfig = {
-    defaultProvider: computeDefaultProvider(null),
+    get defaultProvider() { return executionPolicy.get().providerId ?? fallbackProvider; },
     defaultModelByProvider,
+    executionPolicy,
   };
   const resolver = createProviderResolver(providers, resolverConfig);
-  // Recompute the default live whenever the Microsoft identity flips so new
-  // sessions and the first-run UI immediately reflect Agency becoming available
-  // (sign-in) or hidden (sign-out).
-  microsoftIdentity.onChange(() => {
-    resolverConfig.defaultProvider = computeDefaultProvider(lastEndpointReachable);
-    logger.info('provider exposure changed', {
-      microsoftSignedIn: microsoftIdentity.isSignedIn(),
-      defaultProvider: resolverConfig.defaultProvider,
+  const runClaudeProbe = async (probe: { command: string; args: string[] }): Promise<string> => {
+    if (!applicationWork.accepting) throw new ConflictError('Application shutdown is in progress');
+    const permit = executionPolicy.acquire(CLAUDE_NAMESPACE, {
+      kind: 'probe', id: 'claude-readiness', label: 'Checking Claude Code version and authentication',
     });
-  });
-
-  // When the environment is ambiguous (no override, env not Microsoft), run the
-  // best-effort reachability probe and refine the default in place. The resolver
-  // reads `defaultProvider` live, so later sessions pick up the refined default
-  // without a restart. Skipped when a strong signal already decided it.
-  if (networkOverride === null && !envMicrosoft) {
-    void probeMicrosoftInstallEndpoint()
-      .then((reachable) => {
-        if (reachable) {
-          lastEndpointReachable = true;
-          resolverConfig.defaultProvider = computeDefaultProvider(true);
-        }
-      })
-      .catch((error) => {
-        logger.debug('microsoft network probe failed', { error });
-      });
-  }
+    let admission: Awaited<ReturnType<typeof processAdmission.acquireCold>> | undefined;
+    let handle: ReturnType<typeof spawner.spawn>;
+    try {
+      admission = await processAdmission.acquireCold(AbortSignal.timeout(claudeConfig.probeTimeoutMs));
+      if (!applicationWork.accepting) throw new ConflictError('Application shutdown is in progress');
+      handle = spawner.spawn({ ...probe, env: process.env as Record<string, string>, stdin: 'ignore' });
+    } catch (error) {
+      admission?.release();
+      permit.release();
+      throw error;
+    }
+    handle.onExit(() => { admission?.release(); permit.release(); });
+    trackProviderProbe(handle);
+    let output = '';
+    handle.onStdoutLine((line) => { output = `${output}${line}\n`.slice(-claudeConfig.maxCommandLineLength); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        try { handle.kill(); }
+        catch (error) { logger.warn('Claude readiness probe termination could not be requested', { error }); }
+        reject(new ProviderError('Claude Code readiness probe timed out; native termination must be confirmed before switching.'));
+      }, claudeConfig.probeTimeoutMs);
+      timer.unref();
+    });
+    try {
+      const code = await Promise.race([handle.done, deadline]);
+      if (code !== 0) throw new ProviderError('Claude Code readiness probe failed. Check the configured executable and commands.');
+      return output;
+    } finally { clearTimeout(timer); }
+  };
+  const refreshClaudeReadiness = (): void => {
+    if (claudeReadiness || executionPolicy.get().selectionRequired ||
+        resolverConfig.defaultProvider !== CLAUDE_NAMESPACE || !claudeBootstrapper.status().installed) return;
+    claudeVersion = claudeVersionCapabilities('');
+    claudeAuthMethod = null;
+    claudeReadinessError = null;
+    const commands = claudeProbeCommands(claudeConfig);
+    claudeReadiness = applicationWork.own(async () => {
+      claudeVersion = claudeVersionCapabilities(await runClaudeProbe(commands.version));
+      if (claudeVersion.status !== 'supported') {
+        throw new ProviderError('This Claude Code version is unsupported or unrecognized. Update the native CLI or choose another CLI.');
+      }
+      const auth = parseClaudeAuthStatus(await runClaudeProbe(commands.authStatus));
+      claudeAuthMethod = auth.authenticated ? auth.method : null;
+    }).catch((error: unknown) => {
+      claudeReadinessError = error instanceof Error ? error.message : 'Claude Code readiness could not be verified';
+      logger.warn('Claude Code readiness unavailable', { reason: claudeReadinessError });
+    }).finally(() => {
+      claudeReadiness = null;
+      refreshAutomationReadiness(CLAUDE_NAMESPACE);
+    });
+  };
   logger.info('default AI provider selected', {
     defaultProvider: resolverConfig.defaultProvider,
-    envMicrosoft,
-    override: networkOverride,
+    selectionRequired: executionPolicy.get().selectionRequired,
   });
 
   // Credit engine.
@@ -1954,6 +2443,7 @@ function main(): void {
   ensureDir(`${sessionConfig.usageDir}/.keep`);
   const factory = createSessionFactory({ ids, clock, config: sessionConfig });
   const launcher = createSessionLauncher({
+    executionPolicy,
     physicalOwnership: metaPhysicalOwnership,
     processAdmission,
     resolver,
@@ -1981,6 +2471,7 @@ function main(): void {
     operations: metaOperationRepo,
     clock,
     newOperationId: () => ids.next(),
+    onOperationChanged: metaUsageCapture.prioritize,
   });
 
   // Reconciles a session's persisted resolved model with a freshly-observed
@@ -2004,6 +2495,7 @@ function main(): void {
   // Interactive terminal: launches the real CLI chat TUI in a PTY per session,
   // reusing the same usage-capture pipeline via session.started/ended events.
   terminalManager = createTerminalManager({
+    executionPolicy,
     logger,
     spawner: createNodePtySpawner(),
     providers,
@@ -2045,6 +2537,7 @@ function main(): void {
     // the status bar if even that could not recover it.
     selfRecovery: {
       enabled: selfRecoveryConfig.enabled,
+      maxRestartCycles: selfRecoveryConfig.maxRestartCycles,
       useMetaAnalysis: selfRecoveryConfig.useMetaAnalysis,
       analyze: (errorText) =>
         analyzeSessionError
@@ -2065,9 +2558,9 @@ function main(): void {
     createCliUsageTailer({
       intervalMs: usageConfig.livePollIntervalMs,
       sessionId: session.id,
-      sourceId: cliUsageStore.sourceId,
+      sourceId: providerUsageRouter.sourceId(session.provider),
       read: (cursor, limit) =>
-        cliUsageStore.readUsagePage(
+        providerUsageRouter.readUsagePage(
           session.id,
           {
             featureId: session.featureId,
@@ -2220,24 +2713,43 @@ function main(): void {
     copilotHistoryConfig.subdir,
     copilotHistoryConfig.databaseFile,
   );
+  const livePrompts = createLivePromptFsReader({
+    sessionStateDir: pathJoin(
+      homedir(),
+      copilotHistoryConfig.subdir,
+      copilotHistoryConfig.sessionStateDir,
+    ),
+    eventsFile: copilotHistoryConfig.eventsFile,
+    tailBytes: copilotHistoryConfig.livePromptTailBytes,
+    maxScanBytes: copilotHistoryConfig.livePromptMaxScanBytes,
+    worker: {
+      maxWorkers: copilotHistoryConfig.livePromptMaxWorkers,
+      maxQueued: copilotHistoryConfig.livePromptMaxQueued,
+      timeoutMs: copilotHistoryConfig.livePromptTimeoutMs,
+      workerMemoryMb: copilotHistoryConfig.livePromptWorkerMemoryMb,
+    },
+  });
   const copilotHistoryReader = createCopilotHistoryReader({
     source: createCopilotHistoryDb({
       databasePath: cliStoreDatabasePath,
     }),
-    livePrompts: createLivePromptFsReader({
-      sessionStateDir: pathJoin(
-        homedir(),
-        copilotHistoryConfig.subdir,
-        copilotHistoryConfig.sessionStateDir,
-      ),
-      eventsFile: copilotHistoryConfig.eventsFile,
-      tailBytes: copilotHistoryConfig.livePromptTailBytes,
-    }),
+    livePrompts,
     config: copilotHistoryConfig,
+    onLiveReadFailure: (sessionId, error) => {
+      logger.warn('Live prompt history refresh is unavailable; clients retain their last loaded history', { sessionId, error });
+    },
+  });
+  const providerHistoryReader = createProviderHistoryReader({
+    sessions: sessionRepo,
+    readers: new Map([
+      [COPILOT_NAMESPACE, copilotHistoryReader],
+      [AGENCY_NAMESPACE, copilotHistoryReader],
+      [CLAUDE_NAMESPACE, claudeHistoryStore],
+    ]),
   });
   const workSummaryService = createFeatureWorkSummaryService({
     sessions: sessionRepo,
-    reader: copilotHistoryReader,
+    reader: providerHistoryReader,
     summaries: sessionSummaryRepo,
   });
   const collector = createTranscriptCollector({
@@ -2320,17 +2832,14 @@ function main(): void {
   // falls back to Copilot otherwise — matching session launch defaults. An
   // explicit choice (persisted override) always wins, subject to the exposure
   // degrade above.
-  const metaProviderExplicitlyChosen = () =>
-    (configOverrideService.getOverride(META_NAMESPACE) as { providerId?: unknown }).providerId !== undefined;
   const exposedMetaSettings = {
     get: () => {
       const value = metaSettings.get();
-      const providerId = metaProviderExplicitlyChosen()
-        ? value.providerId
-        : resolverConfig.defaultProvider;
-      return isProviderExposed(providerId, microsoftIdentity.isSignedIn())
-        ? { ...value, providerId }
-        : { ...value, providerId: resolverConfig.defaultProvider };
+      const providerId = resolverConfig.defaultProvider;
+      return {
+        ...value, providerId,
+        model: value.providerId === providerId ? value.model : defaultModelByProvider[providerId],
+      };
     },
     set: (patch: Partial<ReturnType<typeof metaSettings.get>>) => metaSettings.set(patch),
     onChange: (listener: (value: ReturnType<typeof metaSettings.get>) => void) =>
@@ -2342,13 +2851,21 @@ function main(): void {
   // session across refreshes so it stops losing the resource race with the warm
   // pool — the failure that flashed "plan usage unavailable".
   const planUsageConfig = config[PLAN_USAGE_NAMESPACE] as PlanUsageConfig;
-  const planUsageService = createPlanUsageService({
-    probe: createPtyPlanUsageProbe({
+  const quotaServices = new Map<string, {
+    service: ReturnType<typeof createPlanUsageService>;
+    probe: ReturnType<typeof createPtyPlanUsageProbe>;
+  }>();
+  const quotaService = (providerId: string) => {
+    const cached = quotaServices.get(providerId);
+    if (cached) return cached.service;
+    const probe = createPtyPlanUsageProbe({
       spawner: createNodePtySpawner(),
       resolveCommand: () => {
         const active = exposedMetaSettings.get();
+        executionPolicy.assertActive(providerId);
         return buildPlanUsageProbeCommand({
-          providerId: active.providerId,
+          extraArgs: planUsageConfig.extraArgs,
+          providerId,
           model: active.model || copilotConfig.defaultModel,
           sessionId: randomUUID(),
           copilot: { executable: copilotConfig.executable },
@@ -2360,11 +2877,31 @@ function main(): void {
       },
       env: planUsageEnv,
       admission: processAdmission,
-    }),
-    now: () => new Date(),
-    ttlMs: planUsageConfig.refreshMinutes * 60 * 1000,
-    failureThreshold: planUsageConfig.failureThreshold,
-  });
+      acquireExecution: () => executionPolicy.acquire(providerId, {
+        kind: 'probe', id: 'plan-usage', label: 'Plan quota CLI worker',
+      }),
+      usageCommand: () => (providerId === AGENCY_NAMESPACE
+        ? agencyConfig.commandProfile : copilotConfig.commandProfile)?.usageCommand ?? copilotCommandProfile.usageCommand,
+    });
+    const service = createPlanUsageService({
+      probe,
+      now: () => new Date(),
+      ttlMs: planUsageConfig.refreshMinutes * 60 * 1000,
+      failureThreshold: planUsageConfig.failureThreshold,
+    });
+    quotaServices.set(providerId, { service, probe });
+    return service;
+  };
+  const quotaAvailable = () => !executionPolicy.get().selectionRequired &&
+    providers.get(resolverConfig.defaultProvider).capabilities?.planUsage === 'aic-panel';
+  const planUsageService: ReturnType<typeof createPlanUsageService> = {
+    read: () => quotaAvailable()
+      ? quotaService(resolverConfig.defaultProvider).read()
+      : { status: 'unavailable', usage: null, error: 'AI-credit plan quota is not available for the selected CLI.' },
+    refresh: () => quotaAvailable()
+      ? quotaService(resolverConfig.defaultProvider).refresh()
+      : Promise.resolve(null),
+  };
 
   const shutdownOwner = createAbortTracker();
   // Shared headless-AI primitive reused by every AI feature (summaries,
@@ -2398,9 +2935,26 @@ function main(): void {
   // with pricing is the CLI itself: a throwaway `copilot --acp` session returns
   // it in its `session/new` result, so it is fetched once over ACP and cached
   // (the fetch costs seconds; the catalog rarely changes).
-  const modelCatalogService = createModelCatalogService({
-    probe: createAcpModelCatalogProbe({
+  const modelCatalogServices = new Map<string, ReturnType<typeof createModelCatalogService>>();
+  const catalogForProvider = (providerId: string) => {
+    const cached = modelCatalogServices.get(providerId);
+    if (cached) return cached;
+    const provider = providers.get(providerId);
+    const staticCatalog = async () => (await provider.listModels()).map((model) => ({
+      id: model.id, name: model.label, description: '', enabled: true,
+      usageMultiplier: null, usageLabel: null, priceCategory: null,
+    }));
+    const probe = provider.capabilities?.warmTransport === 'acp' && providerId === warmProviderIdentity
+      ? { fetch: async () => {
+        try {
+          const names = await prepareHeadlessMcpInventory({ cwd: process.cwd(), kind: 'meta' }, providerId,
+            AbortSignal.timeout(mcpConfig.discoveryTimeoutMs));
+          // This probe cannot pass per-server exclusions; never initialize custom servers for a catalog read.
+          if (names.length > 0) return staticCatalog();
+        } catch { return staticCatalog(); }
+        return createAcpModelCatalogProbe({
       executable: warmExecutable,
+      extraArgs: warmPoolCfg.modelCatalogExtraArgs,
       // The CLI's `session/new` requires a working directory to open a session;
       // any valid directory yields the same account-wide model catalog.
       cwd: process.cwd(),
@@ -2409,10 +2963,24 @@ function main(): void {
       // hold the request open.
       initializeTimeoutMs: 60_000,
       turnTimeoutMs: 30_000,
-    }),
-    now: () => Date.now(),
-    ttlMs: 10 * 60 * 1000,
-  });
+      admission: processAdmission,
+      acquireExecution: () => executionPolicy.acquire(providerId, {
+        kind: 'probe', id: 'model-catalog', label: 'Model catalog CLI probe',
+      }),
+      registerPhysical: trackProviderProbe,
+        }).fetch();
+      } }
+      : { fetch: staticCatalog };
+    const service = createModelCatalogService({ probe, now: () => Date.now(), ttlMs: 10 * 60 * 1000 });
+    modelCatalogServices.set(providerId, service);
+    return service;
+  };
+  const modelCatalogService: ReturnType<typeof createModelCatalogService> = {
+    read: () => executionPolicy.get().selectionRequired
+      ? Promise.resolve([]) : catalogForProvider(resolverConfig.defaultProvider).read(),
+    refresh: () => executionPolicy.get().selectionRequired
+      ? Promise.resolve([]) : catalogForProvider(resolverConfig.defaultProvider).refresh(),
+  };
   const warmDemand = new PoolDemandTracker({
     now: () => Date.now(),
     windowMs: warmPoolCfg.demandWindowMs,
@@ -2423,6 +2991,7 @@ function main(): void {
   // The single live warm pool, so the Settings page can resize it without a
   // restart. Empty until warm pools are enabled/built below.
   const allWarmPools = new Set<MetaSessionPool>();
+  let warmPoolStarting = false;
   let resizeMetaPoolFn: (size: number) => ReturnType<
     typeof metaPoolsStatus
   > = () => {
@@ -2430,19 +2999,36 @@ function main(): void {
   };
   let rawMetaAi: typeof coldMetaRunner = coldMetaRunner;
   let warmInlinePrompts = false;
-  if (warmPoolCfg.enabled) {
-    const supportsWarm = createConfiguredWarmRoutePolicy({
-      settings: metaSettings,
+  const startWarmPool = (): void => {
+    if (!warmPoolCfg.enabled || executionPolicy.get().selectionRequired ||
+        warmProviderIdentity !== resolverConfig.defaultProvider ||
+        !installedProviderIds().has(resolverConfig.defaultProvider) || allWarmPools.size > 0 || warmPoolStarting) return;
+    warmPoolStarting = true;
+    void (async () => {
+    const warmCwd = process.cwd();
+    const disabledNames = await prepareHeadlessMcpInventory({ cwd: warmCwd, kind: 'meta' }, resolverConfig.defaultProvider,
+      AbortSignal.timeout(mcpConfig.discoveryTimeoutMs));
+    if (!applicationWork.accepting || executionPolicy.get().selectionRequired ||
+        warmProviderIdentity !== resolverConfig.defaultProvider || allWarmPools.size > 0) return;
+    const inventoryKey = [...disabledNames].sort().join('\0');
+    const routeSupportsWarm = createConfiguredWarmRoutePolicy({
+      settings: exposedMetaSettings,
       metaConfig,
       copilotConfig,
       agencyConfig,
     });
+    const supportsWarm = (request: Parameters<typeof routeSupportsWarm>[0]): boolean =>
+      routeSupportsWarm(request) && (!request.cwd || pathResolve(request.cwd) === pathResolve(warmCwd));
     const pool = new MetaSessionPool({
       physicalOwnership: metaPhysicalOwnership,
       processAdmission,
       size: warmPoolCfg.size,
       createClient: () =>
-        new AcpClient(new AcpProcessAdapter({ executable: warmExecutable }), {
+        new AcpClient(new AcpProcessAdapter({
+          executable: warmExecutable, cwd: warmCwd,
+          baseArgs: ['--acp', '--disable-builtin-mcps', ...disabledNames.flatMap((name) => ['--disable-mcp-server', name])],
+          extraArgs: warmPoolCfg.extraArgs,
+        }), {
           initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
           turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
         }),
@@ -2462,7 +3048,18 @@ function main(): void {
     });
     const warmPool: WarmPool = {
       stats: () => pool.stats(),
-      runDetailed: (request) => warmRunner.runDetailed(request),
+      runDetailed: async (request) => {
+        let current: readonly string[];
+        try {
+          current = await prepareHeadlessMcpInventory({ cwd: request.cwd ?? warmCwd, kind: 'meta' },
+            warmProviderIdentity!, AbortSignal.any([
+              AbortSignal.timeout(mcpConfig.discoveryTimeoutMs),
+              ...(request.signal ? [request.signal] : []),
+            ]));
+        } catch { return coldMetaRunner.runDetailed(request); }
+        if ([...current].sort().join('\0') !== inventoryKey) return coldMetaRunner.runDetailed(request);
+        return warmRunner.runDetailed({ ...request, cwd: request.cwd ?? warmCwd });
+      },
     };
     rawMetaAi = createPooledMetaRunner({
       physicalOwnership: metaPhysicalOwnership,
@@ -2483,12 +3080,31 @@ function main(): void {
       pool.resize(size);
       return metaPoolsStatusFn();
     };
-  }
+    })().catch((error: unknown) => {
+      logger.warn('Warm ACP startup blocked by unverifiable MCP sources; using guarded cold launches', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => { warmPoolStarting = false; });
+  };
+  extraProviderBlockers = () => [...allWarmPools].flatMap((pool, index) => {
+    const live = pool.stats().live;
+    return live > 0 ? [{ kind: 'warm', id: `warm-pool-${index}`, label: `${live} warm CLI workers awaiting exit` }] : [];
+  });
+  refreshProviderWorkers = (resetCaches = false) => {
+    if (resetCaches) {
+      quotaServices.clear();
+      modelCatalogServices.clear();
+    }
+    refreshClaudeReadiness();
+    startWarmPool();
+  };
+  refreshClaudeReadiness();
+  startWarmPool();
   const activeSessions = createActiveSessionsService({
     config: activeSessionsConfig,
     now: () => Date.now(),
     sessions: createActiveSessionsReader(db),
-    pools: metaPoolsStatusFn,
+    pools: () => metaPoolsStatusFn(),
     tracker: metaDebugTracker,
     context: (featureId) => {
       const feature = featureRepo.get(featureId);
@@ -2497,11 +3113,15 @@ function main(): void {
       return { featureName: feature?.name ?? null, projectName: repo?.name ?? null };
     },
   });
-  const metaAi = createOwnedMetaRunner(
+  const metaAi = createExclusiveMetaRunner(createOwnedMetaRunner(
     createRecordingMetaRunner({
-      base: observeMetaRunner(rawMetaAi, metaDebugTracker),
+      base: observeMetaRunner({
+        run: (request) => rawMetaAi.run(request),
+        runDetailed: (request) => rawMetaAi.runDetailed(request),
+      }, metaDebugTracker),
       operations: metaOperationRepo,
       ownership: metaOperationOwnership,
+      onOperationChanged: metaUsageCapture.prioritize,
       newOperationId: () => ids.next(),
       resolveIdentity: (request) => {
         const defaults = exposedMetaSettings.get();
@@ -2513,7 +3133,7 @@ function main(): void {
       clock,
     }),
     shutdownOwner,
-  );
+  ), executionPolicy);
   // Wire the self-recovery analyzer now that the meta runner is final. Runs a
   // read-only diagnosis turn; a thrown error (meta cannot spin up) propagates to
   // the coordinator, which then reports that automatic analysis was unavailable.
@@ -2543,7 +3163,7 @@ function main(): void {
     files: createMcpConfigFileStore(),
     tools: createMcpToolInspector(),
     config: mcpConfig,
-    microsoftSignedIn: () => microsoftIdentity.isSignedIn(),
+    microsoftSignedIn: () => isProviderEligible(AGENCY_NAMESPACE),
     healDiagnose: async (serverName, message, output) => {
       try {
         const detail = [message ?? '', ...output].join('\n').trim();
@@ -2622,7 +3242,11 @@ function main(): void {
   });
   const categoryFiles = createMcpConfigFileStore();
   const categoryWrites = createMcpConfigWrites();
-  const copilotMcpPath = pathJoin(process.env.COPILOT_HOME || pathJoin(homedir(), '.copilot'), 'mcp-config.json');
+  const copilotMcpPath = mcpConfigPath;
+  const physicalMcpConfigPath = async (path: string): Promise<string> => {
+    const canonical = await canonicalCheckoutPath(pathResolve(path));
+    return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  };
   const studioMcpScript = pathJoin(dirname(fileURLToPath(import.meta.url)), 'automation', 'mcp', 'studio-mcp-server.js');
   let studioBridgeApiBase: string | null = null;
   const studioBridgeHealth = createStudioMcpHealth({
@@ -2676,6 +3300,7 @@ function main(): void {
     maxRetained: 20,
   });
   const mcpService = createMcpCategoryService({
+    categoryVisible: isProviderEligible,
     categories: createMcpCategories(categoryFiles, agencyMcpStore, {
       copilot: copilotMcpPath,
       claude: pathJoin(homedir(), '.claude.json'),
@@ -2694,11 +3319,7 @@ function main(): void {
       now: () => clock.now().getTime(),
       ttlMs: mcpConfig.optionsCacheTtlMs ?? mcpDefaults.optionsCacheTtlMs!,
       maxConcurrent: 2,
-    }))
-      // Claude Code is never offered in this IDE (Copilot/Agency only), so the
-      // category is dropped from the manager surface while its generic service
-      // behaviour stays exercised by createMcpCategories tests.
-      .filter((category) => category.info.id !== 'claude'),
+    })),
     enabled: () => mcpConfig.enabled,
     tools: createMcpToolInspector(),
     probeTimeoutMs: mcpConfig.discoveryTimeoutMs,
@@ -2754,7 +3375,7 @@ function main(): void {
       probe: studioBridgeHealth,
     },
   });
-  const gitRepository = createGitRepositoryAdapter();
+  const gitRepository = createGitRepositoryAdapter(undefined, gitConfig.executable);
   const repositoryEvidence = createRepositoryEvidenceService({
     revisionLookup: gitRepository,
     collector: createFilesystemEvidenceCollector({
@@ -2780,7 +3401,7 @@ function main(): void {
   });
   const repoInsightsService = createRepoInsightsService({
     repos: repoService,
-    git: createRepoInsightsGitAdapter(undefined, repoInsightsConfig.gitTimeoutMs),
+    git: createRepoInsightsGitAdapter(undefined, repoInsightsConfig.gitTimeoutMs, gitConfig.executable),
     clock,
     config: repoInsightsConfig,
     store: createRepoInsightsRepo(db),
@@ -2819,7 +3440,7 @@ function main(): void {
       run: (args, cwd) =>
         new Promise((resolve) => {
           execFile(
-            'git',
+            gitConfig.executable,
             args,
             {
               cwd,
@@ -2875,6 +3496,10 @@ function main(): void {
   const backgroundRunner = createBackgroundWorkRunner<ChangeGraphWorkInput, BuiltChangeGraph>({
     config: backgroundWorkConfig,
     spawn: (input, progress) => spawnChangeGraphWorker(input, progress, backgroundWorkConfig.workerMemoryMb),
+  });
+  const usageSummaryRunner = createBackgroundWorkRunner<UsageSummaryWorkInput, UsageSummary>({
+    config: backgroundWorkConfig,
+    spawn: (input, progress) => spawnUsageSummaryWorker(input, progress, backgroundWorkConfig.workerMemoryMb),
   });
   const prReviewService = createPrReviewService({
     reviews: prReviewRepo,
@@ -2979,6 +3604,7 @@ function main(): void {
       return createAzureCommentsGateway(
         {
           token: azureTokenFor,
+          viewerId: azureCommentViewerId,
           httpGet: azureHttpGet,
           httpPost: azureHttpPost,
           httpPatch: azureHttpPatch,
@@ -3307,6 +3933,7 @@ function main(): void {
   const bugBashRunHub = createBugBashRunHub({ service: bugBashService });
   const plannerRepo = createPlannerRepo(db);
   const workspaceAdmin = createWorkspaceAdmin({
+    unitOfWork: databaseUnitOfWork,
     features: featureService,
     sessions: sessionRepo,
     usage: usageRepo,
@@ -3339,7 +3966,7 @@ function main(): void {
     prReviews: prReviewService,
     worktrees: worktreeService,
     sessionWorktrees: { remove: (path) => worktreeService.remove(path) },
-    readBranch: (path) => createGitBranchReader().read(path),
+    readBranch: (path) => createGitBranchReader(gitConfig.executable).read(path),
     sharedContext: contextService,
     ownedAutomations: {
       deleteByFeature: async (featureId) => {
@@ -3383,6 +4010,7 @@ function main(): void {
     },
   });
   const sessionBootstrap = createSessionBootstrap({
+    logger,
     features: featureService,
     sessions: sessionRepo,
     summaries: sessionSummaryRepo,
@@ -3576,9 +4204,8 @@ function main(): void {
   });
   automationScheduler.resume();
   automationScheduler.start();
-  // Unified background credential warm loop: keeps the GitHub token and every
-  // observed Azure DevOps OAuth token fresh so sessions/MCP servers never block
-  // on an interactive re-authentication.
+  // Refreshes future child credential snapshots; it cannot update environments
+  // of running processes or satisfy unrelated native MCP authorization.
   const credentialWarmer = createCredentialWarmer({
     intervalMs: authWarmerConfig.intervalMs,
     onError: (error) =>
@@ -3602,6 +4229,7 @@ function main(): void {
   const app = express();
   app.use(express.json());
   const router = express.Router();
+  router.post('/sessions/:sessionId/text-attachments', createTextAttachmentBody(textAttachmentsConfig.fileBytes));
   const settingsAssistant = createSettingsAssistant({ ai: metaAi });
 
   // Self-healing: environment problems the IDE can fix on the user's behalf
@@ -3623,7 +4251,7 @@ function main(): void {
         // Re-resolve each time so a freshly installed binary is picked up even
         // though this long-lived process inherited a narrower PATH at launch.
         execFile(
-          resolveGhExecutable(),
+          resolveGhExecutable({ executable: githubCliConfig.executable }),
           ['--version'],
           { windowsHide: true, timeout: 10_000 },
           (err) => resolve(!err),
@@ -3631,7 +4259,7 @@ function main(): void {
       }),
     heal: (log) =>
       new Promise<void>((resolve, reject) => {
-        const plan = buildGhInstallPlan(process.platform);
+        const plan = buildGhInstallPlan(process.platform, config[SELF_HEAL_NAMESPACE] as SelfHealConfig);
         log(plan.help);
         if (!plan.supported) {
           reject(new Error(plan.help));
@@ -3722,12 +4350,13 @@ function main(): void {
       ...(status.upgrade?.phase ? { upgradePhase: status.upgrade.phase } : {}),
       ...(status.installed
         ? {}
-        : { detail: 'Not installed — installs automatically on first use.' }),
+        : { detail: 'Not installed. Choose Install and use in CLI settings.' }),
     });
     return [
       describe('copilot', 'GitHub Copilot CLI', copilotBootstrapper.status()),
       describe('agency', 'Agency', agencyBootstrapper.status()),
-    ];
+      describe(CLAUDE_NAMESPACE, 'Claude Code', claudeBootstrapper.status()),
+    ].filter((provider) => isProviderEligible(provider.id) && providers.has(provider.id));
   };
   const healthReportService = createHealthReportService({
     timeoutMs: healthConfig.probeTimeoutMs,
@@ -3784,12 +4413,29 @@ function main(): void {
   };
 
   mountRoutes(
-    router,    ownApplicationRoutes(createApiRoutes({
+    router, guardDatabaseRoutes(ownApplicationRoutes(createApiRoutes({
+      textAttachments,
+      operations: clientOperations,
       appResources: resourceService,
       activeSessions,
       resources: () => ({
         ...resourceMonitor.snapshot(),
         backgroundWork: backgroundRunner.stats(),
+        usageSummaryWork: usageSummaryRunner.stats(),
+        promptHistoryWork: livePrompts.stats(),
+        clientOperations: {
+          connectionPoisoned: databaseUnitOfWork.poisoned,
+          restartRequired: databaseUnitOfWork.poisoned,
+          connectionClosed: databaseClosed,
+          closeFailureReports: databaseCloseFailureReports,
+        },
+        logging: {
+          mode: !effectiveLogging.toFile ? 'console-only' : queuedFileLogging ? 'worker' : 'synchronous',
+          file: queuedFileLogging?.stats() ?? null,
+          sinkFailureReports: logSinkFailureReports,
+          fileFailureReports: fileLogFailureReports,
+          diagnosticWriteFailures,
+        },
       }),
       features: featureService,
       admin: workspaceAdmin,
@@ -3798,7 +4444,7 @@ function main(): void {
       factory,
       sessionConfig,
       sessions: sessionRepo,
-      sessionHistory: copilotHistoryReader,
+      sessionHistory: providerHistoryReader,
       resolveSessionCwd,
       resolveSessionEnvironment: (featureId) =>
         featureEnvironmentResolver.resolve(featureId),
@@ -3810,18 +4456,54 @@ function main(): void {
         });
       },
       providers,
+      executionPolicy,
+      isProviderEligible,
+      updateInternalAgencyOptIn: (enabled) => {
+        configOverrideService.update(PROVIDER_SELECTION_NAMESPACE, { allowInternalAgency: enabled });
+        config[PROVIDER_SELECTION_NAMESPACE] = { ...config[PROVIDER_SELECTION_NAMESPACE] as object, allowInternalAgency: enabled };
+        allowInternalAgency = enabled;
+        if (enabled) refreshAgencyPath();
+      },
+      drainProviderWork: createProviderSwitchDrain({
+        blockers: () => executionPolicy.get().blockers,
+        quotaCapturing: () => [...quotaServices.values()].some(({ probe }) => probe.isCapturing()),
+        stopQuota: () => { for (const { probe } of quotaServices.values()) probe.stop(); },
+        drainTerminals: (timeoutMs) => terminalManager!.drainForProviderSwitch(timeoutMs),
+        drainWarmWorkers: (timeoutMs) => [...allWarmPools].map((pool) => pool.closeAndWait(timeoutMs)),
+        onDrained: () => {
+          allWarmPools.clear();
+          rawMetaAi = coldMetaRunner;
+          warmInlinePrompts = false;
+          metaPoolsStatusFn = () => metaPoolsStatus(false);
+          resizeMetaPoolFn = () => { throw new NotFoundError('Warm CLI workers are stopped'); };
+        },
+        timeoutMs: 5_000,
+      }),
+      isConfigNamespaceExposed: (namespace) => namespace !== PROVIDER_SELECTION_NAMESPACE &&
+        isProviderEligible(namespace),
       providerBootstrapInfo: () => {
         const installed = installedProviderIds();
         return {
+          internalAgencyEnabled: allowInternalAgency,
           defaultProvider: resolverConfig.defaultProvider,
-          providers: enabledProviderIds.map((id) => ({
-            id,
-            installed: installed.has(id),
-          })),
+          providers: enabledProviderIds.map((id) => {
+            const descriptor = providerDescriptors.find((candidate) => candidate.namespace === id);
+            return {
+              id, installed: installed.has(id), configNamespace: id,
+              automation: providerAutomationReadiness(id),
+              label: descriptor?.label ?? id,
+              installCommand: descriptor?.installCommand,
+              installAvailable: descriptor?.installAvailable,
+            };
+          }),
         };
       },
       microsoftSignedIn: () => microsoftIdentity.isSignedIn(),
       aggregates: featureAnalytics,
+      usageSummary: (signal) => usageSummaryRunner.run({
+        databasePath: persistenceConfig.databasePath,
+        rollupKinds: aggregationConfig.rollupKinds,
+      }, { signal }),
       summarizer,
       summaries: summaryRepo,
       workSummaries: workSummaryService,
@@ -3878,6 +4560,7 @@ function main(): void {
       usageDetail: usageDetailService,
       mcp: mcpService,
       configRegistry: registry,
+      commandCatalog: [...providerCommands, ...repositoryCommands, ...mcpCommands, ...internalCommands],
       currentConfig: config,
       configSecretPaths,
       configOverrides: configOverrideService,
@@ -3885,7 +4568,7 @@ function main(): void {
       selfHeal: selfHealService,
       systemHealth: healthReportService,
       configSchema: () => describeNamespaces(registry),
-      metaPools: metaPoolsStatusFn,
+      metaPools: () => metaPoolsStatusFn(),
       metaOperations: { operations: metaOperationRepo, config: metaOperationsConfig },
       metaPoolsProcessAdmission: () => ({
         ...processAdmission.stats(),
@@ -3894,11 +4577,12 @@ function main(): void {
       resizeMetaPool: (size) => resizeMetaPoolFn(size),
       metaSettings: () => ({
         ...exposedMetaSettings.get(),
-        warmPoolEnabled: warmPoolCfg.enabled,
+        warmPoolEnabled: metaPoolsStatusFn().enabled,
       }),
       updateMetaSettings: async (patch) => {
-        const current = metaSettings.get();
+        const current = exposedMetaSettings.get();
         const effectiveProviderId = patch.providerId ?? current.providerId;
+        executionPolicy.assertActive(effectiveProviderId);
         const provider = providers.has(effectiveProviderId)
           ? providers.get(effectiveProviderId)
           : null;
@@ -3929,39 +4613,42 @@ function main(): void {
             resolvedPatch = { ...patch, model: 'auto' };
           }
         }
-        const next = metaSettings.set(resolvedPatch);
+        const next = metaSettings.set({ ...resolvedPatch, providerId: effectiveProviderId });
         // Persist so the choice survives an IDE restart.
-        configOverrideService.update(META_NAMESPACE, { ...resolvedPatch });
-        return { ...next, warmPoolEnabled: warmPoolCfg.enabled };
+        configOverrideService.update(META_NAMESPACE, { ...resolvedPatch, providerId: effectiveProviderId });
+        return { ...next, warmPoolEnabled: metaPoolsStatusFn().enabled };
       },
-      agencyStatus: () => agencyBootstrapper.status(),
-      githubStatus: () => githubAuth.status(),
-      githubSignInStart: () => githubDeviceAuth.start(),
+      agencyStatus: () => {
+        if (!isProviderEligible(AGENCY_NAMESPACE)) throw new NotFoundError('Agency is unavailable until an authorized internal user explicitly opts in');
+        return agencyBootstrapper.status();
+      },
+      githubStatus: () => readAccountStatus(githubCredentialRefresh, () => githubAuth.status()),
+      githubSignInStart: () => githubCredentialRefresh.run(() => githubDeviceAuth.start()),
       githubSignInPoll,
       githubSignOut,
       azureStatus: async (target) => {
+        const generation = azureCredentialRefresh.generation();
         rememberAzureTarget(target);
-        const status = await azureAuth.status(target);
-        microsoftIdentity.set(status.authenticated);
-        if (status.authenticated) {
-          await refreshAzureDevOpsCredentialEnv();
-        }
+        const status = await readAccountStatus(azureCredentialRefresh, () => azureAuth.status(target));
+        if (generation === azureCredentialRefresh.generation()) microsoftIdentity.set(status.authenticated);
         return status;
       },
       azureSignIn: async (target) => {
+        const generation = azureCredentialRefresh.invalidate();
         rememberAzureTarget(target);
-        const status = await azureAuth.signIn(target);
-        microsoftIdentity.set(status.authenticated);
-        if (status.authenticated) {
-          await refreshAzureDevOpsCredentialEnv();
+        const status = await azureCredentialRefresh.run(() => azureAuth.signIn(target));
+        if (generation === azureCredentialRefresh.generation()) {
+          microsoftIdentity.set(status.authenticated);
+          if (status.authenticated) await refreshAzureDevOpsCredentialEnv();
         }
         return status;
       },
       azureSignOut: async (target) => {
-        const status = await azureAuth.signOut(target);
+        const resume = await azureCredentialRefresh.suspend(null);
         microsoftIdentity.set(false);
-        applyAzureCredentialEnv(null);
-        return status;
+        try {
+          return await azureAuth.signOut(target);
+        } finally { resume(); }
       },
       repos: repoService,
       repositoryContexts: repositoryContextCoordinator,
@@ -3991,7 +4678,7 @@ function main(): void {
       mcpUsage: mcpUsageRepo,
       clock,
       logger,
-    }), applicationWork),
+    }), applicationWork), () => databaseUnitOfWork.poisoned),
     // `logger` is reassigned once the file sink is configured, so the mount
     // captures a stable indirection rather than the value at mount time.
     { error: (message, data) => logger.error(message, data) },
@@ -4538,96 +5225,80 @@ function main(): void {
     },
   );
 
-  // First-run agency install, streamed as SSE so the UI can show live progress.
-  // A shared in-flight promise dedupes concurrent connections (e.g. UI reconnect)
-  // onto a single install run.
-  let agencyInstall: Promise<void> | null = null;
-  const installSubscribers = new Map<express.Response, NonNullable<ReturnType<typeof openSse>>>();
-  app.get(`${apiConfig.basePath}/agency/install`, (_req, res) => {
-    if (!applicationWork.accepting) {
-      res.status(409).json({ error: { kind: 'conflict', message: 'Application shutdown is in progress' } });
-      return;
-    }
-    const stream = openSse(res, () => { installSubscribers.delete(res); });
-    if (!stream) return;
-    installSubscribers.set(res, stream);
-    stream.comment('connected');
-    const send = (data: unknown): void => {
-      for (const subscriber of installSubscribers.values()) subscriber.send(null, data);
-    };
-    if (!agencyInstall) {
-      agencyInstall = applicationWork.own(() => agencyBootstrapper
-        .install((event) => send(event))
-        .then((status) => {
-          if (status.installed) {
-            refreshAgencyPath();
-          }
-        }))
-        .catch((error) => {
-          // Surface the failure to the subscriber and log it, instead of
-          // leaving an unhandled rejection.
-          logger.error('Agency install failed', error);
-          send({ kind: 'error', line: 'Installation failed. Please retry.' });
-        })
-        .finally(() => {
-          // Always clear the in-flight marker so a failed install can be
-          // retried; otherwise every later connection would wedge forever on
-          // the "already in progress" branch.
-          agencyInstall = null;
-          for (const subscriber of installSubscribers.values()) subscriber.end();
-        });
-    } else {
-      // Already installing from another connection; report current status so a
-      // late subscriber is not left hanging on a stream with no terminal event.
-      stream.send(null,
-        agencyBootstrapper.status().installed
-          ? { kind: 'done' }
-          : { kind: 'line', line: 'Installation already in progress…' },
-      );
+  app.post(`${apiConfig.basePath}/providers/background/stop`, async (_req, res) => {
+    try {
+      const blockers = executionPolicy.get().blockers.filter((entry) =>
+        entry.kind !== 'warm' && entry.kind !== 'process' &&
+        !(entry.kind === 'probe' && entry.id === 'plan-usage'));
+      if (blockers.length > 0 || [...quotaServices.values()].some(({ probe }) => probe.isCapturing())) {
+        throw new ConflictError('Wait for running sessions, requests and probes to finish before stopping idle workers');
+      }
+      for (const { probe } of quotaServices.values()) probe.stop();
+      const stopped = await Promise.all([...allWarmPools].map((pool) => pool.closeAndWait(5_000)));
+      if (stopped.some((confirmed) => !confirmed)) {
+        throw new ConflictError('Background CLI termination is not yet confirmed. Switching remains blocked.');
+      }
+      allWarmPools.clear();
+      rawMetaAi = coldMetaRunner;
+      metaPoolsStatusFn = () => metaPoolsStatus(false);
+      resizeMetaPoolFn = () => { throw new NotFoundError('Warm CLI workers are stopped'); };
+      res.json({});
+    } catch (error) {
+      const mapped = toErrorResult(error);
+      res.status(mapped.status).json(mapped.body);
     }
   });
 
-  // First-run copilot install, streamed as SSE — mirrors `/agency/install` so the
-  // first-run gate can install whichever CLI is the network default (and install
-  // the other on-demand when the user switches to it).
-  let copilotInstall: Promise<void> | null = null;
-  const copilotInstallSubscribers = new Map<express.Response, NonNullable<ReturnType<typeof openSse>>>();
-  app.get(`${apiConfig.basePath}/copilot/install`, (_req, res) => {
-    if (!applicationWork.accepting) {
-      res.status(409).json({ error: { kind: 'conflict', message: 'Application shutdown is in progress' } });
-      return;
-    }
-    const stream = openSse(res, () => { copilotInstallSubscribers.delete(res); });
-    if (!stream) return;
-    copilotInstallSubscribers.set(res, stream);
-    stream.comment('connected');
-    const send = (data: unknown): void => {
-      for (const subscriber of copilotInstallSubscribers.values()) subscriber.send(null, data);
-    };
-    if (!copilotInstall) {
-      copilotInstall = applicationWork.own(() => copilotBootstrapper
-        .install((event) => send(event))
+  const registerProviderInstaller = (
+    providerId: string,
+    bootstrapper: Pick<ReturnType<typeof createCopilotBootstrapper>, 'status' | 'install'>,
+    refreshPath: () => void,
+  ): void => {
+    let inFlight: Promise<void> | null = null;
+    const subscribers = new Map<express.Response, NonNullable<ReturnType<typeof openSse>>>();
+    app.get(`${apiConfig.basePath}/${providerId}/install`, (_req, res) => {
+      let permit: ReturnType<typeof executionPolicy.acquire>;
+      try {
+        if (!applicationWork.accepting) throw new ConflictError('Application shutdown is in progress');
+        permit = executionPolicy.acquire(providerId, {
+          kind: 'install', id: `${providerId}-install`, label: `Installing ${providerId}`,
+        });
+      } catch (error) {
+        const mapped = toErrorResult(error);
+        res.status(mapped.status).json(mapped.body);
+        return;
+      }
+      const stream = openSse(res, () => { subscribers.delete(res); });
+      if (!stream) { permit.release(); return; }
+      subscribers.set(res, stream);
+      stream.comment('connected');
+      const send = (data: unknown): void => {
+        for (const subscriber of subscribers.values()) subscriber.send(null, data);
+      };
+      if (inFlight) {
+        permit.release();
+        stream.send(null, bootstrapper.status().installed
+          ? { kind: 'done' } : { kind: 'line', line: 'Installation already in progress...' });
+        return;
+      }
+      inFlight = applicationWork.own(() => bootstrapper.install(send))
         .then((status) => {
-          if (status.installed) {
-            refreshCopilotPath();
-          }
-        }))
-        .catch((error) => {
-          logger.error('Copilot install failed', error);
-          send({ kind: 'error', line: 'Installation failed. Please retry.' });
+          if (status.installed) { refreshPath(); refreshProviderWorkers(); }
+        })
+        .catch((error: unknown) => {
+          logger.error('CLI installation failed', { providerId, error });
+          send({ kind: 'error', message: 'Installation failed. Please retry.' });
         })
         .finally(() => {
-          copilotInstall = null;
-          for (const subscriber of copilotInstallSubscribers.values()) subscriber.end();
+          permit.release();
+          inFlight = null;
+          for (const subscriber of subscribers.values()) subscriber.end();
         });
-    } else {
-      stream.send(null,
-        copilotBootstrapper.status().installed
-          ? { kind: 'done' }
-          : { kind: 'line', line: 'Installation already in progress…' },
-      );
-    }
-  });
+    });
+  };
+  registerProviderInstaller(COPILOT_NAMESPACE, copilotBootstrapper, refreshCopilotPath);
+  registerProviderInstaller(AGENCY_NAMESPACE, agencyBootstrapper, refreshAgencyPath);
+  registerProviderInstaller(CLAUDE_NAMESPACE, claudeBootstrapper, refreshClaudePath);
 
   // Self-heal SSE: verify → fix → re-verify a target, streaming phase/log/done
   // events so the UI shows a live status instead of a dead-end error. Mirrors
@@ -4719,8 +5390,12 @@ function main(): void {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      const wrappedPaths = new Set<string>();
       for (const provider of sessionMcpService.listProviders()) {
         try {
+          const current = await sessionMcpService.getServers(provider.id);
+          const physicalPath = await physicalMcpConfigPath(current.configPath);
+          if (wrappedPaths.has(physicalPath)) continue;
           await sessionMcpService.putServer(provider.id, {
             name: STUDIO_MCP_SERVER_NAME,
             spec: studioMcpSpec,
@@ -4729,7 +5404,6 @@ function main(): void {
           // so real per-server I/O (bytes/calls/latency) is recorded per feature.
           // The proxy is a transparent pass-through; the wrap is loss-less and
           // undone on shutdown (see unwrapConfiguredMcpServers).
-          const current = await sessionMcpService.getServers(provider.id);
           for (const server of current.servers) {
             if (server.name === STUDIO_MCP_SERVER_NAME) {
               continue;
@@ -4749,6 +5423,7 @@ function main(): void {
               });
             }
           }
+          wrappedPaths.add(physicalPath);
         } catch (error: unknown) {
           logger.error('MCP proxy wrapping failed', {
             providerId: provider.id,
@@ -4804,9 +5479,12 @@ function main(): void {
   // Best-effort: getServers already returns unwrapped specs, so re-persisting
   // them strips the on-disk wrapper.
   const restoreMcpServers = async (): Promise<void> => {
+    const restoredPaths = new Set<string>();
     for (const provider of sessionMcpService.listProviders()) {
       try {
         const current = await sessionMcpService.getServers(provider.id);
+        const physicalPath = await physicalMcpConfigPath(current.configPath);
+        if (restoredPaths.has(physicalPath)) continue;
         for (const server of current.servers) {
           if (server.name === STUDIO_MCP_SERVER_NAME) {
             continue;
@@ -4816,6 +5494,7 @@ function main(): void {
             spec: server.spec,
           });
         }
+        restoredPaths.add(physicalPath);
       } catch (error: unknown) {
         logger.error('MCP proxy unwrap failed', {
           providerId: provider.id,
@@ -4836,6 +5515,8 @@ function main(): void {
       yield* tailers.values();
       yield { stop: () => resourceMonitor.dispose() };
       yield { stop: stopResourceSampling };
+      yield { stop: () => { clearInterval(claudeHistoryTimer); claudeHistoryAbort.abort(); } };
+      for (const { probe } of quotaServices.values()) yield { stop: () => probe.shutdown() };
     },
   };
   const shutdownNonce = process.env.CW_DESKTOP_SHUTDOWN_NONCE;
@@ -4858,9 +5539,25 @@ function main(): void {
       },
       waitForIdle: (timeoutMs) => shutdownOwner.waitForIdle(timeoutMs),
     },
-    pools: [...allWarmPools, {
-      closeAndWait: async () => { await backgroundRunner.close(); return true; },
-    }],
+    pools: {
+      *[Symbol.iterator]() {
+        yield* allWarmPools;
+        yield { closeAndWait: (timeoutMs: number) => livePrompts.closeWithin(timeoutMs) };
+        yield { closeAndWait: (timeoutMs: number) => backgroundRunner.closeWithin(timeoutMs) };
+        yield { closeAndWait: (timeoutMs: number) => usageSummaryRunner.closeWithin(timeoutMs) };
+        yield { closeAndWait: async () => { await claudeHistoryStore.close(); return true; } };
+        yield {
+          closeAndWait: async (timeoutMs: number) => {
+            for (const handle of providerProbeHandles) {
+              try { handle.kill(); }
+              catch (error) { logger.warn('CLI probe termination could not be requested', { error }); }
+            }
+            return await providerProbeWork.waitForIdle(timeoutMs) && providerProbeHandles.size === 0;
+          },
+        };
+        if (queuedFileLogging) yield { closeAndWait: (timeoutMs: number) => queuedFileLogging.close(timeoutMs) };
+      },
+    },
     tailers: shutdownTailers,
     credentialWarmer,
     terminalManager: terminalManager!,
@@ -4876,7 +5573,7 @@ function main(): void {
         server.closeAllConnections();
       }),
     },
-    db,
+    db: { close: closeDatabase },
     settleOwnership: () => metaOperationShutdown.settleAfterPhysicalDrain(),
     acknowledge: () => acknowledgeDesktopShutdown(
       shutdownNonce,

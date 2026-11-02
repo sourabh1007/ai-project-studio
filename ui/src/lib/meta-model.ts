@@ -3,6 +3,7 @@ import type { MetaSettings } from './types.js';
 const PROVIDER_LABELS: Record<string, string> = {
   agency: 'Agency',
   copilot: 'Copilot',
+  claude: 'Claude Code',
 };
 
 /** Human label for a provider id (known ids get a nicer name). */

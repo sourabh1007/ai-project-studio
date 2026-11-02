@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGitRepositoryAdapter } from './git-repository-adapter.js';
 
 describe('git repository adapter', () => {
+  it('uses the single configured executable for both evidence operations', async () => {
+    const run = vi.fn().mockResolvedValue({ stdout: '0123456789abcdef0123456789abcdef01234567' });
+    const adapter = createGitRepositoryAdapter({ run }, 'C:\\custom git\\git.exe');
+    await adapter.getRevision('repo');
+    await adapter.listTrackedFiles('repo');
+    expect(run.mock.calls.every((call) => call[0] === 'C:\\custom git\\git.exe')).toBe(true);
+  });
   it('uses only read-only Git inspection commands', async () => {
     const run = vi
       .fn()

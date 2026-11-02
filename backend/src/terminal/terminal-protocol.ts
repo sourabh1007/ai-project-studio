@@ -20,7 +20,7 @@ export type ServerMessage =
   | { type: 'pong'; generation: number; seq: number }
   | { type: 'ack'; seq: number; generation: number; outcome: 'written' | 'rejected' | 'uncertain'; reason: string }
   | { type: 'output'; data: string }
-  | { type: 'resize'; cols: number; rows: number }
+  | { type: 'resize'; cols: number; rows: number; phase: 'attach' | 'boundary' }
   | { type: 'exit'; code: number | null };
 
 /** Serializes a server->client message to a WebSocket text frame. */

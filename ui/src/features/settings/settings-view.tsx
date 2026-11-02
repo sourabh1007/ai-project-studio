@@ -32,15 +32,15 @@ import { ErrorState } from '../../components/error-state.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { SelfHealButton } from '../../components/self-heal-button.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
+import { AutomationReadinessNotice, useAutomationReadiness } from '../../app/automation-readiness.js';
 import { SoftwareUpdateSection } from '../updates/software-update-section.js';
-import { AgencyCliSection } from './agency-cli-section.js';
-import { useMicrosoftSignedIn } from '../../hooks/use-microsoft-identity.js';
-import { isAgencyHidden } from '../../lib/microsoft-identity.js';
+import { CliSection } from './cli-section.js';
 import { AppearanceSection } from './appearance-section.js';
 import { NetworkActivitySection } from './network-activity-section.js';
 import { DiagnosticsSection } from './diagnostics-section.js';
 import { HealthSection } from './health-section.js';
 import { RetainedImagesSection } from './retained-images-section.js';
+import { RetainedTextSection } from './retained-text-section.js';
 import { WorktreesSection } from './worktrees-section.js';
 import { MetasessionPoolsSection } from './metasession-pools-section.js';
 import { MetaOperationsSection } from '../meta-operations/meta-operations-section.js';
@@ -60,6 +60,8 @@ import {
   type NamespaceDraftState,
 } from './settings-drafts.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
+import { ToolsSection } from './tools-section.js';
+import { toolFields, projectToolConfig, projectToolValues, setToolPatch } from './tools-model.js';
 
 function fallbackDraftState(
   values: Record<string, ConfigValue>,
@@ -287,6 +289,7 @@ function NamespaceEditor({
     () => buildFields(values, fieldsMeta),
     [values, fieldsMeta],
   );
+  const automation = useAutomationReadiness();
   const [busy, setBusy] = useState<null | 'save' | 'reset'>(null);
   const [error, setError] = useState<string | null>(null);
   const [assistOpen, setAssistOpen] = useState(false);
@@ -318,7 +321,7 @@ function NamespaceEditor({
 
   async function askAssistant(q: string, key?: string) {
     const trimmed = q.trim();
-    if (trimmed.length === 0 || asking) {
+    if (trimmed.length === 0 || asking || automation?.supported === false) {
       return;
     }
     setAssistOpen(true);
@@ -361,7 +364,7 @@ function NamespaceEditor({
     const patch: Record<string, unknown> = {};
     try {
       for (const f of changed) {
-        patch[f.key] = parseInput(draftValue(f), f.control, f.meta);
+        setToolPatch(patch, f.key, parseInput(draftValue(f), f.control, f.meta));
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -414,6 +417,8 @@ function NamespaceEditor({
           <Button
             variant="ghost"
             onClick={() => setAssistOpen((open) => !open)}
+            disabled={automation?.supported === false}
+            title={automation?.supported === false ? automation.reason ?? 'Automated AI is unavailable.' : undefined}
             aria-expanded={assistOpen}
           >
             ✨ Ask AI
@@ -444,8 +449,11 @@ function NamespaceEditor({
       </div>
       {expanded && (
         <>
+          {namespace === 'processAdmission' && <p role="note">Process admission limits apply after restarting the app, not to the current process budget.</p>}
+          {namespace === 'selfRecovery' && <p role="note">Enabling self-recovery does not authorize automatic resume or prompt replay. Recovery requires authoritative provider confirmation that replay is safe; current providers do not supply that confirmation.</p>}
           {assistOpen && (
         <div className="config-assistant">
+          <AutomationReadinessNotice />
           <form
             className="config-assistant-ask"
             onSubmit={(e) => {
@@ -460,7 +468,7 @@ function NamespaceEditor({
               onChange={(e) => setQuestion(e.target.value)}
               disabled={asking}
             />
-            <Button type="submit" disabled={asking || question.trim().length === 0}>
+            <Button type="submit" disabled={asking || question.trim().length === 0 || automation?.supported === false}>
               {asking ? (
                 <>
                   <Spinner size={13} label="Thinking" /> Thinking…
@@ -499,7 +507,7 @@ function NamespaceEditor({
             field={f}
             draft={draftValue(f)}
             disabled={busy !== null}
-            asking={asking}
+            asking={asking || automation?.supported === false}
             overridden={overrideKeys.has(f.key)}
             validationError={validationErrors[f.key] ?? null}
             onExplain={() =>
@@ -538,6 +546,7 @@ function NamespaceEditor({
 
 type TabId =
   | 'appearance'
+  | 'cli'
   | 'config'
   | 'prompts'
   | 'metasession'
@@ -553,6 +562,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'health', label: 'System' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'cli', label: 'Tools & CLIs' },
   { id: 'prompts', label: 'Prompts & Commands' },
   { id: 'metasession', label: 'Metasession' },
   { id: 'network', label: 'Network' },
@@ -562,7 +572,6 @@ const TABS: TabDef[] = [
 
 export function SettingsView({ worktreesRequest }: { worktreesRequest?: number } = {}) {
   const api = useApi();
-  const microsoftSignedIn = useMicrosoftSignedIn();
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
     [],
@@ -574,6 +583,11 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   const [promptAnchor, setPromptAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [subTab, setSubTab] = useState<string | null>(null);
+  const { data: catalog, error: catalogError, loading: catalogLoading, reload: reloadCatalog } = useAsync(
+    () => api.getCommandCatalog(), [],
+  );
+  const commandFields = useMemo(() => toolFields(catalog ?? []), [catalog]);
+  const editorData = useMemo(() => data ? projectToolConfig(data, commandFields) : null, [data, commandFields]);
   const [restartPending, setRestartPending] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
@@ -609,13 +623,13 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
     return () => window.removeEventListener(OPEN_PROMPT_SETTINGS_EVENT, onOpen);
   }, []);
   useEffect(() => {
-    if (!data) {
+    if (!editorData) {
       return;
     }
     setDrafts((prev) =>
-      reconcileSettingsDraftStore(prev, data.current, data.schema),
+      reconcileSettingsDraftStore(prev, editorData.current, editorData.schema),
     );
-  }, [data, setDrafts]);
+  }, [editorData, setDrafts]);
 
   useEffect(() => {
     let active = true;
@@ -635,15 +649,19 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   }, [bridge]);
 
   const configTabs = useMemo(
-    () => (data ? buildConfigTabs(data.namespaces) : []),
-    [data],
+    () => (data ? buildConfigTabs(data.namespaces.filter((namespace) =>
+      !['copilot', 'agency', 'claude', 'provider-selection'].includes(namespace) && !commandFields.has(namespace))) : []),
+    [data, commandFields],
   );
   const activeSubTab =
     subTab && configTabs.some((t) => t.id === subTab)
       ? subTab
       : configTabs[0]?.id ?? null;
   const activeNamespaces =
-    configTabs.find((t) => t.id === activeSubTab)?.namespaces ?? [];
+    tab === 'cli'
+      ? (editorData?.namespaces ?? []).filter((namespace) => commandFields.has(namespace))
+      : (configTabs.find((t) => t.id === activeSubTab)?.namespaces ?? [])
+        .filter((namespace) => !['copilot', 'agency', 'claude'].includes(namespace));
 
   const logDirectory =
     typeof data?.current.logging?.directory === 'string'
@@ -658,7 +676,9 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
     if (result.requiresRestart) {
       setRestartPending(true);
     }
-    setDrafts((prev) => applyConfigUpdateToDraftStore(prev, result, data?.schema));
+    const paths = commandFields.get(result.namespace);
+    setDrafts((prev) => applyConfigUpdateToDraftStore(prev, paths
+      ? { ...result, effective: projectToolValues(result.effective, paths) } : result, editorData?.schema));
     reload();
   }
 
@@ -772,14 +792,20 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
         </SettingsPage>
       )}
 
-      {tab === 'config' && (
+      {(tab === 'config' || tab === 'cli') && (
         <div className="settings-panel">
           <Card>
+            {tab === 'cli' && <>
+              <CliSection onConfigChanged={() => { reload(); reloadCatalog(); }} />
+              {catalogLoading && <Loader label="Loading tool inventory" />}
+              <ErrorText error={catalogError} />
+              {catalog && <ToolsSection entries={catalog} query={query} />}
+            </>}
             <div className="page-header">
               <div className="page-header-main">
                 <IconBadge icon={<ConfigIcon size={22} />} tone="accent" />
                 <div>
-                  <h2 className="page-title">Configuration</h2>
+                  <h2 className="page-title">{tab === 'cli' ? 'Tool configuration' : 'Configuration'}</h2>
                   <p className="page-subtitle">
                     Every module setting, grouped and editable. Values are typed
                     from each module's schema; saved changes apply after a
@@ -799,7 +825,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
             {error && <ErrorState error={cause ?? error} onRetry={reload} />}
             {data && (
               <>
-                <div className="config-subtabs" role="tablist">
+                {tab === 'config' && <div className="config-subtabs" role="tablist">
                   {configTabs.map((t) => (
                     <button
                       key={t.id}
@@ -817,28 +843,28 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
                       </span>
                     </button>
                   ))}
-                </div>
+                </div>}
                 {activeNamespaces.length === 0 && (
                   <EmptyState message="No settings to show." />
                 )}
                 {activeNamespaces.map((namespace) => {
                   const overrideKeys = new Set(
-                    Object.keys(data.overrides[namespace] ?? {}),
+                    Object.keys(editorData?.overrides[namespace] ?? {}),
                   );
                   return (
                     <NamespaceEditor
                       key={namespace}
                       namespace={namespace}
-                      values={data.current[namespace] ?? {}}
-                      fieldsMeta={data.schema?.[namespace]?.fields}
+                      values={editorData?.current[namespace] ?? {}}
+                      fieldsMeta={editorData?.schema?.[namespace]?.fields}
                       overrideKeys={overrideKeys}
                       overridden={overrideKeys.size > 0}
                       query={query.trim().toLowerCase()}
                       draftState={
                         drafts[namespace] ??
                         fallbackDraftState(
-                          data.current[namespace] ?? {},
-                          data.schema?.[namespace]?.fields,
+                          editorData?.current[namespace] ?? {},
+                          editorData?.schema?.[namespace]?.fields,
                         )
                       }
                       onDraftChange={(key, next) =>
@@ -847,8 +873,8 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
                           [namespace]: updateNamespaceDraftValue(
                             prev[namespace] ??
                               fallbackDraftState(
-                                data.current[namespace] ?? {},
-                                data.schema?.[namespace]?.fields,
+                                editorData?.current[namespace] ?? {},
+                                editorData?.schema?.[namespace]?.fields,
                               ),
                             key,
                             next,
@@ -858,14 +884,14 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
                       onDiscardConflicts={(keys) =>
                         setDrafts((prev) => {
                           const fields = buildFields(
-                            data.current[namespace] ?? {},
-                            data.schema?.[namespace]?.fields,
+                            editorData?.current[namespace] ?? {},
+                            editorData?.schema?.[namespace]?.fields,
                           );
                           const current =
                             prev[namespace] ??
                             fallbackDraftState(
-                              data.current[namespace] ?? {},
-                              data.schema?.[namespace]?.fields,
+                              editorData?.current[namespace] ?? {},
+                              editorData?.schema?.[namespace]?.fields,
                             );
                           return {
                             ...prev,
@@ -972,16 +998,6 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
           >
             <SoftwareUpdateSection embedded />
           </CollapsibleCard>
-          {!isAgencyHidden(microsoftSignedIn) && (
-            <CollapsibleCard
-              id="general-agency"
-              title="Agency CLI"
-              subtitle="The bundled Microsoft Agency CLI is kept current automatically."
-              keywords={['agency', 'cli', 'upgrade']}
-            >
-              <AgencyCliSection embedded />
-            </CollapsibleCard>
-          )}
           <CollapsibleCard
             id="diagnostics-logs"
             title="Logs"
@@ -1027,6 +1043,14 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
             keywords={['image', 'clipboard', 'retained', 'attachment', 'cleanup']}
           >
             <RetainedImagesSection bridge={bridge?.attachments} embedded />
+          </CollapsibleCard>
+          <CollapsibleCard
+            id="diagnostics-text"
+            title="Retained pasted text"
+            subtitle="Manage text files referenced by large session pastes."
+            keywords={['text', 'paste', 'retained', 'attachment', 'cleanup']}
+          >
+            <RetainedTextSection />
           </CollapsibleCard>
           <div id="settings-worktrees-target"><CollapsibleCard
             id="diagnostics-worktrees"

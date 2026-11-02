@@ -10,6 +10,7 @@ export type ErrorKind =
   | 'provider'
   | 'config'
   | 'auth_required'
+  | 'unavailable'
   | 'internal';
 
 export class AppError extends Error {

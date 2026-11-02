@@ -46,6 +46,17 @@ function createFixture(output, { readyDelayMs = 0, seed = '0' } = {}) {
   return { root, token, config };
 }
 
+async function removeFixtureEntries(root) {
+  for (const entry of await fs.promises.readdir(root)) {
+    if (entry !== 'manifest.json') {
+      // Chromium profile locks can outlive process exit on Windows.
+      await fs.promises.rm(path.join(root, entry), {
+        recursive: true, force: true, maxRetries: 10, retryDelay: 200,
+      });
+    }
+  }
+}
+
 function isolatedEnv(fixture, parent = process.env) {
   // Allow-list, not {...process.env}: excludes credentials, provider config,
   // NODE_OPTIONS, Electron overrides, and user PATH shims.
@@ -250,5 +261,5 @@ class Cdp {
 
 module.exports = {
   sha256, hashFile, loopbackUrl, boundedInteger, createFixture, isolatedEnv,
-  waitFor, inspectPackage, killTree, Cdp, quoteWindowsArg, launchOwned, resolvePowerShell,
+  waitFor, inspectPackage, killTree, Cdp, quoteWindowsArg, launchOwned, resolvePowerShell, removeFixtureEntries,
 };

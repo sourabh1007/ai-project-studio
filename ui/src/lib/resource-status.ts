@@ -34,9 +34,12 @@ export function resourceStatus(
     };
   }
   const detail = [
-    `System CPU: ${snapshot.cpuPercent!.toFixed(0)}%.`,
-    `Free memory: ${(snapshot.freeMemoryBytes! / 1024 ** 3).toFixed(1)} / ${(snapshot.totalMemoryBytes! / 1024 ** 3).toFixed(1)} GiB.`,
-    `Peak backend event-loop delay: ${snapshot.eventLoopDelayMs!.toFixed(0)} ms.`,
+    snapshot.cpuPercent === null ? 'System CPU: unknown.' : `System CPU: ${snapshot.cpuPercent.toFixed(0)}%.`,
+    snapshot.freeMemoryBytes === null || snapshot.totalMemoryBytes === null
+      ? 'Free memory: unknown.'
+      : `Free memory: ${(snapshot.freeMemoryBytes / 1024 ** 3).toFixed(1)} / ${(snapshot.totalMemoryBytes / 1024 ** 3).toFixed(1)} GiB.`,
+    snapshot.eventLoopDelayMs === null ? 'Peak backend event-loop delay: unknown.'
+      : `Peak backend event-loop delay: ${snapshot.eventLoopDelayMs.toFixed(0)} ms.`,
     ...(snapshot.backgroundWork ? [
       `Background CPU tasks: ${snapshot.backgroundWork.active}/${snapshot.backgroundWork.maxWorkers} active, ${snapshot.backgroundWork.queued}/${snapshot.backgroundWork.maxQueued} queued. Queueing alone does not indicate resource pressure.`,
     ] : []),

@@ -19,7 +19,7 @@ const good: McpServerEntry = { name: 'native:ado', spec: {}, toolDiscovery: { st
 afterEach(() => vi.useRealTimers());
 
 describe('bounded explicit native authentication jobs', () => {
-  it('returns pending immediately, keeps challenge live while pending, then clears it on completed inventory', async () => {
+  it('does not report completed sign-in when inventory arrives while a native challenge remains unverified', async () => {
     const s = setup();
     const job = s.jobs.start({ owner: 'agency/native:ado', serverName: 'native:ado', run: s.run });
     expect(job).toMatchObject({ id: 'job-1', status: 'pending', authUrl: null, deviceCode: null, expiresAt: '1970-01-01T00:00:06.000Z' });
@@ -33,13 +33,34 @@ describe('bounded explicit native authentication jobs', () => {
     expect(s.active[0].signal.aborted).toBe(false);
     expect(s.jobs.get('agency/native:ado', job.id)).toMatchObject({ status: 'pending', authUrl: 'https://microsoft.com/devicelogin', deviceCode: 'ABCD12345' });
     s.active[0].resolve(good);
-    await vi.waitFor(() => expect(s.jobs.get('agency/native:ado', job.id).status).toBe('completed'));
+    await vi.waitFor(() => expect(s.jobs.get('agency/native:ado', job.id).status).toBe('failed'));
     expect(s.jobs.get('agency/native:ado', job.id)).toMatchObject({ authUrl: null, deviceCode: null, server: good });
-    expect(s.jobs.get('agency/native:ado', job.id).message).toContain('has not been verified');
+    expect(s.jobs.get('agency/native:ado', job.id).message).toContain('before sign-in completion or credential caching could be confirmed');
     expect(s.active[0].signal.aborted).toBe(true);
     s.active[0].progress(['To sign in, open https://microsoft.com/devicelogin and enter the code STALE999']);
     expect(s.jobs.get('agency/native:ado', job.id).authUrl).toBeNull();
-    expect(s.jobs.cancel('agency/native:ado', job.id).status).toBe('completed');
+    expect(s.jobs.cancel('agency/native:ado', job.id).status).toBe('failed');
+  });
+
+  it('completes inventory only when no live authentication challenge was observed', async () => {
+    const s = setup();
+    const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
+    await Promise.resolve();
+    s.active[0].resolve(good);
+    await vi.waitFor(() => expect(s.jobs.get('a', job.id).status).toBe('completed'));
+    expect(s.jobs.get('a', job.id).message).toContain('has not been verified');
+    expect(s.jobs.cancel('a', job.id).status).toBe('completed');
+    s.jobs.close();
+  });
+
+  it('rejects a native interrupted-challenge marker even when progress is no longer retained', async () => {
+    const s = setup();
+    const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
+    await Promise.resolve();
+    s.active[0].resolve({ ...good, toolDiscovery: { ...good.toolDiscovery!, authenticationInterrupted: true } });
+    await vi.waitFor(() => expect(s.jobs.get('a', job.id).status).toBe('failed'));
+    expect(s.jobs.get('a', job.id).message).toContain('Complete service sign-in in the native CLI');
+    s.jobs.close();
   });
 
   it('cancels before launch without starting a native process', async () => {
@@ -50,7 +71,7 @@ describe('bounded explicit native authentication jobs', () => {
     expect(s.run).not.toHaveBeenCalled();
   });
 
-  it('expires stalled native work, clears prompts, frees capacity and ignores late results', async () => {
+  it('expires stalled native work but retains capacity until cancellation acknowledgement', async () => {
     vi.useFakeTimers();
     const s = setup();
     const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
@@ -58,9 +79,12 @@ describe('bounded explicit native authentication jobs', () => {
     s.active[0].progress(['To sign in, open https://microsoft.com/devicelogin and enter the code ABCD12345']);
     await vi.advanceTimersByTimeAsync(5000);
     expect(s.active[0].signal.aborted).toBe(true);
-    expect(s.jobs.get('a', job.id)).toMatchObject({ status: 'failed', authUrl: null, deviceCode: null });
+    expect(s.jobs.get('a', job.id)).toMatchObject({ status: 'pending', authUrl: null, deviceCode: null });
+    expect(() => s.jobs.start({ owner: 'b', serverName: 'ado', run: s.run })).toThrow(/capacity/);
+    s.active[0].progress(['To sign in, open https://microsoft.com/devicelogin and enter the code STALE999']);
+    expect(s.jobs.get('a', job.id).authUrl).toBeNull();
     s.active[0].resolve(good);
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(s.jobs.get('a', job.id).status).toBe('failed');
     const second = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
     s.jobs.cancel('a', second.id);
@@ -71,8 +95,11 @@ describe('bounded explicit native authentication jobs', () => {
     const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
     await Promise.resolve();
     s.active[0].progress(['To sign in, open https://microsoft.com/devicelogin']);
-    expect(s.jobs.cancel('a', job.id)).toMatchObject({ status: 'cancelled', authUrl: null, deviceCode: null });
+    expect(s.jobs.cancel('a', job.id)).toMatchObject({ status: 'pending', authUrl: null, deviceCode: null });
     expect(s.active[0].signal.aborted).toBe(true);
+    expect(s.jobs.cancel('a', job.id).status).toBe('pending');
+    s.active[0].resolve(good);
+    await vi.waitFor(() => expect(s.jobs.get('a', job.id).status).toBe('cancelled'));
   });
 
   it('bounds concurrent work and rejects duplicate-owner work even with spare capacity', () => {
@@ -136,8 +163,27 @@ describe('bounded explicit native authentication jobs', () => {
     await Promise.resolve();
     s.jobs.close();
     expect(s.active[0].signal.aborted).toBe(true);
-    expect(s.jobs.get('a', job.id).status).toBe('cancelled');
+    expect(s.jobs.get('a', job.id).status).toBe('pending');
     expect(() => s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run })).toThrow(/shutting down/);
     s.jobs.close();
+  });
+  it('pins capacity when native cleanup could not be verified and never exposes a stale challenge', async () => {
+    const s = setup();
+    const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
+    await Promise.resolve();
+    s.jobs.cancel('a', job.id);
+    s.active[0].resolve({ ...good, toolDiscovery: { ...good.toolDiscovery!, status: 'failed', cleanupUnconfirmed: true } });
+    await vi.waitFor(() => expect(s.jobs.get('a', job.id).message).toContain('restart'));
+    expect(() => s.jobs.start({ owner: 'b', serverName: 'ado', run: s.run })).toThrow(/capacity/);
+    expect(s.jobs.get('a', job.id).authUrl).toBeNull();
+  });
+  it('does not treat a rejected run as proof of native process termination', async () => {
+    const s = setup();
+    const job = s.jobs.start({ owner: 'a', serverName: 'ado', run: s.run });
+    await Promise.resolve();
+    s.jobs.cancel('a', job.id);
+    s.active[0].reject(new Error('aborted'));
+    await vi.waitFor(() => expect(s.jobs.get('a', job.id).status).toBe('failed'));
+    expect(() => s.jobs.start({ owner: 'b', serverName: 'ado', run: s.run })).toThrow(/capacity/);
   });
 });

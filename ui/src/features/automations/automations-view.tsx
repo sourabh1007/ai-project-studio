@@ -245,10 +245,11 @@ export function AutomationsView({ live }: { live: LiveState }) {
       </div>
 
       <ErrorText error={actionError ?? error} />
+      {error && <p role="status">Monitors could not be loaded. The list is unknown, not empty. Refresh to try again.</p>}
 
       {loading && <SkeletonCards cards={3} />}
 
-      {!loading && automations.length === 0 && sortedSubagents.length === 0 && (
+      {!loading && !error && automations.length === 0 && sortedSubagents.length === 0 && (
         <EmptyState
           icon={<AutomationIcon size={20} />}
           title="No monitors yet"

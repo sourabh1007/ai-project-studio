@@ -3,6 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { LineAssembler } from '../../provider/process-kernel/stream-reader.js';
 import { killProcessTree } from '../../provider/process-kernel/process-tree-kill.js';
 import type { AcpProcess } from './acp-client.js';
+import { optionalCommandArgsSchema } from '../../provider/command-options.js';
 
 export interface AcpReadableStream {
   setEncoding?(encoding: BufferEncoding): void;
@@ -147,7 +148,7 @@ export class AcpProcessAdapter implements AcpProcess {
   constructor(options: AcpSpawnOptions) {
     const args = [
       ...(options.baseArgs ?? ['--acp', '--disable-builtin-mcps']),
-      ...(options.extraArgs ?? []),
+      ...optionalCommandArgsSchema.parse(options.extraArgs ?? []),
     ];
     this.child = (options.spawnImpl ?? defaultSpawn)(options.executable, args, {
       env: options.env ?? process.env,

@@ -6,6 +6,9 @@ import { createSessionRepo } from './session-repo.js';
 import { ideUsageDefaults } from '../ide-usage/config.js';
 import type { StoredUsage } from '../usage/usage-repo-port.js';
 import type { Session } from '../session/session-contract.js';
+import { createMetaUsageRepo } from './meta-usage-repo.js';
+import { createRetainedUsageRepo } from './retained-usage-repo.js';
+import { createUsageRollupRepo } from './usage-rollup-repo.js';
 
 function usage(overrides: Partial<StoredUsage>): StoredUsage {
   return {
@@ -128,5 +131,49 @@ describe('ide-usage-repo', () => {
     expect(reader.byModel()).toEqual([]);
     expect(reader.byDay()).toEqual([]);
     db.close();
+  });
+});
+
+describe('ide-usage-repo agrees with the IDE rollup', () => {
+  it('counts warm-ACP meta usage records like the rollup does', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    createUsageRepo(db).saveAll([usage({ sessionId: 'm1', kind: 'meta', credits: 1, nanoAiu: 1 })]);
+    createMetaUsageRepo(db).save({
+      sessionId: 'warm1', featureId: 'f1', providerId: 'github', requestedModel: 'auto', resolvedModel: 'gpt-5.4',
+      transport: 'warm-acp', providerSessionId: null, purpose: null, label: 'x', inputTokens: 10,
+      outputTokens: 5, nanoAiu: 2, credits: 2, capturedAt: '2026-01-01T00:00:05.000Z',
+    });
+    const rollup = createUsageRollupRepo(db, ideUsageDefaults).ideDays().reduce((sum, row) => sum + (row.credits ?? 0), 0);
+    const reader = createIdeUsageRepo(db, ideUsageDefaults);
+    expect(rollup).toBe(3);
+    expect(reader.totals().credits).toBe(rollup);
+    expect(reader.byDay().reduce((sum, d) => sum + (d.credits ?? 0), 0)).toBe(rollup);
+    expect(reader.byModel().reduce((sum, m) => sum + (m.credits ?? 0), 0)).toBe(rollup);
+  });
+
+  it('does not shrink when an internal session is deleted (retained usage included)', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const usageRepo = createUsageRepo(db);
+    usageRepo.saveAll([usage({ sessionId: 'm1', kind: 'meta', credits: 1 })]);
+    const reader = createIdeUsageRepo(db, ideUsageDefaults);
+    expect(reader.totals().credits).toBe(1);
+    createRetainedUsageRepo(db).summarizeSession({
+      sessionId: 'm1', featureId: 'f1', featureName: 'F', sessionKind: 'meta', scope: 'internal',
+      reason: 'session-deleted', retainedAt: '2026-01-05T00:00:00.000Z',
+    });
+    usageRepo.deleteBySession('m1');
+    expect(reader.totals().credits).toBe(1);
+    expect(reader.totals().sessions).toBe(1);
+  });
+
+  it('keeps unknown billing unknown instead of treating it as zero', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    createUsageRepo(db).saveAll([
+      usage({ sessionId: 'm1', kind: 'meta', credits: 1 }),
+      usage({ sessionId: 'm2', kind: 'meta', credits: null, cost: null, nanoAiu: null }),
+    ]);
+    const totals = createIdeUsageRepo(db, ideUsageDefaults).totals();
+    expect(totals.credits).toBeNull();
+    expect(totals.nanoAiu).toBeNull();
   });
 });

@@ -1,0 +1,14 @@
+{
+  "firstSummaryMs": 2000,
+  "mixedTotalMs": 10000,
+  "loadedHealthP95Ms": 100,
+  "summaryP95Ms": 2000,
+  "historyP95Ms": 2000,
+  "eventLoopP99Ms": 100,
+  "retainedHeapGrowthMiB": 32,
+  "logEnqueueMs": 100,
+  "logFlushMs": 5000,
+  "textPasteMs": 2000,
+  "textPasteHealthP95Ms": 100,
+  "textPasteEventLoopP99Ms": 100
+}

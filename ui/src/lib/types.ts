@@ -23,6 +23,11 @@ export interface AgencyUpgradeState {
 }
 
 /** Install state + default selection for the first-run provider gate. */
+export interface ProviderAutomationReadiness {
+  supported: boolean;
+  reason: string | null;
+}
+
 export interface ProviderBootstrapInfo {
   /** Provider id chosen as the default for new sessions (network-based). */
   defaultProvider: string;
@@ -1204,6 +1209,7 @@ export interface Session {
   resolvedModel: string | null;
   status: SessionStatus;
   kind: SessionKind;
+  scope?: 'feature' | 'internal';
   prompt: string;
   /** Fallback work/query title derived from CLI history when prompt is empty. */
   workTitle?: string | null;
@@ -1322,9 +1328,14 @@ export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
-  cost: number;
-  credits: number;
-  nanoAiu: number;
+  cost: number | null;
+  credits: number | null;
+  nanoAiu: number | null;
+  knownCost?: number;
+  knownCredits?: number;
+  knownNanoAiu?: number;
+  unavailableCharges?: number;
+  usdEstimate?: number | null;
 }
 
 export type UsageOrigin = 'ide' | 'user' | 'agent';
@@ -1380,6 +1391,8 @@ export interface McpToolBreakdown {
 
 export interface SessionBreakdown extends UsageTotals {
   sessionId: string;
+  /** false when the session has no usage rows yet (zeros are a placeholder, not a measurement). */
+  usageRecorded?: false;
   groupId: string | null;
   origin: UsageOrigin;
   provider: string;
@@ -1408,6 +1421,8 @@ export interface FeatureUsage {
   byDay: DailyBreakdown[];
   bySession: SessionBreakdown[];
   byMcpServer: McpServerBreakdown[];
+  /** Usage retained from deleted sessions; already included in totals, no session row. */
+  retained?: UsageTotals;
   timing: FeatureTiming;
 }
 
@@ -1415,6 +1430,22 @@ export interface WorkspaceStats {
   totals: UsageTotals;
   activeSessions: number;
   totalSessions: number;
+}
+
+export interface UsageSummaryNode {
+  totals: UsageTotals;
+  state: 'none' | 'empty' | 'complete' | 'partial' | 'unavailable';
+  sessionsWithoutUsage: number;
+}
+
+export interface FeatureUsageSummary extends UsageSummaryNode {
+  featureId: string;
+  groups: Record<string, UsageSummaryNode>;
+}
+
+export interface UsageSummary {
+  features: Record<string, FeatureUsageSummary>;
+  unattributed: UsageSummaryNode | null;
 }
 
 /** The IDE's own AI (meta-session) usage — assistant overhead, not dev cost. */
@@ -1540,6 +1571,7 @@ export interface ProviderInfo {
   id: string;
   /** Whether this provider's CLI is installed and enabled on this machine. */
   installed: boolean;
+  automation?: ProviderAutomationReadiness;
 }
 
 export interface ModelInfo {
@@ -1599,6 +1631,7 @@ export interface McpServerEntry {
     state: 'unknown' | 'required' | 'expired' | 'ready';
     checkedAt: string | null;
     message: string;
+    interrupted?: boolean;
   };
   configurationSources?: Array<{
     kind: 'resolved' | 'global';
@@ -1651,6 +1684,7 @@ export interface McpToolDiscovery {
   output: string[];
   authRequired?: boolean;
   authUrl?: string | null;
+  authenticationInterrupted?: boolean;
 }
 
 export type McpServerConnectionStatus =
@@ -1693,6 +1727,8 @@ export interface ProviderMcpConfig {
   servers: McpServerEntry[];
   notices?: string[];
   capabilities?: McpCapabilities;
+  /** Full backend inspection budget including process cleanup overhead. */
+  inspectionTimeoutMs?: number;
 }
 
 /** Add/update payload for a single MCP server entry (upsert by name). */
@@ -1710,6 +1746,10 @@ export interface McpApplyResult {
 }
 
 export interface StoredUsage extends UsageTotals {
+  chargeProvenance?: 'reported' | 'estimated' | 'unavailable';
+  chargeUnit?: 'aic' | null;
+  nativeSessionId?: string;
+  nativeMessageId?: string;
   sessionId: string;
   featureId: string;
   turnIndex: number;
@@ -1771,6 +1811,18 @@ export interface FieldMeta {
   options?: string[];
   element?: FieldMeta;
   fields?: Record<string, FieldMeta>;
+}
+
+export interface CommandCatalogEntry {
+  id: string;
+  label: string;
+  category: 'provider' | 'repository' | 'mcp' | 'installer' | 'internal' | 'user-owned';
+  description: string;
+  config?: { namespace: string; keys: readonly string[] };
+  required: readonly string[];
+  sources: readonly string[];
+  owner?: 'module' | 'native' | 'internal' | 'user';
+  settingsLink?: 'mcp' | 'automations';
 }
 
 export interface ConfigResponse {

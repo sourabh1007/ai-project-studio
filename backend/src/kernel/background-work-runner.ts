@@ -1,4 +1,4 @@
-import type { BackgroundWorkConfig } from './background-work-config.js';
+import { backgroundWorkDefaults, type BackgroundWorkConfig } from './background-work-config.js';
 
 export interface BackgroundWorker<T> {
   result: Promise<T>;
@@ -17,7 +17,8 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
   config: BackgroundWorkConfig;
   spawn(input: Input, progress: (message: string) => void): BackgroundWorker<Output>;
 }) {
-  type Job = { start(): void; stop(error: Error): void; done: Promise<void> };
+  type Job = { start(): void; stop(error: Error): void; done: Promise<void>; settled(): boolean };
+  const terminateTimeoutMs = deps.config.terminateTimeoutMs ?? backgroundWorkDefaults.terminateTimeoutMs;
   const queued = new Set<Job>();
   const active = new Set<Job>();
   let closed = false;
@@ -30,6 +31,36 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
   };
   const cancelAll = (error: Error) => {
     for (const job of [...queued, ...active]) job.stop(error);
+  };
+  // A worker that never confirms exit may still be running, so the caller gets
+  // a bounded rejection while its slot stays held (fail closed).
+  const confirmTermination = (worker: BackgroundWorker<Output>) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('Background worker termination timed out.')),
+      terminateTimeoutMs,
+    );
+    const settle = (error?: unknown) => {
+      clearTimeout(timer);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    try {
+      worker.terminate().then(() => settle(), (error: unknown) => settle(error ?? new Error('terminate failed')));
+    } catch (error) {
+      settle(error ?? new Error('terminate failed'));
+    }
+  });
+
+  /** Resolves true only when every worker confirmed exit before the deadline. */
+  const closeWithin = async (timeoutMs: number = terminateTimeoutMs): Promise<boolean> => {
+    closed = true;
+    const jobs = [...queued, ...active];
+    cancelAll(new Error('Background analysis cancelled during app shutdown.'));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
+    await Promise.race([Promise.all(jobs.map((job) => job.done)), deadline]);
+    clearTimeout(timer);
+    return active.size === 0 && jobs.every((job) => job.settled());
   };
 
   return {
@@ -44,13 +75,14 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
         let stopped = false;
         let rejectStop!: (error: Error) => void;
         let finish!: () => void;
-        const done = new Promise<void>((r) => { finish = r; });
+        let finished = false;
+        const done = new Promise<void>((r) => { finish = () => { finished = true; r(); }; });
         const stopSignal = new Promise<never>((_resolve, r) => { rejectStop = r; });
         // Queued cancellation has no worker race attached yet.
         void stopSignal.catch(() => {});
         const abort = () => job.stop(new Error('Background analysis cancelled.'));
         const timer = setTimeout(() => job.stop(new Error(
-          `Background analysis exceeded ${deps.config.timeoutMs}ms and was stopped. Retry this analysis when ready.`,
+          `Background analysis exceeded ${deps.config.timeoutMs}ms including queue time and was stopped. Retry when the analysis queue is less busy, or increase the background-work timeout in Settings.`,
         )), deps.config.timeoutMs);
         const cleanup = () => {
           clearTimeout(timer);
@@ -58,6 +90,7 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
         };
         const job: Job = {
           done,
+          settled: () => finished,
           stop(error) {
             if (stopped) return;
             stopped = true;
@@ -91,7 +124,7 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
                   output = await Promise.race([worker.result, stopSignal]);
                 } finally {
                   try {
-                    await worker.terminate();
+                    await confirmTermination(worker);
                     worker = undefined;
                   } catch {
                     closed = true;
@@ -132,12 +165,9 @@ export function createBackgroundWorkRunner<Input, Output>(deps: {
         maxQueued: deps.config.maxQueued,
       };
     },
+    closeWithin,
     async close(): Promise<void> {
-      closed = true;
-      const jobs = [...queued, ...active];
-      cancelAll(new Error('Background analysis cancelled during app shutdown.'));
-      await Promise.all(jobs.map((job) => job.done));
-      if (active.size > 0) throw new Error('Background workers did not confirm termination.');
+      if (!await closeWithin()) throw new Error('Background workers did not confirm termination.');
     },
   };
 }

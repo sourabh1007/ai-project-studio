@@ -17,6 +17,11 @@ const fullEnv = {
 };
 
 describe('buildMcpUsageReport', () => {
+  it('attributes shared file wrappers to the launching provider and session, not the last config writer', () => {
+    expect(buildMcpUsageReport({ ...fullEnv, STUDIO_MCP_PROVIDER: 'agency',
+      STUDIO_PROVIDER_ID: 'copilot', STUDIO_SESSION_ID: 'copilot-session' }, snapshot))
+      .toMatchObject({ provider: 'copilot', sessionId: 'copilot-session' });
+  });
   it('builds a report from env and snapshot', () => {
     expect(buildMcpUsageReport(fullEnv, snapshot)).toEqual({
       provider: 'copilot',

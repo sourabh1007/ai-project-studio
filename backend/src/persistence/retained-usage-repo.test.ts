@@ -107,7 +107,7 @@ describe('createRetainedUsageRepo', () => {
     expect(rows[0].resolved_model).toBe('gpt-5.4');
     expect(rows[0].purpose).toBe('review');
     expect(rows[0].nano_aiu).toBe(500);
-    expect(rows[0].credits).toBe(0);
+    expect(rows[0].credits).toBeNull();
     db.close();
   });
 

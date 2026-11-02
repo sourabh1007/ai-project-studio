@@ -29,6 +29,9 @@ export interface UsageRecorder {
 export function createUsageRecorder(deps: UsageRecorderDeps): UsageRecorder {
   const toStored = (event: UsageEvent, kind: SessionKind): StoredUsage => ({
     ...event,
+    chargeProvenance: event.chargeProvenance ?? (event.cost === null ? 'unavailable' : 'reported'),
+    chargeUnit: event.chargeUnit === undefined ? (event.cost === null ? null : 'aic') : event.chargeUnit,
+    usdEstimate: event.usdEstimate ?? null,
     credits: deps.calculator.calculate(event).credits,
     kind,
   });

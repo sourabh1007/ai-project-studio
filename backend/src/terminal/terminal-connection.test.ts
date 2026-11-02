@@ -305,4 +305,11 @@ describe('terminal connection ownership', () => {
       expect(f.frames.at(-1)).toEqual(expect.objectContaining({ type: 'state', state: 'failed' }));
     }
   });
+
+  it('announces the attach size frame with an explicit phase when a terminal binds', async () => {
+    const f = fixture(true);
+    f.launch();
+    await f.started;
+    expect(f.frames).toContainEqual({ type: 'resize', cols: 0, rows: 0, phase: 'attach' });
+  });
 });

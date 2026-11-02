@@ -261,4 +261,44 @@ describe('createAnsiSafeUtf8TailBuffer', () => {
     expect(buffer.text()).toHaveLength(1024);
     expect(scanned).toBeLessThan(4096 * 16);
   });
+
+  describe('geometry segments', () => {
+    it('rejects a non-positive boundary bound', () => {
+      for (const bad of [0, -1, 1.5]) {
+        expect(() => createAnsiSafeUtf8TailBuffer(10, bad)).toThrow('geometry boundaries');
+      }
+    });
+
+    it('with a zero byte budget keeps only the active size', () => {
+      const buffer = createAnsiSafeUtf8TailBuffer(0);
+      buffer.noteGeometry(10, 5);
+      buffer.append('abc');
+      buffer.noteGeometry(20, 5);
+      expect(buffer.replaySegments()).toEqual([{ cols: 20, rows: 5, text: '' }]);
+    });
+
+    it('forced trims inside a control sequence continue to the next text boundary', () => {
+      const buffer = createAnsiSafeUtf8TailBuffer(1000, 2);
+      buffer.noteGeometry(10, 5);
+      buffer.append('a\x1b[1;');
+      buffer.noteGeometry(20, 5);
+      buffer.append('50Hb');
+      buffer.noteGeometry(30, 5);
+      buffer.append('c');
+      expect(buffer.replaySegments()).toEqual([
+        { cols: 20, rows: 5, text: 'b' },
+        { cols: 30, rows: 5, text: 'c' },
+      ]);
+      expect(buffer.text()).toBe('bc');
+    });
+
+    it('replaces a mark at the same position and ignores an identical size', () => {
+      const buffer = createAnsiSafeUtf8TailBuffer(1000);
+      buffer.noteGeometry(10, 5);
+      buffer.noteGeometry(10, 5);
+      buffer.noteGeometry(20, 5);
+      buffer.append('x');
+      expect(buffer.replaySegments()).toEqual([{ cols: 20, rows: 5, text: 'x' }]);
+    });
+  });
 });

@@ -5,6 +5,8 @@ import { PrReviewPicker, parsePullNumber } from './pr-review-picker.js';
 import type { ApiClient } from '../../lib/api.js';
 import type { Repository } from '../../lib/types.js';
 import { TEAM_ROSTER_STORAGE_KEY } from '../../lib/team-roster.js';
+import { prImportStore } from '../../lib/pr-import-store.js';
+import { AutomationReadinessProvider } from '../../app/automation-readiness.js';
 
 const repo: Repository = {
   id: 'r1',
@@ -40,15 +42,31 @@ describe('parsePullNumber', () => {
 });
 
 describe('PrReviewPicker selection', () => {
+  it('explains unavailable automation and prevents review checkout before starting a batch', async () => {
+    const onConfirm = vi.fn();
+    const api = {
+      getProviderBootstrap: vi.fn().mockResolvedValue({
+        defaultProvider: 'interactive-cli', providers: [{ id: 'interactive-cli', installed: true,
+          automation: { supported: false, reason: 'Review automation is blocked by provider policy.' } }],
+      }),
+      listRepoPulls: vi.fn().mockResolvedValue([]),
+    } as unknown as ApiClient;
+    render(<ApiProvider value={api}><AutomationReadinessProvider>
+      <PrReviewPicker repo={repo} onClose={() => {}} onConfirm={onConfirm} />
+    </AutomationReadinessProvider></ApiProvider>);
+    await screen.findByText(/Review automation is blocked by provider policy/);
+    fireEvent.change(screen.getByLabelText('Add by PR number or URL'), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    expect(screen.getByRole('button', { name: /Start review/ })).toBeDisabled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     window.localStorage.clear();
+    prImportStore.reset();
   });
   function renderPicker(
     client: Partial<ApiClient>,
-    onConfirm: (
-      pulls: { number: number; title: string }[],
-      reportProgress: (message: string) => void,
-    ) => Promise<void>,
+    onConfirm: (pulls: { number: number; title: string }[]) => void | Promise<void>,
     provider = repo.provider,
   ) {
     return render(
@@ -81,7 +99,6 @@ describe('PrReviewPicker selection', () => {
     await waitFor(() =>
       expect(onConfirm).toHaveBeenCalledWith(
         [{ number: 42, title: 'PR #42' }],
-        expect.any(Function),
       ),
     );
   });
@@ -130,8 +147,74 @@ describe('PrReviewPicker selection', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
     expect(onConfirm).toHaveBeenCalledWith(
       pulls.slice(0, 10).map(({ number, title }) => ({ number, title })),
-      expect.any(Function),
     );
+  });
+
+  it('stays interactive while the hand-off is pending and ignores a second click', async () => {
+    const client: Partial<ApiClient> = {
+      listRepoPulls: vi.fn().mockResolvedValue([]),
+    };
+    let finish!: () => void;
+    const onConfirm = vi.fn(
+      () => new Promise<void>((resolve) => { finish = resolve; }),
+    );
+    renderPicker(client, onConfirm);
+    fireEvent.change(await screen.findByLabelText('Add by PR number or URL'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    const start = screen.getByRole('button', { name: /Start review/ });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Start review/ })).toBeEnabled());
+  });
+
+  it('shows a hand-off failure and lets the user retry', async () => {
+    const client: Partial<ApiClient> = { listRepoPulls: vi.fn().mockResolvedValue([]) };
+    const onConfirm = vi.fn().mockRejectedValueOnce(new Error('queue exploded')).mockResolvedValue(undefined);
+    renderPicker(client, onConfirm);
+    fireEvent.change(await screen.findByLabelText('Add by PR number or URL'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Start review/ }));
+    expect(await screen.findByText('queue exploded')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Start review/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps pull requests that are already importing or imported out of the selection', async () => {
+    const pulls = [
+      { number: 1, title: 'Running', url: 'u1', sourceBranch: 'a', author: 'x' },
+      { number: 2, title: 'Done', url: 'u2', sourceBranch: 'b', author: 'x' },
+      { number: 3, title: 'Free', url: 'u3', sourceBranch: 'c', author: 'x' },
+    ];
+    const api = {
+      createFeature: vi.fn(),
+      createPrFeatureStreamed: vi
+        .fn()
+        .mockImplementationOnce(() => new Promise(() => {}))
+        .mockResolvedValueOnce({ feature: { id: 'f2' }, alreadyImported: false }),
+    };
+    prImportStore.enqueue(api as never, {
+      repo: { id: 'r1', name: 'acme/app' },
+      pulls: [{ number: 1, title: 'Running' }, { number: 2, title: 'Done' }],
+      batchName: 'b',
+    });
+    // Re-enqueue as two single imports so #2 can finish while #1 stays running.
+    prImportStore.reset();
+    prImportStore.enqueue(api as never, { repo: { id: 'r1', name: 'acme/app' }, pulls: [pulls[0]], batchName: 'b' });
+    prImportStore.enqueue(api as never, { repo: { id: 'r1', name: 'acme/app' }, pulls: [pulls[1]], batchName: 'b' });
+    const client: Partial<ApiClient> = { listRepoPulls: vi.fn().mockResolvedValue(pulls) };
+    renderPicker(client, vi.fn());
+    const items = await screen.findAllByRole('button', { name: /^#\d+\D/ });
+    await waitFor(() => expect(items[1]).toHaveTextContent('Imported'));
+    expect(items[0]).toBeDisabled();
+    expect(items[0]).toHaveTextContent('Importing…');
+    expect(items[1]).toBeDisabled();
+    expect(items[2]).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('Add by PR number or URL'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    expect(screen.getByText('PR #1 is already imported or importing.')).toBeInTheDocument();
   });
 
   it('groups open PRs by author in the Team tab', async () => {

@@ -44,6 +44,15 @@ function scriptedSpawner(script: {
 }
 
 describe('createCopilotBootstrapper', () => {
+  it('reads the installer profile at execution time', async () => {
+    const { spawner, requests } = scriptedSpawner({ code: 0 });
+    const boot = createCopilotBootstrapper({
+      platform: 'linux', detect: () => false, spawner, env: {},
+      installConfig: () => ({ windowsExecutable: 'cmd', posixExecutable: '/custom/sh' }),
+    });
+    await boot.install(() => {});
+    expect(requests[0]?.command).toBe('/custom/sh');
+  });
   it('status reflects the detector', () => {
     const yes = createCopilotBootstrapper({
       platform: 'linux',
@@ -101,7 +110,7 @@ describe('createCopilotBootstrapper', () => {
       { kind: 'done' },
     ]);
     expect(requests[0]?.command).toBe('cmd');
-    expect(requests[0]?.env).toEqual({ PATH: '/bin' });
+    expect(requests[0]?.env).toEqual({ PATH: '/bin', npm_config_ignore_scripts: 'false', NPM_CONFIG_IGNORE_SCRIPTS: 'false' });
   });
 
   it('reports an error when the install process exits non-zero', async () => {

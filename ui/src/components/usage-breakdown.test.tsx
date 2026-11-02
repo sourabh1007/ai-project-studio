@@ -40,6 +40,22 @@ function renderModal(client: Partial<ApiClient>, scope: UsageScope) {
 }
 
 describe('UsageBreakdownModal', () => {
+  it('keeps a cumulative USD snapshot visible without counting it as a request', async () => {
+    renderModal(
+      { getSessionUsageEvents: vi.fn().mockResolvedValue([
+        usage({ provider: 'claude', cost: null, credits: null, nanoAiu: null }),
+        usage({
+          turnIndex: 1, provider: 'claude', operation: 'session-charge-estimate',
+          inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0,
+          cost: null, credits: null, nanoAiu: null, usdEstimate: 3,
+        }),
+      ]) },
+      { kind: 'session', id: 's1', label: 'Claude' },
+    );
+    const label = await screen.findByText('Turns');
+    expect(label.parentElement?.querySelector('.usage-summary-value')?.textContent).toBe('1');
+    expect(screen.getByText('session-charge-estimate')).toBeInTheDocument();
+  });
   it('loads and renders per-turn session usage with summary totals', async () => {
     const getSessionUsageEvents = vi.fn().mockResolvedValue([
       usage({ turnIndex: 0, resolvedModel: 'claude-opus-4.8' }),

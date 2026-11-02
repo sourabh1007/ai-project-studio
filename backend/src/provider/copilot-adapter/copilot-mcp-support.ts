@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { McpSupport } from '../provider-contract.js';
+import { interactiveCommandSchema } from '../command-options.js';
 
 /** The Copilot CLI reads MCP servers from a JSON file with this basename. */
 export const COPILOT_MCP_CONFIG_FILENAME = 'mcp-config.json';
@@ -35,11 +36,11 @@ export function parseCopilotMcpConfigPath(reply: string): string | null {
  * rather than duplicating the discovery prompt/parsing (mirroring how the
  * output and model scanners are shared).
  */
-export function createCopilotMcpSupport(): McpSupport {
+export function createCopilotMcpSupport(liveReloadCommand = '/restart'): McpSupport {
   return {
     configPathPrompt: DISCOVERY_PROMPT,
     parseConfigPath: parseCopilotMcpConfigPath,
     defaultConfigPath: () => join(homedir(), '.copilot', COPILOT_MCP_CONFIG_FILENAME),
-    liveReloadCommand: '/restart',
+    liveReloadCommand: interactiveCommandSchema.parse(liveReloadCommand),
   };
 }

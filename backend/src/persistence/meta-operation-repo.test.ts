@@ -43,6 +43,14 @@ describe('durable meta operation repository', () => {
     expect(repo.complete(done, null)).toBe(true);
     expect(repo.get('1')).toEqual(done);
     expect(repo.get('missing')).toBeNull();
+    const captureRepo = createMetaOperationRepo(db);
+    const get = vi.spyOn(StatementSync.prototype, 'get');
+    try {
+      expect(captureRepo.getSummary('1')).toMatchObject({ hasResult: true, usageState: 'recorded' });
+      expect(get.mock.results[0].value).not.toHaveProperty('result_text');
+      expect(captureRepo.getSummary('2')).toMatchObject({ hasResult: false });
+      expect(captureRepo.getSummary('missing')).toBeNull();
+    } finally { get.mockRestore(); }
     const all = vi.spyOn(StatementSync.prototype, 'all');
     try {
       const page = repo.listPage({}, null, 1);
