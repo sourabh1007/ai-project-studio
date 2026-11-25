@@ -167,6 +167,8 @@ import { createProviderHistoryReader } from './copilot-history/provider-history-
 import { createProviderUsageRouter, type ProviderUsageSource } from './usage/provider-usage-router.js';
 import { createProviderUsageReader } from './usage/provider-usage-reader.js';
 import { createMicrosoftIdentity } from './provider/microsoft-identity.js';
+import { createMicrosoftNetworkDetector } from './provider/network-environment.js';
+import { probeMicrosoftNetwork } from './provider/microsoft-network-probe.js';
 import { withTabsDisabled } from './copilot-settings/copilot-settings.js';
 import {
   createGithubAuth,
@@ -185,8 +187,12 @@ import {
 } from './azure-auth/azure-devops-credential-env.js';
 import { createCopilotProvider } from './provider/copilot-adapter/copilot-provider.js';
 import { createAgencyProvider } from './provider/agency-adapter/agency-provider.js';
+import { resolveAgencyNativeCopilot } from './provider/agency-adapter/agency-env-mapper.js';
 import { createCopilotMcpSupport } from './provider/copilot-adapter/copilot-mcp-support.js';
-import { headlessMcpServerNames } from './mcp/mcp-server-names.js';
+import { headlessMcpServerNames, nativeMcpServerNames } from './mcp/mcp-server-names.js';
+import { PROVIDER_FEATURES_NAMESPACE, providerFeaturesConfigSchema, providerFeaturesDefaults } from './provider-features/config.js';
+import { resolveProviderFeatures, type AutomationReadiness } from './provider-features/provider-features.js';
+import { resolveCopilotNativeCommand, resolveCopilotNpmNativeExecutable } from './provider/copilot-adapter/copilot-native-command.js';
 import { createProviderRegistry } from './provider/provider-registry.js';
 import { createProviderResolver } from './provider/provider-resolver.js';
 
@@ -243,7 +249,8 @@ import { createSharedCheckoutPreparer } from './session-worktree/shared-session-
 import { createCheckoutRecovery } from './session-worktree/checkout-recovery.js';
 import { createSessionRefResolver } from './session-worktree/session-ref-resolver.js';
 import { favouriteAzureBranch } from './repo/azure-branch-favorites.js';
-import { createPrFeatureService } from './repo/pr-feature-service.js';
+import { createPrFeatureService, type PrImportOptions } from './repo/pr-feature-service.js';
+import { parsePrImportInput } from './api/repo-controller.js';
 import { createGithubCommentsGateway } from './repo/github-pr-comments.js';
 import { createAzureCommentsGateway } from './repo/azure-pr-comments.js';
 import { createPrCommentsService } from './pr-review/pr-comments-service.js';
@@ -357,6 +364,7 @@ import {
 } from './session-import/config.js';
 import { createSkillsService } from './skills/skills-service.js';
 import { seedBuiltinSkills } from './skills/skill-seed.js';
+import { selectCosmosReviewSkillIds } from './skills/cosmos-review-skills.js';
 import { createSkillsRepo } from './persistence/skills-repo.js';
 import {
   SKILLS_NAMESPACE,
@@ -377,10 +385,13 @@ import { createMetaSettings } from './meta/meta-settings.js';
 import {
   createConfiguredWarmRoutePolicy,
   resolveWarmProviderIdentity,
+  warmPoolAvailability,
 } from './meta/warm-route-policy.js';
 import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
 import { createMcpUsageRepo } from './persistence/mcp-usage-repo.js';
 import { createSkillUsageRepo } from './persistence/skill-usage-repo.js';
+import { createPromptUsageRepo } from './persistence/prompt-usage-repo.js';
+import { instructionPromptRefs, removalPromptRefs } from './skills/skill-prompt-composer.js';
 import { recordIdeSkillContext, skillInvocationFromEvent } from './skill-usage/skill-usage.js';
 import { SKILL_USAGE_NAMESPACE, skillUsageConfigSchema, skillUsageDefaults, type SkillUsageConfig } from './skill-usage/config.js';
 import { createMcpAuthObservationRepo } from './persistence/mcp-auth-observation-repo.js';
@@ -427,11 +438,12 @@ import type { McpToolEntry } from './mcp/mcp-contract.js';
 import { providerLaunchSpec, wrapServerSpec } from './mcp/mcp-proxy-config.js';
 import { createMcpConfigFileStore } from './mcp/mcp-config-file-adapter.js';
 import { createMcpToolInspector } from './mcp/mcp-tool-inspector-adapter.js';
+import { bluebirdReviewLaunch, createBluebirdReviewResources } from './mcp/bluebird-review-resources.js';
+import { readReviewMcpResources } from './mcp/mcp-review-read-adapter.js';
 import {
   MCP_NAMESPACE,
   mcpConfigSchema,
   mcpDefaults,
-  type McpConfig,
 } from './mcp/config.js';
 import { createFeatureTasksService } from './feature-tasks/feature-tasks-service.js';
 import { createTaskPlanRunner } from './feature-tasks/task-plan-runner.js';
@@ -489,6 +501,10 @@ import {
   type PlannerSummaryConfig,
 } from './planner-summary/config.js';
 import { createPlannerSummaryRunner } from './planner-summary/planner-summary-runner.js';
+import { PLANNER_TRACKING_NAMESPACE, plannerTrackingConfigSchema, plannerTrackingDefaults } from './planner-tracking/config.js';
+import { createWorkTracker as createPlannerWorkTracker } from './planner-tracking/work-tracker.js';
+import { createWorkTrackingSource } from './planner-tracking/tracking-source.js';
+import { createPlannerTrackingContext, createPlannerTrackingStore } from './persistence/planner-tracking-repo.js';
 import { createFeatureTreeService } from './feature-tree/feature-tree-service.js';
 import { createFeatureGroupsRepo } from './persistence/feature-groups-repo.js';
 import {
@@ -563,6 +579,11 @@ import {
   type ReviewBoardConfig,
 } from './review-board/config.js';
 import { createReviewBoardService, requireReviewEvidence } from './review-board/review-board-service.js';
+import { createReviewContextCollector, createReviewLinkedRequirementReader } from './review-board/review-context.js';
+import { readAzureReviewRequirement, readGithubReviewRequirement } from './repo/review-requirement-reader.js';
+import { createReviewContextDiscovery } from './review-board/review-context-discovery.js';
+import { createGitReviewContextSource } from './review-board/review-context-git.js';
+import { createReviewContextCommandRunner } from './review-board/review-context-process-adapter.js';
 import { createReviewBoardQueue } from './review-board/review-board-queue.js';
 import type {
   ReviewBoardEventMap,
@@ -614,6 +635,9 @@ import {
 import { createSystemResourceSampler } from './resource-pressure/system-resource-sampler.js';
 import { RESOURCES_NAMESPACE, resourcesConfigSchema, resourcesDefaults, type ResourcesConfig } from './resources/config.js';
 import { createResourcesService } from './resources/resources-service.js';
+import { createResourceHistoryStore } from './persistence/resource-history-repo.js';
+import { createCapacityHistory } from './meta/capacity-history.js';
+import { createCapacityHistoryStore } from './persistence/capacity-history-repo.js';
 import { createProcessSampler, resourceFileSystem, startResourceSampling } from './resources/resources-node-adapter.js';
 import type { StorageRoot } from './resources/resources-contract.js';
 import { defaultWorkspaceDataDir } from './workspace/workspace-paths.js';
@@ -624,7 +648,7 @@ import { nodeChangeGraphFs } from './pr-review/change-graph-fs.js';
 import { createPrReviewReconciler } from './pr-review/pr-review-reconciler.js';
 import { createMetaUsageReader } from './pr-review/meta-usage-reader.js';
 import { createPrDiffCollector } from './pr-review/pr-diff-collector.js';
-import type { PrReviewEventMap } from './pr-review/pr-review-contract.js';
+import type { PrReview, PrReviewEventMap } from './pr-review/pr-review-contract.js';
 import { createPrReviewRepo } from './persistence/pr-review-repo.js';
 
 import { createApiRoutes } from './api/routes.js';
@@ -642,7 +666,7 @@ import { createBoundedSse } from './api/bounded-sse.js';
 import { SSE_NAMESPACE, sseConfigSchema, sseDefaults, type SseConfig } from './api/sse-config.js';
 import type { ConfigObject } from './config/config-contract.js';
 import type { Session } from './session/session-contract.js';
-import type { IAIProvider, RunningSession, SessionEvent, SessionSpec } from './provider/provider-contract.js';
+import type { HeadlessMcpPolicy, IAIProvider, RunningSession, SessionEvent, SessionSpec } from './provider/provider-contract.js';
 
 const ENV_PREFIX = 'CW';
 
@@ -650,7 +674,7 @@ function ensureDir(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const registry = createConfigSchemaRegistry();
   registry.register({ namespace: GIT_NAMESPACE, schema: gitConfigSchema, defaults: gitDefaults });
   registry.register({ namespace: GITHUB_CLI_NAMESPACE, schema: githubCliConfigSchema, defaults: githubCliDefaults });
@@ -696,8 +720,10 @@ function main(): void {
   registry.register({ namespace: HEALTH_NAMESPACE, schema: healthConfigSchema, defaults: healthDefaults });
   registry.register({ namespace: META_NAMESPACE, schema: metaConfigSchema, defaults: metaDefaults });
   registry.register({ namespace: MCP_NAMESPACE, schema: mcpConfigSchema, defaults: mcpDefaults });
+  registry.register({ namespace: PROVIDER_FEATURES_NAMESPACE, schema: providerFeaturesConfigSchema, defaults: providerFeaturesDefaults });
   registry.register({ namespace: FEATURE_TASKS_NAMESPACE, schema: featureTasksConfigSchema, defaults: featureTasksDefaults });
   registry.register({ namespace: PLANNER_NAMESPACE, schema: plannerConfigSchema, defaults: plannerDefaults });
+  registry.register({ namespace: PLANNER_TRACKING_NAMESPACE, schema: plannerTrackingConfigSchema, defaults: plannerTrackingDefaults });
   registry.register({ namespace: PLANNER_SUMMARY_NAMESPACE, schema: plannerSummaryConfigSchema, defaults: plannerSummaryDefaults });
   registry.register({ namespace: FEATURE_TREE_NAMESPACE, schema: featureTreeConfigSchema, defaults: featureTreeDefaults });
   registry.register({ namespace: IDE_USAGE_NAMESPACE, schema: ideUsageConfigSchema, defaults: ideUsageDefaults });
@@ -964,9 +990,21 @@ function main(): void {
   const copilotConfig = config[COPILOT_NAMESPACE] as CopilotConfig;
   const agencyConfig = config[AGENCY_NAMESPACE] as AgencyConfig;
   const claudeConfig = config[CLAUDE_NAMESPACE] as ClaudeConfig;
-  // Operator attestation only; Agency itself enforces native authentication.
-  let allowInternalAgency = providerSelectionConfigSchema.parse(config[PROVIDER_SELECTION_NAMESPACE]).allowInternalAgency;
-  const isProviderEligible = (id: string): boolean => id !== AGENCY_NAMESPACE || allowInternalAgency;
+  const microsoftNetworkAbort = new AbortController();
+  const microsoftNetwork = createMicrosoftNetworkDetector({
+    probe: () => {
+      const settings = agencyBootstrapConfigSchema.parse(config[AGENCY_BOOTSTRAP_NAMESPACE]);
+      return probeMicrosoftNetwork({
+        host: settings.microsoftNetworkHost, port: settings.microsoftNetworkPort,
+        timeoutMs: settings.microsoftNetworkTimeoutMs,
+      }, microsoftNetworkAbort.signal);
+    },
+  });
+  await microsoftNetwork.refresh();
+  const microsoftNetworkTimer = setInterval(() => { void microsoftNetwork.refresh(); },
+    agencyBootstrapConfigSchema.parse(config[AGENCY_BOOTSTRAP_NAMESPACE]).microsoftNetworkRefreshMs);
+  microsoftNetworkTimer.unref();
+  const isProviderEligible = (id: string): boolean => id !== AGENCY_NAMESPACE || microsoftNetwork.isMicrosoftNetwork();
   const sessionConfig = config[SESSION_NAMESPACE] as SessionConfig;
   const usageConfig = config[USAGE_NAMESPACE] as UsageConfig;
   const creditConfig = config[CREDIT_NAMESPACE] as CreditConfig;
@@ -995,9 +1033,10 @@ function main(): void {
   const sessionImportConfig = config[SESSION_IMPORT_NAMESPACE] as SessionImportConfig;
   const skillsConfig = config[SKILLS_NAMESPACE] as SkillsConfig;
   const metaConfig = config[META_NAMESPACE] as MetaConfig;
-  const mcpConfig = config[MCP_NAMESPACE] as McpConfig;
+  const mcpConfig = mcpConfigSchema.parse(config[MCP_NAMESPACE]);
   const featureTasksConfig = config[FEATURE_TASKS_NAMESPACE] as FeatureTasksConfig;
   const plannerConfig = config[PLANNER_NAMESPACE] as PlannerConfig;
+  const plannerTrackingConfig = plannerTrackingConfigSchema.parse(config[PLANNER_TRACKING_NAMESPACE]);
   const plannerSummaryConfig = config[
     PLANNER_SUMMARY_NAMESPACE
   ] as PlannerSummaryConfig;
@@ -1055,6 +1094,17 @@ function main(): void {
   const metaUsageRepo = createMetaUsageRepo(db);
   const mcpUsageRepo = createMcpUsageRepo(db);
   const skillUsageRepo = createSkillUsageRepo(db);
+  const promptUsageRepo = createPromptUsageRepo(db);
+  const recordPromptContext = (session: Session, promptRefs: readonly string[], kind: 'context-prepared' | 'context-injected') => {
+    try {
+      promptUsageRepo.recordContext({
+        eventId: ids.next(), sessionId: session.id, providerId: session.provider,
+        promptRefs, kind, recordedAt: clock.isoNow(),
+      });
+    } catch (error) {
+      logger.error('Could not record prompt context attribution', { error });
+    }
+  };
   const mcpAuthObservationRepo = createMcpAuthObservationRepo(db);
   const activeSessionsConfig = config[ACTIVE_SESSIONS_NAMESPACE] as ActiveSessionsConfig;
   const metaDebugTracker = createMetaDebugTracker(activeSessionsConfig);
@@ -2004,6 +2054,7 @@ function main(): void {
     ? pathJoin(copilotHome, 'mcp-config.json')
     : createCopilotMcpSupport(copilotConfig.commandProfile?.liveReloadCommand).defaultConfigPath();
   const headlessInventories = new WeakMap<SessionSpec, readonly string[]>();
+  const headlessMcpPolicy = (providerId: string) => mcpConfig.headlessPolicies[providerId] ?? 'isolated';
   const readMcpServerNames = (spec: SessionSpec): readonly string[] => {
     const inventory = headlessInventories.get(spec);
     if (!inventory) throw new ValidationError('Trusted MCP source inventory was not verified for this headless launch.');
@@ -2013,13 +2064,40 @@ function main(): void {
     spec: Pick<SessionSpec, 'cwd' | 'kind' | 'noTools'>,
     providerId: string,
     signal: AbortSignal,
+    policy: HeadlessMcpPolicy = headlessMcpPolicy(providerId),
   ): Promise<readonly string[]> => {
+    signal.throwIfAborted();
+    if (policy === 'native') return [];
     const unavailable = (source: string): ValidationError => new ValidationError(
       `Headless MCP suppression cannot be verified for ${source}. Inspect the effective configuration in the native CLI or choose a provider with verifiable sources. Native trust and administrator safety policies will not be bypassed.`,
     );
     if (providerId === AGENCY_NAMESPACE) {
       // Agency can inject built-ins/plugins before Copilot sees passthrough flags.
       throw unavailable('Agency native runtime defaults and overlays');
+    }
+    if (providerId === COPILOT_NAMESPACE) {
+      signal.throwIfAborted();
+      const admission = await processAdmission.acquireCold(signal);
+      try {
+        const output = await new Promise<string>((resolve, reject) => {
+          const command = resolveCopilotNativeCommand({ command: copilotConfig.executable, args: ['mcp', 'list', '--json'] });
+          const child = execFile(command.command, command.args, {
+            cwd: spec.cwd ?? process.env.CW_WORKSPACE_CWD ?? process.cwd(),
+            env: process.env, signal, timeout: mcpConfig.discoveryTimeoutMs,
+            maxBuffer: mcpConfig.headlessInventoryMaxBytes, encoding: 'utf8',
+            windowsHide: true, shell: false,
+          }, (error, stdout) => {
+            if (error) reject(new ValidationError('Native Copilot MCP inventory could not be read. Verify the configured executable supports "mcp list --json", update the CLI if needed, and refresh. No automated session was launched.'));
+            else resolve(stdout);
+          });
+          trackProviderProbe({
+            kill: () => { child.kill('SIGKILL'); },
+            done: new Promise<number | null>((acknowledge) => { child.once('close', acknowledge); }),
+          });
+          child.stdin?.end();
+        });
+        return nativeMcpServerNames(output);
+      } finally { admission.release(); }
     }
     let remainingBytes = 4 * 1_048_576;
     const readDocument = async (path: string): Promise<unknown> => {
@@ -2135,6 +2213,7 @@ function main(): void {
     ...provider,
     ...(provider.mcp ? { mcp: { ...provider.mcp, defaultConfigPath: () => mcpConfigPath } } : {}),
     startSession(spec): RunningSession {
+      if (headlessMcpPolicy(provider.id) === 'native') return provider.startSession(spec);
       if (spec.kind !== 'meta' && !(provider.id === CLAUDE_NAMESPACE && spec.noTools)) return provider.startSession(spec);
       const controller = new AbortController();
       const handlers = new Set<(event: SessionEvent) => void>();
@@ -2191,28 +2270,52 @@ function main(): void {
   let claudeAuthMethod: string | null = null;
   let claudeReadinessError: string | null = null;
   let claudeReadiness: Promise<void> | null = null;
-  const automationReadiness = new Map<string, { supported: boolean; reason: string | null }>();
+  const automationReadiness = new Map<string, AutomationReadiness>();
+  const automationCheckedAt = new Map<string, number>();
   const automationChecks = new Set<string>();
-  const checkingAutomation = {
+  const checkingAutomation: AutomationReadiness = {
     supported: false,
+    state: 'checking',
     reason: 'Automated AI readiness is being checked against trusted MCP policy. Interactive sessions remain available. Refresh CLI status shortly or choose another provider.',
   };
   const refreshAutomationReadiness = (providerId: string): void => {
-    if (providerId === AGENCY_NAMESPACE) {
+    if (providerId === AGENCY_NAMESPACE && headlessMcpPolicy(providerId) === 'isolated') {
       automationReadiness.set(providerId, {
         supported: false,
-        reason: 'Agency is interactive-only in this application: its native runtime can inject MCP defaults and plugins before passthrough exclusions, so automated planners and agent generation cannot safely verify suppression. Interactive sessions remain available. Choose another provider for automated AI; administrator and trust policies will not be bypassed.',
+        state: 'blocked',
+        reason: 'Agency automation uses native CLI configuration and permissions. The selected isolated policy cannot verify zero-MCP startup. Set mcp.headlessPolicies.agency to native in Settings and restart, or choose a provider with verifiable isolation.',
       });
       return;
     }
-    if (automationChecks.has(providerId)) return;
+    if (providerId === CLAUDE_NAMESPACE) {
+      const reason = !claudeBootstrapper.status().installed
+        ? 'Install Claude Code, then select it to verify the native version and sign-in. Claude Code supports interactive and programmatic sessions.'
+        : executionPolicy.get().selectionRequired || resolverConfig.defaultProvider !== CLAUDE_NAMESPACE
+          ? 'Select Claude Code to verify its native version and sign-in. Native mode preserves the CLI’s own authentication, administrator policies and permissions.'
+          : claudeReadinessError;
+      if (reason) {
+        automationReadiness.set(providerId, { supported: false, state: 'blocked', reason });
+        return;
+      }
+      if (claudeReadiness || claudeVersion.status !== 'supported') {
+        automationReadiness.set(providerId, checkingAutomation);
+        refreshClaudeReadiness();
+        return;
+      }
+    }
+    if (headlessMcpPolicy(providerId) === 'native') {
+      automationReadiness.set(providerId, { supported: true, state: 'ready', reason: null });
+      return;
+    }
+    if (automationChecks.has(providerId) || Date.now() - (automationCheckedAt.get(providerId) ?? 0) < mcpConfig.readinessCacheMs) return;
     automationChecks.add(providerId);
-    if (!automationReadiness.has(providerId)) automationReadiness.set(providerId, checkingAutomation);
+    automationReadiness.set(providerId, checkingAutomation);
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();
       automationReadiness.set(providerId, {
         supported: false,
+        state: 'blocked',
         reason: 'Trusted MCP policy readiness timed out. No CLI was launched. Refresh CLI status to retry or choose another provider for automated AI.',
       });
     }, mcpConfig.discoveryTimeoutMs);
@@ -2221,23 +2324,26 @@ function main(): void {
       cwd: process.env.CW_WORKSPACE_CWD ?? process.cwd(), kind: 'meta', noTools: true,
     }, providerId, controller.signal).then(() => {
       controller.signal.throwIfAborted();
-      if (providerId === CLAUDE_NAMESPACE) assertClaudeHeadlessAuth(process.env, claudeAuthMethod);
-      automationReadiness.set(providerId, { supported: true, reason: null });
+      if (providerId === CLAUDE_NAMESPACE && headlessMcpPolicy(providerId) === 'isolated') {
+        assertClaudeHeadlessAuth(process.env, claudeAuthMethod);
+      }
+      automationReadiness.set(providerId, { supported: true, state: 'ready', reason: null });
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       automationReadiness.set(providerId, {
         supported: false,
+        state: 'blocked',
         reason: `${error instanceof Error ? error.message : 'Trusted MCP policy readiness could not be verified.'} Interactive sessions remain available; choose another provider for automated AI.`,
       });
     }).finally(() => {
       clearTimeout(timer);
+      automationCheckedAt.set(providerId, Date.now());
       automationChecks.delete(providerId);
     });
   };
   const providerAutomationReadiness = (providerId: string) => {
-    const snapshot = automationReadiness.get(providerId) ?? checkingAutomation;
     refreshAutomationReadiness(providerId);
-    return providerId === AGENCY_NAMESPACE ? automationReadiness.get(providerId)! : snapshot;
+    return automationReadiness.get(providerId) ?? checkingAutomation;
   };
   const providerDescriptors: Array<{
     namespace: string;
@@ -2258,8 +2364,10 @@ function main(): void {
       create: () =>
         createCopilotProvider(copilotConfig, {
           spawner,
+          resolveCommand: resolveCopilotNativeCommand,
           baseEnv: process.env,
           mcpServerNames: readMcpServerNames,
+          mcpPolicy: headlessMcpPolicy(COPILOT_NAMESPACE),
         }),
     },
     {
@@ -2272,7 +2380,11 @@ function main(): void {
           spawner,
           baseEnv: process.env,
           importStore: agencyImportStore,
-          mcpServerNames: readMcpServerNames,
+          mcpPolicy: headlessMcpPolicy(AGENCY_NAMESPACE),
+          nativeCopilot: () => resolveAgencyNativeCopilot(process.env.PATH ?? '', {
+            isWindows: process.platform === 'win32', fileExists: existsSync,
+            nativeFromNpm: resolveCopilotNpmNativeExecutable,
+          }),
         }),
     },
     {
@@ -2285,6 +2397,7 @@ function main(): void {
       create: () => createClaudeProvider(claudeConfig, {
         spawner, baseEnv: process.env, logger,
         authMethod: () => claudeAuthMethod,
+        mcpPolicy: headlessMcpPolicy(CLAUDE_NAMESPACE),
         waitUntilReady: async () => {
           if (claudeVersion.status !== 'supported') refreshClaudeReadiness();
           if (claudeReadiness) await claudeReadiness;
@@ -2310,13 +2423,14 @@ function main(): void {
     providers.register(provider);
     enabledProviders.push(provider);
     defaultModelByProvider[descriptor.namespace] = descriptor.defaultModel;
-    refreshAutomationReadiness(descriptor.namespace);
   }
   if (enabledProviders.length === 0) {
     throw new Error('No providers are enabled; enable at least one provider in config.');
   }
 
   const microsoftIdentity = createMicrosoftIdentity(false);
+  const azureIdentityKey = (target: AzureTarget) =>
+    `${target.host.endsWith('.visualstudio.com') ? 'dev.azure.com' : target.host}|${target.org?.toLowerCase() ?? ''}`;
   const enabledProviderIds = enabledProviders.map((provider) => provider.id);
   const installed = installedProviderIds();
   const fallbackProvider = enabledProviderIds.find((id) => isProviderEligible(id) && installed.has(id)) ??
@@ -2415,11 +2529,13 @@ function main(): void {
       }
       const auth = parseClaudeAuthStatus(await runClaudeProbe(commands.authStatus));
       claudeAuthMethod = auth.authenticated ? auth.method : null;
+      if (!auth.authenticated) throw new ProviderError('Complete sign-in in the native Claude Code CLI, then refresh CLI status.');
     }).catch((error: unknown) => {
       claudeReadinessError = error instanceof Error ? error.message : 'Claude Code readiness could not be verified';
       logger.warn('Claude Code readiness unavailable', { reason: claudeReadinessError });
     }).finally(() => {
       claudeReadiness = null;
+      automationCheckedAt.delete(CLAUDE_NAMESPACE);
       refreshAutomationReadiness(CLAUDE_NAMESPACE);
     });
   };
@@ -2807,8 +2923,7 @@ function main(): void {
     sessions: sessionRepo,
     config: skillsConfig,
   });
-  // Populate the curated starter skills on first run (no-op once any skill
-  // exists), so the Skills view is useful out of the box.
+  // Add missing starter skills without replacing existing edited instructions.
   seedBuiltinSkills(skillsService);
 
   // Runtime-mutable meta AI provider/model. Seeded from the persisted `meta`
@@ -2948,12 +3063,13 @@ function main(): void {
       ? { fetch: async () => {
         try {
           const names = await prepareHeadlessMcpInventory({ cwd: process.cwd(), kind: 'meta' }, providerId,
-            AbortSignal.timeout(mcpConfig.discoveryTimeoutMs));
+            AbortSignal.timeout(mcpConfig.discoveryTimeoutMs), 'isolated');
           // This probe cannot pass per-server exclusions; never initialize custom servers for a catalog read.
           if (names.length > 0) return staticCatalog();
         } catch { return staticCatalog(); }
         return createAcpModelCatalogProbe({
       executable: warmExecutable,
+      resolveCommand: resolveCopilotNativeCommand,
       extraArgs: warmPoolCfg.modelCatalogExtraArgs,
       // The CLI's `session/new` requires a working directory to open a session;
       // any valid directory yields the same account-wide model catalog.
@@ -2992,6 +3108,22 @@ function main(): void {
   // restart. Empty until warm pools are enabled/built below.
   const allWarmPools = new Set<MetaSessionPool>();
   let warmPoolStarting = false;
+  let warmPoolStartupFailed = false;
+  const describeMetaPools = (status: ReturnType<typeof metaPoolsStatus>) => ({
+    ...status,
+    availability: warmPoolAvailability({
+      enabled: warmPoolCfg.enabled,
+      providerId: resolverConfig.defaultProvider,
+      installed: installedProviderIds().has(resolverConfig.defaultProvider),
+      selectionRequired: executionPolicy.get().selectionRequired,
+      transport: providers.has(resolverConfig.defaultProvider)
+        ? providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport : undefined,
+      warmProviderId: warmProviderIdentity,
+      running: status.enabled,
+      starting: warmPoolStarting,
+      failed: warmPoolStartupFailed,
+    }),
+  });
   let resizeMetaPoolFn: (size: number) => ReturnType<
     typeof metaPoolsStatus
   > = () => {
@@ -3004,10 +3136,11 @@ function main(): void {
         warmProviderIdentity !== resolverConfig.defaultProvider ||
         !installedProviderIds().has(resolverConfig.defaultProvider) || allWarmPools.size > 0 || warmPoolStarting) return;
     warmPoolStarting = true;
+    warmPoolStartupFailed = false;
     void (async () => {
     const warmCwd = process.cwd();
     const disabledNames = await prepareHeadlessMcpInventory({ cwd: warmCwd, kind: 'meta' }, resolverConfig.defaultProvider,
-      AbortSignal.timeout(mcpConfig.discoveryTimeoutMs));
+      AbortSignal.timeout(mcpConfig.discoveryTimeoutMs), 'isolated');
     if (!applicationWork.accepting || executionPolicy.get().selectionRequired ||
         warmProviderIdentity !== resolverConfig.defaultProvider || allWarmPools.size > 0) return;
     const inventoryKey = [...disabledNames].sort().join('\0');
@@ -3026,6 +3159,7 @@ function main(): void {
       createClient: () =>
         new AcpClient(new AcpProcessAdapter({
           executable: warmExecutable, cwd: warmCwd,
+          resolveCommand: resolveCopilotNativeCommand,
           baseArgs: ['--acp', '--disable-builtin-mcps', ...disabledNames.flatMap((name) => ['--disable-mcp-server', name])],
           extraArgs: warmPoolCfg.extraArgs,
         }), {
@@ -3055,7 +3189,7 @@ function main(): void {
             warmProviderIdentity!, AbortSignal.any([
               AbortSignal.timeout(mcpConfig.discoveryTimeoutMs),
               ...(request.signal ? [request.signal] : []),
-            ]));
+            ]), 'isolated');
         } catch { return coldMetaRunner.runDetailed(request); }
         if ([...current].sort().join('\0') !== inventoryKey) return coldMetaRunner.runDetailed(request);
         return warmRunner.runDetailed({ ...request, cwd: request.cwd ?? warmCwd });
@@ -3081,6 +3215,7 @@ function main(): void {
       return metaPoolsStatusFn();
     };
     })().catch((error: unknown) => {
+      warmPoolStartupFailed = true;
       logger.warn('Warm ACP startup blocked by unverifiable MCP sources; using guarded cold launches', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -3518,15 +3653,84 @@ function main(): void {
     bus: bus as unknown as EventBus<PrReviewEventMap>,
     config: prReviewConfig,
   });
+  const reviewContextLimits = reviewBoardConfig.context;
+  const readReviewFeatureDescription = (review: PrReview): string => {
+    const feature = featureRepo.get(review.featureId);
+    const parent = feature?.parentFeatureId ? featureRepo.get(feature.parentFeatureId) : null;
+    return [feature?.description, parent?.description].filter(Boolean).join('\n\n');
+  };
+  const readLinkedReviewRequirements = createReviewLinkedRequirementReader({
+    getText: (review) => [review.description, readReviewFeatureDescription(review)].filter(Boolean).join('\n\n'),
+    getRemoteUrl: (review) => repoService.get(review.repoId).remoteUrl,
+    maxContentChars: reviewContextLimits.maxCommandBytes,
+    read: (review, id) => {
+      const repo = repoService.get(review.repoId);
+      if (repo.provider === 'github') {
+        return readGithubReviewRequirement(ghRun, repo.name, id, reviewContextLimits.maxCommandBytes);
+      }
+      const target = parseAzureRepoUrl(repo.remoteUrl);
+      return target
+        ? readAzureReviewRequirement(azureWorkItemDeps, target, id, reviewContextLimits.maxCommandBytes)
+        : Promise.resolve(null);
+    },
+  });
+  const reviewContext = createReviewContextCollector({
+    config: reviewContextLimits,
+    source: createGitReviewContextSource(createReviewContextCommandRunner(), reviewContextLimits),
+    readStudioSkill: (id) => skillsService.getSkill(id),
+    listStudioSkillIds: (review) => [...new Set([
+      ...skillsService.listForFeature(review.featureId)
+        .filter((skill) => skill.kind === 'instruction').map((skill) => skill.id),
+      ...selectCosmosReviewSkillIds({
+        repository: repoService.get(review.repoId).remoteUrl,
+        description: `${review.pull.title}\n${review.description ?? ''}`,
+        nodes: review.changeGraph.nodes, skills: skillsService.listSkills(),
+        maxFiles: reviewContextLimits.maxFiles, maxChars: reviewContextLimits.maxCommandBytes,
+      }),
+    ])],
+    readBusinessDescription: (review) => readReviewFeatureDescription(review) || null,
+    readLinkedRequirements: readLinkedReviewRequirements,
+    readSharedContext: (review) => contextService.composeLayered({
+      repoId: review.repoId, featureId: review.featureId,
+    }),
+  });
   const reviewBoardService = createReviewBoardService({
+    contextDiscovery: createReviewContextDiscovery({ ai: metaAi, clock, config: reviewBoardConfig,
+      resources: createBluebirdReviewResources({
+        repository: (id) => repoService.get(id), now: () => clock.isoNow(),
+        maxChars: reviewContextLimits.maxCommandBytes,
+        read: async (providerId, requests, signal) => {
+          if (!mcpConfig.enabled || !isProviderEligible(providerId) || headlessMcpPolicy(providerId) !== 'native') return [];
+          const deadlineAt = clock.now().getTime() + mcpConfig.discoveryTimeoutMs;
+          const timeout = AbortSignal.timeout(mcpConfig.discoveryTimeoutMs);
+          const waitSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+          const inventory = await mcpService.getServers(providerId);
+          waitSignal.throwIfAborted();
+          const launch = bluebirdReviewLaunch(inventory.servers, createAgencyMcpBuiltinRuntime({
+            command: () => resolveExecutable(agencyConfig.executable), cwd: terminalCwd,
+          }));
+          if (!launch) return [];
+          const admission = await processAdmission.acquireCold(waitSignal);
+          try {
+            return await readReviewMcpResources({ launch, requests, signal,
+              onStart: trackProviderProbe,
+              timeoutMs: Math.max(1, deadlineAt - clock.now().getTime()), maxChars: reviewContextLimits.maxCommandBytes });
+          } finally { admission.release(); }
+        },
+      }),
+      temporaryPrompts: createTemporaryPromptFileFactory() }),
+    repository: (repoId) => repoService.get(repoId),
     reviews: {
       get: (featureId) => prReviewService.get(featureId),
       save: (review) => prReviewRepo.save(review),
     },
-    // Feed the reviewer the PR's already-posted threads and replies so it skips
-    // concerns already raised and treats answered ones as resolved. Lazy closure
-    // because prCommentsService is composed further below in this root.
+    // Keep supported concerns visible while linking their existing discussion.
     prComments: { list: (featureId) => prCommentsService.list(featureId) },
+    context: reviewContext,
+    currentRevisions: (featureId) => prApprovalService.revisions!(featureId),
+    settings: () => metaSettings.get(),
+    models: async () => (await modelCatalogService.read()) ?? [],
+    nextId: () => ids.next(),
     config: reviewBoardConfig,
     clock,
     ai: metaAi,
@@ -3616,9 +3820,13 @@ function main(): void {
     },
   };
   const prCommentsService = createPrCommentsService({
-    reviews: { get: (featureId) => prReviewService.find(featureId) },
     repos: { get: (id) => repoService.list().find((r) => r.id === id) ?? null },
     gateways: prCommentsGateways,
+    currentHead: async (featureId) => (await prApprovalService.status!(featureId)).currentHeadSha,
+    currentRevisions: (featureId) => prApprovalService.revisions!(featureId),
+    clock,
+    maxPublications: reviewBoardConfig.maxPublications,
+    reviews: { get: (featureId) => prReviewService.find(featureId), save: (review) => prReviewRepo.save(review) },
   });
   const prApprovalGateways: PrApprovalGatewayResolver = {
     resolve: (repo, pull): PrApprovalGateway => {
@@ -3728,8 +3936,10 @@ function main(): void {
         : { signal, timeoutMs: 5000 }) },
   });
   const resourcesConfig = config[RESOURCES_NAMESPACE] as ResourcesConfig;
+  const capacityHistory = createCapacityHistory({ config: metaConfig, now: () => Date.now(), store: createCapacityHistoryStore(db) });
   const appDataRoots = [...new Set([currentDataDir, defaultWorkspaceDataDir(), resourcesConfig.desktopDataPath].filter(Boolean))];
   const resourceService = createResourcesService({
+    history: createResourceHistoryStore(db),
     config: resourcesConfig, now: () => Date.now(), backendPid: process.pid,
     host: () => resourceMonitor.snapshot(),
     processes: createProcessSampler(resourcesConfig.processTimeoutMs),
@@ -3783,7 +3993,14 @@ function main(): void {
       return roots;
     },
   });
-  const stopResourceSampling = startResourceSampling(resourceService, resourcesConfig.sampleIntervalMs);
+  const stopResourceSampling = startResourceSampling({
+    ...resourceService,
+    sample: async () => {
+      capacityHistory.sample({ ...metaPoolsStatusFn(), processAdmission: { ...processAdmission.stats(), ...processAdmission.limits() } },
+        metaSettings.get().providerId);
+      await resourceService.sample();
+    },
+  }, resourcesConfig.sampleIntervalMs);
   const prFeatureService = createPrFeatureService({
     repos: repoService,
     listPulls: listPullsFor,
@@ -4018,11 +4235,14 @@ function main(): void {
     contexts: repositoryContextCoordinator,
     sharedContext: contextService,
     config: repositoryContextConfig,
-    onSkillContextPrepared: (session) => recordIdeSkillContext(skillUsageRepo, session,
-      sessionRepo.get(session.id) ? skillsService.effectiveForSession(session.id) : skillsService.listForFeature(session.featureId), {
+    onSkillContextPrepared: (session) => {
+      const skills = sessionRepo.get(session.id) ? skillsService.effectiveForSession(session.id) : skillsService.listForFeature(session.featureId);
+      recordIdeSkillContext(skillUsageRepo, session, skills, {
         repoId: featureRepo.get(session.featureId)?.repoId ?? null, recordedAt: clock.isoNow(),
         kind: 'context-prepared', deliveryId: ids.next(),
-      }),
+      });
+      recordPromptContext(session, instructionPromptRefs(skills), 'context-prepared');
+    },
   });
   void applicationWork.own(() => repositoryContextCoordinator.synchronizeSaved()).catch((error) => {
     logger.error('Repository context startup check failed', error);
@@ -4043,6 +4263,36 @@ function main(): void {
     clock,
     config: featureTasksConfig,
   });
+  const plannerTrackingStore = createPlannerTrackingStore(db, plannerTrackingConfig.enabled);
+  const workTracker = createPlannerWorkTracker({
+    source: createWorkTrackingSource({ context: createPlannerTrackingContext(db), history: providerHistoryReader }),
+    store: plannerTrackingStore, planner: plannerRepo, meta: metaAi, ids, clock, config: plannerTrackingConfig,
+    workspace: (featureId) => {
+      const feature = featureRepo.get(featureId);
+      if (!feature) return null;
+      return { name: feature.name, repositoryName: feature.repoId ? repoRepo.get(feature.repoId)?.name ?? null : null };
+    },
+  });
+  const refreshTrackedWork = () => {
+    void applicationWork.own((signal) => workTracker.tick(signal)).catch((error: unknown) => {
+      logger.error('Planner work tracking stopped unexpectedly', { error });
+    });
+  };
+  const plannerTrackingTimer = setInterval(refreshTrackedWork, plannerTrackingConfig.pollMs);
+  bus.on('session.started', (session) => {
+    if (session.kind === 'dev' && session.scope !== 'internal') workTracker.notify(session.featureId);
+  });
+  bus.on('session.ended', (session) => {
+    if (session.kind === 'dev' && session.scope !== 'internal') workTracker.notify(session.featureId);
+  });
+  bus.on('usage.recorded', (record) => {
+    const session = sessionRepo.get(record.sessionId);
+    if (session?.kind === 'dev' && session.scope !== 'internal') workTracker.notify(record.featureId);
+  });
+  bus.on('meta.usage.updated', ({ featureId }) => {
+    if (featureRepo.get(featureId)) workTracker.notify(featureId);
+  });
+  refreshTrackedWork();
   const plannerService = createPlannerService({
     repo: plannerRepo,
     ids,
@@ -4458,12 +4708,6 @@ function main(): void {
       providers,
       executionPolicy,
       isProviderEligible,
-      updateInternalAgencyOptIn: (enabled) => {
-        configOverrideService.update(PROVIDER_SELECTION_NAMESPACE, { allowInternalAgency: enabled });
-        config[PROVIDER_SELECTION_NAMESPACE] = { ...config[PROVIDER_SELECTION_NAMESPACE] as object, allowInternalAgency: enabled };
-        allowInternalAgency = enabled;
-        if (enabled) refreshAgencyPath();
-      },
       drainProviderWork: createProviderSwitchDrain({
         blockers: () => executionPolicy.get().blockers,
         quotaCapturing: () => [...quotaServices.values()].some(({ probe }) => probe.isCapturing()),
@@ -4484,13 +4728,15 @@ function main(): void {
       providerBootstrapInfo: () => {
         const installed = installedProviderIds();
         return {
-          internalAgencyEnabled: allowInternalAgency,
+          internalAgencyEnabled: microsoftNetwork.isMicrosoftNetwork(),
           defaultProvider: resolverConfig.defaultProvider,
           providers: enabledProviderIds.map((id) => {
             const descriptor = providerDescriptors.find((candidate) => candidate.namespace === id);
+            const automation = providerAutomationReadiness(id);
             return {
               id, installed: installed.has(id), configNamespace: id,
-              automation: providerAutomationReadiness(id),
+              automation,
+              features: resolveProviderFeatures(providerFeaturesConfigSchema.parse(config[PROVIDER_FEATURES_NAMESPACE]), installed.has(id), automation),
               label: descriptor?.label ?? id,
               installCommand: descriptor?.installCommand,
               installAvailable: descriptor?.installAvailable,
@@ -4526,6 +4772,7 @@ function main(): void {
           );
           const session = sessionRepo.get(sessionId);
           if (injected && session) {
+            recordPromptContext(session, instructionPromptRefs([skillsService.getSkill(skillId)]), 'context-injected');
             recordIdeSkillContext(skillUsageRepo, session, [skillsService.getSkill(skillId)], {
               repoId: featureRepo.get(session.featureId)?.repoId ?? null, recordedAt: clock.isoNow(),
               kind: 'context-injected', deliveryId: ids.next(),
@@ -4538,15 +4785,20 @@ function main(): void {
       removeSessionSkill: (sessionId, skillId) => {
         const prompt = skillsService.removalPromptForSkill(skillId);
         if (prompt.length > 0) {
-          terminalManager!.injectInstructions(
+          const injected = terminalManager!.injectInstructions(
             sessionId,
             prompt,
             `${skillLabel(skillId)} removal`,
           );
+          const session = sessionRepo.get(sessionId);
+          if (injected && session) {
+            recordPromptContext(session, removalPromptRefs(skillsService.getSkill(skillId)), 'context-injected');
+          }
         }
       },
       tasks: featureTasksService,
       planner: plannerService,
+      plannerTracking: { tracker: workTracker, store: plannerTrackingStore },
       plannerSummarizer,
       taskLookup: featureTasksRepo,
       tree: featureTreeService,
@@ -4568,13 +4820,14 @@ function main(): void {
       selfHeal: selfHealService,
       systemHealth: healthReportService,
       configSchema: () => describeNamespaces(registry),
-      metaPools: () => metaPoolsStatusFn(),
+      metaPools: () => ({ ...describeMetaPools(metaPoolsStatusFn()), history: capacityHistory.snapshot() }),
       metaOperations: { operations: metaOperationRepo, config: metaOperationsConfig },
+      promptUsage: promptUsageRepo,
       metaPoolsProcessAdmission: () => ({
         ...processAdmission.stats(),
         ...processAdmission.limits(),
       }),
-      resizeMetaPool: (size) => resizeMetaPoolFn(size),
+      resizeMetaPool: (size) => ({ ...describeMetaPools(resizeMetaPoolFn(size)), history: capacityHistory.snapshot() }),
       metaSettings: () => ({
         ...exposedMetaSettings.get(),
         warmPoolEnabled: metaPoolsStatusFn().enabled,
@@ -4630,7 +4883,7 @@ function main(): void {
         const generation = azureCredentialRefresh.generation();
         rememberAzureTarget(target);
         const status = await readAccountStatus(azureCredentialRefresh, () => azureAuth.status(target));
-        if (generation === azureCredentialRefresh.generation()) microsoftIdentity.set(status.authenticated);
+        if (generation === azureCredentialRefresh.generation()) microsoftIdentity.set(status.authenticated, azureIdentityKey(target));
         return status;
       },
       azureSignIn: async (target) => {
@@ -4638,7 +4891,7 @@ function main(): void {
         rememberAzureTarget(target);
         const status = await azureCredentialRefresh.run(() => azureAuth.signIn(target));
         if (generation === azureCredentialRefresh.generation()) {
-          microsoftIdentity.set(status.authenticated);
+          microsoftIdentity.set(status.authenticated, azureIdentityKey(target));
           if (status.authenticated) await refreshAzureDevOpsCredentialEnv();
         }
         return status;
@@ -4715,11 +4968,9 @@ function main(): void {
   });
 
   // Server-side review-board fan-out. The whole parallel pass runs here and is
-  // streamed back as newline-delimited JSON over ONE request, so the number of
-  // perspectives reviewed concurrently is bounded by the warm metasession pool
-  // (all-but-one) rather than the browser's ~6-connections-per-origin cap that
-  // would otherwise hold one socket per in-flight perspective. Each line is a
-  // ReviewBoardPerspectiveEvent; live per-lens activity still rides the SSE bus.
+  // streamed back as newline-delimited JSON over ONE request. The service owns
+  // persisted run execution and bounded concurrency; closing this stream only
+  // disconnects its observer. Live per-lens activity still rides the SSE bus.
   app.post(
     `${apiConfig.basePath}/features/:featureId/review-board/analyze-perspectives`,
     (req, res) => {
@@ -4735,7 +4986,7 @@ function main(): void {
       }
       const controller = new AbortController();
       let closed = false;
-      // Abort only on a genuine *client* disconnect before we finish. This must
+      // Disconnect the observer on a genuine client disconnect. This must
       // listen on the response, not the request: `req`'s 'close' fires as soon
       // as express.json() finishes reading the (empty) POST body — which is
       // immediate — and binding the abort there tore down the whole fan-out
@@ -4845,21 +5096,14 @@ function main(): void {
     let number = NaN;
     let parentFeatureId: string | null = null;
     let parentGroupId: string | null = null;
+    let importOptions: PrImportOptions = {};
     try {
       repoService.get(repositoryId);
-      const body = (req.body ?? {}) as {
-        number?: unknown;
-        parentFeatureId?: unknown;
-        parentGroupId?: unknown;
-      };
-      if (typeof body.number !== 'number' || !Number.isFinite(body.number)) {
-        throw new ValidationError('A numeric pull request "number" is required.');
-      }
-      number = body.number;
-      parentFeatureId =
-        typeof body.parentFeatureId === 'string' ? body.parentFeatureId : null;
-      parentGroupId =
-        typeof body.parentGroupId === 'string' ? body.parentGroupId : null;
+      const parsed = parsePrImportInput(req.body);
+      number = parsed.number;
+      parentFeatureId = parsed.parentFeatureId ?? null;
+      parentGroupId = parsed.parentGroupId ?? null;
+      importOptions = { autoReview: parsed.autoReview, reviewOptions: parsed.reviewOptions };
     } catch (error) {
       const result = toErrorResult(error);
       res.status(result.status).json(result.body);
@@ -4880,7 +5124,7 @@ function main(): void {
     };
     prFeatureService
       .createFromPull(repositoryId, number, parentFeatureId, parentGroupId, (status) =>
-        write({ type: 'status', phase: status.phase, message: status.message }),
+        write({ type: 'status', phase: status.phase, message: status.message }), importOptions,
       )
       .then((result) =>
         write({
@@ -5511,6 +5755,8 @@ function main(): void {
     *[Symbol.iterator]() {
       yield stoppedCaptureRecovery;
       yield { stop: () => clearInterval(metaUsageTimer) };
+      yield { stop: () => { clearInterval(plannerTrackingTimer); workTracker.stop(); } };
+      yield { stop: () => { clearInterval(microsoftNetworkTimer); microsoftNetworkAbort.abort(); } };
       yield { stop: () => { mcpLogCapture.stop(); clearInterval(mcpUsageTimer); } };
       yield* tailers.values();
       yield { stop: () => resourceMonitor.dispose() };
@@ -5611,4 +5857,4 @@ function main(): void {
   });
 }
 
-main();
+await main();

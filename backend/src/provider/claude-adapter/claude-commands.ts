@@ -1,4 +1,4 @@
-import type { SessionSpec } from '../provider-contract.js';
+import type { HeadlessMcpPolicy, SessionSpec } from '../provider-contract.js';
 import { ValidationError } from '../../kernel/error-types.js';
 import type { ClaudeConfig } from './config.js';
 import { optionalCommandArgsSchema } from '../command-options.js';
@@ -6,6 +6,7 @@ import { optionalCommandArgsSchema } from '../command-options.js';
 export interface ClaudeSessionOptions {
   /** Native session id, not a conversation name or an encoded cwd. */
   resumeSessionId?: string;
+  mcpPolicy?: HeadlessMcpPolicy;
 }
 
 export function buildClaudeArgs(
@@ -26,20 +27,20 @@ export function buildClaudeArgs(
   if (interactive && spec.instructions) args.push('--append-system-prompt', spec.instructions);
   if (spec.noTools) {
     // --tools alone only disables built-ins; MCP tools must also be denied.
-    args.push('--tools', '', '--disallowedTools', 'mcp__*', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
+    args.push('--tools', '', '--disallowedTools', 'mcp__*');
+  }
+  if (options.mcpPolicy === 'isolated' && (spec.noTools || (!interactive && spec.kind === 'meta'))) {
+    args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
   }
   if (!interactive) {
     args.push('-p', '--output-format', 'stream-json', '--verbose');
-    if (spec.kind === 'meta') {
-      args.push('--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
-    }
   }
   const attachments = spec.attachments ?? [];
   const prompt = attachments.length === 0
     ? spec.prompt
     : `${spec.prompt}\n\nAttached files:\n${attachments.map((path) => JSON.stringify(path)).join('\n')}`;
   // The terminal service sends interactive prompts after the TUI is ready.
-  if (!interactive) args.push('--', prompt);
+  if (!interactive && !spec.noTools) args.push('--', prompt);
   const commandParts = [config.executable, ...args];
   if (commandParts.some((part) => part.includes('\0'))) {
     throw new ValidationError('Claude Code command contains a NUL character');

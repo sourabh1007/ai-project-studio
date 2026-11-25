@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { assertExpectedHeadSha, hasCapturedRightLine, isRepoRelativePath } from './pr-comment-location.js';
+import { assertExpectedHeadSha, hasCapturedLine, hasCapturedRightLine, isRepoRelativePath } from './pr-comment-location.js';
 
 describe('exact comment coordinates', () => {
+  it('validates removed LEFT-side rows without treating additions as old-side evidence', () => {
+    const diff = '@@ -4,2 +8,2 @@\n context\n-old\n+new';
+    expect(hasCapturedLine(diff, 5, 'LEFT')).toBe(true);
+    expect(hasCapturedLine(diff, 8, 'LEFT')).toBe(false);
+    expect(hasCapturedLine('@@ -5 +8 @@\n+new\n-old', 5, 'LEFT')).toBe(true);
+    expect(hasCapturedLine('@@ -5 +8 @@\n+new\ntruncated\n-old', 5, 'LEFT')).toBe(false);
+  });
   it.each(['a.ts', 'src/a b.ts', 'src/é.ts'])('accepts relative path %s unchanged', (path) => {
     expect(isRepoRelativePath(path)).toBe(true);
   });

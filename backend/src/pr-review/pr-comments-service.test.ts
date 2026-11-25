@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PrCommentsServiceDeps } from './pr-comments-service.js';
 import type { Repository } from '../repo/repo-contract.js';
 import type {
   AddPrCommentInput,
@@ -97,6 +98,7 @@ function setup(options: {
   repos?: Map<string, Repository>;
   gateway?: PrCommentsGateway;
   onResolve?: (repo: Repository, pull: PrReviewPull) => void;
+  currentHead?: (featureId: string) => Promise<string | null>;
 }) {
   const reviews = options.reviews ?? new Map<string, PrReview>();
   const repos = options.repos ?? new Map<string, Repository>();
@@ -105,6 +107,7 @@ function setup(options: {
     reviews: { get: (id) => reviews.get(id) ?? null },
     repos: { get: (id) => repos.get(id) ?? null },
     gateways: resolver(gateway, options.onResolve),
+    currentHead: options.currentHead,
   });
   return { service, gateway };
 }
@@ -141,9 +144,19 @@ describe('assertAddCommentInput', () => {
     expect(assertAddCommentInput({ body: 'general note' })).toEqual({ body: 'general note' });
   });
 
-  it('rejects a head-guarded comment that is not anchored', () => {
-    expect(() => assertAddCommentInput({ body: 'x', expectedHeadSha: 'captured' }))
-      .toThrow(/anchored/);
+  it('accepts a head-guarded PR-level comment without inventing an anchor', () => {
+    expect(assertAddCommentInput({ body: 'x', expectedHeadSha: 'captured' }))
+      .toEqual({ body: 'x', expectedHeadSha: 'captured' });
+  });
+  it.each([
+    { expectedRunId: '' }, { expectedAssessmentRevision: 1 },
+    { expectedRunId: 'run', expectedAssessmentRevision: -1 },
+    { expectedRunId: 'run', expectedAssessmentRevision: 1.5 },
+  ])('rejects incomplete or malformed run guards %j', (guards) => {
+    expect(() => assertAddCommentInput({ body: 'x', expectedHeadSha: 'head', ...guards })).toThrow(/expectedRunId/);
+  });
+  it('requires a head when supplying run guards', () => {
+    expect(() => assertAddCommentInput({ body: 'x', expectedRunId: 'run', expectedAssessmentRevision: 1 })).toThrow(/expectedHeadSha/);
   });
 
   it('requires an empty object to fail on the missing body first', () => {
@@ -164,6 +177,127 @@ describe('assertAddCommentInput', () => {
 });
 
 describe('createPrCommentsService', () => {
+  function durable(overrides: Partial<PrCommentsServiceDeps> = {}) {
+    const captured = capturedReview();
+    captured.reviewBoardRun = { id: 'run', revision: 1, context: { baseSha: 'base', targetBranch: 'main' } } as NonNullable<PrReview['reviewBoardRun']>;
+    const records = new Map([['f1', captured]]);
+    const gateway = recordingGateway();
+    const deps: PrCommentsServiceDeps = {
+      reviews: { get: (id) => records.get(id) ?? null, save: (review) => { records.set(review.featureId, review); } },
+      repos: { get: () => repo('r1') }, gateways: resolver(gateway),
+      clock: { now: () => new Date(0), isoNow: () => 'now' },
+      currentRevisions: async () => ({ headSha: 'captured', baseSha: 'base', targetBranch: 'main' }),
+      ...overrides,
+    };
+    const input = { body: 'Please bound this key.', expectedHeadSha: 'captured', expectedRunId: 'run',
+      expectedAssessmentRevision: 1, publicationKey: 'finding-1' };
+    return { deps, records, gateway, input, service: createPrCommentsService(deps) };
+  }
+  it('reserves publication durably, shares concurrent sends and reuses confirmed results', async () => {
+    const { service, gateway, input, records } = durable();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const finish = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    gateway.add = async (posted) => {
+      calls++;
+      expect(records.get('f1')!.reviewPublications![0].status).toBe('pending');
+      expect(posted.body).toContain('<!-- studio-review:');
+      entered();
+      await finish;
+      return thread('created');
+    };
+    const first = service.add('f1', input);
+    const second = service.add('f1', input);
+    await started;
+    await expect(service.reconcilePublication!('f1', input.publicationKey)).rejects.toThrow('still running');
+    release();
+    await Promise.all([first, second]);
+    expect(await service.add('f1', input)).toEqual(thread('created'));
+    expect((await service.reconcilePublication!('f1', input.publicationKey)).status).toBe('posted');
+    expect(calls).toBe(1);
+    expect(service.publications!('f1')[0].input.body).toBe(input.body);
+    await expect(service.add('f1', { ...input, body: 'Different content' })).rejects.toThrow('different content');
+  });
+  it('reconciles an unconfirmed remote side effect across restart without resending', async () => {
+    const { service, gateway, input, deps } = durable();
+    let sent = '';
+    let calls = 0;
+    gateway.add = async (posted) => { calls++; sent = posted.body; throw new Error('Lost HTTP response'); };
+    await expect(service.add('f1', input)).rejects.toThrow('uncertain');
+    expect(service.publications!('f1')[0].status).toBe('uncertain');
+    const restarted = createPrCommentsService(deps);
+    await expect(restarted.add('f1', input)).rejects.toThrow('uncertain');
+    gateway.list = async () => [{ ...thread('remote'), comments: [{
+      id: 'comment', author: null, authorAvatarUrl: null, body: sent, createdAt: null, reactions: [],
+    }] }];
+    expect((await restarted.reconcilePublication!('f1', input.publicationKey)).thread?.id).toBe('remote');
+    expect(await restarted.add('f1', input)).toMatchObject({ id: 'remote' });
+    expect(calls).toBe(1);
+    await expect(restarted.reconcilePublication!('f1', 'unknown')).rejects.toThrow('Unknown');
+  });
+  it('keeps absent or ambiguous provider matches uncertain and never treats publication as a fix', async () => {
+    const { service, gateway, input, records } = durable();
+    let sent = '';
+    gateway.add = async (posted) => { sent = posted.body; throw new Error('unknown'); };
+    await expect(service.add('f1', input)).rejects.toThrow('uncertain');
+    gateway.list = async () => [];
+    expect((await service.reconcilePublication!('f1', input.publicationKey)).error).toContain('not be resent');
+    gateway.list = async () => ['a', 'b'].map((id) => ({ ...thread(id), comments: [{
+      id, author: null, authorAvatarUrl: null, body: sent, createdAt: null, reactions: [],
+    }] }));
+    expect((await service.reconcilePublication!('f1', input.publicationKey)).error).toContain('Multiple');
+    records.get('f1')!.reviewPublications![0].status = 'pending';
+    await expect(service.add('f1', input)).rejects.toThrow('uncertain');
+    records.get('f1')!.reviewPublications![0].status = 'posted';
+    delete records.get('f1')!.reviewPublications![0].thread;
+    await expect(service.add('f1', input)).rejects.toThrow('uncertain');
+    expect(records.get('f1')!.reviewBoardRun!.findingEvents).toBeUndefined();
+  });
+  it('fails closed before publication on changed target/head, missing storage or exhausted history', async () => {
+    const { service, deps, input, records, gateway } = durable({ maxPublications: 1 });
+    for (const live of [
+      { headSha: 'other', baseSha: 'base', targetBranch: 'main' },
+      { headSha: 'captured', baseSha: 'other', targetBranch: 'main' },
+      { headSha: 'captured', baseSha: 'base', targetBranch: 'other' },
+    ]) {
+      deps.currentRevisions = async () => live;
+      await expect(service.add('f1', input)).rejects.toThrow('target branch changed');
+      expect(service.publications!('f1')).toEqual([]);
+    }
+    deps.currentRevisions = async () => ({ headSha: 'captured', baseSha: 'base', targetBranch: 'main' });
+    delete records.get('f1')!.reviewBoardRun!.context.targetBranch;
+    await service.add('f1', input);
+    await expect(service.add('f1', { ...input, publicationKey: 'other' })).rejects.toThrow('history is full');
+    expect(gateway.calls).toHaveLength(1);
+    const noClock = durable({ clock: undefined });
+    await expect(noClock.service.add('f1', noClock.input)).rejects.toThrow('storage');
+    const noSave = durable();
+    delete noSave.deps.reviews.save;
+    await expect(noSave.service.add('f1', noSave.input)).rejects.toThrow('storage');
+    await expect(service.add('missing', input)).rejects.toThrow('No code review');
+    expect(() => service.publications!('missing')).toThrow('No code review');
+    const pending = records.get('f1')!.reviewPublications![0];
+    pending.status = 'uncertain';
+    delete deps.reviews.save;
+    await expect(service.reconcilePublication!('f1', input.publicationKey)).rejects.toThrow('storage');
+  });
+  it('supports guarded publication when a legacy snapshot has no frozen target metadata', async () => {
+    const { service, records, input } = durable();
+    delete records.get('f1')!.reviewBoardRun;
+    await expect(service.add('f1', { body: input.body, expectedHeadSha: input.expectedHeadSha })).resolves.toMatchObject({ id: 'created' });
+    expect(service.publications!('f1')).toEqual([]);
+  });
+  it.each([null, '', ' ', 1, 'x'.repeat(501)])('rejects malformed publication keys %j', (publicationKey) => {
+    expect(() => assertAddCommentInput({ body: 'comment', expectedHeadSha: 'head', expectedRunId: 'run',
+      expectedAssessmentRevision: 1, publicationKey })).toThrow('publicationKey');
+  });
+  it('requires complete run guards and a bounded comment for publication', () => {
+    expect(() => assertAddCommentInput({ body: 'x', publicationKey: 'key' })).toThrow('publicationKey');
+    expect(() => assertAddCommentInput({ body: 'x'.repeat(20_001), expectedRunId: 'r', expectedHeadSha: 'h',
+      expectedAssessmentRevision: 0, publicationKey: 'key' })).toThrow('publicationKey');
+  });
   const guardedInput = { path: 'a.cs', line: 12, body: ' edited comment\n', expectedHeadSha: 'captured' };
   function capturedReview(): PrReview {
     return {
@@ -186,6 +320,28 @@ describe('createPrCommentsService', () => {
     });
     expect(await service.add('f1', guardedInput)).toEqual(thread('created'));
     expect(received).toEqual(guardedInput);
+  });
+  it('revalidates remote heads and the saved assessment before publishing PR-level comments', async () => {
+      const captured = capturedReview();
+      captured.reviewBoardRun = { id: 'run', revision: 1 } as NonNullable<PrReview['reviewBoardRun']>;
+      const input = { body: 'note', expectedHeadSha: 'captured', expectedRunId: 'run', expectedAssessmentRevision: 1 };
+      const gateway = recordingGateway();
+      const common = { reviews: new Map([['f1', captured]]), repos: new Map([['r1', repo('r1')]]), gateway };
+      const fresh = setup({ ...common, currentHead: async () => 'captured' }).service;
+      await expect(fresh.add('f1', { body: 'note', expectedRunId: 'run' })).rejects.toThrow('expectedRunId');
+      await expect(fresh.add('f1', { body: 'note', expectedAssessmentRevision: 1 })).rejects.toThrow('expectedRunId');
+      await fresh.add('f1', input);
+      expect(gateway.calls).toHaveLength(1);
+      await expect(setup({ ...common, currentHead: async () => 'new' }).service.add('f1', input)).rejects.toThrow('remote');
+      await expect(fresh.add('f1', { ...input, expectedRunId: 'old' })).rejects.toThrow('assessment');
+      await expect(fresh.add('f1', { ...input, expectedAssessmentRevision: 0 })).rejects.toThrow('assessment');
+      await expect(setup({ ...common, currentHead: async () => {
+        captured.reviewBoardRun!.revision++;
+        return 'captured';
+      } }).service.add('f1', input)).rejects.toThrow('assessment');
+      expect(gateway.calls).toHaveLength(1);
+      delete captured.reviewBoardRun;
+      await expect(fresh.add('f1', input)).rejects.toThrow('assessment');
   });
 
   it.each([

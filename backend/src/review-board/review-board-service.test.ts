@@ -25,6 +25,667 @@ function step(status: PrReview['problemStatement']['status']) {
 const cleanReview = '{"skipped":false,"summary":"Inspected svc/cache.cs BuildKey; no issues found.","findings":[]}';
 const evidencedReview = '{"findings":[{"title":"Cache key bounds","detail":"No bound on user input.","evidence":[{"source":"svc/cache.cs","reason":"BuildKey accepts arbitrary keys"}]}]}';
 
+describe('immutable review runs', () => {
+  const contextDiscovery = (contextFingerprint = 'context') => ({
+    status: 'loaded' as const, headSha: review.headSha, graphGeneratedAt: 'graph', contextFingerprint,
+    generatedAt: '2026-11-02', summary: 'Preserve cache-key boundaries.',
+    requirements: [{ text: 'Bound cache keys.', kind: 'inferred' as const, source: 'svc/cache.cs', quote: 'BuildKey' }],
+    questions: ['What is the maximum key length?'], sessionId: 'context-meta',
+  });
+
+  it('loads durable context for legacy reviews without rewriting results or fabricating a run', async () => {
+    const { service, deps, current } = harness();
+    const before = structuredClone(current());
+    deps.contextDiscovery = { discover: vi.fn(async () => contextDiscovery()) };
+    const result = await service.loadContext!('f9', new AbortController().signal);
+    expect(result.contextDiscovery!.summary).toContain('cache-key');
+    expect(current()).toEqual({ ...before, reviewContextDiscovery: result.contextDiscovery });
+    expect(current().reviewBoardRun).toBeUndefined();
+    expect(deps.ai.runDetailed).not.toHaveBeenCalled();
+    current().changeGraph.generatedAt = 'new-graph';
+    expect(service.get('f9').contextDiscovery).toBeUndefined();
+    deps.contextDiscovery = undefined;
+    await expect(service.loadContext!('f9')).rejects.toThrow('unavailable');
+    deps.contextDiscovery = { discover: vi.fn() };
+    deps.context = undefined;
+    await expect(service.loadContext!('f9')).rejects.toThrow('unavailable');
+  });
+
+  it('deduplicates automatic context loading before parallel perspectives and never promotes inference to policy', async () => {
+    const { service, deps, current } = harness();
+    let finish!: () => void;
+    const wait = new Promise<void>((resolve) => { finish = resolve; });
+    deps.contextDiscovery = { discover: vi.fn(async (_review, context) => { await wait; return contextDiscovery(context.fingerprint); }) };
+    await service.configure!('f9', {});
+    expect(deps.contextDiscovery.discover).not.toHaveBeenCalled();
+    const first = service.analyzePerspective('f9', 'security');
+    const second = service.analyzePerspective('f9', 'business');
+    finish();
+    await Promise.all([first, second]);
+    expect(deps.contextDiscovery.discover).toHaveBeenCalledTimes(1);
+    expect(current().reviewBoardRun!.context.discovery!.sessionId).toBe('context-meta');
+    expect(current().reviewBoardRun!.context.requirements![0].priority).toBe(110);
+    expect(current().reviewBoardRun!.context.businessRequirements).toBe('');
+    expect(current().reviewBoardAnalysis!.analyses.business.assessment).toBe('insufficient-evidence');
+    await expect(service.loadContext!('f9')).rejects.toThrow('finish');
+  });
+
+  it.each(['offline', 'wrong-snapshot'])('preserves useful analysis and discloses context discovery failure: %s', async (mode) => {
+    const { service, deps, current } = harness();
+    deps.contextDiscovery = { discover: async () => {
+      if (mode === 'offline') throw new Error('Model unavailable');
+      return contextDiscovery('other');
+    } };
+    await service.configure!('f9', {});
+    await service.analyzePerspective('f9', 'security');
+    expect(current().reviewBoardRun!.context.discovery!.status).toBe('failed');
+    expect(current().reviewBoardRun!.context.warnings).toContainEqual(expect.stringContaining('Business context loading failed'));
+    expect(current().reviewBoardAnalysis!.analyses.security).toBeDefined();
+  });
+
+  it('deduplicates manual loading, prevents options races, and cancels without replacing prior context', async () => {
+    const { service, deps, current } = harness();
+    current().reviewContextDiscovery = contextDiscovery();
+    let finish!: () => void;
+    const wait = new Promise<void>((resolve) => { finish = resolve; });
+    deps.contextDiscovery = { discover: vi.fn(async (_review, _context, _selection, signal) => {
+      await wait;
+      signal!.throwIfAborted();
+      return contextDiscovery();
+    }) };
+    const request = new AbortController();
+    const first = service.loadContext!('f9', request.signal);
+    const second = service.loadContext!('f9');
+    await Promise.resolve();
+    await expect(service.configure!('f9', {})).rejects.toThrow('context loading');
+    service.cancel!('f9');
+    finish();
+    await expect(first).rejects.toThrow();
+    await expect(second).rejects.toThrow();
+    expect(deps.contextDiscovery.discover).toHaveBeenCalledTimes(1);
+    expect(current().reviewContextDiscovery).toEqual(contextDiscovery());
+    request.abort();
+    await expect(service.loadContext!('f9', request.signal)).rejects.toThrow();
+  });
+
+  it.each(['head', 'graph', 'run'])('rejects stale manually loaded context when %s changes', async (changed) => {
+    const { service, deps, current } = harness();
+    deps.contextDiscovery = { discover: async () => {
+      if (changed === 'head') current().headSha = 'changed';
+      if (changed === 'graph') current().changeGraph.generatedAt = 'changed';
+      if (changed === 'run') current().reviewBoardRun = { id: 'other' } as never;
+      return contextDiscovery();
+    } };
+    await expect(service.loadContext!('f9')).rejects.toThrow('evidence changed');
+    expect(current().reviewContextDiscovery).toBeUndefined();
+  });
+
+  it('uses the default metasession selection, reuses prepared options on manual reload, and respects request aborts', async () => {
+    const { service, deps } = harness();
+    deps.settings = undefined;
+    deps.contextDiscovery = { discover: vi.fn(async (_review, context) => contextDiscovery(context.fingerprint)) };
+    await service.loadContext!('f9');
+    expect(deps.contextDiscovery.discover).toHaveBeenLastCalledWith(expect.anything(), expect.anything(),
+      { providerId: 'default', model: 'auto' }, expect.any(AbortSignal));
+    await service.configure!('f9', { businessContext: 'Keep keys bounded.' });
+    await service.loadContext!('f9');
+    expect(deps.context!.collect).toHaveBeenLastCalledWith(expect.anything(),
+      { businessContext: 'Keep keys bounded.' }, expect.any(AbortSignal));
+    const controller = new AbortController();
+    deps.contextDiscovery.discover = async () => {
+      controller.abort(new Error('stop context'));
+      return contextDiscovery();
+    };
+    await expect(service.loadContext!('f9', controller.signal)).rejects.toThrow('stop context');
+  });
+
+  it('does not reload context while review options are being prepared', async () => {
+    const { service, deps } = harness();
+    let finish!: () => void;
+    const wait = new Promise<void>((resolve) => { finish = resolve; });
+    const collect = deps.context!.collect;
+    deps.context!.collect = async (...args) => { await wait; return collect(...args); };
+    const preparing = service.configure!('f9', {});
+    await expect(service.loadContext!('f9')).rejects.toThrow('finish');
+    finish();
+    await preparing;
+  });
+
+  it('gathers context once for a full review and allows retrying failed discovery manually afterwards', async () => {
+    const { service, deps, current } = harness();
+    deps.contextDiscovery = { discover: vi.fn(async (_review, context) => contextDiscovery(context.fingerprint)) };
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    expect(deps.contextDiscovery.discover).toHaveBeenCalledTimes(1);
+    expect(current().reviewBoardRun!.context.discovery!.status).toBe('loaded');
+    await service.loadContext!('f9');
+    expect(deps.contextDiscovery.discover).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['replacement', 'cancelled'])('never freezes loaded context into a %s run', async (mode) => {
+    const { service, deps, current, set } = harness();
+    deps.contextDiscovery = { discover: async (_review, context) => contextDiscovery(context.fingerprint) };
+    await service.configure!('f9', {});
+    deps.reviews.save = (next) => {
+      set(next);
+      if (next.reviewContextDiscovery) {
+        if (mode === 'replacement') current().reviewBoardRun!.id = 'replacement';
+        else current().reviewBoardRun!.status = 'cancelled';
+      }
+    };
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('Review changed while loading context');
+    expect(current().reviewBoardRun!.context.discovery).toBeUndefined();
+  });
+
+  it.each(['replacement', 'cancelled', 'aborted'])('propagates %s during automatic discovery rather than freezing failure into another run', async (mode) => {
+    const { service, deps, current } = harness();
+    const controller = new AbortController();
+    deps.contextDiscovery = { discover: async () => {
+      if (mode === 'replacement') current().reviewBoardRun!.id = 'replacement';
+      if (mode === 'cancelled') service.cancel!('f9');
+      if (mode === 'aborted') controller.abort(new Error('stop context'));
+      throw new Error('Discovery interrupted');
+    } };
+    await service.configure!('f9', {});
+    await expect(service.analyzePerspective('f9', 'security', controller.signal)).rejects.toThrow();
+    expect(current().reviewBoardRun!.context.discovery).toBeUndefined();
+  });
+  it('reads legacy repository skills without configuring a run, saving evidence or starting AI', async () => {
+    const { service, deps, current } = harness();
+    const before = structuredClone(current());
+    const inspectSkills = vi.fn(async () => ({ baseSha: 'baseline', skills: [], warnings: ['Discovery incomplete'] }));
+    deps.context!.inspectSkills = inspectSkills;
+    deps.repository = () => ({ name: 'Owner/Repo', remoteUrl: 'https://example.test/Owner/Repo' });
+    const signal = new AbortController().signal;
+    expect(await service.repositorySkills!('f9', signal)).toEqual({
+      repoId: before.repoId, repository: { name: 'Owner/Repo', remoteUrl: 'https://example.test/Owner/Repo' },
+      targetBranch: before.baseBranch, baseSha: 'baseline', skills: [], warnings: ['Discovery incomplete'],
+    });
+    expect(inspectSkills).toHaveBeenCalledWith(before, signal);
+    expect(current()).toEqual(before);
+    expect(deps.ai.runDetailed).not.toHaveBeenCalled();
+    deps.repository = undefined;
+    expect((await service.repositorySkills!('f9')).repository).toBeNull();
+    deps.context = undefined;
+    expect((await service.repositorySkills!('f9')).warnings).toContain('Repository skill discovery is unavailable.');
+    deps.context = { collect: vi.fn() };
+    expect((await service.repositorySkills!('f9')).skills).toEqual([]);
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(service.repositorySkills!('f9', controller.signal)).rejects.toThrow('cancelled');
+  });
+  it('uses the saved import preset and rewrites requirement links to durable finding identities', async () => {
+    for (const reference of ['business/ai-0', 'unknown']) {
+      const { service, current, deps } = harness();
+      current().reviewBoardImport = { autoReview: false, options: { model: 'named' } };
+      deps.context = { collect: async () => ({ fingerprint: 'context', skills: [], warnings: [],
+        businessRequirements: 'Bound cache keys', evidence: JSON.stringify({ path: 'svc/cache.cs', diff: review.changeGraph.nodes[0].diff }),
+        requirements: [{ id: 'r1', text: 'Bound cache keys', source: 'Explicit criteria', priority: 0, fingerprint: 'rhash' }] }) };
+      deps.ai = aiReturning(JSON.stringify({ summary: 'Unbounded keys violate the rule',
+        findings: [{ title: 'Key bounds', detail: 'No bound', requirementIds: ['r1'],
+          evidence: [{ source: 'svc/cache.cs', reason: 'Missing guard' }] }],
+        requirements: [{ requirementId: 'r1', assessment: 'violated', explanation: 'Missing guard',
+          findingIds: [reference], evidence: [{ source: 'svc/cache.cs', reason: 'Missing guard' }] }] }));
+      expect((await service.configure!('f9', {})).run!.model).toBe('named');
+      if (reference === 'unknown') {
+        await expect(service.analyzePerspective('f9', 'business')).rejects.toThrow('identities');
+      } else {
+        const analysis = await service.analyzePerspective('f9', 'business');
+        expect(analysis.requirements![0].findingIds).toEqual([analysis.perspective.findings.find((finding) => finding.id.startsWith('business/ai-'))!.id]);
+      }
+    }
+  });
+  it('records run-scoped reversible decisions and invalidates stale confirmations', async () => {
+    const { service, current, deps } = harness();
+    await service.configure!('f9', {});
+    deps.ai = aiReturning('{"findings":[{"title":"A","detail":"Limit A","evidence":[{"source":"svc/cache.cs","reason":"Unbounded A"}]},{"title":"B","detail":"Limit B","evidence":[{"source":"svc/cache.cs","reason":"Unbounded B"}]}]}');
+    await service.analyzePerspective('f9', 'security');
+    current().reviewBoardRun!.status = 'completed';
+    const initial = service.get('f9');
+    const groups = initial.uniqueFindings!;
+    const action = { expectedRunId: initial.run!.id, expectedAssessmentRevision: initial.run!.revision,
+      action: 'merge' as const, groupIds: groups.map((group) => group.id), reason: 'One shared cause and correction' };
+    const merged = service.manageFindings!('f9', action);
+    expect(merged.uniqueFindings).toHaveLength(1);
+    expect(merged.findingHistory).toHaveLength(1);
+    expect(merged.run!.revision).toBe(initial.run!.revision + 1);
+    expect(() => service.manageFindings!('f9', action)).toThrow('changed');
+    const split = service.manageFindings!('f9', { ...action, expectedAssessmentRevision: merged.run!.revision,
+      action: 'split', groupIds: [merged.uniqueFindings![0].id], reason: 'Distinct behavior after inspection' });
+    expect(split.uniqueFindings!.length).toBeGreaterThan(1);
+    const dismissed = service.manageFindings!('f9', { ...action, expectedAssessmentRevision: split.run!.revision,
+      action: 'disposition', disposition: 'dismissed', groupIds: split.uniqueFindings!.map((group) => group.id), reason: 'Not introduced by this change' });
+    expect(dismissed.summary.open).toBe(0);
+    expect(dismissed.findingHistory![2].reason).toContain('Not introduced');
+    expect(dismissed.analyses!.security.perspective.findings.length).toBe(groups.flatMap((group) => group.observations).length);
+    deps.config.maxFindingEvents = 3;
+    expect(() => service.manageFindings!('f9', { ...action, expectedAssessmentRevision: dismissed.run!.revision })).toThrow('history is full');
+    current().reviewBoardRun!.status = 'running';
+    expect(() => service.manageFindings!('f9', { ...action, expectedAssessmentRevision: dismissed.run!.revision })).toThrow('still running');
+    delete current().reviewBoardRun;
+    expect(() => service.manageFindings!('f9', action)).toThrow('changed');
+  });
+  it('matches live discussion conservatively without changing frozen analysis or dispositions', async () => {
+    const threads = [
+      { id: 'inline', url: 'https://example.test/discussion/1', path: 'svc/cache.cs', line: 1, status: 'active' as const, comments: [] },
+      { id: 'pr', path: null, line: null, status: 'resolved' as const, comments: [{ author: null, body: 'Cache key bounds No bound on user input.' }] },
+      { id: 'other', path: 'other.cs', line: 1, status: 'active' as const, comments: [] },
+      { path: null, line: null, status: 'active' as const, comments: [] },
+    ];
+    const { service, deps, current } = harness({ prComments: { list: async () => threads } });
+    current().changeGraph.nodes[0].diff = '@@ -1 +1 @@\n-old\n+new';
+    await service.configure!('f9', {});
+    deps.ai = aiReturning('{"findings":[{"title":"Cache key bounds","detail":"No bound on user input.","evidence":[{"source":"svc/cache.cs","reason":"No bound","location":{"path":"svc/cache.cs","line":1,"side":"RIGHT"}}]}]}');
+    await service.analyzePerspective('f9', 'security');
+    const matched = await service.discussion!('f9');
+    expect(Object.values(matched.matches)[0]).toEqual([
+      { id: 'inline', status: 'active', url: 'https://example.test/discussion/1' },
+      { id: 'pr', status: 'resolved', url: current().pull.url },
+    ]);
+    expect(matched.warnings[0]).toContain('identifiers');
+    deps.config.maxStoredFindings = 1;
+    expect((await service.discussion!('f9')).warnings).toContainEqual(expect.stringContaining('thread limit'));
+    expect(service.get('f9').uniqueFindings![0].disposition).toBe('open');
+    deps.prComments = undefined;
+    expect((await service.discussion!('f9')).warnings[0]).toContain('unavailable');
+  });
+  it('pins real live base revisions during preparation and refuses races or stale local baselines', async () => {
+    const live = { headSha: review.headSha!, baseSha: 'live-base', targetBranch: 'main' };
+    const { service, deps } = harness({ currentRevisions: async () => live });
+    deps.context = { collect: async (input) => ({ fingerprint: 'f', skills: [], warnings: [], businessRequirements: '',
+      evidence: '', baseSha: input.baseBranch! }) };
+    expect((await service.configure!('f9', {})).run!.context).toMatchObject({ baseSha: 'live-base', targetBranch: 'main' });
+    deps.currentRevisions = async () => ({ ...live, headSha: 'other' });
+    await expect(service.configure!('f9', {})).rejects.toThrow('remote head');
+    let reads = 0;
+    deps.currentRevisions = async () => ({ ...live, baseSha: ++reads === 1 ? 'live-base' : 'moved' });
+    await expect(service.configure!('f9', {})).rejects.toThrow('target changed');
+    deps.currentRevisions = async () => live;
+    deps.context = { collect: async () => ({ fingerprint: 'f', skills: [], warnings: [], businessRequirements: '', evidence: '', baseSha: 'stale' }) };
+    await expect(service.configure!('f9', {})).rejects.toThrow('target changed');
+  });
+  it('rejects a selected model that becomes unavailable before dispatch', async () => {
+    const { service, deps } = harness();
+    await service.configure!('f9', { model: 'named' });
+    deps.models = async () => [];
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('no longer available');
+  });
+  function harness(overrides: Partial<ReviewBoardServiceDeps> = {}) {
+    let current = structuredClone(review);
+    current.changeGraph.generatedAt = 'graph';
+    const deps = baseDeps({
+      config: { ...reviewBoardDefaults },
+      reviews: { get: () => structuredClone(current), save: (next) => { current = next; } },
+      context: { collect: vi.fn(async (_review, options) => ({
+        fingerprint: 'context', skills: [{ id: 's', name: 'Policy', source: 'AGENTS.md',
+          content: 'Bound cache keys', fingerprint: 'skill', perspectiveIds: [] }],
+        businessRequirements: options.businessContext ?? '', evidence: JSON.stringify({ path: 'svc/cache.cs', diff: _review.changeGraph.nodes[0].diff }),
+        warnings: [],
+      })) },
+      settings: () => ({ providerId: 'copilot', model: 'auto' }),
+      models: async () => [{ id: 'named', enabled: true }, { id: 'disabled', enabled: false }],
+      nextId: (() => { let n = 0; return () => `run-${++n}`; })(),
+      ...overrides,
+    });
+    const service = createReviewBoardService(deps);
+    return { deps, service, current: () => current, set: (next: PrReview) => { current = next; } };
+  }
+  it('recovers mistyped requirement hashes with exact corrective identities rather than accepting a near match', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    const id = 'requirement:v1:5fd3cf987dbdc3090a074ffd639b50234aad3fddf7c8fb3ee6912291b91efdd8';
+    const mistyped = id.slice(0, -1);
+    current().reviewBoardRun!.context.requirements = [
+      { id, text: 'Preserve the operation key.', source: 'PR intent', priority: 100, fingerprint: 'source' },
+    ];
+    const response = (requirementId: string) => JSON.stringify({
+      assessment: 'insufficient-evidence', summary: 'The captured code does not show the caller.', findings: [],
+      requirements: [{ requirementId, assessment: 'not-assessed', explanation: 'Caller evidence is missing.', findingIds: [], evidence: [] }],
+    });
+    const runDetailed = vi.fn().mockResolvedValueOnce({ text: response(mistyped), sessionId: 's1' })
+      .mockResolvedValue({ text: response(id), sessionId: 's2' });
+    deps.ai = { runDetailed };
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(runDetailed).toHaveBeenCalledTimes(2);
+    expect(runDetailed.mock.calls[1][0].prompt).toContain(`Invalid requirementId: ${JSON.stringify(mistyped)}`);
+    expect(runDetailed.mock.calls[1][0].prompt).toContain(`Valid requirementIds (copy exactly): ${JSON.stringify([id])}`);
+    expect(result.requirements![0].requirementId).toBe(id);
+    expect(result.assessment).toBe('insufficient-evidence');
+    expect(current().reviewBoardRun!.failures.security).toBeUndefined();
+  });
+  it('discloses missing discussion but retains complete loaded threads in the snapshot and model prompt', async () => {
+    const { deps, service, current } = harness({
+      prComments: { list: async () => { throw new Error('offline'); } },
+    });
+    await service.configure!('f9', {});
+    expect(current().reviewBoardRun?.context.warnings).toContainEqual(expect.stringContaining('could not be loaded'));
+    deps.prComments = { list: async () => [{
+      path: null, line: null, status: 'active', comments: [{ author: null, body: 'x'.repeat(30_000) }],
+    }] };
+    await service.configure!('f9', {});
+    expect(current().reviewBoardRun?.discussion?.[0].comments[0].body).toBe('x'.repeat(30_000));
+    expect(current().reviewBoardRun?.context.warnings.join(' ')).not.toContain('exceeded');
+    let captured = '';
+    deps.inlinePrompts = true;
+    deps.ai.runDetailed = vi.fn(async (request) => { captured = request.prompt; return { text: cleanReview, sessionId: 's' }; });
+    await service.analyzePerspective('f9', 'security');
+    expect(captured).toContain('x'.repeat(30_000));
+  });
+  it('starts the review deadline at execution rather than while a user edits prepared options', async () => {
+    const { deps, service } = harness();
+    await service.configure!('f9', {});
+    const executionTime = '2026-11-02T18:00:00.000Z';
+    deps.clock = { ...deps.clock, isoNow: () => executionTime };
+    await service.analyzePerspective('f9', 'security');
+    expect(vi.mocked(deps.ai.runDetailed).mock.calls[0][0].deadlineAt)
+      .toBe(Date.parse(executionTime) + deps.config.reviewTimeoutMs);
+  });
+  it('gives an explicit saved-run retry a fresh deadline while retaining completed perspectives and frozen context', async () => {
+    const { deps, service, current } = harness();
+    deps.clock = { ...deps.clock, isoNow: () => '2026-11-02T18:00:00.000Z' };
+    await service.configure!('f9', {});
+    const original = deps.ai.runDetailed;
+    deps.ai.runDetailed = vi.fn(async (request) => {
+      if (request.label === 'Review board · security') throw new Error('Unavailable');
+      return original(request);
+    });
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    expect(current().reviewBoardRun!.status).toBe('failed');
+    const identity = current().reviewBoardRun!.id;
+    const fingerprint = current().reviewBoardRun!.context.fingerprint;
+    deps.clock = { ...deps.clock, isoNow: () => '2026-11-02T19:00:00.000Z' };
+    deps.ai.runDetailed = vi.fn(original);
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    const requests = vi.mocked(deps.ai.runDetailed).mock.calls.map(([request]) => request);
+    expect(requests.map((request) => request.label)).toEqual(['Review board · security', 'Review board · final-decision']);
+    expect(requests.every((request) => request.deadlineAt === Date.parse('2026-11-02T19:00:00.000Z') + deps.config.reviewTimeoutMs)).toBe(true);
+    expect(current().reviewBoardRun).toMatchObject({ id: identity, status: 'completed', context: { fingerprint } });
+  });
+  it('discloses failed perspective coverage to Final Decision and cannot certify it as approved', async () => {
+    const { deps, service } = harness();
+    await service.configure!('f9', {});
+    const original = deps.ai.runDetailed;
+    deps.ai.runDetailed = vi.fn(async (request) => {
+      if (request.label === 'Review board · security') throw new Error('Unavailable');
+      return original(request);
+    });
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    const last = vi.mocked(deps.ai.runDetailed).mock.calls.at(-1)![0];
+    expect(last.prompt).toContain('missingPerspectiveIds');
+    expect(last.prompt).toContain('security');
+    const final = service.get('f9').analyses!['final-decision'];
+    expect(final.assessment).toBe('insufficient-evidence');
+    expect(final.perspective.status).toBe('needs-review');
+  });
+  it('retries a lens marked failed even when its older analysis survives, and ignores failures outside the saved selection', async () => {
+    const { deps, service, current, set } = harness();
+    await service.configure!('f9', {});
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    set({ ...current(), reviewBoardRun: { ...current().reviewBoardRun!, status: 'failed',
+      failures: { security: 'The latest attempt failed', retired: 'An obsolete perspective failed' } } });
+    vi.mocked(deps.ai.runDetailed).mockClear();
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    expect(vi.mocked(deps.ai.runDetailed).mock.calls.map(([request]) => request.label))
+      .toEqual(['Review board · security', 'Review board · final-decision']);
+    expect(current().reviewBoardRun?.status).toBe('completed');
+    expect(current().reviewBoardRun?.failures.security).toBeUndefined();
+  });
+  it('leaves a partial single-lens review resumable and persists failed single-lens attempts', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    await service.analyzePerspective('f9', 'security');
+    expect(current().reviewBoardRun?.status).toBe('prepared');
+    const original = deps.ai.runDetailed;
+    deps.ai.runDetailed = vi.fn(async () => { throw new Error('Cannot start reviewer engine'); });
+    await expect(service.analyzePerspective('f9', 'testing')).rejects.toThrow('Cannot start reviewer engine');
+    expect(current().reviewBoardRun).toMatchObject({ status: 'failed',
+      failures: { testing: expect.stringContaining('Cannot start reviewer engine') } });
+    await service.analyzePerspective('f9', 'security');
+    expect(current().reviewBoardRun?.status).toBe('failed');
+    deps.ai.runDetailed = original;
+    await service.analyzePerspective('f9', 'testing');
+    expect(current().reviewBoardRun?.status).toBe('prepared');
+    expect(current().reviewBoardRun?.failures.testing).toBeUndefined();
+  });
+  it('keeps a run active until concurrently requested individual perspectives have finished', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    const original = deps.ai.runDetailed;
+    let resume!: () => void;
+    let gate = new Promise<void>((resolve) => { resume = resolve; });
+    deps.ai.runDetailed = vi.fn(async (request) => {
+      if (request.label === 'Review board · testing') await gate;
+      return original(request);
+    });
+    const testing = service.analyzePerspective('f9', 'testing');
+    try {
+      await service.analyzePerspective('f9', 'security');
+      expect(current().reviewBoardRun?.status).toBe('running');
+    } finally {
+      resume();
+      await testing;
+    }
+    expect(current().reviewBoardRun?.status).toBe('prepared');
+    await expect(service.analyzePerspective('f9', 'unknown')).rejects.toThrow('Unknown perspective');
+    expect(current().reviewBoardRun?.status).toBe('prepared');
+    await service.configure!('f9', {});
+    gate = new Promise<void>((resolve) => { resume = resolve; });
+    deps.ai.runDetailed = vi.fn(async (request) => {
+      if (request.label === 'Review board · testing') await gate;
+      if (request.label === 'Review board · security') throw new Error('Engine failed');
+      return original(request);
+    });
+    const remaining = service.analyzePerspective('f9', 'testing');
+    try {
+      await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('Engine failed');
+      expect(current().reviewBoardRun?.status).toBe('running');
+      expect(current().reviewBoardRun?.failures.security).toContain('Engine failed');
+    } finally {
+      resume();
+      await remaining;
+    }
+    expect(current().reviewBoardRun?.status).toBe('failed');
+  });
+  it('does not overwrite a cancelled or replaced review with a late individual failure', async () => {
+    for (const replace of [false, true]) {
+      const { deps, service, current, set } = harness();
+      await service.configure!('f9', {});
+      deps.ai.runDetailed = vi.fn(async () => {
+        if (replace) set({ ...current(), reviewBoardRun: { ...current().reviewBoardRun!, id: 'replacement' } });
+        else service.cancel!('f9');
+        throw new Error('Late engine failure');
+      });
+      await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('Late engine failure');
+      expect(current().reviewBoardRun?.failures.security).toBeUndefined();
+      expect(current().reviewBoardRun?.status).toBe(replace ? 'running' : 'cancelled');
+    }
+  });
+  it('retains the original single-lens error when the review port has no persistence writer', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    deps.reviews = { get: () => current() };
+    deps.ai.runDetailed = vi.fn(async () => { throw new Error('Engine failure without writer'); });
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('Engine failure without writer');
+  });
+  it('keeps excluded optional perspectives available for selection in a subsequent run', async () => {
+    const { service } = harness();
+    const initial = service.get('f9');
+    const core = initial.model.perspectives.filter((item) => item.source === 'core').map((item) => item.id);
+    await service.configure!('f9', { perspectiveIds: core });
+    const narrowed = service.get('f9');
+    expect(narrowed.perspectives.some((item) => item.id === 'business')).toBe(false);
+    expect(narrowed.availablePerspectives).toContainEqual(expect.objectContaining({ id: 'business', source: 'detected' }));
+    expect(narrowed.availablePerspectives).toContainEqual(expect.objectContaining({ id: 'architecture', source: 'core' }));
+    expect(narrowed.availablePerspectives).toContainEqual(expect.objectContaining({ id: 'accessibility' }));
+    await service.configure!('f9', { perspectiveIds: [...core, 'business'] });
+    expect(service.get('f9').perspectives.some((item) => item.id === 'business')).toBe(true);
+  });
+  it('retries unsupported evidence before storing anything and rejects skill references from another lens', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    const response = JSON.parse(evidencedReview) as { findings: { skillIds?: string[] }[] };
+    response.findings[0].skillIds = ['s'];
+    current().reviewBoardRun!.context.skills[0].perspectiveIds = ['architecture'];
+    deps.ai = aiReturning(JSON.stringify(response));
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('not supplied');
+    expect(vi.mocked(deps.ai.runDetailed).mock.calls.length).toBe(deps.config.transientRetryAttempts + 1);
+    expect(current().reviewBoardAnalysis).toBeUndefined();
+  });
+  it('prepares immutable options, forwards model/skills/evidence, and runs final synthesis last', async () => {
+    const { deps, service, current } = harness();
+    const board = await service.configure!('f9', { model: 'named', businessContext: 'Keys must be bounded.' });
+    expect(board.run).toMatchObject({ status: 'prepared', model: 'named', providerId: 'copilot' });
+    const events: unknown[] = [];
+    await service.analyzeAll('f9', { emit: (event) => events.push(event) });
+    const calls = vi.mocked(deps.ai.runDetailed).mock.calls.map(([request]) => request);
+    expect(calls.at(-1)?.label).toBe('Review board · final-decision');
+    expect(calls.every((call) => call.model === 'named' && call.providerId === 'copilot' && call.noTools && !call.toolsOptional)).toBe(true);
+    expect(calls[0].prompt).toContain('Bound cache keys');
+    expect(calls[0].prompt).toContain('BEGIN CAPTURED REVIEW CONTEXT');
+    expect(current().reviewBoardRun?.status).toBe('completed');
+    expect(service.get('f9').analyses?.business.assessment).toBe('no-concerns');
+    expect(service.get('f9').analyses?.security.resolvedModel).toBeNull();
+    expect(events.length).toBe(calls.length * 2);
+    await service.configure!('f9', {});
+    expect(service.get('f9').analyses).toEqual({});
+    expect(current().reviewBoardHistory).toHaveLength(1);
+  });
+  it.each([true, false])('correlates a prepared legacy review without inventing a perspective (inline=%s)', async (inlinePrompts) => {
+    const { deps, service } = harness({ context: undefined, inlinePrompts,
+      config: { ...reviewBoardDefaults, coldInlineMaxChars: 1 }, ai: aiReturning('{"findings":[]}') });
+    const board = await service.configure!('f9', {});
+    await service.analyze('f9');
+    expect(vi.mocked(deps.ai.runDetailed).mock.calls[0][0].correlation).toEqual({
+      runId: board.run!.id, agentId: 'review-board', contextFingerprint: board.run!.context.fingerprint,
+    });
+  });
+  it('automatically prepares a run and reports missing business evidence without inventing a pass', async () => {
+    const { service, current } = harness();
+    const board = await service.analyze('f9');
+    expect(board.run?.status).toBe('completed');
+    expect(current().reviewBoardAnalysis?.analyses.business.assessment).toBe('insufficient-evidence');
+    expect(board.problem).toBe('p');
+    expect(board.solution).toContain('has not explained the solution yet');
+    expect(board.uniqueFindings).toBeDefined();
+  });
+  it('validates model eligibility and required lenses', async () => {
+    const { service } = harness();
+    await expect(service.configure!('f9', { model: 'disabled' })).rejects.toThrow('unavailable');
+    await expect(service.configure!('f9', { perspectiveIds: ['security'] })).rejects.toThrow('Required');
+    await expect(service.configure!('f9', { model: '' })).rejects.toThrow('Invalid');
+  });
+  it('handles explicit optional perspectives, fallback context, and default identifiers', async () => {
+    const { service, current } = harness({ context: undefined, settings: undefined, models: undefined, nextId: undefined });
+    const ids = ['problem-solution', 'architecture', 'impact-blast-radius', 'code-quality', 'testing', 'security', 'final-decision', 'accessibility'] as const;
+    await service.configure!('f9', { model: 'custom', perspectiveIds: [...ids], businessContext: 'rule' });
+    expect(current().reviewBoardRun?.context.warnings).toContain('Repository skill collection is unavailable.');
+    expect(service.get('f9').perspectives.some((p) => p.id === 'accessibility')).toBe(true);
+    const result = await service.analyzePerspective('f9', 'security');
+    expect(result.requestedModel).toBe('custom');
+    expect(result.runId).toBeDefined();
+  });
+  it('rejects changed evidence and overlapping preparation and honors preparation cancellation', async () => {
+    const { deps, service, current } = harness();
+    let release!: () => void;
+    deps.context = { collect: async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { fingerprint: 'f', skills: [], evidence: '', warnings: [], businessRequirements: '' };
+    } };
+    const first = service.configure!('f9', {});
+    await Promise.resolve();
+    await expect(service.configure!('f9', {})).rejects.toThrow('already');
+    current().headSha = 'different';
+    // get() returns copies, so change the source through the harness setter.
+    const changed = current(); changed.headSha = 'different';
+    release();
+    await expect(first).rejects.toThrow('evidence changed');
+    const controller = new AbortController(); controller.abort();
+    deps.context = { collect: vi.fn(async () => ({ fingerprint: 'f', skills: [], evidence: '', warnings: [], businessRequirements: '' })) };
+    await expect(service.configure!('f9', {}, controller.signal)).rejects.toThrow();
+  });
+  it('persists failures, rejects changed providers and oversized results', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    deps.settings = () => ({ providerId: 'other', model: 'auto' });
+    await service.analyzeAll('f9', { emit: vi.fn() });
+    expect(current().reviewBoardRun?.status).toBe('failed');
+    expect(Object.keys(current().reviewBoardRun!.failures)).toContain('security');
+    deps.settings = () => ({ providerId: 'copilot', model: 'auto' });
+    await service.configure!('f9', {});
+    deps.config = { ...reviewBoardDefaults, maxStoredFindings: 1 };
+    deps.ai = aiReturning(JSON.stringify({ findings: [
+      { title: 'a', detail: 'a', evidence: [{ source: 'svc/cache.cs', reason: 'a' }] },
+      { title: 'b', detail: 'b', evidence: [{ source: 'svc/cache.cs', reason: 'b' }] },
+    ] }));
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('storage bound');
+  });
+  it('cancels durable execution, rejects old run writes, and shares concurrent runs', async () => {
+    const { deps, service, current } = harness();
+    await service.configure!('f9', {});
+    let finish!: (result: MetaRunResult) => void;
+    deps.ai.runDetailed = vi.fn(() => new Promise<MetaRunResult>((resolve) => { finish = resolve; }));
+    deps.config = { ...reviewBoardDefaults, maxConcurrentReviews: 1 };
+    const work = service.analyzeAll('f9', { emit: vi.fn() });
+    await Promise.resolve();
+    await expect(service.configure!('f9', {})).rejects.toThrow('Cancel');
+    const shared = service.analyzeAll('f9', { emit: vi.fn() });
+    service.cancel!('f9');
+    finish({ text: cleanReview, sessionId: 's' });
+    await work; await shared;
+    expect(current().reviewBoardRun?.status).toBe('cancelled');
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('new review');
+    await expect(service.analyzeAll('f9', { emit: vi.fn() })).rejects.toThrow('new review');
+    service.cancel!('f9');
+  });
+  it('automatically prepares and shares single-perspective context, exposing cancellation independently', async () => {
+    const { deps, service } = harness();
+    const first = service.analyzePerspective('f9', 'security');
+    const second = service.analyzePerspective('f9', 'security');
+    expect((await first).runId).toBe((await second).runId);
+    await service.configure!('f9', {});
+    deps.ai.runDetailed = vi.fn(async () => {
+      service.cancel!('f9');
+      return { text: cleanReview, sessionId: 's' };
+    });
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('cancelled');
+  });
+  it('shares durable full runs and replays completed results to another subscriber', async () => {
+    const { service } = harness();
+    await service.configure!('f9', {});
+    const emit = vi.fn();
+    await Promise.all([service.analyzeAll('f9', { emit: vi.fn() }), service.analyzeAll('f9', { emit })]);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'analyzed' }));
+    await service.analyzeAll('f9', { emit });
+  });
+  it('delivers tool-free prompt text with the fixed model and preserves valid supplied assessments', async () => {
+    const { service, deps, current } = harness({ inlinePrompts: false,
+      config: { ...reviewBoardDefaults, coldInlineMaxChars: 1 } });
+    await service.configure!('f9', {});
+    deps.ai = aiReturning('{"skipped":true,"reason":"Not applicable","findings":[]}');
+    expect((await service.analyzePerspective('f9', 'security')).assessment).toBe('not-applicable');
+    expect(vi.mocked(deps.ai.runDetailed).mock.calls[0][0]).toMatchObject({ model: 'auto', toolsOptional: false });
+    await service.configure!('f9', {});
+    deps.ai = aiReturning(evidencedReview);
+    expect((await service.analyzePerspective('f9', 'security')).assessment).toBe('concerns');
+    await service.configure!('f9', {});
+    deps.ai = aiReturning('{"assessment":"no-concerns","summary":"Checked","findings":[]}');
+    expect((await service.analyzePerspective('f9', 'security')).assessment).toBe('no-concerns');
+    current().reviewBoardRun!.context.skills = [
+      { id: 's', name: 'S', source: 'source', content: 'c', fingerprint: 'f', perspectiveIds: ['security'] },
+      { id: 'x', name: 'X', source: 'source', content: 'c', fingerprint: 'f', perspectiveIds: ['architecture'] },
+    ];
+    await service.analyzePerspective('f9', 'testing');
+  });
+  it('supports empty fallback business context, missing problem text, and cancellation before configuration', async () => {
+    const { service, current } = harness({ context: undefined });
+    service.cancel!('f9');
+    await service.configure!('f9', {});
+    current().problemStatement.content = null;
+    expect(service.get('f9').problem).toBe('short');
+    current().description = null;
+    expect(service.get('f9').problem).toContain('problem has not been explained yet');
+  });
+});
+
 const review: PrReview = {
   featureId: 'f9',
   repoId: 'r1',
@@ -268,7 +929,7 @@ describe('createReviewBoardService.analyze', () => {
 ]
 \`\`\``;
 
-  it('merges AI findings on top of the deterministic board (attachment path)', async () => {
+  it('merges AI findings without requiring a tool to read the prompt', async () => {
     const temporaryPrompts = fakeTemporaryPrompts();
     const ai = aiReturning(findingsJson);
     const service = createReviewBoardService(
@@ -285,11 +946,13 @@ describe('createReviewBoardService.analyze', () => {
     expect(board.recommendation).toBe('request-changes');
     const problem = board.perspectives.find((p) => p.id === 'problem-solution');
     expect(problem?.findings.length).toBeGreaterThan(0);
-    expect(temporaryPrompts.created).toHaveLength(1);
-    expect(temporaryPrompts.cleaned).toBe(1);
+    expect(temporaryPrompts.created).toHaveLength(0);
+    expect(temporaryPrompts.cleaned).toBe(0);
     const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as MetaRequest;
-    expect(request.attachments).toEqual(['C:/tmp/prompt-1.txt']);
+    expect(request.attachments).toBeUndefined();
+    expect(request.prompt).toContain('svc/cache.cs');
+    expect(request.noTools).toBe(true);
   });
 
   it('carries the prompt inline when inlinePrompts is set (no attachment)', async () => {
@@ -615,6 +1278,9 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(request.prompt).toContain('Problem ↔ Solution');
     expect(request.prompt).toContain('do NOT grade files one by one');
     expect(request.prompt).toContain('The problem this PR targets');
+    expect(request.prompt).toContain('Mandatory problem and solution explanations');
+    expect(request.prompt).toContain('"Problem example" and "Solution example"');
+    expect(request.prompt).toContain('verbatim contiguous excerpt of at most 12 lines');
     // Floor frames the fallback as Problem / Solution / Why they align / Verdict
     // with NO file-level line-by-line checks.
     expect(result.rationale.map((r) => r.label)).toEqual([
@@ -712,7 +1378,7 @@ describe('createReviewBoardService.analyzePerspective', () => {
     expect(runDetailed).toHaveBeenLastCalledWith(expect.objectContaining({ forceCold: true }));
   });
 
-  it('validates and cleans up each attachment attempt, forcing the last cold', async () => {
+  it('retries invalid responses with corrective feedback and full prompt text, forcing the last cold', async () => {
     const temporaryPrompts = fakeTemporaryPrompts();
     const runDetailed = vi.fn(async (request: MetaRequest) => ({
       text: request.forceCold ? cleanReview : '{}',
@@ -727,11 +1393,12 @@ describe('createReviewBoardService.analyzePerspective', () => {
     }));
     expect((await service.analyzePerspective('f9', 'security')).perspective.status)
       .toBe('approved');
-    expect(temporaryPrompts.created).toHaveLength(2);
-    expect(temporaryPrompts.cleaned).toBe(2);
+    expect(temporaryPrompts.created).toHaveLength(0);
+    expect(temporaryPrompts.cleaned).toBe(0);
     expect(runDetailed).toHaveBeenLastCalledWith(expect.objectContaining({
-      forceCold: true, attachments: ['C:/tmp/prompt-2.txt'],
+      forceCold: true, noTools: true, prompt: expect.stringContaining('previous'),
     }));
+    expect(runDetailed.mock.calls.every(([request]) => !request.attachments)).toBe(true);
   });
 
   it.each(['', '{}', 'I cannot review this.', '[]', '{"findings":[]}'])(
@@ -861,7 +1528,8 @@ describe('createReviewBoardService.chat', () => {
     expect(reply.answer).toBe('The blast radius is wide.');
     const request = (ai.runDetailed as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as MetaRequest;
-    expect(request.prompt).toContain('attached file');
+    expect(request.prompt).toContain('Why is this risky?');
+    expect(request.attachments).toBeUndefined();
   });
 
   it('answers a board-wide question when perspectiveId is null', async () => {

@@ -6,8 +6,10 @@ import type {
 } from '../review-board/review-board-contract.js';
 import type { Route } from './http-contract.js';
 import type { ReviewBoardQueue } from '../review-board/review-board-queue.js';
+import { parseFindingAction, parseReviewOptions } from '../review-board/review-run.js';
 
 export interface ReviewBoardControllerDeps {
+  prComments?: import('../pr-review/pr-comments-contract.js').PrCommentsService;
   reviewBoard: ReviewBoardService;
   reviewQueue?: ReviewBoardQueue;
 }
@@ -83,6 +85,62 @@ export function createReviewBoardRoutes(
   deps: ReviewBoardControllerDeps,
 ): Route[] {
   return [
+    ...(deps.reviewBoard.loadContext ? [{
+      method: 'post' as const, path: '/features/:featureId/review-board/context',
+      handler: async (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200, body: await deps.reviewBoard.loadContext!(req.params.featureId, req.signal),
+      }),
+    }] : []),
+    ...(deps.reviewBoard.repositorySkills ? [{
+      method: 'get' as const, path: '/features/:featureId/review-board/skills',
+      handler: async (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200, body: await deps.reviewBoard.repositorySkills!(req.params.featureId, req.signal),
+      }),
+    }] : []),
+    ...(deps.prComments?.publications ? [{
+      method: 'get' as const, path: '/features/:featureId/review-board/publications',
+      handler: (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200, body: deps.prComments!.publications!(req.params.featureId),
+      }),
+    }] : []),
+    ...(deps.prComments?.reconcilePublication ? [{
+      method: 'post' as const, path: '/features/:featureId/review-board/publications/reconcile',
+      handler: async (req: import('./http-contract.js').HttpRequest) => {
+        const key = (req.body as { key?: unknown } | null)?.key;
+        if (typeof key !== 'string' || !key.trim() || key.length > 500) throw new ValidationError('A publication key is required.');
+        return { status: 200, body: await deps.prComments!.reconcilePublication!(req.params.featureId, key) };
+      },
+    }] : []),
+    ...(deps.reviewBoard.manageFindings ? [{
+      method: 'post' as const,
+      path: '/features/:featureId/review-board/findings',
+      handler: (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200, body: deps.reviewBoard.manageFindings!(req.params.featureId, parseFindingAction(req.body)),
+      }),
+    }] : []),
+    ...(deps.reviewBoard.discussion ? [{
+      method: 'get' as const,
+      path: '/features/:featureId/review-board/discussion',
+      handler: async (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200, body: await deps.reviewBoard.discussion!(req.params.featureId),
+      }),
+    }] : []),
+    ...(deps.reviewBoard.configure ? [{
+      method: 'post' as const,
+      path: '/features/:featureId/review-board/options',
+      handler: async (req: import('./http-contract.js').HttpRequest) => ({
+        status: 200,
+        body: await deps.reviewBoard.configure!(req.params.featureId, parseReviewOptions(req.body), req.signal),
+      }),
+    }] : []),
+    ...(deps.reviewBoard.cancel ? [{
+      method: 'post' as const,
+      path: '/features/:featureId/review-board/cancel',
+      handler: (req: import('./http-contract.js').HttpRequest) => {
+        deps.reviewBoard.cancel!(req.params.featureId);
+        return { status: 200, body: { cancelled: true } };
+      },
+    }] : []),
     ...(deps.reviewQueue ? [
       {
         method: 'get' as const,

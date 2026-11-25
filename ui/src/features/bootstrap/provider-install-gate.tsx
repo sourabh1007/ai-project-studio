@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { useStartupPending } from '../../app/desktop-lifecycle.js';
 import { resolveApiBase } from '../../lib/api-base.js';
-import { CheckIcon, RefreshIcon } from '../../components/icons.js';
+import { CheckIcon, ImportIcon, ProviderIcon, RefreshIcon, SessionIcon, WarningIcon } from '../../components/icons.js';
 import { Button } from '../../components/ui.js';
 import type { ProviderSelectionInfo } from '../../lib/api.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { announceProvider } from '../../lib/provider-selection.js';
+import { ProviderFeatureChecklist } from '../../components/provider-feature-checklist.js';
 
 type Phase = 'checking' | 'choosing' | 'selecting' | 'installing' | 'done' | 'error' | 'uncertain';
 const STATUS_TIMEOUT_MS = 15_000;
@@ -23,6 +25,7 @@ interface InstallEvent {
 export function ProviderInstallGate({ children, forceChoose = false }: { children: React.ReactNode; forceChoose?: boolean }) {
   const api = useApi();
   const [phase, setPhase] = useState<Phase>('checking');
+  useStartupPending(phase === 'checking');
   const [target, setTarget] = useState<string | null>(null);
   const [remember, setRemember] = useState(false);
   const [info, setInfo] = useState<ProviderSelectionInfo | null>(null);
@@ -249,8 +252,8 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
     <div className="bootstrap-gate">
       <div className="bootstrap-card">
         <div className="bootstrap-head">
-          <span className="bootstrap-badge">
-            {phase === 'error' || phase === 'uncertain' ? '!' : <RefreshIcon size={18} />}
+          <span className={`bootstrap-badge${phase === 'checking' ? ' is-checking' : ''}`} aria-hidden>
+            {phase === 'error' || phase === 'uncertain' ? <WarningIcon size={20} /> : phase === 'checking' ? <RefreshIcon size={20} /> : <SessionIcon size={20} />}
           </span>
           <div>
             <h1 className="bootstrap-title">
@@ -277,33 +280,48 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
         </div>
 
         {(phase === 'choosing' || phase === 'selecting') && (
-          <div>
+          <div className="cli-chooser">
             {error && <p role="alert">{error}</p>}
-            <label className="field">
-              <span><input type="checkbox" aria-label="Remember me" checked={remember} disabled={phase === 'selecting'} onChange={(event) => setRemember(event.target.checked)} /> Remember me</span>
-              <span className="field-hint">Use this CLI automatically next time. Otherwise choose again after restarting.</span>
-            </label>
             {info?.blockers?.map((blocker) => (
               <p key={`${blocker.kind}:${blocker.id}`}>Stop {blocker.label} before switching CLI.</p>
             ))}
             {Boolean(info?.blockers?.length) && info?.blockers?.every((blocker) => /warm|probe|pool/i.test(blocker.kind)) && (
               <Button disabled={phase === 'selecting'} onClick={() => void stopIdle()}>Stop idle background CLI workers</Button>
             )}
-            {info?.providers.map((provider) => (
-              <div key={provider.id} className="config-namespace">
-                <h2>{provider.label ?? providerLabel(provider.id)}</h2>
-                <p>{provider.installed ? 'Installed' : 'Not installed'}</p>
-                {provider.automation?.supported === false && <p>Interactive use only — automated AI is unavailable. {provider.automation.reason} Choose another CLI for agents and AI planning.</p>}
-                {provider.installCommand && <code>{provider.installCommand}</code>}
-                {!provider.installed && provider.installAvailable === false && <p>Automatic installation unavailable.</p>}
-                <Button
-                  disabled={phase === 'selecting' || (!provider.installed && provider.installAvailable === false) || Boolean(info.blockers?.length)}
-                  onClick={() => void choose(provider)}
-                >
-                  {provider.installed ? 'Use installed CLI' : 'Install and use'} — {provider.label ?? providerLabel(provider.id)}
-                </Button>
-              </div>
-            ))}
+            <div className="cli-provider-list">
+              {info?.providers.map((provider) => (
+                <section key={provider.id} className="cli-provider-card" aria-label={`${provider.label ?? providerLabel(provider.id)} setup`}>
+                  <div className="cli-provider-heading">
+                    <div className="cli-provider-title">
+                      <span className="cli-provider-icon" aria-hidden><ProviderIcon providerId={provider.id} /></span>
+                      <h2>{provider.label ?? providerLabel(provider.id)}</h2>
+                    </div>
+                    {provider.id === 'agency' && <p className="cli-provider-note">Microsoft internal only</p>}
+                    <span className={`cli-provider-status${provider.installed ? ' is-installed' : ''}`}>
+                      {provider.installed ? <CheckIcon size={13} /> : <ImportIcon size={13} />}
+                      {provider.installed ? 'Installed' : 'Not installed'}
+                    </span>
+                  </div>
+                  <ProviderFeatureChecklist provider={provider} />
+                  {!provider.installed && provider.installCommand && <details className="cli-install-command"><summary>Install command</summary><code>{provider.installCommand}</code></details>}
+                  {!provider.installed && provider.installAvailable === false && <p>Automatic installation unavailable.</p>}
+                  <div className="cli-provider-actions">
+                    <Button
+                      ariaLabel={`${provider.installed ? 'Use installed CLI' : 'Install and use'} — ${provider.label ?? providerLabel(provider.id)}`}
+                      disabled={phase === 'selecting' || (!provider.installed && provider.installAvailable === false) || Boolean(info.blockers?.length)}
+                      onClick={() => void choose(provider)}
+                    >
+                      {provider.installed ? <CheckIcon size={14} /> : <ImportIcon size={14} />}
+                      {provider.installed ? 'Use CLI' : 'Install and use'}
+                    </Button>
+                  </div>
+                </section>
+              ))}
+            </div>
+            <label className="field cli-remember">
+              <span><input type="checkbox" aria-label="Remember me" checked={remember} disabled={phase === 'selecting'} onChange={(event) => setRemember(event.target.checked)} /> Remember me</span>
+              <span className="field-hint">Use this CLI automatically next time.</span>
+            </label>
           </div>
         )}
 
@@ -334,7 +352,7 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
             <CheckIcon size={14} /> Continue without waiting
           </Button>
         </div>
-        <p className="field-hint">
+        <p className="field-hint bootstrap-footer-hint">
           AI CLI features may be unavailable until setup completes.
           Continuing does not cancel an installer already running.
         </p>

@@ -10,6 +10,7 @@ export type UsageGranularity = 'day' | 'week' | 'month' | 'year';
 
 /** Which slice of usage a rollup covers. */
 export type UsageRollupScope = 'workspace' | 'ide' | 'feature';
+export interface UsageWindow { from: string; to: string }
 
 /**
  * One normalized day-grained usage bucket, unioned across every source (live
@@ -36,6 +37,7 @@ export interface UsagePeriod extends UsageTotals {
 
 /** Consolidated usage over a scope, bucketed by the requested granularity. */
 export interface UsageRollup {
+  window?: UsageWindow;
   scope: UsageRollupScope;
   granularity: UsageGranularity;
   totals: UsageTotals;
@@ -58,15 +60,15 @@ export interface UsageRollup {
  */
 export interface UsageRollupReader {
   /** Billable developer usage (feature sessions, excluding IDE overhead). */
-  workspaceDays(): UsageDayRow[];
+  workspaceDays(window?: UsageWindow): UsageDayRow[];
   /** The IDE's own metasession/AI overhead, including warm-ACP meta usage. */
-  ideDays(): UsageDayRow[];
+  ideDays(window?: UsageWindow): UsageDayRow[];
   /** Everything attributed to a feature, including its retained deleted work. */
-  featureDays(featureId: string): UsageDayRow[];
+  featureDays(featureId: string, window?: UsageWindow): UsageDayRow[];
   /** Proxy-measured MCP tool-call I/O for billable dev (non-internal) sessions. */
-  workspaceMcpServers(): McpServerBreakdown[];
+  workspaceMcpServers(window?: UsageWindow): McpServerBreakdown[];
   /** Proxy-measured MCP tool-call I/O for the IDE's own metasessions. */
-  ideMcpServers(): McpServerBreakdown[];
+  ideMcpServers(window?: UsageWindow): McpServerBreakdown[];
   /** Proxy-measured MCP tool-call I/O attributed to a feature. */
-  featureMcpServers(featureId: string): McpServerBreakdown[];
+  featureMcpServers(featureId: string, window?: UsageWindow): McpServerBreakdown[];
 }

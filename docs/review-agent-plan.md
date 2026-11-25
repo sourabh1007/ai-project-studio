@@ -1,11 +1,78 @@
 # Review agent enhancement plan
 
-Status: planning only. Do not implement until explicitly requested.
+Status: core and extended workflows implemented and validated. The original
+design and edge-case matrix below remain as the implementation rationale.
+
+## Delivered workflow
+
+- Review options freeze the selected provider/model, perspective prompts,
+  repository context, selected instruction skills, and business input into a
+  persisted run. Changing options prepares a new run instead of reusing results.
+- Every lens receives bounded, pinned repository evidence. Repository guidance
+  and skills are supplied as untrusted context, with source fingerprints and
+  explicit collection/truncation warnings. Findings can cite only skills
+  actually supplied to that lens and captured changed-code locations.
+- Business is included by default, remains selectable, and reports insufficient
+  evidence rather than passing when business requirements are absent. Final
+  Decision runs after the other lenses using a bounded, complete synthesis;
+  oversized synthesis fails explicitly instead of dropping findings.
+- Exact duplicate findings are grouped conservatively while preserving original
+  observations, strongest severity, perspective IDs, and skill references.
+- The default UI centers on Problem, Solution, and unique review comments.
+  Explanation, evidence, skills, perspectives, models, and diagnostics are
+  available through accessible information/details controls.
+- Backend-owned full runs survive a disconnected browser, save results
+  incrementally, support explicit cancellation, and become interrupted on
+  backend restart. Recent run snapshots are retained when options change.
+- Sign-off and approval include the run ID and assessment revision. Publication
+  checks the captured and live PR head, including PR-level fallback comments;
+  supplied run guards are rechecked after the remote lookup. Posting does not
+  mark a finding fixed.
+
+## Delivered extended workflows
+
+- Single/bulk imports persist per-PR presets. Import-only performs no AI work;
+  explicit, idempotent preparation starts the saved setup. Duplicate imports
+  retain existing state. Refresh preserves historical runs and uncertain
+  publication operations.
+- Business requirements have source/content-bound identities and explicit
+  precedence. Bounded same-repository issue/work-item reads include actual
+  bodies/acceptance criteria through existing credentials. Parent-feature and
+  shared context are supplied without converting generic guidance or bare
+  links into acceptance policy. Business details show the complete qualitative
+  requirement matrix, gaps, contradictory assessments and linked findings.
+- Compact filters include file and disposition. Reasoned merge/split, severity,
+  dismissal, fix verification and undo preserve original observations and
+  provenance in a bounded decision history. These changes increment the
+  assessment revision. Possible duplicates remain suggestions, never semantic
+  auto-merges.
+- Live discussion badges are independent of frozen analysis and local
+  disposition. Durable publication reserves an operation before dispatch,
+  reuses confirmed results and reconciles uncertain responses through a
+  provider-side marker without blindly resending or marking anything fixed.
+- Preparation, publication and approval verify live head, actual target tip and
+  target branch. Local run/revision guards are rechecked after remote reads.
+  Final synthesis accepts requirement links only from the same captured run.
+- A versioned deterministic, labelled quality replay covers seeded defects,
+  business gaps, evidence/skill attribution and duplicate distinction, with
+  regression acceptance gates. This is synthetic comparative replay, **not a
+  live model/vendor quality, latency or cost benchmark**.
+
+The default UI remains Problem, Solution and Review comments; setup, management,
+requirements, history, publication recovery and explanatory detail are
+progressively disclosed. Remote mutations cannot be made atomic with a revision
+lookup when the provider offers no such guarantee; reconciliation is not an
+exactly-once posting claim.
+
+Validation: `npm run build`, `npm run lint`, backend coverage (6,080 tests) and
+UI coverage (2,553 tests) pass. Both configured coverage gates report 100% across
+statements, branches, functions and lines. Native/vendor behavior is exercised
+through test doubles, not certified by these coverage percentages.
 
 ## Investigation findings
 
-The following inspected contracts shape this plan. These are implementation
-constraints, not a claim that the proposed changes already exist.
+These original investigation findings motivated the design. The table records
+the pre-change behavior, not the current delivered workflow.
 
 | Current behavior | Planning consequence |
 | --- | --- |
@@ -34,19 +101,62 @@ It does not mean deleting, rewriting, or automatically posting remote comments.
 
 ## User experience
 
-1. Import a PR (or bulk PRs), choose automatic review or import-only, and inspect
-   the review setup: model, perspectives, selected skills, available business
-   requirements, and missing context.
-2. Preview the actual context/skill mapping each perspective will receive, not
-   just a generic prompt template. Start using a saved immutable setup.
-3. Follow preparation, queued/running lenses, validation/aggregation, and final
-   synthesis. Timings distinguish queue, execution, and end-to-end wall time.
-4. Inspect Perspectives, Unique findings, Skills used, and Business requirements.
-   Navigate from a skill to its checks/findings, or from a bug to its contributing
-   lenses, rules, scenario, and captured code.
+1. Import a PR (or bulk PRs), choose automatic review or import-only, and use
+   defaults or open the compact review-options control for model, perspectives,
+   skills, and business context. Detailed setup inspection is optional.
+2. Land on a minimal surface centered on Problem, Solution, and Review comments
+   from all selected perspectives. Show the consolidated unique-comments view
+   by default, not a dashboard of perspective cards or analysis machinery.
+3. Use contextual information icons to inspect why a finding was raised, how it
+   was assessed, its evidence, skills, perspectives, and business requirements.
+   The same drill-down supports navigation from a skill to related bugs.
+4. Show one concise run status; open its details for preparation, per-lens
+   progress, queue/execution/end-to-end timings, usage, and failures.
 5. Explicitly post selected comments, dismiss with a reason, verify a fix, sign
    off, or approve using current run identity. None of these actions is implied
    by another.
+
+### Minimal UI and progressive disclosure
+
+The default Review Board must prioritize understanding the change and acting on
+review comments, not explaining the agent's internal workflow.
+
+| Default visible surface | Information available on icon click |
+| --- | --- |
+| Problem: concise statement of what needs solving | Requirement sources, acceptance criteria, missing/conflicting business context |
+| Solution: concise description of the proposed change | Changed files, diff/change graph, implementation rationale, scope and limitations |
+| Review comments: unique issues from all selected perspectives | Why/how, scenario and impact, code evidence, contributing perspectives, skill/rule attribution, original observations and linked PR threads |
+| Compact run status and essential actions | Model/options, detailed progress, timing, measured usage, review-context snapshot and diagnostics |
+
+- Keep comment cards concise: severity, actionable title, file/line where known,
+  a short problem/fix statement, and the relevant action. Do not repeat full
+  rationales, skill inventories, perspective reports, checks, or audit trails.
+- Use a small, consistent set of contextual information buttons. Brief
+  explanations may open a popover; rich details open one reusable side panel
+  (or accessible dialog on narrow screens), not stacked/nested modal chains.
+  Preserve scroll, selection, and drafts when opening or closing details.
+- Put perspective/skill filters, all-observations mode, and detailed provenance
+  behind a compact filter/details control. Avoid persistent extra tabs, large
+  matrices, metric tiles, or expanded logs on the default review surface.
+  All previously planned Skills used, Perspectives, and Business requirements
+  views remain available as drill-down content, not mandatory primary sections.
+- Distinguish the actionable "what is wrong / what to change" from explanatory
+  "why / how / which evidence." Keep the former visible; disclose the latter
+  on click. Do not hide the actual review concern behind an information icon.
+- Information buttons work on click/tap and keyboard, have contextual accessible
+  names such as "Why this comment?", and expose open state. Tooltips supplement
+  discoverability, never replace clickable content. Manage focus, Escape/close,
+  screen-reader semantics, and touch targets using existing UI components.
+- Keep material warnings visible as short text: stale evidence, incomplete
+  review/business context, failed analysis, uncertain publication, or approval
+  ineligibility. Details explain them, but icons must not conceal safety state.
+  Avoid repeated banners for the same condition.
+- Keep model choice discoverable in review options before launch and show its
+  recorded value in run details. Preserve explicit confirmations for remote
+  actions without adding an explanatory panel to every ordinary interaction.
+- Loading, empty, partial, clean-review, failed, and cancelled states use concise
+  copy. An empty comments list must distinguish "no issues found" from "review
+  incomplete"; it must not imply approval.
 
 ## 1. Immutable review context
 
@@ -107,7 +217,8 @@ trusted review baseline.
 
 ## 2. Skills, perspectives, and bug attribution
 
-Add a "Repository skills used" section to each review. For every skill show:
+Add "Repository skills used" details to each review, opened through the relevant
+information control rather than an expanded section by default. For every skill show:
 
 - Name, source path or Studio skill ID, scope, revision/content fingerprint.
 - Whether it was discovered, selected, included in a perspective's prompt,
@@ -230,7 +341,8 @@ the same configuration and machine-readable validation patterns as other lenses.
 Include business results and uncertainty in Final Decision without changing
 explicit human sign-off or remote approval semantics.
 
-Present a requirement-to-behavior matrix:
+Present a requirement-to-behavior matrix inside Business details, not on the
+default review surface:
 
 | Requirement/rule | Source | Changed behavior and evidence | Assessment |
 | --- | --- | --- | --- |
@@ -296,7 +408,9 @@ does not stop the rest.
 
 ## 6. All unique findings/comments view
 
-Keep perspective navigation and add a consolidated view:
+Make the consolidated unique-comments view the default. Keep perspective
+navigation and the following detailed capabilities behind compact filter/details
+controls:
 
 - One row per distinct issue, ordered by severity.
 - File/location, concern, impact, suggested fix, skill/rule references,
@@ -474,6 +588,11 @@ platform out of this scope.
   for perspective outcomes; stale-head posting and approval remain guarded.
 - Concurrent review preparation does not block unrelated APIs; cancellation,
   queue limits, and partial/failure states are tested.
+- Default UI shows concise Problem, Solution, and consolidated Review comments;
+  rationale, skills, perspectives, requirements, metrics, and diagnostics are
+  available through contextual click-to-open information controls.
+- Information controls are keyboard/touch/screen-reader accessible, preserve
+  review position/drafts, and do not hide material warnings or the actual concern.
 
 ### Edge-case test matrix
 
@@ -498,6 +617,10 @@ platform out of this scope.
 | Approval confirmed while run, head, base, or assessment changes | Revalidate identity and reject stale confirmation; honor provider pinning limits. |
 | Skill text/requirements contain command or instruction injection | Treat as untrusted evidence; no tool execution or policy bypass; preserve access restrictions. |
 | Legacy review without manifest/provenance | Readable historical view; explicit new review required for new certification. |
+| Many perspectives, skills, or long rationale text | Default surface stays compact; full content remains navigable in details without truncating stored evidence. |
+| Keyboard-only, touch, screen reader, or narrow viewport | Clickable accessible information controls, appropriate panel/dialog layout, reliable close/focus return; no hover-only answers. |
+| Opening details while composing or switching findings | Preserve drafts and review position; bind details to the selected run/finding so stale content is not misattributed. |
+| No visible comments but failed/incomplete review | Concise explicit incomplete state, not a clean-review or approval claim. |
 
 ### Quality evaluation before rollout
 
@@ -523,5 +646,6 @@ npm run test:coverage --workspace backend
 npm run test:coverage --workspace ui
 ```
 
-Maintain the backend's 100% coverage gate. This document records intended work;
-it does not assert that any enhancement has been implemented or validated.
+Maintain the backend's 100% coverage gate. Delivered behavior and validation are
+recorded at the top; live-provider evaluation remains an optional, explicitly
+authorized exercise rather than a claim made by the deterministic replay.

@@ -13,6 +13,7 @@ export function resourceView(snapshot: ResourcesSnapshot): AppResourceSnapshot {
     const incomplete = category.paths.some((path) => path.status !== 'ready' && path.status !== 'excluded');
     const paths = category.paths.filter((path) => path.status !== 'excluded').map((path) => path.path);
     return {
+      ...(snapshot.history ? { history: snapshot.history } : {}),
       id: category.id, kind: category.id, label: category.label,
       paths,
       bytes: incomplete ? null : category.bytes,

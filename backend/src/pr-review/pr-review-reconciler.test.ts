@@ -82,6 +82,18 @@ function memoryRepo(seed: PrReview[]): PrReviewRepo & { rows: Map<string, PrRevi
 const NOW = '2026-08-02T09:00:00.000Z';
 
 describe('pr-review-reconciler', () => {
+  it('retains partial review results and marks a running board interrupted after restart', () => {
+    const current = review({ problem: 'ready', graph: 'ready' });
+    current.reviewBoardPending = true;
+    current.reviewBoardRun = { id: 'run', revision: 1, status: 'running', options: {}, providerId: 'p',
+      model: 'auto', perspectiveIds: [], context: { fingerprint: 'f', skills: [],
+        businessRequirements: '', evidence: '', warnings: [] }, headSha: null,
+      graphGeneratedAt: current.changeGraph.generatedAt, startedAt: NOW, failures: {} };
+    const repo = memoryRepo([current]);
+    expect(createPrReviewReconciler({ reviews: repo, clock: fixedClock(NOW) }).reconcileOrphans()).toBe(1);
+    expect(repo.get('f1')).toMatchObject({ reviewBoardPending: false,
+      reviewBoardRun: { status: 'interrupted', finishedAt: NOW } });
+  });
   it('fails only the orphaned (non-terminal) steps and preserves the rest', () => {
     const repo = memoryRepo([review({ problem: 'generating', graph: 'ready' })]);
 

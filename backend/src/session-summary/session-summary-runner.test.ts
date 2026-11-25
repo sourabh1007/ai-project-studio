@@ -132,6 +132,7 @@ describe('session-summary-runner', () => {
     const summary = await h.runner.summarize({ sessionId: 'dev1', signal });
 
     expect(h.requests[0].kind).toBe('meta');
+    expect(h.requests[0].promptRefs).toEqual(['summarizer.promptTemplate', 'summarizer.sessionTemplate']);
     expect(h.requests[0].featureId).toBe('f1');
     expect(h.requests[0].prompt).toContain('Login');
     expect(h.requests[0].prompt).toContain('wire up the login form');

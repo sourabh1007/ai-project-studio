@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   MetaUsageActivity,
   ModelBreakdown,
@@ -18,6 +18,11 @@ import {
 import { AiIcon, ClockIcon, McpIcon, UsageIcon, WorkspaceContextIcon } from '../../components/icons.js';
 import { McpUsageCharts } from '../../components/mcp-usage-charts.js';
 import { SkillUsage } from '../../components/skill-usage.js';
+import { Insights } from '../monitoring/insights.js';
+import { UsageInsights } from './usage-insights.js';
+import { OperationInsights } from '../meta-operations/operation-insights.js';
+import { useMotion } from '../../hooks/use-motion.js';
+import { PromptUsage, type PromptUsageTarget } from './prompt-usage.js';
 
 type Scope = 'workspace' | 'ide';
 
@@ -30,14 +35,13 @@ const GRANULARITIES: { id: UsageGranularity; label: string }[] = [
 
 /**
  * Consolidated, exploreable IDE usage: billable workspace dev spend and the
- * IDE's own metasession overhead, rolled up by day/week/month/year. Every total
- * folds in usage retained from deleted sessions/features and all metasession
- * credits, so figures reconcile with the plan budget and never shrink when
- * history is pruned. Kept deliberately simple — pick a granularity and a scope,
+ * IDE's own metasession overhead in a selected UTC calendar period. Totals
+ * include corresponding usage retained from deleted sessions/features.
+ * Kept deliberately simple — pick a time frame and a scope,
  * then drill into periods, models, providers and (for the IDE) exactly what
  * each metasession spent credits on.
  */
-export function UsageView({ signal }: { signal: number }) {
+export function UsageView({ signal, promptTarget }: { signal: number; promptTarget?: PromptUsageTarget }) {
   const [granularity, setGranularity] = useState<UsageGranularity>('month');
   const [scope, setScope] = useState<Scope>('workspace');
   const state = useUsageExplorer(granularity, signal);
@@ -48,9 +52,8 @@ export function UsageView({ signal }: { signal: number }) {
       <header className="dash-header">
         <h2 className="dash-title">Usage</h2>
         <p className="dash-description">
-          Consolidated AI usage across the whole studio. Totals include work
-          retained from deleted features and sessions, plus every metasession —
-          so what you see here reconciles with your plan budget.
+          Recorded AI usage in the selected calendar period, including retained
+          usage from deleted features and sessions. Calendar periods use UTC.
         </p>
       </header>
 
@@ -75,7 +78,7 @@ export function UsageView({ signal }: { signal: number }) {
             <AiIcon size={14} /> IDE metasessions
           </button>
         </div>
-        <div className="usage-granularity" role="group" aria-label="Granularity">
+        <div className="usage-granularity" role="group" aria-label="Usage time frame">
           {GRANULARITIES.map((g) => (
             <button
               key={g.id}
@@ -90,6 +93,11 @@ export function UsageView({ signal }: { signal: number }) {
         </div>
       </div>
 
+      <p className="field-hint">
+        Showing {state.window.from} to {state.window.to} (UTC, end exclusive).
+        {state.loading && rollup && ' Updating the selected time frame; the previous window remains visible until it loads.'}
+      </p>
+
       {state.error && (
         <div className="dash-empty">
           <p className="muted" role="status">
@@ -98,24 +106,29 @@ export function UsageView({ signal }: { signal: number }) {
         </div>
       )}
 
+      <PromptUsage window={state.window} signal={signal} target={promptTarget} />
       {rollup && (
         <>
           <Totals rollup={rollup} />
-          <PeriodBreakdown periods={rollup.periods} granularity={granularity} />
+          <PeriodBreakdown periods={rollup.periods} granularity={state.granularity} />
           <div className="usage-split">
             <ModelTable rows={rollup.byModel} />
             <ProviderTable rows={rollup.byProvider} />
           </div>
           <Section icon={<McpIcon size={16} />} title="MCP servers"
             hint={scope === 'ide' ? 'IDE metasession tool usage' : 'Workspace tool usage'}>
-            <McpUsageCharts rows={rollup.byMcpServer} />
+            <McpUsageCharts rows={rollup.byMcpServer} scope={scope === 'ide' ? 'internal' : 'feature'} />
           </Section>
         </>
       )}
-      <SkillUsage scope={scope === 'ide' ? 'internal' : 'feature'} signal={signal} />
+      <Insights title="Activity calendar and trends">{() => <UsageInsights scope={scope} signal={signal} window={state.window} />}</Insights>
+      <SkillUsage scope={scope === 'ide' ? 'internal' : 'feature'} signal={signal} window={state.window} />
 
       {scope === 'ide' && (
-        <ActivityFeed records={state.activity?.records ?? []} />
+        <><Insights title="Operation timing and model comparisons">{() => <OperationInsights scope={{
+          from: `${state.window.from}T00:00:00.000Z`, to: `${state.window.to}T00:00:00.000Z`,
+        }} signal={signal} />}</Insights>
+        <ActivityFeed records={state.activity?.records ?? []} /></>
       )}
 
       {!rollup && !state.error && (
@@ -131,23 +144,49 @@ function Totals({ rollup }: { rollup: UsageRollup }) {
   const t = rollup.totals;
   return (
     <section className="dash-kpis usage-kpis">
-      <Kpi value={formatAic(t.nanoAiu)} label="AI credits (AIC)" accent="var(--accent)" />
-      <Kpi value={formatCredits(t.credits)} label="Vendor credits" accent="#8b5cf6" />
+      <Kpi value={t.nanoAiu} format={formatAic} label="AI credits (AIC)" accent="var(--accent)" />
+      <Kpi value={t.credits} format={formatCredits} label="Vendor credits" accent="#8b5cf6" />
       {t.usdEstimate !== undefined && t.usdEstimate !== null && (
-        <Kpi value={`$${t.usdEstimate.toFixed(4)}`} label="USD estimate (not AIC)" accent="#8b5cf6" />
+        <Kpi value={t.usdEstimate} format={(value) => `$${value!.toFixed(4)}`} label="USD estimate (not AIC)" accent="#8b5cf6" />
       )}
-      <Kpi value={String(t.sessions)} label="Sessions" accent="#0ea5e9" />
-      <Kpi value={formatTokens(t.inputTokens)} label="Input tokens" accent="#22c55e" />
-      <Kpi value={formatTokens(t.outputTokens)} label="Output tokens" accent="#f59e0b" />
+      <Kpi value={t.sessions} format={(value) => String(Math.round(value!))} label="Sessions" accent="#0ea5e9" />
+      <Kpi value={t.inputTokens} format={(value) => formatTokens(Math.round(value!))} label="Input tokens" accent="#22c55e" />
+      <Kpi value={t.outputTokens} format={(value) => formatTokens(Math.round(value!))} label="Output tokens" accent="#f59e0b" />
     </section>
   );
 }
 
-function Kpi({ value, label, accent }: { value: string; label: string; accent: string }) {
+function Kpi({ value, format, label, accent }: {
+  value: number | null; format: (value: number | null) => string; label: string; accent: string;
+}) {
+  const motion = useMotion();
+  const [shown, setShown] = useState(value);
+  const current = useRef(value);
+  useEffect(() => {
+    if (motion !== 'full' || value === null || current.current === null) {
+      current.current = value;
+      setShown(value);
+      return;
+    }
+    const from = current.current;
+    if (from === value) return;
+    const start = performance.now();
+    let frame: number;
+    const tick = (now: number) => {
+      const progress = Math.min(1, Math.max(0, (now - start) / 400));
+      const next = progress === 1 ? value : from + (value - from) * (1 - (1 - progress) ** 3);
+      current.current = next;
+      setShown(next);
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [value, motion]);
+  const displayed = value === null || shown === null || motion !== 'full' ? value : shown;
   return (
-    <div className="dash-kpi">
+    <div className="dash-kpi" role="group" aria-label={`${label}: ${format(value)}`}>
       <span className="dash-kpi-bar" style={{ background: accent }} />
-      <span className="dash-kpi-value">{value}</span>
+      <span className="dash-kpi-value" aria-hidden="true">{format(displayed)}</span>
       <span className="dash-kpi-label">{label}</span>
     </div>
   );
@@ -295,8 +334,8 @@ function ActivityFeed({ records }: { records: MetaUsageActivity[] }) {
   return (
     <Section
       icon={<ClockIcon size={16} />}
-      title="Recent metasession activity"
-      hint="What the IDE spent credits on, most recent first — model, purpose and cost."
+      title="Recent metasession usage captures"
+      hint="Recent captures within the selected UTC window, most recent first. This bounded feed is not the complete retained usage ledger."
     >
       {records.length === 0 ? (
         <p className="muted">No metasession activity captured yet.</p>

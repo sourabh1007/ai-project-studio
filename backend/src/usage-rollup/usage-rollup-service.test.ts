@@ -24,6 +24,22 @@ function row(overrides: Partial<UsageDayRow>): UsageDayRow {
   };
 }
 
+it('passes date windows to the owning readers and returns the effective window on all scopes', () => {
+  const calls: unknown[] = [];
+  const reader: UsageRollupReader = {
+    workspaceDays: (window) => { calls.push(window); return [row({})]; },
+    ideDays: (window) => { calls.push(window); return []; },
+    featureDays: (id, window) => { calls.push([id, window]); return []; },
+    workspaceMcpServers: () => [], ideMcpServers: () => [], featureMcpServers: () => [],
+  };
+  const service = createUsageRollupService({ reader });
+  const window = { from: '2026-09-01', to: '2026-10-01' };
+  expect(service.workspace('day', window).window).toEqual(window);
+  expect(service.ide('day', window).window).toEqual(window);
+  expect(service.feature('feature', 'day', window).window).toEqual(window);
+  expect(calls).toEqual([window, window, ['feature', window]]);
+});
+
 describe('periodBounds', () => {
   it('returns the day itself at day granularity', () => {
     expect(periodBounds('2026-09-14', 'day')).toEqual({

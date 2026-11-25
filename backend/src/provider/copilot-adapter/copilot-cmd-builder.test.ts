@@ -71,10 +71,15 @@ describe('copilot-cmd-builder', () => {
     expect(args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
   });
 
-  it('restricts to zero tools and skips allow-all when noTools is set', () => {
-    const args = buildCopilotArgs({ ...spec, noTools: true }, copilotDefaults);
-    expect(args).toContain('--available-tools');
-    expect(args).not.toContain('--allow-all-tools');
+  it.each([true, false])('starts with an empty tool allowlist and no invalid wildcard permission rule (allowAllTools=%s)', (allowAllTools) => {
+    const args = buildCopilotArgs({ ...spec, noTools: true }, { ...copilotDefaults, allowAllTools });
+    expect(args.slice(args.indexOf('--allow-all-tools'), args.indexOf('--allow-all-tools') + 2))
+      .toEqual(['--allow-all-tools', '--available-tools']);
+    expect(args[args.indexOf('--available-tools') + 1]).toMatch(/^-/);
+    expect(args).not.toContain('--deny-tool');
+    expect(args.filter((arg) => arg === '--allow-all-tools')).toHaveLength(1);
+    expect(args).not.toContain('-p');
+    expect(args).not.toContain(spec.prompt);
   });
 
   it('disables built-in and user MCP servers for meta sessions', () => {

@@ -12,6 +12,7 @@ export interface ModelInfo {
 }
 
 export type SessionKind = 'dev' | 'meta';
+export type HeadlessMcpPolicy = 'native' | 'isolated';
 
 /**
  * Stateful scanner over a session's terminal output that detects when the

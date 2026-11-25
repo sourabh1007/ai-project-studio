@@ -1,10 +1,28 @@
 /**
- * Pure heuristics for deciding whether the app is running on the Microsoft
- * corporate network. The result selects the *default* AI provider: Microsoft
- * network defaults to the Agency CLI, everything else defaults to the GitHub
- * Copilot CLI. All IO (the reachability probe) is injected so the decision
- * logic stays fully unit-testable.
+ * Network visibility is advisory, never authorization. The live detector uses
+ * an injected internal-network probe; legacy env heuristics below are not used
+ * to expose providers or select an active CLI.
  */
+
+export interface MicrosoftNetworkDetectorDeps {
+  probe(): Promise<boolean>;
+}
+
+export function createMicrosoftNetworkDetector(deps: MicrosoftNetworkDetectorDeps) {
+  let detected = false;
+  let pending: Promise<boolean> | null = null;
+  return {
+    isMicrosoftNetwork: () => detected,
+    refresh(): Promise<boolean> {
+      if (pending) return pending;
+      pending = Promise.resolve().then(() => deps.probe()).then(
+        (available) => { detected = available === true; return detected; },
+        () => { detected = false; return false; },
+      ).finally(() => { pending = null; });
+      return pending;
+    },
+  };
+}
 
 /** Env vars (any OS) that may carry an explicit operator override. */
 export const MS_NETWORK_OVERRIDE_VARS = [

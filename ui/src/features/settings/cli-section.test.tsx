@@ -24,7 +24,15 @@ function mount(initial = info) {
   return { bootstrap, select, stop, switcher };
 }
 
-afterEach(cleanup);
+async function expandCli(label: string) {
+  fireEvent.click(await screen.findByRole('button', { name: `${label} settings` }));
+}
+
+function expandPreferences() {
+  fireEvent.click(screen.getByText('CLI preferences', { selector: 'summary' }));
+}
+
+afterEach(() => { cleanup(); localStorage.clear(); });
 
 describe('CLI settings', () => {
   it('surfaces provider policy reasons without disabling explicitly allowed interactive selection', async () => {
@@ -34,8 +42,13 @@ describe('CLI settings', () => {
         automation: { supported: false, reason: 'Inherited MCP sources cannot be safely suppressed.' },
       }],
     });
-    expect(await screen.findByText(/Interactive use only — automated AI is unavailable/)).toHaveTextContent('Inherited MCP sources');
+    await expandCli('Interactive CLI');
+    const summary = await screen.findByText('IDE feature readiness');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
     expect(screen.getByRole('button', { name: 'Use Interactive CLI' })).toBeEnabled();
+    expect(screen.queryByText('Inherited MCP sources cannot be safely suppressed.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'About Interactive CLI' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Inherited MCP sources cannot be safely suppressed.');
   });
 
   it.each([undefined, new Error('Backend unavailable')])('fails closed for missing or failed readiness metadata and offers a bounded retry: %s', async (failure) => {
@@ -71,50 +84,55 @@ describe('CLI settings', () => {
       expect(screen.getByRole('button', { name: 'Choose another CLI' })).toBeEnabled();
     } finally { vi.useRealTimers(); }
   });
-  it('keeps internal Agency opt-in off by default and persists only explicit operator attestation', async () => {
+  it('uses the detected provider catalogue without manual Agency opt-in or automatic selection', async () => {
     const api = createApiClient();
-    const initial = { ...info, internalAgencyEnabled: false };
+    const initial = { ...info, internalAgencyEnabled: true,
+      providers: [...info.providers, { id: 'agency', installed: true }],
+    };
     vi.spyOn(api, 'getProviderBootstrap').mockResolvedValue(initial);
-    const preferences = vi.spyOn(api, 'updateProviderPreferences').mockResolvedValue({
-      ...initial, internalAgencyEnabled: true,
-      providers: [...initial.providers, { id: 'agency', installed: true }],
-    });
+    const preferences = vi.spyOn(api, 'updateProviderPreferences');
     const select = vi.spyOn(api, 'selectProvider');
     const switcher = vi.spyOn(api, 'switchProvider');
     const configChanged = vi.fn();
     render(<ApiProvider value={api}><CliSection onConfigChanged={configChanged} /></ApiProvider>);
-    const checkbox = await screen.findByRole('checkbox', { name: 'I am an authorized Microsoft-internal Agency user' });
-    await waitFor(() => expect(checkbox).toBeEnabled());
+    await expandCli('Agency');
+    expandPreferences();
+    const checkbox = await screen.findByRole('checkbox', { name: 'Show unavailable IDE features (experimental)' });
     expect(checkbox).not.toBeChecked();
     expect(preferences).not.toHaveBeenCalled();
     fireEvent.click(checkbox);
     expect(await screen.findByRole('button', { name: 'Use Agency' })).toBeEnabled();
+    expect(screen.getByText('Microsoft internal only')).toBeInTheDocument();
     expect(checkbox).toBeChecked();
-    expect(preferences).toHaveBeenCalledWith({ allowInternalAgency: true });
-    expect(configChanged).toHaveBeenCalledOnce();
+    expect(preferences).not.toHaveBeenCalled();
+    expect(configChanged).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
     expect(switcher).not.toHaveBeenCalled();
-    preferences.mockRejectedValueOnce(new Error('Choose another CLI before disabling Agency'));
     fireEvent.click(checkbox);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Choose another CLI');
-    expect(checkbox).toBeChecked();
+    expect(checkbox).not.toBeChecked();
   });
   it('lists only eligible providers, active selection and install commands without mutating on mount', async () => {
     const h = mount();
     expect(await screen.findByText('Active CLI:')).toHaveTextContent('Copilot');
     expect(screen.queryByText('Agency')).toBeNull();
-    expect(screen.getByText('Not installed')).toBeTruthy();
-    expect(screen.getByText(info.providers[1].installCommand!)).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Uninstalled CLIs' })).toBeInTheDocument();
+    expect(screen.queryByText(info.providers[1].installCommand!)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use Copilot' })).toBeNull();
+    await expandCli('Copilot');
     expect(screen.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
     expect(h.select).not.toHaveBeenCalled();
     expect(h.stop).not.toHaveBeenCalled();
+    await expandCli('Claude Code');
     expect(screen.getByRole('button', { name: 'Use Claude Code' })).toBeDisabled();
     expect(h.switcher).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Open CLI setup' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'About Claude Code' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent(info.providers[1].installCommand!);
   });
 
   it('preserves active selection on 409 and network errors', async () => {
     const h = mount({ ...info, providers: info.providers.map((provider) => ({ ...provider, installed: true })) });
+    await expandCli('Claude Code');
     h.switcher.mockRejectedValueOnce(new ApiError(409, 'Stop terminal first.'));
     fireEvent.click(await screen.findByRole('button', { name: 'Use Claude Code' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Stop CLI work and switch' }));
@@ -129,9 +147,11 @@ describe('CLI settings', () => {
 
   it('stops idle warm workers only after a click and refreshes before enabling selection', async () => {
     const h = mount({ ...info, blockers: [{ kind: 'warm-pool', id: 'pool', label: 'idle warm pool' }] });
+    await expandCli('Claude Code');
     expect(await screen.findByRole('button', { name: 'Use Claude Code' })).toBeDisabled();
     expect(h.stop).not.toHaveBeenCalled();
     h.bootstrap.mockResolvedValue(info);
+    fireEvent.click(screen.getByText('Switching requirements (1)', { selector: 'summary' }));
     fireEvent.click(screen.getByRole('button', { name: 'Stop idle background CLI workers' }));
     await waitFor(() => expect(h.bootstrap).toHaveBeenCalledTimes(2));
     expect(h.stop).toHaveBeenCalledTimes(1);
@@ -139,6 +159,8 @@ describe('CLI settings', () => {
 
   it('never offers to stop interactive work and keeps failed idle stops explicit', async () => {
     const h = mount({ ...info, blockers: [{ kind: 'probe', id: 'p', label: 'probe' }] });
+    await expandCli('Claude Code');
+    fireEvent.click(screen.getByText('Switching requirements (1)', { selector: 'summary' }));
     h.stop.mockRejectedValue(new ApiError(409, 'Probe is busy.'));
     fireEvent.click(await screen.findByRole('button', { name: 'Stop idle background CLI workers' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Probe is busy.');
@@ -156,5 +178,32 @@ describe('CLI settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh CLI status' }));
     expect(await screen.findByText('bootstrap unavailable')).toBeTruthy();
     expect(h.select).not.toHaveBeenCalled();
+  });
+
+  it('keeps all provider settings collapsed and opens static documentation without starting CLI work', async () => {
+    const settings = vi.fn(() => <label>Executable<input aria-label="CLI executable" /></label>);
+    const api = createApiClient();
+    const bootstrap = vi.spyOn(api, 'getProviderBootstrap').mockResolvedValue(info);
+    const select = vi.spyOn(api, 'selectProvider');
+    const switcher = vi.spyOn(api, 'switchProvider');
+    render(<ApiProvider value={api}><CliSection renderProviderSettings={settings} /></ApiProvider>);
+    const toggle = await screen.findByRole('button', { name: 'Copilot settings' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('textbox', { name: 'CLI executable' })).toBeNull();
+    expect(settings).not.toHaveBeenCalled();
+    expect(screen.getByRole('checkbox').closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('button', { name: 'About CLI settings' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('waits for confirmed exit');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('textbox', { name: 'CLI executable' })).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('textbox', { name: 'CLI executable' })).toBeNull();
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
+    expect(switcher).not.toHaveBeenCalled();
   });
 });

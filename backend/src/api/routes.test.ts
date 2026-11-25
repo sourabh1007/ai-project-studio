@@ -119,6 +119,17 @@ function deps(): ApiRoutesDeps {
   };
 }
 
+it('registers optional incremental Planner tracking routes', () => {
+  const routes = createApiRoutes({ ...deps(), plannerTracking: { tracker: {} as never, store: {} as never } });
+  expect(routes.some((route) => route.path === '/planner/tracking')).toBe(true);
+  expect(routes.some((route) => route.path === '/planner/tasks/:taskId/evidence')).toBe(true);
+});
+
+it('registers prompt usage with composition-owned storage and the configured history bound', () => {
+  const routes = createApiRoutes({ ...deps(), promptUsage: {} as never });
+  expect(routes.some((route) => route.method === 'get' && route.path === '/prompt-usage')).toBe(true);
+});
+
 describe('createApiRoutes', () => {
   it('wires a metadata-only catalog with configured and default exposure policies', async () => {
     const entry = { id: 'git', label: 'Git', category: 'repository' as const, description: 'Git',
@@ -239,6 +250,7 @@ describe('createApiRoutes', () => {
       'delete /groups/:groupId',
       'post /tree/move',
       'get /features/:featureId/pr-review',
+      'post /features/:featureId/pr-review/prepare',
       'post /features/:featureId/pr-review/refresh',
       'post /features/:featureId/pr-review/pull-latest',
       'post /features/:featureId/pr-review/steps/:step/retry',

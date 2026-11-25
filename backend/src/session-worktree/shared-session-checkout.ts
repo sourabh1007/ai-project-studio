@@ -106,6 +106,13 @@ export function createSharedCheckoutPreparer(deps: {
           report(`Branch ${target.ref} was not found, so the session opened on the current branch instead.`);
           return cwd;
         }
+        if (!target.checkoutPath) {
+          const unmerged = await deps.git(['-C', cwd, 'ls-files', '--unmerged', '-z'], report);
+          if (unmerged.code === 0 && unmerged.stdout.length > 0) {
+            report('The session opened on the current checkout because Git has unresolved merge conflicts. No conflicts were reset or discarded. Resolve them here before switching branches.');
+            return cwd;
+          }
+        }
         // Recovery preserves existing files and only provisions missing trees.
         const recovered = await deps.recover?.({ target, cwd, report, confirm });
         if (recovered) return recovered;

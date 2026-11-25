@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 describe('PlannerView', () => {
-  it('disables AI planning and review for an interactive-only CLI while keeping task editing and sessions usable', async () => {
+  it('hides unavailable AI planning and review while keeping task editing and sessions usable', async () => {
     const api = client({
       getProviderBootstrap: vi.fn().mockResolvedValue({
         defaultProvider: 'interactive-cli', providers: [{ id: 'interactive-cli', installed: true,
@@ -94,9 +94,9 @@ describe('PlannerView', () => {
     }, [task({ kind: 'pr', prUrl: 'https://github.com/acme/app/pull/42' })]);
     render(<ApiProvider value={api}><AutomationReadinessProvider><PlannerView onLaunch={vi.fn()} /></AutomationReadinessProvider></ApiProvider>);
     await screen.findByText(/Automation policy cannot be verified/);
-    expect(screen.getByRole('button', { name: 'AI summary' })).toBeDisabled();
-    expect(screen.getByTitle('Plan with the New Task agent')).toBeDisabled();
-    expect(screen.getByTitle('Review the pull request')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'AI summary' })).toBeNull();
+    expect(screen.queryByTitle('Plan with the New Task agent')).toBeNull();
+    expect(screen.queryByTitle('Review the pull request')).toBeNull();
     expect(screen.getByTitle('Start a working session')).toBeEnabled();
     expect(screen.getByRole('combobox', { name: 'New task' })).toBeEnabled();
     expect(api.createPlannerTask).not.toHaveBeenCalled();

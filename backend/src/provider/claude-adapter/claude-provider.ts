@@ -1,6 +1,6 @@
 import type { Logger } from '../../kernel/logger.js';
 import { ProviderError } from '../../kernel/error-types.js';
-import type { IAIProvider, ImportableSession, SessionSpec } from '../provider-contract.js';
+import type { HeadlessMcpPolicy, IAIProvider, ImportableSession, SessionSpec } from '../provider-contract.js';
 import type { ProcessSpawner } from '../process-kernel/process-spawner.js';
 import { toRunningSession } from '../process-kernel/running-session.js';
 import { CLAUDE_NAMESPACE, type ClaudeConfig } from './config.js';
@@ -18,12 +18,13 @@ export interface ClaudeAdapterDeps {
   /** Verified by the native `auth status` probe, not by reading credentials. */
   authMethod?: () => string | null;
   sessionOptions?: (spec: SessionSpec) => ClaudeSessionOptions;
+  mcpPolicy?: HeadlessMcpPolicy;
   /** Cache only; injected IO/worker refresh happens outside request handling. */
   listImportableSessions?: () => ImportableSession[];
 }
 
 export const CLAUDE_AUTH_NOTICE =
-  'Native Claude Code sign-in is supported in the unmodified CLI. Application-automated headless runs require your own Anthropic API key or supported cloud provider credentials; Claude.ai OAuth credentials must not be collected or intermediated by this application.';
+  'Native mode delegates sign-in to the unmodified Claude Code CLI. Isolated programmatic runs require your own Anthropic API key or supported cloud provider credentials. Studio never collects, stores or intermediates Claude.ai credentials or session tokens.';
 
 export function assertClaudeHeadlessAuth(
   env: Record<string, string | undefined>,
@@ -66,8 +67,7 @@ export function parseClaudeAuthStatus(line: string) {
   return {
     authenticated: record.loggedIn,
     method: record.authMethod,
-    headlessSupported: record.loggedIn &&
-      ['api_key', 'api_key_helper', 'third_party'].includes(record.authMethod),
+    headlessSupported: record.loggedIn,
   };
 }
 
@@ -90,14 +90,16 @@ export function createClaudeProvider(config: ClaudeConfig, deps: ClaudeAdapterDe
     },
     startSession(spec) {
       deps.assertReady?.();
-      assertClaudeHeadlessAuth(deps.baseEnv, deps.authMethod?.() ?? null);
-      const args = buildClaudeArgs(spec, config, false, deps.sessionOptions?.(spec));
+      if (deps.mcpPolicy === 'isolated') assertClaudeHeadlessAuth(deps.baseEnv, deps.authMethod?.() ?? null);
+      const args = buildClaudeArgs(spec, config, false, {
+        ...deps.sessionOptions?.(spec), mcpPolicy: deps.mcpPolicy ?? 'native',
+      });
       const handle = normalizeClaudeSession(deps.spawner.spawn({
         command: config.executable,
         args,
         env: buildClaudeEnv(deps.baseEnv),
         cwd: spec.cwd,
-        stdin: 'ignore',
+        ...(spec.noTools ? { input: spec.prompt } : { stdin: 'ignore' as const }),
       }));
       handle.onExit((code) => {
         if (code !== 0) {

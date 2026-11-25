@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useStartupPending } from '../app/desktop-lifecycle.js';
 import { Terminal } from '@xterm/xterm';
 import type { ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -26,7 +27,7 @@ import {
   type TerminalInputRecord,
   type TerminalInputSource,
 } from '../lib/terminal-input-diagnostics.js';
-import { ActivityIcon } from './icons.js';
+import { ActivityIcon, TrashIcon } from './icons.js';
 import { Button, Modal } from './ui.js';
 import {
   toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage, copyFailureMessage,
@@ -219,9 +220,13 @@ async function readClipboardAttachment(sessionId: string): Promise<ClipboardAtta
 export function TerminalView({
   sessionId,
   onExit,
+  diagnosticsOpen = false,
+  onCloseDiagnostics,
 }: {
   sessionId: string;
   onExit?: (code: number | null) => void;
+  diagnosticsOpen?: boolean;
+  onCloseDiagnostics?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const focusTokenRef = useRef(0);
@@ -248,21 +253,15 @@ export function TerminalView({
   const [traceEnabled, setTraceEnabled] = useState(false);
   const [inputRecords, setInputRecords] = useState<TerminalInputRecord[]>([]);
   const sendEscapeRef = useRef<(() => void) | null>(null);
+  const clearInputRef = useRef<(() => boolean) | null>(null);
+  const diagnosticsShown = showDiagnostics || diagnosticsOpen;
   const healthProblem = health?.connection === 'unresponsive' || (health?.pendingInputSeconds ?? 0) >= 10;
   const preparing = ['connecting', 'bootstrapping', 'reconnecting'].includes(connectionStatus.state);
-  // The steady "Terminal connection live" state is pure noise, so hide the
-  // status strip (and its diagnostics toggle) by default when everything is
-  // healthy. It reappears automatically for startup, connecting, notices and
-  // any health problem, and stays visible while diagnostics are open.
-  const healthyIdle = !startupDetail
-    && connectionStatus.state === 'ready'
-    && !!health
-    && health.connection === 'live'
+  useStartupPending(preparing && !worktreeSelection && !connectionStatus.notice);
+  const statusHidden = connectionStatus.state === 'ready'
     && !healthProblem
-    && !health.quiet
-    && !preparing
-    && !connectionStatus.notice;
-  const statusHidden = healthyIdle && !showDiagnostics;
+    && !connectionStatus.notice
+    && !diagnosticsShown;
   useEffect(() => {
     setStartupSeconds(0);
     if (!preparing) return;
@@ -350,6 +349,7 @@ export function TerminalView({
       // cursor stays visible regardless of focus.
       cursorStyle: 'block',
       cursorInactiveStyle: 'block',
+      altClickMovesCursor: true,
       fontFamily: appearanceRef.current.fontFamily,
       fontSize: appearanceRef.current.fontSize,
       lineHeight: 1.2,
@@ -933,6 +933,12 @@ export function TerminalView({
         })();
       }, 0);
     };
+    clearInputRef.current = () => {
+      if (disposed || pendingTextPaste || !delivery.writable() || hasOpenModalDialog()) return false;
+      focusTerminal(false);
+      if (!host.contains(document.activeElement)) return false;
+      return delivery.offer('\x01\x0b');
+    };
 
     // Bridge-based paste for the right-click path only (a context-menu paste
     // fires no native `paste` event, so xterm won't handle it). This path is
@@ -1370,6 +1376,7 @@ export function TerminalView({
       cancelTextPasteRef.current = null;
       window.clearInterval(healthTimer);
       sendEscapeRef.current = null;
+      clearInputRef.current = null;
       window.clearTimeout(reconnectTimer);
       window.clearTimeout(handshakeTimer);
       window.clearTimeout(webglRetryTimer);
@@ -1429,7 +1436,7 @@ export function TerminalView({
         <Button variant="secondary" onClick={() => worktreeSelection.respond(null)}>Cancel launch</Button>
       </div>
     </Modal>}
-    <div role="status" aria-live="polite" className={statusHidden ? 'terminal-status terminal-status--idle' : 'terminal-status'} style={{ flexShrink: 0, fontSize: 12 }}>
+    {!statusHidden && <div role="status" aria-live="polite" className="terminal-status" style={{ flexShrink: 0, fontSize: 12 }}>
       {preparing && <span className="spinner" aria-hidden="true" style={{ marginRight: 6 }} />}
       {startupDetail || (connectionStatus.state === 'ready' && health
         ? health.connection === 'unresponsive' ? 'Backend heartbeat missing'
@@ -1452,9 +1459,12 @@ export function TerminalView({
       {(connectionStatus.state === 'failed' || connectionStatus.state === 'closed') &&
         <button onClick={() => setConnectionAttempt((value) => value + 1)}>Reconnect (input is not replayed)</button>}
       {connectionStatus.state === 'ready' &&
-        <button type="button" className="terminal-diagnostics-toggle" aria-label="Session diagnostics" title="Session diagnostics" aria-expanded={showDiagnostics || healthProblem} onClick={() => setShowDiagnostics((value) => !value)}><ActivityIcon size={14} /></button>}
-    </div>
-    {connectionStatus.state === 'ready' && health && (showDiagnostics || healthProblem) &&
+        <button type="button" className="terminal-diagnostics-toggle" aria-label="Session diagnostics" title="Session diagnostics" aria-expanded={diagnosticsShown || healthProblem} onClick={() => {
+          setShowDiagnostics(!diagnosticsShown);
+          if (diagnosticsShown) onCloseDiagnostics?.();
+        }}><ActivityIcon size={14} /></button>}
+    </div>}
+    {connectionStatus.state === 'ready' && health && (diagnosticsShown || healthProblem) &&
       <section className="terminal-diagnostics" aria-label="Session diagnostics">
         <dl>
           <dt>Backend connection</dt><dd>{health.connection === 'live'
@@ -1496,6 +1506,14 @@ export function TerminalView({
     {textPasteNotice && <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>{textPasteNotice}</div>}
     {attachmentError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{attachmentError}</div>}
     {copyError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{copyError}</div>}
-    <div className="terminal-host" style={{ flex: 1, minHeight: 0 }} ref={hostRef} />
+    <div className="terminal-viewport">
+      <div className="terminal-host" style={{ position: 'relative', inset: 'auto', flex: 1, minHeight: 0 }} ref={hostRef} />
+      <Button variant="ghost" className="terminal-clear-input" ariaLabel="Clear input line"
+        title="Clear the current input line (Ctrl+A, Ctrl+K). Use at the CLI prompt; does not submit or interrupt."
+        disabled={connectionStatus.state !== 'ready' || savingTextPaste}
+        onClick={() => {
+          if (!clearInputRef.current?.()) setAttachmentError('Clear input was not sent. Wait for the terminal to be ready and retry explicitly.');
+        }}><TrashIcon size={13} /></Button>
+    </div>
   </div>;
 }

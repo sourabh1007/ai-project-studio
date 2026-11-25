@@ -118,6 +118,12 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
 
 /** Aggregate warm-pool status for the settings surface. */
 export interface MetaPoolsStatus {
+  availability?: {
+    state: 'disabled' | 'unavailable' | 'starting' | 'running' | 'failed';
+    providerId: string;
+    message: string;
+  };
+  history?: { samples: import('./capacity-history.js').CapacityPoint[]; error: string | null };
   /** Shared native headless reservations; interactive PTYs and descendants are excluded. */
   processAdmission?: {
     processes: number;

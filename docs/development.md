@@ -453,6 +453,11 @@ download, signature, installer, account or native upgrade.
   name, SHA-256 and byte size, with `qualification: "passed"` and, for signed
   candidates, `signatureVerification: "passed"`. The current generator's pending
   qualification state is deliberately insufficient for automatic installation.
+  Release checks validate that manifest before offering automatic installation.
+  Missing trust or qualification is shown in the update banner and Settings;
+  the sole guided action opens the release page without downloading an
+  installer, stopping the backend, or quitting. Installer bytes and signatures
+  are still checked again at download and execution boundaries.
 - **macOS:** release detection/notes and guided download/install remain the
   supported path, including when signed. There is no promised automatic ZIP,
   Squirrel, blockmap or differential installation.
@@ -474,6 +479,16 @@ installer qualification; do not run it against a live profile as a unit test.
 ## Debugging the desktop app
 - `npm run desktop` prints backend logs prefixed with `[backend]`, including the dynamic API port (`… API listening on http://127.0.0.1:<port>/api`).
 - Verify the backend is up: `curl http://127.0.0.1:<port>/api/providers`.
+- AI readiness waits for the selected CLI, not an unrelated CLI's pending
+  checks. A failed readiness request shows its reason and **Refresh automation
+  readiness** directly; an unknown status is not reported as missing CLI setup.
+- Main and detached windows recover from renderer crashes without restarting the
+  backend. Two consecutive automatic reloads are allowed; further crashes show a
+  lightweight **Reload interface** page instead of looping. A healthy app load
+  resets the budget after one minute. Unresponsive windows offer **Wait** or
+  **Reload interface**; unsent input can be lost when reloading. Renderer exit
+  reasons and recovery failures survive restart in the bounded
+  `<userData>/logs/desktop-renderer.log`.
 - Kill a stray Electron: find the PID (`Get-Process electron`) and `Stop-Process -Id <pid>`.
 
 ## Environment quirks

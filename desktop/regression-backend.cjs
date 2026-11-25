@@ -33,7 +33,8 @@ function start(env = process.env) {
     } else if (req.url === '/') {
       res.setHeader('Content-Type', 'text/html');
       res.end(`<!doctype html><html><head><title>Isolated desktop smoke</title></head>
-        <body data-fixture="${marker.token}">Synthetic backend; no AI providers.</body></html>`);
+        <body data-fixture="${marker.token}">Synthetic backend; no AI providers.
+        <script>window.desktop?.ready?.();</script></body></html>`);
     } else if (req.method === 'POST' && req.url === '/api/shutdown') {
       res.setHeader('Content-Type', 'application/json');
       res.writeHead(202).end(JSON.stringify({ status: 'shutting-down' }));

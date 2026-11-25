@@ -47,4 +47,42 @@ describe('meta operation result routes with actual SQLite', () => {
     expect(await routes[1].handler(request())).toMatchObject({ status: 400 });
     expect(await routes[1].handler(request({ params: { operationId: 'missing' } }))).toMatchObject({ status: 404 });
   });
+  it('filters hidden provider rows before pagination and applies the same exposure rule to details', async () => {
+    const repo = createMetaOperationRepo(db);
+    repo.create({ ...repo.get('operation')!, operationId: 'agency', providerId: 'agency' });
+    repo.create({ ...repo.get('operation')!, operationId: 'unknown', providerId: null });
+    let signedIn = false;
+    routes = createMetaOperationsRoutes({ operations: repo, config: metaOperationsDefaults, microsoftSignedIn: () => signedIn });
+    expect(await routes[0].handler(request({ query: { limit: '1' } }))).toMatchObject({
+      body: { items: [{ operationId: 'operation' }], nextCursor: 'operation' },
+    });
+    expect(await routes[0].handler(request({ query: { after: 'operation', limit: '1' } }))).toMatchObject({
+      body: { items: [{ operationId: 'unknown' }], nextCursor: 'unknown' },
+    });
+    expect(await routes[1].handler(request({ params: { operationId: 'agency' } }))).toMatchObject({ status: 404 });
+    signedIn = true;
+    expect(await routes[1].handler(request({ params: { operationId: 'agency' } }))).toMatchObject({ status: 200 });
+    routes = createMetaOperationsRoutes({ operations: repo, config: metaOperationsDefaults });
+    expect(await routes[1].handler(request({ params: { operationId: 'agency' } }))).toMatchObject({ status: 200 });
+  });
+  it.each([
+    { from: '2026-01-01T00:00:00.000Z' }, { to: '2026-01-01T00:00:00.000Z' },
+    { from: 'invalid', to: 'invalid' },
+    { from: '2026-02-01T00:00:00.000Z', to: '2026-01-01T00:00:00.000Z' },
+    { from: '2024-01-01T00:00:00.000Z', to: '2026-01-01T00:00:00.000Z' },
+  ])('rejects malformed or oversized analytical windows %j', async (query) => {
+    expect(await routes[0].handler(request({ query }))).toMatchObject({ status: 400 });
+  });
+  it('filters bounded run and agent histories without parsing labels', async () => {
+    const repo = createMetaOperationRepo(db);
+    repo.create({ ...repo.get('operation')!, operationId: 'typed', createdAt: '2026-01-15T00:00:00.000Z',
+      correlation: { runId: 'r', agentId: 'review-board', perspectiveId: 'security' } });
+    expect(await routes[0].handler(request({ query: { featureId: 'f', agentId: 'review-board', runId: 'r',
+      from: '2026-01-01T00:00:00.000Z', to: '2026-02-01T00:00:00.000Z' } })))
+      .toMatchObject({ status: 200, body: { items: [{ operationId: 'typed', correlation: { runId: 'r' } }] } });
+    expect(repo.get('typed')?.correlation).toEqual({ runId: 'r', agentId: 'review-board', perspectiveId: 'security' });
+    expect(repo.listPage({ runId: 'other' }, null, 10).items).toEqual([]);
+    expect(await routes[0].handler(request({ query: { from: '2026-01-15T00:00:00Z', to: '2026-01-15T00:00:00.001Z' } })))
+      .toMatchObject({ status: 200, body: { items: [{ operationId: 'typed' }] } });
+  });
 });

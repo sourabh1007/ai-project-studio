@@ -48,6 +48,20 @@ test('HTTP cache capability exposes only its fixed IPC invocation, not caller op
   assert.deepEqual(calls, [{ kind: 'invoke', args: ['resources:clearHttpCache'] }]);
 });
 
+test('lifecycle IPC announces readiness and subscribes only to supported states', () => {
+  const { bridge, calls, ipcRenderer } = loadPreload();
+  bridge.ready();
+  assert.deepEqual(calls, [{ kind: 'send', args: ['app:ready'] }]);
+  const states = [];
+  const stop = bridge.onLifecycleState((state) => states.push(state));
+  ipcRenderer.emit('app:lifecycle', {}, 'closing');
+  ipcRenderer.emit('app:lifecycle', {}, 'unknown');
+  ipcRenderer.emit('app:lifecycle', {}, 'running');
+  assert.deepEqual(states, ['closing', 'running']);
+  stop();
+  assert.equal(ipcRenderer.listenerCount('app:lifecycle'), 0);
+});
+
 test('real preload composes retained-image, diagnostics, clipboard, restart, and update journeys', async () => {
   const { bridge, calls, ipcRenderer } = loadPreload();
 

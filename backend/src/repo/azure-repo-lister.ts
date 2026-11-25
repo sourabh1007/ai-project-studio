@@ -101,19 +101,21 @@ export function parseAzureRepoLocation(
   }
 
   const host = url.hostname.toLowerCase();
-  const segments = url.pathname.split('/').filter(Boolean);
+  const segments = url.pathname.split('/').filter(Boolean).map((part) => {
+    try { return decodeURIComponent(part); } catch { return part; }
+  });
   const gitIndex = segments.indexOf('_git');
   const repo = gitIndex >= 0 ? (segments[gitIndex + 1] ?? null) : null;
   if (host.endsWith('.visualstudio.com')) {
     return {
       org: host.split('.')[0] || null,
-      project: gitIndex > 0 ? segments[0] : null,
+      project: gitIndex > 0 ? segments[gitIndex - 1] : gitIndex === 0 ? repo : segments[0] ?? null,
       repo,
     };
   }
   return {
     org: segments[0] ?? null,
-    project: gitIndex > 1 ? segments[1] : null,
+    project: gitIndex > 1 ? segments[gitIndex - 1] : gitIndex === 1 ? repo : segments[1] ?? null,
     repo,
   };
 }
@@ -178,31 +180,37 @@ export async function listAzureRepos(
   deps: { token: AzureTokenGetter; httpGet: AzureHttpGetter },
   org: string,
 ): Promise<RemoteRepo[]> {
-  const trimmed = parseAzureRepoLocation(org).org;
+  const location = parseAzureRepoLocation(org);
+  const trimmed = location.org;
   if (!trimmed) {
     throw new ValidationError('Enter an Azure DevOps organization to load repositories.');
   }
   const token = await deps.token(trimmed);
   if (!token) {
     throw new AuthRequiredError(
-      'Not signed in to Azure DevOps. Sign in first, then try again.',
+      `Studio could not obtain a usable Azure DevOps credential for organization "${trimmed}". Other organizations may still be connected. Check the organization (not the project), or paste the full repository URL, then sign in for that organization.`,
       'azure-devops',
     );
   }
 
-  const res = await deps.httpGet(repositoriesUrl(trimmed), token);
-  if (res.status === 401 || res.status === 403) {
-    // The cached token is missing or expired for this org — prompt a re-sign-in
-    // (HTTP 401) rather than surfacing a generic failure.
+  const target = location.project
+    ? `https://dev.azure.com/${encodeURIComponent(trimmed)}/${encodeURIComponent(location.project)}/_apis/git/repositories${location.repo ? `/${encodeURIComponent(location.repo)}` : ''}?api-version=${API_VERSION}`
+    : repositoriesUrl(trimmed);
+  const res = await deps.httpGet(target, token);
+  if (res.status === 401) {
     throw new AuthRequiredError(
-      'Your Azure DevOps sign-in has expired or lacks access to this ' +
-        'organization. Sign in again, then try again.',
+      `Your Azure DevOps sign-in for organization "${trimmed}" was rejected. Check the organization or repository URL and sign in with the account that has access.`,
       'azure-devops',
+    );
+  }
+  if (res.status === 403) {
+    throw new ProviderError(
+      `Azure DevOps denied repository access in organization "${trimmed}". Your signed-in account may differ from your browser account. Check project/repository permissions or sign in with a different account.`,
     );
   }
   if (res.status === 404) {
     throw new ProviderError(
-      `Azure DevOps organization "${trimmed}" was not found or you do not have access. Check the organization name and sign in again if needed.`,
+      `Azure DevOps location "${[trimmed, location.project, location.repo].filter(Boolean).join('/')}" was not found or you do not have access. Check the organization, project and repository URL.`,
     );
   }
   if (res.status !== 200) {
@@ -212,7 +220,7 @@ export async function listAzureRepos(
   }
 
   const repos: RemoteRepo[] = [];
-  for (const repo of extractValue<AdoRepository>(res.body)) {
+  for (const repo of location.repo ? [res.body as AdoRepository] : extractValue<AdoRepository>(res.body)) {
     const name = repo?.name;
     const project = repo?.project?.name;
     if (!name || !project || repo.isDisabled) {

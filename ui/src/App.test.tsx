@@ -4,6 +4,12 @@ import { ApiProvider } from './app/api-context.js';
 import { App } from './App.js';
 import type { ApiClient } from './lib/api.js';
 import type { Feature, Repository, Session } from './lib/types.js';
+import { useActivity } from './hooks/use-activity.js';
+import { OPEN_PROMPT_USAGE_EVENT, type PromptUsageTarget } from './features/usage/prompt-usage.js';
+
+vi.mock('./features/usage/usage-view.js', () => ({
+  UsageView: ({ promptTarget }: { promptTarget?: PromptUsageTarget }) => <div>Usage target {promptTarget?.promptRef} {promptTarget?.nonce}</div>,
+}));
 
 vi.mock('./hooks/use-usage-stream.js', () => ({
   useUsageStream: () => ({
@@ -34,7 +40,7 @@ vi.mock('./hooks/use-plan-usage.js', () => ({
   usePlanUsage: () => ({ status: 'ready', usage: null, error: null }),
 }));
 vi.mock('./hooks/use-activity.js', () => ({
-  useActivity: () => ({ pending: 0, error: null, label: null }),
+  useActivity: vi.fn(() => ({ pending: 0, error: null, label: null })),
 }));
 vi.mock('./hooks/use-ui-preferences.js', () => ({
   useApplyUiPreferences: () => undefined,
@@ -53,9 +59,6 @@ vi.mock('./features/status-bar/meta-model-status.js', () => ({
 }));
 vi.mock('./components/plan-usage-indicator.js', () => ({
   PlanUsageIndicator: () => null,
-}));
-vi.mock('./components/top-loading-bar.js', () => ({
-  TopLoadingBar: () => null,
 }));
 vi.mock('./components/connection-banner.js', () => ({
   ConnectionBanner: () => null,
@@ -236,6 +239,7 @@ function renderApp(client = apiClient()) {
 describe('App workspace tab persistence', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    vi.mocked(useActivity).mockReturnValue({ pending: 0, error: null, label: null });
   });
 
   // Every view is behind React.lazy + Suspense, so the first paint of a view
@@ -246,6 +250,23 @@ describe('App workspace tab persistence', () => {
   const findView = (text: string) => screen.findByText(text, undefined, LAZY_VIEW_TIMEOUT);
   const findControl = (name: string) =>
     screen.findByRole('button', { name }, LAZY_VIEW_TIMEOUT);
+
+  it('opens unified Usage at the requested prompt, including repeated links', async () => {
+    renderApp();
+    await findControl('Open session tab');
+    fireEvent(globalThis.window, new CustomEvent(OPEN_PROMPT_USAGE_EVENT, { detail: 'featureTasks.promptTemplate' }));
+    expect(await findView('Usage target featureTasks.promptTemplate 1')).toBeVisible();
+    fireEvent(globalThis.window, new CustomEvent(OPEN_PROMPT_USAGE_EVENT, { detail: 'featureTasks.promptTemplate' }));
+    expect(await findView('Usage target featureTasks.promptTemplate 2')).toBeVisible();
+  });
+
+  it('keeps activity in the status bar without a top loading strip', async () => {
+    vi.mocked(useActivity).mockReturnValue({ pending: 3, error: null, label: 'Refreshing workspace' });
+    const { container } = renderApp();
+    await findControl('Open session tab');
+    expect(container.querySelector('.top-loading-bar')).toBeNull();
+    expect(screen.getByText('Refreshing workspace')).toBeVisible();
+  });
 
   it('keeps open tabs and the active tab across top-level navigation', async () => {
     renderApp();

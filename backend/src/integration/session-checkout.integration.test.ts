@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createSharedCheckoutPreparer, type GitRunResult } from '../session-worktree/shared-session-checkout.js';
+import { provisionPrWorktree, prWorktreePath } from '../repo/pr-worktree-provisioner.js';
 
 const git = (args: string[]): Promise<GitRunResult> => new Promise((resolve) => {
   execFile('git', args, { timeout: 20_000, windowsHide: true }, (error, stdout, stderr) =>
@@ -18,6 +20,53 @@ const commit = (cwd: string) => run([
   '-C', cwd, '-c', 'user.name=Session Test', '-c', 'user.email=session@example.invalid',
   '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture',
 ]);
+
+it('imports an orphaned PR directory without deleting files or disturbing edited recovery checkouts', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'pr-orphan-recovery-'));
+  const source = join(base, 'app');
+  const original = prWorktreePath(source, 7);
+  try {
+    await run(['init', '-b', 'master', source]);
+    await run(['-C', source, 'config', 'core.autocrlf', 'false']);
+    await writeFile(join(source, 'file.txt'), 'PR snapshot\n');
+    await run(['-C', source, 'add', '.']); await commit(source);
+    await run(['-C', source, 'branch', 'topic']);
+    await run(['-C', source, 'remote', 'add', 'origin', source]);
+    const head = await run(['-C', source, 'rev-parse', 'HEAD']);
+    await run(['-C', source, 'update-ref', 'refs/pull/7/head', head]);
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, 'notes.txt'), 'Preserve orphaned local files\n');
+    const input = { repoLocalPath: source, provider: 'github' as const, number: 7, sourceBranch: 'topic' };
+    const deps = { git, pathExists: existsSync };
+    const first = await provisionPrWorktree(deps, input);
+    expect(first.worktreePath).not.toBe(original);
+    expect(await readFile(join(original, 'notes.txt'), 'utf8')).toBe('Preserve orphaned local files\n');
+    await expect(access(join(original, '.git'))).rejects.toThrow();
+    expect(await run(['-C', first.worktreePath, 'rev-parse', 'HEAD'])).toBe(head);
+    expect(await readFile(join(first.worktreePath, 'file.txt'), 'utf8')).toBe('PR snapshot\n');
+    expect(await provisionPrWorktree(deps, input)).toEqual(first);
+    await writeFile(join(first.worktreePath, 'file.txt'), 'Unsaved recovery checkout edits\n');
+    const second = await provisionPrWorktree(deps, input);
+    expect(second.worktreePath).not.toBe(first.worktreePath);
+    expect(await readFile(join(first.worktreePath, 'file.txt'), 'utf8')).toBe('Unsaved recovery checkout edits\n');
+    expect(await provisionPrWorktree(deps, input)).toEqual(second);
+    expect(await run(['-C', source, 'branch', '--show-current'])).toBe('master');
+    expect(await run(['-C', source, 'rev-parse', 'topic'])).toBe(head);
+    await writeFile(join(source, 'file.txt'), 'Updated PR snapshot\n');
+    await run(['-C', source, 'add', '.']); await commit(source);
+    const updated = await run(['-C', source, 'rev-parse', 'HEAD']);
+    await run(['-C', source, 'update-ref', 'refs/pull/7/head', updated]);
+    await run(['-C', source, 'update-ref', 'refs/heads/topic', updated]);
+    const latest = await provisionPrWorktree(deps, input);
+    expect(latest.worktreePath).not.toBe(second.worktreePath);
+    expect(latest.headSha).toBe(updated);
+    expect(await readFile(join(latest.worktreePath, 'file.txt'), 'utf8')).toBe('Updated PR snapshot\n');
+    expect(await readFile(join(first.worktreePath, 'file.txt'), 'utf8')).toBe('Unsaved recovery checkout edits\n');
+    expect(await readFile(join(original, 'notes.txt'), 'utf8')).toBe('Preserve orphaned local files\n');
+  } finally {
+    await rm(base, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+}, 60_000);
 
 it('opens the same master directly, preserves local edits and reuses PR checkouts without copies', async () => {
   const base = await mkdtemp(join(tmpdir(), 'session-shared-'));

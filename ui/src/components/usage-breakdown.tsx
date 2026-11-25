@@ -12,6 +12,8 @@ import type { StoredUsage } from '../lib/types.js';
 import { Loader } from './loading.js';
 import { EmptyState, ErrorText, Modal } from './ui.js';
 import { ArrowDownIcon, ArrowUpIcon, UsageIcon } from './icons.js';
+import { Insights } from '../features/monitoring/insights.js';
+import { RecordedUsageInsights } from '../features/usage/usage-insights.js';
 
 /** The scope a usage breakdown is opened for. */
 export type UsageScope =
@@ -92,11 +94,12 @@ export function UsageBreakdownModal({
   onClose: () => void;
 }) {
   const api = useApi();
-  const { data, loading, error } = useAsync<StoredUsage[]>(
-    () => loadFor(api, scope),
+  const ownerKey = `${scope.kind}:${scope.id}`;
+  const { data, loading, error } = useAsync<{ key: string; events: StoredUsage[] }>(
+    () => loadFor(api, scope).then((events) => ({ key: ownerKey, events })),
     [scope.kind, scope.id],
   );
-  const events = data ?? [];
+  const events = data?.key === ownerKey ? data.events : [];
   const totals = useMemo(() => sum(events), [events]);
   const models = useMemo(() => byModel(events), [events]);
 
@@ -117,6 +120,7 @@ export function UsageBreakdownModal({
 
         {!loading && !error && events.length > 0 && (
           <>
+            <Insights title="Usage trends">{() => <RecordedUsageInsights key={ownerKey} events={events} />}</Insights>
             <div className="usage-breakdown-summary">
               <div className="usage-summary-item">
                 <span className="usage-summary-value">

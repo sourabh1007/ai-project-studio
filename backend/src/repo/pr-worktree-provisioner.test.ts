@@ -17,6 +17,11 @@ function gitRecorder(results: GitRunResult[]) {
   let i = 0;
   const git = (args: string[]): Promise<GitRunResult> => {
     calls.push(args);
+    if (args.includes('--show-prefix')) {
+      return Promise.resolve({ ...ok, stdout: 'true\n\n' });
+    }
+    if (args.includes('status')) return Promise.resolve(ok);
+    if (args.includes('show-ref')) return Promise.resolve({ ...ok, code: 1 });
     return Promise.resolve(results[i++] ?? ok);
   };
   return { git, calls };
@@ -33,6 +38,166 @@ describe('prWorktreePath', () => {
 });
 
 describe('provisionPrWorktree', () => {
+  it.each(['missing metadata', 'local edits'])('preserves an existing checkout with %s and creates a separate review worktree', async (reason) => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix') && args[1] === original && reason === 'missing metadata') {
+        recorder.calls.push(args);
+        return { code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' };
+      }
+      if (args.includes('status') && args[1] === original && reason === 'local edits') {
+        recorder.calls.push(args);
+        return { ...ok, stdout: ' M file.ts\0?? notes.txt\0' };
+      }
+      return recorder.git(args);
+    };
+    const statuses: ProvisionStatus[] = [];
+    const result = await provisionPrWorktree({ git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' }, (status) => statuses.push(status));
+    expect(result.worktreePath).not.toBe(original);
+    expect(result).toMatchObject({ headSha: 'abc123', tracksPullRequest: false });
+    expect(recorder.calls.some((args) => args.includes('checkout') && args.includes(original))).toBe(false);
+    const add = recorder.calls.find((args) => args.includes('worktree') && args.includes('add'))!;
+    expect(add).toContain('-b');
+    expect(add).not.toContain('--force');
+    expect(add).not.toContain('-B');
+    expect(statuses.some((status) => /preserv|keeping/i.test(status.message))).toBe(true);
+  });
+
+  it('explains a missing primary Git repository as a local checkout problem instead of a provider failure', async () => {
+    const { git } = gitRecorder([{ code: 128, stdout: '', stderr: 'fatal: not a git repository' }]);
+    await expect(provisionPrWorktree({ git, pathExists: () => true },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' }))
+      .rejects.toThrow(/local repository.*Settings/i);
+  });
+
+  it.each(['parent repository', 'empty root', 'unreadable status'])('does not reset a checkout with %s', async (scenario) => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix') && scenario !== 'unreadable status') {
+        recorder.calls.push(args);
+        return { ...ok, stdout: scenario === 'empty root' ? '' : 'true\nparent-subdirectory/\n' };
+      }
+      if (args.includes('status')) {
+        recorder.calls.push(args);
+        return { ...ok, code: 128, stderr: 'Cannot inspect the existing checkout' };
+      }
+      return recorder.git(args);
+    };
+    const result = await provisionPrWorktree({ git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' });
+    expect(result.worktreePath).not.toBe(original);
+    expect(recorder.calls.some((args) => args.includes('checkout'))).toBe(false);
+  });
+
+  it.each(['bad head', 'different head', 'detached', 'different branch', 'invalid metadata'])(
+    'preserves an occupied recovery checkout with %s', async (scenario) => {
+      const original = prWorktreePath(repoLocalPath, 12);
+      const occupied = join(dirname(original), `${basename(repoLocalPath)}-pr-r12-abc123-1`);
+      const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+      const git = async (args: string[]): Promise<GitRunResult> => {
+        if (args.includes('--show-prefix') && (args[1] === original || scenario === 'invalid metadata')) {
+          recorder.calls.push(args);
+          return { ...ok, code: 128, stderr: 'not a git repository' };
+        }
+        if (args[1] === occupied && args.at(-1) === 'HEAD' && args.includes('rev-parse')) {
+          recorder.calls.push(args);
+          return { ...ok, code: scenario === 'bad head' ? 128 : 0,
+            stdout: scenario === 'different head' ? 'other-commit' : 'abc123' };
+        }
+        if (args.includes('symbolic-ref')) {
+          recorder.calls.push(args);
+          return { ...ok, code: scenario === 'detached' ? 1 : 0, stdout: 'user-branch' };
+        }
+        return recorder.git(args);
+      };
+      const result = await provisionPrWorktree({ git, pathExists: (path) => path === original || path === occupied },
+        { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' });
+      expect(result.worktreePath).not.toBe(occupied);
+      expect(recorder.calls.some((args) => args.includes('checkout'))).toBe(false);
+    },
+  );
+
+  it('skips existing branches and a concurrently claimed recovery destination without forcing either', async () => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    let branches = 0;
+    let adds = 0;
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix')) {
+        recorder.calls.push(args); return { ...ok, code: 128 };
+      }
+      if (args.includes('show-ref')) {
+        recorder.calls.push(args); return { ...ok, code: ++branches === 1 ? 0 : 1 };
+      }
+      if (args.includes('add') && ++adds === 1) {
+        recorder.calls.push(args); return { ...ok, code: 128, stderr: 'a branch already exists' };
+      }
+      return recorder.git(args);
+    };
+    const result = await provisionPrWorktree({ git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' });
+    expect(result.worktreePath).toMatch(/-3$/);
+    expect(recorder.calls.flat()).not.toContain('--force');
+    expect(recorder.calls.flat()).not.toContain('-B');
+  });
+
+  it.each(['permission denied', ''])('surfaces a failed replacement checkout while preserving original files: %j', async (stderr) => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix') || args.includes('add')) {
+        return { ...ok, code: 128, stderr };
+      }
+      return recorder.git(args);
+    };
+    await expect(provisionPrWorktree({ git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' }))
+      .rejects.toThrow(stderr || 'Existing files were preserved');
+  });
+
+  it('does not create a worktree when the recovery branch cannot be inspected', async () => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix') || args.includes('show-ref')) {
+        recorder.calls.push(args);
+        return { ...ok, code: 128, stderr: 'not a git repository' };
+      }
+      return recorder.git(args);
+    };
+    await expect(provisionPrWorktree({ git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' }))
+      .rejects.toThrow('Could not verify a safe recovery branch');
+    expect(recorder.calls.some((args) => args.includes('add'))).toBe(false);
+  });
+
+  it('bounds recovery attempts instead of deleting occupied checkouts', async () => {
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok]);
+    const git = async (args: string[]): Promise<GitRunResult> => {
+      if (args.includes('--show-prefix')) {
+        recorder.calls.push(args); return { ...ok, code: 128 };
+      }
+      return recorder.git(args);
+    };
+    await expect(provisionPrWorktree({ git, pathExists: () => true },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' }))
+      .rejects.toThrow('No unused recovery checkout');
+    expect(recorder.calls.some((args) => args.includes('add') || args.includes('remove') || args.includes('prune'))).toBe(false);
+  });
+
+  it('recovers when Git metadata disappears between verification and checkout', async () => {
+    const original = prWorktreePath(repoLocalPath, 12);
+    const recorder = gitRecorder([ok, { ...ok, stdout: 'abc123' }, ok,
+      { code: 128, stdout: '', stderr: 'fatal: not a git repository' }]);
+    const result = await provisionPrWorktree({ git: recorder.git, pathExists: (path) => path === original },
+      { repoLocalPath, provider: 'github', number: 12, sourceBranch: 'topic' });
+    expect(result.worktreePath).not.toBe(original);
+    expect(result.headSha).toBe('abc123');
+  });
+
   it('keeps concurrent PR fetches isolated before checking out their exact commits', async () => {
     const refs = new Map<string, string>();
     const calls: string[][] = [];
@@ -250,7 +415,7 @@ describe('provisionPrWorktree', () => {
     ).rejects.toThrow(/favourite \/ publish it/i);
   });
 
-  it('reuses an existing worktree, force-switching it to the freshly fetched head branch', async () => {
+  it('reuses a verified clean worktree, switching it to the freshly fetched head branch', async () => {
     const { git, calls } = gitRecorder([ok, { code: 0, stdout: 'def456\n', stderr: '' }]);
     const worktreePath = prWorktreePath(repoLocalPath, 3);
     const result = await provisionPrWorktree(
@@ -273,7 +438,7 @@ describe('provisionPrWorktree', () => {
       '+pull/3/head:refs/ai-project-studio/pr/3',
     ]);
     expect(calls[1]).toEqual(['-C', repoLocalPath, 'rev-parse', 'refs/ai-project-studio/pr/3']);
-    expect(calls[3]).toEqual([
+    expect(calls.find((args) => args.includes('checkout'))).toEqual([
       '-c',
       'core.longpaths=true',
       '-c',
@@ -286,7 +451,7 @@ describe('provisionPrWorktree', () => {
       'feat',
       'def456',
     ]);
-    expect(calls[4]).toEqual([
+    expect(calls.at(-1)).toEqual([
       '-C',
       worktreePath,
       'branch',
@@ -455,7 +620,7 @@ describe('provisionPrWorktree', () => {
     });
   });
 
-  it('falls back to the fetched head when the in-place HEAD cannot be resolved', async () => {
+  it.each([1, 0])('creates a verified checkout rather than certifying an unresolved in-place HEAD (exit %i)', async (code) => {
     const { git } = gitRecorder([
       ok,
       { code: 0, stdout: 'fetched\n', stderr: '' },
@@ -465,18 +630,14 @@ describe('provisionPrWorktree', () => {
         stdout: '',
         stderr: "used by worktree at 'Q:/src/CosmosDB'",
       },
-      { code: 1, stdout: '', stderr: 'no HEAD' },
+      { code, stdout: '', stderr: 'no HEAD' },
     ]);
     const result = await provisionPrWorktree(
       { git, pathExists: () => false },
       { repoLocalPath, provider: 'github', number: 9, sourceBranch: 'b' },
     );
-    expect(result).toEqual({
-      worktreePath: 'Q:/src/CosmosDB',
-      branch: 'b',
-      tracksPullRequest: true,
-      headSha: 'fetched',
-    });
+    expect(result.worktreePath).not.toBe('Q:/src/CosmosDB');
+    expect(result).toMatchObject({ tracksPullRequest: false, headSha: 'fetched' });
   });
 
   it('favourites the branch first and reports each phase to the status listener', async () => {

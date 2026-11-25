@@ -25,14 +25,14 @@ function loadUpdater(overrides = {}) {
   });
   const context = {
     module: { exports: {} },
-    process: Object.assign(new EventEmitter(), { env: {}, platform: 'win32', arch: 'x64' }),
+    process: Object.assign(new EventEmitter(), { env: {}, platform: overrides.platform ?? 'win32', arch: 'x64' }),
     Buffer, URL,
     setTimeout: () => ({ unref() {} }),
     setInterval: () => ({ unref() {} }),
     clearInterval() {},
     require: (name) =>
       name === 'electron'
-        ? { app, shell: { openExternal() {} } }
+        ? { app, shell: { openExternal: overrides.openExternal ?? (() => {}) } }
         : name === 'electron-updater'
           ? { autoUpdater: new EventEmitter() }
           : overrides.modules?.[name] || require(name),
@@ -130,15 +130,24 @@ test('candidate trust rejects pending provenance, mismatched identities/checksum
 });
 
 function installFixture({ manifest = candidate(), signature = { status: 'Valid', thumbprint: pins[0] },
-  actualHash = 'b'.repeat(64), launchError, beforeInstall = true, downloadError, trust = policy } = {}) {
+  actualHash = 'b'.repeat(64), launchError, beforeInstall = true, downloadError, trust = policy,
+  releaseAssets, candidateError, platform, releaseError, downloadGate } = {}) {
   let downloads = 0;
   let launches = 0;
   let verifications = 0;
   let backendStops = 0;
-  const assets = [asset(installerName), asset('candidate-win32-x64.json')];
+  let manifestReads = 0;
+  let releaseReads = 0;
+  const openedPages = [];
+  const assets = releaseAssets ?? [asset(installerName), asset('candidate-win32-x64.json')];
   const https = {
     request(_options, callback) {
+      releaseReads++;
       const request = Object.assign(new EventEmitter(), { end() {
+        if (releaseError) {
+          queueMicrotask(() => request.emit('error', new Error(releaseError)));
+          return;
+        }
         const response = Object.assign(new EventEmitter(), { statusCode: 200 });
         callback(response);
         queueMicrotask(() => {
@@ -149,10 +158,17 @@ function installFixture({ manifest = candidate(), signature = { status: 'Valid',
       return request;
     },
   };
-  const updater = loadUpdater({ packaged: true, modules: { 'node:https': https } });
+  const updater = loadUpdater({
+    packaged: true, platform, modules: { 'node:https': https },
+    openExternal: async (url) => { openedPages.push(url); },
+  });
   updater.init({
     trustPolicy: trust,
-    fetchCandidate: async () => manifest,
+    fetchCandidate: async () => {
+      manifestReads++;
+      if (candidateError) throw new Error(candidateError);
+      return manifest;
+    },
     fsImpl: {
       mkdirSync() {}, rmSync() {},
       lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, size: 42 }),
@@ -162,18 +178,112 @@ function installFixture({ manifest = candidate(), signature = { status: 'Valid',
     download: async (_url, _dest, _progress, maxBytes) => {
       downloads++;
       assert.equal(maxBytes, 42);
+      await downloadGate;
       if (downloadError) throw new Error('injected interrupted download');
     },
     beforeInstall: async () => { backendStops++; return beforeInstall; },
     launchInstaller: async () => { launches++; if (launchError) throw new Error('injected asynchronous spawn denial'); },
   });
-  return { updater, counts: () => ({ downloads, launches, verifications, backendStops }) };
+  return { updater, openedPages, counts: () => ({ downloads, launches, verifications, backendStops, manifestReads, releaseReads }) };
 }
+
+test('guided Windows actions open the release page without downloading or stopping the backend', async () => {
+  const { updater, counts, openedPages } = installFixture({
+    trust: { requireAuthenticode: true, signerThumbprints: [] },
+  });
+  await updater.checkForUpdates(true);
+  assert.equal(updater.getState().canAutoInstall, false);
+  assert.match(updater.getState().autoInstallBlockReason, /signer/i);
+  await updater.downloadUpdate();
+  assert.equal(await updater.installNow(), true);
+  assert.equal(openedPages.length, 2);
+  assert.ok(openedPages.every((url) => url === 'https://github.com/sourabh1007/ai-project-studio/releases/latest'));
+  assert.deepEqual(counts(), { downloads: 0, launches: 0, verifications: 0, backendStops: 0, manifestReads: 0, releaseReads: 1 });
+  assert.equal(updater.getState().status, 'available');
+  updater.dispose();
+});
+
+test('coalesces overlapping release checks and prevents installation during qualification checks', async () => {
+  let finish;
+  const manifest = new Promise((resolve) => { finish = resolve; });
+  const { updater, counts, openedPages } = installFixture({ manifest });
+  const first = updater.checkForUpdates(false);
+  const second = updater.checkForUpdates(true);
+  await new Promise(setImmediate);
+  assert.equal(updater.getState().status, 'checking');
+  assert.equal(updater.getState().canAutoInstall, false);
+  assert.equal(await updater.installNow(), false);
+  await updater.downloadUpdate();
+  assert.equal(openedPages.length, 0);
+  assert.equal(counts().downloads, 0);
+  finish(candidate());
+  await Promise.all([first, second]);
+  assert.equal(counts().releaseReads, 1);
+  assert.equal(counts().manifestReads, 1);
+  assert.equal(updater.getState().canAutoInstall, true);
+  await updater.checkForUpdates(true);
+  assert.equal(counts().manifestReads, 2, 'readiness refreshes instead of trusting a cached manifest');
+  updater.dispose();
+});
+
+test('background network failures restore a retryable state; manual checks surface the error', async () => {
+  const { updater } = installFixture({ releaseError: 'Network unavailable' });
+  await updater.checkForUpdates(false);
+  assert.equal(updater.getState().status, 'idle');
+  assert.equal(updater.getState().error, null);
+  await Promise.all([updater.checkForUpdates(false), updater.checkForUpdates(true)]);
+  assert.equal(updater.getState().status, 'error');
+  assert.match(updater.getState().error, /Network unavailable/);
+  updater.dispose();
+});
+
+test('release polling cannot replace download progress or installer state', async () => {
+  let finish;
+  const downloadGate = new Promise((resolve) => { finish = resolve; });
+  const { updater, counts } = installFixture({ downloadGate });
+  await updater.checkForUpdates(true);
+  const download = updater.downloadUpdate();
+  await new Promise(setImmediate);
+  assert.equal(updater.getState().status, 'downloading');
+  await updater.checkForUpdates(false);
+  assert.equal(updater.getState().status, 'downloading');
+  assert.equal(counts().releaseReads, 1);
+  finish();
+  await download;
+  assert.equal(updater.getState().status, 'restarting');
+  assert.equal(counts().launches, 1);
+  updater.dispose();
+});
+
+test('automatic readiness requires a qualified exact manifest and explains guided fallback', async () => {
+  for (const [options, reason] of [
+    [{ manifest: { ...candidate(), qualification: 'pending' } }, /unqualified/],
+    [{ manifest: { ...candidate(), signatureVerification: 'pending' } }, /signature evidence/],
+    [{ manifest: { ...candidate(), arch: 'arm64' } }, /architecture/],
+    [{ releaseAssets: [asset(installerName)] }, /manifest/],
+    [{ releaseAssets: [] }, /installer/],
+    [{ candidateError: 'Release candidate request timed out.' }, /timed out/],
+    [{ platform: 'darwin' }, /guided/],
+  ]) {
+    const { updater, counts, openedPages } = installFixture(options);
+    await updater.checkForUpdates(true);
+    assert.equal(updater.getState().status, 'available');
+    assert.equal(updater.getState().canAutoInstall, false);
+    assert.match(updater.getState().autoInstallBlockReason, reason);
+    assert.equal(await updater.installNow(), true);
+    assert.equal(openedPages.length, 1);
+    assert.equal(counts().downloads, 0);
+    assert.equal(counts().backendStops, 0);
+    assert.equal(counts().launches, 0);
+    updater.dispose();
+  }
+});
 
 test('verified installer alone crosses the injected execution boundary after exact checksum/signature and backend gate', async () => {
   const { updater, counts } = installFixture();
   await updater.checkForUpdates(true);
   assert.equal(updater.getState().canAutoInstall, true);
+  assert.equal(updater.getState().autoInstallBlockReason, null);
   await updater.downloadUpdate();
   assert.equal(updater.getState().status, 'restarting');
   assert.equal(counts().launches, 1);
@@ -182,12 +292,25 @@ test('verified installer alone crosses the injected execution boundary after exa
   updater.dispose();
 });
 
-test('hash mismatch, unsigned/foreign signer, interrupted download and pending evidence never execute installers', async () => {
+test('qualification is checked again before downloading instead of trusting release-check evidence', async () => {
+  const manifest = candidate();
+  const { updater, counts } = installFixture({ manifest });
+  await updater.checkForUpdates(true);
+  assert.equal(updater.getState().canAutoInstall, true);
+  manifest.qualification = 'pending';
+  await updater.downloadUpdate();
+  assert.equal(counts().manifestReads, 2);
+  assert.equal(counts().downloads, 0);
+  assert.equal(counts().launches, 0);
+  assert.match(updater.getState().error, /unqualified/);
+  updater.dispose();
+});
+
+test('hash mismatch, unsigned/foreign signer and interrupted download never execute installers', async () => {
   for (const options of [
     { actualHash: 'c'.repeat(64) },
     { signature: { status: 'NotSigned', thumbprint: pins[0] } },
     { signature: { status: 'Valid', thumbprint: 'd'.repeat(40) } },
-    { manifest: { ...candidate(), qualification: 'pending' } },
     { downloadError: true },
   ]) {
     const { updater, counts } = installFixture(options);

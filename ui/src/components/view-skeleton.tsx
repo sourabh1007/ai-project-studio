@@ -1,9 +1,12 @@
+import { useStartupPending } from '../app/desktop-lifecycle.js';
+
 /**
  * A lightweight placeholder shown while a lazily-loaded view chunk is fetched.
  * Uses shimmer bars instead of a spinner so the shell never shows a blank pane
- * and the user perceives progress. Purely presentational.
+ * and the user perceives progress.
  */
 export function ViewSkeleton({ label }: { label?: string }) {
+  useStartupPending(true);
   return (
     <div className="view-skeleton" role="status" aria-live="polite">
       <span className="sr-only">{label ? `Loading ${label}…` : 'Loading…'}</span>

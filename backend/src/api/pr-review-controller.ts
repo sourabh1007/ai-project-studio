@@ -14,6 +14,8 @@ import {
   assertThreadStatus,
 } from '../pr-review/pr-comments-service.js';
 import { ValidationError } from '../kernel/error-types.js';
+import { z } from 'zod';
+import { parseInput } from './request-validation.js';
 import type { Route } from './http-contract.js';
 
 export interface PrReviewControllerDeps {
@@ -103,6 +105,14 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
     },
     {
       method: 'post',
+      path: '/features/:featureId/pr-review/prepare',
+      handler: (req) => {
+        parseInput(z.object({}).strict(), req.body);
+        return { status: 200, body: deps.prReviews.prepare(req.params.featureId) };
+      },
+    },
+    {
+      method: 'post',
       path: '/features/:featureId/pr-review/refresh',
       handler: (req) => ({
         status: 200,
@@ -176,12 +186,15 @@ export function createPrReviewRoutes(deps: PrReviewControllerDeps): Route[] {
     {
       method: 'post',
       path: '/features/:featureId/pr-review/approve',
-      handler: async (req) => ({
-        status: 200,
-        body: await deps.prApprovals.approve(req.params.featureId,
-          (req.body as { expectedHeadSha?: string } | undefined)?.expectedHeadSha,
-          (req.body as { expectedReviewUpdatedAt?: string } | undefined)?.expectedReviewUpdatedAt),
-      }),
+      handler: async (req) => {
+        const body = req.body as { expectedHeadSha?: string; expectedReviewUpdatedAt?: string;
+          expectedRunId?: string; expectedAssessmentRevision?: number } | undefined;
+        const args: [string, string | undefined, string | undefined] =
+          [req.params.featureId, body?.expectedHeadSha, body?.expectedReviewUpdatedAt];
+        return { status: 200, body: body?.expectedRunId !== undefined
+          ? await deps.prApprovals.approve(...args, body.expectedRunId, body.expectedAssessmentRevision)
+          : await deps.prApprovals.approve(...args) };
+      },
     },
     {
       method: 'post',

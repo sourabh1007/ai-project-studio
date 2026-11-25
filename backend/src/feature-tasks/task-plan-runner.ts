@@ -39,6 +39,7 @@ export function createTaskPlanRunner(deps: TaskPlanRunnerDeps): TaskPlanRunner {
         featureId,
         prompt,
         label: 'Task plan',
+        promptRefs: ['featureTasks.promptTemplate'],
         signal,
       });
       signal?.throwIfAborted();

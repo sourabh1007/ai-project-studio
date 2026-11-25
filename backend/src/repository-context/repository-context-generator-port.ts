@@ -25,6 +25,7 @@ export interface RepositoryAnalysisExecutor {
     repositoryId: string;
     repositoryPath: string;
     prompt: string;
+    promptRefs?: readonly string[];
     maxOutputChars: number;
   }): Promise<string>;
 }

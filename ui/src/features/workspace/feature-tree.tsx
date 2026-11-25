@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useState,
   type DragEvent,
   type ReactNode,
@@ -34,6 +35,10 @@ export interface DragNode {
 
 /** Insertion index used when dropping onto a group header (append to end). */
 export const APPEND_INDEX = Number.MAX_SAFE_INTEGER;
+
+export const ExplorerRevealContext = createContext<{
+  nonce: number; repoId: string | null; featureIds: string[]; groupIds: string[]; target: string;
+} | null>(null);
 
 /** Shared drag state so a node can be dragged from one feature and dropped in
  * another. */
@@ -269,6 +274,10 @@ function GroupNode({ group }: { group: TreeGroup }) {
     `explorer.group.${group.id}.expanded`,
     true,
   );
+  const reveal = useContext(ExplorerRevealContext);
+  useEffect(() => {
+    if (reveal?.groupIds.includes(group.id)) setExpanded(true);
+  }, [reveal, group.id, setExpanded]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(group.name);
   const [confirming, setConfirming] = useState(false);

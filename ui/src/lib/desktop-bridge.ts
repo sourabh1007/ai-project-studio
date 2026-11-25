@@ -59,6 +59,8 @@ export interface DesktopWindowsBridge {
 }
 
 export interface DesktopBridge {
+  ready?(): void;
+  onLifecycleState?(callback: (state: 'closing' | 'running') => void): () => void;
   getAppearance?(): { values: Record<string, string>; error: string | null };
   saveAppearance?(key: string, value: string): { saved: boolean; error: string | null };
   onAppearanceChanged?(callback: (key: string, value: string) => void): () => void;
@@ -101,8 +103,8 @@ export const DESKTOP_BRIDGE_CAPABILITIES = {
   root: [
     'attachments', 'backendDiagnostics', 'chooseDirectory', 'clearClipboard', 'clearHttpCache', 'copyText',
     'getAppearance', 'getVersion',
-    'onAppearanceChanged', 'onBackendUnavailable',
-    'openDocs', 'openExternal', 'readImage', 'readText', 'relaunch', 'revealFile',
+    'onAppearanceChanged', 'onBackendUnavailable', 'onLifecycleState',
+    'openDocs', 'openExternal', 'readImage', 'readText', 'ready', 'relaunch', 'revealFile',
     'runClipboardSmoke', 'saveAppearance', 'setTheme', 'updates', 'windows',
   ],
   attachments: ['list', 'remove'],

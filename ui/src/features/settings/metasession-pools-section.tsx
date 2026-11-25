@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { HistoryChart, type HistoryPoint } from '../monitoring/insights.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { useMicrosoftSignedIn } from '../../hooks/use-microsoft-identity.js';
 import { installedProviders } from '../../lib/providers.js';
+import { useActiveSessions } from '../active-sessions/use-active-sessions.js';
+import type { ActiveSessionEntry } from '../active-sessions/active-session-types.js';
+import '../active-sessions/active-sessions.css';
 import { providerLabel } from '../../lib/meta-model.js';
 import {
   Button,
@@ -25,6 +29,7 @@ import type {
   MetaSessionInfo,
   MetaSessionState,
   MetaSettings,
+  MetaPoolsStatus,
   ModelInfo,
   ProviderInfo,
 } from '../../lib/types.js';
@@ -145,11 +150,19 @@ function SessionDetailsModal({
 }) {
   const [showHistory, setShowHistory] = useState(true);
   const [openTurn, setOpenTurn] = useState<number | null>(null);
+  const [observations, setObservations] = useState<HistoryPoint[]>([]);
+  useEffect(() => {
+    const at = Date.now();
+    setObservations((previous) => [...previous, {
+      id: String(at), at, label: `${formatClock(at)} · ${STATE_LABEL[info.state]}`,
+      value: info.state === 'idle' ? 1 : 0,
+    }].slice(-60));
+  }, [info]);
   const totalTokens = info.inputTokens + info.outputTokens;
   // Newest turn first so the most recent work is at the top of the history.
   const history = [...info.history].reverse();
   return (
-    <Modal title={`Metasession ${info.id}`} onClose={onClose}>
+    <Modal title={`Metasession ${info.id}`} onClose={onClose} size="lg">
       <div className="metasession-detail">
         <div className="metasession-detail-head">
           <span
@@ -323,15 +336,104 @@ function SessionDetailsModal({
             ))}
         </div>
 
-        <p className="metasession-detail-note">
-          A climbing “turns served” and real token counts are live evidence this
-          warm session is handling IDE AI requests instead of a cold CLI spawn.
-          Warm ACP turns report tokens; per-turn AIC is only attributed on the
-          cold path.
-        </p>
+        <div className="metasession-detail-charts">
+          <HistoryChart title="Session token usage" unit="tokens"
+            explain="Provider-reported tokens for retained completed turns in this session, not shared process counts or lifetime billing."
+            points={info.history.map((turn, index) => ({
+              id: `${turn.at}-${index}`, at: turn.at,
+              label: `${formatClock(turn.at)} · ${turnWork(turn)}`,
+              value: turn.inputTokens + turn.outputTokens,
+            }))} />
+          <HistoryChart title="Session availability" unit="ready"
+            explain="Live observations while this dialog is open: 1 = ready for a command, 0 = serving a command or warming. Busy is normal, not unhealthy. CPU, memory and failure health are unavailable without session-specific telemetry."
+            maxGapMs={15_000} points={observations} />
+        </div>
+        <p className="metasession-detail-note">Usage and state belong to this session only. Missing charges or health telemetry are not inferred from a shared queue.</p>
       </div>
     </Modal>
   );
+}
+
+function InactivePoolStatus({ status, target, loading, failed }: {
+  status: MetaPoolsStatus | null;
+  target: number;
+  loading: boolean;
+  failed: boolean;
+}) {
+  const api = useApi();
+  const [selected, setSelected] = useState<ActiveSessionEntry | null>(null);
+  const monitor = useActiveSessions(api, selected?.id ?? null);
+  const entries = monitor.snapshot?.entries.filter((entry) => entry.kind === 'meta') ?? [];
+  const current = entries.find((entry) => entry.id === selected?.id);
+  const availability = status?.availability;
+  const count = Number.isInteger(target) && target > 0 ? target : 0;
+  const state = failed ? 'Live status unavailable' : loading ? 'Loading…'
+    : availability?.state === 'starting' ? 'Starting…'
+    : availability?.state === 'failed' ? 'Startup failed'
+    : availability?.state === 'disabled' ? 'Off'
+    : availability?.state === 'unavailable' ? 'On demand' : 'Not running';
+  return <div className="metapool-live">
+    <div className="metapool-live-head">
+      <StatusBadge status={failed || availability?.state === 'failed' ? 'error' : 'pending'} label={state} />
+      {availability && <span className="metapool-provider">{providerLabel(availability.providerId)}</span>}
+      <span className="metapool-stats">
+        <span><strong>{monitor.snapshot ? entries.length : '—'}</strong> active</span>
+        <span><strong>{monitor.snapshot ? entries.filter((entry) => entry.state === 'idle').length : '—'}</strong> idle</span>
+        <span><strong>{monitor.snapshot ? entries.filter((entry) => entry.state === 'busy' || entry.state === 'running').length : '—'}</strong> busy</span>
+        <span><strong>{status && !failed ? 0 : '—'}</strong>/{count} warm</span>
+      </span>
+    </div>
+    <p className="metapool-pending" role="status">
+      {failed ? 'Live status could not be read. Retry above; saved settings are unchanged.'
+        : loading ? 'Reading live pool status.'
+        : availability?.message ?? 'No live warm pool is reported. Saving a target does not start one.'}
+    </p>
+    {monitor.error && <div role="status"><ErrorText error={monitor.error} /><Button variant="ghost"
+      onClick={monitor.refresh}>Retry sessions</Button></div>}
+    {entries.length > 0 && <div className="metapool-sessions" role="list" aria-label="Live IDE metasessions">
+      {entries.map((entry) => <button key={entry.id} type="button" role="listitem"
+        className={`metasession-chip metasession-chip-${entry.state === 'running' ? 'busy' : entry.state}`}
+        aria-label={`Metasession ${entry.label}: ${entry.state}. View live details`}
+        title={`${entry.sessionId ?? entry.id} · ${entry.provider ?? 'unknown provider'} · ${entry.label} · ${entry.state}`}
+        aria-haspopup="dialog" onClick={() => setSelected(entry)}>
+        <span className={`metasession-chip-dot metasession-dot-${entry.state === 'running' ? 'busy' : entry.state}`} />
+        <span className="metasession-chip-id">{(entry.sessionId ?? entry.id).slice(0, 12)}</span>
+      </button>)}
+    </div>}
+    {count > 0 && <div className="metapool-sessions" role="list" aria-label="Configured warm slots">
+      {Array.from({ length: Math.min(count, 32) }, (_, index) => <span key={index}
+        role="listitem" className="metasession-chip metasession-chip-ghost"
+        aria-label={`Metasession slot ${index + 1}: no live session`}>
+        <span className="metasession-chip-dot metasession-dot-ghost" /><span className="metasession-chip-id">s{index + 1}</span>
+      </span>)}
+      {count > 32 && <span>+{count - 32} configured slots</span>}
+    </div>}
+    <div className="metapool-legend" role="note"><span className="metapool-legend-hint">
+      Click a live session for details. Outlined slots are not running sessions.
+    </span></div>
+    {selected && <Modal title={`IDE metasession · ${selected.label}`} size="xl" onClose={() => setSelected(null)}>
+      <p className="muted">Read-only live activity; opening this view starts no AI work.</p>
+      <dl className="active-session-details">
+        <dt>Status</dt><dd>{current?.state ?? 'No longer active'}</dd>
+        <dt>Provider / model</dt><dd>{selected.provider ?? 'Not reported'} / {selected.model ?? 'Not reported'}</dd>
+        <dt>Project</dt><dd>{selected.projectName ?? 'Not associated'}</dd>
+        <dt>Feature</dt><dd>{selected.featureName ?? selected.featureId ?? 'Not associated'}</dd>
+        <dt>Task</dt><dd>{selected.purpose ?? selected.label}</dd>
+      </dl>
+      <ErrorText error={monitor.debugError} />
+      <ErrorText error={monitor.debug?.error ?? null} />
+      {monitor.debugError && <Button onClick={monitor.refresh}>Retry live details</Button>}
+      {!monitor.debug && !monitor.debugError && <Loader label="Loading live details" />}
+      {monitor.debug && <>
+        {monitor.debug.truncated && <p role="status">Showing the retained activity/output tail.</p>}
+        <h3>Recent activity</h3>
+        {monitor.debug.activity.length ? <ol>{monitor.debug.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>
+          : <p>No recorded activity.</p>}
+        <h3>Live output</h3>
+        <pre className="active-session-output">{monitor.debug.output || 'No output available.'}</pre>
+      </>}
+    </Modal>}
+  </div>;
 }
 
 function PoolStatus({
@@ -431,15 +533,6 @@ function PoolStatus({
             <strong>{pool.served}</strong> served
           </span>
         </span>
-        {!hasPending && pool.waitingForCapacity && (
-          <p className="metapool-pending" role="status" aria-live="polite">
-            Waiting for shared process capacity — <strong>{readyCount}</strong> of{' '}
-            <strong>{pool.size}</strong> ready, <strong>{warmingCount}</strong> warming.
-            The saved target has not reverted. Lower the metasession count or
-            adjust the processAdmission limits and restart.
-          </p>
-        )}
-
         {hasPending && (
           <span
             className={`metapool-target metapool-target-${
@@ -466,22 +559,32 @@ function PoolStatus({
             <strong>{pool.size}</strong>
           </span>
         )}
-        <span
-          className="metapool-suggest"
-          title="Suggested warm size from observed peak concurrency in the recent telemetry window"
-        >
-          Suggested <strong>{pool.suggestedSize}</strong>
-          {suggestionDiffers && (
-            <button
-              type="button"
-              className="metapool-suggest-apply"
-              onClick={handleApply}
-            >
-              Apply
-            </button>
-          )}
-        </span>
       </div>
+
+      {!hasPending && pool.waitingForCapacity && (
+        <p className="metapool-pending" role="status" aria-live="polite">
+          Waiting for shared process capacity — <strong>{readyCount}</strong> of{' '}
+          <strong>{pool.size}</strong> ready, <strong>{warmingCount}</strong> warming.
+          The saved target has not reverted. Lower the metasession count or
+          adjust the processAdmission limits and restart.
+        </p>
+      )}
+
+      <span
+        className="metapool-suggest"
+        title="Suggested warm size from observed peak concurrency in the recent telemetry window"
+      >
+        Suggested <strong>{pool.suggestedSize}</strong>
+        {suggestionDiffers && (
+          <button
+            type="button"
+            className="metapool-suggest-apply"
+            onClick={handleApply}
+          >
+            Apply
+          </button>
+        )}
+      </span>
 
       {(rendered.length > 0 || ghostCount > 0) && (
         <div className="metapool-sessions" role="list">
@@ -499,6 +602,9 @@ function PoolStatus({
                 className={`metasession-chip metasession-chip-${info.state}${
                   exiting ? ' metasession-chip-exit' : ''
                 }${surplus ? ' metasession-chip-surplus' : ''}`}
+                aria-label={`Metasession ${info.id}: ${STATE_LABEL[info.state]}, ${info.served} turns. View details`}
+                aria-haspopup="dialog"
+                aria-expanded={detailId === info.id}
                 title={`${info.id} · ${STATE_LABEL[info.state]} · ${info.served} served${
                   surplus ? ' · retires on save' : ''
                 }`}
@@ -943,13 +1049,13 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
+  const [appliedLive, setAppliedLive] = useState(false);
 
   useEffect(() => {
     if (savedWarmPool) {
       setEnabled(savedWarmPool.enabled);
       setSize(String(savedWarmPool.size));
       setError(null);
-      setSaved(false);
     }
   }, [savedWarmPool]);
 
@@ -958,7 +1064,7 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
   // conversation of a busy session update smoothly instead of stepping every
   // few seconds; fall back to the calm cadence once settled and idle.
   const live = status.data?.pool;
-  const converging = Boolean(
+  const converging = status.data?.availability?.state === 'starting' || Boolean(
     live &&
       (live.live > live.size ||
         live.sessions.some((s) => s.state === 'warming' || s.state === 'busy')),
@@ -1007,7 +1113,9 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
       }
       // A restart is only needed to turn the warm pool on or off; the size
       // already applied live above.
-      setNeedsRestart(savedWarmPool?.enabled !== enabled);
+      setAppliedLive(enabled && status.data?.enabled === true);
+      setNeedsRestart(status.data?.availability?.state !== 'unavailable' &&
+        (savedWarmPool?.enabled !== enabled || (enabled && status.data?.enabled !== true)));
       setSaved(true);
       config.reload();
     } catch (err) {
@@ -1033,17 +1141,10 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
     <>
       {embedded && (
         <p className="page-subtitle">
-          Warm AI sessions kept ready so the IDE responds instantly instead
-          of spawning a CLI per request. Every AI feature — PR review,
-          review board, summaries, monitors — draws from this one pool; its
-          size bounds how many turns run in parallel, and extra requests
-          wait for the next free session or fall back to a cold spawn.
-          Resizing applies live on save; turning warm sessions on or off
-          needs a restart.
+          Warm AI sessions kept ready for IDE requests. Resize live on save;
+          availability follows the selected CLI.
         </p>
       )}
-
-      <MetaModelPicker />
 
       {loading && <Loader label="Loading pool configuration" />}
       {config.error && (
@@ -1087,6 +1188,9 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
             />
             <span>Keep metasessions warm</span>
           </label>
+          {status.data?.availability?.state === 'unavailable' && <p className="page-subtitle">
+            The warm target is retained for compatible providers; this CLI stays unchanged.
+          </p>}
 
           <div className="metapool-rows">
             <div className="metapool-row">
@@ -1108,8 +1212,7 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
                   />
                 </label>
               </div>
-              {enabled &&
-                (live ? (
+              {live ? (
                   <PoolStatus
                     pool={live}
                     model={status.data?.model}
@@ -1119,18 +1222,10 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
                       setSaved(false);
                     }}
                   />
-                ) : status.error ? (
-                  <div className="metapool-live">
-                    <StatusBadge status="error" label="Live status unavailable" />
-                  </div>
                 ) : (
-                  <div className="metapool-live">
-                    <StatusBadge
-                      status={saved ? 'starting' : 'pending'}
-                      label={saved ? 'Starting…' : 'Save to start live'}
-                    />
-                  </div>
-                ))}
+                  <InactivePoolStatus status={status.data} target={Number(size)}
+                    loading={status.loading && !status.data} failed={Boolean(status.error)} />
+                )}
             </div>
           </div>
 
@@ -1161,13 +1256,18 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
                     )}
                   </>
                 ) : (
-                  'Saved — applied live.'
+                  appliedLive ? 'Saved — applied live.' : 'Saved — settings retained.'
                 )}
               </span>
             )}
           </div>
         </div>
       )}
+
+      <details className="metapool-model-settings">
+        <summary>Provider and model</summary>
+        <MetaModelPicker />
+      </details>
     </>
   );
 
@@ -1183,13 +1283,8 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
           <div>
             <h2 className="page-title">Metasessions</h2>
             <p className="page-subtitle">
-              Warm AI sessions kept ready so the IDE responds instantly instead
-              of spawning a CLI per request. Every AI feature — PR review,
-              review board, summaries, monitors — draws from this one pool; its
-              size bounds how many turns run in parallel, and extra requests
-              wait for the next free session or fall back to a cold spawn.
-              Resizing applies live on save; turning warm sessions on or off
-              needs a restart.
+              Warm AI sessions kept ready for IDE requests. Resize live on save;
+              availability follows the selected CLI.
             </p>
           </div>
         </div>

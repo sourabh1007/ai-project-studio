@@ -47,6 +47,8 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   const messages = [];
   const exitWaitBudgets = [];
   const ipc = {};
+  const ipcMain = new EventEmitter();
+  ipcMain.handle = (name, handler) => { ipc[name] = handler; };
   let relaunches = 0;
   let exits = 0;
   let quits = 0;
@@ -56,6 +58,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   let appQuitting = false;
   const windows = [];
   const timers = [];
+  let timerNow = 0;
   const pages = [];
   const closePrompts = [];
   const startupRequests = [];
@@ -68,7 +71,11 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     static getAllWindows() { return windows.filter((win) => !win.destroyed); }
     constructor(options) {
       super();
-      this.webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, send() {} });
+      this.messages = [];
+      this.webContents = Object.assign(new EventEmitter(), {
+        mainFrame: {}, setWindowOpenHandler() {},
+        send: (channel, payload) => this.messages.push({ channel, payload }),
+      });
       this.focuses = 0;
       this.options = options;
       this.shows = 0;
@@ -144,12 +151,12 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     BrowserWindow: FakeWindow, shell,
     Menu: { setApplicationMenu() {}, buildFromTemplate: (template) => template },
     nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
-    ipcMain: { handle: (name, handler) => { ipc[name] = handler; }, on: () => {} },
+    ipcMain,
   };
   const context = {
     process: processFake, URL, AbortController, __dirname: path.join(__dirname, '..'),
     setTimeout: (callback, delay) => {
-      const timer = { callback, delay, cleared: false };
+      const timer = { callback, delay, cleared: false, due: timerNow + delay, fired: false };
       timers.push(timer);
       return timer;
     },
@@ -232,8 +239,20 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     runAfterBackendStop: context.owner.runAfterBackendStop,
   });
   return {
-    app, owner: context.owner, updater, au, ipc, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
+    app, owner: context.owner, updater, au, ipc, ipcMain, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
     closePrompts, startupRequests, startupLogs,
+    advanceTimers(ms) {
+      const end = timerNow + ms;
+      for (;;) {
+        const timer = timers.filter((entry) => !entry.cleared && !entry.fired && entry.due <= end)
+          .sort((a, b) => a.due - b.due)[0];
+        if (!timer) break;
+        timerNow = timer.due;
+        timer.fired = true;
+        timer.callback();
+      }
+      timerNow = end;
+    },
     spawn() { context.owner.startBackend(1234); return spawned; },
     /**
      * Answers a pending readiness probe the way the real backend's /identity
@@ -308,6 +327,37 @@ test('readiness uses the configured API path, rejects HTTP errors, and clears al
   assert.equal(f.timers[0].cleared, true);
   assert.equal(child.listenerCount('exit'), 1);
   assert.equal(child.listenerCount('error'), 1);
+});
+
+test('a cold backend can become ready after the old 30-second deadline without being replaced', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  let settled = false;
+  const ready = f.owner.waitForBackend(1234);
+  const outcome = ready.then(() => { settled = true; }, (error) => { settled = true; throw error; });
+  f.startupRequests[0].emit('error', new Error('ECONNREFUSED'));
+  f.advanceTimers(35000);
+  await tick();
+  assert.equal(settled, false);
+  assert.equal(f.owner.backend, child);
+  f.respondIdentity(f.startupRequests.length - 1);
+  await outcome;
+  assert.equal(f.owner.backend, child);
+  assert.equal(f.timers[0].cleared, true);
+});
+
+test('the extended cold-start wait is still bounded and honors an explicit startup budget', async () => {
+  for (const [env, budget] of [[{}, 120000], [{ CW_STARTUP_TIMEOUT_MS: '45000' }, 45000]]) {
+    const f = fixture({ env });
+    const child = f.spawn();
+    const ready = f.owner.waitForBackend(1234);
+    const rejected = assert.rejects(ready, /Backend did not start in time/);
+    f.advanceTimers(budget);
+    await rejected;
+    assert.equal(f.startupRequests[0].destroyed, true);
+    assert.equal(f.owner.backend, child);
+    assert.equal(child.listenerCount('exit'), 1);
+  }
 });
 
 test('a stranger holding the port never satisfies readiness and is named in the timeout', async () => {
@@ -451,7 +501,7 @@ test('a backend crash during cooperative quit offers the same exit-only recovery
   assert.equal(f.owner.isBackendShutdownConfirmed(), false);
 });
 
-test('startup handoff waits for successful loading and a painted main window', async () => {
+test('startup handoff waits for hydrated React, successful loading and a painted main window', async () => {
   let resolveLoad;
   const f = fixture({ loadPromise: new Promise((resolve) => { resolveLoad = resolve; }) });
   let handoffs = 0;
@@ -462,9 +512,44 @@ test('startup handoff waits for successful loading and a painted main window', a
   assert.equal(handoffs, 0);
   resolveLoad();
   await tick();
+  assert.equal(handoffs, 0);
+  const sender = win.webContents;
+  f.ipcMain.emit('app:ready', { sender: {}, senderFrame: sender.mainFrame, trusted: true });
+  f.ipcMain.emit('app:ready', { sender, senderFrame: {}, trusted: true });
+  f.ipcMain.emit('app:ready', { sender, senderFrame: sender.mainFrame, trusted: false });
+  assert.equal(handoffs, 0);
+  f.ipcMain.emit('app:ready', { sender, senderFrame: sender.mainFrame, trusted: true });
   assert.equal(handoffs, 1);
   assert.equal(win.shows, 1);
   assert.equal(f.timers[0].cleared, true);
+  win.destroy();
+  assert.equal(f.ipcMain.listenerCount('app:ready'), 0);
+});
+
+test('closing covers every window before cleanup and cancellation restores the existing interface', async () => {
+  const f = fixture();
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://fixture');
+  win.close();
+  assert.deepEqual(win.messages.at(-1), { channel: 'app:lifecycle', payload: 'closing' });
+  assert.equal(win.isDestroyed(), false);
+  await settle();
+  assert.equal(f.owner.backend, child);
+  assert.deepEqual(win.messages.at(-1), { channel: 'app:lifecycle', payload: 'running' });
+  assert.equal(win.isDestroyed(), false);
+  child.finish();
+});
+
+test('a destroyed renderer cannot block shutdown notifications or cooperative cleanup', async () => {
+  const f = fixture({ waitMs: 100 });
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://fixture');
+  win.webContents.send = () => { throw new Error('renderer already destroyed'); };
+  win.close();
+  await tick();
+  child.finish();
+  await tick();
+  assert.equal(f.counts().quits, 1);
 });
 
 test('an interface load failure cannot reveal a blank window and timeout stays visible', async () => {

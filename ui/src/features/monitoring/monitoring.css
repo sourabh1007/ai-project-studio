@@ -1,0 +1,15 @@
+.monitor-insights { margin-block: 0.75rem; }
+.monitor-insights > summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; width: fit-content; }
+.monitor-body { padding-block: 0.75rem; min-width: 0; }
+.monitor-chart { margin-block: 0.75rem; min-width: 0; }
+.monitor-chart h4 { margin: 0.5rem 0; }
+.monitor-chart svg { display: block; width: 100%; max-height: 180px; }
+.monitor-scroll { overflow: auto; max-height: 26rem; }
+.monitor-matrix th { text-align: left; }
+.monitor-matrix td { min-width: 5rem; }
+.monitor-matrix [data-state="failed"], .monitor-matrix [data-state="violated"], .monitor-matrix [data-state="fail"] { box-shadow: inset 3px 0 var(--danger, #d55); }
+.monitor-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-block: 0.5rem; }
+.monitor-lanes > div { display: grid; grid-template-columns: minmax(6rem, 30%) 1fr; gap: 0.5rem; margin-block: 0.25rem; font-size: 0.8rem; }
+.monitor-lanes > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-lane { display: flex; background: var(--surface-alt, #8881); overflow: hidden; }
+.monitor-lane i { display: block; min-height: 0.65rem; background: var(--accent); opacity: 0.7; }

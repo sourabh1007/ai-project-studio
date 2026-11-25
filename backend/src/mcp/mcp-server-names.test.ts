@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { enabledMcpServerNames, headlessMcpServerNames } from './mcp-server-names.js';
+import { enabledMcpServerNames, headlessMcpServerNames, nativeMcpServerNames } from './mcp-server-names.js';
+
+describe('native effective MCP inventory', () => {
+  it('disables every native source, including plugins and already-disabled servers', () => {
+    expect(nativeMcpServerNames(JSON.stringify({ mcpServers: {
+      user: { source: 'user' }, workspace: { source: 'workspace' },
+      'plugin:server': { source: 'plugin', enabled: false }, builtin: { source: 'builtin' },
+    } }))).toEqual(['user', 'workspace', 'plugin:server', 'builtin']);
+    expect(nativeMcpServerNames('{"mcpServers":{}}')).toEqual([]);
+  });
+  it.each(['invalid private-token', 'null', '[]', '{}', '{"mcpServers":null}', '{"mcpServers":{"-unsafe":{}}}'])
+    ('fails closed on missing or invalid inventory without echoing credentials: %s', (raw) => {
+      expect(() => nativeMcpServerNames(raw)).toThrow();
+      try { nativeMcpServerNames(raw); } catch (error) {
+        expect((error as Error).message).not.toContain('private-token');
+      }
+    });
+});
 
 describe('conservative headless MCP suppression', () => {
   it('unions user, workspace and ancestor declarations without trusting enable flags', () => {

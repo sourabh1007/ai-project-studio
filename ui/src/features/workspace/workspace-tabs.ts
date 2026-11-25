@@ -38,6 +38,21 @@ export interface WorkspaceTabsState {
   splitId: string | null;
 }
 
+export function groupWorkspaceTabs(tabs: readonly WorkspaceTab[]): Array<{
+  id: string; label: string | null; tabs: WorkspaceTab[];
+}> {
+  const groups = new Map<string, { id: string; label: string | null; tabs: WorkspaceTab[] }>();
+  for (const tab of tabs) {
+    const review = tab.kind === 'review-board' || tab.kind === 'agent' && tab.agentId === 'review-board';
+    const label = review ? 'Reviews' : tab.kind === 'pr-review-tracker' ? 'Review batches' : null;
+    const id = label ? `group:${label}` : `tab:${tab.id}`;
+    const group = groups.get(id) ?? { id, label, tabs: [] };
+    group.tabs.push(tab);
+    groups.set(id, group);
+  }
+  return [...groups.values()];
+}
+
 export interface WorkspaceTabReconcileSources {
   features?: Map<string, Feature> | null;
   repos?: Map<string, Repository> | null;

@@ -23,9 +23,15 @@ Failures do not stop other PRs: all running/queued work finishes before retry is
 enabled, successful reviews remain saved, and retrying in the same dialog
 reuses the bulk parent. Tabs retain the selected PR order.
 
-Each successfully imported PR, including a single-PR import, is automatically queued for Review Board
-analysis immediately, without waiting for the rest of the imports or opening
-its review tab. Up to three automatic PR reviews run concurrently across
+Automatic review remains the default. Choose **Import only; review later** to
+create the checkout without starting problem-statement or review AI. The
+compact import options accept a model, perspectives, instruction-skill IDs and
+business context; bulk imports save an independent copy of that setup per PR.
+Opening an existing imported PR does not overwrite its setup or restart AI.
+An explicit preparation action starts a deferred review using its saved setup.
+
+Each automatically reviewed PR is queued without waiting for the other imports
+or opening its review tab. Up to three automatic PR reviews run concurrently across
 batches. Each waits for its change graph before analyzing perspectives.
 Switching or closing the tracker tab does not stop the shared queue, and
 reopening it does not duplicate a queued, active or finished run. Failed
@@ -45,7 +51,7 @@ evidence clears obsolete results and timings.
 Each perspective also shows its own live/final analysis time. Its clock starts
 when execution begins, not while it is queued, includes automatic retries and
 freezes on success, skip or failure. Manually reanalyzing a section starts a new
-section timer. Evidence preparation is measured separately. Parallel section
+full-run timer when it starts a new configured review. Evidence preparation is measured separately. Parallel section
 times are not added together as the full review's wall-clock duration.
 
 The Review Board summary names the changed projects rather than only a generic
@@ -58,25 +64,125 @@ failures offer a retry, and incomplete graph file coverage is stated explicitly.
 Validated perspective results are persisted with the PR review's head and graph
 revision and restored by the read-only board GET. Reopening a board never resets
 the review or starts graph/AI work. Concurrent requests for the same perspective
-share one analysis, and completed results are reused until an explicit reset.
+share one analysis within the same pinned run. Explicit review/options changes
+create a fresh run, retaining bounded history rather than mixing old results.
 Renderer timings survive tab navigation; recorded AIC remains independently
 persisted. A failed graph retry does not delete earlier perspective results,
 but cannot certify them for approval.
 
 Approval uses `POST /features/:featureId/pr-review/approve` with
-`{ expectedHeadSha, expectedReviewUpdatedAt? }`. Pass the board's `pull.headSha`
-and `reviewUpdatedAt` to pin the confirmation to its displayed evidence.
+`{ expectedHeadSha, expectedReviewUpdatedAt?, expectedRunId?, expectedAssessmentRevision? }`.
+For manifest-backed reviews, run ID and assessment revision are required. Pass
+the board's `pull.headSha`, `reviewUpdatedAt`, run ID and revision to pin
+confirmation to its displayed evidence and recorded human decisions.
 `reviewUpdatedAt` uses the graph generation timestamp when available, not later
 activity or usage updates. The backend requires completed, persisted analyses for
 every perspective selected for that exact graph/head, checks the live provider
-head, then sends the real provider approval.
+head and actual target-branch tip, then sends the real provider approval.
 `GET /features/:featureId/pr-review/approval-status` performs only a lightweight
-provider-head read and eligibility check; it never fetches a worktree or
-rebuilds the graph. Changed heads require an explicit reset and new review.
+provider revision read and eligibility check; it never fetches a worktree or
+rebuilds the graph. Changed heads, target branches or pinned base commits require
+a fresh review. Providers without verifiable target revisions cannot certify
+manifest-backed approval.
 Concurrent approval clicks share one operation. Existing approvals are detected
 at the provider; GitHub approval requests also name the reviewed `commit_id`.
 Provider failures are reported rather than presented as successful approvals.
 Older reviews without persisted machine results are not automatically certified.
+
+**Review skills** groups frozen repository guidance, IDE skills and shared
+context, with source revisions, instructions and related comments. Overview
+tags distinguish loaded guidance **captured** for the review from guidance
+**cited** by findings; unavailable references do not count. Other references
+stay collapsed. Capture or citation does not prove compliance or tool execution.
+Legacy reviews without
+attribution say so rather than substituting today's repository inventory.
+Guidance discovery scans configured paths and changed-file ancestor instruction
+files, not the entire repository. Defaults include Copilot, `.agents` and Claude
+skill directories, `AGENTS.md`, `CLAUDE.md` and `.github/instructions`.
+Instruction `applyTo` patterns are matched against changed paths. Task skills
+are selected by applicable `applyTo` patterns, meaningful skill-name/description
+matches, or an explicit path/`/skill-name`; mere presence does not establish use.
+
+The Skills library has a separate **Cosmos DB IDE skills** section with 14
+editable review checklists: evidence/tooling, authentication, HTTP/RNTBD,
+partitioning, transactions, consistency, RU/retries, regions/conflicts, queries,
+change feed, background markers, native ownership, upgrades and tests/diagnostics.
+Cosmos repositories or captured SDK usage automatically select relevant
+checklists alongside feature-tagged instructions, not the whole catalog.
+Explicit review skill selections, including an empty selection, take precedence.
+Matching samples are bounded independently of review evidence; no captured
+context is shortened to fit a prompt budget. Public references are background,
+not authority for internal contracts or other Cosmos APIs. Documented repository
+tools are verification references; text-only review does not execute them.
+
+**Read explanation** leads with plain-English problem and solution narratives,
+not business-context cards or a filename inventory. All review, chat and context
+generation prompts request 1–2 short sentences per field, preferably ≤35 words,
+and diagrams of at most six lines. Problem and Solution have distinct summaries
+of the old failure and implemented behavior. **Full explanation** expands an
+easy before/after scenario and code from the captured diff, not a second copy
+of the summary. New model requests include separate example/code rationales even
+when saved editable guidance predates them. Code excerpts must match a contiguous
+part of the correct diff side; invented snippets or joined hunks are replaced
+with actual captured excerpts. Missing examples are reported, never invented.
+Long saved prose remains under **Original review text**; opening a saved review
+does not spend AI to regenerate it. Longer full comments
+are folded behind disclosures, not discarded. Requirement summaries avoid
+repeating every lens; full assessments and evidence remain in final synthesis.
+New reviews request compact
+ASCII diagrams of the problem and implemented solution whenever captured evidence
+supports a useful flow. Unsupported diagrams are omitted with an explanation;
+proposed fixes must not be drawn as implemented behavior. Existing saved reviews
+are not regenerated just by opening them.
+Acceptance criteria, their sources and context-loading controls are under the
+collapsed **Acceptance criteria and source evidence** disclosure. **View changes**
+also leads with the explanation; **Captured code and revision** expands readable
+captured diffs. Generated bulk-import counts and reference IDs are bookkeeping,
+not problem statements or authoritative acceptance criteria.
+Collection notes and criteria gaps do not trigger a clarification banner or ask
+the user to supply requirements. Check-specific evidence-gap summaries live
+in **Details**, not in a duplicate overview grid. Operational failures and PR
+publication recovery remain visible. These presentation changes do not relax approval
+checks or rewrite frozen requirements from historical reviews.
+If a model mistypes a requirement ID, corrective retries identify the rejected
+value and list exact captured IDs. Near matches are never silently accepted.
+**Details** leads with perspective outcomes; technical IDs and collection notes
+are collapsed. **More** contains review settings and a fresh review action.
+**Decisions** uses one action selector and save button, retaining required
+reasons, verification evidence and reversible decision history.
+
+Tool-free review and business-context requests deliver their full task text
+directly. Cold native providers use standard input, not an attached document or
+an oversized Windows command line. Copilot/Agency omit `-p` in this mode because
+its argument overrides piped input; Claude retains print mode without a
+positional prompt. Tool restrictions and native MCP policy remain unchanged.
+
+Before a new review starts, a provider-agnostic **metasession** gathers business
+context from captured repository requirements, authorized linked requirements,
+PR intent and code excerpts. For Azure repositories, an injected read-only
+resource reader also attempts relevant Bluebird code, wiki and work-item searches
+using the actual repository organization/project. It uses an enabled, unambiguous
+configured Agency built-in under native MCP policy, honors tool exclusions, and
+never enables servers, changes permissions or asks for authentication.
+Unavailable, disabled or denied resources fall back to captured evidence.
+Every proposed expectation must quote a
+supplied source; PR/code-derived expectations stay explicitly **inferred**, not
+documented policy. They can be assessed as hypotheses but cannot satisfy missing
+business-policy approval gates. Criteria are inferred and assessed best-effort;
+clarification or confirmation is never required to continue the analysis.
+Metasession failures remain visible without
+suppressing other supported findings. Saving review options alone runs no AI.
+
+**Load/Reload context with metasession**, under **Acceptance criteria and source
+evidence** in the explanation and Business perspective, refreshes available context without rewriting existing
+findings or frozen assessments. It runs a tracked, cancellable AI request with
+tools disabled. Only the separate bounded resource reader invokes allowlisted
+Bluebird read tools; source text cannot select tools or execute code. Exact MCP
+responses and retrieval provenance are retained separately from pinned changed-code
+evidence. Index/current-branch results are contextual, not proof about the PR's
+captured revision. Resource sources are visible in context details.
+An empty result states evidence limitations instead of asking the user for input
+or inventing policy. Optional review settings remain available.
 
 Review Board summaries, perspective entries and bulk PR rows show live
 vendor-reported **AIC**. These totals cover persisted review history, including
@@ -95,18 +201,42 @@ is substituted for missing author metadata.
 
 ## What the review contains
 
-The mounted Review Board combines:
+The default surface centers on **Problem**, **Solution** and **Review comments**.
+Contextual information controls expose project/diff details, selected lenses,
+models, instructions, evidence, timings and diagnostics without expanding the
+default page. Sign-off remains a human acknowledgement, separate from AI
+completion and provider approval.
 
-- **Summary / Project details** — PR context, changed projects and captured
-  evidence.
-- **Change graph / files changed** — navigation into captured changed-file diffs.
-- **Perspectives** — selected review angles, their findings, evidence, status,
-  timing and reported usage. Analysis can be queued, active, complete, skipped,
-  or failed with a retry.
-- **Reviewer sign-off** — inspect findings and **mark perspectives reviewed**.
-  This is a human acknowledgement, not the same as AI analysis completion.
-- **Comments and Approve PR** — provider-backed actions against the reviewed
-  evidence, with explicit confirmation and eligibility checks.
+Unique findings preserve all original observations, contributing perspectives
+and supplied skill references. Filters change presentation, not stored results
+or approval inputs. Exact duplicates are grouped automatically; uncertain
+same-anchor matches remain separate possible duplicates. Recorded merge/split,
+severity and disposition decisions require a reason and support undo. These
+decisions increment the assessment revision, invalidating stale confirmation.
+
+Business details contain every captured requirement with its content-bound ID,
+source and Supported / Violated / Not assessed / Ambiguous outcome. Reviewer
+criteria take precedence over inferred intent; repository/shared guidance is
+untrusted context, not invented acceptance policy. Explicit same-repository
+issue/work-item links use existing provider credentials and bounded exact-item
+reads, including issue bodies and work-item acceptance criteria. Missing,
+oversized, denied and conflicting context remains visible. This qualitative
+matrix is not a test-coverage percentage or proof that tests ran.
+
+Live **Already discussed** annotations are separate from the frozen discussion
+used by the run. Refreshing discussion never rewrites the analysis, hides a
+concern or marks it fixed.
+
+Review-generated comment publication records a durable operation key before
+dispatch. A lost provider response becomes **uncertain**, never an automatic
+retry. Reconciliation checks a stable operation marker in provider discussion;
+missing or multiple matches require checking the PR. Confirmed operations reuse
+the saved result rather than sending duplicates. Publication, local disposition
+and remote thread resolution are independent states.
+
+Remote head/base checks cannot make provider mutations atomic when the provider
+does not support that guarantee. Operation markers enable reconciliation, not
+an exactly-once posting claim.
 
 There is no mounted legacy **Core Analysis / 0–100 score** workflow.
 

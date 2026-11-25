@@ -8,7 +8,7 @@ const STAGES = {
   starting: { step: 1, title: 'Starting local services', detail: 'Loading backend modules and preparing your workspace database.' },
   connecting: { step: 1, title: 'Connecting to your workspace', detail: 'Waiting for the local API and provider registry to respond.' },
   development: { step: 1, title: 'Connecting to development services', detail: 'Using the existing development server; no new backend is started.' },
-  interface: { step: 2, title: 'Loading the interface', detail: 'Loading index.html, application scripts, styles, and workspace views.' },
+  interface: { step: 2, title: 'Restoring your workspace', detail: 'Preparing your saved tabs, console and prompt history.' },
   ready: { step: 3, title: 'Your workspace is ready', detail: 'Opening AI Project Studio.' },
   closing: { step: -1, title: 'Closing safely', detail: 'Waiting for background services to finish and save their work.' },
 };

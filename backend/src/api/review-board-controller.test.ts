@@ -39,6 +39,67 @@ function service(overrides: Partial<ReviewBoardService> = {}): ReviewBoardServic
 }
 
 describe('createReviewBoardRoutes', () => {
+  it('loads context only on an explicit POST and forwards cancellation', async () => {
+    const loadContext = vi.fn(async () => board);
+    const signal = new AbortController().signal;
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ loadContext }) });
+    expect(await pick(routes, 'post', '/features/:featureId/review-board/context')(req({ params: { featureId: 'f1' }, signal })))
+      .toEqual({ status: 200, body: board });
+    expect(loadContext).toHaveBeenCalledWith('f1', signal);
+  });
+  it('reads repository skill inventory independently from review analysis and forwards cancellation', async () => {
+    const result = { repoId: 'repo', repository: null, targetBranch: 'main', skills: [], warnings: [] };
+    const repositorySkills = vi.fn(async () => result);
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ repositorySkills }) });
+    const signal = new AbortController().signal;
+    expect(await pick(routes, 'get', '/features/:featureId/review-board/skills')(req({ params: { featureId: 'f1' }, signal })))
+      .toEqual({ status: 200, body: result });
+    expect(repositorySkills).toHaveBeenCalledWith('f1', signal);
+  });
+  it('records guarded finding decisions and reads live discussion and durable publication status', async () => {
+    const manageFindings = vi.fn(() => board);
+    const discussion = vi.fn(async () => ({ matches: {}, warnings: [] }));
+    const publications = vi.fn(() => []);
+    const reconcilePublication = vi.fn(async () => ({ key: 'p', status: 'uncertain' as const, input: { body: 'b' }, startedAt: 'now' }));
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ manageFindings, discussion }),
+      prComments: { publications, reconcilePublication } as never });
+    const action = { expectedRunId: 'run', expectedAssessmentRevision: 1, action: 'disposition',
+      groupIds: ['group'], reason: 'Existing behavior', disposition: 'dismissed' };
+    const request = req({ params: { featureId: 'f1' }, body: action });
+    expect(await pick(routes, 'post', '/features/:featureId/review-board/findings')(request)).toEqual({ status: 200, body: board });
+    expect(manageFindings).toHaveBeenCalledWith('f1', action);
+    expect(await pick(routes, 'get', '/features/:featureId/review-board/discussion')(request)).toEqual({ status: 200, body: { matches: {}, warnings: [] } });
+    expect(await pick(routes, 'get', '/features/:featureId/review-board/publications')(request)).toEqual({ status: 200, body: [] });
+    const reconcile = pick(routes, 'post', '/features/:featureId/review-board/publications/reconcile');
+    expect((await reconcile(req({ params: { featureId: 'f1' }, body: { key: 'p' } }))).status).toBe(200);
+    expect(reconcilePublication).toHaveBeenCalledWith('f1', 'p');
+    for (const body of [null, {}, { key: 1 }, { key: '' }, { key: ' ' }, { key: 'x'.repeat(501) }]) {
+      await expect(reconcile(req({ params: { featureId: 'f1' }, body }))).rejects.toThrow('key');
+    }
+  });
+  it('exposes and settles the pending review queue', () => {
+    const pending = vi.fn(() => []);
+    const settle = vi.fn();
+    const routes = createReviewBoardRoutes({ reviewBoard: service(), reviewQueue: { pending, settle } });
+    expect(pick(routes, 'get', '/review-board/queue')(req())).toEqual({ status: 200, body: [] });
+    expect(pick(routes, 'post', '/features/:featureId/review-board/queue/settle')(req({ params: { featureId: 'f1' } })))
+      .toEqual({ status: 200, body: { settled: true } });
+    expect(settle).toHaveBeenCalledWith('f1');
+  });
+  it('prepares validated options and explicitly cancels a durable run', async () => {
+    const configure = vi.fn(async () => board);
+    const cancel = vi.fn();
+    const routes = createReviewBoardRoutes({ reviewBoard: service({ configure, cancel }) });
+    const signal = new AbortController().signal;
+    const prepare = pick(routes, 'post', '/features/:featureId/review-board/options');
+    expect(await prepare(req({ params: { featureId: 'f1' }, body: { model: 'auto' }, signal })))
+      .toEqual({ status: 200, body: board });
+    expect(configure).toHaveBeenCalledWith('f1', { model: 'auto' }, signal);
+    await expect(prepare(req({ params: { featureId: 'f1' }, body: { extra: true } }))).rejects.toThrow('Invalid');
+    expect(await pick(routes, 'post', '/features/:featureId/review-board/cancel')(req({ params: { featureId: 'f1' } })))
+      .toEqual({ status: 200, body: { cancelled: true } });
+    expect(cancel).toHaveBeenCalledWith('f1');
+  });
   it('returns the derived board for a feature', () => {
     const routes = createReviewBoardRoutes({ reviewBoard: service() });
     const handler = pick(routes, 'get', '/features/:featureId/review-board');

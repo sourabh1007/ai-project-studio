@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -34,6 +34,105 @@ afterEach(() => {
 });
 
 describe('AzureStatusBadge', () => {
+  it('adds another organization without replacing the existing connection or default target', async () => {
+    window.localStorage.setItem('azureDevOpsOrg', 'contoso');
+    const signedIn = { authenticated: true, account: 'same-account', message: null };
+    const client = makeClient({
+      getAzureStatus: vi.fn().mockResolvedValue(signedIn),
+      azureSignIn: vi.fn().mockResolvedValue(signedIn),
+    });
+    renderBadge(client);
+    await screen.findByText('Azure DevOps · same-account');
+    fireEvent.click(screen.getByRole('button', { name: 'Add organization' }));
+    fireEvent.change(screen.getByLabelText('Azure DevOps organization or repository URL'), {
+      target: { value: 'https://fabrikam.visualstudio.com/Platform/_git/app' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(client.azureSignIn).toHaveBeenCalledWith('fabrikam'));
+    const first = screen.getByRole('region', { name: 'Azure DevOps organization contoso' });
+    const second = await screen.findByRole('region', { name: 'Azure DevOps organization fabrikam' });
+    await waitFor(() => expect(within(second).getByText('Azure DevOps · same-account')).toBeInTheDocument());
+    expect(within(first).getByText('Azure DevOps · same-account')).toBeInTheDocument();
+    expect(window.localStorage.getItem('azureDevOpsOrg')).toBe('contoso');
+    expect(JSON.parse(window.localStorage.getItem('azureDevOpsConnections')!)).toEqual(['contoso', 'fabrikam']);
+    expect(client.azureSignOut).not.toHaveBeenCalled();
+  });
+  it('keeps another connected organization when sign-in fails and surfaces the explicit sign-in result', async () => {
+    window.localStorage.setItem('azureDevOpsConnections', JSON.stringify(['contoso', 'fabrikam']));
+    const client = makeClient({
+      getAzureStatus: vi.fn(async (org?: string) => ({ authenticated: org === 'contoso', account: org === 'contoso' ? 'same-account' : null, message: null })),
+      azureSignIn: vi.fn().mockResolvedValue({ authenticated: false, account: null, message: 'Consent is required.' }),
+    });
+    renderBadge(client);
+    const second = await screen.findByRole('region', { name: 'Azure DevOps organization fabrikam' });
+    fireEvent.click(await within(second).findByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('fabrikam: Consent is required.')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Azure DevOps organization contoso' })).getByText('Azure DevOps · same-account')).toBeInTheDocument();
+    expect(client.azureSignOut).not.toHaveBeenCalled();
+  });
+  it('deduplicates hosted URL aliases and does not apply the remembered account to a different organization', async () => {
+    window.localStorage.setItem('azureDevOpsOrg', 'contoso');
+    window.localStorage.setItem('azureDevOpsAccount', 'remembered-account');
+    window.localStorage.setItem('azureDevOpsConnections', JSON.stringify([
+      'https://CONTOSO.visualstudio.com/Platform/_git/app', 'https://dev.azure.com/contoso/Platform/_git/app', 'fabrikam',
+    ]));
+    const client = makeClient({ getAzureStatus: vi.fn().mockResolvedValue({ authenticated: true, account: null, message: null }) });
+    renderBadge(client);
+    expect(await screen.findByText('Azure DevOps · remembered-account')).toBeInTheDocument();
+    expect(await screen.findByText('Azure DevOps · fabrikam')).toBeInTheDocument();
+    expect(screen.getAllByRole('region', { name: /Azure DevOps organization/ })).toHaveLength(2);
+    expect(client.getAzureStatus).toHaveBeenCalledWith('contoso');
+    expect(client.getAzureStatus).toHaveBeenCalledWith('fabrikam');
+  });
+  it('forgets only the selected entry without erasing shared credentials or rediscovering it on remount', async () => {
+    window.localStorage.setItem('azureDevOpsOrg', 'contoso');
+    window.localStorage.setItem('azureDevOpsConnections', JSON.stringify(['contoso', 'fabrikam']));
+    const client = makeClient({
+      getAzureStatus: vi.fn().mockResolvedValue({ authenticated: true, account: 'same-account', message: null }),
+      listRepos: vi.fn().mockResolvedValue([{ provider: 'azure-devops', remoteUrl: 'https://dev.azure.com/contoso/Platform/_git/app' }]),
+    });
+    const { unmount } = renderBadge(client);
+    await screen.findAllByText('Azure DevOps · same-account');
+    fireEvent.click(screen.getByRole('button', { name: 'Forget contoso' }));
+    expect(screen.queryByRole('region', { name: 'Azure DevOps organization contoso' })).not.toBeInTheDocument();
+    expect(client.azureSignOut).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('azureDevOpsOrg')).toBe('fabrikam');
+    unmount();
+    renderBadge(client);
+    await screen.findByRole('region', { name: 'Azure DevOps organization fabrikam' });
+    expect(screen.queryByRole('region', { name: 'Azure DevOps organization contoso' })).not.toBeInTheDocument();
+    expect(client.listRepos).not.toHaveBeenCalled();
+  });
+  it('requires confirmation before signing out the shared account across saved organizations', async () => {
+    window.localStorage.setItem('azureDevOpsConnections', JSON.stringify(['contoso', 'fabrikam']));
+    const signedOut = new Set<string>();
+    const client = makeClient({
+      getAzureStatus: vi.fn(async (org?: string) => ({ authenticated: !signedOut.has(org!), account: 'same-account', message: null })),
+      azureSignOut: vi.fn(async (org?: string) => {
+        signedOut.add(org!);
+        return { authenticated: false, account: null, message: null };
+      }),
+    });
+    renderBadge(client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out saved organizations' }));
+    const dialog = screen.getByRole('dialog', { name: 'Sign out Azure DevOps' });
+    expect(within(dialog).getByText(/share your Microsoft account credentials/)).toBeInTheDocument();
+    expect(client.azureSignOut).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm sign out' }));
+    await waitFor(() => expect(client.azureSignOut).toHaveBeenCalledTimes(2));
+    expect(client.azureSignOut).toHaveBeenNthCalledWith(1, 'contoso');
+    expect(client.azureSignOut).toHaveBeenNthCalledWith(2, 'fabrikam');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(2));
+    expect(client.azureSignIn).not.toHaveBeenCalled();
+  });
+  it('rejects non-Azure URL targets without launching sign-in', async () => {
+    const client = makeClient({});
+    renderBadge(client);
+    fireEvent.change(screen.getByLabelText('Azure DevOps organization or repository URL'), { target: { value: 'https://github.com/org/repo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter an Azure DevOps organization');
+    expect(client.azureSignIn).not.toHaveBeenCalled();
+  });
   it('shows the signed-in username and a sign-out button', async () => {
     window.localStorage.setItem('azureDevOpsOrg', 'contoso');
     const client = makeClient({
@@ -127,7 +226,7 @@ describe('AzureStatusBadge', () => {
     });
     renderBadge(client);
     expect(await screen.findByText('Azure DevOps · alice')).toBeTruthy();
-    expect(getAzureStatus).toHaveBeenCalledWith(remoteUrl);
+    expect(getAzureStatus).toHaveBeenCalledWith('contoso');
   });
 
   it('shows the org input and Sign in when signed out', async () => {

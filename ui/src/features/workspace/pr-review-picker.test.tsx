@@ -42,7 +42,65 @@ describe('parsePullNumber', () => {
 });
 
 describe('PrReviewPicker selection', () => {
-  it('explains unavailable automation and prevents review checkout before starting a batch', async () => {
+  it('snapshots selected model, perspectives, instruction skills and business context for each bulk PR', async () => {
+    const onConfirm = vi.fn();
+    const client = {
+      listRepoPulls: vi.fn().mockResolvedValue([]),
+      getMetaModels: vi.fn().mockResolvedValue([{ id: 'named', name: 'Named model', enabled: true }]),
+      listSkills: vi.fn().mockResolvedValue([
+        { id: 'guide', name: 'Payments guide', kind: 'instruction' },
+        { id: 'task', name: 'Not an instruction', kind: 'task-plan' },
+      ]),
+    };
+    renderPicker(client as unknown as ApiClient, onConfirm);
+    for (const number of ['41', '42']) {
+      fireEvent.change(screen.getByLabelText('Add by PR number or URL'), { target: { value: number } });
+      fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    }
+    const details = screen.getByText(/Review setup/).closest('details')!;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    await screen.findByRole('option', { name: 'Named model' });
+    fireEvent.change(screen.getByLabelText('Import review model'), { target: { value: 'named' } });
+    fireEvent.click(screen.getByLabelText('Security'));
+    fireEvent.click(screen.getByLabelText('Payments guide'));
+    expect(screen.queryByText('Not an instruction')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Import business context'), { target: { value: 'No duplicate payments.' } });
+    fireEvent.click(screen.getByLabelText('Automatically review after import'));
+    fireEvent.click(screen.getByRole('button', { name: /Import only; review later/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledOnce());
+    const selected = onConfirm.mock.calls[0][0];
+    expect(selected).toEqual([41, 42].map((number) => ({
+      number, title: `PR #${number}`, importOptions: { autoReview: false, reviewOptions: {
+        model: 'named', perspectiveIds: ['security'], skillIds: ['guide'], businessContext: 'No duplicate payments.',
+      } },
+    })));
+    selected[0].importOptions.reviewOptions.skillIds.push('changed');
+    expect(selected[1].importOptions.reviewOptions.skillIds).toEqual(['guide']);
+  });
+
+  it('allows import-only even when automation is unavailable', async () => {
+    const onConfirm = vi.fn();
+    const client = {
+      listRepoPulls: vi.fn().mockResolvedValue([]),
+      getProviderBootstrap: vi.fn().mockResolvedValue({
+        defaultProvider: 'interactive', providers: [{ id: 'interactive', installed: true,
+          automation: { supported: false, reason: 'Automation unavailable.' } }],
+      }),
+    } as unknown as ApiClient;
+    render(<ApiProvider value={client}><AutomationReadinessProvider>
+      <PrReviewPicker repo={repo} onClose={() => {}} onConfirm={onConfirm} />
+    </AutomationReadinessProvider></ApiProvider>);
+    await screen.findByText(/Automation unavailable\./);
+    fireEvent.change(screen.getByLabelText('Add by PR number or URL'), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+    expect(screen.queryByLabelText('Automatically review after import')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Import only; review later/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith([{
+      number: 42, title: 'PR #42', importOptions: { autoReview: false, reviewOptions: {} },
+    }]));
+  });
+  it('hides unavailable review setup without blocking manual import', async () => {
     const onConfirm = vi.fn();
     const api = {
       getProviderBootstrap: vi.fn().mockResolvedValue({
@@ -57,7 +115,9 @@ describe('PrReviewPicker selection', () => {
     await screen.findByText(/Review automation is blocked by provider policy/);
     fireEvent.change(screen.getByLabelText('Add by PR number or URL'), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /Add/ }));
-    expect(screen.getByRole('button', { name: /Start review/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Start review/ })).toBeNull();
+    expect(screen.queryByText(/Review setup/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Import only; review later/ })).toBeEnabled();
     expect(onConfirm).not.toHaveBeenCalled();
   });
   beforeEach(() => {

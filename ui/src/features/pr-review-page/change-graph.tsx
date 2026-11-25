@@ -1016,8 +1016,10 @@ export function ChangeGraph({
   onChat,
   comments,
   focusPath,
+  concerns,
 }: {
   step: ChangeGraphStep;
+  concerns?: Readonly<Record<string, number>>;
   category: ChangeGraphCategory;
   /** Paths whose lazy English explanation is currently being generated. */
   explaining?: ReadonlySet<string>;
@@ -1035,6 +1037,7 @@ export function ChangeGraph({
   focusPath?: string | null;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [showConcerns, setShowConcerns] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   // A diagram overlay the "Explain" chat can attach to its answers: spotlighted
   // nodes, an ordered flow to trace, and short notes pinned to files. Cleared
@@ -1559,8 +1562,10 @@ export function ChangeGraph({
                     }
                   }}
                 >
+                  {showConcerns && concerns && <title>{concerns[node.path] ?? 0} linked unique groups. Static graph only; no findings does not prove inspection.</title>}
                   <rect
                     className="cg-filenode-rect"
+                    style={showConcerns && concerns && concerns[node.path] ? { stroke: 'var(--warning)', strokeWidth: 3 } : undefined}
                     width={node.width}
                     height={NODE_H}
                     rx={6}
@@ -1571,7 +1576,7 @@ export function ChangeGraph({
                     y={NODE_H / 2 + 4}
                     textAnchor="middle"
                   >
-                    {node.label}
+                    {node.label}{showConcerns && concerns ? ` [${concerns[node.path] ?? 0}]` : ''}
                   </text>
                   {node.flow && (
                     <FlowMarker flow={node.flow} nodeWidth={node.width} />
@@ -1584,6 +1589,8 @@ export function ChangeGraph({
         </svg>
         </div>
         <div className="cg-controls" role="group" aria-label="Zoom controls">
+          {concerns && <label><input type="checkbox" checked={showConcerns} onChange={(event) => setShowConcerns(event.target.checked)} />
+            Linked review groups (not coverage)</label>}
           {onChat && (
             <button
               type="button"

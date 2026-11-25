@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { Insights } from '../monitoring/insights.js';
+import { McpInsights } from '../monitoring/mcp-insights.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type {
   McpServerEntry,
@@ -975,6 +977,10 @@ function McpServerCard({
   const hasHealDetails =
     status?.status === 'error' &&
     (healAttempts.length > 0 || Boolean(status.message));
+  const observedInsights = !server.catalog && <Insights title="Observed activity (configured name)">{() => <>
+    <p className="field-hint">Historical calls match this provider and server name, not a proven configuration revision. Viewing history never probes or authenticates this server.</p>
+    <McpInsights provider={providerId} server={studioBridge ? 'ai-project-studio' : server.name} />
+  </>}</Insights>;
 
   if (server.origin === 'agency-built-in' || server.builtinName || server.catalog) {
     return (
@@ -1017,6 +1023,7 @@ function McpServerCard({
         {!server.catalog && !capability('tools', capabilities).supported && (
           <p className="field-hint">{capability('tools', capabilities).reason}</p>
         )}
+        {observedInsights}
       </div>
     );
   }
@@ -1141,6 +1148,7 @@ function McpServerCard({
           Configure
         </Button>
       ) : <CapabilityDetails capabilities={capabilities} />}
+      {observedInsights}
       {detailsOpen && status && (
         <Modal
           title={`Why ${server.name} couldn't connect`}

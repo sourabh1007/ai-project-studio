@@ -58,6 +58,7 @@ export function createSessionSummaryRunner(
         scope: 'internal',
         purpose: 'session-summary',
         label: 'Session summary',
+        promptRefs: ['summarizer.promptTemplate', 'summarizer.sessionTemplate'],
         signal,
       });
       const ended = await launched.completion;

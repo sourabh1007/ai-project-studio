@@ -240,6 +240,10 @@ describe('selectPerspectives', () => {
 });
 
 describe('discoverProjectModel', () => {
+  it('includes business review even when no language or deployment type can be inferred', () => {
+    const model = discoverProjectModel({ description: '', changedFiles: 0, projects: [], nodes: [] });
+    expect(model.perspectives.map((item) => item.id)).toContain('business');
+  });
   it('derives a full model for a backend service change', () => {
     const input: DiscoveryInput = {
       description: 'Add retry logic to the client',

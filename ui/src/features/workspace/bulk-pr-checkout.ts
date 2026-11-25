@@ -15,7 +15,7 @@ export async function checkoutPulls(
   api: Pick<ApiClient, 'createPrFeatureStreamed'>,
   repoId: string,
   parentId: string,
-  pulls: SelectedPull[],
+  selectedPulls: SelectedPull[],
   report: (message: string) => void,
   onImported?: (item: {
     feature: Feature;
@@ -24,8 +24,11 @@ export async function checkoutPulls(
     alreadyImported: boolean;
   }) => void,
 ): Promise<
-  { feature: Feature; number: number; title: string; alreadyImported: boolean }[]
+  (SelectedPull & { feature: Feature; alreadyImported: boolean })[]
 > {
+  const pulls = selectedPulls.map((pull) => ({
+    ...pull, ...(pull.importOptions ? { importOptions: structuredClone(pull.importOptions) } : {}),
+  }));
   const states = pulls.map(() => 'Queued');
   const results = new Map<number, { feature: Feature; alreadyImported: boolean }>();
   const failures: string[] = [];
@@ -42,12 +45,13 @@ export async function checkoutPulls(
       const { feature, alreadyImported } = await api.createPrFeatureStreamed(repoId, pull.number, (status) => {
         states[index] = status.message;
         publish();
-      }, parentId);
+      }, parentId, null, pull.importOptions);
       results.set(pull.number, { feature, alreadyImported });
       onImported?.({ feature, ...pull, alreadyImported });
       states[index] = alreadyImported
         ? 'Already imported — skipped'
-        : onImported ? 'Imported · review queued' : 'Ready';
+        : pull.importOptions?.autoReview === false ? 'Imported · review later'
+          : onImported ? 'Imported · review queued' : 'Ready';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       states[index] = `Failed: ${message}`;

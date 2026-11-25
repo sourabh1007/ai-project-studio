@@ -17,6 +17,26 @@ const event = (extra: Partial<SkillUsageRecord> = {}): SkillUsageRecord => ({
 });
 
 describe('skill usage persistence', () => {
+  it('filters event timestamps before aggregation and limiting, with an inclusive start and exclusive end', () => {
+    const { repo } = fixture();
+    repo.record(event({ eventId: 'before', recordedAt: '2026-10-16T23:59:59.999Z', inputTokens: 5000 }));
+    repo.record(event({ eventId: 'start', recordedAt: '2026-10-17T00:00:00.000Z', inputTokens: 10 }));
+    repo.record(event({ eventId: 'inside', recordedAt: '2026-10-17T12:00:00.000Z', inputTokens: 20 }));
+    repo.record(event({ eventId: 'other-feature', featureId: 'f2', recordedAt: '2026-10-17T13:00:00.000Z', inputTokens: 30 }));
+    repo.record(event({ eventId: 'end', recordedAt: '2026-10-18T00:00:00.000Z', inputTokens: 999 }));
+    const window = { from: '2026-10-17', to: '2026-10-18' };
+    expect(repo.read({ scope: 'feature', window }, 10)).toMatchObject({
+      limited: false, rows: [{ uses: 3, inputTokens: 60, nanoAiu: null }],
+    });
+    expect(repo.read({ scope: 'feature', featureId: 'f1', window }, 10)).toMatchObject({
+      limited: false, rows: [{ uses: 2, inputTokens: 30, lastUsedAt: '2026-10-17T12:00:00.000Z' }],
+    });
+    expect(repo.read({ scope: 'feature', window }, 2)).toMatchObject({
+      limited: true, rows: [{ uses: 2, inputTokens: 50 }],
+    });
+    expect(repo.read({ scope: 'feature', window: { from: '2026-10-19', to: '2026-10-20' } }, 10).rows).toEqual([]);
+  });
+
   it('returns an honest empty snapshot', () => {
     const { repo } = fixture();
     expect(repo.read({ scope: 'feature' }, 100)).toEqual({ rows: [], limited: false, maxEvents: 100 });

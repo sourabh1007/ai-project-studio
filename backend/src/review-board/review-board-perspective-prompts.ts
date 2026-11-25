@@ -24,6 +24,7 @@
 /** The complete, fixed universe of review lenses the board can render. */
 export const REVIEW_PERSPECTIVE_IDS = [
   'problem-solution',
+  'business',
   'architecture',
   'impact-blast-radius',
   'code-quality',
@@ -59,6 +60,7 @@ export const PERSPECTIVE_CONFIG_KEYS: Record<
   ReviewPerspectiveId,
   PerspectiveConfigKeys
 > = {
+  business: { focus: 'businessFocus', issueFormat: 'businessIssueFormat' },
   'problem-solution': {
     focus: 'problemSolutionFocus',
     issueFormat: 'problemSolutionIssueFormat',
@@ -127,6 +129,7 @@ export const PERSPECTIVE_CONFIG_KEYS: Record<
 
 /** Human-readable display name for each lens, used to label its settings. */
 export const PERSPECTIVE_LABELS: Record<ReviewPerspectiveId, string> = {
+  business: 'Business',
   'problem-solution': 'Problem ↔ Solution',
   architecture: 'Architecture & Code Flow',
   'impact-blast-radius': 'Impact & Blast Radius',
@@ -158,6 +161,29 @@ export const COMMON_PROMPT_PLACEHOLDERS = [
   'changedFiles',
 ] as const;
 
+export const CONCISE_REVIEW_OUTPUT = [
+  '## Mandatory concise output',
+  'Every generated summary, explanation, finding, check and prose rationale is 1-2 short sentences, preferably at most 35 words.',
+  'Lead with changed behavior, concrete impact or the exact next action. No preamble, repeated caveats, jargon definitions or filename-led paragraphs.',
+  'Prefer a meaningful ASCII diagram (at most 6 lines, 64 columns) over a paragraph; add only one short explanatory sentence.',
+  'In JSON, diagrams use raw ASCII with escaped newlines, never nested Markdown fences. Cite paths/symbols in evidence, not as prose introductions.',
+  'Preserve the response schema; do not add unsupported diagram fields.',
+  'Keep every required requirement assessment and real concern; brevity must never remove evidence, weaken validation or imply approval.',
+  'List only meaningful changed behaviors/invariants, not a line-by-line narration. Do not repeat the same evidence gap across labels.',
+  'These output rules also apply when saved editable guidance requests longer explanations.',
+  'Work autonomously from authorized MCP research and captured repository, PR, skill and test evidence. Never ask the user for clarification, confirmation or more input.',
+  'Use source-backed inferred acceptance criteria for a best-effort assessment; label assumptions, do not invent business policy, and state unresolved evidence limitations without blocking analysis or implying approval.',
+].join('\n');
+
+export const PROBLEM_SOLUTION_EXPLANATION_OUTPUT = [
+  '## Mandatory problem and solution explanations',
+  'Keep "Problem" and "Solution implemented" distinct: Problem explains the old failure or unmet need; Solution explains what this PR actually changes and why it helps. Never repeat the same summary or substitute an inventory of reviewed files.',
+  'Add rationale labels "Problem example" and "Solution example": use the same simple scenario/input to show the before and after outcomes. Each is 1-2 short sentences that add understanding rather than paraphrase the summary. Label illustrative values as examples, never as executed tests or observed production data.',
+  'Add "Problem code" and "Solution code" when captured evidence supports them. Each detail starts with the exact repository-relative path on its own line, then a verbatim contiguous excerpt of at most 12 lines: old-side code for Problem, implemented new-side code for Solution.',
+  'Code details use raw source with JSON-escaped newlines and preserved indentation, never nested Markdown fences. Do not invent code, join unrelated hunks, or present a suggested fix as implemented code.',
+  'Omit examples or code that cannot be grounded in captured evidence. Use the existing rationale array; do not add response fields. Keep diagrams small and evidence-backed.',
+].join('\n');
+
 /**
  * Section 1 — shared review guidance. Placeholders are filled at run time with
  * the concrete PR evidence. Deliberately language-agnostic: it names the
@@ -172,6 +198,8 @@ export const DEFAULT_COMMON_REVIEW_GUIDANCE = [
   'How to review:',
   '- Be concise and direct. No preamble, no filler, no lecturing. Short, plain',
   '  sentences a busy engineer can act on immediately.',
+  '- Use 1-2 short sentences per generated field, preferably at most 35 words.',
+  '  Prefer an evidence-grounded diagram of at most 6 lines over more prose.',
   '- Go deep on THIS lens only; ignore concerns that belong to another lens.',
   '- Tie every observation to a specific changed file and, where you can, the',
   '  exact symbol/region. An observation you cannot ground in a listed file is',
@@ -215,6 +243,7 @@ export const RESPONSE_ENVELOPE = [
   'or derive a line from a symbol name, file ordering, or a summary. Deletions belong on LEFT.',
   'Reply with ONLY a fenced ```json code block containing a single object:',
   '{',
+  '  "assessment": "concerns" | "no-concerns" | "insufficient-evidence" | "not-applicable",',
   '  "skipped": boolean — true only if this lens genuinely does not apply,',
   '  "reason": string — required when skipped: one sentence why it does not',
   '    apply,',
@@ -228,15 +257,26 @@ export const RESPONSE_ENVELOPE = [
   '    "status": "pass" | "concern" | "na" } ] — the audit trail this lens',
   '    asked for (leave empty only when the lens explicitly says to),',
   '  "findings": [ {',
+  '    "id": "<unique local finding ID; use this exact ID in requirement findingIds>",',
   '    "title": short imperative headline naming the affected file/symbol,',
   '    "detail": the concise, paste-ready comment — the problem, its exact',
   '      location (file + symbol), and the concrete fix, in as few words as',
   '      make it actionable,',
   '    "severity": "critical" | "high" | "medium" | "low" | "suggestion",',
+  '    "skillIds": [exact supplied skill IDs supporting this finding, or none],',
+  '    "requirementIds": [exact supplied requirement IDs supporting this finding, or none],',
   '    "evidence": [ { "source": "<path> — <symbol/region>", "reason": how this',
   '      specific code demonstrates the finding, "confidence": 0..1 } ]',
-  '  } ]',
+  '  } ],',
+  '  "requirements": [{ "requirementId": "<supplied ID>",',
+  '    "assessment": "supported" | "violated" | "not-assessed" | "ambiguous",',
+  '    "explanation": "<evidence-backed behavior or the specific gap>",',
+  '    "evidence": [{ "source": "<captured changed path>", "reason": "<why>" }],',
+  '    "findingIds": [] }]',
   '}',
+  'Business must assess each supplied requirement; missing/conflicting policy is not a pass.',
+  'Use exact supplied requirement IDs, not labels, group IDs or invented IDs.',
+  'A supported/violated requirement needs captured changed-code evidence. For metadata, missing code or policy, use not-assessed or ambiguous.',
   'Return an empty "findings" array when the change is clean for this lens, but',
   'still fill "summary", "rationale" and "checks" with the concrete evidence you',
   'based that verdict on. Never assume "green". Do not add any prose outside the',
@@ -265,11 +305,40 @@ export const DEFAULT_PERSPECTIVE_PROMPTS: Record<
   ReviewPerspectiveId,
   PerspectivePromptParts
 > = {
+  business: {
+    focus: lines(
+      '## Business perspective',
+      'Evaluate the changed user journeys, acceptance criteria, business rules,',
+      'roles/entitlements, state transitions and customer impact against supplied',
+      'business requirements. Do not invent policy from the implementation.',
+      'If requirements are absent or ambiguous, return assessment',
+      '"insufficient-evidence", not a clean verdict or not-applicable skip.',
+      'Distinguish a documented rule violation from a product suggestion.',
+    ),
+    issueFormat: lines(
+      'Name the supplied requirement, affected user/scenario, contradictory',
+      'changed code, impact and concrete fix or verification. Cite skillIds only',
+      'when the corresponding supplied rule supports this particular finding.',
+    ),
+  },
   'problem-solution': {
     focus: lines(
       '## Focus for this lens — Problem ↔ Solution',
       'Decide one thing: does this change actually solve the problem it set out',
       'to solve? Judge the change as a whole — do NOT grade files one by one.',
+      'Explain the solution in simple English under rationale label "Solution implemented":',
+      'what happens differently now, how the changed code makes that happen, and',
+      'why it addresses the problem. Explain technical terms. Do not substitute',
+      'the PR title, filenames, file counts, or a proposed fix for the implemented solution.',
+      'Explain the problem and the changed behavior for a reader unfamiliar with the codebase.',
+      'Include a small ASCII diagram for the problem and another for the implemented solution',
+      'whenever the supplied evidence supports a meaningful flow, state change or interaction.',
+      'Use rationale labels "Problem diagram" and "Solution diagram"; their detail is raw ASCII',
+      'with JSON-escaped newlines, not Markdown fences. Use short plain-English node labels,',
+      'arrows such as -> and |, and keep lines under 64 columns. Explain identifiers in the prose.',
+      'Every node and arrow must follow from captured evidence. Do not draw a proposed fix as',
+      'implemented behavior. If a diagram is not possible without guessing, omit its rationale',
+      'and explain the specific evidence gap in the associated narrative instead.',
       '',
       'The problem this PR targets (from the description + any linked work item):',
       '{{distilledProblem}}',
@@ -283,8 +352,10 @@ export const DEFAULT_PERSPECTIVE_PROMPTS: Record<
     ),
     issueFormat: lines(
       '## How to report for this lens',
-      'Use EXACTLY these four rationale labels, in order: "Problem",',
-      '"Solution implemented", "Why they align", "Verdict". Keep each to one or',
+      'Use rationale labels "Problem", "Problem example", "Problem code", "Problem diagram",',
+      '"Solution implemented", "Solution example", "Solution code", "Solution diagram",',
+      '"Why they align", "Verdict", in that order. Omit examples, code and diagrams',
+      'that cannot be grounded in captured evidence. Keep prose details to one or',
       'two plain sentences — no file-by-file grading, no jargon dump.',
       'Leave "checks" empty: this lens is holistic, not line-by-line.',
       'File one finding per real gap where the solution fails to solve the',
@@ -567,6 +638,7 @@ export const DEFAULT_PERSPECTIVE_PROMPTS: Record<
  * path serves every lens.
  */
 export function buildReviewPrompt(input: {
+  perspectiveId?: string;
   common: string;
   focus: string;
   issueFormat: string;
@@ -577,6 +649,8 @@ export function buildReviewPrompt(input: {
     input.focus,
     input.issueFormat,
     RESPONSE_ENVELOPE,
+    CONCISE_REVIEW_OUTPUT,
+    ...(input.perspectiveId === 'problem-solution' ? [PROBLEM_SOLUTION_EXPLANATION_OUTPUT] : []),
   ].join('\n\n');
   let output = assembled;
   for (const [key, value] of Object.entries(input.vars)) {

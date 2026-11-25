@@ -28,6 +28,7 @@ export function createRepositoryAnalysisExecutor(
         const content = await meta.run({
           featureId: `repository:${request.repositoryId}`,
           prompt: request.prompt,
+          promptRefs: request.promptRefs,
           cwd: request.repositoryPath,
           scope: 'internal',
           label: 'Repository analysis',
@@ -42,6 +43,7 @@ export function createRepositoryAnalysisExecutor(
         const content = await meta.run({
           featureId: `repository:${request.repositoryId}`,
           prompt: ATTACHED_PROMPT_INSTRUCTION,
+          promptRefs: request.promptRefs,
           attachments: [temporaryPrompt.path],
           cwd: request.repositoryPath,
           scope: 'internal',

@@ -9,6 +9,8 @@ import { optionalCommandArgsSchema } from '../provider/command-options.js';
 export const META_NAMESPACE = 'meta';
 
 export const metaConfigSchema = z.object({
+  monitoringHistoryPoints: z.number().int().min(2).max(600).default(600),
+  monitoringHistoryMs: z.number().int().min(60000).max(86400000).default(3600000),
   /** Provider used to run meta AI sessions. */
   providerId: z.string().min(1),
   /** Model used for meta sessions (may be 'auto'). */
@@ -62,6 +64,7 @@ export const metaConfigSchema = z.object({
 export type MetaConfig = z.infer<typeof metaConfigSchema>;
 
 export const metaDefaults: MetaConfig = {
+  monitoringHistoryPoints: 600, monitoringHistoryMs: 3600000,
   // Keep in sync with the enabled provider(s) in the provider config
   // (Agency by default), mirroring the summarizer defaults.
   providerId: 'agency',

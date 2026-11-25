@@ -8,6 +8,7 @@ import type {
 import type { PlannerRepo } from '../planner/planner-repo-port.js';
 
 interface PlannerRow {
+  automatically_tracked?: number;
   id: string;
   title: string;
   notes: string;
@@ -28,6 +29,7 @@ interface PlannerRow {
 
 function mapTask(row: PlannerRow): PlannerTask {
   return {
+    ...(row.automatically_tracked ? { automaticallyTracked: true } : {}),
     id: row.id,
     title: row.title,
     notes: row.notes,
@@ -56,9 +58,11 @@ export function createPlannerRepo(db: DatabaseSync): PlannerRepo {
         backlogged_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  const selectOne = db.prepare('SELECT * FROM planner_tasks WHERE id = ?');
+  const projection = `SELECT t.*, EXISTS(SELECT 1 FROM planner_tracked_work w WHERE w.task_id = t.id)
+    AS automatically_tracked FROM planner_tasks t`;
+  const selectOne = db.prepare(`${projection} WHERE t.id = ?`);
   const selectAll = db.prepare(
-    'SELECT * FROM planner_tasks ORDER BY date DESC, created_at DESC, id',
+    `${projection} ORDER BY t.date DESC, t.created_at DESC, t.id`,
   );
   const updateRow = db.prepare(
     `UPDATE planner_tasks

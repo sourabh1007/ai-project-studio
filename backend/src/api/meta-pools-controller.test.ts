@@ -36,6 +36,14 @@ describe('createMetaPoolsRoutes', () => {
     expect(route.handler({} as never)).toEqual({ status: 200, body: status });
   });
 
+  it('preserves provider availability alongside the live admission readout', () => {
+    const available: MetaPoolsStatus = { enabled: false, availability: {
+      state: 'unavailable', providerId: 'agency', message: 'On-demand execution only',
+    } };
+    const routes = routesWith({ status: () => available });
+    expect(routes[0].handler({} as never)).toEqual({ status: 200, body: available });
+  });
+
   it('resizes the pool from the request body and returns the refreshed status', () => {
     const calls: number[] = [];
     const routes = routesWith({

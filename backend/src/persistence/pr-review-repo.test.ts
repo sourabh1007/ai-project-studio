@@ -63,6 +63,38 @@ function review(overrides: Partial<PrReview> = {}): PrReview {
 }
 
 describe('pr-review-repo', () => {
+  it('retains the pinned review manifest and historical assessments across repository instances', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    try {
+      const current = review();
+      current.reviewContextDiscovery = { status: 'loaded', headSha: current.headSha,
+        graphGeneratedAt: current.changeGraph.generatedAt, contextFingerprint: 'hash', generatedAt: current.timestamps.createdAt,
+        summary: 'Preserve prices.', requirements: [{ text: 'Keep existing prices', kind: 'inferred',
+          source: 'captured-change:hash', quote: 'price' }], questions: ['Confirm pricing rules.'], sessionId: 'context-meta' };
+      current.reviewBoardImport = { autoReview: false, options: { model: 'named', businessContext: 'Keep existing prices' } };
+      current.analysisDeferred = true;
+      current.reviewPublications = [{
+        key: 'run/finding', status: 'uncertain', startedAt: current.timestamps.createdAt,
+        input: { body: 'Preserve the price', expectedHeadSha: current.headSha!, expectedRunId: 'run', expectedAssessmentRevision: 3 },
+        error: 'Check the PR before retrying.',
+      }];
+      current.reviewBoardRun = {
+        schemaVersion: 2, id: 'run', revision: 3, status: 'completed', options: { model: 'named', skillIds: ['skill'] },
+        providerId: 'provider', model: 'named', perspectiveIds: ['business'],
+        context: { fingerprint: 'hash', skills: [{ id: 'skill', name: 'Rules', source: 'AGENTS.md',
+          content: 'pinned guidance', fingerprint: 'skill-hash', perspectiveIds: ['business'] }],
+          evidence: 'diff', businessRequirements: 'Keep existing prices', warnings: [], baseSha: 'base', mergeBaseSha: 'merge', targetBranch: 'main',
+          requirements: [{ id: 'r1', text: 'Keep existing prices', source: 'Explicit criteria', priority: 0, fingerprint: 'r-hash' }] },
+        headSha: current.headSha, graphGeneratedAt: current.changeGraph.generatedAt,
+        startedAt: current.timestamps.createdAt, failures: {},
+        findingEvents: [{ id: 'decision', action: 'disposition', observationIds: ['business/ai-hash'],
+          disposition: 'dismissed', reason: 'Existing behavior, not changed', at: current.timestamps.updatedAt }],
+      };
+      current.reviewBoardHistory = [{ run: current.reviewBoardRun, analyses: {} }];
+      createPrReviewRepo(db).save(current);
+      expect(createPrReviewRepo(db).get('f1')).toEqual(current);
+    } finally { db.close(); }
+  });
   it('persists queued review intent across repository instances without changing evidence timestamps', () => {
     const db = createDatabase({ databasePath: ':memory:' });
     createPrReviewRepo(db).save(review({ reviewBoardPending: true }));

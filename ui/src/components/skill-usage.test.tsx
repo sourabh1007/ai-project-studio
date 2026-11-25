@@ -52,6 +52,21 @@ it('scopes feature reads and discloses bounded historical windows', async () => 
   expect(screen.getByRole('status')).toHaveTextContent('most recent 5,000 skill events');
 });
 
+it.each([undefined, 'f1'])('follows selected date windows without leaking earlier aggregates (feature=%s)', async (featureId) => {
+  const api = client(snapshot([row('repository')]));
+  const window = { from: '2026-11-01', to: '2026-12-01' };
+  const view = render(<ApiProvider value={api}><SkillUsage featureId={featureId} signal={0} window={window} /></ApiProvider>);
+  await screen.findByText('repository skill');
+  if (featureId) expect(api.getFeatureSkillUsage).toHaveBeenCalledWith(featureId, window);
+  else expect(api.getSkillUsage).toHaveBeenCalledWith('feature', window);
+  expect(screen.getByText(/Follows the selected Usage time frame/)).toBeInTheDocument();
+  api.getSkillUsage.mockImplementationOnce(() => new Promise(() => {}));
+  api.getFeatureSkillUsage.mockImplementationOnce(() => new Promise(() => {}));
+  view.rerender(<ApiProvider value={api}><SkillUsage featureId={featureId} signal={0}
+    window={{ from: '2026-11-02', to: '2026-11-03' }} /></ApiProvider>);
+  expect(screen.queryByText('repository skill')).toBeNull();
+});
+
 it('shows unknown availability rather than zero for empty sources and internal scope', async () => {
   const api = client();
   render(<ApiProvider value={api}><SkillUsage scope="internal" signal={0} /></ApiProvider>);

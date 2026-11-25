@@ -53,6 +53,7 @@ export function createRecordingSessionLauncher(
       const operationId = deps.newOperationId();
       const now = deps.clock.isoNow();
       let op: MetaOperation = {
+        ...(request.promptRefs ? { promptRefs: [...new Set(request.promptRefs)] } : {}),
         operationId,
         featureId: request.featureId,
         automationId: null,

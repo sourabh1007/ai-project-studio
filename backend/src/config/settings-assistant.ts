@@ -167,6 +167,7 @@ export function createSettingsAssistant(
         scope: 'internal',
         purpose: 'general',
         label: `Settings assistant · ${target}`,
+        promptRefs: ['settings-assistant-prompt'],
         timeoutMs: deps.timeoutMs,
       });
       return answer.trim();

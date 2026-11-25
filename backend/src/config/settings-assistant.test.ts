@@ -175,6 +175,7 @@ describe('createSettingsAssistant', () => {
     expect(captured?.featureId).toBe('settings-assistant');
     expect(captured?.noTools).toBe(true);
     expect(captured?.scope).toBe('internal');
+    expect(captured?.promptRefs).toEqual(['settings-assistant-prompt']);
     expect(captured?.purpose).toBe('general');
     expect(captured?.timeoutMs).toBe(12_345);
     expect(captured?.label).toBe('Settings assistant · meta.model');

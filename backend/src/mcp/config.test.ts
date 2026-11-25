@@ -15,4 +15,12 @@ describe('mcp config', () => {
       mcpConfigSchema.parse({ enabled: true, discoveryTimeoutMs: 1.5 }),
     ).toThrow();
   });
+
+  it('supports configurable native execution without treating an unknown isolation policy as valid', () => {
+    expect(mcpConfigSchema.parse({ enabled: true, discoveryTimeoutMs: 1000 }).headlessPolicies)
+      .toEqual({ copilot: 'isolated', agency: 'native', claude: 'native' });
+    expect(mcpConfigSchema.parse({ ...mcpDefaults, headlessPolicies: { agency: 'isolated' } }).headlessPolicies)
+      .toEqual({ agency: 'isolated' });
+    expect(mcpConfigSchema.safeParse({ ...mcpDefaults, headlessPolicies: { agency: 'bypass' } }).success).toBe(false);
+  });
 });

@@ -1,4 +1,4 @@
-import type { SessionSpec } from '../provider-contract.js';
+import type { HeadlessMcpPolicy, SessionSpec } from '../provider-contract.js';
 import {
   buildCopilotArgs,
   type Command,
@@ -14,13 +14,14 @@ export function buildAgencyCommand(
   spec: SessionSpec,
   config: AgencyConfig,
   disabledMcpServers: readonly string[] = [],
+  mcpPolicy: HeadlessMcpPolicy = 'native',
 ): Command {
   return {
     command: config.executable,
     args: [
       config.subcommand,
       '--',
-      ...buildCopilotArgs(spec, config, disabledMcpServers),
+      ...buildCopilotArgs(spec, config, disabledMcpServers, mcpPolicy),
     ],
   };
 }

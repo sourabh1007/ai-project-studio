@@ -1,4 +1,6 @@
 export interface MetaOperation {
+  promptRefs?: readonly string[];
+  correlation?: { runId: string; attachmentId?: string; perspectiveId?: string; contextFingerprint?: string; agentId?: string };
   operationId: string;
   featureId: string;
   automationId: string | null;
@@ -26,6 +28,10 @@ export interface MetaOperation {
 export type MetaOperationSummary = Omit<MetaOperation, 'resultText'> & { hasResult: boolean };
 export interface MetaOperationPage { items: MetaOperationSummary[]; nextCursor: string | null }
 export interface MetaOperationsQuery {
+  agentId?: string;
+  runId?: string;
+  from?: string;
+  to?: string;
   featureId?: string;
   sessionId?: string;
   automationId?: string;

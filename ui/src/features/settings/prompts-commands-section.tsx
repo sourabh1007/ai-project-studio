@@ -12,6 +12,7 @@ import {
   type PromptCatalogReadOnly,
 } from './prompts-catalog.js';
 import { promptAnchorId } from './prompts-nav.js';
+import { PromptUsageMarker } from '../usage/prompt-usage.js';
 
 function asString(value: ConfigValue): string {
   return typeof value === 'string' ? value : value == null ? '' : String(value);
@@ -76,6 +77,7 @@ export function PromptFieldEditor({
     <div id={promptAnchorId(field.namespace, field.key)} className="prompt-entry">
       <div className="prompt-entry-head">
         <h4 className="prompt-entry-title">{field.label}</h4>
+        <PromptUsageMarker promptRef={`${field.namespace}.${field.key}`} label={field.label} />
         <code className="prompt-entry-path">
           {field.namespace}.{field.key}
         </code>
@@ -146,6 +148,7 @@ function PromptReadOnly({ entry }: { entry: PromptCatalogReadOnly }) {
     <div id={entry.id} className="prompt-entry prompt-entry-readonly">
       <div className="prompt-entry-head">
         <h4 className="prompt-entry-title">{entry.label}</h4>
+        <PromptUsageMarker promptRef={entry.id} label={entry.label} />
         <span className="prompt-entry-flag prompt-entry-flag-ro">
           {entry.command ? 'Command' : 'Read-only'}
         </span>

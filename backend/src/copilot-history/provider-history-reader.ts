@@ -1,4 +1,4 @@
-import type { PromptHistoryReader } from './copilot-history-contract.js';
+import { PromptHistoryUnavailableError, type PromptHistoryReader } from './copilot-history-contract.js';
 
 export interface ProviderHistoryReaderDeps {
   sessions: { get(id: string): { provider: string } | null };
@@ -8,6 +8,12 @@ export interface ProviderHistoryReaderDeps {
 /** History follows immutable session attribution, never the active execution provider. */
 export function createProviderHistoryReader(deps: ProviderHistoryReaderDeps): PromptHistoryReader {
   return {
+    recentPrompts(sessionId, limit) {
+      const session = deps.sessions.get(sessionId);
+      const reader = session && deps.readers.get(session.provider);
+      if (!reader?.recentPrompts) throw new PromptHistoryUnavailableError('This provider has no bounded prompt reader');
+      return reader.recentPrompts(sessionId, limit);
+    },
     read(sessionIds) {
       const groups = new Map<PromptHistoryReader, string[]>();
       for (const id of new Set(sessionIds)) {

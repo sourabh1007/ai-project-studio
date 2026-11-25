@@ -10,6 +10,7 @@ import type {
   UsageRollup,
   UsageRollupReader,
   UsageRollupScope,
+  UsageWindow,
 } from './usage-rollup-contract.js';
 
 const EMPTY_TOTALS: UsageTotals = {
@@ -183,9 +184,9 @@ export function parseGranularity(value: unknown): UsageGranularity {
 
 /** Consolidated usage rollups per scope, folded to a chosen granularity. */
 export interface UsageRollupService {
-  workspace(granularity: UsageGranularity): UsageRollup;
-  ide(granularity: UsageGranularity): UsageRollup;
-  feature(featureId: string, granularity: UsageGranularity): UsageRollup;
+  workspace(granularity: UsageGranularity, window?: UsageWindow): UsageRollup;
+  ide(granularity: UsageGranularity, window?: UsageWindow): UsageRollup;
+  feature(featureId: string, granularity: UsageGranularity, window?: UsageWindow): UsageRollup;
 }
 
 export interface UsageRollupServiceDeps {
@@ -196,26 +197,29 @@ export function createUsageRollupService(
   deps: UsageRollupServiceDeps,
 ): UsageRollupService {
   return {
-    workspace(granularity) {
+    workspace(granularity, window) {
       return {
-        ...rollupUsage(deps.reader.workspaceDays(), granularity, 'workspace'),
-        byMcpServer: deps.reader.workspaceMcpServers(),
+        ...rollupUsage(deps.reader.workspaceDays(window), granularity, 'workspace'),
+        ...(window ? { window } : {}),
+        byMcpServer: deps.reader.workspaceMcpServers(window),
       };
     },
-    ide(granularity) {
+    ide(granularity, window) {
       return {
-        ...rollupUsage(deps.reader.ideDays(), granularity, 'ide'),
-        byMcpServer: deps.reader.ideMcpServers(),
+        ...rollupUsage(deps.reader.ideDays(window), granularity, 'ide'),
+        ...(window ? { window } : {}),
+        byMcpServer: deps.reader.ideMcpServers(window),
       };
     },
-    feature(featureId, granularity) {
+    feature(featureId, granularity, window) {
       return {
         ...rollupUsage(
-          deps.reader.featureDays(featureId),
+          deps.reader.featureDays(featureId, window),
           granularity,
           'feature',
         ),
-        byMcpServer: deps.reader.featureMcpServers(featureId),
+        ...(window ? { window } : {}),
+        byMcpServer: deps.reader.featureMcpServers(featureId, window),
       };
     },
   };

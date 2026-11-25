@@ -1,5 +1,5 @@
 import { ApiError, type ApiClient } from './api.js';
-import type { Feature } from './types.js';
+import type { Feature, ReviewImportOptions } from './types.js';
 import { isDefiniteRejection } from './operation-keys.js';
 
 /** Imports that may run at once, across every repository and dialog. */
@@ -28,6 +28,7 @@ export interface PrImportJob {
   title: string;
   parentFeatureId: string | null;
   parentGroupId: string | null;
+  importOptions?: ReviewImportOptions;
   status: PrImportStatus;
   /** Latest human-readable phase (running) or outcome. */
   message: string;
@@ -85,7 +86,7 @@ interface PersistedState {
 
 export interface PrImportRequest {
   repo: { id: string; name: string };
-  pulls: { number: number; title: string }[];
+  pulls: { number: number; title: string; importOptions?: ReviewImportOptions }[];
   parentFeatureId?: string | null;
   parentGroupId?: string | null;
   /** Name/description for the parent feature of a multi-PR batch. */
@@ -182,7 +183,7 @@ export class PrImportStore {
   enqueue(api: PrImportApi, request: PrImportRequest): PrImportEnqueueResult {
     const result: PrImportEnqueueResult = { accepted: [], skipped: [] };
     const seen = new Set<number>();
-    const fresh: { number: number; title: string }[] = [];
+    const fresh: PrImportRequest['pulls'] = [];
     let active = this.jobs.filter((job) => LIVE.includes(job.status)).length;
     for (const pull of request.pulls) {
       const key = `${request.repo.id}:${pull.number}`;
@@ -234,6 +235,7 @@ export class PrImportStore {
         title: pull.title,
         parentFeatureId: request.parentFeatureId ?? null,
         parentGroupId: request.parentGroupId ?? null,
+        ...(pull.importOptions ? { importOptions: structuredClone(pull.importOptions) } : {}),
         status: 'queued',
         message: 'Queued',
         error: null,
@@ -449,6 +451,7 @@ export class PrImportStore {
         },
         parent?.id ?? job.parentFeatureId,
         job.parentGroupId,
+        job.importOptions,
       );
       if (!this.current(id, attempt, epoch)) return;
       // After an unknown outcome the server finished our own import, so it is
@@ -457,7 +460,8 @@ export class PrImportStore {
       this.update(id, (item) => ({
         ...item,
         status: 'succeeded',
-        message: existed ? 'Already imported' : 'Imported · review queued',
+        message: existed ? 'Already imported' : job.importOptions?.autoReview === false
+          ? 'Imported · review later' : 'Imported · review queued',
         error: null,
         feature,
         alreadyImported: existed,

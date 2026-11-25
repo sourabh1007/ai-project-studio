@@ -79,8 +79,11 @@ export interface PrCommentThread {
  * when the captured diff has no precise right-side anchor for the finding.
  */
 export interface AddPrCommentInput {
+  publicationKey?: string;
   /** Captured Review Board head; when supplied, fail closed on stale or uncaptured anchors. */
   expectedHeadSha?: string;
+  expectedRunId?: string;
+  expectedAssessmentRevision?: number;
   /** Repo-relative path of the changed file the comment anchors to; omitted for a PR-level comment. */
   path?: string;
   /** 1-based line on the new (right) side of the diff; omitted for a PR-level comment. */
@@ -135,6 +138,8 @@ export interface PrCommentsGatewayResolver {
  * gateway, and posts/reads/updates live against the real pull request.
  */
 export interface PrCommentsService {
+  publications?(featureId: string): ReviewPublication[];
+  reconcilePublication?(featureId: string, key: string): Promise<ReviewPublication>;
   list(featureId: string): Promise<PrCommentThread[]>;
   add(featureId: string, input: AddPrCommentInput): Promise<PrCommentThread>;
   setStatus(
@@ -143,4 +148,13 @@ export interface PrCommentsService {
     status: PrCommentThreadStatus,
   ): Promise<PrCommentThread>;
   react(featureId: string, input: ReactPrCommentInput): Promise<PrComment>;
+}
+
+export interface ReviewPublication {
+  key: string;
+  status: 'pending' | 'posted' | 'uncertain';
+  input: AddPrCommentInput;
+  startedAt: string;
+  thread?: PrCommentThread;
+  error?: string;
 }

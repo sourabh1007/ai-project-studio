@@ -23,6 +23,8 @@ export interface SignoffIdentity {
   prUrl: string;
   reviewedCommit: string;
   evidenceRevision: string;
+  runId?: string;
+  assessmentRevision?: string;
 }
 
 export interface SignoffHistoryEntry {
@@ -149,7 +151,7 @@ function archiveCurrentSignoff(
 }
 
 export function resolveSignoffIdentity(
-  board: Pick<ReviewBoard, 'repoId' | 'pull' | 'reviewUpdatedAt'>,
+  board: Pick<ReviewBoard, 'repoId' | 'pull' | 'reviewUpdatedAt' | 'run' | 'analyses'>,
 ): SignoffIdentity | null {
   const repoId = board.repoId.trim();
   const prNumber = board.pull.number;
@@ -172,6 +174,15 @@ export function resolveSignoffIdentity(
     prUrl,
     reviewedCommit,
     evidenceRevision,
+    ...(board.run ? {
+      runId: board.run.id,
+      assessmentRevision: JSON.stringify([
+        board.run.revision,
+        ...board.run.perspectiveIds.map((id) => [
+          id, board.analyses?.[id]?.attemptId ?? null, board.analyses?.[id]?.assessment ?? null,
+        ]),
+      ]),
+    } : {}),
   };
 }
 
@@ -446,6 +457,8 @@ function parseIdentity(raw: unknown): SignoffIdentity | null {
         prUrl: obj.prUrl,
         reviewedCommit: obj.reviewedCommit,
         evidenceRevision: obj.evidenceRevision,
+        ...(typeof obj.runId === 'string' ? { runId: obj.runId } : {}),
+        ...(typeof obj.assessmentRevision === 'string' ? { assessmentRevision: obj.assessmentRevision } : {}),
       }
     : null;
 }

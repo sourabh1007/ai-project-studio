@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildReviewPrompt,
+  CONCISE_REVIEW_OUTPUT,
+  PROBLEM_SOLUTION_EXPLANATION_OUTPUT,
   COMMON_PROMPT_PLACEHOLDERS,
   DEFAULT_COMMON_REVIEW_GUIDANCE,
   DEFAULT_PERSPECTIVE_PROMPTS,
@@ -11,6 +13,41 @@ import {
 } from './review-board-perspective-prompts.js';
 
 describe('review-board perspective prompt system', () => {
+  it('enforces concise, diagram-first output for every lens after saved verbose guidance without weakening the schema', () => {
+    for (const id of REVIEW_PERSPECTIVE_IDS) {
+      const prompt = buildReviewPrompt({
+        perspectiveId: id,
+        common: 'Write a long explanation.', focus: DEFAULT_PERSPECTIVE_PROMPTS[id].focus,
+        issueFormat: DEFAULT_PERSPECTIVE_PROMPTS[id].issueFormat, vars: {},
+      });
+      expect(prompt.endsWith(id === 'problem-solution' ? PROBLEM_SOLUTION_EXPLANATION_OUTPUT : CONCISE_REVIEW_OUTPUT)).toBe(true);
+      expect(prompt).toContain('1-2 short sentences');
+      expect(prompt).toContain('35 words');
+      expect(prompt).toContain('unsupported diagram fields');
+      expect(prompt).toContain(RESPONSE_ENVELOPE);
+    }
+  });
+  it('requires distinct before/after examples and captured code even with saved older guidance', () => {
+    const prompt = buildReviewPrompt({ perspectiveId: 'problem-solution', common: 'COMMON',
+      focus: 'Older focus.', issueFormat: 'Only repeat the same summary.', vars: {} });
+    expect(prompt).toContain('"Problem example" and "Solution example"');
+    expect(prompt).toContain('same simple scenario/input');
+    expect(prompt).toContain('verbatim contiguous excerpt of at most 12 lines');
+    expect(prompt).toContain('never nested Markdown fences');
+    expect(prompt).toContain('Do not invent code, join unrelated hunks');
+    expect(prompt).toContain(RESPONSE_ENVELOPE);
+    expect(prompt.endsWith(PROBLEM_SOLUTION_EXPLANATION_OUTPUT)).toBe(true);
+  });
+  it('asks for plain-English before/after diagrams grounded in the captured code rather than invented flows', () => {
+    const { focus, issueFormat } = DEFAULT_PERSPECTIVE_PROMPTS['problem-solution'];
+    expect(focus).toContain('small ASCII diagram');
+    expect(focus).toContain('raw ASCII');
+    expect(focus).toContain('not Markdown fences');
+    expect(focus).toContain('Every node and arrow must follow from captured evidence');
+    expect(focus).toContain('omit its rationale');
+    expect(issueFormat).toContain('"Problem diagram"');
+    expect(issueFormat).toContain('"Solution diagram"');
+  });
   it('fixes exact location guidance in the non-editable response contract', () => {
     expect(RESPONSE_ENVELOPE).toContain('"location": { "path": "<repo-relative path>", "line": 1');
     expect(RESPONSE_ENVELOPE).toContain('"side": "RIGHT" | "LEFT"');

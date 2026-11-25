@@ -6,6 +6,8 @@ import { formatBytes, formatDateTime } from '../../lib/format.js';
 import type { MeasuredConnectionStatus } from '../../hooks/use-connection-status.js';
 import type { AppResourceSnapshot, ResourceCleanup } from './resource-types.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
+import { Insights } from '../monitoring/insights.js';
+import { ResourceInsights } from './resource-insights.js';
 
 export const resourceBytes = (value: number | null | undefined) =>
   value == null ? 'Unavailable' : formatBytes(value);
@@ -128,6 +130,7 @@ export function ResourcePanel({ snapshot, error, loading, now, connection, refre
       <ErrorText error={error} />
       {error && <Button onClick={() => void refresh()}>Retry resource measurements</Button>}
       {stale && <p role="status" className="resource-warning">Measurements are stale. Last snapshot: {measuredTime(snapshot?.measuredAt)}.</p>}
+      <Insights title="Resource trends">{() => <ResourceInsights snapshot={snapshot} />}</Insights>
       <section className="resource-section" aria-labelledby="resource-system-title">
         <header className="resource-section-head"><h3 id="resource-system-title">System</h3><span className="muted">Entire machine · not app usage</span></header>
         <div className="resource-summary-grid resource-system-metrics">
@@ -194,6 +197,7 @@ export function ResourcePanel({ snapshot, error, loading, now, connection, refre
             {scanPending || storage?.status === 'scanning' ? <><Spinner size={12} /> Scanning storage…</> : 'Refresh disk usage'}
           </Button></div>
         <p className="muted">Last completed scan: {measuredTime(storage?.scannedAt)}. Disk scans run in the background, less often than CPU/RAM samples.</p>
+        <Insights title="Storage growth">{() => <ResourceInsights snapshot={snapshot} storage />}</Insights>
         {storage?.progress && <p role="status">
           {storage.status === 'scanning' ? 'Scanning' : 'Last scan'}: {storage.progress.visitedEntries.toLocaleString()} entries · {formatBytes(storage.progress.scannedBytes)} measured
           {storage.status === 'scanning' && storage.progress.currentPath && <> · <code>{storage.progress.currentPath}</code></>}

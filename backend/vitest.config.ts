@@ -63,6 +63,7 @@ export default defineConfig({
         'src/mcp/mcp-config-file-adapter.ts',
         'src/config/early-config-file-adapter.ts',
         'src/mcp/mcp-tool-inspector-adapter.ts',
+        'src/mcp/mcp-review-read-adapter.ts',
         'src/copilot-history/copilot-live-prompt-fs-adapter.ts',
         'src/logging/log-writer-worker-entry.ts',
         'src/meta/acp/acp-process-adapter.ts',

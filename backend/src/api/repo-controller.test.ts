@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRepoRoutes } from './repo-controller.js';
+import { createRepoRoutes, parsePrImportInput } from './repo-controller.js';
 import type { RepoService } from '../repo/repo-service.js';
 import type { Repository } from '../repo/repo-contract.js';
 import type { RemoteRepo } from '../repo/remote-repo-contract.js';
@@ -113,6 +113,7 @@ function harness() {
   const provisioned: unknown[] = [];
   const removed: string[] = [];
   const reviewed: Array<{ repoId: string; number: number }> = [];
+  const importSetups: unknown[] = [];
   const listedFilters: string[] = [];
   const initialized: string[] = [];
   const loaded: string[] = [];
@@ -161,8 +162,9 @@ function harness() {
       listedFilters.push(filter);
       return [pull];
     },
-    createFromPull: async (repoId, number) => {
+    createFromPull: async (repoId, number, _parentFeatureId, _parentGroupId, _status, options) => {
       reviewed.push({ repoId, number });
+      importSetups.push(options);
       return { feature: reviewFeature, alreadyImported: false };
     },
     pullLatest: async () => {
@@ -239,6 +241,7 @@ function harness() {
     provisioned,
     removed,
     reviewed,
+    importSetups,
     listedFilters,
     initialized,
     loaded,
@@ -258,6 +261,30 @@ function harness() {
 }
 
 describe('repo-controller', () => {
+  it('passes validated import presets and placement through the normal import route', async () => {
+    const h = harness();
+    const reviewOptions = { model: 'chosen', perspectiveIds: ['security'], skillIds: ['guide'], businessContext: 'Protect accounts.' };
+    await pick(h.routes, 'post', '/repos/:id/pulls')(req({
+      params: { id: 'r1' },
+      body: { number: 12, parentFeatureId: 'parent', parentGroupId: 'group', autoReview: false, reviewOptions },
+    }));
+    expect(h.importSetups).toEqual([{ autoReview: false, reviewOptions }]);
+  });
+
+  it.each([
+    { number: 0 }, { number: 1.5 }, { number: '12' }, { number: Number.MAX_SAFE_INTEGER + 1 },
+    { number: 12, unexpected: true },
+    { number: 12, autoReview: 'false' }, { number: 12, parentFeatureId: 42 },
+    { number: 12, reviewOptions: null }, { number: 12, reviewOptions: [] },
+    { number: 12, reviewOptions: { model: '' } },
+    { number: 12, reviewOptions: { perspectiveIds: [] } },
+    { number: 12, reviewOptions: { perspectiveIds: ['unknown'] } },
+    { number: 12, reviewOptions: { skillIds: [1] } },
+    { number: 12, reviewOptions: { businessContext: true } },
+    { number: 12, reviewOptions: { extra: 'invalid' } },
+  ])('strictly rejects invalid setup shared by stream and JSON imports: %j', (body) => {
+    expect(() => parsePrImportInput(body)).toThrow();
+  });
   it('lists saved repositories', async () => {
     const h = harness();
     const result = await pick(h.routes, 'get', '/repos')(req());

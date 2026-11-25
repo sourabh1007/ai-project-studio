@@ -49,7 +49,7 @@ export function summarizeImports(jobs: readonly PrImportJob[]) {
 function StatusGlyph({ job }: { job: PrImportJob }) {
   switch (job.status) {
     case 'running':
-      return <Spinner size={13} label="Importing" />;
+      return <Spinner size={14} label="Importing" showLabel={false} />;
     case 'succeeded':
       return <CheckIcon size={13} />;
     case 'failed':
@@ -101,11 +101,15 @@ export function PrImportStatus({
   const attention = summary.failed + summary.unknown > 0;
   const hasFinished = jobs.some((job) => isFinishedImport(job.status));
   const batchIds = [...new Set(jobs.map((job) => job.batchId))];
+  const state = summary.failed ? 'failed' : summary.unknown ? 'unknown' : summary.running ? 'running'
+    : summary.queued ? 'queued' : summary.succeeded ? 'succeeded' : 'cancelled';
 
   return (
     <section
       className={`pr-import-status${attention ? ' has-attention' : ''}`}
       aria-label="Pull request imports"
+      data-state={state}
+      data-active={working}
     >
       <div className="pr-import-head">
         <button
@@ -115,9 +119,11 @@ export function PrImportStatus({
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? <ChevronDownIcon size={13} /> : <ChevronRightIcon size={13} />}
-          <PullRequestIcon size={14} />
-          <span className="pr-import-title">PR imports</span>
-          <span className="pr-import-summary">{summary.text || 'Done'}</span>
+          <span className="pr-import-heading-icon"><PullRequestIcon size={16} /></span>
+          <span className="pr-import-heading">
+            <span className="pr-import-title">PR imports</span>
+            <span className="pr-import-summary">{summary.text || 'Done'}</span>
+          </span>
         </button>
         {hasFinished && (
           <button
@@ -130,6 +136,10 @@ export function PrImportStatus({
           </button>
         )}
       </div>
+      <div className="pr-import-progress-caption">
+        <span>Import progress</span>
+        <span>{settled} / {jobs.length} finished</span>
+      </div>
       <div
         className="pr-import-bar"
         role="progressbar"
@@ -140,6 +150,7 @@ export function PrImportStatus({
         aria-valuetext={`${settled} of ${jobs.length} finished`}
       >
         <span className="pr-import-bar-fill" style={{ width: `${pct}%` }} />
+        {working && <span className="pr-import-bar-activity" aria-hidden="true" style={{ left: `${pct}%` }} />}
       </div>
       <span className="sr-only" role="status" aria-live="polite">
         {summary.text}

@@ -4,6 +4,8 @@ import type { ProviderSelectionInfo } from '../../lib/api.js';
 import { announceProvider } from '../../lib/provider-selection.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { Button, ConfirmDialog, ErrorText, Modal } from '../../components/ui.js';
+import { ProviderFeatureChecklist } from '../../components/provider-feature-checklist.js';
+import { CheckIcon, ImportIcon, ProviderIcon } from '../../components/icons.js';
 
 export function CliSelector({ onClose, initialProviderId = null }: { onClose: () => void; initialProviderId?: string | null }) {
   const api = useApi();
@@ -62,17 +64,27 @@ export function CliSelector({ onClose, initialProviderId = null }: { onClose: ()
         <span><input type="checkbox" aria-label="Remember me" checked={remember} disabled={busy} onChange={(event) => setRemember(event.target.checked)} /> Remember me</span>
         <span className="field-hint">Skip startup selection next time. Unchecked clears any previously remembered CLI.</span>
       </label>
-      {info?.providers.map((provider) => (
-        <div className="config-namespace" key={provider.id}>
-          <strong>{provider.label ?? providerLabel(provider.id)}</strong>
-          <p>{provider.installed ? 'Installed' : 'Not installed — configure installation in Settings → CLI.'}</p>
-          {provider.automation?.supported === false && <p>Interactive use only — automated AI is unavailable. {provider.automation.reason} Choose another CLI for agents and AI planning.</p>}
-          {!provider.automation && <p>Automation readiness is unreported. Selecting this CLI does not confirm agent or AI planning support.</p>}
-          <Button disabled={busy || !provider.installed} onClick={() => setTarget(provider.id)}>
+      <div className="cli-provider-list">{info?.providers.map((provider) => (
+        <section className="cli-provider-card" key={provider.id} aria-label={`${provider.label ?? providerLabel(provider.id)} setup`}>
+          <div className="cli-provider-heading">
+            <div className="cli-provider-title">
+              <span className="cli-provider-icon" aria-hidden><ProviderIcon providerId={provider.id} /></span>
+              <h2>{provider.label ?? providerLabel(provider.id)}</h2>
+            </div>
+            {provider.id === 'agency' && <p className="cli-provider-note">Microsoft internal only</p>}
+            <span className={`cli-provider-status${provider.installed ? ' is-installed' : ''}`}>
+              {provider.installed ? <CheckIcon size={13} /> : <ImportIcon size={13} />}
+              {provider.installed ? 'Installed' : 'Not installed'}
+            </span>
+          </div>
+          {!provider.installed && <p className="field-hint">Install from Settings → CLI.</p>}
+          <ProviderFeatureChecklist provider={provider} />
+          <div className="cli-provider-actions"><Button disabled={busy || !provider.installed} onClick={() => setTarget(provider.id)}>
+            <CheckIcon size={14} />
             Use {provider.label ?? providerLabel(provider.id)}
-          </Button>
-        </div>
-      ))}
+          </Button></div>
+        </section>
+      ))}</div>
       {info?.blockers?.map((blocker) => <p key={`${blocker.kind}:${blocker.id}`}>{blocker.label}</p>)}
       {target && <ConfirmDialog
         title="Switch active CLI?"

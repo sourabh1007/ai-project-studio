@@ -32,6 +32,30 @@ function usage(overrides: Partial<StoredUsage>): StoredUsage {
   };
 }
 
+it('bounds all day sources by an exclusive UTC window and preserves retained billing', () => {
+  const db = createDatabase({ databasePath: ':memory:' });
+  try {
+    const repo = createUsageRollupRepo(db, ideUsageDefaults);
+    createUsageRepo(db).saveAll([usage({}), usage({ turnIndex: 1, startedAt: '2026-02-01T00:00:00.000Z' })]);
+    insertRetained(db, { id: 'keep', day: '2026-01-02' });
+    insertRetained(db, { id: 'old', day: '2025-12-01' });
+    insertRetained(db, { id: 'internal', day: '2026-01-03', source: 'meta', scope: 'internal' });
+    const window = { from: '2026-01-01', to: '2026-02-01' };
+    expect(repo.workspaceDays(window).map((row) => row.day)).toEqual(['2026-01-01', '2026-01-02']);
+    expect(repo.featureDays('f1', window).map((row) => row.day)).toEqual(['2026-01-01', '2026-01-02', '2026-01-03']);
+    expect(repo.ideDays(window).map((row) => row.day)).toEqual(['2026-01-03']);
+    expect(repo.featureDays('missing', window)).toEqual([]);
+    const mcp = createMcpUsageRepo(db);
+    for (const scope of ['feature', 'internal'] as const) for (const at of ['2025-12-31', '2026-01-02', '2026-02-01']) {
+      mcp.recordObserved({ featureId: 'f1', sessionId: 'mcp-session', provider: 'copilot', server: 'tools', tool: 'read',
+        callId: `${scope}/${at}`, origin: 'configured', scope, recordedAt: `${at}T00:00:00.000Z` });
+    }
+    expect(repo.workspaceMcpServers(window)).toMatchObject([{ calls: 1, tools: [{ calls: 1 }] }]);
+    expect(repo.ideMcpServers(window)).toMatchObject([{ calls: 1, tools: [{ calls: 1 }] }]);
+    expect(repo.featureMcpServers('f1', window)).toMatchObject([{ calls: 2, tools: [{ calls: 2 }] }]);
+  } finally { db.close(); }
+});
+
 function session(id: string, scope: Session['scope'], kind: Session['kind']): Session {
   return {
     id,

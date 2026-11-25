@@ -11,9 +11,10 @@ export function createSkillUsageRepo(db: DatabaseSync): SkillUsageRepo {
     input_tokens = COALESCE(skill_usage.input_tokens, excluded.input_tokens),
     output_tokens = COALESCE(skill_usage.output_tokens, excluded.output_tokens),
     nano_aiu = COALESCE(skill_usage.nano_aiu, excluded.nano_aiu)`);
-  const query = (feature: boolean) => db.prepare(`
+  const query = (feature: boolean, window = false) => db.prepare(`
     WITH recent AS (
       SELECT * FROM skill_usage WHERE scope = ? ${feature ? 'AND feature_id = ?' : ''}
+      ${window ? 'AND recorded_at >= ? AND recorded_at < ?' : ''}
       ORDER BY recorded_at DESC, event_id DESC LIMIT ?
     ), bounded AS (SELECT * FROM recent ORDER BY recorded_at DESC, event_id DESC LIMIT ?)
     SELECT identity, name, source, kind, provider, repo_id,
@@ -26,6 +27,8 @@ export function createSkillUsageRepo(db: DatabaseSync): SkillUsageRepo {
     ORDER BY uses DESC, last_used_at DESC, name, identity`);
   const all = query(false);
   const byFeature = query(true);
+  const allWindow = query(false, true);
+  const featureWindow = query(true, true);
   return {
     record(entry) {
       insert.run(entry.eventId, entry.featureId, entry.sessionId, entry.provider, entry.repoId,
@@ -33,9 +36,13 @@ export function createSkillUsageRepo(db: DatabaseSync): SkillUsageRepo {
         entry.inputTokens, entry.outputTokens, entry.nanoAiu, entry.recordedAt);
     },
     read(filter, maxEvents) {
-      const result = filter.featureId === undefined
-        ? all.all(filter.scope, maxEvents + 1, maxEvents)
-        : byFeature.all(filter.scope, filter.featureId, maxEvents + 1, maxEvents);
+      const result = filter.window
+        ? filter.featureId === undefined
+          ? allWindow.all(filter.scope, filter.window.from, filter.window.to, maxEvents + 1, maxEvents)
+          : featureWindow.all(filter.scope, filter.featureId, filter.window.from, filter.window.to, maxEvents + 1, maxEvents)
+        : filter.featureId === undefined
+          ? all.all(filter.scope, maxEvents + 1, maxEvents)
+          : byFeature.all(filter.scope, filter.featureId, maxEvents + 1, maxEvents);
       const rows: SkillUsageRow[] = result.map((row) => ({
         identity: row.identity as string, name: row.name as string,
         source: row.source as SkillOrigin, kind: row.kind as SkillUsageKind,

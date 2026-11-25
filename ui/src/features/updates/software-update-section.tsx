@@ -101,6 +101,10 @@ export function SoftwareUpdateSection({ embedded }: { embedded?: boolean } = {})
         </p>
       )}
 
+      {!state.error && !ui.showProgress && !ui.showActivity && ui.detail && (
+        <p className="page-subtitle">{ui.detail}</p>
+      )}
+
       {state.releaseNotes && (
         <details className="update-section-notes">
           <summary>Release notes</summary>

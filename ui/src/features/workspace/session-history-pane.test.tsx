@@ -32,6 +32,25 @@ afterEach(() => {
 });
 
 describe('prompt history search', () => {
+  it('hides the fullscreen history panel completely and cancels polling without overwriting its saved normal state', async () => {
+    localStorage.setItem('cw-history-pane-open', 'true');
+    const changed = vi.fn();
+    const view = render(<SessionHistoryPane sessionId="s1" open={false} onOpenChange={changed} hideCollapsed />);
+    expect(view.container).toBeEmptyDOMElement();
+    expect(api.listSessionPrompts).not.toHaveBeenCalled();
+    view.rerender(<SessionHistoryPane sessionId="s1" open onOpenChange={changed} hideCollapsed />);
+    await screen.findByText('Fix the checkout bug');
+    const signal = api.listSessionPrompts.mock.calls[0][1].signal as AbortSignal;
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse prompt history' }));
+    expect(changed).toHaveBeenCalledWith(false);
+    expect(localStorage.getItem('cw-history-pane-open')).toBe('true');
+    view.rerender(<SessionHistoryPane sessionId="s1" open={false} onOpenChange={changed} hideCollapsed />);
+    expect(view.container).toBeEmptyDOMElement();
+    expect(signal.aborted).toBe(true);
+    view.rerender(<SessionHistoryPane sessionId="s1" />);
+    expect(screen.getByRole('button', { name: 'Collapse prompt history' })).toBeVisible();
+  });
+
   it('expands only the response with copy/download controls and restores the prompt detail', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { clipboard: { writeText } });
@@ -155,6 +174,32 @@ describe('prompt history search', () => {
     expect(within(dialog).getByText('The response is complete.')).toBeInTheDocument();
     expect(within(dialog).queryByText('Generating response…')).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent('Still being saved');
+  });
+
+  it('keeps queued prompts separate and updates the selected reply when other requests finish first', async () => {
+    vi.useFakeTimers();
+    const first = { ...prompt(0, 'First request', 'A is working'), status: 'answering' as const, pending: true };
+    const second = { ...prompt(1, 'Second request'), queued: true, pending: true };
+    const third = { ...prompt(2, 'Third request'), queued: true, pending: true };
+    api.listSessionPrompts.mockResolvedValue([first, second, third]);
+    render(<SessionHistoryPane sessionId="s1" />);
+    await act(async () => {});
+    expect(screen.getAllByRole('img', { name: 'Queued - waiting for response' })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: /Second request/ }));
+    let dialog = screen.getByRole('dialog', { name: 'Prompt & response' });
+    expect(dialog).toHaveTextContent('This prompt is queued.');
+    expect(dialog).not.toHaveTextContent('A is working');
+    api.listSessionPrompts.mockResolvedValue([
+      prompt(0, 'First request', 'Only A answer'),
+      { ...prompt(4, 'Second request', 'Only B answer'), at: '2026-10-16T10:00:00.000Z' },
+      third,
+    ]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    dialog = screen.getByRole('dialog', { name: 'Prompt & response' });
+    expect(dialog).toHaveTextContent('Only B answer');
+    expect(dialog).not.toHaveTextContent('Only A answer');
+    expect(dialog).not.toHaveTextContent('This prompt is queued.');
+    expect(dialog).toHaveTextContent('Turn5');
   });
 
   it('keeps an open live turn synchronized when its persisted index changes', async () => {

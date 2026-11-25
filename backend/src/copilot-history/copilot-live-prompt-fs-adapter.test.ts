@@ -61,6 +61,19 @@ describe('scanLiveLog', () => {
     expect(await reader(20).latest('tail')).toBeNull();
   });
 
+  it('scans past a newly queued prompt to recover the earlier prompt that is still answering', async () => {
+    writeLog('queued-long', [
+      event('user.message', { content: 'First request', messageId: 'a' }, '2024-01-01T00:00:00Z'),
+      event('assistant.turn_start', { turnId: 'ta' }, '2024-01-01T00:00:01Z'),
+      ...Array.from({ length: 20 }, () => event('tool.execution_complete', { output: 'x'.repeat(300) }, '2024-01-01T00:00:02Z')),
+      event('user.message', { content: 'Queued request', messageId: 'b' }, '2024-01-01T00:00:03Z'),
+      event('assistant.message', { originatingMessageId: 'a', content: 'First answer' }, '2024-01-01T00:00:04Z'),
+    ].join('\n') + '\n');
+    const snapshot = await reader(500, 20_000).latest('queued-long');
+    expect(snapshot).toMatchObject({ text: 'Queued request', response: null, queued: true });
+    expect(snapshot?.preceding).toMatchObject([{ text: 'First request', response: 'First answer' }]);
+  });
+
   describe('latest user message beyond the first tail window', () => {
     const user = (content: string, id: string, at: string) => event('user.message', { content, messageId: id }, at);
     const reply = (id: string, content: string, at: string) => event('assistant.message', { originatingMessageId: id, content }, at);

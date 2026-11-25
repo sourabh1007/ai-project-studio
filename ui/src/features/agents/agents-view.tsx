@@ -7,6 +7,8 @@ import { ErrorState } from '../../components/error-state.js';
 import { Loader } from '../../components/loading.js';
 import { AgentIcon } from '../../agent-host/agent-icon.js';
 import { AgentPromptTree } from './agent-prompt-tree.js';
+import { Insights } from '../monitoring/insights.js';
+import { OperationInsights } from '../meta-operations/operation-insights.js';
 
 function formatCredits(value: number | null): string {
   return value == null ? '—' : value.toFixed(2);
@@ -66,6 +68,10 @@ function AgentDetail({
       </div>
 
       <h3 className="agents-detail-subhead">Prompts &amp; settings</h3>
+      <Insights title="Recorded execution insights">{() => <>
+        <p className="field-hint">Only operations with this agent's typed attribution are included. Legacy operations without attribution are not guessed from their labels.</p>
+        <OperationInsights scope={{ agentId: manifest.id }} />
+      </>}</Insights>
       {loading && <Loader label="Loading settings…" />}
       {error && <ErrorState error={cause ?? error} onRetry={reload} />}
       {data &&

@@ -27,6 +27,7 @@ import {
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import { PlannerImportDialog } from './planner-import-dialog.js';
+import { PlannerTaskEvidence, PlannerTrackingControl } from './planner-tracking.js';
 import {
   addDays,
   formatDayLabel,
@@ -559,7 +560,7 @@ export function PlannerView({
 
   /** Requests an AI summary of the current scope (day/month/year). */
   async function generateSummary() {
-    if (automation?.supported === false) return;
+    if (automation?.canAttempt === false) return;
     setSummaryBusy(true);
     setSummaryError(null);
     try {
@@ -609,7 +610,7 @@ export function PlannerView({
 
   /** Creates the launch target, records the link on the task, and opens it. */
   async function performLaunch(task: PlannerTask, intent: PlannerIntent) {
-    if (intent !== 'session' && automation?.supported === false) return;
+    if (intent !== 'session' && automation?.canAttempt === false) return;
     const repo = task.repoId || effectiveRepoId;
     const retention = acquireRetention(launchRegistry, task, intent, repo);
     if (!retention) {
@@ -659,7 +660,7 @@ export function PlannerView({
   }
 
   function launchTask(task: PlannerTask, intent: PlannerIntent) {
-    if (intent !== 'session' && automation?.supported === false) return Promise.resolve();
+    if (intent !== 'session' && automation?.canAttempt === false) return Promise.resolve();
     return withLaunchSlot(task, () => performLaunch(task, intent));
   }
 
@@ -776,6 +777,7 @@ export function PlannerView({
             <h1 className="page-title planner-brand-title">Planner</h1>
           </div>
           <div className="planner-toolbar-actions">
+            <PlannerTrackingControl onUpdated={tasks.reload} />
             <label className="planner-repo">
               Repository
               <select
@@ -853,17 +855,16 @@ export function PlannerView({
             <ImportIcon size={14} />
             <span>Import</span>
           </button>
-          <button
+          {automation?.canAttempt !== false && <button
             type="button"
             className="planner-ai-trigger"
             onClick={() => setSummaryOpen(true)}
             aria-label="AI summary"
-            disabled={automation?.supported === false}
             title="Summarize these tasks with AI"
           >
             <AiIcon size={15} />
             <span>AI summary</span>
-          </button>
+          </button>}
           </div>
         </div>
         <div className="planner-date-nav">
@@ -1031,7 +1032,7 @@ export function PlannerView({
               task={task}
               busy={busyTaskId === task.id}
               launchLocked={busyTaskId !== null}
-              automationBlocked={automation?.supported === false}
+              automationBlocked={automation?.canAttempt === false}
               busyPhase={busyTaskId === task.id ? busyPhase : null}
               renaming={renamingId === task.id}
               renameValue={renameValue}
@@ -1268,6 +1269,7 @@ function BacklogRow({
     <li className="planner-item">
       <div className="planner-item-body">
         <span className="planner-item-title">{task.title}</span>
+        {task.automaticallyTracked && <PlannerTaskEvidence taskId={task.id} />}
         <span className="planner-item-notes">Backlogged {task.backloggedAt}</span>
       </div>
       <div className="planner-item-side">
@@ -1480,6 +1482,7 @@ function PlannerRow({
           {task.title}
         </button>
         {task.notes && <span className="planner-item-notes">{task.notes}</span>}
+        {task.automaticallyTracked && <PlannerTaskEvidence taskId={task.id} />}
       </div>
 
       <div className="planner-item-side">
@@ -1553,7 +1556,7 @@ function PlannerRow({
           </div>
         ) : (
           <div className="planner-actions">
-            {actionsForTask(task).map((intent, index) => {
+            {actionsForTask(task).filter((intent) => !automationBlocked || intent === 'session').map((intent, index) => {
               const { label, Icon } = INTENTS[intent];
               return (
                 <button
@@ -1563,7 +1566,7 @@ function PlannerRow({
                     index === 0 ? 'is-primary' : ''
                   }`.trim()}
                   onClick={() => onLaunch(intent)}
-                  disabled={busy || launchLocked || (automationBlocked && intent !== 'session')}
+                  disabled={busy || launchLocked}
                   title={INTENTS[intent].verb}
                 >
                   <Icon size={14} /> {label}

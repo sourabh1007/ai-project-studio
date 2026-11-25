@@ -10,6 +10,13 @@ export const MCP_NAMESPACE = 'mcp';
 export const mcpConfigSchema = z.object({
   /** Feature flag for the MCP server management surface. */
   enabled: z.boolean(),
+  headlessPolicies: z.record(z.enum(['native', 'isolated'])).default({
+    copilot: 'isolated', agency: 'native', claude: 'native',
+  }).describe('MCP policy by provider for automated AI. Native preserves CLI configuration and permissions; isolated requires verifiable zero-MCP startup. Unknown providers default to isolated. Restart after changing.'),
+  headlessInventoryMaxBytes: z.number().int().min(1024).max(4_194_304).default(1_048_576)
+    .describe('Maximum output from the native read-only MCP inventory command.'),
+  readinessCacheMs: z.number().int().min(1000).max(300_000).default(30_000)
+    .describe('Cache baseline automation readiness; each actual launch still checks its own working directory.'),
   /**
    * Upper bound (ms) on the provider meta-session used to discover the config
    * file path. Discovery only runs when the documented default file is absent,
@@ -31,10 +38,13 @@ export const mcpConfigSchema = z.object({
   authObservationMaxEntries: z.number().int().positive().max(1000).optional(),
 });
 
-export type McpConfig = z.infer<typeof mcpConfigSchema>;
+export type McpConfig = z.input<typeof mcpConfigSchema>;
 
 export const mcpDefaults: McpConfig = {
   enabled: true,
+  headlessPolicies: { copilot: 'isolated', agency: 'native', claude: 'native' },
+  headlessInventoryMaxBytes: 1_048_576,
+  readinessCacheMs: 30_000,
   discoveryTimeoutMs: 15_000,
   maxConcurrentProbes: 2,
   studioProbeTimeoutMs: 3_000,

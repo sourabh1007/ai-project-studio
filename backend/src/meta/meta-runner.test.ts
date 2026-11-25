@@ -316,6 +316,28 @@ describe('meta-runner', () => {
     );
   });
 
+  it('retains the causal native startup error before a generic engine exit wrapper', async () => {
+    const h = harness({
+      sessionId: 'meta1', stdout: [], exitCode: 1,
+      stderr: [
+        'Starting proxies',
+        'Could not start GitHub Copilot CLI at C:\\npm\\copilot.cmd: UnsupportedWindowsCommandValue',
+        'Error: Agent execution failed: launch_engine - C:\\shim\\copilot.exe exited with non-zero status (exit code: 1)',
+      ],
+    }, { ended: { status: 'failed', exitCode: 1 } });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' }))
+      .rejects.toThrow('Could not start GitHub Copilot CLI at C:\\npm\\copilot.cmd: UnsupportedWindowsCommandValue');
+  });
+
+  it('keeps a lone engine exit wrapper when there is no preceding diagnostic', async () => {
+    const h = harness({
+      sessionId: 'meta1', stdout: [], exitCode: 1,
+      stderr: ['Error: Agent execution failed: launch_engine - engine exited with non-zero status'],
+    }, { ended: { status: 'failed', exitCode: 1 } });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' }))
+      .rejects.toThrow('Provider failed (exit code 1): Error: Agent execution failed');
+  });
+
   it('prefers the final session.error and safely caps provider failures', async () => {
     const long = `specific ${'x'.repeat(600)}`;
     const h = harness(
@@ -708,6 +730,44 @@ describe('meta-runner', () => {
     // The terminal `result` line triggers exactly one kill; the `result` on
     // stderr and the non-result stdout lines do not.
     expect(killed).toBe(1);
+  });
+  it.each([
+    { type: 'result', exitCode: 1 },
+    { type: 'result', is_error: true },
+    { type: 'result', status: 'failed' },
+    { type: 'result', subtype: 'error_max_turns' },
+  ])('rejects a failed terminal result instead of accepting an empty completed review: %j', async (result) => {
+    const h = harness({ sessionId: 'meta1', stdout: [JSON.stringify(result)], stderr: [], exitCode: 0 }, {
+      ended: { status: 'completed', exitCode: 0 },
+      events: [{ type: 'stdout', line: JSON.stringify(result) }],
+    });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' })).rejects.toThrow('Provider reported a failed result');
+  });
+  it('does not let a bare result event erase an earlier captured session error', async () => {
+    const failure = JSON.stringify({ type: 'session.error', data: { message: 'Engine failed' } });
+    const h = harness({ sessionId: 'meta1', stdout: [failure], stderr: [], exitCode: 1 }, {
+      ended: { status: 'failed', exitCode: 1 },
+      events: [{ type: 'stdout', line: failure }, { type: 'stdout', line: '{"type":"result"}' }],
+    });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' })).rejects.toThrow('Engine failed');
+  });
+  it.each([
+    { message: 'Authentication failed' },
+    { error: 'Authentication failed' },
+    { message: '', error: ' ', result: 'Authentication failed' },
+  ])('preserves diagnostics from a failed result without requiring a nonzero process exit: %j', async (detail) => {
+    const line = JSON.stringify({ type: 'result', is_error: true, ...detail });
+    const h = harness({ sessionId: 'meta1', stdout: [line], stderr: [], exitCode: 0 }, {
+      ended: { status: 'completed', exitCode: 0 }, events: [{ type: 'stdout', line }],
+    });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' })).rejects.toThrow('Authentication failed');
+  });
+  it('also checks errors recorded before the live completion listener was attached', async () => {
+    const failure = JSON.stringify({ type: 'session.error', data: { message: 'Transcript engine failure' } });
+    const h = harness({ sessionId: 'meta1', stdout: [failure], stderr: [], exitCode: 0 }, {
+      ended: { status: 'completed', exitCode: 0 }, events: [{ type: 'stdout', line: '{"type":"result"}' }],
+    });
+    await expect(h.runner.run({ featureId: 'f1', prompt: 'Review' })).rejects.toThrow('Transcript engine failure');
   });
 
   it('finishes the turn even when killing after the terminal event throws', async () => {

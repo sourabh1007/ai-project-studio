@@ -14,6 +14,7 @@ import type { RepositoryContextCoordinator } from '../repository-context/reposit
 import type { RepoInsightsService } from '../repo-insights/repo-insights-service.js';
 import type { Route } from './http-contract.js';
 import { parseInput } from './request-validation.js';
+import { parseReviewOptions } from '../review-board/review-run.js';
 
 const createRepoSchema = z.object({
   provider: z.enum(['github', 'azure-devops']),
@@ -30,10 +31,24 @@ const reprovisionRepoSchema = z.object({
 });
 
 const reviewPullSchema = z.object({
-  number: z.number().int().positive(),
+  number: z.number().int().positive().safe(),
   parentFeatureId: z.string().min(1).nullish(),
   parentGroupId: z.string().min(1).nullish(),
-});
+  autoReview: z.boolean().optional(),
+  reviewOptions: z.unknown().optional(),
+}).strict();
+
+/** Shared with the streamed import so both paths reject the same invalid setup. */
+export function parsePrImportInput(body: unknown) {
+  const input = parseInput(reviewPullSchema, body);
+  const { reviewOptions, ...rest } = input;
+  return {
+    ...rest,
+    ...(reviewOptions !== undefined
+      ? { reviewOptions: parseReviewOptions(reviewOptions) }
+      : {}),
+  };
+}
 
 const refreshContextSchema = z.object({}).strict().optional();
 
@@ -242,12 +257,14 @@ export function createRepoRoutes(deps: RepoControllerDeps): Route[] {
       method: 'post',
       path: '/repos/:id/pulls',
       handler: async (req) => {
-        const input = parseInput(reviewPullSchema, req.body);
+        const input = parsePrImportInput(req.body);
         const result = await deps.prFeatures.createFromPull(
           req.params.id,
           input.number,
           input.parentFeatureId ?? null,
           input.parentGroupId ?? null,
+          undefined,
+          { autoReview: input.autoReview, reviewOptions: input.reviewOptions },
         );
         return {
           status: 201,

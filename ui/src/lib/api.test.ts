@@ -19,6 +19,114 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('encodes prompt attribution filters and preserves cancellation on read-only usage requests', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ events: [], limited: false, maxEvents: 100 }));
+    const api = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    await api.getPromptUsage({ from: 'start', to: 'end', promptRef: 'one/two' }, controller.signal);
+    await api.getPromptUsage({ from: 'start', to: 'end' });
+    expect(calls[0][0]).toBe('/api/prompt-usage?from=start&to=end&promptRef=one%2Ftwo');
+    expect(calls[0][1]?.method).toBeUndefined();
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+    expect(calls[1][0]).toBe('/api/prompt-usage?from=start&to=end');
+  });
+  it('loads tracking status and task evidence and persists pause without triggering analysis', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ enabled: true }));
+    const client = createApiClient({ fetchImpl });
+    await client.plannerTrackingStatus();
+    await client.setPlannerTracking(false);
+    await client.plannerTaskEvidence('task');
+    expect(calls[0][0]).toBe('/api/planner/tracking');
+    expect(calls[1][1]).toMatchObject({ method: 'PUT', body: '{"enabled":false}' });
+    expect(calls[2][0]).toBe('/api/planner/tasks/task/evidence');
+  });
+  it('explicitly loads business context through an encoded cancellable POST', async () => {
+    const result = { featureId: 'one/two' };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(result));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    expect(await client.loadReviewBoardContext('one/two', controller.signal)).toBe(result);
+    expect(calls[0][0]).toBe('/api/features/one%2Ftwo/review-board/context');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe('{}');
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+  });
+  it('reads repository skill inventory without starting analysis and preserves request cancellation', async () => {
+    const result = { repoId: 'repo', repository: null, targetBranch: 'main', skills: [], warnings: [] };
+    const { fetchImpl, calls } = mockFetch(jsonResponse(result));
+    const client = createApiClient({ fetchImpl });
+    const controller = new AbortController();
+    expect(await client.getReviewBoardSkills('one/two', controller.signal)).toBe(result);
+    expect(calls[0][0]).toBe('/api/features/one%2Ftwo/review-board/skills');
+    expect(calls[0][1]?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(calls[0][1]?.signal?.aborted).toBe(true);
+    expect(calls[0][1]?.method).toBeUndefined();
+  });
+  it('encodes bounded UTC usage windows and provider-scoped observed tool history', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ items: [], limited: false }));
+    const client = createApiClient({ fetchImpl });
+    const window = { from: '2026-01-01', to: '2026-02-01' };
+    await client.getUsageRollup('day', window);
+    await client.getIdeUsageRollup('day', window);
+    await client.getMcpHistory({ provider: 'copilot', server: 'a/b', scope: 'feature',
+      from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', featureId: 'one/two' });
+    expect(calls[0][0]).toBe('/api/usage/rollup?granularity=day&from=2026-01-01&to=2026-02-01');
+    expect(calls[1][0]).toBe('/api/usage/ide/rollup?granularity=day&from=2026-01-01&to=2026-02-01');
+    expect(calls[2][0]).toContain('/api/mcp-usage/history?provider=copilot&server=a%2Fb&scope=feature');
+    expect(calls[2][0]).toContain('featureId=one%2Ftwo');
+  });
+  it('refreshes checking native readiness instead of caching an initial false-negative as unsupported', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ providers: [{ automation: { state: 'checking' } }] }))
+        .mockResolvedValue(jsonResponse({ providers: [{ automation: { state: 'ready', supported: true } }] }));
+      const pending = createApiClient({ fetchImpl }).getProviderBootstrap();
+      await vi.advanceTimersByTimeAsync(250);
+      expect((await pending).providers[0].automation?.supported).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      fetchImpl.mockResolvedValue(jsonResponse({ providers: [{ automation: { state: 'checking' } }] }));
+      const bounded = createApiClient({ fetchImpl }).getProviderBootstrap();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect((await bounded).providers[0].automation?.state).toBe('checking');
+      expect(fetchImpl).toHaveBeenCalledTimes(22);
+      const slow = createApiClient({ fetchImpl: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        return jsonResponse({ providers: [{ automation: { state: 'checking' } }] });
+      } }).getProviderBootstrap();
+      await vi.advanceTimersByTimeAsync(5_250);
+      expect((await slow).providers[0].automation?.state).toBe('checking');
+    } finally { vi.useRealTimers(); }
+  });
+  it('does not delay a ready active CLI while another CLI is still checking', async () => {
+    const info = { defaultProvider: 'agency', selectionRequired: false, providers: [
+      { id: 'agency', installed: true, automation: { state: 'ready', supported: true } },
+      { id: 'copilot', installed: true, automation: { state: 'checking', supported: false } },
+    ] };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(info))
+      .mockRejectedValue(new Error('Unrelated readiness refresh must not run'));
+    expect(await createApiClient({ fetchImpl }).getProviderBootstrap()).toBe(info);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])('still refreshes the selected CLI or an unresolved selection: %s', async (selectionRequired) => {
+    vi.useFakeTimers();
+    try {
+      const info = { defaultProvider: 'agency', selectionRequired, providers: [
+        { id: 'agency', automation: { state: selectionRequired ? 'ready' : 'checking' } },
+        { id: 'copilot', automation: { state: selectionRequired ? 'checking' : 'ready' } },
+      ] };
+      const ready = { ...info, providers: info.providers.map((provider) =>
+        ({ ...provider, automation: { state: 'ready' } })) };
+      const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(info)).mockResolvedValue(jsonResponse(ready));
+      const result = createApiClient({ fetchImpl }).getProviderBootstrap();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(await result).toBe(ready);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
   it('uploads pasted UTF-8 text without JSON expansion and preserves cancellation and session identity', async () => {
     const saved = { sessionId: 'session/one', path: '/owned/paste.txt', attachmentId: 'a1', bytes: 5 };
     const { fetchImpl, calls } = mockFetch(jsonResponse(saved, 201));
@@ -50,8 +158,13 @@ describe('createApiClient', () => {
     await client.getSkillUsage('feature');
     await client.getSkillUsage('internal');
     await client.getFeatureSkillUsage('one/two');
+    const window = { from: '2026-11-01', to: '2026-12-01' };
+    await client.getSkillUsage('internal', window);
+    await client.getFeatureSkillUsage('one/two', window);
     expect(calls.map(([path]) => path)).toEqual([
       '/api/usage/skills?scope=feature', '/api/usage/skills?scope=internal', '/api/features/one%2Ftwo/skill-usage',
+      '/api/usage/skills?scope=internal&from=2026-11-01&to=2026-12-01',
+      '/api/features/one%2Ftwo/skill-usage?from=2026-11-01&to=2026-12-01',
     ]);
   });
   it('supports cancellation and safely encodes active-session debug identities', async () => {
@@ -1406,6 +1519,19 @@ describe('createApiClient', () => {
       JSON.stringify({ number: 42, parentFeatureId: null, parentGroupId: null }),
     );
   });
+  it('passes import-only and saved review setup through both PR import transports', async () => {
+    const options = { autoReview: false, reviewOptions: { model: 'named', perspectiveIds: ['business'], skillIds: ['s1'], businessContext: 'Keep existing entitlements.' } };
+    const plain = mockFetch(jsonResponse({ id: 'f1' }));
+    await createApiClient({ fetchImpl: plain.fetchImpl }).createPrFeature('r1', 42, null, null, options);
+    expect(JSON.parse(plain.calls[0][1]?.body as string)).toEqual({
+      number: 42, parentFeatureId: null, parentGroupId: null, ...options,
+    });
+    const streamed = mockFetch(streamResponse(['{"type":"done","feature":{"id":"f2"}}\n']));
+    await createApiClient({ fetchImpl: streamed.fetchImpl }).createPrFeatureStreamed('r1', 43, () => {}, 'parent', 'group', options);
+    expect(JSON.parse(streamed.calls[0][1]?.body as string)).toEqual({
+      number: 43, parentFeatureId: 'parent', parentGroupId: 'group', ...options,
+    });
+  });
 
   it('nests a review feature under a parent feature when given one', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ id: 'f2' }));
@@ -1542,6 +1668,52 @@ describe('createApiClient', () => {
     expect(result).toEqual({ featureId: 'f1' });
     expect(calls[0][0]).toBe('/api/features/f1/review-board');
     expect(calls[0][1]?.method ?? 'GET').toBe('GET');
+  });
+  it('starts deferred evidence preparation only on explicit request', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1', analysisDeferred: false }));
+    expect(await createApiClient({ fetchImpl }).preparePrReview('f1')).toEqual({ featureId: 'f1', analysisDeferred: false });
+    expect(calls[0][0]).toBe('/api/features/f1/pr-review/prepare');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(calls[0][1]?.body).toBe('{}');
+  });
+  it('pins durable grouping and disposition decisions to the exact run assessment', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const decision = { expectedRunId: 'run', expectedAssessmentRevision: 4, action: 'merge' as const,
+      groupIds: ['g1', 'g2'], reason: 'Same changed cause and correction.' };
+    expect(await createApiClient({ fetchImpl }).manageReviewBoardFindings('f1', decision)).toEqual({ featureId: 'f1' });
+    expect(calls[0][0]).toBe('/api/features/f1/review-board/findings');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual(decision);
+  });
+  it('reads live discussion and durable publication records and reconciles without resending a comment', async () => {
+    const discussion = mockFetch(jsonResponse({ matches: {}, warnings: ['Partial thread access'] }));
+    expect(await createApiClient({ fetchImpl: discussion.fetchImpl }).getReviewBoardDiscussion('f1')).toEqual({
+      matches: {}, warnings: ['Partial thread access'],
+    });
+    expect(discussion.calls[0][0]).toBe('/api/features/f1/review-board/discussion');
+    const records = mockFetch(jsonResponse([{ key: 'operation', status: 'uncertain' }]));
+    expect(await createApiClient({ fetchImpl: records.fetchImpl }).getReviewBoardPublications('f1')).toEqual([{ key: 'operation', status: 'uncertain' }]);
+    expect(records.calls[0][0]).toBe('/api/features/f1/review-board/publications');
+    const reconciled = mockFetch(jsonResponse({ key: 'operation', status: 'posted' }));
+    expect(await createApiClient({ fetchImpl: reconciled.fetchImpl }).reconcileReviewBoardPublication('f1', 'operation')).toEqual({
+      key: 'operation', status: 'posted',
+    });
+    expect(reconciled.calls[0][0]).toBe('/api/features/f1/review-board/publications/reconcile');
+    expect(reconciled.calls[0][1]?.method).toBe('POST');
+    expect(reconciled.calls[0][1]?.body).toBe('{"key":"operation"}');
+  });
+  it('prepares immutable per-review options and explicitly cancels a review run', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ featureId: 'f1' }));
+    const client = createApiClient({ fetchImpl });
+    const options = { model: 'named-model', perspectiveIds: ['business'], skillIds: ['s1'], businessContext: 'Keep existing entitlements.' };
+    expect(await client.configureReviewBoard('f1', options)).toEqual({ featureId: 'f1' });
+    expect(calls[0][0]).toBe('/api/features/f1/review-board/options');
+    expect(calls[0][1]?.method).toBe('POST');
+    expect(JSON.parse(calls[0][1]?.body as string)).toEqual(options);
+    await client.cancelReviewBoard('f1');
+    expect(calls[1][0]).toBe('/api/features/f1/review-board/cancel');
+    expect(calls[1][1]?.method).toBe('POST');
+    expect(calls[1][1]?.body).toBe('{}');
   });
   it('restores and settles durable import review queue entries', async () => {
     const pending = mockFetch(jsonResponse(['f1']));

@@ -15,6 +15,7 @@ export interface ClaudeHistoryDiscovery {
 }
 
 export interface ClaudeHistoryCache extends CopilotHistoryReader {
+  recentPrompts(sessionId: string, limit: number): SessionPrompt[];
   refresh(signal: AbortSignal): Promise<void>;
   listImportable(): ImportableSession[];
   readUsagePage(sessionId: string, cursor: string | null, limit: number): {
@@ -125,6 +126,23 @@ export function createClaudeHistoryCache(config: ClaudeConfig, discovery?: Claud
         }
       }
       return prompts;
+    },
+    recentPrompts(id, limit): SessionPrompt[] {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid bounded history limit');
+      const prompts: SessionPrompt[] = [];
+      for (const [index, record] of (sessions.get(id) ?? []).slice(-128).entries()) {
+        if (record.role === 'user') prompts.push({
+          index, text: record.text.slice(0, 8000), at: record.timestamp,
+          response: null, status: 'unanswered', answeredAt: null, durationMs: null,
+        });
+        else {
+          const last = prompts.at(-1);
+          if (!last) continue;
+          last.response = `${last.response ?? ''}${record.text.slice(0, 8000)}`.slice(0, 8000);
+          last.status = 'answered';
+        }
+      }
+      return prompts.slice(-limit);
     },
     listImportable() {
       return [...sessions].map(([id, records]) => {

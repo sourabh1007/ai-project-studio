@@ -45,6 +45,7 @@ import {
   Link2,
   List,
   ListChecks,
+  LocateFixed,
   LogIn,
   Power,
   Maximize2,
@@ -93,6 +94,11 @@ type IconProps = { size?: number; className?: string };
 
 const STROKE = 1.75;
 
+export function ProviderIcon({ providerId, size = 20 }: { providerId: string; size?: number }) {
+  const Icon = providerId === 'copilot' ? AiChatIcon : providerId === 'claude' ? AiIcon : SessionIcon;
+  return <Icon size={size} />;
+}
+
 export function ChevronIcon({
   size = 16,
   open = false,
@@ -127,6 +133,7 @@ function makeIcon(Component: ComponentType<LucideProps>) {
 
 export const PencilIcon = makeIcon(Pencil);
 export const PlusIcon = makeIcon(Plus);
+export const LocateIcon = makeIcon(LocateFixed);
 export const TrashIcon = makeIcon(Trash2);
 export const WarningIcon = makeIcon(AlertTriangle);
 export const ImportIcon = makeIcon(Download);

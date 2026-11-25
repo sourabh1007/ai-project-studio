@@ -119,12 +119,45 @@ describe('ProviderInstallGate', () => {
     expect(InstallerStream.instances).toHaveLength(0);
   });
 
+  it('separates provider setup cards and labels Agency without claiming missing Claude features are unsupported', async () => {
+    mount(async () => ({
+      ...bootstrap('copilot', true), selectionRequired: true,
+      providers: [
+        { id: 'copilot', installed: true, automation: { supported: true, reason: null } },
+        { id: 'agency', installed: true, automation: { supported: false, integrationSupported: false, reason: 'Studio inventory verification required' } },
+        { id: 'claude', installed: false },
+      ],
+    }));
+    await flush();
+    expect(screen.getAllByRole('region', { name: /setup$/ })).toHaveLength(3);
+    expect(screen.getByText('Microsoft internal only')).toBeInTheDocument();
+    expect(screen.queryByText(/5\/10 available/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Unavailable' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Studio integration required' })).toHaveLength(5);
+    expect(screen.getAllByRole('img', { name: 'Setup required' })).toHaveLength(6);
+  });
+
   it('installs Agency only after explicit consent via its own stream', async () => {
     mount(async () => bootstrap('agency', false));
     await install('agency');
     expect(screen.getByRole('heading', { name: 'Installing Agency' })).toBeTruthy();
     expect(InstallerStream.instances).toHaveLength(1);
     expect(InstallerStream.instances[0].url).toContain('/agency/install');
+  });
+
+  it('shows native Agency automation as ready with decorative icons, without selecting or launching it', async () => {
+    const h = mount(async () => ({
+      ...bootstrap('copilot', true), selectionRequired: true,
+      providers: [{ id: 'agency', installed: true, automation: { supported: true, state: 'ready', reason: null } }],
+    }));
+    await flush();
+    const card = screen.getByRole('region', { name: 'Agency setup' });
+    expect(card.querySelectorAll('[aria-label="Available"]')).toHaveLength(10);
+    expect(card.querySelector('.cli-provider-icon svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(document.querySelector('.bootstrap-badge')).not.toHaveClass('is-checking');
+    expect(screen.getByRole('button', { name: 'Use installed CLI — Agency' })).toBeEnabled();
+    expect(h.select).not.toHaveBeenCalled();
+    expect(InstallerStream.instances).toHaveLength(0);
   });
 
   it('installs GitHub Copilot CLI when it is the default', async () => {

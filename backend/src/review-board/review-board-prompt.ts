@@ -14,13 +14,9 @@ import type {
   ReviewFinding,
   ReviewPerspective,
   ProjectModel,
+  PerspectiveAnalysis,
 } from './review-board-contract.js';
-
-/** Truncate `value` to `max` characters with an ellipsis marker. */
-function clamp(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, Math.max(0, max - 1))}…`;
-}
+import { CONCISE_REVIEW_OUTPUT } from './review-board-perspective-prompts.js';
 
 /** A compact, evidence-first digest of the derived project model. */
 function modelDigest(model: ProjectModel): string {
@@ -51,17 +47,12 @@ function perspectiveMenu(perspectives: ReviewPerspective[]): string {
     .join('\n');
 }
 
-/** A bounded, enumerated list of the concrete files the change touched. */
-function changedFilesDigest(paths: readonly string[], max: number): string {
+/** An enumerated list of the concrete files the change touched. */
+function changedFilesDigest(paths: readonly string[]): string {
   if (paths.length === 0) {
     return '(no changed files were resolved from the change graph)';
   }
-  const shown = paths.slice(0, max);
-  const lines = shown.map((p) => `- ${p}`);
-  if (paths.length > shown.length) {
-    lines.push(`- …and ${paths.length - shown.length} more changed file(s)`);
-  }
-  return lines.join('\n');
+  return paths.map((p) => `- ${p}`).join('\n');
 }
 
 /**
@@ -70,6 +61,8 @@ function changedFilesDigest(paths: readonly string[], max: number): string {
  * pr-comments contract) so this pure module stays decoupled.
  */
 export interface ExistingCommentThread {
+  id?: string;
+  url?: string;
   /** Repo-relative file the thread anchors to; null for PR-level discussion. */
   path: string | null;
   /** 1-based right-side line the thread anchors to; null when unanchored. */
@@ -88,25 +81,20 @@ export interface ExistingCommentThread {
  */
 export function renderExistingDiscussion(
   threads: readonly ExistingCommentThread[],
-  maxChars: number,
 ): string {
   if (threads.length === 0) return '';
   const lines: string[] = [];
-  const shown = threads.slice(0, 50);
-  for (const thread of shown) {
+  for (const thread of threads) {
     const anchor = thread.path
       ? `${thread.path}${thread.line !== null ? `:${thread.line}` : ''}`
       : 'PR-level discussion';
     lines.push(`- [${thread.status}] ${anchor}`);
     for (const comment of thread.comments) {
       const author = comment.author?.trim() || 'reviewer';
-      lines.push(`  • ${author}: ${clamp(comment.body.trim(), 400)}`);
+      lines.push(`  • ${author}: ${comment.body.trim()}`);
     }
   }
-  if (threads.length > shown.length) {
-    lines.push(`- …and ${threads.length - shown.length} more existing thread(s)`);
-  }
-  return clamp(lines.join('\n'), maxChars);
+  return lines.join('\n');
 }
 
 /**
@@ -116,9 +104,8 @@ export function renderExistingDiscussion(
  */
 export function existingDiscussionSection(
   threads: readonly ExistingCommentThread[],
-  maxChars: number,
 ): string {
-  const rendered = renderExistingDiscussion(threads, maxChars);
+  const rendered = renderExistingDiscussion(threads);
   if (!rendered) return '';
   return [
     '## Existing PR discussion (already-posted comments & replies)',
@@ -126,9 +113,9 @@ export function existingDiscussionSection(
     'thread (with its status) followed by its comments and replies, oldest first.',
     rendered,
     '',
-    'Account for them: do NOT re-raise a concern an existing thread already',
-    'covers, and when a reply already answers or resolves a concern, treat it as',
-    'addressed and omit that finding.',
+    'Account for existing concerns without posting duplicates. Retain a finding',
+    'when captured code still supports it and reference the existing discussion.',
+    'A resolved thread or a reply is not proof of a code fix. Assess the evidence.',
   ].join('\n');
 }
 
@@ -167,17 +154,12 @@ export function buildFindingsPrompt(input: {
   board: ReviewBoard;
   description: string | null;
   changedPaths: readonly string[];
-  config: { maxContextChars: number };
   existingThreads?: readonly ExistingCommentThread[];
 }): string {
   const { board } = input;
-  const description = clamp(
-    (input.description ?? '').trim() || '(no description provided)',
-    input.config.maxContextChars,
-  );
+  const description = (input.description ?? '').trim() || '(no description provided)';
   const discussion = existingDiscussionSection(
     input.existingThreads ?? [],
-    input.config.maxContextChars,
   );
   const ids = board.perspectives.map((p) => p.id).join(', ');
   return [
@@ -199,7 +181,7 @@ export function buildFindingsPrompt(input: {
     modelDigest(board.model),
     '',
     '## Changed files',
-    changedFilesDigest(input.changedPaths, 80),
+    changedFilesDigest(input.changedPaths),
     '',
     ...(discussion ? [discussion, ''] : []),
     '## Perspectives you may file findings under',
@@ -219,6 +201,7 @@ export function buildFindingsPrompt(input: {
     '}',
     'Return an empty array [] if the change looks clean. Do not wrap the array',
     'in any other object and do not add prose outside the code block.',
+    CONCISE_REVIEW_OUTPUT,
   ].join('\n');
 }
 
@@ -236,7 +219,6 @@ export function buildCommonPromptVars(input: {
   perspective: ReviewPerspective;
   description: string | null;
   changedPaths: readonly string[];
-  maxContextChars: number;
 }): Record<string, string> {
   const { board, perspective } = input;
   return {
@@ -246,12 +228,9 @@ export function buildCommonPromptVars(input: {
     prTitle: board.pull.title,
     baseBranch: board.baseBranch ?? 'unknown',
     filesChanged: String(board.changedFiles),
-    description: clamp(
-      (input.description ?? '').trim() || '(no description provided)',
-      input.maxContextChars,
-    ),
+    description: (input.description ?? '').trim() || '(no description provided)',
     modelDigest: modelDigest(board.model),
-    changedFiles: changedFilesDigest(input.changedPaths, 80),
+    changedFiles: changedFilesDigest(input.changedPaths),
   };
 }
 
@@ -276,25 +255,51 @@ export interface SolutionNode {
 /** The best available per-file signal describing what the change did. */
 function solutionNodeSignal(node: SolutionNode): string | null {
   const whatChanged = node.whatChanged.trim();
-  if (whatChanged) return whatChanged;
+  if (whatChanged && !/^No (?:change summary|summary|analysis) (?:was )?(?:produced|available)/i.test(whatChanged)) return whatChanged;
   const diff = node.diff.trim();
-  if (diff) return clamp(diff, 500);
+  if (diff) return diff;
   const whatItDoes = node.whatItDoes.trim();
   if (whatItDoes) return `Existing role: ${whatItDoes}`;
   return null;
 }
 
+export function reviewContextText(text: string): string {
+  return text.split(/\r?\n/).filter((line) =>
+    !/^[ \t]*Reviewing \d+ pull requests? from .+\.[ \t]*$/i.test(line) &&
+    !/^[ \t]*Import reference: [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}[ \t]*$/i.test(line)).join('\n').trim();
+}
+
+function reviewedNarrative(analysis: PerspectiveAnalysis | undefined, labels: RegExp, diagramLabel: string): string | undefined {
+  if (!analysis || analysis.skipped) return undefined;
+  const text = analysis.rationale.find((point) => labels.test(point.label.trim()) && point.detail.trim())?.detail.trim();
+  if (!text) return undefined;
+  const diagram = analysis.rationale.find((point) => point.label.trim().toLowerCase() === diagramLabel)?.detail.trim();
+  return diagram && !text.includes(diagram) ? `${text}\n\n\`\`\`text\n${diagram}\n\`\`\`` : text;
+}
+
+export function reviewedProblem(analyses: Record<string, PerspectiveAnalysis>, fallback: string): string {
+  return reviewedNarrative(analyses['problem-solution'], /^(?:problem(?: statement)?)$/i, 'problem diagram') ||
+    reviewContextText(fallback) || 'The problem has not been explained yet. Start a review to analyse the captured code and PR description.';
+}
+
+export function reviewedSolution(analyses: Record<string, PerspectiveAnalysis>): string {
+  for (const id of ['problem-solution', 'architecture']) {
+    const text = reviewedNarrative(analyses[id], /^(?:solution(?: implemented)?|implementation|flow)$/i, 'solution diagram');
+    if (text) return text;
+  }
+  return 'The review has not explained the solution yet. Retry the incomplete review to analyse how the code changes address the problem.';
+}
+
 /**
  * A general, holistic digest of what the PR *implements* — grouped material the
  * model synthesizes into a plain-English "solution implemented" narrative. It
- * deliberately carries per-file signal (distilled `whatChanged` or a bounded
+ * deliberately carries per-file signal (distilled `whatChanged` or a captured
  * diff) as raw evidence, but is fed to a prompt that forbids file-by-file
  * grading, so the model produces a general assessment rather than a file audit.
  */
 export function buildSolutionDigest(input: {
   title: string;
   nodes: readonly SolutionNode[];
-  maxChars: number;
 }): string {
   const changed = input.nodes.filter((n) => n.kind === 'changed');
   if (changed.length === 0) {
@@ -306,18 +311,14 @@ export function buildSolutionDigest(input: {
     `PR "${input.title}" changes ${changed.length} file(s) — ${code} code, ${test} test.`,
     '',
   ];
-  const shown = changed.slice(0, 60);
-  for (const node of shown) {
+  for (const node of changed) {
     const suffix = node.changeKind ? ` — ${node.changeKind}` : '';
     const module = node.module ? ` (${node.module})` : '';
     lines.push(`- ${node.path}${module}${suffix}`);
     const signal = solutionNodeSignal(node);
     if (signal) lines.push(`  ${signal}`);
   }
-  if (changed.length > shown.length) {
-    lines.push(`- …and ${changed.length - shown.length} more changed file(s)`);
-  }
-  return clamp(lines.join('\n'), input.maxChars);
+  return lines.join('\n');
 }
 
 /**
@@ -338,7 +339,6 @@ export function buildAgentChatPrompt(input: {
   board: ReviewBoard;
   perspective: ReviewPerspective | null;
   messages: ReviewBoardChatMessage[];
-  config: { maxContextChars: number };
 }): string {
   const { board, perspective, messages } = input;
   const focus = perspective
@@ -357,8 +357,7 @@ export function buildAgentChatPrompt(input: {
   const transcript = messages
     .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
     .join('\n');
-  return clamp(
-    [
+  return [
       'You are the Engineering Review Agent for a pull request review board.',
       'Answer the user precisely and cite the evidence you rely on. If asked to',
       'draft a PR comment, produce ready-to-paste text. Keep answers focused.',
@@ -374,13 +373,12 @@ export function buildAgentChatPrompt(input: {
       focus,
       '',
       ...ratingChangeProtocol(perspective),
+      CONCISE_REVIEW_OUTPUT,
       '## Conversation',
       transcript,
       '',
       'Assistant:',
-    ].join('\n'),
-    input.config.maxContextChars,
-  );
+    ].join('\n');
 }
 
 /**

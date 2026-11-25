@@ -19,6 +19,7 @@ import { createLanguageAnalyzerRegistry } from './language-analyzer.js';
 import { createCSharpAnalyzer } from './csharp-analyzer.js';
 import type { ChangeGraphFs } from './change-graph-fs.js';
 import { buildChangeGraph } from './change-graph-builder.js';
+import type { ReviewRun } from '../review-board/review-run-contract.js';
 
 function stepClock(): Clock {
   let tick = 0;
@@ -130,6 +131,7 @@ function harness(options: {
   bus.on('pr.review.updated', (review) => events.push(review));
   const diffRequests: PrDiffRequest[] = [];
   const prompts: string[] = [];
+  const requests: MetaRequest[] = [];
   const attachmentContents = new Map<string, string>();
   const cleanups: string[] = [];
   const sleeps: number[] = [];
@@ -184,6 +186,7 @@ function harness(options: {
     },
     ai: options.ai ?? {
       runDetailed: async (request: MetaRequest) => {
+        requests.push(request);
         // The real step prompt travels as the attachment, not inline argv.
         const attached = request.attachments?.[0] ?? '';
         const realPrompt = attachmentContents.get(attached) ?? request.prompt;
@@ -205,7 +208,7 @@ function harness(options: {
       },
     },
   });
-  return { service, reviews, events, diffRequests, prompts, cleanups, sleeps };
+  return { service, reviews, events, diffRequests, prompts, requests, cleanups, sleeps };
 }
 
 async function settle(): Promise<void> {
@@ -213,6 +216,104 @@ async function settle(): Promise<void> {
 }
 
 describe('createPrReviewService', () => {
+  it.each([true, false])('honors the imported model during explicit evidence preparation (inline=%s)', async (inlinePrompts) => {
+    const h = harness({ inlinePrompts, config: { ...prReviewDefaults, coldInlineMaxChars: 0 } });
+    h.service.start({ ...startInput, reviewBoardImport: { autoReview: false, options: { model: 'chosen-model' } } });
+    expect(h.requests).toEqual([]);
+    h.service.prepare('f1');
+    await settle();
+    expect(h.requests[0].model).toBe('chosen-model');
+  });
+  it('archives replaced review runs and preserves uncertain publication operations during refresh', async () => {
+    const h = harness();
+    h.service.start(startInput);
+    await settle();
+    const current = h.reviews.get('f1')!;
+    const run: ReviewRun = {
+      id: 'old', revision: 1, status: 'completed', options: { model: 'chosen' }, providerId: 'generic',
+      model: 'chosen', perspectiveIds: ['security'],
+      context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [] },
+      headSha: current.headSha, graphGeneratedAt: current.changeGraph.generatedAt,
+      startedAt: '2026-01-01', failures: {},
+    };
+    const publication = {
+      key: 'uncertain-post', status: 'uncertain' as const,
+      input: { path: 'src/Service.cs', line: 1, body: 'Check this finding.' },
+      startedAt: '2026-01-01',
+    };
+    h.reviews.save({ ...current, reviewBoardRun: run, reviewPublications: [publication] });
+    h.service.refresh('f1', 'new-head');
+    await settle();
+    let updated = h.reviews.get('f1')!;
+    expect(updated.reviewPublications).toEqual([publication]);
+    expect(updated.reviewBoardRun).toBeUndefined();
+    expect(updated.reviewBoardHistory).toEqual([{ run, analyses: {} }]);
+    expect(updated.headSha).toBe('new-head');
+    const analyses = { retained: { summary: 'Retained history' } } as unknown as NonNullable<PrReview['reviewBoardAnalysis']>['analyses'];
+    h.reviews.save({ ...updated, reviewBoardRun: { ...run, id: 'next' }, reviewBoardAnalysis: {
+      headSha: updated.headSha, graphGeneratedAt: updated.changeGraph.generatedAt, analyses,
+    }, reviewBoardHistory: [0, 1, 2].map((id) => ({ run: { ...run, id: String(id) }, analyses: {} })) });
+    h.service.refresh('f1');
+    await settle();
+    updated = h.reviews.get('f1')!;
+    expect(updated.reviewBoardHistory?.map((entry) => entry.run.id)).toEqual(['1', '2', 'next']);
+    expect(updated.reviewBoardHistory?.[2].analyses).toEqual(analyses);
+    h.service.refresh('f1');
+    await settle();
+    expect(h.reviews.get('f1')!.reviewBoardHistory).toEqual(updated.reviewBoardHistory);
+    expect(h.reviews.get('f1')!.reviewPublications).toEqual([publication]);
+  });
+  it('imports deferred reviews without evidence or AI calls, prepares once, and preserves the snapshot', async () => {
+    const h = harness();
+    const setup = { autoReview: false, options: { model: 'chosen', perspectiveIds: ['security'], skillIds: ['guide'] } };
+    const imported = h.service.start({ ...startInput, reviewBoardImport: setup });
+    setup.options.skillIds.push('mutated');
+    await settle();
+    expect(h.diffRequests).toEqual([]);
+    expect(h.prompts).toEqual([]);
+    expect(imported).toMatchObject({
+      worktreePath: startInput.worktreePath, headSha: startInput.headSha,
+      analysisDeferred: true, reviewBoardPending: false,
+      reviewBoardImport: { autoReview: false, options: { skillIds: ['guide'] } },
+    });
+    expect(h.service.start({ ...startInput, reviewBoardImport: { autoReview: true, options: {} } })).toEqual(imported);
+    expect(h.service.prepare('f1')).toMatchObject({ analysisDeferred: false, reviewBoardPending: true });
+    h.service.prepare('f1');
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.service.get('f1').changeGraph.status).toBe('ready');
+    const completed = h.service.get('f1');
+    expect(h.service.prepare('f1')).toEqual(completed);
+    expect(h.prompts).toHaveLength(1);
+    expect(() => h.service.prepare('missing')).toThrow('Code review is not available');
+  });
+
+  it('automatic setup starts evidence and refreshing a deferred import keeps its setup without AI', async () => {
+    const h = harness();
+    const reviewBoardImport = { autoReview: true, options: { businessContext: 'Requirements' } };
+    h.service.start({ ...startInput, reviewBoardImport });
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.service.prepare('f1').reviewBoardImport).toEqual(reviewBoardImport);
+    const deferred = { ...startInput, featureId: 'f2', reviewBoardImport: { ...reviewBoardImport, autoReview: false } };
+    h.service.start(deferred);
+    h.service.refresh('f2');
+    await settle();
+    expect(h.service.get('f2')).toMatchObject({
+      analysisDeferred: true, reviewBoardPending: false, reviewBoardImport: deferred.reviewBoardImport,
+    });
+    expect(h.prompts).toHaveLength(1);
+    h.service.prepare('f2');
+    await settle();
+    expect(h.prompts).toHaveLength(2);
+    h.service.refresh('f2', 'new-head');
+    await settle();
+    expect(h.service.get('f2')).toMatchObject({
+      analysisDeferred: false, reviewBoardPending: true, headSha: 'new-head',
+      reviewBoardImport: deferred.reviewBoardImport,
+    });
+    expect(h.prompts).toHaveLength(3);
+  });
   it('preserves provider author and source branch through import and explicit refresh', async () => {
     const { service, reviews } = harness();
     service.start(startInput);

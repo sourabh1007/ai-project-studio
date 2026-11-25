@@ -257,19 +257,95 @@ describe('createAzureDevOpsAuth', () => {
   });
 
   it('signIn runs an interactive credential get', async () => {
-    let interactive = false;
+    const calls: Array<{ verb: string; interactive: boolean }> = [];
     const auth = createAzureDevOpsAuth({
       config: async () => ok(''),
-      credential: async (_verb, _input, opts) => {
-        interactive = opts.interactive;
+      credential: async (verb, _input, opts) => {
+        calls.push({ verb, interactive: opts.interactive });
         return ok('username=bob\npassword=tok');
       },
     });
 
     const result = await auth.signIn({ host: 'dev.azure.com', org: null });
 
-    expect(interactive).toBe(true);
+    expect(calls).toEqual([
+      { verb: 'get', interactive: true },
+      { verb: 'store', interactive: false },
+      { verb: 'get', interactive: false },
+    ]);
     expect(result).toEqual({ authenticated: true, account: 'bob', message: null });
+  });
+
+  it.each([
+    { host: 'dev.azure.com', org: 'fabrikam' },
+    { host: 'fabrikam.visualstudio.com', org: 'fabrikam' },
+  ])('remembers the organization binding across repeated checks and facade restarts: %j', async (target) => {
+    const first = { host: 'dev.azure.com', org: 'contoso' };
+    const bindings = new Map([[buildCredentialQuery(first), 'alice']]);
+    const calls: Array<{ verb: string; input: string }> = [];
+    const deps: Parameters<typeof createAzureDevOpsAuth>[0] = {
+      config: async () => ok(''),
+      credential: async (verb, input, opts) => {
+        calls.push({ verb, input });
+        if (verb === 'store') {
+          expect(opts.interactive).toBe(false);
+          expect(input).toBe(`${buildCredentialQuery(target).trimEnd()}\nusername=alice\npassword=fixture-token\n\n`);
+          bindings.set(buildCredentialQuery(target), 'alice');
+          return ok('');
+        }
+        if (opts.interactive || bindings.has(input)) {
+          return ok('protocol=https\r\nhost=ignored.example\r\nusername=alice\r\npassword=fixture-token\r\ncapability=fixture\r\n');
+        }
+        return fail('fatal: Cannot prompt because user interactivity has been disabled.');
+      },
+    };
+    const auth = createAzureDevOpsAuth(deps);
+    expect((await auth.status(target)).authenticated).toBe(false);
+    expect((await auth.signIn(target)).authenticated).toBe(true);
+    expect((await auth.status(first)).authenticated).toBe(true);
+    expect((await auth.status(target)).authenticated).toBe(true);
+    expect((await createAzureDevOpsAuth(deps).status(target)).authenticated).toBe(true);
+    expect(calls.filter(({ verb }) => verb === 'store')).toHaveLength(1);
+    expect(calls.some(({ verb }) => verb === 'erase')).toBe(false);
+  });
+
+  it('does not report successful sign-in when saving the native organization binding fails', async () => {
+    const calls: string[] = [];
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (verb) => {
+        calls.push(verb);
+        return verb === 'store' ? fail('configuration is read-only') : ok('username=alice\npassword=fixture-token');
+      },
+    });
+    expect(await auth.signIn({ host: 'dev.azure.com', org: 'contoso' })).toEqual({
+      authenticated: false, account: null,
+      message: 'Could not remember Azure DevOps sign-in for this organization. Azure DevOps sign-in failed: configuration is read-only',
+    });
+    expect(calls).toEqual(['get', 'store']);
+  });
+
+  it('does not claim persistent sign-in if the silent confirmation still requires interaction', async () => {
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (verb, _input, opts) => opts.interactive
+        ? ok('username=alice\npassword=fixture-token')
+        : verb === 'store' ? ok('') : fail('fatal: Cannot prompt because user interactivity has been disabled.'),
+    });
+    expect(await auth.signIn({ host: 'dev.azure.com', org: 'contoso' })).toEqual({
+      authenticated: false, account: null,
+      message: 'The saved Azure DevOps account could not be reused silently. Please try signing in again.',
+    });
+  });
+
+  it('does not store credentials when interactive sign-in returns no credential', async () => {
+    const calls: string[] = [];
+    const auth = createAzureDevOpsAuth({
+      config: async () => ok(''),
+      credential: async (verb) => { calls.push(verb); return ok(''); },
+    });
+    expect((await auth.signIn({ host: 'dev.azure.com', org: 'contoso' })).authenticated).toBe(false);
+    expect(calls).toEqual(['get']);
   });
 
   it('signIn surfaces a reason when the interactive get fails', async () => {

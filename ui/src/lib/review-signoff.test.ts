@@ -72,6 +72,56 @@ function reviewedState() {
   return state;
 }
 
+describe('immutable run sign-off', () => {
+  function runBoard(): ReviewBoard {
+    const value = board('sha-a');
+    value.run = {
+      id: 'run-one', revision: 1, status: 'prepared', options: {}, providerId: 'cli', model: 'auto',
+      perspectiveIds: ['security'], context: {
+        fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [],
+      }, headSha: 'sha-a', graphGeneratedAt: AT, startedAt: AT, failures: {},
+    };
+    return value;
+  }
+  it('invalidates legacy sign-off when a run exists even on the same commit and evidence', () => {
+    const previous = reviewedState();
+    const value = runBoard();
+    const identity = resolveSignoffIdentity(value)!;
+    expect(identity.runId).toBe('run-one');
+    expect(identity.assessmentRevision).toBe('[1,["security",null,null]]');
+    const next = syncSignoffIdentity(previous, identity, AT3);
+    expect(next.prReviewedAt).toBeNull();
+    expect(next.perspectives).toEqual({});
+    expect(next.history[0].identity).toEqual(previous.identity);
+    expect(parseSignoff(JSON.parse(JSON.stringify(next)))).toEqual(next);
+  });
+  it('invalidates sign-off on changed run, assessment revision, or perspective attempt', () => {
+    const value = runBoard();
+    value.analyses = {};
+    const missing = resolveSignoffIdentity(value)!;
+    value.analyses.security = {
+      perspectiveId: 'security', perspective: { id: 'security' } as ReviewBoard['perspectives'][number],
+      runId: 'run-one', attemptId: 'attempt-one', assessment: 'concerns',
+      skipped: false, skipReason: null, summary: null, rationale: [], checks: [],
+    };
+    const assessed = resolveSignoffIdentity(value)!;
+    expect(assessed.assessmentRevision).not.toEqual(missing.assessmentRevision);
+    const previous = withPerspectiveReviewed(syncSignoffIdentity(emptySignoff(), assessed, AT), 'security', AT2);
+    value.analyses.security.attemptId = 'attempt-two';
+    expect(syncSignoffIdentity(previous, resolveSignoffIdentity(value), AT3).perspectives).toEqual({});
+    value.run!.revision += 1;
+    expect(resolveSignoffIdentity(value)?.assessmentRevision).not.toEqual(assessed.assessmentRevision);
+    value.run!.id = 'run-two';
+    expect(syncSignoffIdentity(previous, resolveSignoffIdentity(value), AT3).perspectives).toEqual({});
+  });
+  it('never restores malformed run identity fields', () => {
+    const identity = resolveSignoffIdentity(runBoard())!;
+    const restored = parseSignoff({ identity: { ...identity, runId: 7, assessmentRevision: {} } });
+    expect(restored.identity).not.toHaveProperty('runId');
+    expect(restored.identity).not.toHaveProperty('assessmentRevision');
+  });
+});
+
 describe('emptySignoff', () => {
   it('starts with nothing reviewed', () => {
     expect(emptySignoff()).toEqual({

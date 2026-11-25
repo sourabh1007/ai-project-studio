@@ -357,13 +357,37 @@ export function runStatusLabel(run: AutomationRun): string {
     case 'finished':
       switch (run.status) {
         case 'ok':
-          return 'Succeeded';
+          return run.triggered ? 'Action completed' : 'Checked';
         case 'failed':
-          return 'Failed';
+          return run.triggered ? 'Action failed' : 'Check failed';
         case 'skipped':
           return 'Skipped';
       }
   }
+}
+
+export function describeCheckFailure(detail: string): string {
+  const message = detail.replace(/^Check failed:\s*/, '');
+  const failed = /^Provider failed(?: \(exit code (-?\d+)\))?$/.exec(message);
+  if (failed) {
+    const code = failed[1] === undefined ? '' : ` (exit code ${failed[1]})`;
+    return `AI CLI failed${code}. No diagnostic detail was captured; the condition is unknown.`;
+  }
+  const timeout = /^Provider timed out after (\d+)ms(.*)$/.exec(message);
+  if (timeout) {
+    const seconds = Number(timeout[1]) / 1000;
+    const minutes = seconds >= 60 && seconds % 60 === 0;
+    const amount = minutes ? seconds / 60 : seconds;
+    const unit = minutes ? 'minute' : 'second';
+    const limit = `${amount} ${unit}${amount === 1 ? '' : 's'}`;
+    const stopped = timeout[2].includes('not confirmed')
+      ? ' CLI shutdown was not confirmed.'
+      : '';
+    return timeout[2].includes('before it started')
+      ? `AI check did not start within ${limit}; the condition is unknown.${stopped}`
+      : `AI check exceeded ${limit}; no result was received.${stopped}`;
+  }
+  return message;
 }
 
 /** A one-line summary of a single run for the detailed-log timeline. */
@@ -388,6 +412,15 @@ export function runSummary(run: AutomationRun): string {
   }
   if (run.report) {
     return run.detail ?? 'Report generated';
+  }
+  if (run.detail?.startsWith('Check failed:')) {
+    return describeCheckFailure(run.detail);
+  }
+  if (run.detail === 'Checked: no') {
+    return 'Check answered no; no action was run.';
+  }
+  if (run.detail?.startsWith('Checked:')) {
+    return run.detail;
   }
   const outcome = run.triggered ? 'Triggered' : 'Checked';
   return run.detail ? `${outcome} · ${run.detail}` : outcome;

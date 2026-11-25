@@ -99,6 +99,7 @@ describe('task-plan-runner', () => {
     const tasks = await runner.generate('f1', signal);
 
     expect(requests[0].featureId).toBe('f1');
+    expect(requests[0].promptRefs).toEqual(['featureTasks.promptTemplate']);
     expect(requests[0].prompt).toContain('Login');
     expect(requests[0].signal).toBe(signal);
     expect(tasks).toEqual([

@@ -5,6 +5,21 @@ import type { CopilotHistoryReader, SessionHistory } from './copilot-history-con
 const history = (sessionId: string): SessionHistory => ({ sessionId, summary: sessionId, firstUserMessage: null, checkpoints: [] });
 
 describe('provider history routing', () => {
+  it('routes bounded work evidence by original provider and never falls back to full history', async () => {
+    const recentPrompts = vi.fn(async () => []);
+    const reader = createProviderHistoryReader({
+      sessions: { get: (id) => id === 'missing' ? null : { provider: id } },
+      readers: new Map([
+        ['copilot', { read: () => [], prompts: () => [], recentPrompts }],
+        ['old', { read: () => [], prompts: () => [] }],
+      ]),
+    });
+    expect(await reader.recentPrompts!('copilot', 4)).toEqual([]);
+    expect(recentPrompts).toHaveBeenCalledWith('copilot', 4);
+    for (const id of ['old', 'unknown', 'missing']) {
+      expect(() => reader.recentPrompts!(id, 4)).toThrow('bounded prompt reader');
+    }
+  });
   it('groups persisted providers, preserves input order and does not consult active execution policy', () => {
     const copilot: CopilotHistoryReader = { read: vi.fn((ids) => ids.map(history).reverse()), prompts: vi.fn(() => []) };
     const claude: CopilotHistoryReader = { read: vi.fn((ids) => [...ids.map(history), history('foreign')]), prompts: vi.fn(() => []) };

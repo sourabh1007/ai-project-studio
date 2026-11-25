@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { Insights, ExecutionTimeline, InsightMatrix } from '../monitoring/insights.js';
+import { OperationInsights } from '../meta-operations/operation-insights.js';
 import { useAgentUsage } from '../../hooks/use-agent-usage.js';
 import { refreshAgentCredits } from '../../lib/agent-usage.js';
 import { AgentUsageValue } from '../../components/feature-agent-usage.js';
@@ -374,6 +376,10 @@ function AgentTeamPanel({
           />
         ))}
       </div>
+      <Insights title="Team execution insights">{() => <ExecutionTimeline now={nowMs}
+        items={agents.map((agent) => ({ id: agent.id, label: `${agent.title} · ${agent.role}`, status: agent.status,
+          start: agent.startedAt, end: agent.startedAt != null && agent.durationMs != null ? agent.startedAt + agent.durationMs : null,
+          durationMs: agent.durationMs, select: () => onOpen(agent.id) }))} />}</Insights>
     </section>
   );
 }
@@ -1567,6 +1573,16 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
           </p>
         </div>
       </header>
+      <Insights title="Run and evidence insights">{() => <>
+        <InsightMatrix title="Scenario evidence" columns={['Verdict', 'Execution', 'Evidence']}
+          explanation="A reported pass without execution or complete evidence is not a verified pass. Blockers are not product defects."
+          rows={scenarios.map((scenario) => ({ id: scenario.id, label: scenario.title, cells: [
+            { value: null, text: scenario.status, state: scenario.status, select: () => setOpenScenarioId(scenario.id) },
+            { value: null, text: scenario.ran ? 'Ran' : 'Not run' },
+            { value: null, text: scenario.evidenceGaps.length ? `Missing: ${scenario.evidenceGaps.join(', ')}` : scenario.ran ? 'Recorded' : 'Unverified' },
+          ] }))} />
+        <OperationInsights scope={{ featureId: feature.id, runId: attachmentId }} />
+      </>}</Insights>
 
       <Stepper current={step} reachable={reachable} onSelect={setStep} />
 

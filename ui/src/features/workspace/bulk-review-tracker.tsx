@@ -19,8 +19,10 @@ import {
   type ReviewBoardRunState,
 } from '../review-board-page/review-board-run-store.js';
 import type { TrackedPr } from './workspace-tabs.js';
+import type { PrReview } from '../../lib/types.js';
+import { ExecutionTimeline, Insights } from '../monitoring/insights.js';
 
-type PrCardStatus = 'queued' | 'preparing' | 'reviewing' | 'done' | 'failed' | 'incomplete' | 'skipped' | 'partial';
+type PrCardStatus = 'deferred' | 'queued' | 'preparing' | 'reviewing' | 'done' | 'failed' | 'incomplete' | 'skipped' | 'partial';
 
 interface PrCardModel {
   status: PrCardStatus;
@@ -32,7 +34,7 @@ interface PrCardModel {
   recommendation: string | null;
 }
 
-export function deriveCard(state: ReviewBoardRunState): PrCardModel {
+export function deriveCard(state: ReviewBoardRunState, deferred = false): PrCardModel {
   const perspectives = state.board?.perspectives ?? [];
   const entries = perspectives.map((p) => state.progress[p.id]).filter(Boolean);
   const total = perspectives.length;
@@ -43,7 +45,9 @@ export function deriveCard(state: ReviewBoardRunState): PrCardModel {
   const failed = entries.filter((p) => p.status === 'error').length;
 
   let status: PrCardStatus;
-  if (state.queued) {
+  if (deferred) {
+    status = 'deferred';
+  } else if (state.queued) {
     status = 'queued';
   } else if (state.running) {
     status = 'reviewing';
@@ -73,6 +77,7 @@ export function deriveCard(state: ReviewBoardRunState): PrCardModel {
 }
 
 const STATUS_LABEL: Record<PrCardStatus, string> = {
+  deferred: 'Imported · review later',
   queued: 'Queued',
   preparing: 'Preparing',
   reviewing: 'Reviewing',
@@ -122,6 +127,7 @@ export function BulkReviewTracker({
   live?: LiveState;
 }) {
   const api = useApi();
+  const [reviews, setReviews] = useState<Record<string, PrReview>>({});
   const featureIds = useMemo(() => prs.map((pr) => pr.featureId), [prs]);
   const usage = useAgentUsage(featureIds, 'Review board', undefined, live);
   const runApi = useMemo(
@@ -147,12 +153,33 @@ export function BulkReviewTracker({
   }, [prs]);
 
   useEffect(() => {
-    for (const pr of prs) void reviewBoardRunStore.load(pr.featureId, runApi);
-  }, [prs, runApi]);
+    let active = true;
+    for (const pr of prs) {
+      if (!api.getPrReview) {
+        void reviewBoardRunStore.load(pr.featureId, runApi);
+        continue;
+      }
+      void api.getPrReview(pr.featureId).then((review) => {
+        if (!active) return;
+        setReviews((previous) => ({ ...previous, [pr.featureId]: review }));
+        if (!review.analysisDeferred) void reviewBoardRunStore.load(pr.featureId, runApi);
+      }).catch(() => {
+        if (active) void reviewBoardRunStore.load(pr.featureId, runApi);
+      });
+    }
+    return () => { active = false; };
+  }, [prs, runApi, api]);
+
+  function isDeferred(featureId: string): boolean {
+    const saved = reviews[featureId];
+    const streamed = live.prReviews[featureId];
+    const latest = streamed && (!saved || streamed.timestamps.updatedAt >= saved.timestamps.updatedAt) ? streamed : saved;
+    return latest?.analysisDeferred === true;
+  }
 
   const cards = prs.map((pr) => ({
     pr,
-    model: deriveCard(reviewBoardRunStore.getState(pr.featureId)),
+    model: deriveCard(reviewBoardRunStore.getState(pr.featureId), isDeferred(pr.featureId)),
     timing: reviewBoardRunStore.getState(pr.featureId).timing,
   }));
   const completed = cards.filter((c) => c.model.status === 'done').length;
@@ -163,6 +190,7 @@ export function BulkReviewTracker({
   const failed = cards.filter((c) => c.model.status === 'failed').length;
   const incomplete = cards.filter((c) => c.model.status === 'incomplete' || c.model.status === 'skipped').length;
   const withSkips = cards.filter((c) => c.model.status === 'partial').length;
+  const deferred = cards.filter((c) => c.model.status === 'deferred').length;
   const active = reviewing > 0 || queued > 0;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -179,6 +207,9 @@ export function BulkReviewTracker({
 
   return (
     <div className="bulk-review">
+      <Insights title="Batch review timing">{() => <ExecutionTimeline title="Pull request review spans" now={now}
+        items={cards.map(({ pr, model, timing }) => ({ id: pr.featureId, label: pr.title, status: model.status === 'reviewing' || model.status === 'preparing' ? 'running' : model.status,
+          start: timing?.startedAt ?? null, end: timing?.finishedAt ?? null, select: onOpen ? () => onOpen(pr.featureId) : undefined }))} />}</Insights>
       <header className="bulk-review-head">
         <div className="bulk-review-title">
           <PullRequestIcon size={18} />
@@ -203,6 +234,7 @@ export function BulkReviewTracker({
           <span className="brs brs-queued">
             <ClockIcon size={13} /> {queued} queued
           </span>
+          {deferred > 0 && <span className="brs"><ClockIcon size={13} /> {deferred} review later</span>}
           {failed > 0 && (
             <span className="brs brs-failed">
               <WarningIcon size={13} /> {failed} failed
@@ -253,6 +285,7 @@ export function BulkReviewTracker({
                     <span className="brr-name">{pr.title}</span>
                   </span>
                   {model.status === 'preparing' && <span className="brr-activity">{state.prep.message}</span>}
+                  {model.status === 'deferred' && <span className="brr-activity">Open to prepare this review. No AI has started.</span>}
                   {activity && <span className="brr-activity" title={activity}>{activity}</span>}
                   <span className="brr-bar" aria-hidden="true">
                     <span

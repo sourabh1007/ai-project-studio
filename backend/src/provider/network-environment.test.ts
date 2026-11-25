@@ -4,7 +4,51 @@ import {
   envIndicatesMicrosoftNetwork,
   resolveMicrosoftNetwork,
   MS_NETWORK_OVERRIDE_VARS,
+  createMicrosoftNetworkDetector,
 } from './network-environment.js';
+
+describe('Microsoft network detector', () => {
+  it('coalesces concurrent probes and updates visibility when the network changes', async () => {
+    let finish!: (value: boolean) => void;
+    let probes = 0;
+    const detector = createMicrosoftNetworkDetector({
+      probe: () => { probes++; return new Promise((resolve) => { finish = resolve; }); },
+    });
+    expect(detector.isMicrosoftNetwork()).toBe(false);
+    const first = detector.refresh();
+    expect(detector.refresh()).toBe(first);
+    await Promise.resolve();
+    expect(probes).toBe(1);
+    finish(true);
+    expect(await first).toBe(true);
+    expect(detector.isMicrosoftNetwork()).toBe(true);
+    const next = detector.refresh();
+    await Promise.resolve();
+    finish(false);
+    expect(await next).toBe(false);
+    expect(detector.isMicrosoftNetwork()).toBe(false);
+  });
+
+  it('fails closed for rejected or throwing probes and permits recovery', async () => {
+    let failure = true;
+    const detector = createMicrosoftNetworkDetector({
+      probe: () => {
+        if (failure) throw new Error('DNS unavailable');
+        return Promise.resolve(true);
+      },
+    });
+    expect(await detector.refresh()).toBe(false);
+    expect(detector.isMicrosoftNetwork()).toBe(false);
+    failure = false;
+    expect(await detector.refresh()).toBe(true);
+    failure = true;
+    expect(await detector.refresh()).toBe(false);
+    expect(detector.isMicrosoftNetwork()).toBe(false);
+    expect(await createMicrosoftNetworkDetector({
+      probe: () => Promise.reject(new Error('Connection timed out')),
+    }).refresh()).toBe(false);
+  });
+});
 
 describe('explicitNetworkOverride', () => {
   it('returns null when no override var is set', () => {

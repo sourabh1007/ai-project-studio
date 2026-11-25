@@ -473,5 +473,6 @@ export function liveSignal(state: LiveState): number {
  */
 export function mergeLive(session: Session, live: LiveState): Session {
   const liveSession = live.sessions[session.id];
-  return liveSession && !live.streamInterrupted ? { ...session, ...liveSession } : session;
+  // Lifecycle snapshots can predate a user's persisted rename.
+  return liveSession && !live.streamInterrupted ? { ...session, ...liveSession, name: session.name } : session;
 }

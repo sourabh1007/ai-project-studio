@@ -52,6 +52,24 @@ describe('parseGithubApproval', () => {
 });
 
 describe('createGithubApprovalGateway', () => {
+  it('pins the live target ref instead of trusting an old merge target snapshot', async () => {
+    const calls: string[][] = [];
+    const replies = [{ state: 'open', head: { sha: 'head' }, base: { ref: 'release/v1', sha: 'stale' } }, { object: { sha: 'live-base' } }];
+    const gateway = createGithubApprovalGateway(async (args) => { calls.push(args); return ok(JSON.stringify(replies.shift())); }, TARGET);
+    expect(await gateway.getRevisions!()).toEqual({ headSha: 'head', baseSha: 'live-base', targetBranch: 'release/v1' });
+    expect(calls.at(-1)).toEqual(['api', '/repos/acme/widgets/git/ref/heads/release%2Fv1']);
+  });
+  it.each([null, {}, { state: 'closed' }, { state: 'open', head: { sha: '' }, base: { ref: 'main' } },
+    { state: 'open', head: { sha: 'head' }, base: {} }, { state: 'open', head: { sha: 'head' }, base: { ref: '' } }])(
+    'rejects unverifiable live revisions %j', async (detail) => {
+      const { gw } = guarded([detail]);
+      await expect(gw.getRevisions!()).rejects.toThrow('head and target');
+    },
+  );
+  it.each([null, {}, { object: { sha: '' } }])('rejects missing live target commit %j', async (ref) => {
+    const { gw } = guarded([{ state: 'open', head: { sha: 'head' }, base: { ref: 'main' } }, ref]);
+    await expect(gw.getRevisions!()).rejects.toThrow('target commit');
+  });
   const detail = { state: 'open', head: { sha: 'head' } };
   function guarded(responses: unknown[]) {
     const calls: string[][] = [];

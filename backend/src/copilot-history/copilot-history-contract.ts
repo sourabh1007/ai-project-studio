@@ -36,6 +36,8 @@ export interface SessionPrompt {
    * yet. Persistence can lag behind generation, including after completion.
    */
   pending?: boolean;
+  /** Submitted while another prompt is still being answered. */
+  queued?: boolean;
 }
 
 /** The CLI's recorded history for one session. */
@@ -89,6 +91,8 @@ export interface CopilotHistorySource {
    * when the store exists but the read fails (lock, corruption, schema drift).
    */
   userMessages(sessionId: string): HistoryUserMessageRow[];
+  /** Bounded text projection, ascending, for incremental background consumers. */
+  recentUserMessages?(sessionId: string, limit: number): HistoryUserMessageRow[];
   /**
    * ISO timestamps of the assistant usage events recorded for one session,
    * ascending. Used to derive per-prompt answer completion time by bucketing
@@ -129,6 +133,10 @@ export interface LivePromptTurn {
   completedAt?: string | null;
   /** Timestamp of the newest valid event logged for this turn, when present. */
   lastActivityAt?: string | null;
+  /** Waiting for its own assistant turn, rather than borrowing another reply. */
+  queued?: boolean;
+  /** Earlier recent turns, retained while several prompts await persistence. */
+  preceding?: LivePromptTurn[];
 }
 
 /**
@@ -162,6 +170,8 @@ export interface CopilotHistoryReader<
    * cannot be read, instead of reporting an empty history.
    */
   prompts(sessionId: string): P;
+  /** Implementations must bound native IO before materializing prompt text. */
+  recentPrompts?(sessionId: string, limit: number): Promise<SessionPrompt[]> | SessionPrompt[];
 }
 
 /** A history reader whose prompt read may be asynchronous (non-blocking IO). */

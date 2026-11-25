@@ -31,4 +31,24 @@ describe('createMicrosoftIdentity', () => {
     expect(listener).toHaveBeenLastCalledWith(false);
     expect(listener).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps an authenticated organization when a different organization requires sign-in', () => {
+    const identity = createMicrosoftIdentity();
+    const listener = vi.fn();
+    identity.onChange(listener);
+    identity.set(true, 'org-a');
+    identity.set(false, 'org-b');
+    identity.set(true, 'org-c');
+    identity.set(false, 'org-a');
+    expect(identity.isSignedIn()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    identity.set(false, 'org-c');
+    expect(identity.isSignedIn()).toBe(false);
+    expect(listener).toHaveBeenLastCalledWith(false);
+    identity.set(true, 'org-a');
+    identity.set(false);
+    expect(identity.isSignedIn()).toBe(false);
+    identity.set(false, 'org-b');
+    expect(identity.isSignedIn()).toBe(false);
+  });
 });

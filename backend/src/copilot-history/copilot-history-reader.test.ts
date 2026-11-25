@@ -5,6 +5,8 @@ import {
   type CopilotHistorySource,
   type HistoryCheckpointRow,
   type HistorySessionRow,
+  type HistoryUserMessageRow,
+  type LivePromptTurn,
 } from './copilot-history-contract.js';
 import { copilotHistoryDefaults } from './config.js';
 import { parseLatestLivePrompt } from './copilot-live-prompt-parser.js';
@@ -33,6 +35,51 @@ function fakeSource(overrides: Partial<CopilotHistorySource> = {}): {
 }
 
 describe('createCopilotHistoryReader', () => {
+  it('requires a bounded native port and a valid bounded limit', async () => {
+    const { source } = fakeSource();
+    const reader = createCopilotHistoryReader({ source, config: copilotHistoryDefaults });
+    for (const limit of [0, 101, 1.5, 1]) await expect(reader.recentPrompts!('s', limit)).rejects.toThrow('Bounded');
+  });
+
+  it('merges bounded saved evidence with matching live completion without changing turn identity', async () => {
+    const { source } = fakeSource({
+      recentUserMessages: () => [
+        { turn_index: 0, user_message: '# Session Bootstrap Context', assistant_response: null, timestamp: null },
+        { turn_index: 1, user_message: 'Fix lock', assistant_response: 'Saved reply', timestamp: 'at' },
+      ],
+    });
+    let live: import('./copilot-history-contract.js').LivePromptTurn | null = {
+      text: 'Fix lock', response: 'Completed fix', at: 'at', completedAt: 'end',
+    };
+    const reader = createCopilotHistoryReader({ source, config: copilotHistoryDefaults, livePrompts: { latest: () => live } });
+    expect(await reader.recentPrompts!('s', 4)).toEqual([expect.objectContaining({ index: 1, text: 'Fix lock', status: 'answered', response: 'Completed fix', answeredAt: 'end' })]);
+    live = { text: 'Fix lock', at: 'at', response: null };
+    expect((await reader.recentPrompts!('s', 4))[0].status).toBe('answered');
+    live = { text: 'Add regression test', at: 'later', response: null };
+    expect(await reader.recentPrompts!('s', 1)).toEqual([expect.objectContaining({ index: 2, status: 'answering', answeredAt: null, response: null })]);
+    live = { text: '# Session Bootstrap Context', at: '', response: null };
+    expect(await reader.recentPrompts!('s', 4)).toHaveLength(1);
+    live = null;
+    expect(await reader.recentPrompts!('s', 4)).toHaveLength(1);
+  });
+
+  it('handles empty native stores, nullable saved text/times, and a live-only first turn', async () => {
+    const { source } = fakeSource({ recentUserMessages: () => [] });
+    const noLive = createCopilotHistoryReader({ source, config: copilotHistoryDefaults });
+    expect(await noLive.recentPrompts!('s', 4)).toEqual([]);
+    const liveOnly = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, livePrompts: { latest: () => ({ text: 'First request', at: '', response: null }) },
+    });
+    expect(await liveOnly.recentPrompts!('s', 4)).toEqual([expect.objectContaining({ index: 0, text: 'First request', status: 'answering' })]);
+    const nullable = fakeSource({
+      recentUserMessages: () => [
+        { turn_index: 0, user_message: null, assistant_response: null, timestamp: null },
+        { turn_index: 1, user_message: 'Ask', assistant_response: null, timestamp: null },
+      ],
+    });
+    expect(await createCopilotHistoryReader({ source: nullable.source, config: copilotHistoryDefaults }).recentPrompts!('s', 4))
+      .toEqual([expect.objectContaining({ at: '', status: 'unanswered', response: null })]);
+  });
   it.each([false, true])('uses recorded completion with recent usage and delayed persistence (saved=%s)', async (saved) => {
     const { source } = fakeSource({
       userMessages: () => saved ? [
@@ -874,5 +921,109 @@ describe('createCopilotHistoryReader freshness and read reliability', () => {
       userMessages: () => { throw new PromptHistoryUnavailableError('locked'); },
     });
     await expect(reader.prompts('s1')).rejects.toBeInstanceOf(PromptHistoryUnavailableError);
+  });
+});
+
+describe('queued prompt history', () => {
+  const at = (second: number) => `2024-01-01T00:00:${String(second).padStart(2, '0')}Z`;
+  const event = (type: string, data: unknown, second: number) => JSON.stringify({ type, data, timestamp: at(second) });
+
+  it('keeps three rapid prompts with their own replies before, during and after store persistence', async () => {
+    const stored: HistoryUserMessageRow[] = [
+      { turn_index: 7, user_message: '# Session Bootstrap Context', assistant_response: null, timestamp: at(0) },
+    ];
+    const { source } = fakeSource({ userMessages: () => stored, recentUserMessages: () => stored });
+    const events = [
+      event('user.message', { content: 'First request', messageId: 'a' }, 0),
+      event('assistant.turn_start', { turnId: 'ta' }, 1),
+      event('user.message', { content: 'Second request', messageId: 'b' }, 2),
+      event('user.message', { content: 'Third request', messageId: 'c' }, 3),
+      event('assistant.message', { originatingMessageId: 'a', content: 'Only A answer' }, 5),
+      event('assistant.turn_end', { turnId: 'ta' }, 6),
+    ];
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => Date.parse(at(20)),
+      livePrompts: { latest: () => parseLatestLivePrompt(events.join('\n'), toVisiblePrompt) },
+    });
+    let rows = await reader.prompts('s');
+    expect(rows.map((row) => [row.index, row.text, row.response, row.queued ?? false])).toEqual([
+      [8, 'First request', 'Only A answer', false],
+      [9, 'Second request', null, true],
+      [10, 'Third request', null, true],
+    ]);
+    expect(rows[0]).toMatchObject({ status: 'answered', durationMs: 6000, answeredAt: at(6) });
+    expect((await reader.recentPrompts!('s', 2)).map((row) => row.text)).toEqual(['Second request', 'Third request']);
+    events.push(
+      event('assistant.turn_start', { turnId: 'tb' }, 7),
+      event('assistant.message', { originatingMessageId: 'b', content: 'Only B answer' }, 8),
+      event('assistant.turn_end', { turnId: 'tb' }, 9),
+      event('assistant.turn_start', { turnId: 'tc' }, 10),
+      event('assistant.message', { originatingMessageId: 'c', content: 'Only C answer' }, 11),
+      event('assistant.turn_end', { turnId: 'tc' }, 12),
+    );
+    stored.push({ turn_index: 8, user_message: 'First request', assistant_response: 'Only A answer', timestamp: at(0) });
+    rows = await reader.prompts('s');
+    expect(rows.map((row) => row.response)).toEqual(['Only A answer', 'Only B answer', 'Only C answer']);
+    stored.push(
+      { turn_index: 9, user_message: 'Second request', assistant_response: 'Only B answer', timestamp: at(2) },
+      { turn_index: 10, user_message: 'Third request', assistant_response: 'Only C answer', timestamp: at(3) },
+    );
+    rows = await reader.prompts('s');
+    expect(rows.map((row) => row.index)).toEqual([8, 9, 10]);
+    expect(rows.every((row) => row.status === 'answered' && !row.pending && !row.queued)).toBe(true);
+    expect((await reader.recentPrompts!('s', 3)).map((row) => row.response)).toEqual(['Only A answer', 'Only B answer', 'Only C answer']);
+  });
+
+  it('does not collapse repeated prompt text, and keeps longer stored replies until a final live reply arrives', async () => {
+    const stored: HistoryUserMessageRow[] = [
+      { turn_index: 0, user_message: 'Repeat', assistant_response: 'Stored complete text', timestamp: '2024-01-01T00:00:00.000Z' },
+      { turn_index: 1, user_message: 'Repeat', assistant_response: null, timestamp: at(2) },
+    ];
+    const first: LivePromptTurn = { text: 'Repeat', response: 'Stored', at: at(0), lastActivityAt: at(18) };
+    const last: LivePromptTurn = { text: 'Repeat', response: null, at: at(2), queued: true, preceding: [first] };
+    const { source } = fakeSource({ userMessages: () => stored, usageEventTimes: () => [at(1)] });
+    let nowMs = Date.parse(at(20));
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, now: () => nowMs, livePrompts: { latest: () => last },
+    });
+    expect((await reader.prompts('s')).map((row) => row.response)).toEqual(['Stored complete text', null]);
+    first.response = null;
+    first.lastActivityAt = at(0);
+    nowMs = Date.parse('2024-01-01T00:01:00Z');
+    expect((await reader.prompts('s'))[0]).toMatchObject({ response: 'Stored complete text', answeredAt: new Date(at(1)).toISOString() });
+    first.response = 'Final';
+    first.completedAt = at(6);
+    last.response = 'Separate final';
+    last.completedAt = at(9);
+    delete last.queued;
+    expect((await reader.prompts('s')).map((row) => row.response)).toEqual(['Final', 'Separate final']);
+  });
+
+  it('handles hidden turns, missing times, empty bounded stores and duplicate native timestamps without stealing answers', async () => {
+    const snapshot: LivePromptTurn = {
+      text: 'Same', at: '', response: null, queued: true,
+      preceding: [
+        { text: '# Session Bootstrap Context', at: '', response: 'Hidden' },
+        { text: 'Same', at: '', response: 'First answer', completedAt: null },
+      ],
+    };
+    const { source } = fakeSource({ recentUserMessages: () => [] });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults, livePrompts: { latest: () => snapshot },
+    });
+    expect((await reader.recentPrompts!('s', 5)).map((row) => [row.text, row.response])).toEqual([
+      ['Same', 'First answer'], ['Same', null],
+    ]);
+    expect(await reader.prompts('s')).toHaveLength(2);
+  });
+
+  it('keeps a single queued live row distinct from a response already being generated', async () => {
+    const { source } = fakeSource({ recentUserMessages: () => [] });
+    const reader = createCopilotHistoryReader({
+      source, config: copilotHistoryDefaults,
+      livePrompts: { latest: () => ({ text: 'Queued request', at: '', response: null, queued: true }) },
+    });
+    expect((await reader.recentPrompts!('s', 1))[0]).toMatchObject({ status: 'unanswered', queued: true });
+    expect((await reader.prompts('s'))[0]).toMatchObject({ status: 'unanswered', queued: true });
   });
 });

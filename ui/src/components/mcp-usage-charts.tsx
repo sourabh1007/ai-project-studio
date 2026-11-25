@@ -1,6 +1,8 @@
 import { Fragment, useState } from 'react';
 import type { McpServerBreakdown, McpToolBreakdown } from '../lib/types.js';
 import { formatAic, formatBytes, formatCompactNumber, formatCredits, formatDateTime, formatDuration } from '../lib/format.js';
+import { Insights } from '../features/monitoring/insights.js';
+import { McpInsights } from '../features/monitoring/mcp-insights.js';
 
 type Metric = 'calls' | 'bytes' | 'credits';
 const METRICS: { id: Metric; label: string }[] = [
@@ -27,7 +29,7 @@ function label(row: McpServerBreakdown) {
   return row.provider ? `${row.server} (${row.provider})` : row.server;
 }
 
-export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
+export function McpUsageCharts({ rows, scope = 'feature', featureId }: { rows: McpServerBreakdown[]; scope?: 'feature' | 'internal'; featureId?: string }) {
   const [metric, setMetric] = useState<Metric>('calls');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (key: string) => setExpanded((prev) => {
@@ -119,6 +121,7 @@ export function McpUsageCharts({ rows }: { rows: McpServerBreakdown[] }) {
                     </button>
                   : row.server}
                 {row.provider && <small className="mcp-usage-provider">{row.provider}</small>}
+                {row.provider && <Insights title="Observed diagnostics">{() => <McpInsights provider={row.provider!} server={row.server} scope={scope} featureId={featureId} signal={`${row.calls}:${row.lastCallAt}`} />}</Insights>}
               </td>
               <td>{row.origin === 'built-in' ? 'CLI built-in' : row.origin === 'configured' ? 'Configured' : 'Not identified'}</td>
               <td className="dash-num">{formatCompactNumber(row.calls)}</td>

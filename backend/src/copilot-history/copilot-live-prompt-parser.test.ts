@@ -98,6 +98,8 @@ describe('parseLatestLivePrompt', () => {
       at: '2024-01-01T00:05:00Z',
       lastActivityAt: '2024-01-01T00:05:00Z',
       response: null,
+      queued: true,
+      preceding: [{ text: 'first', at: '2024-01-01T00:00:00Z', lastActivityAt: '2024-01-01T00:00:00Z', response: null }],
     });
   });
 
@@ -230,5 +232,59 @@ describe('parseLatestLivePrompt', () => {
   it('omits last activity when no event of the turn carries a valid timestamp', () => {
     const tail = line({ type: 'user.message', data: { content: 'ask', messageId: 'm1' }, timestamp: 't' });
     expect(parseLatestLivePrompt(tail, visible)).not.toHaveProperty('lastActivityAt');
+  });
+
+  it('keeps every queued prompt and routes interleaved answers and completion to their native origin', () => {
+    const events = [
+      { type: 'user.message', data: { content: 'First request', messageId: 'a' }, timestamp: '2024-01-01T00:00:00Z' },
+      { type: 'assistant.turn_start', data: { turnId: 'ta' } },
+      { type: 'assistant.message', data: { originatingMessageId: 'a', content: 'Working on A' } },
+      { type: 'user.message', data: { content: 'Second request', messageId: 'b' }, timestamp: '2024-01-01T00:00:02Z' },
+      { type: 'user.message', data: { content: 'Third request', messageId: 'c' }, timestamp: '2024-01-01T00:00:03Z' },
+      { type: 'assistant.message', data: { originatingMessageId: 'a', content: 'A complete' } },
+      { type: 'assistant.turn_end', data: { turnId: 'ta' }, timestamp: '2024-01-01T00:00:06Z' },
+    ];
+    const pending = parseLatestLivePrompt(events.map(line).join('\n'), visible)!;
+    expect(pending).toMatchObject({ text: 'Third request', response: null, queued: true });
+    expect(pending.preceding).toMatchObject([
+      { text: 'First request', response: 'Working on A\n\nA complete', completedAt: '2024-01-01T00:00:06Z' },
+      { text: 'Second request', response: null, queued: true },
+    ]);
+    const completed = parseLatestLivePrompt([...events,
+      { type: 'assistant.turn_start', data: { turnId: 'tb' } },
+      { type: 'assistant.message', data: { originatingMessageId: 'b', content: 'B answer' } },
+      { type: 'tool.execution_complete', data: { turnId: 'tb' }, timestamp: '2024-01-01T00:00:07Z' },
+      { type: 'assistant.turn_end', data: { turnId: 'tb' }, timestamp: '2024-01-01T00:00:08Z' },
+      { type: 'assistant.turn_start', data: { turnId: 'tc', originatingMessageId: 'c' } },
+      { type: 'assistant.message', data: { originatingMessageId: 'c', content: 'C answer' } },
+      { type: 'assistant.turn_end', data: { turnId: 'tc' }, timestamp: '2024-01-01T00:00:10Z' },
+    ].map(line).join('\n'), visible)!;
+    expect(completed).toMatchObject({ text: 'Third request', response: 'C answer', completedAt: '2024-01-01T00:00:10Z' });
+    expect(completed).not.toHaveProperty('queued');
+    expect(completed.preceding?.map((turn) => turn.response)).toEqual(['Working on A\n\nA complete', 'B answer']);
+  });
+
+  it('does not guess ownership of an ambiguous turn or uncorrelated tool activity', () => {
+    const result = parseLatestLivePrompt([
+      { type: 'tool.execution_complete', data: { turnId: 'absent' } },
+      { type: 'tool.execution_complete' },
+      { type: 'user.message', data: { content: 'A', messageId: 'a' } },
+      { type: 'user.message', data: { content: 'B', messageId: 'b' } },
+      { type: 'assistant.turn_start', data: { turnId: 'unbound' } },
+      { type: 'tool.execution_complete', timestamp: '2024-01-01T00:00:05Z' },
+      { type: 'assistant.turn_end', data: { turnId: 'unbound' }, timestamp: '2024-01-01T00:00:06Z' },
+    ].map(line).join('\n'), visible)!;
+    expect(result.response).toBeNull();
+    expect(result.preceding?.[0].response).toBeNull();
+    expect(result).not.toHaveProperty('completedAt');
+    expect(result.preceding?.[0]).not.toHaveProperty('completedAt');
+  });
+
+  it('caps the live overlay at 100 turns without dropping the latest prompt', () => {
+    const result = parseLatestLivePrompt(Array.from({ length: 105 }, (_, index) =>
+      line({ type: 'user.message', data: { content: `Request ${index}`, messageId: `${index}` } })).join('\n'), visible)!;
+    expect(result.text).toBe('Request 104');
+    expect(result.preceding).toHaveLength(99);
+    expect(result.preceding?.[0].text).toBe('Request 5');
   });
 });

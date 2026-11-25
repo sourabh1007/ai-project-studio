@@ -3,6 +3,9 @@ import { z } from 'zod';
 export const RESOURCES_NAMESPACE = 'resources';
 export const resourcesConfigSchema = z.object({
   processSamplingEnabled: z.boolean().default(true).describe('Disable app process-tree sampling to avoid its PowerShell/CIM overhead; host pressure remains available.'),
+  historyMaxPoints: z.number().int().min(2).max(600).default(600),
+  historyMaxAgeMs: z.number().int().min(60000).max(86400000).default(3600000),
+  storageHistoryMaxScans: z.number().int().min(2).max(90).default(90),
   sampleIntervalMs: z.number().int().min(5000).max(60000),
   staleAfterMs: z.number().int().min(10000).max(300000),
   processTimeoutMs: z.number().int().min(1000).max(30000),
@@ -17,6 +20,7 @@ export const resourcesConfigSchema = z.object({
 });
 export type ResourcesConfig = z.infer<typeof resourcesConfigSchema>;
 export const resourcesDefaults: ResourcesConfig = {
+  historyMaxPoints: 600, historyMaxAgeMs: 3600000, storageHistoryMaxScans: 90,
   processSamplingEnabled: true, maxScanDurationMs: 300000,
   sampleIntervalMs: 10000, staleAfterMs: 30000, processTimeoutMs: 8000,
   scanTimeoutMs: 30000, maxScanEntries: 100000, storageStaleAfterMs: 300000,

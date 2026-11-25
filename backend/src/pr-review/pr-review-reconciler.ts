@@ -72,11 +72,15 @@ export function createPrReviewReconciler(
         }
         const problemOrphaned = !isSettled(review.problemStatement);
         const graphOrphaned = !isSettled(review.changeGraph);
-        if (!problemOrphaned && !graphOrphaned) {
+        const runOrphaned = review.reviewBoardRun?.status === 'running';
+        if (!problemOrphaned && !graphOrphaned && !runOrphaned) {
           continue;
         }
         reviews.save({
           ...review,
+          ...(runOrphaned ? { reviewBoardPending: false, reviewBoardRun: {
+            ...review.reviewBoardRun!, status: 'interrupted' as const, finishedAt: failedAt,
+          } } : {}),
           problemStatement: problemOrphaned
             ? failStep(review.problemStatement, failedAt)
             : review.problemStatement,

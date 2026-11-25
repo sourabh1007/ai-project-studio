@@ -40,6 +40,7 @@ export interface SkillUsageRow {
 export interface SkillUsageFilter {
   scope: 'feature' | 'internal';
   featureId?: string;
+  window?: { from: string; to: string };
 }
 
 export interface SkillUsageSnapshot {

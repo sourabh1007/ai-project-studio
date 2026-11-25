@@ -1,5 +1,5 @@
 import { AcpClient } from '../acp/acp-client.js';
-import { AcpProcessAdapter } from '../acp/acp-process-adapter.js';
+import { AcpProcessAdapter, type AcpSpawnOptions } from '../acp/acp-process-adapter.js';
 import type {
   MetaModelOption,
   ModelCatalogProbe,
@@ -10,6 +10,7 @@ import type { ProcessAdmission } from '../../kernel/process-admission.js';
 export interface AcpModelCatalogProbeOptions {
   /** Absolute path to the copilot executable driving the ACP process. */
   executable: string;
+  resolveCommand?: AcpSpawnOptions['resolveCommand'];
   extraArgs?: string[];
   /** Timeout (ms) for the one-time ACP `initialize` handshake. */
   initializeTimeoutMs: number;
@@ -43,7 +44,7 @@ export function createAcpModelCatalogProbe(
       try {
         permit = await options.admission?.acquireCold(AbortSignal.timeout(options.initializeTimeoutMs));
         client = new AcpClient(
-          new AcpProcessAdapter({ executable: options.executable, extraArgs: options.extraArgs }),
+          new AcpProcessAdapter({ executable: options.executable, extraArgs: options.extraArgs, resolveCommand: options.resolveCommand }),
           {
             initializeTimeoutMs: options.initializeTimeoutMs,
             turnTimeoutMs: options.turnTimeoutMs,

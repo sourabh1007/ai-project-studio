@@ -157,10 +157,11 @@ describe('createRecordingSessionLauncher', () => {
       clock,
       newOperationId: () => 'op-1',
     });
-    const handle = await runner.start(request());
+    const handle = await runner.start(request({ promptRefs: ['one', 'two', 'one'] }));
     await expect(handle.completion).resolves.toBe(ended);
 
     expect(rec.created[0]).toMatchObject({
+      promptRefs: ['one', 'two'],
       operationId: 'op-1',
       state: 'pending',
       purpose: 'feature-summary',

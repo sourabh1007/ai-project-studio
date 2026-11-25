@@ -10,6 +10,7 @@ const regression = require('./regression-isolation.cjs').configure(app);
 const updateManager = regression?.updater || require('./update-manager.cjs');
 const ipcInput = require('./ipc-input.cjs');
 const { createBackendFailureLog } = require('./backend-failure-log.cjs');
+const { attachRendererRecovery } = require('./renderer-recovery.cjs');
 const { createHttpCacheCleanupHandler } = require('./http-cache-cleanup.cjs');
 const { createAppearanceStore, registerAppearanceIpc } = require('./appearance-store.cjs');
 const { createStablePort } = require('./stable-port.cjs');
@@ -87,6 +88,11 @@ const failureLog = createBackendFailureLog({
   onError: (message) => safeWrite(process.stderr, `${message}\n`),
 });
 
+const rendererFailureLog = createBackendFailureLog({
+  logPath: path.join(app.getPath('userData'), 'logs', 'desktop-renderer.log'),
+  onError: (message) => safeWrite(process.stderr, `${message}\n`),
+});
+
 function recordBackendFailure(entry) {
   return failureLog.record(entry);
 }
@@ -109,6 +115,9 @@ function writePersistedTheme(mode) {
   }
 }
 const STARTUP_TIMEOUT_MS = Number(process.env.CW_STARTUP_TIMEOUT_MS || 30000);
+// Cold backend/module/database initialization can outlast the renderer budget.
+// Keep waiting for the same owned child; never adopt an unverified listener.
+const BACKEND_STARTUP_TIMEOUT_MS = Number(process.env.CW_STARTUP_TIMEOUT_MS || 120000);
 // Leave room after the backend's 5s drain budget for persistence and transport
 // closure. Timing out retains ownership; it never escalates to killing the root.
 const BACKEND_STOP_TIMEOUT_MS = 10000;
@@ -209,7 +218,7 @@ function waitForBackend(port) {
       lastRejection
         ? `Backend did not start in time. ${lastRejection}`
         : 'Backend did not start in time',
-    )), STARTUP_TIMEOUT_MS);
+    )), BACKEND_STARTUP_TIMEOUT_MS);
     const retry = () => {
       if (!settled && !retryTimer) retryTimer = setTimeout(attempt, 300);
     };
@@ -581,6 +590,17 @@ function reportShutdownFailure(action) {
 function releaseFailedUpdateGate() {
   if (shutdownAction?.action === 'update' && shutdownAction.confirmed && isBackendShutdownConfirmed()) {
     shutdownAction = null;
+    notifyLifecycleState('running');
+  }
+}
+
+function notifyLifecycleState(state) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) win.webContents.send('app:lifecycle', state);
+    } catch {
+      // A renderer already tearing down must not prevent cooperative cleanup.
+    }
   }
 }
 
@@ -595,6 +615,7 @@ function runAfterBackendStop(action, proceed, terminal = true) {
   const generation = backendGeneration;
   const attempt = { action, generation, confirmed: false, promise: null };
   shutdownAction = attempt;
+  notifyLifecycleState('closing');
   attempt.promise = (async () => {
     try {
       if (await stopBackend() !== true || !isBackendShutdownConfirmed() ||
@@ -623,6 +644,7 @@ function runAfterBackendStop(action, proceed, terminal = true) {
       // admitted; a completed promise alone must not permit a replacement.
       if (shutdownAction === attempt && (!attempt.confirmed || !terminal)) {
         shutdownAction = null;
+        notifyLifecycleState('running');
       }
     }
   })();
@@ -795,17 +817,25 @@ function createWindow(loadUrl, splash = null) {
   });
   let painted = false;
   let loaded = false;
+  let appReady = false;
   let revealed = false;
   const startupTimer = splash ? setTimeout(() => {
     splash.fail(new Error('The interface is taking too long to load. You can close the app and try again.'));
   }, STARTUP_TIMEOUT_MS) : null;
   const reveal = () => {
-    if (!splash || revealed || !painted || !loaded || startupCancelled || win.isDestroyed()) return;
+    if (!splash || revealed || !painted || !loaded || !appReady || startupCancelled || win.isDestroyed()) return;
     revealed = true;
     clearTimeout(startupTimer);
     splash.complete(win);
     if (startupSplash === splash) startupSplash = null;
   };
+  superviseRenderer(win, loadUrl, 'main', () => !splash || revealed);
+  const onReady = (event) => {
+    if (event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame || !isTrustedSender(event)) return;
+    appReady = true;
+    reveal();
+  };
+  ipcMain.on('app:ready', onReady);
   if (splash) {
     win.once('ready-to-show', () => { painted = true; reveal(); });
     win.webContents.on('render-process-gone', (_event, details) => {
@@ -898,6 +928,7 @@ function createWindow(loadUrl, splash = null) {
     app.quit();
   });
   win.on('closed', () => {
+    ipcMain.removeListener('app:ready', onReady);
     if (startupTimer) clearTimeout(startupTimer);
     if (mainWindow === win) {
       mainWindow = null;
@@ -909,6 +940,31 @@ function createWindow(loadUrl, splash = null) {
     }
   });
   return win;
+}
+
+function superviseRenderer(win, url, role, canRecover = () => true) {
+  attachRendererRecovery({
+    window: win, url, canRecover,
+    isQuitting: () => startupCancelled || shutdownAction !== null,
+    record: (entry) => {
+      const recorded = rendererFailureLog.record({ window: role, ...entry });
+      safeWrite(process.stderr, `[desktop] Renderer failure: ${JSON.stringify(recorded)}\n`);
+    },
+    showFailure: () => dialog.showErrorBox('Studio interface unavailable',
+      'The interface could not recover. Close and reopen Studio. Your saved workspace has not been deleted.'),
+    confirmReload: async () => {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: 'Studio is not responding',
+        message: 'The interface is not responding.',
+        detail: 'You can wait or reload just the interface. Reloading may discard unsent input; backend sessions are not restarted.',
+        buttons: ['Wait', 'Reload interface'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      return response === 1;
+    },
+  });
 }
 
 /**
@@ -970,6 +1026,7 @@ function openPopoutWindow(tab, label) {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
+  superviseRenderer(win, loadUrl, 'popout');
 
   // Same navigation guards as the main window: external links go to the system
   // browser, and any cross-origin navigation is denied.
@@ -1002,7 +1059,7 @@ function openPopoutWindow(tab, label) {
     }
     // Returning a detached tab to the IDE must never lose it: re-open it in the
     // main window (if one is still alive) when the pop-out closes.
-    if (!shutdownAction?.confirmed && mainWindow && !mainWindow.isDestroyed()) {
+    if (!shutdownAction && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('tab:return', { tab, label: label ?? '' });
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();

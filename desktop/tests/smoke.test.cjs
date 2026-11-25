@@ -256,7 +256,13 @@ test('delayed backend fixture uses a dynamic loopback port and cleans up its own
   assert.equal(record.pid, child.pid);
   assert.equal(record.token, f.token);
   const response = await fetch(`http://127.0.0.1:${record.port}/`, { signal: AbortSignal.timeout(2000) });
-  assert.match(await response.text(), new RegExp(f.token));
+  const html = await response.text();
+  assert.match(html, new RegExp(f.token));
+  let ready = 0;
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  require('node:vm').runInNewContext(script, { window: { desktop: { ready: () => ready++ } } });
+  assert.equal(ready, 1);
+  require('node:vm').runInNewContext(script, { window: {} });
   assert.deepEqual(await fetch(`http://127.0.0.1:${record.port}/api/providers`,
     { signal: AbortSignal.timeout(2000) }).then((res) => res.json()), []);
   await killTree(child);

@@ -1,5 +1,6 @@
 import type {
   IAIProvider,
+  HeadlessMcpPolicy,
   ImportableSession,
   InteractiveCommand,
   McpErrorScanner,
@@ -31,12 +32,8 @@ export interface AgencyAdapterDeps {
   baseEnv: Record<string, string | undefined>;
   /** Source of past CLI sessions available to import into a feature. */
   importStore: CliSessionStore;
-  /**
-   * Names of the user-configured MCP servers to disable for headless meta
-   * sessions so they never trigger a browser/OAuth sign-in on load. Read live
-   * for the actual session cwd so config edits are reflected without a restart.
-   */
-  mcpServerNames?: (spec: SessionSpec) => readonly string[];
+  mcpPolicy?: HeadlessMcpPolicy;
+  nativeCopilot?: () => string | null;
 }
 
 /** Agency CLI provider. Wraps the Copilot CLI via `agency copilot -- ...`. */
@@ -51,16 +48,13 @@ export function createAgencyProvider(
       return listAgencyModels(config);
     },
     startSession(spec: SessionSpec) {
-      if (spec.kind === 'meta' && !deps.mcpServerNames) {
-        throw new ValidationError('Headless MCP suppression cannot be verified. Configure trusted effective MCP sources or repair the native CLI policy before starting meta tasks.');
+      if (spec.kind === 'meta' && deps.mcpPolicy === 'isolated') {
+        throw new ValidationError('Agency cannot guarantee zero-MCP startup in isolated mode. Choose native MCP policy in Settings for normal Agency execution, or use a provider with verifiable isolation. Native administrator and trust policies remain enforced.');
       }
-      const { command, args } = buildAgencyCommand(
-        spec,
-        config,
-        spec.kind === 'meta' ? deps.mcpServerNames!(spec) : [],
-      );
-      const env = { ...buildAgencyEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE };
-      const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
+      const { command, args } = buildAgencyCommand(spec, config, [], deps.mcpPolicy ?? 'native');
+      const env = { ...buildAgencyEnv(spec, deps.baseEnv, deps.nativeCopilot?.()), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE };
+      const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd,
+        ...(spec.noTools ? { input: spec.prompt } : {}) });
       return toRunningSession(spec.sessionId, handle);
     },
     buildInteractiveCommand(spec: SessionSpec): InteractiveCommand {
@@ -71,7 +65,7 @@ export function createAgencyProvider(
           '--',
           ...buildCopilotInteractiveArgs(spec, config),
         ],
-        env: { ...buildAgencyEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE },
+        env: { ...buildAgencyEnv(spec, deps.baseEnv, deps.nativeCopilot?.()), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE },
       };
     },
     createOutputScanner(ctx: SessionOutputScannerContext): SessionOutputScanner {

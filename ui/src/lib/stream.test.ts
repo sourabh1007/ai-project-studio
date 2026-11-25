@@ -817,6 +817,15 @@ describe('liveSignal', () => {
 });
 
 describe('mergeLive', () => {
+  it.each(['Renamed hotfix', null])('keeps persisted names authoritative over stale live metadata (%s)', (name) => {
+    const persisted = { ...session('s1'), name, status: 'created' as const };
+    const live = {
+      ...initialLiveState,
+      sessions: { s1: { ...persisted, name: 'Hotfix creation', status: 'running' as const } },
+    };
+    expect(mergeLive(persisted, live)).toMatchObject({ name, status: 'running' });
+  });
+
   it('overlays live status/model updates onto the persisted session', () => {
     const persisted = session('s1');
     const live = {

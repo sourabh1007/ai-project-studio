@@ -168,6 +168,24 @@ export function createAzureApprovalGateway(
     async getHeadSha() {
       return headFromDetail(await deps.httpGet(pullDetailUrl(target), await authorize()));
     },
+    async getRevisions() {
+      const token = await authorize();
+      const detail = await deps.httpGet(pullDetailUrl(target), token);
+      const headSha = headFromDetail(detail);
+      const targetRef = (detail.body as { targetRefName?: unknown }).targetRefName;
+      if (typeof targetRef !== 'string' || !targetRef.startsWith('refs/heads/') || targetRef.length <= 11) {
+        throw new ProviderError('Could not verify the Azure DevOps target branch.');
+      }
+      const url = pullDetailUrl(target).split('/pullRequests/')[0] +
+        `/refs?filter=${encodeURIComponent(targetRef.slice(5))}&api-version=${API_VERSION}`;
+      const refs = await deps.httpGet(url, token);
+      const values = (refs.body as { value?: Array<{ name?: unknown; objectId?: unknown }> } | null)?.value;
+      const ref = Array.isArray(values) ? values.find((item) => item.name === targetRef) : undefined;
+      if (refs.status !== 200 || typeof ref?.objectId !== 'string' || !ref.objectId) {
+        throw new ProviderError('Could not verify the live Azure DevOps target commit.');
+      }
+      return { headSha, baseSha: ref.objectId, targetBranch: targetRef.slice(11) };
+    },
     async approve(expectedHeadSha): Promise<PrApprovalResult> {
       const token = await authorize();
       const me = await fetchAzureUser(deps, target.org);

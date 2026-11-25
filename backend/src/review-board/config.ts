@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reviewContextConfigSchema, reviewContextDefaults } from './review-context.js';
 import {
   DEFAULT_COMMON_REVIEW_GUIDANCE,
   DEFAULT_PERSPECTIVE_PROMPTS,
@@ -8,6 +9,14 @@ import {
 export const REVIEW_BOARD_NAMESPACE = 'reviewBoard';
 
 export const reviewBoardConfigSchema = z.object({
+  maxFindingEvents: z.number().int().positive(),
+  maxPublications: z.number().int().positive(),
+  context: reviewContextConfigSchema,
+  businessFocus: z.string().min(1),
+  businessIssueFormat: z.string().min(1),
+  maxConcurrentReviews: z.number().int().positive(),
+  maxStoredFindings: z.number().int().positive(),
+  reviewTimeoutMs: z.number().int().positive(),
   /**
    * A trimmed PR description shorter than this many characters is flagged as
    * missing/minimal by the Problem ↔ Solution perspective.
@@ -20,12 +29,6 @@ export const reviewBoardConfigSchema = z.object({
   blastRadiusMediumThreshold: z.number().int().positive(),
   /** Blast-radius breadth at or above this is treated as high risk. */
   blastRadiusHighThreshold: z.number().int().positive(),
-  /**
-   * The largest slice of change context (description + change-graph summary)
-   * embedded into an AI prompt, in characters — keeps prompts inside provider
-   * limits.
-   */
-  maxContextChars: z.number().int().positive(),
   /**
    * Per-AI-step wall-clock budget in milliseconds before it fails fast.
    *
@@ -106,10 +109,17 @@ export const reviewBoardConfigSchema = z.object({
 export type ReviewBoardConfig = z.infer<typeof reviewBoardConfigSchema>;
 
 export const reviewBoardDefaults: ReviewBoardConfig = {
+  maxFindingEvents: 500,
+  maxPublications: 200,
+  context: reviewContextDefaults,
+  businessFocus: DEFAULT_PERSPECTIVE_PROMPTS.business.focus,
+  businessIssueFormat: DEFAULT_PERSPECTIVE_PROMPTS.business.issueFormat,
+  maxConcurrentReviews: 2,
+  maxStoredFindings: 200,
+  reviewTimeoutMs: 1_800_000,
   minDescriptionChars: 30,
   blastRadiusMediumThreshold: 3,
   blastRadiusHighThreshold: 6,
-  maxContextChars: 20_000,
   stepTimeoutMs: 300_000,
   transientRetryAttempts: 2,
   transientRetryBackoffMs: 2_000,

@@ -16,7 +16,6 @@ import { useApi } from '../../app/api-context.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
-import { ApiError } from '../../lib/api.js';
 import { withOperationKey } from '../../lib/operation-keys.js';
 import type { LiveState } from '../../lib/stream.js';
 import {
@@ -55,6 +54,7 @@ import {
   FolderIcon,
   MoveIcon,
   ImportIcon,
+  LocateIcon,
   PencilIcon,
   PlusIcon,
   PullRequestIcon,
@@ -83,6 +83,7 @@ import { NewSessionForm } from './new-session-form.js';
 import { ImportSessionPanel } from './import-session-panel.js';
 import {
   APPEND_INDEX,
+  ExplorerRevealContext,
   FeatureTree,
   NodeDragStoreProvider,
   useNodeDragStore,
@@ -92,10 +93,12 @@ import { RepoPicker } from './repo-picker.js';
 import { PrReviewPicker } from './pr-review-picker.js';
 import { bulkReviewName } from './bulk-pr-checkout.js';
 import { prImportStore } from '../../lib/pr-import-store.js';
+import { featureDeletionStore } from '../../lib/feature-deletion-store.js';
 import { usePrImportEvents } from '../../hooks/use-pr-imports.js';
 import { PrImportStatus } from './pr-import-status.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
+import type { WorkspaceTab } from './workspace-tabs.js';
 import {
   RepositoryContextBadge,
   RepositoryContextViewer,
@@ -129,20 +132,22 @@ function UsageBadge({ node, label, onOpenEvents }: {
     : state === 'complete' ? 'Reported'
     : state === 'partial' ? 'Partial: known lower bound' : 'Charges not reported';
   return <>
-    <button type="button" className="tree-usage-badge"
+    <button type="button" className="tree-action tree-usage-badge"
       aria-label={`View ${label} usage`}
-      title={`${label}, including nested items: ${credits} AI credits, ${tokens.toLocaleString()} tokens. ${status}.`}
+      aria-haspopup="dialog" aria-expanded={open}
+      aria-description={`${credits} AI credits, ${formatTokens(tokens)} tokens. ${status}.`}
+      title={`${label}, including nested items: ${credits} AI credits, ${formatTokens(tokens)} tokens. ${status}.`}
       onClick={() => setOpen(true)}>
-      <span>{credits}</span><span className="muted">{formatTokens(tokens)} tok</span>
+      <UsageIcon size={14} />
     </button>
     {open && <Modal title={`${label} usage`} onClose={() => setOpen(false)}>
       <p>Totals include nested features and subcategories, with retained usage from deleted sessions.</p>
       <dl className="usage-summary-details">
         <dt>Status</dt><dd>{status}</dd>
         <dt>AI credits</dt><dd>{credits}</dd>
-        <dt>Input tokens</dt><dd>{totals.inputTokens.toLocaleString()}</dd>
-        <dt>Output tokens</dt><dd>{totals.outputTokens.toLocaleString()}</dd>
-        <dt>Reasoning output tokens</dt><dd>{totals.reasoningOutputTokens.toLocaleString()}</dd>
+        <dt>Input tokens</dt><dd>{formatTokens(totals.inputTokens)}</dd>
+        <dt>Output tokens</dt><dd>{formatTokens(totals.outputTokens)}</dd>
+        <dt>Reasoning output tokens</dt><dd>{formatTokens(totals.reasoningOutputTokens)}</dd>
         <dt>Sessions</dt><dd>{totals.sessions.toLocaleString()}</dd>
         <dt>Sessions awaiting usage</dt><dd>{node.sessionsWithoutUsage.toLocaleString()}</dd>
         <dt>Events with unavailable charges</dt><dd>{totals.unavailableCharges ?? 0}</dd>
@@ -222,7 +227,7 @@ function SessionRow({
   } · Active: ${formatDuration(persisted?.activeMs ?? 0)}`;
 
   function startEditing() {
-    setDraft(session.name ?? customName ?? '');
+    setDraft(sessionWorkTitle(session.name ?? customName, session.prompt, session.workTitle, ordinal, 120, session.kind));
     setEditing(true);
   }
 
@@ -240,12 +245,18 @@ function SessionRow({
           autoFocus
           value={draft}
           aria-label="Session name"
+          maxLength={120}
+          onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
+              event.preventDefault();
+              event.stopPropagation();
               commit();
             } else if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
               setEditing(false);
             }
           }}
@@ -255,7 +266,7 @@ function SessionRow({
   }
 
   return (
-    <div className={`session-card ${active ? 'is-active' : ''}`.trim()}>
+    <div data-explorer-item={`session:${session.id}`} className={`session-card ${active ? 'is-active' : ''}`.trim()}>
       <div className="session-card-head">
         <button
           type="button"
@@ -430,6 +441,7 @@ function AttachedAgents({
       {attached.map((entry) => (
         <div
           key={entry.attachment.id}
+          data-explorer-item={entry.manifest.id === 'review-board' ? `review-board:${feature.id}` : `agent:${entry.attachment.id}`}
           className="session-card pr-review-child attached-agent-row"
         >
           <div className="session-card-head">
@@ -623,18 +635,22 @@ function FeatureNode({
 }) {
   const api = useApi();
   const nodeStore = useNodeDragStore();
+  const nodeAutomation = useAutomationReadiness();
   const usageContext = useContext(UsageSummaryContext);
   const summary = usageContext?.snapshot?.features[feature.id];
   const [expanded, setExpanded] = usePersistentState(
     `explorer.feature.${feature.id}.expanded`,
     false,
   );
+  const reveal = useContext(ExplorerRevealContext);
+  useEffect(() => {
+    if (reveal?.featureIds.includes(feature.id)) setExpanded(true);
+  }, [reveal, feature.id, setExpanded]);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirming, setConfirming] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteWorktrees, setDeleteWorktrees] = useState<
     FeatureDeletionWorktree[] | null
@@ -920,6 +936,7 @@ function FeatureNode({
   return (
     <div className="tree-node" style={{ '--feature-accent': accent } as CSSProperties}>
       <div
+        data-explorer-item={`feature:${feature.id}`}
         className={`tree-branch ${
           (nodeDropTarget && canAcceptNode) || (featureDropTarget && canAcceptFeature)
             ? 'is-drop-target'
@@ -1086,7 +1103,7 @@ function FeatureNode({
                 danger: true,
                 onSelect: () => setConfirming(true),
               },
-            ]}
+            ].filter((item) => item.label !== 'Add agent' || nodeAutomation?.canAttempt !== false)}
           />
         </div>
         {confirming ? (
@@ -1094,7 +1111,6 @@ function FeatureNode({
             title="Delete feature"
             icon={<WarningIcon />}
             confirmLabel="Delete feature"
-            busy={deleting}
             error={deleteError}
             message={
               <>
@@ -1130,7 +1146,6 @@ function FeatureNode({
               setDeleteError(null);
             }}
             onConfirm={() => {
-              setDeleting(true);
               setDeleteError(null);
               void (async () => {
                 try {
@@ -1142,8 +1157,6 @@ function FeatureNode({
                       ? error.message
                       : 'Could not delete the feature.',
                   );
-                } finally {
-                  setDeleting(false);
                 }
               })();
             }}
@@ -1534,6 +1547,10 @@ function RepoNode({
     `explorer.repo.${repoId ?? 'none'}.expanded`,
     defaultExpanded,
   );
+  const reveal = useContext(ExplorerRevealContext);
+  useEffect(() => {
+    if (reveal && reveal.repoId === repoId) setExpanded(true);
+  }, [reveal, repoId, setExpanded]);
   const [confirming, setConfirming] = useState(false);
   const [viewingContext, setViewingContext] = useState(false);
   const [viewingUsage, setViewingUsage] = useState(false);
@@ -1622,6 +1639,7 @@ function RepoNode({
   return (
     <div className={`repo-node ${repo ? '' : 'repo-node-orphan'}`.trim()}>
       <div
+        data-explorer-item={`repo:${repoId ?? 'none'}`}
         className={`tree-branch repo-branch ${
           headerDropTarget && canAcceptDrop ? 'is-drop-target' : ''
         } ${confirming ? 'is-actions-open' : ''}`.trim()}
@@ -1862,6 +1880,7 @@ function RepoNode({
 export function Explorer({
   live,
   activeSessionId,
+  activeTab = null,
   names,
   onOpenSession,
   onOpenFeature,
@@ -1877,6 +1896,7 @@ export function Explorer({
 }: {
   live: LiveState;
   activeSessionId: string | null;
+  activeTab?: WorkspaceTab | null;
   names: Record<string, string>;
   onOpenSession: (session: Session, label: string) => void;
   onOpenFeature: (feature: Feature) => void;
@@ -1897,6 +1917,90 @@ export function Explorer({
   const repos = useAsync(() => api.listRepos(), []);
   const automation = useAutomationReadiness();
   const features = useAsync(() => api.listFeatures(), []);
+  useEffect(() => featureDeletionStore.subscribe(features.reload), [features.reload]);
+  const explorerRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const locateNonce = useRef(0);
+  const [reveal, setReveal] = useState<React.ContextType<typeof ExplorerRevealContext>>(null);
+  const [locating, setLocating] = useState(false);
+  const [locateNotice, setLocateNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  useEffect(() => {
+    setReveal(null); setLocateNotice(null); setLocating(false);
+    return () => { locateNonce.current += 1; };
+  }, [activeTab?.id]);
+  useEffect(() => {
+    if (!reveal || !explorerRef.current) return;
+    const root = explorerRef.current;
+    let located: HTMLElement | undefined;
+    const finish = () => {
+      located = [...root.querySelectorAll<HTMLElement>('[data-explorer-item]')]
+        .find((element) => element.dataset.explorerItem === reveal.target);
+      if (!located) return;
+      located.classList.add('is-located');
+      located.tabIndex = -1;
+      located.scrollIntoView({ block: 'nearest', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      located.focus({ preventScroll: true });
+      setLocateNotice({ message: 'Active tab located in Explorer.', type: 'success' });
+      setLocating(false);
+      observer.disconnect();
+      window.clearTimeout(timeout);
+    };
+    const observer = new MutationObserver(finish);
+    const timeout = window.setTimeout(() => {
+      observer.disconnect(); setLocating(false);
+      setLocateNotice({ message: 'The active item is not available in Explorer. It may have been removed or its details could not load.', type: 'error' });
+    }, 5000);
+    observer.observe(root, { childList: true, subtree: true });
+    finish();
+    return () => { observer.disconnect(); window.clearTimeout(timeout); located?.classList.remove('is-located'); };
+  }, [reveal]);
+  const locateActive = async () => {
+    const tab = activeTabRef.current;
+    if (!tab) return;
+    const nonce = ++locateNonce.current;
+    setLocating(true); setLocateNotice(null); setReveal(null);
+    try {
+      if (tab.kind === 'repo') {
+        setReveal({ nonce, repoId: tab.repo.id, featureIds: [], groupIds: [], target: `repo:${tab.repo.id}` });
+        return;
+      }
+      const featureId = tab.kind === 'session' ? tab.session.featureId : tab.feature.id;
+      const current = await api.listFeatures();
+      const lineage: Feature[] = [];
+      let feature = current.find((entry) => entry.id === featureId);
+      if (!feature) throw new Error('The active feature is no longer available in Explorer.');
+      while (feature && !lineage.some((entry) => entry.id === feature!.id)) {
+        lineage.push(feature);
+        feature = current.find((entry) => entry.id === feature!.parentFeatureId);
+      }
+      const needsFolderOwner = lineage.some((entry) => entry.parentGroupId && !entry.parentFeatureId);
+      const groups = (await Promise.all((needsFolderOwner ? current : lineage).map((entry) => api.listGroups(entry.id)))).flat();
+      for (let index = 0; index < lineage.length; index++) {
+        const entry = lineage[index];
+        const parentId = groups.find((group) => group.id === entry.parentGroupId)?.featureId ?? entry.parentFeatureId;
+        const parent = current.find((candidate) => candidate.id === parentId);
+        if (parent && !lineage.some((candidate) => candidate.id === parent.id)) lineage.push(parent);
+      }
+      const groupIds = new Set<string>();
+      const addGroup = (id: string | null | undefined) => {
+        while (id && !groupIds.has(id)) { groupIds.add(id); id = groups.find((group) => group.id === id)?.parentGroupId; }
+      };
+      lineage.forEach((entry) => addGroup(entry.parentGroupId));
+      if (tab.kind === 'session') {
+        const session = (await api.listSessions(featureId)).find((entry) => entry.id === tab.session.id);
+        if (!session) throw new Error('The active session is no longer available in Explorer.');
+        addGroup(session.groupId);
+      }
+      if (nonce !== locateNonce.current || activeTabRef.current?.id !== tab.id) return;
+      setReveal({ nonce, repoId: lineage[0].repoId, featureIds: lineage.map((entry) => entry.id), groupIds: [...groupIds],
+        target: tab.kind === 'session' ? `session:${tab.session.id}`
+          : tab.kind === 'review-board' || tab.kind === 'agent' && tab.agentId === 'review-board' ? `review-board:${featureId}`
+            : tab.kind === 'agent' ? `agent:${tab.attachmentId}` : `feature:${featureId}` });
+    } catch (error) {
+      if (nonce === locateNonce.current) setLocateNotice({ message: error instanceof Error ? error.message : 'Could not locate the active item.', type: 'error' });
+    } finally { if (nonce === locateNonce.current) setLocating(false); }
+  };
   const [addingRepo, setAddingRepo] = useState(false);
   const [reviewRepo, setReviewRepo] = useState<{
     repo: Repository;
@@ -1919,8 +2023,8 @@ export function Explorer({
       setMoveError('The pull request import completed without a feature. Check its import status.');
       return;
     }
-    if (job.batchSize > 1 || !job.alreadyImported) {
-      if (automation?.supported === false) {
+    if (!job.alreadyImported && job.importOptions?.autoReview !== false) {
+      if (automation?.canAttempt === false) {
         setMoveError(automation.reason ?? 'The selected CLI cannot start automated reviews. Choose another CLI.');
       } else {
         reviewBoardRunStore.enqueueBulk([job.feature.id], api);
@@ -2084,31 +2188,9 @@ export function Explorer({
   }
 
   async function deleteFeature(feature: Feature) {
-    // Deleting a feature first cancels any work it still owns (an in-flight
-    // review or metasession). That cancellation is asynchronous: the backend
-    // aborts the work, then waits a few seconds for it to confirm stopped and
-    // otherwise answers 409 ("blocked until all owned work has stopped"). The
-    // cancellation *has* already been requested, so a slow-to-abort operation
-    // used to force the user to click delete a second time. Retry the delete
-    // until the aborted work settles so a single confirmation is enough.
-    const deadline = Date.now() + 30_000;
-    for (;;) {
-      try {
-        await onDeleteFeature(feature);
-        break;
-      } catch (error) {
-        const stillStopping =
-          error instanceof ApiError &&
-          error.status === 409 &&
-          Date.now() < deadline;
-        if (!stillStopping) {
-          features.reload();
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
+    if (!featureDeletionStore.enqueue(feature, () => onDeleteFeature(feature))) {
+      throw new Error('The deletion queue is full. Wait for a deletion to finish, then try again.');
     }
-    features.reload();
   }
 
   async function moveFeature(
@@ -2332,10 +2414,15 @@ export function Explorer({
         setTreeRevision((revision) => revision + 1);
       },
     }}>
-    <div className="explorer">
+    <ExplorerRevealContext.Provider value={reveal}>
+    <div className="explorer" ref={explorerRef}>
       <div className="explorer-header">
         <span className="explorer-title">Explorer</span>
         <div className="explorer-header-actions">
+          <button type="button" className="tree-action" title="Locate active tab in Explorer"
+            aria-label="Locate active tab in Explorer" disabled={!activeTab || locating} onClick={() => void locateActive()}>
+            <LocateIcon />
+          </button>
           <button
             type="button"
             className="tree-action"
@@ -2356,23 +2443,8 @@ export function Explorer({
           </button>
         </div>
       </div>
-
-      <PrImportStatus
-        api={api}
-        onOpen={(job) => {
-          if (job.feature) onOpenPrReview(job.feature);
-          else setMoveError('This pull request does not have an imported feature yet.');
-        }}
-        onOpenBatch={(batch, jobs) => {
-          if (!batch.parent) {
-            setMoveError('This pull request batch does not have a parent feature yet.');
-            return;
-          }
-          onOpenBulkPrReview(batch.parent, jobs.flatMap((job) => job.feature
-            ? [{ feature: job.feature, number: job.number, title: job.title }]
-            : []));
-        }}
-      />
+      {locateNotice && <p className={locateNotice.type === 'success' ? 'sr-only' : 'explorer-locate-notice'}
+        role="status">{locateNotice.message}</p>}
 
       {addingRepo && (
         <RepoPicker
@@ -2429,7 +2501,7 @@ export function Explorer({
           repo={reviewRepo.repo}
           onClose={() => setReviewRepo(null)}
           onConfirm={(pulls) => {
-            if (automation?.supported === false) {
+            if (automation?.canAttempt === false && pulls.some((pull) => pull.importOptions?.autoReview !== false)) {
               setMoveError(automation.reason ?? 'Choose another CLI before starting automated reviews.');
               return;
             }
@@ -2647,6 +2719,23 @@ export function Explorer({
         )}
         </NodeDragStoreProvider>
       </div>
+      <div className="explorer-status-footer">
+      <PrImportStatus
+        api={api}
+        onOpen={(job) => {
+          if (job.feature) onOpenPrReview(job.feature);
+          else setMoveError('This pull request does not have an imported feature yet.');
+        }}
+        onOpenBatch={(batch, jobs) => {
+          if (!batch.parent) {
+            setMoveError('This pull request batch does not have a parent feature yet.');
+            return;
+          }
+          onOpenBulkPrReview(batch.parent, jobs.flatMap((job) => job.feature
+            ? [{ feature: job.feature, number: job.number, title: job.title }]
+            : []));
+        }}
+      />
       <details className="explorer-footer">
         <summary>Accounts</summary>
         <div className="explorer-accounts">
@@ -2654,7 +2743,9 @@ export function Explorer({
           <AzureStatusBadge />
         </div>
       </details>
+      </div>
     </div>
+    </ExplorerRevealContext.Provider>
     </UsageSummaryContext.Provider>
   );
 }

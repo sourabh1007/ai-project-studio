@@ -44,6 +44,7 @@ export function createSummaryRunner(deps: SummaryRunnerDeps): FeatureSummarizer 
         scope: 'internal',
         purpose: 'feature-summary',
         label: 'Feature summary',
+        promptRefs: ['summarizer.promptTemplate', ...(collected.sessions.length > 0 ? ['summarizer.sessionTemplate'] : [])],
         signal: request.signal,
       });
       const ended = await launched.completion;

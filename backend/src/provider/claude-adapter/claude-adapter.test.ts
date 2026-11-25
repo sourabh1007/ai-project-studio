@@ -57,7 +57,7 @@ describe('Claude configuration and native commands', () => {
     expect(buildClaudeArgs({ ...spec, instructions: 'already in prompt' }, claudeDefaults, false)).not.toContain('--append-system-prompt');
     expect(buildClaudeArgs({ ...spec, model: 'opus', noTools: true, kind: 'meta' },
       { ...claudeDefaults, extraArgs: ['--debug'], headlessArgs: ['--max-turns', '2'] }, false,
-      { resumeSessionId: id })).toEqual(expect.arrayContaining([
+      { resumeSessionId: id, mcpPolicy: 'isolated' })).toEqual(expect.arrayContaining([
         '--debug', '--max-turns', '2', '--model', 'opus', '--resume', id,
         '--tools', '', '--disallowedTools', 'mcp__*', '--strict-mcp-config',
       ]));
@@ -100,7 +100,7 @@ describe('Claude authentication and version capabilities', () => {
     }
     expect(parseClaudeAuthStatus('{"loggedIn":true,"authMethod":"api_key"}').headlessSupported).toBe(true);
     expect(parseClaudeAuthStatus('{"loggedIn":false,"authMethod":"api_key"}').headlessSupported).toBe(false);
-    expect(parseClaudeAuthStatus('{"loggedIn":true,"authMethod":"claude.ai"}').headlessSupported).toBe(false);
+    expect(parseClaudeAuthStatus('{"loggedIn":true,"authMethod":"claude.ai"}').headlessSupported).toBe(true);
   });
 });
 
@@ -207,9 +207,34 @@ describe('Claude provider process integration', () => {
     expect(provider.listImportableSessions?.()).toEqual([]);
     expect(provider.buildInteractiveCommand(spec).args).toContain('--resume');
     const noAuth = createClaudeProvider(claudeDefaults, { ...h, baseEnv: {} });
-    expect(() => noAuth.startSession(spec)).toThrow('Unsupported');
+    expect(() => noAuth.startSession(spec)).not.toThrow();
+    const isolated = createClaudeProvider(claudeDefaults, { ...h, baseEnv: {}, mcpPolicy: 'isolated' });
+    expect(() => isolated.startSession(spec)).toThrow('Unsupported');
     expect(noAuth.buildInteractiveCommand(spec).command).toBe('claude');
     expect(noAuth.listImportableSessions).toBeUndefined();
+  });
+  it('lets the native CLI own authentication and managed MCP policy while denying tools for text-only turns', () => {
+    const h = harness();
+    const provider = createClaudeProvider(claudeDefaults, {
+      ...h, baseEnv: {}, authMethod: () => 'claude.ai', mcpPolicy: 'native',
+    });
+    provider.startSession({ ...spec, kind: 'meta', noTools: true });
+    expect(h.requests[0].input).toBe(spec.prompt);
+    expect(h.requests[0].stdin).toBeUndefined();
+    expect(h.requests[0].args).not.toContain(spec.prompt);
+    expect(h.requests[0].args).toEqual(expect.arrayContaining(['--tools', '', '--disallowedTools', 'mcp__*']));
+    expect(h.requests[0].args).not.toContain('--strict-mcp-config');
+    expect(h.requests[0].args).not.toContain('--dangerously-skip-permissions');
+    expect(h.requests[0].args).not.toContain('--mcp-config');
+    const strict = createClaudeProvider(claudeDefaults, {
+      ...h, baseEnv: {}, authMethod: () => 'api_key_helper', mcpPolicy: 'isolated',
+    });
+    strict.startSession({ ...spec, kind: 'meta', noTools: true });
+    expect(h.requests[1].args.filter((arg) => arg === '--strict-mcp-config')).toHaveLength(1);
+    expect(buildClaudeArgs({ ...spec, noTools: true }, claudeDefaults, true, { mcpPolicy: 'isolated' }))
+      .toContain('--strict-mcp-config');
+    expect(buildClaudeArgs({ ...spec, kind: 'meta' }, claudeDefaults, false, { mcpPolicy: 'isolated' }))
+      .toContain('--strict-mcp-config');
   });
   it('guards both execution paths with verified readiness without probing dormant model catalogs', async () => {
     const h = harness();

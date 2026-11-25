@@ -102,6 +102,61 @@ describe('createPrApprovalService', () => {
     return { reviews, ...setup({ reviews, repos }) };
   }
 
+  function withRun() {
+    const state = ready();
+    const current = state.reviews.get('f1')!;
+    current.reviewBoardRun = { id: 'run', revision: 3, status: 'completed', options: {},
+      providerId: 'p', model: 'auto', perspectiveIds: ['security'],
+      context: { fingerprint: 'f', skills: [], evidence: '', warnings: [], businessRequirements: '' },
+      headSha: 'reviewed-head', graphGeneratedAt: 'graph-revision', startedAt: 'now', failures: {} };
+    current.reviewBoardAnalysis!.analyses.security.runId = 'run';
+    current.reviewBoardAnalysis!.analyses.security.assessment = 'no-concerns';
+    return { ...state, current };
+  }
+  it('requires live target verification for pinned runs and rejects target movement or retargeting', async () => {
+    const { service, current, gateway } = withRun();
+    current.reviewBoardRun!.context.baseSha = 'base';
+    await expect(service.revisions!('f1')).rejects.toThrow('cannot verify');
+    expect((await service.status!('f1')).canApprove).toBe(false);
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 3)).rejects.toThrow('target');
+    gateway.getRevisions = async () => ({ headSha: 'reviewed-head', baseSha: 'base', targetBranch: 'main' });
+    expect((await service.revisions!('f1')).baseSha).toBe('base');
+    expect((await service.status!('f1')).canApprove).toBe(true);
+    current.reviewBoardRun!.context.targetBranch = 'main';
+    expect((await service.status!('f1')).canApprove).toBe(true);
+    gateway.getRevisions = async () => ({ headSha: 'reviewed-head', baseSha: 'new-base', targetBranch: 'main' });
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 3)).rejects.toThrow('target');
+    gateway.getRevisions = async () => ({ headSha: 'reviewed-head', baseSha: 'base', targetBranch: 'release' });
+    expect((await service.status!('f1')).canApprove).toBe(false);
+    gateway.getRevisions = async () => ({ headSha: 'reviewed-head', baseSha: 'base', targetBranch: 'main' });
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 3)).resolves.toMatchObject({ approved: true });
+  });
+  it('pins approval to the selected run and assessment revision', async () => {
+    const { service, gateway } = withRun();
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision')).rejects.toThrow('run or assessment');
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 2)).rejects.toThrow('run or assessment');
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 3)).resolves.toMatchObject({ approved: true });
+    expect(gateway.calls).toEqual(['approve']);
+  });
+  it.each(['failed', 'head', 'graph', 'missing', 'wrong-run', 'insufficient'])('blocks %s run certification', async (variant) => {
+    const { service, current } = withRun();
+    if (variant === 'failed') current.reviewBoardRun!.status = 'failed';
+    if (variant === 'head') current.reviewBoardRun!.headSha = 'old';
+    if (variant === 'graph') current.reviewBoardRun!.graphGeneratedAt = 'old';
+    if (variant === 'missing') delete current.reviewBoardAnalysis!.analyses.security;
+    if (variant === 'wrong-run') current.reviewBoardAnalysis!.analyses.security.runId = 'other';
+    if (variant === 'insufficient') current.reviewBoardAnalysis!.analyses.security.assessment = 'insufficient-evidence';
+    expect((await service.status!('f1')).canApprove).toBe(false);
+  });
+  it('rejects a same-head assessment change while approval is in flight', async () => {
+    const { service, current, gateway } = withRun();
+    gateway.getHeadSha = async () => {
+      current.reviewBoardRun!.revision += 1;
+      return 'reviewed-head';
+    };
+    await expect(service.approve('f1', 'reviewed-head', 'graph-revision', 'run', 3)).rejects.toThrow('Review changed');
+  });
+
   it('exposes a read-only lightweight approval status', async () => {
     const { service, gateway } = ready();
     await expect(service.status!('f1')).resolves.toEqual({

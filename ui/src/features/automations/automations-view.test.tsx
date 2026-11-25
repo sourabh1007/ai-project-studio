@@ -9,6 +9,8 @@ import {
   setMicrosoftSignedIn,
 } from '../../lib/microsoft-identity.js';
 import { AutomationsView } from './automations-view.js';
+import { AutomationReadinessProvider } from '../../app/automation-readiness.js';
+import { CliSection } from '../settings/cli-section.js';
 
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
@@ -98,6 +100,56 @@ function renderView(api: ApiClient, live = initialLiveState) {
 }
 
 describe('AutomationsView', () => {
+  it('separates failed checks, negative verdicts and task completion without running checks', async () => {
+    const failed = 'Check failed: Provider failed';
+    const monitor = automation({
+      progress: failed, nextRunAt: '2026-11-02T23:00:00.000Z',
+    });
+    const api = client([monitor], {
+      getAutomation: vi.fn().mockResolvedValue({
+        automation: monitor, subagents: [], runs: [
+          run({ id: 'failed', status: 'failed', triggered: false, detail: failed }),
+          run({ id: 'no', triggered: false, detail: 'Checked: no' }),
+        ],
+      }),
+    });
+    renderView(api);
+    await screen.findByText('Last check failed');
+    expect(screen.getByRole('img', { name: 'Watching' })).toBeInTheDocument();
+    expect(screen.getByText(/The monitor is still watching/)).toHaveTextContent('Another check is scheduled');
+    expect(screen.getByText(/No diagnostic detail was captured/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Logs/ }));
+    await screen.findByText('Check answered no; no action was run.');
+    expect(screen.getByText('Check failed')).toBeInTheDocument();
+    expect(screen.getByText('Checked')).toBeInTheDocument();
+    expect(screen.queryByText('Succeeded')).toBeNull();
+    expect(screen.queryByText('Checked · Check failed: Provider failed')).toBeNull();
+    expect(screen.getAllByText('Technical details')).toHaveLength(2);
+    expect(api.runAutomation).not.toHaveBeenCalled();
+  });
+  it('hides unsupported AI execution, preserves manual monitors and reveals experiments only through Settings', async () => {
+    localStorage.clear();
+    const api = client([
+      automation({ id: 'ai', name: 'AI monitor', status: 'paused' }),
+      automation({ id: 'manual', name: 'Manual monitor', status: 'paused',
+        action: { type: 'command' }, condition: { type: 'always' } }),
+    ], { getProviderBootstrap: vi.fn().mockResolvedValue({
+      defaultProvider: 'agency', providers: [{ id: 'agency', installed: true,
+        automation: { supported: false, reason: 'Interactive only.' } }],
+    }) });
+    render(<ApiProvider value={api}><AutomationReadinessProvider>
+      <AutomationsView live={initialLiveState} /><CliSection />
+    </AutomationReadinessProvider></ApiProvider>);
+    await screen.findByText('AI monitor');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(1));
+    expect(screen.getAllByRole('button', { name: 'Run now' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show unavailable IDE features (experimental)' }));
+    expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(2);
+    expect(api.resumeAutomation).not.toHaveBeenCalled();
+    expect(api.runAutomation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show unavailable IDE features (experimental)' }));
+    localStorage.clear();
+  });
   it('distinguishes an unreadable monitor list from an empty list', async () => {
     renderView(client([], { listAutomations: vi.fn().mockRejectedValue(new Error('503 monitors unavailable')) }));
     await screen.findByText(/The list is unknown, not empty/);
@@ -120,7 +172,7 @@ describe('AutomationsView', () => {
     const titles = Array.from(
       container.querySelectorAll('.automation-section-title'),
     ).map((el) => el.textContent);
-    expect(titles.some((t) => t?.includes('Running'))).toBe(true);
+    expect(titles.some((t) => t?.includes('Watching'))).toBe(true);
     expect(titles.some((t) => t?.includes('Paused'))).toBe(true);
     expect(titles.some((t) => t?.includes('Needs sign-in'))).toBe(true);
     expect(titles.some((t) => t?.includes('Finished'))).toBe(true);
@@ -307,7 +359,7 @@ describe('AutomationsView', () => {
     fireEvent.click(screen.getByRole('button', { name: /logs/i }));
     expect(await screen.findByText(/Triggered · went green/)).toBeInTheDocument();
     expect(api.getAutomation).toHaveBeenCalledWith('a1');
-    expect(screen.getByText('Succeeded')).toBeInTheDocument();
+    expect(screen.getByText('Action completed')).toBeInTheDocument();
   });
 
   it('renders a persisted report body in the run history', async () => {

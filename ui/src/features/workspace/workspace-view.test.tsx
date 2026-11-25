@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider, useApi } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import { initialLiveState, type LiveState } from '../../lib/stream.js';
 import type { AttachedAgent, Feature, PrReview, Repository, Session } from '../../lib/types.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
+import { featureDeletionStore } from '../../lib/feature-deletion-store.js';
 import { WorkspaceView } from './workspace-view.js';
 import type { WorkspaceTab, WorkspaceTabsState } from './workspace-tabs.js';
 
@@ -21,6 +22,7 @@ vi.mock('./explorer.js', () => ({
     const api = useApi();
     return <div>
       <button onClick={() => void props.onDeleteFeature(root).catch(() => {})}>Delete feature</button>
+      <button onClick={() => featureDeletionStore.enqueue(root, () => props.onDeleteFeature(root))}>Queue feature deletion</button>
       <button onClick={() => void props.onDeleteSession(childSession).catch(() => {})}>Delete session</button>
       <button onClick={() => void api.deleteRepo(repository.id).catch(() => {})}>Delete repo</button>
       <button onClick={() => void api.detachAgent('attachment').catch(() => {})}>Detach agent</button>
@@ -32,7 +34,8 @@ vi.mock('./explorer.js', () => ({
   },
 }));
 vi.mock('../../components/terminal-view.js', () => ({
-  TerminalView: ({ sessionId }: { sessionId: string }) => <div>Terminal {sessionId}</div>,
+  TerminalView: ({ sessionId, diagnosticsOpen }: { sessionId: string; diagnosticsOpen?: boolean }) =>
+    <div data-diagnostics-open={diagnosticsOpen}>Terminal {sessionId}</div>,
 }));
 vi.mock('../feature-dashboard/feature-dashboard.js', () => ({
   FeatureDashboard: ({ featureId }: { featureId: string }) => <div>Dashboard {featureId}</div>,
@@ -157,6 +160,49 @@ function stored(): WorkspaceTabsState {
   return JSON.parse(window.localStorage.getItem('cw-workspace-tabs')!);
 }
 
+it('groups related reviews, reveals every review on click and preserves their individual selection and state', async () => {
+  const second: WorkspaceTab = { kind: 'review-board', id: 'review:root', label: 'Review root', feature: root };
+  const client = createClient();
+  client.listFeatureAgents.mockImplementation(async (featureId: string) => [attached, {
+    ...attached, attachment: { ...attached.attachment, id: 'root-review', featureId: root.id },
+  }].filter((entry) => entry.attachment.featureId === featureId));
+  await act(async () => {
+    mount({ tabs: [agentTab, featureTab(other), second], activeId: agentTab.id, splitId: null }, client);
+  });
+  const strip = screen.getByRole('tablist', { name: 'Workspace tabs' });
+  const group = within(strip).getByRole('button', { name: 'Reviews tabs (2)' });
+  expect(group).toHaveAttribute('aria-expanded', 'false');
+  expect(within(strip).getAllByRole('tab')).toHaveLength(2);
+  const before = stored().activeId;
+  fireEvent.click(group);
+  expect(within(strip).getAllByRole('tab')).toHaveLength(3);
+  expect(stored().activeId).toBe(before);
+  const review = within(strip).getAllByRole('tab').find((tab) => tab.id.endsWith(second.id))!;
+  await act(async () => { fireEvent.click(review); });
+  expect(stored().activeId).toBe(second.id);
+  fireEvent.click(group);
+  expect(review).toHaveAttribute('aria-selected', 'true');
+  expect(within(strip).getAllByRole('tab')).toHaveLength(2);
+  expect(stored().tabs.map((tab) => tab.id)).toEqual([agentTab.id, 'feature:other', second.id]);
+  fireEvent.click(group);
+  fireEvent.contextMenu(review);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Close tabs to the left' }));
+  expect(stored().tabs.map((tab) => tab.id)).toEqual([second.id, 'feature:other']);
+  expect(stored().activeId).toBe(second.id);
+});
+
+it('reveals collapsed review siblings during keyboard navigation and preserves the active tab focus', async () => {
+  const second: WorkspaceTab = { kind: 'review-board', id: 'review:root', label: 'Review root', feature: root };
+  mount({ tabs: [agentTab, featureTab(other), second], activeId: agentTab.id, splitId: null });
+  const strip = screen.getByRole('tablist', { name: 'Workspace tabs' });
+  const selected = within(strip).getByRole('tab', { selected: true });
+  selected.focus();
+  fireEvent.keyDown(selected, { key: 'ArrowRight' });
+  expect(stored().activeId).toBe(second.id);
+  expect(within(strip).getByRole('button', { name: 'Reviews tabs (2)' })).toHaveAttribute('aria-expanded', 'true');
+  await waitFor(() => expect(within(strip).getByRole('tab', { selected: true })).toHaveFocus());
+});
+
 function mount(state: WorkspaceTabsState, client = createClient(), providerSwitch: { providerId: string; nonce: number } | null = null) {
   window.localStorage.setItem('cw-workspace-tabs', JSON.stringify(state));
   const view = render(
@@ -230,14 +276,85 @@ it('lets a hosted agent open a created session as the active workspace tab', asy
 });
 
 it('shows recorded session details on demand without inventing model or exit information', async () => {
-  mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null });
-  const summary = await screen.findByText('Session details');
-  const details = summary.closest('details')!;
-  expect(details).not.toHaveAttribute('open');
+  const view = mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null });
+  await screen.findByText('Terminal session');
+  expect(view.container.querySelector('.session-record-details')).toBeNull();
+  expect(screen.queryByText('Session details')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Session details' }));
+  const details = screen.getByRole('dialog', { name: 'Session details' });
   expect(details).toHaveTextContent('Provider default');
   expect(details).toHaveTextContent('Not reported');
   expect(details).toHaveTextContent('copilot');
   expect(details).toHaveTextContent('Recorded status');
+});
+
+it('fullscreens a tab without remounting its console, toggles both panels and restores the normal layout', async () => {
+  localStorage.setItem('cw-history-pane-open', 'true');
+  const view = mount({ tabs: [sessionTab, featureTab(other)], activeId: sessionTab.id, splitId: 'feature:other' });
+  const terminal = await screen.findByText('Terminal session');
+  const workspace = view.container.querySelector('.workspace')!;
+  const enter = vi.fn(async () => {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: workspace });
+    document.dispatchEvent(new Event('fullscreenchange'));
+  });
+  const exit = vi.fn(async () => {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null });
+    document.dispatchEvent(new Event('fullscreenchange'));
+  });
+  Object.defineProperty(workspace, 'requestFullscreen', { configurable: true, value: enter });
+  Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exit });
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fullscreen tab' }));
+    await waitFor(() => expect(workspace).toHaveClass('is-fullscreen', 'is-collapsed'));
+    expect(enter).toHaveBeenCalledOnce();
+    expect(view.container.querySelector('.workspace-explorer')).toHaveAttribute('aria-hidden', 'true');
+    expect(view.container.querySelector('.history-pane')).toBeNull();
+    expect(screen.queryByText('Dashboard other')).not.toBeInTheDocument();
+    expect(screen.getByText('Terminal session')).toBe(terminal);
+    fireEvent.click(screen.getByRole('button', { name: 'Show explorer' }));
+    expect(view.container.querySelector('.workspace-explorer')).not.toHaveAttribute('aria-hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide explorer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show prompt history' }));
+    expect(screen.getByRole('button', { name: 'Collapse prompt history' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse prompt history' }));
+    expect(view.container.querySelector('.history-pane')).toBeNull();
+    expect(localStorage.getItem('cw-history-pane-open')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Session details' }));
+    expect(workspace.contains(screen.getByRole('dialog', { name: 'Session details' }))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
+    await waitFor(() => expect(workspace).not.toHaveClass('is-fullscreen'));
+    expect(exit).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Collapse prompt history' })).toBeVisible();
+    expect(view.container.querySelector('.workspace-explorer')).not.toHaveAttribute('aria-hidden');
+    expect(await screen.findByText('Dashboard other')).toBeInTheDocument();
+    expect(stored().splitId).toBe('feature:other');
+    expect(screen.getByText('Terminal session')).toBe(terminal);
+  } finally {
+    Reflect.deleteProperty(document, 'fullscreenElement');
+    Reflect.deleteProperty(document, 'exitFullscreen');
+  }
+});
+
+it('keeps fullscreen failures actionable and opens terminal diagnostics from tab actions', async () => {
+  const view = mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null });
+  const terminal = await screen.findByText('Terminal session');
+  const workspace = view.container.querySelector('.workspace')!;
+  Object.defineProperty(workspace, 'requestFullscreen', {
+    configurable: true, value: vi.fn(async () => { throw new Error('Fullscreen permission denied'); }),
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Fullscreen tab' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Fullscreen permission denied');
+  expect(workspace).not.toHaveClass('is-fullscreen');
+  expect(view.container.querySelector('.workspace-explorer')).not.toHaveAttribute('aria-hidden');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Terminal diagnostics' }));
+  expect(terminal).toHaveAttribute('data-diagnostics-open', 'true');
 });
 
 it('keeps the visual selection on exactly the selected tab independently of hover and focus', async () => {
@@ -292,7 +409,7 @@ it('offers keyboard-accessible tab actions with menu navigation and Escape focus
   await screen.findByText('Terminal session');
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Child session' }));
   const menu = screen.getByRole('menu', { name: 'Tab actions' });
-  expect(screen.getByRole('menuitem', { name: 'Close this' })).toHaveFocus();
+  expect(screen.getByRole('menuitem', { name: 'Fullscreen tab' })).toHaveFocus();
   fireEvent.keyDown(menu, { key: 'End' });
   expect(screen.getByRole('menuitem', { name: 'Close all' })).toHaveFocus();
   fireEvent.keyDown(menu, { key: 'Escape' });
@@ -391,6 +508,32 @@ describe('WorkspaceView deletion reconciliation', () => {
     mount(stored(), view.client);
     expect(await screen.findByText('Dashboard other')).toBeInTheDocument();
     expect(screen.getAllByRole('tab')).toHaveLength(1);
+  });
+
+  it('reconciles deletion completed by a previous workspace mount without closing unrelated tabs', async () => {
+    const client = createClient();
+    let finish!: () => void;
+    const original = client.deleteFeature.getMockImplementation()!;
+    client.deleteFeature.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return original();
+    });
+    const state = {
+      tabs: [featureTab(other), featureTab(root), sessionTab],
+      activeId: sessionTab.id, splitId: null,
+    };
+    const first = mount(state, client);
+    await screen.findByText('Terminal session');
+    fireEvent.click(screen.getByText('Queue feature deletion'));
+    await waitFor(() => expect(client.deleteFeature).toHaveBeenCalledOnce());
+    expect(stored()).toEqual(state);
+    first.unmount();
+    mount(stored(), client);
+    await screen.findByText('Terminal session');
+    await act(async () => finish());
+    await waitFor(() => expect(stored().tabs).toEqual([featureTab(other)]));
+    expect(screen.queryByText('Terminal session')).toBeNull();
+    act(() => featureDeletionStore.dismiss(root.id));
   });
 
   it('closes sessions by entity ID, leaving feature and agent tabs open', async () => {

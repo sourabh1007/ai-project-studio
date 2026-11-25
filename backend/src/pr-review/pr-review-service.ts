@@ -35,6 +35,11 @@ import type { ChangeGraphWorkInput } from './change-graph-worker-adapter.js';
 import type { BackgroundWorkOptions } from '../kernel/background-work-runner.js';
 import type { ChangeGraphFs } from './change-graph-fs.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
+import type { ReviewOptions } from '../review-board/review-run-contract.js';
+
+export type StartReviewInput = StartPrReviewInput & {
+  reviewBoardImport?: { autoReview: boolean; options: ReviewOptions };
+};
 
 export interface PrReviewServiceDeps {
   reviews: PrReviewRepo;
@@ -89,7 +94,9 @@ export interface PrReviewService {
    */
   findByPull(repoId: string, pullNumber: number): string | null;
   /** Begins generation for a newly-created PR review feature. */
-  start(input: StartPrReviewInput): PrReview;
+  start(input: StartReviewInput): PrReview;
+  /** Starts deferred evidence preparation once, then permits the board to queue. */
+  prepare(featureId: string): PrReview;
   /**
    * Re-runs every step for an existing review. Pass `headSha` when the worktree
    * was just re-provisioned to a new remote head (take-latest) so the review
@@ -182,6 +189,7 @@ interface NewReviewInput {
   worktreePath: string;
   headSha: string | null;
   baseBranch: string | null;
+  reviewBoardImport?: { autoReview: boolean; options: ReviewOptions };
 }
 
 function newReview(input: NewReviewInput, now: string, existingCreatedAt?: string): PrReview {
@@ -203,7 +211,11 @@ function newReview(input: NewReviewInput, now: string, existingCreatedAt?: strin
     problemStatement: { ...pendingStep(), content: null, sufficient: true },
     changeGraph: { ...pendingStep(), projects: [], nodes: [], edges: [] },
     changedFiles: null,
-    reviewBoardPending: true,
+    reviewBoardPending: input.reviewBoardImport?.autoReview !== false,
+    ...(input.reviewBoardImport ? {
+      reviewBoardImport: structuredClone(input.reviewBoardImport),
+      analysisDeferred: !input.reviewBoardImport.autoReview,
+    } : {}),
     timestamps: { createdAt: existingCreatedAt ?? now, updatedAt: now },
   };
 }
@@ -300,6 +312,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     if (deps.inlinePrompts || params.prompt.length <= deps.config.coldInlineMaxChars) {
       return deps.ai.runDetailed({
         featureId: params.review.featureId,
+        model: params.review.reviewBoardImport?.options.model,
         prompt: params.prompt,
         cwd: params.review.worktreePath,
         scope: 'internal',
@@ -318,6 +331,7 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
     try {
       return await deps.ai.runDetailed({
         featureId: params.review.featureId,
+        model: params.review.reviewBoardImport?.options.model,
         prompt: ATTACHED_PROMPT_INSTRUCTION,
         attachments: [temporaryPrompt.path],
         cwd: params.review.worktreePath,
@@ -587,6 +601,17 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
       if (existing) return enrich(existing);
       const review = newReview(input, now);
       const current = persist(review);
+      if (!review.analysisDeferred) runPipeline(review);
+      return current;
+    },
+    prepare(featureId) {
+      const existing = deps.reviews.get(featureId);
+      if (!existing) {
+        throw new NotFoundError(`Code review is not available: ${featureId}`);
+      }
+      if (!existing.analysisDeferred) return enrich(existing);
+      const review = stamp({ ...existing, analysisDeferred: false, reviewBoardPending: true });
+      const current = persist(review);
       runPipeline(review);
       return current;
     },
@@ -606,14 +631,27 @@ export function createPrReviewService(deps: PrReviewServiceDeps): PrReviewServic
           // a plain refresh reuses the existing worktree, so keep its head.
           headSha: headSha ?? existing.headSha,
           baseBranch: existing.baseBranch,
+          reviewBoardImport: existing.reviewBoardImport,
         },
         deps.clock.isoNow(),
         existing.timestamps.createdAt,
       );
-      const current = persist(reset);
+      const refreshed = {
+        ...reset,
+        analysisDeferred: existing.analysisDeferred === true,
+        reviewBoardPending: existing.analysisDeferred !== true,
+        reviewPublications: existing.reviewPublications,
+        reviewBoardHistory: existing.reviewBoardRun
+          ? [...existing.reviewBoardHistory ?? [], structuredClone({
+            run: existing.reviewBoardRun,
+            analyses: existing.reviewBoardAnalysis?.analyses ?? {},
+          })].slice(-3)
+          : existing.reviewBoardHistory,
+      };
+      const current = persist(refreshed);
       // Bumps the generation, so any run still wedged in `generating` is preempted
       // and a fresh pass repopulates from the latest worktree code.
-      runPipeline(reset);
+      if (!refreshed.analysisDeferred) runPipeline(refreshed);
       return current;
     },
     retryStep(featureId, step) {

@@ -6,6 +6,7 @@ import {
   createConfiguredWarmRoutePolicy,
   createWarmRoutePolicy,
   resolveWarmProviderIdentity,
+  warmPoolAvailability,
 } from './warm-route-policy.js';
 import type { MetaRequest } from './meta-runner.js';
 
@@ -13,6 +14,28 @@ const baseRequest: MetaRequest = {
   featureId: 'f1',
   prompt: 'hi',
 };
+
+describe('warmPoolAvailability', () => {
+  const base = { enabled: true, providerId: 'copilot', installed: true, selectionRequired: false,
+    transport: 'acp' as const, warmProviderId: 'copilot', running: false, starting: false, failed: false };
+
+  it.each([
+    [{ selectionRequired: true }, 'unavailable', 'Select a CLI'],
+    [{ installed: false }, 'unavailable', 'not installed'],
+    [{ providerId: 'agency', transport: undefined }, 'unavailable', 'on demand'],
+    [{ warmProviderId: null }, 'unavailable', 'does not match'],
+    [{ enabled: false }, 'disabled', 'turned off'],
+    [{ running: true }, 'running', 'is running'],
+    [{ failed: true }, 'failed', 'startup failed'],
+    [{ starting: true }, 'starting', 'Starting'],
+    [{}, 'unavailable', 'No warm pool'],
+  ] as const)('reports actual availability without changing provider or routing (%s)', (patch, state, message) => {
+    const input = { ...base, ...patch };
+    const result = warmPoolAvailability(input);
+    expect(result).toMatchObject({ state, providerId: input.providerId });
+    expect(result.message).toContain(message);
+  });
+});
 
 describe('resolveWarmProviderIdentity', () => {
   it('identifies the warm ACP executable as Copilot only when the executable matches that provider uniquely', () => {

@@ -1,4 +1,5 @@
 import type { CreateSkillInput } from './skills-contract.js';
+import { COSMOS_REVIEW_SKILLS } from './cosmos-review-skills.js';
 
 /**
  * A curated starter library of reusable skills seeded on first run so the
@@ -6,9 +7,10 @@ import type { CreateSkillInput } from './skills-contract.js';
  * with a recommended scope: `feature` for project-wide context that should
  * apply to every session under a feature (coding standards, system design), and
  * `session` for one-off task context. Users can freely edit or delete these;
- * they are only seeded when the library is empty (see {@link seedBuiltinSkills}).
+ * missing names are seeded alongside existing skills (see {@link seedBuiltinSkills}).
  */
 export const BUILTIN_SKILLS: readonly CreateSkillInput[] = [
+  ...COSMOS_REVIEW_SKILLS,
   {
     name: 'Project Discovery & Planning Questions',
     kind: 'instruction',

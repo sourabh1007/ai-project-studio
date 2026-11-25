@@ -84,6 +84,21 @@ function makeDeps(signedIn = true) {
 }
 
 describe('usage-rollup-controller', () => {
+  it.each([
+    { from: 'invalid', to: '2026-02-01' }, { from: '2026-02-30', to: '2026-03-10' },
+    { from: '2026-01-01' }, { to: '2026-02-01' }, { from: '2026-02-01', to: '2026-01-01' },
+    { from: '2024-01-01', to: '2026-01-01' },
+  ])('rejects invalid or unbounded insight windows %j', async (query) => {
+    const { routes } = makeDeps();
+    expect(await pick(routes, 'get', '/usage/rollup')(req({ query }))).toMatchObject({ status: 400 });
+  });
+  it('accepts a bounded UTC date window on every usage scope', async () => {
+    const { routes } = makeDeps();
+    for (const path of ['/usage/rollup', '/usage/ide/rollup', '/features/:featureId/usage/rollup']) {
+      expect(await pick(routes, 'get', path)(req({ params: { featureId: 'f' },
+        query: { from: '2026-01-01', to: '2026-02-01' } }))).toMatchObject({ status: 200 });
+    }
+  });
   it('serves the workspace rollup with the requested granularity', async () => {
     const { routes, calls } = makeDeps();
     const res = await pick(routes, 'get', '/usage/rollup')(req({ query: { granularity: 'week' } }));

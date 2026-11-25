@@ -57,6 +57,8 @@ let installerAsset = null;
 let installerPath = null;
 let downloading = null;
 let installerCandidate = null;
+let checking = null;
+let checkingManually = false;
 const RECOVERY = 'No unverified installer was started. Keep the app open, retry, or download a verified installer from the release page.';
 
 // The single source of truth for the update state, echoed to the renderer on
@@ -78,6 +80,7 @@ function baseState() {
     // Enabled only after an exact asset/manifest and packaged signer policy are
     // available. The install boundary still verifies their actual evidence.
     canAutoInstall: false,
+    autoInstallBlockReason: null,
     platform: process.platform,
     releasePageUrl: RELEASES_PAGE,
   };
@@ -244,27 +247,35 @@ function reportError(err) {
  * the user; background checks stay quiet on the not-available path.
  */
 async function checkForUpdates(manual) {
-  if (!active()) {
+  if (!active() || downloading || installing) {
     return getState();
   }
-  try {
-    // Detection always goes through the GitHub Releases API, on every platform.
-    // electron-updater's feed needs `latest.yml` published beside the
-    // installers, and the release workflow deliberately uploads only the .exe /
-    // .dmg (see .github/workflows/release.yml, "publish installers without
-    // update feeds"). Asking electron-updater to check therefore 404s, and a
-    // background 404 is swallowed — which is why no update ever announced
-    // itself. The Releases API needs no feed, so it works either way.
-    await checkGitHubLatest(manual);
-  } catch (err) {
-    // Background failures (e.g. offline) shouldn't nag; only show on manual.
-    if (manual) {
-      reportError(err);
-    } else {
-      log(`background check failed: ${err}`);
-    }
+  if (checking) {
+    checkingManually ||= manual;
+    return checking;
   }
-  return getState();
+  checkingManually = manual;
+  const previous = getState();
+  const attempt = (async () => {
+    try {
+      // Published releases omit electron-updater feeds; use GitHub metadata.
+      await checkGitHubLatest();
+    } catch (err) {
+      if (checkingManually) {
+        reportError(err);
+      } else {
+        log(`background check failed: ${err}`);
+        setState(previous);
+      }
+    }
+    return getState();
+  })();
+  checking = attempt;
+  try {
+    return await attempt;
+  } finally {
+    if (checking === attempt) checking = null;
+  }
 }
 
 /**
@@ -295,9 +306,9 @@ function newestRelease(releases) {
  * Lightweight GitHub Releases check. Never throws to the caller path beyond the
  * awaited promise; compares the newest published tag to the running version.
  */
-function checkGitHubLatest(manual) {
+function checkGitHubLatest() {
   return new Promise((resolve, reject) => {
-    setState({ status: Status.CHECKING, error: null });
+    setState({ status: Status.CHECKING, canAutoInstall: false, autoInstallBlockReason: null, error: null });
     const req = https.request(
       {
         method: 'GET',
@@ -314,7 +325,7 @@ function checkGitHubLatest(manual) {
         res.on('data', (chunk) => {
           body += chunk;
         });
-        res.on('end', () => {
+        res.on('end', async () => {
           try {
             if (!res.statusCode || res.statusCode >= 400) {
               throw new Error(`GitHub API returned ${res.statusCode}`);
@@ -323,6 +334,7 @@ function checkGitHubLatest(manual) {
             if (best && isNewer(best.version, safeVersion())) {
               const json = best.release;
               const next = pickWindowsInstaller(json.assets, best.version, process.arch);
+              const autoInstallBlockReason = await automaticInstallBlockReason(next);
               if (installerAsset?.url !== next?.url) {
                 installerPath = null;
                 installerCandidate = null;
@@ -335,9 +347,8 @@ function checkGitHubLatest(manual) {
                 releaseNotes: typeof json.body === 'string' ? json.body : null,
                 releaseName: json.name || null,
                 releasePageUrl: json.html_url || RELEASES_PAGE,
-                // Windows with a downloadable installer asset can install and
-                // relaunch in the background; everything else stays guided.
-                canAutoInstall: isWindows() && Boolean(installerAsset?.candidateUrl) && hasSignerPolicy(),
+                canAutoInstall: autoInstallBlockReason === null,
+                autoInstallBlockReason,
                 error: null,
               });
             } else {
@@ -346,26 +357,19 @@ function checkGitHubLatest(manual) {
                 status: Status.NOT_AVAILABLE,
                 availableVersion: null,
                 canAutoInstall: false,
+                autoInstallBlockReason: null,
                 error: null,
               });
             }
             resolve();
           } catch (err) {
-            if (manual) {
-              reportError(err);
-            }
             reject(err);
           }
         });
       },
     );
     req.on('timeout', () => req.destroy(new Error('GitHub API request timed out')));
-    req.on('error', (err) => {
-      if (manual) {
-        reportError(err);
-      }
-      reject(err);
-    });
+    req.on('error', reject);
     req.end();
   });
 }
@@ -435,6 +439,19 @@ function hasSignerPolicy() {
   const policy = trustPolicy();
   return !!policy && (policy.requireAuthenticode === false ||
     (policy.requireAuthenticode === true && hasTrustedSigner(policy)));
+}
+
+async function automaticInstallBlockReason(asset) {
+  if (!isWindows()) return 'This platform uses guided installation. Open the release page; the app will remain open.';
+  if (!asset) return 'No exact installer is available for this version and architecture. Open the release page for supported downloads.';
+  if (!hasSignerPolicy()) return 'Trusted Authenticode signer pins are not configured in this app. Contact the release maintainer; use the release page for guided installation.';
+  if (!asset.candidateUrl) return 'The exact release qualification manifest is missing. Contact the release maintainer; use the release page for guided installation.';
+  try {
+    validateCandidate(await (deps?.fetchCandidate || fetchCandidate)(asset.candidateUrl), asset, trustPolicy());
+    return null;
+  } catch (error) {
+    return `${error.message} Open the release page for guided installation; no installer will be started automatically.`;
+  }
 }
 
 function hasTrustedSigner(policy) {
@@ -547,10 +564,10 @@ async function verifyInstaller(file, candidate) {
  *  - Everything else (macOS / no asset): guided install by opening the page.
  */
 async function downloadUpdate() {
-  if (!active()) {
+  if (!active() || checking) {
     return getState();
   }
-  if (isWindows() && installerAsset && installerAsset.url) {
+  if (isWindows() && state?.canAutoInstall && installerAsset && installerAsset.url) {
     return downloadAndInstallWindows();
   }
   try {
@@ -751,10 +768,10 @@ async function performSilentInstall() {
  *    acknowledges only the page-opening request, never a forced quit.
  */
 function installNow() {
-  if (!active()) {
+  if (!active() || checking) {
     return Promise.resolve(false);
   }
-  if (isWindows() && installerAsset) {
+  if (isWindows() && state?.canAutoInstall && installerAsset) {
     if (installerPath) {
       return runSilentInstall();
     }

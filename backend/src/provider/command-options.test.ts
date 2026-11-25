@@ -25,6 +25,11 @@ const spec: SessionSpec = {
 };
 
 describe('bounded command configuration', () => {
+  it.each(['--enable-mcp-server', '--enable-mcp-server=plugin:server', '--agent', '--add-dir'])(
+    'does not let optional flags bypass the verified MCP inventory: %s', (flag) => {
+      expect(optionalCommandArgsSchema.safeParse([flag]).success).toBe(false);
+    },
+  );
   it('accepts literal safe argv and executable paths with spaces, not shell fragments', () => {
     expect(optionalCommandArgsSchema.parse(['--effort=high', '--debug', 'C:\\a b\\file', 'value; literal'])).toHaveLength(4);
     expect(executableSchema.parse('C:\\Program Files\\cli.exe')).toBe('C:\\Program Files\\cli.exe');

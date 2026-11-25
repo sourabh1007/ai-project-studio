@@ -114,6 +114,39 @@ export function createCopilotHistoryReader(
   const now = deps.now ?? (() => Date.now());
 
   return {
+    async recentPrompts(sessionId, limit) {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !source.recentUserMessages) {
+        throw new PromptHistoryUnavailableError('Bounded prompt history is unavailable');
+      }
+      const raw = source.recentUserMessages(sessionId, limit);
+      const prompts: SessionPrompt[] = raw.flatMap((row) => {
+        const text = toVisiblePrompt(row.user_message ?? '');
+        return text === null ? [] : [{
+          index: row.turn_index, text, at: row.timestamp ?? '',
+          response: row.assistant_response, status: row.assistant_response ? 'answered' as const : 'unanswered' as const,
+          answeredAt: null, durationMs: null,
+        }];
+      });
+      const live = await readLive(sessionId);
+      if (live?.preceding?.length) {
+        return mergeLiveTurns(prompts, raw.at(-1)?.turn_index ?? -1, live, now(), config.activeAnswerWindowMs, 8000).slice(-limit);
+      }
+      const text = live && toVisiblePrompt(live.text);
+      if (live && text) {
+        const last = prompts.at(-1);
+        const matches = last?.text === text.slice(0, 8000) && last.at === live.at;
+        const turn: SessionPrompt = {
+          index: matches ? last.index : (raw.at(-1)?.turn_index ?? -1) + 1,
+          text: text.slice(0, 8000), at: live.at, response: live.response?.slice(0, 8000) ?? null,
+          status: live.queued ? 'unanswered' : live.completedAt !== undefined || (matches && last.status === 'answered') ? 'answered' : 'answering',
+          answeredAt: live.completedAt ?? null, durationMs: null, pending: true,
+          ...(live.queued ? { queued: true } : {}),
+        };
+        if (matches) prompts[prompts.length - 1] = turn;
+        else prompts.push(turn);
+      }
+      return prompts.slice(-limit);
+    },
     read(sessionIds) {
       if (sessionIds.length === 0 || !source.available()) {
         return sessionIds.map((sessionId) => ({
@@ -236,6 +269,9 @@ export function createCopilotHistoryReader(
           durationMs,
         };
       });
+      if (live?.preceding?.length) {
+        return mergeLiveTurns(prompts, allRows.reduce((max, row) => Math.max(max, row.index), -1), live, nowMs, windowMs);
+      }
       return inFlight ? [...prompts, inFlight] : prompts;
     },
   };
@@ -280,6 +316,7 @@ function livePromptStatus(
   response: string | null,
   active: boolean,
 ): SessionPrompt['status'] {
+  if (live.queued) return 'unanswered';
   if (live.completedAt !== undefined || !active) {
     return response ? 'answered' : 'unanswered';
   }
@@ -337,6 +374,7 @@ function buildInFlightPrompt(
         ? Math.max(0, Date.parse(answeredAt) - promptMs)
         : null,
       pending: true,
+      ...(live.queued ? { queued: true } : {}),
     };
   }
 
@@ -362,12 +400,52 @@ function buildInFlightPrompt(
   };
 }
 
+function mergeLiveTurns(
+  saved: SessionPrompt[],
+  maxIndex: number,
+  latest: LivePromptTurn,
+  nowMs: number,
+  windowMs: number,
+  maxChars?: number,
+): SessionPrompt[] {
+  const result = [...saved];
+  const key = (text: string, at: string) => `${Number.isNaN(Date.parse(at)) ? at : Date.parse(at)}\0${text}`;
+  const positions = new Map<string, number[]>();
+  saved.forEach((prompt, index) => {
+    const identity = key(prompt.text, prompt.at);
+    const list = positions.get(identity) ?? [];
+    list.push(index);
+    positions.set(identity, list);
+  });
+  for (const turn of [...latest.preceding!, latest]) {
+    const visible = toVisiblePrompt(turn.text);
+    if (visible === null) continue;
+    const text = visible.slice(0, maxChars);
+    const position = positions.get(key(text, turn.at))?.shift();
+    const previous = position === undefined ? undefined : result[position];
+    const liveResponse = turn.response?.trim().slice(0, maxChars) || null;
+    const response = previous?.response && turn.completedAt === undefined &&
+      previous.response.length > (liveResponse?.length ?? 0)
+      ? previous.response : liveResponse || previous?.response || null;
+    const active = isRecent(nowMs, windowMs, Date.parse(turn.lastActivityAt ?? ''), Date.parse(turn.at));
+    const status = livePromptStatus(turn, response, active);
+    const answeredAt = status === 'answered' ? turn.completedAt ?? previous?.answeredAt ?? null : null;
+    const promptMs = Date.parse(turn.at);
+    const prompt: SessionPrompt = {
+      index: previous?.index ?? ++maxIndex, text, at: turn.at, response, status, answeredAt,
+      durationMs: answeredAt && !Number.isNaN(promptMs) ? Math.max(0, Date.parse(answeredAt) - promptMs) : null,
+      ...(!previous ? { pending: true } : {}),
+      ...(turn.queued ? { queued: true } : {}),
+    };
+    if (position === undefined) result.push(prompt);
+    else result[position] = prompt;
+  }
+  return result;
+}
+
 /**
- * Derives when a prompt's answer completed by taking the latest usage event
- * that falls between this prompt and the next one. The usage events' own
- * turn_index is unreliable, so timing is matched purely by wall-clock window.
- * Returns an ISO string, or null when the prompt time is unknown or the window
- * holds no events.
+ * Derives completion from the latest usage event before the next prompt.
+ * Native turn-end evidence takes precedence when prompts overlap.
  */
 function answerCompletedAt(
   promptAt: string,

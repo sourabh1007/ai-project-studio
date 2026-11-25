@@ -131,6 +131,10 @@ export function SkillsManager() {
   }
 
   const list = skills.data ?? [];
+  const sections = [
+    { name: 'Cosmos DB IDE skills', skills: list.filter((skill) => skill.name.startsWith('Cosmos DB: ')) },
+    { name: 'Other IDE skills', skills: list.filter((skill) => !skill.name.startsWith('Cosmos DB: ')) },
+  ].filter((section) => section.skills.length > 0);
   const uploadOutcomes = [...outcomes.current.values()];
   const createdCount = uploadOutcomes.filter((outcome) => outcome === 'created').length;
   const unknownCount = uploadOutcomes.filter((outcome) => outcome === 'unknown').length;
@@ -211,8 +215,11 @@ export function SkillsManager() {
         />
       )}
 
-      <div className="skill-list">
-        {list.map((skill) => (
+      {sections.map((section) => <section key={section.name} aria-label={section.name}>
+        <h3>{section.name} ({section.skills.length})</h3>
+        {section.name === 'Cosmos DB IDE skills' && <p className="page-subtitle">Relevant guidance is selected automatically for Cosmos DB reviews; explicit review selections take precedence.</p>}
+        <div className="skill-list">
+        {section.skills.map((skill) => (
           <div key={skill.id} className="skill-card">
             <div className="skill-card-head">
               <span className={`skill-chip skill-chip-${skill.kind}`}>
@@ -258,7 +265,8 @@ export function SkillsManager() {
             )}
           </div>
         ))}
-      </div>
+        </div>
+      </section>)}
 
       {creating && (
         <Modal title="New skill" onClose={() => setCreating(false)}>

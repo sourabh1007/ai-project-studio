@@ -72,6 +72,7 @@ function harness() {
   const calls: Record<string, unknown[]> = {};
   const prReviews = {
     get: (id: string) => ((calls.get = [id]), review),
+    prepare: (id: string) => ((calls.prepare = [id]), review),
     refresh: (id: string) => ((calls.refresh = [id]), review),
     retryStep: (id: string, s: string) => ((calls.retryStep = [id, s]), review),
     explainFile: (id: string, path: string) => (
@@ -145,6 +146,25 @@ function harness() {
 }
 
 describe('pr-review-controller', () => {
+  it('explicitly prepares imported evidence and rejects nonempty prepare bodies', async () => {
+    const h = harness();
+    const prepare = pick(h.routes, 'post', '/features/:featureId/pr-review/prepare');
+    expect(await prepare(req({ params: { featureId: 'f1' }, body: {} }))).toEqual({
+      status: 200, body: review,
+    });
+    expect(h.calls.prepare).toEqual(['f1']);
+    expect(() => prepare(req({ params: { featureId: 'f1' }, body: { autoReview: true } }))).toThrow();
+  });
+  it('forwards the confirmed run and assessment revision to approval', async () => {
+    const { routes, prApprovals } = harness();
+    let received: unknown[] = [];
+    prApprovals.approve = async (...args) => { received = args; return { approved: true, state: 'approved' }; };
+    await pick(routes, 'post', '/features/:featureId/pr-review/approve')(req({
+      params: { featureId: 'f1' }, body: { expectedHeadSha: 'head', expectedReviewUpdatedAt: 'graph',
+        expectedRunId: 'run', expectedAssessmentRevision: 4 },
+    }));
+    expect(received).toEqual(['f1', 'head', 'graph', 'run', 4]);
+  });
   it('reads lightweight approval status without resetting a review', async () => {
     const { routes, calls, prApprovals } = harness();
     const handler = pick(routes, 'get', '/features/:featureId/pr-review/approval-status');

@@ -257,6 +257,15 @@ export interface PrReviewTimestamps {
  * references.
  */
 export interface PrReview {
+  reviewContextDiscovery?: import('../review-board/review-run-contract.js').ReviewContextDiscovery;
+  reviewBoardImport?: { autoReview: boolean; options: import('../review-board/review-run-contract.js').ReviewOptions };
+  analysisDeferred?: boolean;
+  reviewPublications?: import('./pr-comments-contract.js').ReviewPublication[];
+  reviewBoardRun?: import('../review-board/review-run-contract.js').ReviewRun;
+  reviewBoardHistory?: Array<{
+    run: import('../review-board/review-run-contract.js').ReviewRun;
+    analyses: Record<string, import('../review-board/review-board-contract.js').PerspectiveAnalysis>;
+  }>;
   /** Validated AI results, retained independently of browser/view lifetime. */
   reviewBoardAnalysis?: {
     headSha: string | null;

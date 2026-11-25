@@ -26,6 +26,25 @@ const input: ClaudeHistoryWorkInput = { config: claudeDefaults, directory: fixtu
 const empty: ClaudeHistorySnapshot = { sessions: [], usage: [] };
 const signal = () => new AbortController().signal;
 
+it('provides bounded Claude prompt evidence from the already-worker-populated cache', () => {
+  const cache = createClaudeHistoryCache(claudeDefaults);
+  expect(cache.recentPrompts('missing', 4)).toEqual([]);
+  for (const limit of [0, 101, 1.5]) expect(() => cache.recentPrompts(id, limit)).toThrow('limit');
+  const record = {
+    nativeSessionId: id, nativeMessageId: 'message', role: 'user' as const, text: 'Request', timestamp: '2026-04-04T10:00:00Z',
+    cwd: '', model: null,
+  };
+  cache.replace({ usage: null, sessions: [[id, [
+    { ...record, role: 'assistant', text: 'Orphan' },
+    record,
+    { ...record, role: 'assistant', text: 'First response' },
+    { ...record, role: 'assistant', text: 'More response' },
+    { ...record, text: 'New request' },
+  ]]] });
+  expect(cache.recentPrompts(id, 1)).toEqual([expect.objectContaining({ text: 'New request', response: null })]);
+  expect(cache.recentPrompts(id, 4)[0]).toMatchObject({ status: 'answered', response: 'First responseMore response' });
+});
+
 beforeAll(async () => {
   await mkdir(join(fixture, 'discovered-project', 'subagents'), { recursive: true });
   await writeFile(join(fixture, 'discovered-project', `${id}.jsonl`), `${message}\n${assistant}`);

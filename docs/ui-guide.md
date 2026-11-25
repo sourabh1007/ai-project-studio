@@ -18,11 +18,21 @@ appearance, and reduced-motion preferences. The displayed milestones follow
 actual startup: desktop settings, local backend readiness, and interface loading;
 there is no simulated percentage or artificial delay.
 
-The main window stays hidden until its page loads successfully and paints.
+The main window stays hidden until React restores the initial view, its lazy
+panels, console connection and visible prompt history, then paints. A
+sender-scoped readiness signal replaces the premature HTML-load handoff, so
+individual component skeletons stay behind the one animated startup screen.
+Provider selection and recoverable loading errors remain actionable rather
+than waiting for an impossible successful load.
 Startup errors remain visible with an explanation and a close control. Closing
 the startup window uses the same cooperative backend shutdown as the main app.
 Missing Node.js or an early backend exit is reported immediately rather than
-waiting for the readiness timeout. Startup failures write a bounded
+waiting for the readiness timeout. Cold backend initialization has a bounded
+120-second readiness budget, separate from the interface's 30-second budget.
+`CW_STARTUP_TIMEOUT_MS` explicitly overrides both. Readiness still requires the
+spawned child's launch identity and compatible protocol; waiting longer never
+replaces a live child or adopts another server on its port.
+Startup failures write a bounded
 `desktop-startup.log` in the desktop user-data directory; the error shows its
 location. Each failed launch replaces that diagnostic file.
 
@@ -33,29 +43,75 @@ succeeded, restart the backend, or launch an installer. **Keep open** preserves
 the error screen without an ongoing closing animation. A still-running backend
 continues to require cooperative cleanup.
 
+Normal close, relaunch and update cleanup show one opaque **Closing AI Project
+Studio** screen, with a themed power emblem, a gentle orbit animation, an
+indeterminate loading bar and a friendly wrap-up message. It explicitly waits
+for shutdown confirmation rather than claiming that cleanup already finished.
+The workspace stays mounted beneath it, so disconnected panels do not
+flash while services stop. A cancelled or failed close restores the existing
+interface. Reduced motion is respected; no fake completion percentage or
+artificial shutdown delay is added.
+
 Development launches connect to the existing server rather than spawning a second
 backend. Assets and the isolated preload live in `desktop/startup/`; lifecycle
 coordination is in `desktop/startup-splash.cjs` and `desktop/main.cjs`.
 
 ## What's actually mounted
 
+The Explorer header's **Locate active tab in Explorer** icon reveals the active
+workspace tab in the tree. It expands the relevant repository, parent features
+and nested folders, then scrolls to and highlights the session, feature,
+repository or attached agent without switching tabs. Review batches locate their
+parent feature. Other branches retain their expansion state; unavailable items
+report a short status instead of opening a different item.
+
 The CLI picker sits immediately above the theme icon in the activity bar and
 is also available in the command palette. **Ctrl+Shift+L** (Windows/Linux) or
 **Cmd+Shift+L** (macOS) opens it even while the embedded terminal is focused;
 IME composition, existing dialogs and ordinary text composers retain ownership.
 Settings → CLI can change the chord to **Ctrl/Cmd+Shift+Y** or disable it.
-Agency is hidden by default. Authorized Microsoft-internal users may opt in
-explicitly in Settings → CLI. This is operator attestation, not employment or
-entitlement verification, and Agency still enforces its own authentication.
-Microsoft sign-in/network access never enables it; Copilot and Claude require
-no Agency installation or internal credentials.
+Agency appears automatically when the internal-network probe succeeds, and is
+hidden otherwise. Network visibility is not authorization: Agency still
+enforces its own authentication. Microsoft sign-in alone never exposes it;
+Copilot and Claude require no Agency installation or internal credentials.
+
+Each CLI has an initially collapsed **IDE feature readiness** checklist.
+Settings groups **Installed** and **Not installed** CLIs with each provider
+collapsed initially. Expand a provider for its configuration; installation
+instructions and documentation live behind small information buttons.
+CLI preferences, switching requirements and other tools are collapsed separately.
+The chooser uses separate, padded provider cards and shorter action labels;
+Agency is labelled **Microsoft internal only**. Diagnostic details are
+collapsed separately. These are Studio readiness states, not a native CLI
+capability score.
+Amber warnings mean supported features need installation, credentials or other
+setup; a pending check is not reported as unsupported. **Studio integration
+needed** is an amber application-integration state, not a red unsupported
+native feature. A missing Claude installation is setup-required, not unsupported.
+The chooser scrolls within the window when lists are expanded or zoomed.
+Native-style icons distinguish CLIs, installation status and actions without
+relying on color. Cards have a short staggered entrance and checklist expansion
+fades in; OS reduced-motion and Studio Reduced/Off settings disable this motion.
+The chooser's ready heading uses a terminal icon, not a perpetual loading symbol.
+Unavailable AI controls are hidden by default; Settings → CLI →
+**Show unavailable IDE features (experimental)** reveals them without claiming
+support or starting any work. Attempts can still fail, and backend/native
+safety checks remain enforced. Manual planning, PR imports, and configuration
+remain available.
 
 CLI readiness also distinguishes interactive from automated execution. Agency
-is currently interactive-only for IDE-launched AI automation; unverifiable
-native MCP overlays block metasessions, not interactive terminals. AI agents,
-summaries and planners require Copilot, or Claude with safe/nonmanaged
-configuration and supported API/cloud credentials, plus successful policy
-checks. A registered/installed provider is not a promise of every capability.
+and Claude use native CLI configuration and permissions for agents, summaries
+and planners by default; invoking these features can start native MCP servers
+or request native sign-in. Text-only tasks still explicitly disable model tools.
+Copilot-backed prompt mode includes its mandatory startup approval flag, but
+an empty available-tool list and deny-all rule override it for no-tools turns.
+The `mcp.headlessPolicies` setting selects `native` or `isolated` for each CLI;
+restart after editing. Copilot defaults to isolated mode. Optional isolated
+Agency refuses unverifiable zero-MCP startup; isolated Claude requires supported
+API/cloud credentials and no conflicting managed MCP configuration.
+Claude's native version and sign-in are verified only after it is selected; a
+dormant provider is not falsely described as having invalid credentials.
+A registered/installed provider is not a promise of every capability.
 
 Startup asks which eligible CLI to use. **Remember me** is opt-in; remembered
 legacy choices continue to work. Settings → CLI exposes this preference,
@@ -104,6 +160,68 @@ shown/loaded counts; narrow server scopes/facets to retrieve a different set.
 Changing sources/repositories clears local search and selection. No unsupported
 provider search parameters or implicit searches over truncated lists are used.
 
+### Usage time frames
+
+**Day**, **Week**, **Month**, and **Year** select the current UTC calendar
+period, not just chart grouping. Weeks start Monday. Cards, model/provider/MCP
+breakdowns, the activity calendar, skill activity, and operation insights share
+the displayed date window in both Workspace and IDE scopes. Shorter periods
+use daily buckets; Year uses monthly buckets. Date ranges have an exclusive end.
+While refreshing, the previous snapshot keeps its original window label;
+failed or late requests cannot relabel or replace it with another period.
+
+KPI numbers ease to new measured totals over 400 ms. Reduced/off motion updates
+immediately, screen readers receive the exact final value, and unavailable
+billing is never displayed as a zero. The bounded metasession feed filters by
+usage-capture time, not operation-start time, and is not a complete usage ledger.
+
+### Prompt usage
+
+Each editable and read-only entry in **Settings > Prompts & Commands** has a
+small Usage icon. It opens **Usage** with that prompt selected. **Prompt usage**
+uses the displayed UTC time frame and covers IDE template requests plus
+workspace skill context independently of the Workspace/IDE accounting tabs.
+Opening, editing or saving a template does not record a use or start AI.
+
+New task-plan, summary, repository-analysis and settings-assistant requests
+persist stable template identities with their operations, including failed
+attempts. Skill context records **prepared** separately from successfully
+**injected** instructions/removals; neither claims model invocation. Custom
+skill removal text does not count as use of the default removal template.
+No prompt text is added to the attribution ledger, and earlier requests remain
+unattributed rather than being presented as zero usage.
+
+The view charts events by day and reported tokens/AIC by request, showing
+unknown metering as gaps. A request using multiple templates is counted once
+in **All attributed prompts**; its per-template metrics represent shared
+participation, not additive spend. Reused warm sessions use immutable
+request-response metering, never whole-session totals; unavailable per-request
+billing stays unavailable. Dedicated cold operations may receive late captured
+usage. The latest matching events are bounded by `metaOperations.maxPageSize`;
+truncation and reported/total counts make partial charts explicit. **Refresh
+prompt usage** rereads the ledger without starting any operation. Unified
+Usage totals remain the accounting authority.
+
+### Monitor check outcomes
+
+**Watching** means the monitor remains scheduled, not that its latest check
+succeeded or the watched task finished. A failed check leaves its condition
+unknown; the card distinguishes that failure from the next scheduled retry.
+Timeouts show a readable duration and preserve unconfirmed CLI-shutdown warnings.
+Missing provider diagnostics are explicitly unavailable, not guessed to be an
+authentication or task failure. Raw errors remain under **Technical details**.
+Logs distinguish **Checked** (including a negative verdict/no action) from
+**Action completed**, **Check failed**, and **Action failed**, without repeating
+“Checked” prefixes. Opening logs never runs a check.
+
+### Session names
+
+**Rename** prefills and selects the current displayed title, including generated
+titles. Names are limited to 120 characters; Enter saves and Escape cancels.
+Persisted names remain authoritative after refresh/reload even when an older
+live session snapshot still contains the generated name. Runtime status and
+other live fields continue updating.
+
 ### Skill and MCP telemetry
 
 **Usage** and feature dashboards show skill activity separately from MCP servers.
@@ -129,9 +247,11 @@ Session/turn totals are never allocated between skills or MCP servers.
 MCP tables and rankings no longer show model-token metrics.
 
 Skill snapshots cover the latest `skillUsage.maxEvents` events in the selected
-workspace, IDE-metasession, or feature scope (5,000 by default, capped at 10,000),
-independently of the AI-usage period selector. A notice identifies truncated
-history; older events remain persisted. **Refresh skills** reloads the snapshot.
+workspace, IDE-metasession, or feature scope (5,000 by default, capped at 10,000).
+In Usage, the selected calendar window filters events before aggregation and
+limiting. Standalone feature dashboards retain their independent recent-event
+window. A notice identifies truncated history; older events remain persisted.
+**Refresh skills** reloads the snapshot.
 Payloads and skill contents are not persisted by this telemetry.
 
 ### Session checkout and startup
@@ -198,11 +318,38 @@ only on the first terminal launch, not when reopening or recovering a session.
 Creation errors preserve the prompt. Cancel is disabled during creation;
 Escape cancels only an empty, idle form.
 
+If a new primary/shared-checkout session cannot switch branches and Git
+confirms unresolved index entries, it opens the existing checkout instead.
+The launch message explains that conflicts remain unresolved; no files or
+index entries are reset, discarded or automatically resolved. Managed
+task/PR checkouts are never redirected to a different branch.
+
 Planner title/notes and New Task problem/context drafts survive view switches.
 A late server response does not overwrite dirty or restored text, and a
 successful save clears only the version that was saved. If local draft backup
 is blocked or full, a warning asks the user to save or copy the text before
 leaving. This warning is separate from backend save failures.
+
+Planner's radar icon glows when auto tracking is enabled and pulses only
+while processing recorded work (without animation under reduced motion).
+Click it for a compact status panel with running/queued counts, the configured
+check interval, workspace and repository names, enqueue/start times, and the
+active phase (reading recorded activity or analyzing evidence). Evidence and
+session counts appear only after a source snapshot has been read; these are
+records considered, not a percent-complete estimate. The bounded queue holds
+up to 16 waiting workspaces plus the active pass. Discovery can reorder work;
+the list is not a promise of strict FIFO processing.
+
+The last pass shows whether tasks were refreshed, evidence was unchanged or
+absent, the workspace disappeared, a pass was cancelled, or a retry is waiting.
+Retry times are earliest eligibility, not a guaranteed start; rediscovery or
+new activity schedules another check. Queue entries are retained while paused.
+Polling failures hide stale active/queue details and label the last result as
+last-known. The collapsible explanation retains the credit/evidence caveats.
+Errors and the last successful update are shown in local time. No update this launch can mean there
+is no new evidence; an unchanged timestamp alone does not indicate failure.
+Updates reflect successful tracking passes, not independently verified task
+completion. Status refreshes every 15 seconds while the window is visible.
 
 Planner suggestions support arrow keys, Enter and Escape. IME composition does
 not add or rename a task, repeated submission is guarded, and failed mutations
@@ -275,6 +422,11 @@ Click a badge for input/output/reasoning tokens, charge reliability, missing
 usage counts and reported USD estimates. Deleted sessions remain in feature
 totals and appear as retained usage in the feature dashboard.
 
+Explorer usage controls show only the shared usage icon, leaving room for item
+names at every sidebar width. Hover for exact credits/tokens and billing status,
+or activate the keyboard-accessible button to open full details. Icon-only
+presentation never changes accounting.
+
 Summary invalidations are throttled to one request per second, including
 meta usage, stream reconnects and hierarchy changes. Failed refreshes keep the
 last snapshot with an explicit stale notice and **Retry usage**. Snapshot queries
@@ -288,6 +440,35 @@ defaults to 128; older replay segments are trimmed when this limit is reached.
 Clipboard failures are visible, and a delayed native write cannot overwrite a
 newer copy or restore text after a clear. Native Windows/Mac clipboard and
 renderer qualification still requires the installed-desktop regression checks.
+
+Input stays in the **native console**; there is no separate prompt editor or
+second draft/history store. There is no bottom input toolbar. A small
+**Clear input line** icon sits at the bottom-right in a reserved gutter outside
+the terminal text grid, without consuming console height. It sends Ctrl+A then Ctrl+K
+to clear the current input line, including when its cursor is in the middle.
+Use it at the CLI prompt; it does not send Enter or Ctrl+C, clear output, or
+delete history. Multiline input remains owned by the CLI. History remains in
+the existing **Prompt history** pane and the CLI's native recall shortcuts.
+Multiple prompts can be submitted while a reply is running. History retains
+each recent live prompt until the CLI store catches up, associates replies by
+native originating-message IDs rather than arrival order, and labels waiting
+prompts as **Queued**. Turn completion and duration stay with the corresponding
+answer even when later prompts were entered first. Open response dialogs keep
+following the same prompt as it streams and is persisted.
+The normal connected-status row is hidden; startup, failures, lost heartbeat
+and unacknowledged input remain visible. **Tab actions > Session details** and
+**Terminal diagnostics** open details only when requested.
+Clicking terminal output follows the native CLI's mouse behavior; **Alt+click**
+uses xterm's cursor-movement fallback at the live viewport. Dragging still
+selects text. This is terminal navigation, not a free-form document editor:
+mouse-tracking CLIs, menus and multiline input can interpret movement differently.
+
+**Tab actions > Fullscreen tab** fills the screen with the workspace without
+restarting the CLI or changing the saved panel layout. Both side panels are
+completely hidden on entry. The fullscreen tab strip has **Show explorer**,
+**Show prompt history**, and **Exit fullscreen** controls; panels can be opened
+and closed without leaving fullscreen. Escape also exits. Exiting restores the
+normal panel and split-pane layout. Dialogs and tooltips stay inside fullscreen.
 
 Session text pastes larger than 4 KiB of UTF-8 are saved as retained text files
 instead of flooding the CLI composer. Both keyboard and right-click paste use
@@ -389,7 +570,15 @@ reported only through measured App resources, not inferred from a slow response.
 
 The PR picker hands checkout work to a background queue and closes immediately.
 Persistent **PR imports** status in the explorer shows queued, running, completed,
-failed and unconfirmed results without disabling the workspace. Closing the
+failed and unconfirmed results without disabling the workspace. The import
+card stays at the bottom of the left panel, outside the scrolling tree,
+with blue active, green successful, red failed and amber unconfirmed states.
+An accented icon and count badge make ongoing imports easy to spot. The thicker
+bar shows genuinely finished imports; a separate activity sweep runs only while
+an import is working, including before the first completion. Failed imports
+stay prominent even when other imports continue. Studio and system reduced-motion
+settings replace the animation with a static activity highlight.
+Closing the
 picker, collapsing the tree or switching tabs does not stop checkout. Concurrent
 requests for the same repository/PR join the existing backend operation.
 Only queued work can be cancelled. A lost progress connection is unconfirmed,
@@ -414,6 +603,11 @@ is rebuilt once before analysis; repeated failures retain their actual cause.
 Manual full reviews and retry actions also check change evidence first.
 Whole-stream errors apply only to actual perspectives, and the UI does not
 claim retries were exhausted when analysis never started.
+Saved perspective failures restore their error banner and explicit retry action
+after reopening a review; merely opening it never retries a failed model request.
+Related workspace tabs are grouped into **Reviews** and **Review batches**.
+Expand a group to reveal its members; active and split tabs remain visible
+when collapsed, and keyboard navigation reveals hidden siblings.
 The tracker shows live elapsed time, final batch wall time and per-PR review
 duration; individual Review Board summaries show the latest full attempt time.
 The tracker can be opened from import status and updates as more imports finish;
@@ -470,6 +664,13 @@ stay visible without discarding completed results. The per-perspective review
 marks and **Mark PR reviewed** remain local sign-off, not remote approval.
 
 ### Deleting Explorer items
+
+Confirming feature deletion closes the dialog and queues bounded background work.
+The app-wide **Feature deletions** panel shows queued/running progress, completion
+or an actionable failure, even after switching views or collapsing the Explorer.
+Stopping owned work is retried for up to 30 seconds; ambiguous connection failures
+are not automatically retried. Check the feature before confirming another
+delete after a failure. The queue lives for the current app window, not across reloads.
 
 Successful deletion closes the matching editor views and reconciles active and
 split panes. Deleting a feature also closes descendant feature, session, agent
@@ -530,7 +731,18 @@ shifting the layout. Reduced-motion preferences disable magnification. Use the
 bottom-left **Hide icon dock / Show icon dock** button or **Toggle Icon Dock** in
 the command palette to change its visibility; the choice survives restart and
 does not collapse the Explorer. Global activity/error text appears only in the
-bottom status bar; the top progress track is decorative.
+bottom status bar; the top progress/loading strip is not mounted.
+
+Settings metasession pools retain colored session-ID chips and served counts.
+The compact dashboard stays visible for every provider, even when warming is off
+or unavailable. Agency's on-demand IDE sessions use the real active-session
+inventory and open read-only live details; outlined slots are saved capacity,
+not fabricated running sessions. Availability comes from the selected provider
+and running backend, not the warm checkbox. Saving unsupported capacity retains
+the target without claiming it was applied live or switching the CLI.
+Click a chip for conversation details, completed-turn token charts and an
+availability graph based on observed idle/busy/warming states. Availability is
+not CPU, memory or inferred failure health; opening the popup starts no AI work.
 
 The bottom **N active** button lists running workspace sessions plus IDE-owned
 metasession instances, including warm capacity and cold runs. Warm operation
@@ -696,10 +908,106 @@ It combines PR/project summary, captured changed-file diffs and change graph,
 evidence-grounded perspectives, findings, local reviewed marks, comments and
 provider-backed approval. Legacy PR-summary/Core Analysis/0–100-score panels
 are not the mounted workflow. Opening a board reads existing state; import and
-startup recovery schedule automatic analysis. Use **Retry incomplete** or
-explicit **Reset** rather than expecting navigation to rerun AI.
+startup recovery schedule automatic analysis. **Retry incomplete** resumes the
+saved context, model and perspective selection with a fresh execution deadline,
+keeps successful perspectives, and recomputes Final Decision. **New review**
+captures fresh context after confirmation; cancelled/interrupted runs need a
+new review. Preparation shows an indeterminate progress bar through checkout
+refresh, graph rebuild, context collection, and authoritative board reload;
+old failed-perspective counts are not shown as current review progress.
+During analysis, an animated bar shows finished checks separately from active
+checks; failed and skipped checks count as finished, not successful. Available
+findings stream into the board, and coalesced read-only snapshots refresh saved
+problem/solution explanations and diagrams every two seconds without restarting
+AI or resetting active progress, timings or human decisions. Slower snapshots
+cannot erase newer streamed findings or replace results from a different captured
+run, commit or graph. Pending explanations show waiting text rather than asking
+for a retry while the review is still running. Reduced-motion settings retain a
+static activity highlight and the real finished count.
+Generated fields request 1–2 short sentences and small grounded ASCII diagrams.
+The overview keeps two-line problem/solution summaries and concise finding
+cards. Open a finding title for its full concern, fix and evidence; its file
+location opens the diff. **More tools** holds skills and decision history.
+Repo/IDE provenance appears inside **Review skills**, distinguishing captured
+guidance from finding citations; shared context stays separate and unavailable
+references do not count as delivered guidance or executed tools.
+Problem and Solution explain different behavior, not the same review inventory.
+**Read explanation** and **View changes** show simple scenarios, diagrams and
+before/after code verified against the captured diff, without duplicate inline
+expansion controls. Summaries are not repeated there; longer legacy prose
+is preserved under **Original review text**. New reviews request these separate
+examples; saved reviews do not generate missing examples merely by being opened.
+The Skills view groups 14 editable Cosmos DB review checklists separately.
+Relevant defaults join feature-tagged instructions for Cosmos reviews; explicit
+review skill selections override them. Repository skills are selected by
+applicable paths, meaningful metadata or explicit references, not inventory size.
+**Analyze current** never silently fetches a different commit. If the remote
+head changed, **Take latest & retry** explicitly refreshes evidence, preserves
+the selected review options, and starts a fresh review after preparation.
+Previous results stay visible until the replacement context is ready.
+Review failures, actionable criteria gaps and publication recovery
+share one status panel. Per-check evidence-gap summaries are available only in
+**Details**, without a duplicate overview grid. Collection notes alone do not raise an attention banner;
+they remain under technical run information in **Details**.
+A stale-commit error promotes **Take latest & retry**
+and hides the inappropriate saved-context retry action. Technical diagnostics
+and context notes remain expandable without starting AI. Problem and solution
+summaries use aligned cards that stack on narrow windows; saved findings are
+explicitly labelled as non-certifying while the review is incomplete.
+Navigation never retries AI. Failure summaries stay concise, with
+native diagnostics under **Technical details**. Missing stream results remain
+visible through same-run refreshes until an authoritative result replaces them.
+Engine-exit wrappers retain the preceding native diagnostic instead of hiding
+the startup cause. On Windows, Agency prioritizes an installed native
+`copilot.exe` in its child PATH, avoiding npm command scripts and the forwarding
+VS Code shim; it does not change the user's PATH or bypass native authentication,
+MCP policy, or permissions. Studio does not impose a review prompt character
+budget or compact captured context to fit an IDE-selected context window.
+The selected provider owns context-window handling and any resulting errors.
+Collection remains bounded by file/count, command-output and timeout safety
+limits; missing or oversized sources are reported rather than silently treated
+as reviewed. These collection diagnostics are separate from provider failures.
+Text-only Copilot/Agency turns use an empty `--available-tools` allowlist;
+tool approval does not expose filtered-out tools. A wildcard `--deny-tool '*'`
+is not a valid native permission rule and is not passed.
+Failed/missing perspectives cannot certify Final Decision or unlock approval.
+Captured skills, requirements, discussion, evidence and final synthesis are
+passed without additional prompt-budget truncation. Legacy context-character
+settings are ignored. Existing saved reviews retain their original evidence
+and warnings; **New review** is required to collect a fresh snapshot.
+
+PR import checks existing checkout metadata and local changes before reusing a
+directory. An orphaned folder is not a Git worktree just because it exists.
+When it cannot be safely reused, import preserves it and creates a separate,
+review-only worktree at the fetched PR commit, without resetting existing
+branches. A clean recovery checkout is reused only for the same commit and
+expected branch; edited or stale checkouts remain untouched. Recovery attempts
+are bounded. If the primary repository itself is missing or invalid, import
+explains which local path must be restored or corrected in Settings.
 See [PR reviews](features/pr-reviews.md) for evidence identity, approval and
 sign-off semantics.
+
+**Review agent** opens a dedicated, whole-review chat instead of the full
+diagnostics view. In **Details**, **Ask about this perspective** opens a chat
+scoped to the selected perspective. Neither action starts AI until a message
+is sent. **Run information** contains timing, cost, context and diagnostics;
+**Assessment evidence** contains detailed checks and rationale. Both start
+collapsed, while findings, failure states, evidence gaps and sign-off controls
+remain visible.
+
+Review Board uses named actions such as **Read explanation**, **View changes** and
+clickable finding titles instead of repeated information icons. Context and explanations
+render safe Markdown with section headings, lists and code, within a scrollable
+dialog whose actions stay accessible. Explanations lead with the concern and
+fix; provenance, original observations and raw captured evidence remain available
+in expandable sections. Problem/solution explanations use plain English and,
+for new reviews, grounded ASCII before/after diagrams whenever the captured
+code supports them. Unsupported diagrams are omitted rather than invented.
+Acceptance criteria and their source evidence stay in a collapsed disclosure;
+generated import counts/reference IDs are not business requirements.
+**Edit acceptance criteria** and named **Inspect** actions address actual gaps
+without changing approval eligibility. **Review decision** reveals the existing reasoned
+disposition workflow without treating a suggested fix as verified.
 
 Opening a PR review as its own editor tab renders the full **PR review page** (`pr-review-page/pr-review-page.tsx`), which adds the per-file **change graph** (`change-graph.tsx`). The graph is a static reference graph of PR-modified functions and their connections; it supports **zoom, pan, internal scroll for large graphs, and full-screen**, plus a **show/hide callers** toggle. Selecting a node opens a detail popup with that file's **code diff** and inline **PR comments** (`pr-comments.tsx`). The page exposes **Approve** (casts the signed-in reviewer approval on GitHub or Azure DevOps), **Re-run all**, and per-step **Retry** controls; re-running re-collects diffs, so reviews generated before a diff-collection fix repopulate their per-file diffs.
 
@@ -818,6 +1126,48 @@ restart; this does not interrupt or replay an active conversation.
 These safeguards do not make a GitHub or Azure DevOps token interchangeable
 with another MCP's audience, tenant, permissions or native credential cache.
 
+**Accounts > Azure DevOps** supports multiple hosted organizations using the
+same Microsoft account. **Add organization** accepts a bare organization or
+an HTTPS repository URL; modern and legacy URL aliases deduplicate to one
+organization entry. Existing saved sign-in settings migrate without replacing
+the default organization. On first migration, Azure repositories already in
+the workspace also contribute organization targets. Each entry checks native
+credentials silently and sequentially, shows its own account/status/error, and
+offers explicit sign-in. A failed check for one organization does not mark
+another connected organization signed out or hide Microsoft-only providers.
+Explicit sign-in completes Git Credential Manager's native `get` / `store`
+handshake to remember the organization-to-account binding, then verifies a
+silent lookup before reporting success. This lets later checks select the
+cached account without reopening the browser; a save or confirmation failure
+is reported rather than briefly claiming a persistent sign-in.
+Saved targets and remembered display names are local UI preferences, not stored
+tokens or proof of current authorization.
+
+**Forget** removes only that entry from the list; it does not erase shared
+Microsoft credentials. **Sign out saved organizations** requires confirmation
+when multiple entries exist and erases their native credential targets. Native
+Microsoft credentials can be shared across organizations, so this is not an
+isolated per-organization logout and may affect other Azure DevOps access on the
+device. Different simultaneous Microsoft identities are not selected here.
+
+The Azure repository picker offers a **Signed-in organization** dropdown from
+saved Accounts targets, silently checking each target in sequence. Selecting an
+organization immediately loads its `project/repository` list. The search box
+matches either project or repository names, case-insensitively; switching
+organizations clears the old search and ignores late responses from the previous
+target. **Refresh** rechecks saved sign-ins without launching authentication.
+Unavailable checks keep last-confirmed entries with a warning instead of falsely
+signing them out. Confirmed signed-out targets are excluded from the dropdown.
+
+The repository picker also accepts an Azure DevOps organization or a full repository
+URL, including legacy `organization.visualstudio.com` links. A repository URL
+uses a direct project/repository lookup instead of requiring organization-wide
+repository enumeration. The picker displays the parsed organization, project
+and repository separately. Sign-in targets the organization and retains the
+original URL for retry; browser or MCP access alone does not establish Studio's
+Git Credential Manager sign-in. Permission denials are reported separately
+from missing credentials, and **Load** retries even when the input is unchanged.
+
 **Check all configured servers** provides a single workflow for enabled,
 configured built-ins. It reports per-server progress and separates verified
 tool discovery, observed sign-in requirements and unknown/failure states.
@@ -874,10 +1224,10 @@ The CLI setup gate detects installation without installing anything. A fresh
 profile must explicitly choose an eligible CLI, even if the suggested CLI is
 already installed: **Use installed CLI** persists that choice without installing;
 **Install and use** persists the choice and starts the selected installer.
-Only providers returned as eligible by the API are shown. Agency requires the
-explicit internal-user opt-in in Settings; this is operator attestation, not
-verified entitlement, and its own authentication still applies. An Azure
-sign-in or email does not enable it.
+Only providers returned as eligible by the API are shown. Agency requires
+detected internal-network connectivity and its own authentication. Network
+detection never selects or installs it. An Azure sign-in or email does not
+enable it.
 
 **Continue without waiting** is available during status checks and installation.
 A status check is bounded to 15 seconds; failure or an incomplete response does

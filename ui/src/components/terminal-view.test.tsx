@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
     rows: number;
     cols: number;
     options: Record<string, unknown>;
+    modes: { bracketedPasteMode: boolean };
     refresh: ReturnType<typeof import('vitest').vi.fn>;
     reset: ReturnType<typeof import('vitest').vi.fn>;
     scrollHandlers: Array<() => void>;
@@ -45,6 +46,7 @@ vi.mock('@xterm/xterm', () => {
     rows = 24;
     cols = 80;
     options: Record<string, unknown> = {};
+    modes = { bracketedPasteMode: true };
     refresh = vi.fn();
     scrollHandlers: Array<() => void> = [];
     selectionHandlers: Array<() => void> = [];
@@ -218,6 +220,43 @@ describe('TerminalView scrollback repaint', () => {
     return { view, term, ws, paste, input };
   }
 
+  it('uses one clear-input icon without a toolbar or connected-status row, sending no interrupt or submission', () => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    const ws = h.ws!;
+    expect(view.getByRole('button', { name: 'Clear input line' })).toBeDisabled();
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536 }) });
+    });
+    ws.send.mockClear();
+    expect(view.queryByRole('status')).toBeNull();
+    expect(view.queryByRole('button', { name: 'Recall prompt' })).toBeNull();
+    expect(view.container.querySelector('.terminal-input-controls')).toBeNull();
+    expect(view.container.querySelectorAll('textarea')).toHaveLength(1);
+    fireEvent.click(view.getByRole('button', { name: 'Clear input line' }));
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'input')
+      .map((frame) => ({ data: frame.data, generation: frame.generation })))
+      .toEqual([{ data: '\x01\x0b', generation: 1 }]);
+    expect(view.container.querySelector('.terminal-host textarea')).toHaveFocus();
+    expect(term.options.altClickMovesCursor).toBe(true);
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'reconnecting', generation: 2 }) }));
+    expect(view.getByRole('button', { name: 'Clear input line' })).toBeDisabled();
+  });
+
+  it('opens diagnostics only on demand and returns to a full-height console when closed', () => {
+    const closed = vi.fn();
+    const f = textPasteFixture(vi.fn());
+    f.view.rerender(<TerminalView sessionId="s1" diagnosticsOpen onCloseDiagnostics={closed} />);
+    expect(f.view.getByRole('region', { name: 'Session diagnostics' })).toBeInTheDocument();
+    fireEvent.click(f.view.getByRole('button', { name: 'Session diagnostics' }));
+    expect(closed).toHaveBeenCalledOnce();
+    f.view.rerender(<TerminalView sessionId="s1" />);
+    expect(f.view.queryByRole('status')).toBeNull();
+    expect(f.view.queryByRole('region', { name: 'Session diagnostics' })).toBeNull();
+    expect(f.input()).toEqual([]);
+  });
+
   it.each([
     { agent: 'Windows NT', path: 'C:\\owned text\\paste.txt' },
     { agent: 'Macintosh; Intel Mac OS X', path: '/owned text/paste.txt' },
@@ -232,6 +271,7 @@ describe('TerminalView scrollback repaint', () => {
     expect(f.term.paste).not.toHaveBeenCalled();
     expect(f.term.options.disableStdin).not.toBe(true);
     expect(f.view.getByText(/Saving pasted text as a file/)).toBeTruthy();
+    expect(f.view.getByRole('button', { name: 'Clear input line' })).toBeDisabled();
     act(() => {
       expect(f.term.keyHandler?.(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }))).toBe(false);
       f.term.dataHandlers[0]('\r');
@@ -526,7 +566,7 @@ describe('TerminalView scrollback repaint', () => {
     act(() => h.ws!.onmessage?.({ data: JSON.stringify({
       type: 'state', version: 2, generation: 1, state: 'ready', inputLimit: 65536,
     }) }));
-    expect(view.getByRole('status').textContent).toContain('Terminal connected');
+    expect(view.queryByRole('status')).toBeNull();
     expect(view.container.querySelector('.spinner')).toBeNull();
   });
 
@@ -555,7 +595,7 @@ describe('TerminalView scrollback repaint', () => {
       h.ws!.onmessage?.({ data: JSON.stringify({ type: 'pong', generation: 1, seq: 1 }) });
       vi.advanceTimersByTime(1000);
     });
-    fireEvent.click(view.getByRole('button', { name: 'Session diagnostics' }));
+    view.rerender(<TerminalView sessionId="s1" diagnosticsOpen />);
     expect(view.getByRole('button', { name: 'Send Esc to CLI' })).toBeEnabled();
     fireEvent.click(view.getByRole('button', { name: 'Send Esc to CLI' }));
     expect(sent().filter((message) => message.type === 'input')).toEqual([
@@ -1228,7 +1268,7 @@ describe('TerminalView scrollback repaint', () => {
       }) });
     });
     expect(view.queryByLabelText('Terminal input metadata')).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Session diagnostics' }));
+    view.rerender(<TerminalView sessionId="s1" diagnosticsOpen />);
     fireEvent.click(view.getByRole('checkbox', { name: /Record terminal input metadata/ }));
     const target = view.container.querySelector('textarea')!;
     target.focus();
@@ -1804,7 +1844,7 @@ describe('TerminalView scrollback repaint', () => {
 
     expect(fit.fit).toHaveBeenCalledTimes(1);
     expect(h.webgl?.clearTextureAtlas).toHaveBeenCalledTimes(1);
-    expect(view.getByRole('status').textContent).toContain('Terminal connected');
+    expect(view.queryByRole('status')).toBeNull();
   });
 
   it('restores pane geometry immediately for a zero-output replay once ready arrives', () => {

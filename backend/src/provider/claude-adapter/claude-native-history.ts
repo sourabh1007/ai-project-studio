@@ -171,6 +171,7 @@ export function createClaudeNativeHistoryStore(config: ClaudeConfig, deps: Claud
   return {
     read: cache.read,
     prompts: cache.prompts,
+    recentPrompts: cache.recentPrompts,
     listImportable: cache.listImportable,
     readUsagePage: cache.readUsagePage,
     async refresh(signal: AbortSignal) {

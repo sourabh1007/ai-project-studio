@@ -25,6 +25,7 @@ import {
   snapIntervalMs,
   runStatusLabel,
   runSummary,
+  describeCheckFailure,
 } from './automation-view.js';
 import type { Automation, AutomationRun, Subagent } from './types.js';
 
@@ -393,8 +394,10 @@ describe('run log helpers', () => {
     };
   }
   it('labels each run status', () => {
-    expect(runStatusLabel(run({ status: 'ok' }))).toBe('Succeeded');
-    expect(runStatusLabel(run({ status: 'failed' }))).toBe('Failed');
+    expect(runStatusLabel(run({ status: 'ok' }))).toBe('Checked');
+    expect(runStatusLabel(run({ status: 'ok', triggered: true }))).toBe('Action completed');
+    expect(runStatusLabel(run({ status: 'failed' }))).toBe('Check failed');
+    expect(runStatusLabel(run({ status: 'failed', triggered: true }))).toBe('Action failed');
     expect(runStatusLabel(run({ status: 'skipped' }))).toBe('Skipped');
     expect(runStatusLabel(run({ phase: 'queued' }))).toBe('Queued');
     expect(runStatusLabel(run({ phase: 'checking' }))).toBe('Checking');
@@ -404,6 +407,9 @@ describe('run log helpers', () => {
     expect(runStatusLabel(run({ phase: 'uncertain' }))).toBe('Uncertain');
   });
   it('summarizes triggered and checked runs with and without detail', () => {
+    expect(runSummary(run({ detail: 'Checked: no' }))).toBe('Check answered no; no action was run.');
+    expect(runSummary(run({ detail: 'Checked: completed/success' }))).toBe('Checked: completed/success');
+    expect(runSummary(run({ status: 'failed', detail: 'Check failed: specific error' }))).toBe('specific error');
     expect(runSummary(run({ report: 'Full durable report', detail: null }))).toBe('Report generated');
     expect(runSummary(run({ triggered: true, detail: 'went green' }))).toBe(
       'Triggered · went green',
@@ -436,5 +442,18 @@ describe('run log helpers', () => {
     expect(runSummary(run({ phase: 'interrupted', detail: null }))).toBe(
       'Interrupted',
     );
+  });
+  it.each([
+    ['Check failed: Provider failed', 'AI CLI failed. No diagnostic detail was captured; the condition is unknown.'],
+    ['Provider failed (exit code 1)', 'AI CLI failed (exit code 1). No diagnostic detail was captured; the condition is unknown.'],
+    ['Check failed: Provider timed out after 300000ms', 'AI check exceeded 5 minutes; no result was received.'],
+    ['Provider timed out after 1500ms', 'AI check exceeded 1.5 seconds; no result was received.'],
+    ['Provider timed out after 61000ms', 'AI check exceeded 61 seconds; no result was received.'],
+    ['Provider timed out after 300000ms; termination was requested but not confirmed',
+      'AI check exceeded 5 minutes; no result was received. CLI shutdown was not confirmed.'],
+    ['Provider timed out after 60000ms before it started', 'AI check did not start within 1 minute; the condition is unknown.'],
+    ['Check failed: Provider failed (exit code 1): Missing credentials', 'Provider failed (exit code 1): Missing credentials'],
+  ])('explains failures without inventing causes: %s', (detail, expected) => {
+    expect(describeCheckFailure(detail)).toBe(expected);
   });
 });

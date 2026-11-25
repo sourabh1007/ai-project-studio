@@ -16,19 +16,23 @@ export function assertExpectedHeadSha(value: unknown): asserts value is string {
 
 /** Inspect only captured rows, never infer a line from a hunk's advertised range. */
 export function hasCapturedRightLine(diff: string, target: number): boolean {
+  return hasCapturedLine(diff, target, 'RIGHT');
+}
+
+export function hasCapturedLine(diff: string, target: number, side: 'RIGHT' | 'LEFT'): boolean {
   let rightLine = 0;
   let remaining = 0;
   for (const row of diff.split(/\r?\n/)) {
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(row);
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(row);
     if (hunk) {
-      rightLine = Number(hunk[1]);
-      remaining = Number(hunk[2] ?? 1);
+      rightLine = Number(hunk[side === 'RIGHT' ? 3 : 1]);
+      remaining = Number(hunk[side === 'RIGHT' ? 4 : 2] ?? 1);
     } else if (remaining > 0) {
-      if (row.startsWith('+') || row.startsWith(' ')) {
+      if (row.startsWith(side === 'RIGHT' ? '+' : '-') || row.startsWith(' ')) {
         if (rightLine === target) return true;
         rightLine += 1;
         remaining -= 1;
-      } else if (!row.startsWith('-') && row !== '\\ No newline at end of file') {
+      } else if (!row.startsWith(side === 'RIGHT' ? '-' : '+') && row !== '\\ No newline at end of file') {
         remaining = 0;
       }
     }

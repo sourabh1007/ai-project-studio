@@ -139,9 +139,18 @@ describe('SettingsView drafts', () => {
       }),
     });
     fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
+    expect(screen.queryByRole('textbox', { name: 'Executable' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Copilot settings' }));
     const executable = await screen.findByRole('textbox', { name: 'Executable' });
     expect(screen.queryByDisplayValue('agency')).toBeNull();
     fireEvent.change(executable, { target: { value: 'custom-copilot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Copilot settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copilot settings' }));
+    expect(screen.getByRole('textbox', { name: 'Executable' })).toHaveValue('custom-copilot');
+    fireEvent.click(screen.getByRole('button', { name: 'About Executable' }));
+    expect(screen.getByRole('dialog', { name: 'Executable setting' })).toHaveTextContent('copilot.executable');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const args = screen.getByRole('textbox', { name: 'Args' });
     fireEvent.change(args, { target: { value: 'not-json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -188,6 +197,8 @@ describe('SettingsView drafts', () => {
     };
     renderSettings(client);
     fireEvent.click(await screen.findByRole('tab', { name: 'Tools & CLIs' }));
+    expect(screen.queryByRole('textbox', { name: 'Node Executable' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Other tools & commands' }));
     const gitCard = (await screen.findByRole('button', { name: 'Git' })).closest('.config-module-card') as HTMLElement;
     const ghCard = screen.getByRole('button', { name: /^Github CLI/ }).closest('.config-module-card') as HTMLElement;
     expect(screen.getByRole('textbox', { name: 'Node Executable' })).toBeInTheDocument();

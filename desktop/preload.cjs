@@ -22,6 +22,16 @@ function isExternalUrl(value) {
  * menu bar) can match instead of staying light in dark mode.
  */
 contextBridge.exposeInMainWorld('desktop', {
+  ready() {
+    ipcRenderer.send('app:ready');
+  },
+  onLifecycleState(callback) {
+    const listener = (_event, state) => {
+      if (state === 'closing' || state === 'running') callback(state);
+    };
+    ipcRenderer.on('app:lifecycle', listener);
+    return () => ipcRenderer.removeListener('app:lifecycle', listener);
+  },
   getAppearance() {
     return ipcRenderer.sendSync('appearance:get');
   },

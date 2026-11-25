@@ -65,6 +65,8 @@ export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRu
     return deps.ownership.own(scope, async (lease) => {
       const now = deps.clock.isoNow();
       let operation: MetaOperation = {
+        ...(request.promptRefs ? { promptRefs: [...new Set(request.promptRefs)] } : {}),
+        ...(request.correlation ? { correlation: request.correlation } : {}),
         ...scope, providerId: null, requestedModel: null, resolvedModel: null,
         sessionId: null, providerSessionId: null, sessionIds: [], transport: 'unknown',
         state: 'pending', outcome: 'not-dispatched', purpose: request.purpose ?? null,
@@ -129,7 +131,7 @@ export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRu
           resolvedModel: result.resolvedModel ?? null,
           providerSessionId: result.providerSessionId ?? (sameSession ? operation.providerSessionId : null),
           transport: result.transport ?? 'unknown', resultText: result.text, outcome: 'returned',
-          usage: snapshot.usage, usageState: snapshot.state, updatedAt: deps.clock.isoNow(),
+          usage: snapshot.usage, requestUsage: snapshot.usage, usageState: snapshot.state, updatedAt: deps.clock.isoNow(),
         };
         if (startFailure) throw startFailure;
         if (lease.signal.aborted) throw new Error('Meta operation cancelled after provider returned');

@@ -41,6 +41,25 @@ describe('summarizeImports', () => {
 });
 
 describe('PrImportStatus', () => {
+  it('shows activity at zero real completion, keeps failures prominent while work continues, and stops when settled', async () => {
+    const { store, add, pending } = harness();
+    const { container } = render(<PrImportStatus store={store} />);
+    await act(async () => { add([1, 2]); });
+    const progress = screen.getByRole('progressbar');
+    expect(progress).toHaveAttribute('aria-valuenow', '0');
+    expect(progress).toHaveAttribute('aria-valuetext', '0 of 2 finished');
+    expect(container.querySelector('.pr-import-bar-activity')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByText('Importing')).not.toBeInTheDocument();
+    await act(async () => { pending[0].reject(new ApiError(400, 'Checkout rejected')); });
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-state', 'failed');
+    expect(progress).toHaveAttribute('aria-valuenow', '50');
+    expect(container.querySelector('.pr-import-bar-activity')).toBeInTheDocument();
+    await act(async () => { pending[1].resolve({ feature: { id: 'f2' }, alreadyImported: false }); });
+    expect(progress).toHaveAttribute('aria-valuenow', '100');
+    expect(container.querySelector('.pr-import-bar-activity')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-active', 'false');
+  });
+
   it('allows every failed import to be dismissed when none succeeded', async () => {
     const { store, add, pending } = harness();
     render(<PrImportStatus store={store} />);
@@ -67,6 +86,7 @@ describe('PrImportStatus', () => {
     render(<PrImportStatus store={store} onOpen={open} onOpenBatch={openBatch} />);
     await act(async () => { add([1, 2, 3]); });
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-state', 'running');
     expect(screen.getAllByText('Starting checkout…')).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel import of PR #3' }));
@@ -75,6 +95,7 @@ describe('PrImportStatus', () => {
     await act(async () => { pending[0].resolve({ feature: { id: 'f1' }, alreadyImported: false }); });
     await act(async () => { pending[1].reject(new ApiError(500, 'checkout exploded')); });
     expect(screen.getByText('checkout exploded')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-state', 'failed');
     fireEvent.click(screen.getByRole('button', { name: 'Open review for PR #1' }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ number: 1 }));
     fireEvent.click(screen.getByRole('button', { name: /Open acme\/app review dashboard \(1\/3\)/ }));
@@ -86,6 +107,7 @@ describe('PrImportStatus', () => {
     expect(pending).toHaveLength(3);
     await act(async () => { pending[2].reject(new TypeError('offline')); });
     expect(screen.getByRole('button', { name: 'Check again PR #2' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-state', 'unknown');
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', '3 of 3 finished');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
@@ -125,6 +147,7 @@ describe('PrImportStatus', () => {
     await act(async () => { add([1]); });
     await act(async () => { pending[0].resolve({ feature: { id: 'f' }, alreadyImported: true }); });
     expect(screen.getByText('Already imported')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Pull request imports' })).toHaveAttribute('data-state', 'succeeded');
     expect(screen.queryByRole('button', { name: /dashboard/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Open review/ })).not.toBeInTheDocument();
   });

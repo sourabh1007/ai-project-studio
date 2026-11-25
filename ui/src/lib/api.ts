@@ -1,7 +1,10 @@
 import type { AppResourceSnapshot, ResourceCleanup } from '../features/resources/resource-types.js';
 import type { ActiveSessionsSnapshot, ActiveSessionDebug } from '../features/active-sessions/active-session-types.js';
+import type { PromptUsageSnapshot } from '../features/usage/prompt-usage.js';
 import { TEXT_PASTE_TIMEOUT_MS, type TextAttachmentsSnapshot } from './terminal-paste.js';
 import type {
+  PlannerWorkProvenance,
+  PlannerTrackingStatus,
   ConfigResponse,
   CommandCatalogEntry,
   ConfigUpdateResult,
@@ -55,6 +58,7 @@ import type {
   McpServerStatus,
   ProviderInfo,
   ProviderAutomationReadiness,
+  ProviderFeature,
   ProviderMcpConfig,
   Repository,
   RepositoryContext,
@@ -81,6 +85,12 @@ import type {
   PrApprovalResult,
   PrDescriptionExportResult,
   ReviewBoard,
+  ReviewRepositorySkills,
+  ReviewOptions,
+  ReviewImportOptions,
+  ReviewFindingMutation,
+  ReviewDiscussion,
+  ReviewPublication,
   ReviewBoardChatMessage,
   RefineChatMessage,
   BugBashRefineResult,
@@ -159,6 +169,7 @@ export interface ProviderSelectionInfo extends Omit<ProviderBootstrapInfo, 'prov
     installAvailable?: boolean;
     configNamespace?: string;
     automation?: ProviderAutomationReadiness;
+    features?: ProviderFeature[];
   }>;
 }
 
@@ -453,6 +464,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
     getMetaOperation: (operationId: string) =>
       request<MetaOperation>(`/meta/operations/${encodeURIComponent(operationId)}`),
+    getPromptUsage: (query: { from: string; to: string; promptRef?: string }, signal?: AbortSignal) =>
+      request<PromptUsageSnapshot>(`/prompt-usage?${new URLSearchParams(query)}`, { signal }),
+    getMcpHistory: (query: { provider: string; server: string; scope: 'feature' | 'internal'; from: string; to: string; featureId?: string }) =>
+      request<{ items: { callId: string; tool: string; at: string; durationMs: number | null }[]; limited: boolean }>(
+        `/mcp-usage/history?${new URLSearchParams(query)}`),
     checkHealth: () => request<HealthStatus>('/health'),
     getActiveSessions: (options?: { signal?: AbortSignal }) =>
       request<ActiveSessionsSnapshot>('/active-sessions', options),
@@ -555,6 +571,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       number: number,
       parentFeatureId?: string | null,
       parentGroupId?: string | null,
+      importOptions?: ReviewImportOptions,
     ) =>
       request<Feature>(
         `/repos/${repoId}/pulls`,
@@ -562,6 +579,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
           number,
           parentFeatureId: parentFeatureId ?? null,
           parentGroupId: parentGroupId ?? null,
+          ...importOptions,
         }),
       ),
     // Streamed variant of createPrFeature: one long-lived POST whose body is
@@ -576,6 +594,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       onStatus: (status: { phase: string; message: string }) => void,
       parentFeatureId?: string | null,
       parentGroupId?: string | null,
+      importOptions?: ReviewImportOptions,
     ): Promise<{ feature: Feature; alreadyImported: boolean }> => {
       const path = `/repos/${repoId}/pulls/stream`;
       const response = await doFetch(
@@ -584,6 +603,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
           number,
           parentFeatureId: parentFeatureId ?? null,
           parentGroupId: parentGroupId ?? null,
+          ...importOptions,
         }),
       );
       if (!response.ok) {
@@ -650,8 +670,27 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
     getPrReview: (featureId: string) =>
       request<PrReview>(`/features/${featureId}/pr-review`),
+    preparePrReview: (featureId: string) =>
+      request<PrReview>(`/features/${featureId}/pr-review/prepare`, jsonBody({})),
     getReviewBoard: (featureId: string) =>
       request<ReviewBoard>(`/features/${featureId}/review-board`),
+    getReviewBoardSkills: (featureId: string, signal?: AbortSignal) =>
+      request<ReviewRepositorySkills>(`/features/${encodeURIComponent(featureId)}/review-board/skills`, { signal }),
+    loadReviewBoardContext: (featureId: string, signal?: AbortSignal) =>
+      request<ReviewBoard>(`/features/${encodeURIComponent(featureId)}/review-board/context`,
+        { ...jsonBody({}), signal }),
+    configureReviewBoard: (featureId: string, options: ReviewOptions) =>
+      request<ReviewBoard>(`/features/${featureId}/review-board/options`, jsonBody(options)),
+    cancelReviewBoard: (featureId: string) =>
+      request<ReviewBoard>(`/features/${featureId}/review-board/cancel`, jsonBody({})),
+    manageReviewBoardFindings: (featureId: string, input: ReviewFindingMutation) =>
+      request<ReviewBoard>(`/features/${featureId}/review-board/findings`, jsonBody(input)),
+    getReviewBoardDiscussion: (featureId: string) =>
+      request<ReviewDiscussion>(`/features/${featureId}/review-board/discussion`),
+    getReviewBoardPublications: (featureId: string) =>
+      request<ReviewPublication[]>(`/features/${featureId}/review-board/publications`),
+    reconcileReviewBoardPublication: (featureId: string, key: string) =>
+      request<ReviewPublication>(`/features/${featureId}/review-board/publications/reconcile`, jsonBody({ key })),
     analyzeReviewBoard: (featureId: string) =>
       request<ReviewBoard>(
         `/features/${featureId}/review-board/analyze`,
@@ -1004,7 +1043,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/features/${featureId}/pr-review/comments/${threadId}/comments/${commentId}/reactions`,
         jsonBody({ content, on }),
       ),
-    approvePrReview: (featureId: string, input: { expectedHeadSha: string }) =>
+    approvePrReview: (featureId: string, input: {
+      expectedHeadSha: string;
+      expectedRunId?: string;
+      expectedAssessmentRevision?: number;
+    }) =>
       request<PrApprovalResult>(
         `/features/${featureId}/pr-review/approve`,
         jsonBody(input),
@@ -1107,15 +1150,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<UsageSummary>('/usage/summary', options),
     getWorkspaceStats: () => request<WorkspaceStats>('/usage/workspace'),
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
-    getUsageRollup: (granularity: UsageGranularity) =>
-      request<UsageRollup>(`/usage/rollup?granularity=${granularity}`),
-    getIdeUsageRollup: (granularity: UsageGranularity) =>
-      request<UsageRollup>(`/usage/ide/rollup?granularity=${granularity}`),
+    getUsageRollup: (granularity: UsageGranularity, window?: { from: string; to: string }) =>
+      request<UsageRollup>(`/usage/rollup?granularity=${granularity}${window ? `&${new URLSearchParams(window)}` : ''}`),
+    getIdeUsageRollup: (granularity: UsageGranularity, window?: { from: string; to: string }) =>
+      request<UsageRollup>(`/usage/ide/rollup?granularity=${granularity}${window ? `&${new URLSearchParams(window)}` : ''}`),
     getIdeActivity: () => request<IdeActivityFeed>('/usage/ide/activity'),
-    getSkillUsage: (scope: 'feature' | 'internal') =>
-      request<SkillUsageSnapshot>(`/usage/skills?scope=${scope}`),
-    getFeatureSkillUsage: (featureId: string) =>
-      request<SkillUsageSnapshot>(`/features/${encodeURIComponent(featureId)}/skill-usage`),
+    getSkillUsage: (scope: 'feature' | 'internal', window?: { from: string; to: string }) =>
+      request<SkillUsageSnapshot>(`/usage/skills?scope=${scope}${window ? `&${new URLSearchParams(window)}` : ''}`),
+    getFeatureSkillUsage: (featureId: string, window?: { from: string; to: string }) =>
+      request<SkillUsageSnapshot>(`/features/${encodeURIComponent(featureId)}/skill-usage${window ? `?${new URLSearchParams(window)}` : ''}`),
     getFeatureUsageRollup: (featureId: string, granularity: UsageGranularity) =>
       request<UsageRollup>(
         `/features/${featureId}/usage/rollup?granularity=${granularity}`,
@@ -1269,6 +1312,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     removeFeatureTask: (taskId: string) =>
       request<{ id: string }>(`/tasks/${taskId}`, del()),
     listPlannerTasks: () => request<PlannerTask[]>('/planner/tasks'),
+    plannerTrackingStatus: () => request<PlannerTrackingStatus>('/planner/tracking'),
+    setPlannerTracking: (enabled: boolean) => request<PlannerTrackingStatus>('/planner/tracking', putBody({ enabled })),
+    plannerTaskEvidence: (taskId: string) => request<PlannerWorkProvenance | null>(`/planner/tasks/${taskId}/evidence`),
     createPlannerTask: (input: CreatePlannerTaskInput) =>
       request<PlannerTask>('/planner/tasks', jsonBody(input)),
     updatePlannerTask: (taskId: string, input: UpdatePlannerTaskInput) =>
@@ -1329,8 +1375,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<{ answer: string }>('/config/assistant', jsonBody(input)),
     getAgencyStatus: () => request<AgencyStatus>('/agency/status'),
     getSystemHealth: () => request<SystemHealthReport>('/system-health'),
-    getProviderBootstrap: () =>
-      request<ProviderSelectionInfo>('/providers/bootstrap'),
+    getProviderBootstrap: async () => {
+      const deadline = Date.now() + 5_000;
+      let info = await request<ProviderSelectionInfo>('/providers/bootstrap', undefined, undefined, 5_000);
+      for (let attempt = 0; attempt < 20 && Date.now() < deadline && info.providers.some((provider) =>
+        provider.automation?.state === 'checking' &&
+        (info.selectionRequired || !info.defaultProvider || provider.id === info.defaultProvider)); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        info = await request<ProviderSelectionInfo>('/providers/bootstrap', undefined, undefined, remaining);
+      }
+      return info;
+    },
     selectProvider: (providerId: string, options?: { remember?: boolean }) =>
       request<ProviderSelectionInfo>('/providers/selection', jsonBody({ providerId, ...options }), undefined, GET_TIMEOUT_MS),
     switchProvider: (input: { providerId: string; remember: boolean; expectedRevision: number }) =>

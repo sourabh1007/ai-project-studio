@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -7,6 +7,67 @@ import { MetasessionPoolsSection } from './metasession-pools-section.js';
 afterEach(() => {
   cleanup();
   delete (window as unknown as { desktop?: unknown }).desktop;
+});
+
+it('keeps Agency dashboard visible with actual on-demand sessions and read-only live details', async () => {
+  const entry = { id: 'meta:agency-live', sessionId: 'agency-live', kind: 'meta', transport: 'session',
+    state: 'busy', label: 'Review change', purpose: 'review-board', featureId: 'f',
+    featureName: 'Development', projectName: 'CosmosDB', operationId: 'op', provider: 'agency', model: 'auto' };
+  const workspace = { ...entry, id: 'terminal', kind: 'session' };
+  const debug = vi.fn().mockResolvedValue({ sampledAt: 1000, entry, state: 'running',
+    activity: ['Reading captured review input'], output: 'Actual recorded output', error: null, truncated: false });
+  const updateConfig = vi.fn().mockResolvedValue({});
+  const resizeMetaPool = vi.fn();
+  const api: Partial<ApiClient> = {
+    getConfig: vi.fn().mockResolvedValue({ current: { meta: { warmPool: { enabled: true, size: 10 } } } }),
+    getMetaPools: vi.fn().mockResolvedValue({ enabled: false, availability: {
+      state: 'unavailable', providerId: 'agency', message: 'This provider runs AI requests on demand; reusable warm sessions are not supported.',
+    } }),
+    getMetaSettings: vi.fn().mockResolvedValue({ providerId: 'agency', model: 'auto' }),
+    getMetaModels: vi.fn().mockResolvedValue([]),
+    getActiveSessions: vi.fn().mockResolvedValue({ sampledAt: 1000, pollMs: 3000, entries: [entry, workspace] }),
+    getActiveSessionDebug: debug, updateConfig, resizeMetaPool,
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection embedded /></ApiProvider>);
+  expect(await screen.findByText('On demand')).toBeVisible();
+  expect(screen.getByText('Agency', { selector: '.metapool-provider' })).toBeVisible();
+  expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(10);
+  expect(await screen.findByLabelText('Metasession Review change: busy. View live details')).toBeVisible();
+  expect(debug).not.toHaveBeenCalled();
+  expect(screen.queryByText('Save to start live')).toBeNull();
+  expect(screen.queryByText('Starting…')).toBeNull();
+  fireEvent.click(screen.getByLabelText('Metasession Review change: busy. View live details'));
+  const dialog = screen.getByRole('dialog', { name: 'IDE metasession · Review change' });
+  expect(await within(dialog).findByText('Actual recorded output')).toBeVisible();
+  expect(dialog).toHaveTextContent('CosmosDB');
+  expect(debug).toHaveBeenCalledWith(entry.id, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText('Saved — settings retained.')).toBeVisible();
+  expect(screen.queryByText('Saved — applied live.')).toBeNull();
+  expect(screen.queryByText('Starting…')).toBeNull();
+  expect(resizeMetaPool).not.toHaveBeenCalled();
+  expect(updateConfig).toHaveBeenCalledOnce();
+});
+
+it('keeps stopped warm capacity visible and bounds configured placeholders without spawning sessions', async () => {
+  const api: Partial<ApiClient> = {
+    getConfig: vi.fn().mockResolvedValue({ current: { meta: { warmPool: { enabled: false, size: 100 } } } }),
+    getMetaPools: vi.fn().mockResolvedValue({ enabled: false, availability: {
+      state: 'disabled', providerId: 'copilot', message: 'Warm sessions are turned off.',
+    } }),
+    getMetaSettings: vi.fn().mockResolvedValue({ providerId: 'copilot', model: 'auto' }),
+    getMetaModels: vi.fn().mockResolvedValue([]),
+    getActiveSessions: vi.fn().mockResolvedValue({ sampledAt: 1000, pollMs: 3000, entries: [] }),
+    updateConfig: vi.fn(), resizeMetaPool: vi.fn(),
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection /></ApiProvider>);
+  expect(await screen.findByText('Off')).toBeVisible();
+  expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(32);
+  expect(screen.getByText('+68 configured slots')).toBeVisible();
+  expect(api.updateConfig).not.toHaveBeenCalled();
+  expect(api.resizeMetaPool).not.toHaveBeenCalled();
+  await act(async () => {});
 });
 
 it('reports a failed live resize without losing the requested target and permits retry', async () => {
@@ -41,6 +102,43 @@ it('reports a failed live resize without losing the requested target and permits
   await waitFor(() => expect(resize).toHaveBeenCalledTimes(2));
   expect(resize).toHaveBeenLastCalledWith(1);
   expect(screen.queryByText(/resizing the running pool failed/)).toBeNull();
+});
+
+it('restores colored session chips with live details, session-specific usage and availability charts, not a shared capacity metric', async () => {
+  const session = {
+    id: 's1', state: 'busy', served: 1, startedAt: 1000, lastActiveAt: 2000,
+    inputTokens: 120, outputTokens: 30,
+    history: [{ at: 3000, purpose: 'review-board', label: 'Review code', inputTokens: 120, outputTokens: 30,
+      prompt: 'Review this change', response: 'Recorded response' }],
+    live: { purpose: 'review-board', label: 'Review next change', startedAt: 4000,
+      prompt: 'Current prompt', response: 'Current response' },
+  };
+  const api: Partial<ApiClient> = {
+    getConfig: vi.fn().mockResolvedValue({ current: { meta: { warmPool: { enabled: true, size: 1 } } } }),
+    getMetaPools: vi.fn().mockResolvedValue({
+      enabled: true, pool: { size: 1, suggestedSize: 1, live: 1, idle: 0, busy: 1, ready: true, served: 1, sessions: [session] },
+      history: { error: null, samples: [{ at: 3000, provider: 'agency', model: null, queued: 0 }] },
+    }),
+    getMetaSettings: vi.fn().mockResolvedValue({ model: 'fixture' }),
+    getMetaModels: vi.fn().mockResolvedValue([{ id: 'fixture', name: 'Fixture' }]),
+  };
+  render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection /></ApiProvider>);
+  const icon = await screen.findByLabelText('Metasession s1: Busy, 1 turns. View details');
+  expect(icon).toHaveTextContent('s1');
+  expect(icon).toHaveTextContent('1');
+  expect(icon).toHaveAttribute('aria-haspopup', 'dialog');
+  expect(screen.queryByText('Capacity trends')).toBeNull();
+  fireEvent.click(icon);
+  const dialog = screen.getByRole('dialog', { name: 'Metasession s1' });
+  expect(dialog).toHaveTextContent('Current prompt');
+  expect(dialog).toHaveTextContent('Current response');
+  expect(within(dialog).getByRole('img', { name: /Session token usage:.*maximum 150 tokens/ })).toBeInTheDocument();
+  expect(within(dialog).getByRole('img', { name: /Session availability:/ })).toBeInTheDocument();
+  expect(dialog).toHaveTextContent('Busy is normal, not unhealthy');
+  expect(within(dialog).queryByLabelText('Metric')).toBeNull();
+  fireEvent.click(within(dialog).getByText('Review code', { selector: 'span' }));
+  expect(dialog).toHaveTextContent('Review this change');
+  expect(dialog).toHaveTextContent('Recorded response');
 });
 
 it('rejects a size below one without calling the backend', async () => {
@@ -95,6 +193,7 @@ it('keeps a saved pool size after the config reloads', async () => {
   await waitFor(() => expect(getConfig).toHaveBeenCalledTimes(2));
   expect(await screen.findByDisplayValue('7')).toBeInTheDocument();
   expect(screen.queryByDisplayValue('2')).toBeNull();
+  expect(screen.getByText('Saved — applied live.')).toBeVisible();
 });
 
 it.each([false, true])('shows capacity-blocked targets and actual headless budgets (closed=%s)', async (closed) => {

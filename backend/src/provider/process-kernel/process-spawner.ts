@@ -13,6 +13,7 @@ export interface SpawnRequest {
   env: Record<string, string>;
   cwd?: string;
   stdin?: 'ignore';
+  input?: string;
 }
 
 /** Handle to a running process exposing line-oriented output and lifecycle. */
@@ -36,6 +37,7 @@ export interface RawStream {
 
 export interface RawChildProcess {
   pid?: number;
+  stdin?: { end(text: string): void; on(event: 'error', cb: (error: Error) => void): void } | null;
   stdout: RawStream | null;
   stderr: RawStream | null;
   on(event: 'close', cb: (code: number | null) => void): void;
@@ -163,14 +165,30 @@ export function createProcessSpawner(
         // through the same settle path as a null exit code, matching how
         // callers already interpret "process never produced a real exit
         // code" (e.g. agency-bootstrapper's install-failure message).
-        child.on('error', () => {
+        child.on('error', (error) => {
+          if (settled) return;
           if (child.pid === undefined) {
+            for (const cb of stderrCbs) cb(`Could not start provider process: ${error.message}`);
             settle(null);
           } else {
             for (const cb of stderrCbs) cb('Provider process reported an error; waiting for confirmed native exit.');
           }
         });
       });
+
+      if (request.input !== undefined) {
+        const inputFailed = () => {
+          for (const cb of stderrCbs) cb('Provider could not receive the task on standard input.');
+          killProcessTree(child.pid, () => child.kill());
+        };
+        if (child.stdin) {
+          child.stdin.on('error', inputFailed);
+          try { child.stdin.end(request.input); }
+          catch { queueMicrotask(inputFailed); }
+        } else if (child.pid !== undefined) {
+          queueMicrotask(inputFailed);
+        }
+      }
 
       return {
         onStdoutLine: (cb) => stdoutCbs.push(cb),

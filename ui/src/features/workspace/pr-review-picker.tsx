@@ -6,6 +6,10 @@ import type {
   RemotePullRequest,
   RepoProvider,
   Repository,
+  ReviewImportOptions,
+  ReviewOptions,
+  MetaModelOption,
+  Skill,
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Avatar } from '../../components/avatar.js';
@@ -91,7 +95,19 @@ export const MAX_BULK_PRS = 10;
 export interface SelectedPull {
   number: number;
   title: string;
+  importOptions?: ReviewImportOptions;
 }
+
+const IMPORT_PERSPECTIVES = [
+  ['problem-solution', 'Problem / solution'], ['business', 'Business'],
+  ['architecture', 'Architecture'], ['impact-blast-radius', 'Impact / blast radius'],
+  ['code-quality', 'Code quality'], ['performance', 'Performance'],
+  ['observability', 'Observability'], ['configuration', 'Configuration'],
+  ['api-contract', 'API contract'], ['accessibility', 'Accessibility'],
+  ['backward-compatibility', 'Backward compatibility'], ['data-contract', 'Data contract'],
+  ['rollback-safety', 'Rollback safety'], ['deployment', 'Deployment'],
+  ['testing', 'Testing'], ['security', 'Security'], ['final-decision', 'Final decision'],
+] as const;
 
 /**
  * Modal for starting a PR review. Lists the repository's open pull requests
@@ -112,6 +128,35 @@ export function PrReviewPicker({
 }) {
   const api = useApi();
   const automation = useAutomationReadiness();
+  const [autoReview, setAutoReview] = useState(true);
+  const reviewAfterImport = automation?.canAttempt !== false && autoReview;
+  const [reviewOptions, setReviewOptions] = useState<ReviewOptions>({});
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [models, setModels] = useState<MetaModelOption[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!setupOpen) return;
+    let active = true;
+    void Promise.allSettled([api.getMetaModels(), api.listSkills()]).then(([catalog, instructions]) => {
+      if (!active) return;
+      if (catalog.status === 'fulfilled') setModels(catalog.value);
+      if (instructions.status === 'fulfilled') setSkills(instructions.value.filter((skill) => skill.kind === 'instruction'));
+      if (catalog.status === 'rejected' || instructions.status === 'rejected') {
+        setSetupError('Some review options could not be loaded. Close and reopen setup to retry.');
+      } else setSetupError(null);
+    });
+    return () => { active = false; };
+  }, [api, setupOpen]);
+  function toggleOption(key: 'perspectiveIds' | 'skillIds', id: string) {
+    setReviewOptions((options) => {
+      const current = options[key] ?? [];
+      const next = current.includes(id) ? current.filter((value) => value !== id) : [...current, id];
+      const updated = { ...options, [key]: next };
+      if (key === 'perspectiveIds' && next.length === 0) delete updated.perspectiveIds;
+      return updated;
+    });
+  }
   const mine = useAsync<RemotePullRequest[]>(
     () => api.listRepoPulls(repo.id, 'mine'),
     [repo.id],
@@ -303,14 +348,16 @@ export function PrReviewPicker({
   }
 
   async function confirm() {
-    if (automation?.supported === false) return;
     if (selected.length === 0 || busy) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await onConfirm(selected);
+      await onConfirm(reviewAfterImport && Object.keys(reviewOptions).length === 0 ? selected :
+        selected.map((pull) => ({
+          ...pull, importOptions: structuredClone({ autoReview: reviewAfterImport, reviewOptions }),
+        })));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -674,17 +721,76 @@ export function PrReviewPicker({
         </div>
 
         <ErrorText error={error} />
+        {automation?.canAttempt !== false && <label>
+          <input type="checkbox" checked={autoReview} disabled={busy}
+            onChange={(event) => setAutoReview(event.target.checked)} />
+          Automatically review after import
+        </label>}
+        {!reviewAfterImport && <p>Import only; review later. No AI runs until you explicitly prepare or start the review.</p>}
+        {automation?.canAttempt !== false && <details onToggle={(event) => setSetupOpen(event.currentTarget.open)}>
+          <summary>Review setup · applies separately to each selected PR</summary>
+          <label>Review model
+            <select aria-label="Import review model" disabled={busy} value={reviewOptions.model ?? ''}
+              onChange={(event) => setReviewOptions((options) => {
+                const next = { ...options };
+                if (event.target.value) next.model = event.target.value;
+                else delete next.model;
+                return next;
+              })}>
+              <option value="">Use IDE default</option>
+              {models.map((model) => <option key={model.id} value={model.id} disabled={!model.enabled}>{model.name}</option>)}
+            </select>
+          </label>
+          <fieldset disabled={busy}><legend>Review perspectives</legend>
+            <label>Perspective preset
+              <select aria-label="Import perspective preset"
+                value={!reviewOptions.perspectiveIds ? 'automatic' :
+                  reviewOptions.perspectiveIds.length === IMPORT_PERSPECTIVES.length ? 'all' :
+                    reviewOptions.perspectiveIds.length === 1 && reviewOptions.perspectiveIds[0] === 'security' ? 'security' : 'custom'}
+                onChange={(event) => {
+                  const preset = event.target.value;
+                  setReviewOptions(({ perspectiveIds: _ids, ...options }) => ({
+                    ...options,
+                    ...(preset === 'all' ? { perspectiveIds: IMPORT_PERSPECTIVES.map(([id]) => id) } :
+                      preset === 'security' ? { perspectiveIds: ['security'] } : {}),
+                  }));
+                }}>
+                <option value="automatic">Automatically select perspectives</option>
+                <option value="security">Security focused</option>
+                <option value="all">All perspectives</option>
+                <option value="custom" disabled>Custom selection</option>
+              </select>
+            </label>
+            {IMPORT_PERSPECTIVES.map(([id, name]) => <label key={id}>
+              <input type="checkbox" checked={reviewOptions.perspectiveIds?.includes(id) ?? false}
+                onChange={() => toggleOption('perspectiveIds', id)} />{name}
+            </label>)}
+          </fieldset>
+          <fieldset disabled={busy}><legend>Studio instruction skills</legend>
+            {skills.length === 0 && <p>No instruction skills available. Repository guidance is collected automatically.</p>}
+            {skills.map((skill) => <label key={skill.id}>
+              <input type="checkbox" checked={reviewOptions.skillIds?.includes(skill.id) ?? false}
+                onChange={() => toggleOption('skillIds', skill.id)} />{skill.name}
+            </label>)}
+          </fieldset>
+          <label>Business context
+            <textarea aria-label="Import business context" rows={3} maxLength={20_000}
+              value={reviewOptions.businessContext ?? ''} disabled={busy}
+              onChange={(event) => setReviewOptions((options) => ({ ...options, businessContext: event.target.value }))} />
+          </label>
+          {setupError && <p role="status">{setupError}</p>}
+        </details>}
         <AutomationReadinessNotice />
 
         <div className="pr-picker-actions">
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={confirm} disabled={busy || selected.length === 0 || automation?.supported === false}>
+          <Button onClick={confirm} disabled={busy || selected.length === 0}>
             {busy ? (
               <Spinner size={13} label="Preparing" />
             ) : (
-              `Start review${selected.length > 0 ? ` (${selected.length})` : ''}`
+              `${reviewAfterImport ? 'Start review' : 'Import only; review later'}${selected.length > 0 ? ` (${selected.length})` : ''}`
             )}
           </Button>
         </div>

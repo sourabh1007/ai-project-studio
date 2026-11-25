@@ -7,8 +7,11 @@ import type {
 import { createProcessAttribution } from './process-attribution.js';
 import { canonicalPath, errorText, initialStorage, scanStorage } from './storage-scanner.js';
 import { cleanupFiles, supportsLogCleanup, type LogCleanupPolicy } from './safe-cleanup.js';
+import { createResourceHistory } from './resource-history.js';
+import type { ResourceHistoryStore } from './resources-contract.js';
 
 export interface ResourcesDeps {
+  history?: ResourceHistoryStore;
   config: ResourcesConfig;
   now(): number;
   backendPid: number;
@@ -22,6 +25,7 @@ export interface ResourcesDeps {
 
 /** HTTP reads cached state; sampling, scans and cleanup each have one bounded owner. */
 export function createResourcesService(deps: ResourcesDeps): ResourcesService {
+  const history = createResourceHistory(deps.config, deps.now, deps.history);
   const attribute = createProcessAttribution(deps.backendPid, deps.config.desktopPid, deps.config.staleAfterMs);
   let app: AppResources = {
     status: 'unavailable', measuredAt: null, staleAfterMs: deps.config.staleAfterMs,
@@ -76,6 +80,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
   };
   const service: ResourcesService = {
     snapshot: () => ({
+      history: history.snapshot(),
       sampledAt: deps.now(), host: deps.host(),
       app: {
         ...app,
@@ -88,6 +93,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
       if (disposed) return Promise.resolve();
       if (!deps.config.processSamplingEnabled) {
         app = { ...app, status: 'unavailable', errors: ['App process sampling is disabled; host pressure remains available.'] };
+        history.sample(service.snapshot());
         return Promise.resolve();
       }
       if (processRun) return processRun;
@@ -97,7 +103,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
           if (!disposed) app = attribute(result);
         } catch (error) {
           app = { ...app, status: 'unavailable', errors: [errorText(error)] };
-        } finally { processRun = undefined; }
+        } finally { processRun = undefined; history.sample(service.snapshot()); }
       })();
       return processRun;
     },
@@ -116,6 +122,7 @@ export function createResourcesService(deps: ResourcesDeps): ResourcesService {
           storage.errors.push(errorText(error));
         } finally {
           storage.completedAt = deps.now();
+          history.storage(service.snapshot());
           storage.progress.currentPath = null;
           scanRun = undefined;
           scanAbort = undefined;

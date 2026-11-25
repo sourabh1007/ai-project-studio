@@ -33,6 +33,29 @@ it.each([
 it.each([
   ['settings', SoftwareUpdateSection],
   ['banner', UpdateBanner],
+] as const)('shows why automatic installation is blocked and offers only guided installation in %s', async (_name, Component) => {
+  const install = vi.fn().mockResolvedValue(true);
+  const download = vi.fn();
+  (window as unknown as { desktop: unknown }).desktop = { updates: {
+    getState: async () => ({
+      status: 'available', availableVersion: '1.0.0', canAutoInstall: false,
+      autoInstallBlockReason: 'Trusted signer pins are not configured. Contact the release maintainer.',
+    }),
+    install, download,
+    onEvent: () => () => {},
+  } };
+  render(<Component />);
+  const open = await screen.findByRole('button', { name: 'Open release page' });
+  expect(screen.getByText(/Trusted signer pins are not configured/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Get update' })).toBeNull();
+  fireEvent.click(open);
+  expect(install).toHaveBeenCalledTimes(1);
+  expect(download).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['settings', SoftwareUpdateSection],
+  ['banner', UpdateBanner],
 ] as const)('shows an animated installing phase with no dismiss/actions in %s', async (_name, Component) => {
   (window as unknown as { desktop: unknown }).desktop = { updates: {
     getState: async () => ({

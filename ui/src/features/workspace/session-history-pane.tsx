@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useAnimatedPresence } from '../../hooks/use-motion.js';
 import { useApi } from '../../app/api-context.js';
+import { useStartupPending } from '../../app/desktop-lifecycle.js';
 import {
   CheckIcon,
   ChevronIcon,
@@ -36,6 +37,9 @@ interface SessionHistoryPaneProps {
   sessionId: string | null;
   /** Upper bound on one history request before it is abandoned and retried. */
   pollTimeoutMs?: number;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideCollapsed?: boolean;
 }
 
 /** How often the pane re-polls so new prompts and status changes appear live. */
@@ -59,11 +63,12 @@ function failureMessage(error: unknown, timedOut: boolean): string {
 
 /** Selects the detail entry that is still the same turn after a refresh. */
 function sameTurn(current: SessionPrompt, result: SessionPrompt[]): SessionPrompt {
+  const sameTime = (at: string) => at === current.at || Date.parse(at) === Date.parse(current.at);
   return result.find((prompt) => prompt.index === current.index &&
       (!current.text || prompt.text === current.text) &&
-      (!current.at || !prompt.at || prompt.at === current.at)) ??
+      (!current.at || !prompt.at || sameTime(prompt.at))) ??
     result.find((prompt) => current.text && current.at &&
-      prompt.text === current.text && prompt.at === current.at) ?? current;
+      prompt.text === current.text && sameTime(prompt.at)) ?? current;
 }
 
 const STATUS_LABEL: Record<PromptStatus, string> = {
@@ -74,7 +79,7 @@ const STATUS_LABEL: Record<PromptStatus, string> = {
 
 /** A small status glyph with a descriptive tooltip for a prompt's lifecycle. */
 function StatusIcon({ prompt, showLabel = true }: { prompt: SessionPrompt; showLabel?: boolean }) {
-  const base = STATUS_LABEL[prompt.status];
+  const base = prompt.queued ? 'Queued - waiting for response' : STATUS_LABEL[prompt.status];
   const tip =
     prompt.status === 'answered' && prompt.durationMs != null
       ? `${base} in ${formatDuration(prompt.durationMs)}`
@@ -86,7 +91,7 @@ function StatusIcon({ prompt, showLabel = true }: { prompt: SessionPrompt; showL
       aria-label={tip}
       title={tip}
     >
-      {prompt.status === 'answered' ? (
+      {prompt.queued ? <ClockIcon size={13} /> : prompt.status === 'answered' ? (
         <CheckIcon size={13} />
       ) : prompt.status === 'answering' ? (
         <Spinner size={13} label={tip} showLabel={showLabel} />
@@ -223,7 +228,7 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
         <>
           <div className="history-detail-meta">
             <StatusIcon prompt={prompt} showLabel={false} />
-            <span className="history-detail-status">{STATUS_LABEL[prompt.status]}</span>
+            <span className="history-detail-status">{prompt.queued ? 'Queued - waiting for response' : STATUS_LABEL[prompt.status]}</span>
             {durationText && <span className="history-detail-duration">· took {durationText}</span>}
           </div>
           <Disclosure className="prompt-record-details" summary="Recorded turn details">
@@ -272,7 +277,9 @@ function PromptDetail({ prompt, onClose }: { prompt: SessionPrompt; onClose: () 
           />
         ) : (
           <p className="history-detail-pending">
-            {prompt.status === 'answering'
+            {prompt.queued
+              ? 'This prompt is queued. Its response will appear here when the CLI answers it.'
+              : prompt.status === 'answering'
               ? 'The AI is generating a response…'
               : prompt.pending
                 ? 'The response is still being saved…'
@@ -411,9 +418,11 @@ function PromptList({
  * The list re-polls so new prompts and status changes appear without a manual
  * refresh. The open/closed state is persisted.
  */
-export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS }: SessionHistoryPaneProps) {
+export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS, open: controlledOpen, onOpenChange, hideCollapsed = false }: SessionHistoryPaneProps) {
   const api = useApi();
-  const [open, setOpen] = usePersistentState('cw-history-pane-open', true);
+  const [savedOpen, setSavedOpen] = usePersistentState('cw-history-pane-open', true);
+  const open = controlledOpen ?? savedOpen;
+  const setOpen = (next: boolean) => controlledOpen === undefined ? setSavedOpen(next) : onOpenChange?.(next);
   const historyPresence = useAnimatedPresence(open, '--motion-panel-duration');
   const [width, setWidth] = usePersistentState('cw-history-pane-width', 300, {
     validate: isFiniteNumber,
@@ -433,7 +442,8 @@ export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS 
   const retry = () => setReloadTick((tick) => tick + 1);
   const detailOpen = selected !== null;
   const [expanded, setExpanded] = useState(false);
-  const historyVisible = open || expanded || detailOpen;
+  const historyVisible = (!hideCollapsed || open) && (open || expanded || detailOpen);
+  useStartupPending(Boolean(sessionId) && historyVisible && loading);
   const [query, setQuery] = useState('');
   const needle = query.trim().toLowerCase();
   const matchingPrompts = useMemo(
@@ -520,7 +530,7 @@ export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS 
     };
   }, [api, sessionId, historyVisible, reloadTick, pollTimeoutMs]);
 
-  if (!sessionId) {
+  if (!sessionId || (hideCollapsed && !open)) {
     return null;
   }
 
@@ -550,7 +560,7 @@ export function SessionHistoryPane({ sessionId, pollTimeoutMs = POLL_TIMEOUT_MS 
         aria-expanded={open}
         aria-label={open ? 'Collapse prompt history' : 'Expand prompt history'}
         title={open ? 'Collapse prompt history' : 'Expand prompt history'}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => setOpen(!open)}
       >
         <ChevronIcon size={14} open={open} />
         {open ? (

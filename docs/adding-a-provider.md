@@ -3,8 +3,19 @@
 The app is intentionally **not** coupled to a particular CLI. Adapters expose
 supported capabilities behind the provider interface; registration does not
 promise every interactive, headless, agent, quota or history capability.
-Current Agency support is interactive-only for IDE-launched AI automation
-because native MCP overlays cannot be verifiably isolated.
+Agency and Claude support IDE-launched automation using their unmodified native
+CLI configuration and permissions. Zero-MCP isolation is a separate, optional
+execution policy, not a prerequisite for native automation.
+
+On Windows, a discovered npm `.cmd` launcher is not a native executable.
+Copilot command resolution uses the official npm package's verified platform
+entry point (nested or hoisted, x64 or ARM64), falling back to its verified Node
+loader when necessary. Interactive sessions, cold/background turns, warm ACP
+pools and model-catalog probes share that resolution. Agency prioritizes a
+native CLI on PATH, excludes the forwarding VS Code shim, and can recover an
+npm-only installation by prepending its platform binary directory in the child
+environment. This changes neither the global PATH nor CLI permissions, and
+never feeds prompt text through `cmd.exe` or blindly retries dispatched work.
 
 ## The contract
 
@@ -22,9 +33,10 @@ Look at the three existing adapters as templates:
 - `provider/copilot-adapter/` — `copilot-provider.ts`, `copilot-cmd-builder.ts`, `copilot-env-mapper.ts`, `copilot-model-lister.ts`.
 - `provider/agency-adapter/` — `agency-provider.ts` (wraps another CLI via a passthrough prefix and reuses Copilot's interactive args).
 - `provider/claude-adapter/` — native Claude Code **v2**, native history/usage,
-  separate interactive/headless authentication and unavailable plan-quota/AIC
-  handling. Subscription sign-in does not authorize app-driven headless turns;
-  those need operator-owned supported API/cloud credentials.
+  native sign-in and unavailable plan-quota/AIC handling. Studio invokes the
+  user's unmodified CLI; it never collects or intermediates subscription tokens.
+  The optional isolated programmatic profile requires supported API/cloud
+  credentials instead.
 
 ## Steps
 
@@ -79,33 +91,71 @@ and Claude through its supported configured platform installer. Bootstrap
 installation/version deadlines belong to their module config; detection must
 use the configured executable and version argv, not a hardcoded alternate CLI.
 
-### Headless tool isolation
+### Headless execution policy
 
-Automated turns must preserve their strict tool/protocol flags and inspect
-provider-native sources asynchronously before launch; no synchronous repository
-walk belongs on the API thread.
+`mcp.headlessPolicies` is an editable provider-to-policy map in Settings.
+Defaults are `copilot: isolated`, `agency: native`, `claude: native`; unlisted
+providers default to `isolated`. Restart after changing this setting.
+Native mode preserves the CLI's settings, plugins, MCP configuration, sign-in
+and administrator policies. Explicitly invoking an AI feature may start native
+MCP servers or request native sign-in. Studio does not rewrite managed policy,
+automatically submit work when selecting a CLI, or collect native credentials.
 
-- **Copilot:** preflight checks user/`COPILOT_HOME` sources and the working
-  directory/ancestors up to `.git`. Declared servers are disabled independently
-  of native trust decisions. Malformed/oversized configuration and uninspectable
-  plugin/additional-source markers fail closed rather than assuming no tools.
-- **Agency:** automated metasession launches are currently **blocked**. Native
-  runtime defaults/overlays cannot be safely suppressed through Copilot
-  passthrough flags. The error directs the user to the native CLI or another
-  eligible provider; there is no unsafe override. Interactive Agency is unaffected.
-- **Claude:** headless/no-tools preflight checks the exclusive managed
-  `managed-mcp.json` policy source and blocks unsafe configuration with
-  administrator guidance. Do not remove isolation flags to work around policy.
+Text-only turns retain explicit no-tools restrictions in both modes. Normal
+tool-enabled runs retain configured permission flags; native mode does not add
+permission-bypass flags. Session identity and JSON protocol flags remain
+app-owned. Isolation preflight is asynchronous, bounded and cancellable; no
+synchronous repository walk belongs on the API thread.
 
-These are intentional execution restrictions, separate from installation,
-authentication or advertised interactive capability. Summaries, planners and
-agents must surface the refusal rather than claim successful automated work.
+- **Copilot (isolated by default):** preflight uses the installed CLI's read-only `mcp list --json`
+  effective inventory for the actual working directory and environment. This
+  supports native settings syntax, including comments, and enumerates user,
+  workspace, plugin and built-in sources without guessing from plugin directories.
+  Every returned server is disabled independently of native trust decisions.
+  Missing, malformed, oversized or failed inventories fail closed. Windows npm
+  shims dispatch through the official package's declared Node entry point, not
+  a command shell; prompt arguments are never interpolated into shell strings.
+- **Agency (native by default):** metasessions use the real Agency executable,
+  normal native overlays and the Copilot JSON protocol. Optional `isolated`
+  mode refuses automated launches because native overlays cannot be verified
+  as completely suppressed; plain Copilot listing is not sufficient. Switch
+  to native mode or another provider rather than bypass administrator policy.
+- **Claude (native by default):** prompt-mode turns preserve native MCP and
+  authentication. Text-only turns disable built-in and MCP model tools.
+  Optional `isolated` mode adds strict-empty MCP configuration, requires
+  supported API/cloud credentials, and checks for conflicting managed MCP
+  policy before launch. Managed policy is never removed or overridden.
+
+Installation, authentication and execution policy are separate requirements.
+Summaries, planners and agents surface real launch failures rather than claim
+successful automated work.
 Provider entries from `/providers/bootstrap`, `/providers` and selection/switch
 responses can expose `automation: { supported: boolean, reason: string | null }`.
 Consumers use this generic readiness metadata to disable automated actions and
 show the reason/another-CLI guidance while preserving interactive terminals,
 Settings and history. Baseline readiness is not final launch authorization:
 Copilot rechecks the actual session working directory/ancestors before execution.
+
+The configurable `providerFeatures.features` catalogue owns feature IDs, labels
+and requirements (`installed-cli`, `automation`, or neither for manual features).
+Provider responses include resolved per-feature `available`, `setup-required`,
+`checking`, `integration-required` or `unsupported` states. Missing installation
+takes precedence over integration readiness. An unimplemented Studio integration
+must use `integration-required`, not claim the native CLI lacks automation.
+Adding a future feature using those execution
+requirements needs no per-CLI UI changes. Configuration never grants execution
+permission. `mcp.headlessInventoryMaxBytes` and `mcp.readinessCacheMs` bound native
+inventory output and baseline caching; launch-time checks never use the cache.
+Automatic model-catalog probes and optional warm workers retain isolated
+startup checks, even when normal prompt-mode tasks use native configuration.
+They fall back to the configured model list or cold native execution rather
+than starting custom MCP servers merely to display or prewarm the interface.
+Agency's informational Copilot passthrough skips Agency's real MCP/plugin setup,
+so its plain Copilot listing cannot certify isolated Agency launches.
+Claude's native version/sign-in checks run after explicit selection; readiness
+must wait for those checks and preserve their failure reasons, rather than
+infer missing credentials for an unselected provider or readiness from API
+environment variables alone.
 
 ### History and accounting
 
@@ -182,10 +232,14 @@ the active provider. HTTP 409 conflicts return
 `error.blockers`, not internal `ConflictError.details`. No work is
 silently killed. Bootstrap adds `selectionRequired`, `revision`, and `blockers`.
 Provider lists, bootstrap, and model catalogs apply the same availability policy.
-Agency is disabled by default behind `providerSelection.allowInternalAgency`.
-An authorized internal operator must explicitly attest in Settings → CLI;
-this is an operator preference, not verified employment or entitlement.
-Microsoft sign-in, email domains, and network presence never enable Agency.
+Agency appears only when the internal-network probe succeeds. The bounded TCP
+probe sends no credentials or HTTP data; `agencyBootstrap.microsoftNetworkHost`,
+`microsoftNetworkPort`, `microsoftNetworkTimeoutMs`, and
+`microsoftNetworkRefreshMs` configure its target and refresh cadence (restart
+after changing the cadence). Detection failures hide Agency. Sign-in, email
+domains, and the deprecated `providerSelection.allowInternalAgency` preference
+do not bypass this policy. Visibility never verifies authorization or selects
+or launches the CLI.
 The installed Agency CLI remains responsible for its own authentication.
 Copilot and Claude work without Agency or internal credentials.
 
@@ -202,10 +256,9 @@ then verifies every lease has released before persisting the new choice.
 Running background AI requests, stale revisions, unconfirmed native exits, or
 persistence failures refuse the switch without changing provider identity.
 Stopping an interactive terminal preserves its transcript and session record;
-it never deletes a session. `PUT /providers/preferences` accepts
-`{ allowInternalAgency }`, persists the opt-in before exposing Agency, and does
-not select, install or launch it. Disabling while Agency is active is refused;
-select another provider first.
+it never deletes a session. The legacy `PUT /providers/preferences` contract
+remains available to custom hosts with an injected preference handler; the
+desktop composition root no longer configures that manual opt-in endpoint.
 
 Providers may expose `prepareInteractiveSession()` to await their non-billable
 native readiness checks before command construction. The terminal retains its

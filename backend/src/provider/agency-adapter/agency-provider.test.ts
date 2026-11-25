@@ -58,6 +58,32 @@ const spec: SessionSpec = {
 };
 
 describe('agency-provider', () => {
+  it('resolves the native Copilot selection afresh for headless and interactive Agency launches', () => {
+    const { spawner, requests } = fakeSpawner();
+    let native = 'C:\\native-one\\copilot.exe';
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner, baseEnv: { PATH: 'C:\\npm' }, importStore: fakeStore(),
+      nativeCopilot: () => native,
+    });
+    provider.startSession({ ...spec, kind: 'meta' });
+    expect(requests[0].command).toBe('agency');
+    expect(requests[0].env.PATH).toBe('C:\\native-one;C:\\npm');
+    native = 'C:\\native-two\\copilot.exe';
+    expect(provider.buildInteractiveCommand(spec).env.PATH).toBe('C:\\native-two;C:\\npm');
+  });
+
+  it('keeps strict zero-MCP isolation opt-in instead of blocking native Agency automation', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner, baseEnv: {}, importStore: fakeStore(),
+      mcpPolicy: 'isolated',
+    });
+    expect(() => provider.startSession({ ...spec, kind: 'meta' })).toThrow(/Agency.*MCP/);
+    expect(requests).toHaveLength(0);
+    expect(() => provider.startSession(spec)).not.toThrow();
+    expect(requests).toHaveLength(1);
+  });
+
   it('reports its id and lists configured models', async () => {
     const { spawner } = fakeSpawner();
     const provider = createAgencyProvider(agencyDefaults, {
@@ -89,38 +115,38 @@ describe('agency-provider', () => {
     expect(req.env.PATH).toBe('/bin');
   });
 
-  it('disables MCP servers in the passthrough for meta sessions', () => {
+  it('rejects unverified isolated meta launches without blocking normal native configuration', () => {
     const { spawner, requests } = fakeSpawner();
     const provider = createAgencyProvider(agencyDefaults, {
       spawner,
       baseEnv: {},
       importStore: fakeStore(),
-      mcpServerNames: (session) => {
-        expect(session.cwd).toBe('/work');
-        return ['github'];
-      },
+      mcpPolicy: 'isolated',
     });
 
-    provider.startSession({ ...spec, kind: 'meta' });
-    const req = requests[0];
-    expect(req.args).toContain('--disable-builtin-mcps');
-    expect(req.args).toEqual(
-      expect.arrayContaining(['--disable-mcp-server', 'github']),
-    );
+    expect(() => provider.startSession({ ...spec, kind: 'meta' })).toThrow(/Agency.*MCP/);
+    expect(requests).toHaveLength(0);
   });
 
-  it('only evaluates workspace MCP policy for meta work and stamps the actual provider identity', () => {
+  it('runs native meta sessions with text-only tool denial and preserves provider identity', () => {
     const { spawner, requests } = fakeSpawner();
     const provider = createAgencyProvider(agencyDefaults, {
       spawner, baseEnv: { STUDIO_PROVIDER_ID: 'wrong' }, importStore: fakeStore(),
-      mcpServerNames: () => { throw new Error('Unverified overlay'); },
+      mcpPolicy: 'native',
     });
     expect(() => provider.startSession(spec)).not.toThrow();
-    expect(() => provider.startSession({ ...spec, kind: 'meta' })).toThrow('Unverified overlay');
+    expect(() => provider.startSession({ ...spec, kind: 'meta', noTools: true })).not.toThrow();
+    expect(requests[1].input).toBe(spec.prompt);
+    expect(requests[1].args).not.toContain(spec.prompt);
+    expect(requests[1].args).not.toContain('-p');
+    expect(requests[1].args.slice(requests[1].args.indexOf('--allow-all-tools'), requests[1].args.indexOf('--allow-all-tools') + 2))
+      .toEqual(['--allow-all-tools', '--available-tools']);
+    expect(requests[1].args).not.toContain('--deny-tool');
+    expect(requests[1].args).not.toContain('--disable-builtin-mcps');
     expect(requests[0].env.STUDIO_PROVIDER_ID).toBe('agency');
     expect(provider.buildInteractiveCommand!(spec).env.STUDIO_PROVIDER_ID).toBe('agency');
     const plain = createAgencyProvider(agencyDefaults, { spawner, baseEnv: {}, importStore: fakeStore() });
-    expect(() => plain.startSession({ ...spec, kind: 'meta' })).toThrow(/suppression cannot be verified/);
+    expect(() => plain.startSession({ ...spec, kind: 'meta' })).not.toThrow();
   });
 
   it('buildInteractiveCommand wraps interactive args in the agency passthrough', () => {

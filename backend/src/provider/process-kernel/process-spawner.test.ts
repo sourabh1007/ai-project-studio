@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   createProcessSpawner,
   type RawChildProcess,
@@ -18,6 +19,7 @@ class FakeStream implements RawStream {
 
 class FakeChild implements RawChildProcess {
   pid?: number;
+  stdin?: RawChildProcess['stdin'];
   stdout: FakeStream | null;
   stderr: FakeStream | null;
   killed = false;
@@ -48,6 +50,39 @@ class FakeChild implements RawChildProcess {
 const clock = createClock(() => 0);
 
 describe('process-spawner', () => {
+  it('delivers an exact multiline task above the Windows argv limit on stdin and closes the pipe', async () => {
+    const input = ('a "quoted" path\\file\n\u00e9\u4e16\u754c\u{1f600}\n').repeat(4000);
+    const lines: string[] = [];
+    const handle = createProcessSpawner(clock).spawn({ command: process.execPath,
+      args: ['-e', "const c=require('node:crypto').createHash('sha256');process.stdin.on('data',x=>c.update(x));process.stdin.on('end',()=>console.log(c.digest('hex')));"],
+      env: process.env as Record<string, string>, input });
+    handle.onStdoutLine((line) => lines.push(line));
+    expect(await handle.done).toBe(0);
+    expect(lines).toEqual([createHash('sha256').update(input).digest('hex')]);
+  });
+  it.each(['error', 'throw'] as const)('reports stdin %s and terminates only its owned child without leaking task text', async (failure) => {
+    const child = new FakeChild();
+    let onError: (() => void) | undefined;
+    child.stdin = { on: (_event, callback) => { onError = () => callback(new Error('secret task')); },
+      end: () => { if (failure === 'throw') throw new Error('secret task'); } };
+    const handle = createProcessSpawner(clock, () => child).spawn({ command: 'x', args: [], env: {}, input: 'secret task' });
+    const errors: string[] = [];
+    handle.onStderrLine((line) => errors.push(line));
+    if (failure === 'error') onError!();
+    await Promise.resolve();
+    expect(child.killed).toBe(true);
+    expect(errors).toEqual(['Provider could not receive the task on standard input.']);
+    child.close(1);
+    expect(await handle.done).toBe(1);
+  });
+  it('fails delivery when a spawned process has no input pipe instead of leaving it waiting', async () => {
+    const handle = createProcessSpawner(clock).spawn({ command: process.execPath,
+      args: ['-e', 'setInterval(()=>{},1000)'], env: process.env as Record<string, string>, stdin: 'ignore', input: 'task' });
+    const errors: string[] = [];
+    handle.onStderrLine((line) => errors.push(line));
+    expect(await handle.done).not.toBe(0);
+    expect(errors).toContain('Provider could not receive the task on standard input.');
+  });
   it('pumps stdout/stderr lines, flushes trailing text, and resolves done', async () => {
     const child = new FakeChild();
     const spawner = createProcessSpawner(clock, () => child);
@@ -135,7 +170,9 @@ describe('process-spawner', () => {
     const handle = spawner.spawn({ command: 'missing-cli', args: [], env: {} });
 
     const exits: (number | null)[] = [];
+    const diagnostics: string[] = [];
     handle.onExit((c) => exits.push(c));
+    handle.onStderrLine((line) => diagnostics.push(line));
 
     child.error(Object.assign(new Error('spawn missing-cli ENOENT'), { code: 'ENOENT' }));
 
@@ -143,6 +180,7 @@ describe('process-spawner', () => {
     expect(code).toBeNull();
     expect(exits).toEqual([null]);
     expect(handle.snapshot().phase).toBe('exited');
+    expect(diagnostics).toContain('Could not start provider process: spawn missing-cli ENOENT');
   });
 
   it('does not manufacture exit proof for an error after a process has started', async () => {
@@ -168,7 +206,9 @@ describe('process-spawner', () => {
     const handle = spawner.spawn({ command: 'copilot.cmd', args: ['--version'], env: {} });
 
     const exits: (number | null)[] = [];
+    const diagnostics: string[] = [];
     handle.onExit((c) => exits.push(c));
+    handle.onStderrLine((line) => diagnostics.push(line));
     // The synthetic child exposes a no-op kill and ignores non-error events.
     expect(() => handle.kill()).not.toThrow();
 
@@ -176,6 +216,7 @@ describe('process-spawner', () => {
     expect(code).toBeNull();
     expect(exits).toEqual([null]);
     expect(handle.snapshot().phase).toBe('exited');
+    expect(diagnostics).toContain('Could not start provider process: spawn EINVAL');
   });
 
   it('ignores a close event that arrives after a spawn error already settled done', async () => {
@@ -200,7 +241,9 @@ describe('process-spawner', () => {
     const handle = spawner.spawn({ command: 'x', args: [], env: {} });
 
     const exits: (number | null)[] = [];
+    const diagnostics: string[] = [];
     handle.onExit((c) => exits.push(c));
+    handle.onStderrLine((line) => diagnostics.push(line));
 
     child.close(0);
     child.error(new Error('late error after exit'));
@@ -208,5 +251,6 @@ describe('process-spawner', () => {
     const code = await handle.done;
     expect(code).toBe(0);
     expect(exits).toEqual([0]);
+    expect(diagnostics).toEqual([]);
   });
 });

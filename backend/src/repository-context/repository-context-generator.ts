@@ -92,11 +92,13 @@ export function createRepositoryContextGenerator(deps: {
     repositoryId: string,
     repositoryPath: string,
     prompt: string,
+    promptRef: string,
   ): Promise<string> => {
     const content = await deps.executor.execute({
       repositoryId,
       repositoryPath,
       prompt,
+      promptRefs: [promptRef],
       maxOutputChars: deps.config.maxOutputChars,
     });
     const normalized = normalizeRepositoryContext(content, deps.config);
@@ -116,6 +118,7 @@ export function createRepositoryContextGenerator(deps: {
             request.repositoryId,
             request.repositoryPath,
             buildRepositoryAnalysisPrompt(request.evidence, deps.config),
+            'repositoryContext.analysisPromptTemplate',
           ),
         };
       }
@@ -139,6 +142,7 @@ export function createRepositoryContextGenerator(deps: {
                 chunkEvidence(request.evidence, chunk),
                 deps.config,
               ),
+              'repositoryContext.chunkPromptTemplate',
             ),
           );
         } catch (error) {
@@ -152,6 +156,7 @@ export function createRepositoryContextGenerator(deps: {
           request.repositoryId,
           request.repositoryPath,
           buildRepositorySynthesisPrompt(summaries, deps.config),
+          'repositoryContext.synthesisPromptTemplate',
         ),
       };
     },

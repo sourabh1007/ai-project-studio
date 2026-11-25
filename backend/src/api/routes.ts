@@ -35,6 +35,8 @@ import type { SummaryStore } from '../summarizer/summary-store-port.js';
 import type { WorkspaceAdmin } from '../workspace/workspace-admin-service.js';
 import type { AgencyStatus } from '../agency-bootstrap/agency-bootstrapper.js';
 import { createAgencyRoutes } from './agency-controller.js';
+import { createPromptUsageRoutes } from './prompt-usage-controller.js';
+import type { PromptUsageRepo } from '../meta/prompt-usage-contract.js';
 import { createHealthRoutes, type HealthControllerDeps } from './health-controller.js';
 import { createSystemHealthRoutes } from './system-health-controller.js';
 import type { HealthReportService } from '../health/health-contract.js';
@@ -107,6 +109,7 @@ import type { SkillUsageRepo } from '../skill-usage/skill-usage-contract.js';
 import type { SkillUsageConfig } from '../skill-usage/config.js';
 import { createFeatureTasksRoutes } from './feature-tasks-controller.js';
 import { createPlannerRoutes } from './planner-controller.js';
+import { createPlannerTrackingRoutes, type PlannerTrackingRoutesDeps } from './planner-tracking-controller.js';
 import { createPlannerSummaryRoutes } from './planner-summary-controller.js';
 import { createFeatureTreeRoutes } from './feature-tree-controller.js';
 import { createPrReviewRoutes } from './pr-review-controller.js';
@@ -201,6 +204,7 @@ export interface ApiRoutesDeps {
   removeSessionSkill?: (sessionId: string, skillId: string) => void;
   tasks: FeatureTasksService;
   planner: PlannerService;
+  plannerTracking?: PlannerTrackingRoutesDeps;
   plannerSummarizer: PlannerSummarizer;
   taskLookup: Pick<FeatureTasksRepo, 'get'>;
   tree: FeatureTreeService;
@@ -235,6 +239,7 @@ export interface ApiRoutesDeps {
   /** Live warm metasession pool status for the Settings page. */
   metaPools: () => MetaPoolsStatus;
   metaOperations: MetaOperationsControllerDeps;
+  promptUsage?: PromptUsageRepo;
   /** Live-resizes the shared warm pool (no restart), returning status. */
   resizeMetaPool: (size: number) => MetaPoolsStatus;
   /**
@@ -365,6 +370,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createAggregateRoutes({ analytics: deps.aggregates, summary: deps.usageSummary }),
     ...createUsageDetailRoutes({ usageDetail: deps.usageDetail }),
     ...createMcpUsageRoutes({
+      microsoftSignedIn: deps.microsoftSignedIn,
       mcpUsage: deps.mcpUsage,
       clock: deps.clock,
       controlToken: deps.controlToken,
@@ -388,6 +394,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...(deps.skillUsage ? createSkillUsageRoutes(deps.skillUsage) : []),
     ...createFeatureTasksRoutes({ tasks: deps.tasks }),
     ...createPlannerRoutes({ planner: deps.planner }),
+    ...(deps.plannerTracking ? createPlannerTrackingRoutes(deps.plannerTracking) : []),
     ...createPlannerSummaryRoutes({ plannerSummarizer: deps.plannerSummarizer }),
     ...createFeatureTreeRoutes({ tree: deps.tree }),
     ...createPrReviewRoutes({
@@ -397,7 +404,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       prDescriptions: deps.prDescriptions,
       prFeatures: deps.prFeatures,
     }),
-    ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard, reviewQueue: deps.reviewQueue }),
+    ...createReviewBoardRoutes({ reviewBoard: deps.reviewBoard, reviewQueue: deps.reviewQueue, prComments: deps.prComments }),
     ...createNewTaskRoutes({ newTask: deps.newTask }),
     ...createBugBashRoutes({ bugBash: deps.bugBash }),
     ...createAgentRoutes({ agents: deps.agents, operations: deps.operations }),
@@ -435,7 +442,11 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       schema: deps.configSchema,
       current: deps.currentConfig,
     }),
-    ...createMetaOperationsRoutes(deps.metaOperations),
+    ...createMetaOperationsRoutes({ ...deps.metaOperations, microsoftSignedIn: deps.microsoftSignedIn }),
+    ...(deps.promptUsage ? createPromptUsageRoutes({
+      usage: deps.promptUsage, maxEvents: deps.metaOperations.config.maxPageSize,
+      microsoftSignedIn: deps.microsoftSignedIn,
+    }) : []),
     ...createMetaPoolsRoutes({
       status: deps.metaPools,
       resize: deps.resizeMetaPool,

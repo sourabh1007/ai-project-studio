@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { ApiError } from '../../lib/api.js';
@@ -10,10 +10,11 @@ import type {
 } from '../../lib/types.js';
 import { Button, EmptyState, ErrorText, Modal } from '../../components/ui.js';
 import { Loader, Spinner } from '../../components/loading.js';
-import { RepoIcon } from '../../components/icons.js';
+import { RefreshIcon, RepoIcon } from '../../components/icons.js';
 import { GithubSignInModal } from '../github/github-signin.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
-import { describeAzureConnection } from '../../lib/azure.js';
+import { azureOrganization, describeAzureConnection, parseAzureOrganizations, AZURE_ORGANIZATIONS_STORAGE_KEY } from '../../lib/azure.js';
+import { AZURE_AUTH_CHANGED_EVENT } from '../../hooks/use-microsoft-identity.js';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
 
@@ -72,6 +73,55 @@ export function RepoPicker({
   const [githubSignin, setGithubSignin] = useState(false);
   const [azureSigningIn, setAzureSigningIn] = useState(false);
   const [azureSigninError, setAzureSigninError] = useState<string | null>(null);
+  const [connectedOrgs, setConnectedOrgs] = useState<string[]>([]);
+  const [checkingOrgs, setCheckingOrgs] = useState(false);
+  const [orgCheckError, setOrgCheckError] = useState<string | null>(null);
+  const [orgChecks, setOrgChecks] = useState(0);
+  const azureLocation = describeAzureConnection(orgDraft);
+
+  useEffect(() => {
+    if (provider !== 'azure-devops') return;
+    let active = true;
+    setCheckingOrgs(true);
+    setOrgCheckError(null);
+    void (async () => {
+      let candidates: string[];
+      try {
+        candidates = parseAzureOrganizations(
+          window.localStorage.getItem(AZURE_ORGANIZATIONS_STORAGE_KEY) ?? '',
+          window.localStorage.getItem(ORG_STORAGE_KEY) ?? '',
+        );
+        if (active) setConnectedOrgs((existing) => existing.filter((entry) => candidates.includes(entry)));
+      } catch {
+        if (active) { setOrgCheckError('Saved organizations could not be read. You can still enter an organization or repository URL.'); setCheckingOrgs(false); }
+        return;
+      }
+      for (const candidate of candidates) {
+        if (!active) return;
+        try {
+          const result = await api.getAzureStatus(candidate);
+          if (!active) return;
+          setConnectedOrgs((existing) => result.authenticated
+            ? existing.includes(candidate) ? existing : [...existing, candidate]
+            : existing.filter((entry) => entry !== candidate));
+        } catch {
+          if (active) setOrgCheckError('Some organization checks are unavailable. Retry to refresh the signed-in list.');
+        }
+      }
+      if (active) setCheckingOrgs(false);
+    })();
+    return () => { active = false; };
+  }, [api, provider, orgChecks]);
+
+  useEffect(() => {
+    const refresh = () => setOrgChecks((value) => value + 1);
+    window.addEventListener(AZURE_AUTH_CHANGED_EVENT, refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener(AZURE_AUTH_CHANGED_EVENT, refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, []);
 
   const remote = useAsync<RemoteRepo[]>(
     () =>
@@ -89,7 +139,8 @@ export function RepoPicker({
     remote.cause instanceof ApiError && remote.cause.status === 401;
 
   async function signInAzure() {
-    const target = describeAzureConnection(org || orgDraft).org ?? '';
+    const requested = orgDraft.trim() || org;
+    const target = describeAzureConnection(requested).org ?? '';
     if (azureSigningIn || !target) {
       return;
     }
@@ -98,7 +149,16 @@ export function RepoPicker({
     try {
       const result = await api.azureSignIn(target);
       if (result.authenticated) {
-        setOrg(target);
+        const signedInOrg = azureOrganization(target);
+        if (signedInOrg) {
+          setConnectedOrgs((existing) => existing.includes(signedInOrg) ? existing : [...existing, signedInOrg]);
+          try {
+            const saved = parseAzureOrganizations(window.localStorage.getItem(AZURE_ORGANIZATIONS_STORAGE_KEY) ?? '', readSavedOrg());
+            window.localStorage.setItem(AZURE_ORGANIZATIONS_STORAGE_KEY, JSON.stringify([...new Set([...saved, signedInOrg])]));
+          } catch { /* The confirmed connection remains selectable in this window. */ }
+          window.dispatchEvent(new Event(AZURE_AUTH_CHANGED_EVENT));
+        }
+        setOrg(requested);
         remote.reload();
       } else {
         setAzureSigninError(
@@ -130,11 +190,14 @@ export function RepoPicker({
     } catch {
       /* storage unavailable; listing still works for this session */
     }
-    setOrgDraft(next);
+    const location = parsed.project || parsed.repo ? orgDraft.trim() : next;
+    setOrgDraft(location);
+    setAzureSigninError(null);
     setFilter(
       parsed.repo ? (parsed.project ? `${parsed.project}/${parsed.repo}` : parsed.repo) : '',
     );
-    setOrg(next);
+    if (location === org) remote.reload();
+    else setOrg(location);
   }
 
   if (selected) {
@@ -188,6 +251,30 @@ export function RepoPicker({
         </div>
 
         {provider === 'azure-devops' && (
+          <>
+          <label className="field-hint" htmlFor="repo-azure-organization">Signed-in organization</label>
+          <div className="repo-org-row">
+            <select id="repo-azure-organization" className="input"
+              value={connectedOrgs.includes(azureOrganization(org) ?? '') ? azureOrganization(org)! : ''}
+              disabled={checkingOrgs && connectedOrgs.length === 0}
+              onChange={(event) => {
+                const next = event.target.value;
+                setOrgDraft(next);
+                setOrg(next);
+                setFilter('');
+                setAzureSigninError(null);
+                try { window.localStorage.setItem(ORG_STORAGE_KEY, next); } catch { /* Selection still works without storage. */ }
+              }}>
+              <option value="">{checkingOrgs ? 'Checking signed-in organizations...' : 'Select an organization'}</option>
+              {connectedOrgs.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+            </select>
+            <Button variant="ghost" ariaLabel="Refresh organizations" title="Refresh signed-in organizations" disabled={checkingOrgs}
+              onClick={() => setOrgChecks((value) => value + 1)}><RefreshIcon size={13} /> Refresh</Button>
+          </div>
+          {orgCheckError && <p className="field-hint" role="status">{orgCheckError}</p>}
+          {!checkingOrgs && !orgCheckError && connectedOrgs.length === 0 && <p className="field-hint">
+            No saved organization is currently signed in. Add one under Accounts or use the field below.
+          </p>}
           <div className="repo-org-row">
             <input
               className="input"
@@ -198,14 +285,22 @@ export function RepoPicker({
                   loadAzure();
                 }
               }}
-              placeholder="Azure DevOps organization"
+              placeholder="Or enter an organization or full repository URL"
               aria-label="Azure DevOps organization"
+              aria-describedby="azure-repo-location-help"
               spellCheck={false}
             />
             <Button onClick={loadAzure} disabled={!orgDraft.trim()}>
               Load
             </Button>
           </div>
+          <p id="azure-repo-location-help" className="field-hint">
+            {azureLocation.org
+              ? `Organization: ${azureLocation.org}${azureLocation.project ? ` / Project: ${azureLocation.project}` : ''}${azureLocation.repo ? ` / Repository: ${azureLocation.repo}` : ''}. `
+              : ''}
+            Use the organization, not the project name, or paste the full repository URL.
+          </p>
+          </>
         )}
 
         {visibleRepos.length > 0 && (
@@ -215,7 +310,7 @@ export function RepoPicker({
               type="search"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search repositories"
+              placeholder={provider === 'azure-devops' ? 'Search project or repository names' : 'Search repositories'}
               aria-label="Search repositories"
               spellCheck={false}
             />
@@ -227,6 +322,7 @@ export function RepoPicker({
           {!remote.loading && authRequired && (
             <RepoAuthPrompt
               provider={provider}
+              azureOrg={describeAzureConnection(org).org}
               message={displayError}
               azureSigningIn={azureSigningIn}
               azureSigninError={azureSigninError}
@@ -282,11 +378,12 @@ export function RepoPicker({
 
 /**
  * Shown when the repo listing fails with a 401 (the GitHub or Azure DevOps
- * login is missing or expired). Explains that the provider isn't configured and
- * offers a one-click sign-in instead of a bare error string.
+ * login is missing or expired). Azure access is scoped to the requested org,
+ * not a statement about every Azure connection.
  */
 function RepoAuthPrompt({
   provider,
+  azureOrg,
   message,
   azureSigningIn,
   azureSigninError,
@@ -294,6 +391,7 @@ function RepoAuthPrompt({
   onAzureSignIn,
 }: {
   provider: RepoProvider;
+  azureOrg: string | null;
   message: string | null;
   azureSigningIn: boolean;
   azureSigninError: string | null;
@@ -304,7 +402,10 @@ function RepoAuthPrompt({
   return (
     <div className="repo-auth-prompt" role="status">
       <RepoIcon size={20} />
-      <p className="repo-auth-title">{label} isn’t connected</p>
+      <p className="repo-auth-title">{provider === 'azure-devops' ? 'Azure DevOps access needs attention' : `${label} isn’t connected`}</p>
+      {provider === 'azure-devops' && azureOrg && <p className="repo-auth-message">
+        Requested organization: {azureOrg}. Other Azure DevOps connections are unchanged.
+      </p>}
       <p className="repo-auth-message">
         {message ??
           `Sign in to ${label} to browse and add your repositories.`}

@@ -73,7 +73,270 @@ function api(getReviewBoard: ReturnType<typeof vi.fn>) {
   };
 }
 
+describe('live same-run snapshots', () => {
+  async function runningReview() {
+    const saved = board('live-snapshot', 'sha');
+    saved.perspectives.push({ ...saved.perspectives[0], id: 'testing', name: 'Testing' });
+    saved.run = { id: 'live-run', revision: 1, status: 'running', options: {}, providerId: 'cli', model: 'auto',
+      perspectiveIds: ['security', 'testing'], headSha: 'sha', graphGeneratedAt: 'graph', startedAt: '2026-01-01',
+      failures: {}, context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [] } };
+    const c = api(vi.fn(async () => structuredClone(saved)));
+    const end = deferred<void>();
+    const started = deferred<void>();
+    let send!: (event: ReviewBoardPerspectiveEvent) => void;
+    c.analyzeReviewBoardPerspectives.mockImplementation(async (_id, emit) => {
+      send = emit;
+      started.resolve();
+      await end.promise;
+    });
+    const store = createReviewBoardRunStore();
+    const run = store.analyze(saved.featureId, c, { waitForGraph: false });
+    await started.promise;
+    c.getReviewBoard.mockClear();
+    return { saved, c, store, send, end, run };
+  }
+
+  it('coalesces reads and displays saved narratives while preserving progress, clocks and human decisions', async () => {
+    const { saved, c, store, send, end, run } = await runningReview();
+    send({ type: 'analyzing', perspectiveId: 'testing' });
+    const before = store.getState(saved.featureId);
+    const snapshot = deferred<ReviewBoard>();
+    c.getReviewBoard.mockReturnValueOnce(snapshot.promise);
+    const first = store.refreshLive(saved.featureId, c);
+    const second = store.refreshLive(saved.featureId, c);
+    expect(c.getReviewBoard).toHaveBeenCalledOnce();
+    snapshot.resolve({ ...saved, run: { ...saved.run!, revision: 2 }, problem: 'Retries duplicate a charge.',
+      solution: 'Reuse the operation key.\n\n```text\n[Retry] -> [Original receipt]\n```' });
+    await Promise.all([first, second]);
+    const current = store.getState(saved.featureId);
+    expect(current.board?.solution).toContain('[Retry] -> [Original receipt]');
+    expect(current.board?.problem).toBe('Retries duplicate a charge.');
+    expect(current.running).toBe(true);
+    expect(current.progress).toBe(before.progress);
+    expect(current.timing).toBe(before.timing);
+    expect(current.preparationTiming).toBe(before.preparationTiming);
+    expect(current.signoff).toBe(before.signoff);
+    expect(current.resolutions).toBe(before.resolutions);
+    expect(c.analyzeReviewBoardPerspectives).toHaveBeenCalledOnce();
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+    end.resolve(); await run;
+  });
+
+  it('does not let a slower snapshot erase a newer streamed finding or earlier available analysis', async () => {
+    const { saved, c, store, send, end, run } = await runningReview();
+    const result = {
+      perspectiveId: 'security', runId: 'live-run', skipped: false, skipReason: null, summary: 'Inspected retries',
+      rationale: [], checks: [],
+      perspective: { ...saved.perspectives[0], findings: [{
+        id: 'security/retry', perspectiveId: 'security', title: 'Retry duplicates the charge',
+        detail: 'Reuse an operation key.', severity: 'medium' as const, status: 'warning' as const, evidence: [],
+      }] },
+    };
+    const delayed = deferred<ReviewBoard>();
+    c.getReviewBoard.mockReturnValueOnce(delayed.promise);
+    const refresh = store.refreshLive(saved.featureId, c);
+    send({ type: 'analyzed', analysis: result });
+    delayed.resolve({ ...saved, solution: 'Use idempotency.', uniqueFindings: [] });
+    await refresh;
+    expect(store.getState(saved.featureId).board?.perspectives[0].findings).toEqual(result.perspective.findings);
+    expect(store.getState(saved.featureId).board?.uniqueFindings).toBeUndefined();
+    expect(store.getState(saved.featureId).progress.security.status).toBe('done');
+    await store.refreshLive(saved.featureId, c);
+    expect(store.getState(saved.featureId).board?.analyses?.security).toBe(result);
+    end.resolve(); await run;
+  });
+
+  it.each(['run', 'head', 'graph', 'revision', 'review timestamp', 'perspectives'] as const)(
+    'rejects a live snapshot with a different or stale %s',
+    async (change) => {
+      const { saved, c, store, end, run } = await runningReview();
+      const stale = structuredClone(saved);
+      stale.solution = 'Do not display this stale explanation.';
+      if (change === 'run') stale.run!.id = 'another-run';
+      if (change === 'head') stale.pull.headSha = 'another-head';
+      if (change === 'graph') stale.run!.graphGeneratedAt = 'another-graph';
+      if (change === 'revision') stale.run!.revision = 0;
+      if (change === 'review timestamp') stale.reviewUpdatedAt = 'another-review';
+      if (change === 'perspectives') stale.perspectives[1].id = 'another-perspective';
+      const before = store.getState(saved.featureId);
+      c.getReviewBoard.mockResolvedValueOnce(stale);
+      await store.refreshLive(saved.featureId, c);
+      expect(store.getState(saved.featureId)).toBe(before);
+      end.resolve(); await run;
+    },
+  );
+
+  it('keeps live results on a failed read, retries on the next refresh, and ignores a reply after reset', async () => {
+    const { saved, c, store, end, run } = await runningReview();
+    const before = store.getState(saved.featureId);
+    c.getReviewBoard.mockRejectedValueOnce(new Error('Temporarily offline'));
+    await store.refreshLive(saved.featureId, c);
+    expect(store.getState(saved.featureId)).toBe(before);
+    c.getReviewBoard.mockResolvedValueOnce({ ...saved, solution: 'Recovered explanation.' });
+    await store.refreshLive(saved.featureId, c);
+    expect(store.getState(saved.featureId).board?.solution).toBe('Recovered explanation.');
+    const delayed = deferred<ReviewBoard>();
+    c.getReviewBoard.mockReturnValueOnce(delayed.promise);
+    const refresh = store.refreshLive(saved.featureId, c);
+    store.reset(saved.featureId, c);
+    delayed.resolve({ ...saved, solution: 'Old cancelled explanation.' });
+    await refresh;
+    expect(store.getState(saved.featureId).board?.solution).not.toBe('Old cancelled explanation.');
+    end.resolve(); await run;
+  });
+});
+
 describe('automatic bulk review scheduling and timing', () => {
+  it('retains missing stream-result errors after reloading a newer revision of the same run', async () => {
+    let saved = board('stream-gap', 'sha');
+    saved.perspectives.push({ ...saved.perspectives[0], id: 'testing', name: 'Testing' });
+    saved.run = { id: 'r', revision: 1, status: 'running', options: {}, providerId: 'cli', model: 'auto',
+      perspectiveIds: ['security', 'testing'], headSha: 'sha', graphGeneratedAt: 'graph', startedAt: '2026-01-01',
+      failures: {}, context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [] } };
+    const c = api(vi.fn(async () => structuredClone(saved)));
+    c.analyzeReviewBoardPerspectives.mockImplementation(async (_id, emit) => {
+      const result = { perspectiveId: 'security', perspective: saved.perspectives[0], runId: 'r',
+        skipped: false, skipReason: null, summary: 'Inspected security', rationale: [], checks: [] };
+      saved = { ...saved, run: { ...saved.run!, revision: 2 }, analyses: { security: result } };
+      emit({ type: 'analyzed', analysis: result });
+    });
+    const store = createReviewBoardRunStore();
+    await store.analyze(saved.featureId, c);
+    expect(store.getState(saved.featureId).progress.testing).toMatchObject({
+      status: 'error', error: 'The review stream ended without a result for this perspective. Retry the review.',
+    });
+    expect(store.getState(saved.featureId).progress.security.status).toBe('done');
+    await store.load(saved.featureId, c, true);
+    expect(store.getState(saved.featureId).progress).toEqual({});
+    expect(store.getState(saved.featureId).board?.analyses?.security.summary).toBe('Inspected security');
+  });
+  it('does not let perspective retries cancel a full review that is still preparing', async () => {
+    const saved = board('preparing-retry', 'sha');
+    saved.run = { id: 'r', revision: 1, status: 'failed', options: {}, providerId: 'cli', model: 'auto',
+      perspectiveIds: ['security'], headSha: 'sha', graphGeneratedAt: 'graph', startedAt: '2026-01-01',
+      failures: { security: 'Failed' }, context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [] } };
+    const c = api(vi.fn(async () => structuredClone(saved)));
+    const ready = deferred<{ changeGraph: { status: string } }>();
+    c.getPrReview.mockReturnValue(ready.promise);
+    c.analyzeReviewBoardPerspective.mockResolvedValue({ perspectiveId: 'security',
+      perspective: saved.perspectives[0], skipped: false, skipReason: null, summary: null, rationale: [], checks: [] });
+    const store = createReviewBoardRunStore();
+    await store.load(saved.featureId, c);
+    const full = store.analyze(saved.featureId, c);
+    const retry = store.retryFailed(saved.featureId, c);
+    const single = store.analyzeOne(saved.featureId, 'security', c);
+    ready.resolve({ changeGraph: { status: 'ready' } });
+    await Promise.all([full, retry, single]);
+    expect(c.analyzeReviewBoardPerspectives).toHaveBeenCalledOnce();
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+  });
+  it('resumes a saved failed review through the authoritative stream and reloads its completed run', async () => {
+    let saved = board('resume-saved', 'sha');
+    saved.run = { id: 'r', revision: 1, status: 'failed', options: {}, providerId: 'cli', model: 'auto',
+      perspectiveIds: ['security'], headSha: 'sha', graphGeneratedAt: 'graph', startedAt: '2026-01-01',
+      failures: { security: 'Failed' }, context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: '', warnings: [] } };
+    const c = api(vi.fn(async () => structuredClone(saved)));
+    c.analyzeReviewBoardPerspectives.mockImplementation(async (_id, emit) => {
+      const result = { perspectiveId: 'security', perspective: saved.perspectives[0], runId: 'r',
+        skipped: false, skipReason: null, summary: 'Inspected security', rationale: [], checks: [] };
+      saved = { ...saved, run: { ...saved.run!, revision: 2, status: 'completed', failures: {} }, analyses: { security: result } };
+      emit({ type: 'analyzed', analysis: result });
+    });
+    const store = createReviewBoardRunStore();
+    await store.load(saved.featureId, c);
+    await store.retryFailed(saved.featureId, c);
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+    expect(c.analyzeReviewBoardPerspectives).toHaveBeenCalledOnce();
+    expect(store.getState(saved.featureId).board?.run?.status).toBe('completed');
+    expect(store.getState(saved.featureId).board?.analyses?.security.summary).toBe('Inspected security');
+  });
+  it('prepares saved options only after refreshed change evidence and reloads after the stream', async () => {
+    const store = createReviewBoardRunStore();
+    const calls: string[] = [];
+    const value = board('fresh', 'sha');
+    const c = {
+      ...api(vi.fn(async () => { calls.push('board'); return value; })),
+      pullLatestPrReview: vi.fn(async () => { calls.push('pull'); return {} as never; }),
+      getPrReview: vi.fn(async () => { calls.push('graph'); return { changeGraph: { status: 'ready' } } as never; }),
+      configureReviewBoard: vi.fn(async () => { calls.push('options'); return value; }),
+      analyzeReviewBoardPerspectives: vi.fn(async (_id: string, emit: (event: ReviewBoardPerspectiveEvent) => void) => {
+        calls.push('stream');
+        emit({ type: 'analyzed', analysis: {
+          perspectiveId: 'security', perspective: value.perspectives[0], skipped: false, skipReason: null,
+          summary: null, rationale: [], checks: [],
+        } });
+      }),
+    };
+    const options = { model: 'named', businessContext: 'Keep existing behavior.' };
+    await store.analyze('fresh', c, { takeLatest: true, fresh: true, reviewOptions: options });
+    expect(calls).toEqual(['pull', 'graph', 'options', 'board', 'stream', 'board']);
+    expect(c.configureReviewBoard).toHaveBeenCalledWith('fresh', options);
+  });
+
+  it('keeps preparation visible and timed through context collection and authoritative reload', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const store = createReviewBoardRunStore();
+    const value = board('context-progress', 'sha');
+    const prepared = deferred<ReviewBoard>();
+    const loaded = deferred<ReviewBoard>();
+    const c = { ...api(vi.fn().mockResolvedValue(value)), configureReviewBoard: vi.fn(() => prepared.promise) };
+    await store.load(value.featureId, c);
+    c.getPrReview.mockImplementation(async () => {
+      now.mockReturnValue(2000);
+      return { changeGraph: { status: 'ready' } };
+    });
+    const running = store.analyze(value.featureId, c, { fresh: true });
+    await flush();
+    expect(store.getState(value.featureId).prep).toMatchObject({ active: true, message: expect.stringMatching(/context/i) });
+    expect(store.getState(value.featureId).board).toEqual(value);
+    expect(c.analyzeReviewBoardPerspectives).not.toHaveBeenCalled();
+    await store.retryFailed(value.featureId, c);
+    await store.analyzeOne(value.featureId, 'security', c);
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+    c.getReviewBoard.mockReturnValueOnce(loaded.promise);
+    now.mockReturnValue(3000);
+    prepared.resolve(value);
+    await flush();
+    expect(store.getState(value.featureId).prep.active).toBe(true);
+    now.mockReturnValue(4000);
+    loaded.resolve(value);
+    await running;
+    expect(store.getState(value.featureId).prep.active).toBe(false);
+    expect(store.getState(value.featureId).preparationTiming).toEqual({ startedAt: 1000, finishedAt: 4000 });
+    expect(c.analyzeReviewBoardPerspectives).toHaveBeenCalledOnce();
+    now.mockRestore();
+  });
+
+  it('preserves the prior board and exposes stale-evidence preparation failures without starting inference', async () => {
+    const store = createReviewBoardRunStore();
+    const value = board('context-stale', 'old-sha');
+    const c = { ...api(vi.fn().mockResolvedValue(value)), configureReviewBoard: vi.fn().mockRejectedValue(
+      new Error('The remote head changed. Pull the latest evidence before reviewing.')) };
+    await store.load(value.featureId, c);
+    await store.analyze(value.featureId, c, { fresh: true });
+    expect(store.getState(value.featureId)).toMatchObject({
+      board: value, running: false, prep: { active: false, error: 'The remote head changed. Pull the latest evidence before reviewing.' },
+    });
+    expect(c.pullLatestPrReview).not.toHaveBeenCalled();
+    expect(c.analyzeReviewBoardPerspectives).not.toHaveBeenCalled();
+  });
+
+  it('persists publication independently from disposition and keeps the dismissal reason', () => {
+    window.localStorage.clear();
+    const store = createReviewBoardRunStore();
+    store.setFindingPublication('publication', 'finding', 'posted');
+    expect(store.getState('publication').resolutions.finding).toBeUndefined();
+    store.setFindingResolution('publication', 'finding', 'ignored', 'Not reachable from the changed path.');
+    const restored = createReviewBoardRunStore().getState('publication');
+    expect(restored.publications.finding).toBe('posted');
+    expect(restored.resolutions.finding).toBe('ignored');
+    expect(restored.resolutionReasons.finding).toBe('Not reachable from the changed path.');
+    store.setFindingResolution('publication', 'finding', null);
+    expect(store.getState('publication').publications.finding).toBe('posted');
+    expect(store.getState('publication').resolutionReasons.finding).toBeUndefined();
+    window.localStorage.clear();
+  });
+
   it('recovers interrupted change evidence once before automatic analysis, then settles durable intent', async () => {
     const store = createReviewBoardRunStore();
     const c = {
@@ -420,6 +683,50 @@ describe('review-board-run-store approval identity', () => {
     store.reset(initial.featureId, c);
     await store.load(initial.featureId, c, true);
     expect(store.getState(initial.featureId).analyzed).toBe(false);
+  });
+
+  it('restores saved failures, retries only failed lenses and clears errors when a new run replaces them', async () => {
+    const initial = board('saved-failures', 'sha');
+    initial.perspectives.push({ ...initial.perspectives[0], id: 'testing', name: 'Testing' });
+    initial.run = {
+      id: 'saved-run', revision: 1, status: 'failed', options: { model: 'auto' },
+      providerId: 'cli', model: 'auto', perspectiveIds: ['security', 'testing'],
+      context: { fingerprint: 'context', skills: [], businessRequirements: '', evidence: 'diff', warnings: [] },
+      headSha: 'sha', graphGeneratedAt: 'graph', startedAt: '2026-01-01',
+      failures: { security: 'Native engine startup failed', retired: 'Old perspective failure' },
+    };
+    const testing = {
+      perspectiveId: 'testing', perspective: initial.perspectives[1], runId: 'saved-run',
+      skipped: false, skipReason: null, summary: 'Reviewed tests', rationale: [], checks: [],
+    };
+    initial.analyses = { testing };
+    const c = api(vi.fn().mockResolvedValue(initial));
+    const store = createReviewBoardRunStore();
+    await store.load(initial.featureId, c);
+    await store.load(initial.featureId, c);
+    expect(store.getState(initial.featureId).progress).toMatchObject({
+      security: { status: 'error', error: 'Native engine startup failed' },
+      testing: { status: 'done' },
+    });
+    expect(store.getState(initial.featureId).progress.retired).toBeUndefined();
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+    expect(c.analyzeReviewBoardPerspectives).not.toHaveBeenCalled();
+    c.analyzeReviewBoardPerspectives.mockImplementation(async (_id, emit) => {
+      const analysis = { ...testing, perspectiveId: 'security', perspective: initial.perspectives[0] };
+      initial.run = { ...initial.run!, status: 'completed', revision: 2, failures: {} };
+      initial.analyses = { testing, security: analysis };
+      emit({ type: 'analyzed', analysis });
+      emit({ type: 'analyzed', analysis: testing });
+    });
+    await store.retryFailed(initial.featureId, c);
+    expect(c.analyzeReviewBoardPerspective).not.toHaveBeenCalled();
+    expect(c.analyzeReviewBoardPerspectives).toHaveBeenCalledOnce();
+    expect(store.getState(initial.featureId).progress).toMatchObject({
+      security: { status: 'done', error: null }, testing: { status: 'done' },
+    });
+    initial.run = { ...initial.run!, id: 'new-run', status: 'prepared', revision: 1 };
+    await store.load(initial.featureId, c);
+    expect(store.getState(initial.featureId).progress).toEqual({});
   });
 
   it('preserves actual same-revision results when another tab reloads the blank board', async () => {

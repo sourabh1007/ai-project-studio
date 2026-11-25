@@ -28,6 +28,7 @@ files:
   - backend-control.cjs
   - backend-identity.cjs
   - backend-failure-log.cjs
+  - renderer-recovery.cjs
   - startup-splash.cjs
   - node-provision.cjs
   - provision-io.cjs

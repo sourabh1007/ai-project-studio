@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { Insights, ExecutionTimeline } from '../monitoring/insights.js';
+import { OperationInsights } from '../meta-operations/operation-insights.js';
+import { useAutomationReadiness } from '../../app/automation-readiness.js';
 import type { LiveState } from '../../lib/stream.js';
 import { useAutomations } from '../../hooks/use-automations.js';
 import type {
@@ -32,6 +35,7 @@ import {
   snapIntervalMs,
   runStatusLabel,
   runSummary,
+  describeCheckFailure,
 } from '../../lib/automation-view.js';
 import {
   Card,
@@ -189,7 +193,7 @@ export function AutomationsView({ live }: { live: LiveState }) {
   }[] = [
     {
       key: 'running',
-      title: 'Running',
+      title: 'Watching',
       icon: <ActivityIcon size={14} />,
       items: groups.running,
     },
@@ -338,6 +342,8 @@ function AutomationCard({
   onInterval: (id: string, intervalMs: number) => void;
 }) {
   const api = useApi();
+  const readiness = useAutomationReadiness();
+  const canExecute = (!isAiAction(automation) && automation.condition.type !== 'ai-verdict') || readiness?.canAttempt !== false;
   const [logsOpen, setLogsOpen] = useState(false);
   const [signInOpen, setSignInOpen] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
@@ -354,8 +360,9 @@ function AutomationCard({
   const percent = progressPercent(automation);
   const eta = etaLabel(automation);
   const currentCall = activeStepLabel(automation);
+  const checkFailed = automation.progress?.startsWith('Check failed:') === true;
   const editable = canCancel(automation.status);
-  const runnable = canRunNow(automation);
+  const runnable = canExecute && canRunNow(automation);
   const microsoftSignedIn = useMicrosoftSignedIn();
   const signInKind = signInKindForAutomation(automation, microsoftSignedIn);
   const authActionsBlocked = needsAuth(automation.status);
@@ -422,7 +429,7 @@ function AutomationCard({
         };
 
   function requestRunNow() {
-    if (authActionsBlocked) {
+    if (authActionsBlocked || !canExecute) {
       return;
     }
     if (automation.uncertainty) {
@@ -434,6 +441,7 @@ function AutomationCard({
   }
 
   async function signInAndResume() {
+    if (!canExecute) return;
     setSignInError(null);
     if (signInKind === 'github') {
       setSignInOpen(true);
@@ -473,7 +481,8 @@ function AutomationCard({
         <span className="automation-card-name" title={automation.name}>
           {automation.name}
         </span>
-        <StatusBadge status={statusLabel(automation.status)} />
+        <StatusBadge status={statusLabel(automation.status)}
+          label={automation.status === 'active' ? 'Watching' : statusLabel(automation.status)} />
       </div>
 
       <p className="automation-check" title={describeCheck(automation.check)}>
@@ -515,7 +524,20 @@ function AutomationCard({
       )}
 
       {automation.progress && !needsAuth(automation.status) && (
-        <p className="automation-progress">{automation.progress}</p>
+        checkFailed ? (
+          <div className="automation-auth" role="status">
+            <strong>Last check failed</strong>
+            <span>{describeCheckFailure(automation.progress)}</span>
+            {automation.status === 'active' && <span>
+              The monitor is still watching; this is not a result for the task being monitored.
+              {automation.nextRunAt ? ' Another check is scheduled.' : ''}
+            </span>}
+            <details>
+              <summary>Technical details</summary>
+              <p>{automation.progress}</p>
+            </details>
+          </div>
+        ) : <p className="automation-progress">{automation.progress}</p>
       )}
 
       {automation.uncertainty && (
@@ -536,7 +558,7 @@ function AutomationCard({
           </span>
           {signInError && <ErrorText error={signInError} />}
           <div className="automation-auth-actions">
-            <button
+            {canExecute && <button
               type="button"
               className="primary-button"
               onClick={() => void signInAndResume()}
@@ -548,7 +570,7 @@ function AutomationCard({
               }
             >
               <SignInIcon size={14} /> {signingIn ? 'Signing in…' : 'Sign in'}
-            </button>
+            </button>}
           </div>
         </div>
       ) : (
@@ -603,7 +625,7 @@ function AutomationCard({
             <PauseIcon size={14} /> Pause
           </button>
         )}
-        {canResume(automation.status) && (
+        {canExecute && canResume(automation.status) && (
           <button
             type="button"
             className="ghost-button tone-resume"
@@ -669,6 +691,13 @@ function AutomationCard({
 
       {logsOpen && (
         <div className="automation-logs">
+          <Insights title="Execution insights">{() => <>
+            <ExecutionTimeline title="Automation occurrences" items={(runs ?? []).map((run) => ({
+              id: run.id, label: new Date(run.startedAt).toLocaleString(), status: run.phase === 'finished' ? run.status : run.phase,
+              start: Date.parse(run.startedAt), end: run.endedAt ? Date.parse(run.endedAt) : null,
+            }))} />
+            <OperationInsights scope={{ automationId: automation.id }} />
+          </>}</Insights>
           <ErrorText error={logsError} />
           {logsLoading && (
             <p className="automation-logs-empty">Loading logs…</p>
@@ -700,6 +729,12 @@ function AutomationCard({
                     {run.report && (
                       <pre className="automation-run-report">{run.report}</pre>
                     )}
+                    {run.phase === 'finished' && run.status === 'failed' && run.detail && (
+                      <details>
+                        <summary>Technical details</summary>
+                        <pre className="automation-run-report">{run.detail}</pre>
+                      </details>
+                    )}
                   </div>
                 </li>
               ))}
@@ -708,7 +743,7 @@ function AutomationCard({
         </div>
       )}
 
-      {confirmingRetry && automation.uncertainty && (
+      {canExecute && confirmingRetry && automation.uncertainty && (
         <ConfirmDialog
           title="Retry a possibly duplicated action?"
           icon={<WarningIcon size={18} />}
@@ -745,7 +780,7 @@ function AutomationCard({
         />
       )}
 
-      {signInOpen && (
+      {canExecute && signInOpen && (
         <GithubSignInModal
           onClose={() => setSignInOpen(false)}
           onAuthenticated={() => {

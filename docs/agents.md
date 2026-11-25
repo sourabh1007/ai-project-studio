@@ -12,11 +12,15 @@ roll-up, and the management view generically. Three ship today:
 | **Bug Bash** | the feature has a linked repository | Generates edge-case test scenarios, runs them across a tester team, and reports what breaks ([Bug Bash](features/bug-bash.md)). |
 
 Attachment prerequisites do not guarantee AI execution readiness. All three
-agents require a metasession-capable active CLI: choose **Copilot** or **Claude
-with a safe/nonmanaged profile and supported API/cloud credentials**. Agency
-is currently **interactive-only for IDE-launched AI automation** because its
-native MCP overlays cannot be verifiably isolated. Installation/sign-in does
-not remove this intentional restriction.
+agents require a ready metasession-capable active CLI: **Copilot**, **Agency
+(Microsoft internal only)** or **Claude Code**. Agency and Claude use native CLI
+configuration, sign-in and permissions by default; explicitly running an agent
+can start native MCP servers or request authentication. Text-only turns retain
+no-tools restrictions. `mcp.headlessPolicies` makes zero-MCP isolation optional
+per provider, with Copilot isolated by default. Isolated Agency refuses
+unverifiable native overlays; isolated Claude requires supported API/cloud
+credentials and no conflicting managed MCP policy. Restart after changing
+execution policy. Studio never collects native sign-in credentials.
 
 An agent:
 

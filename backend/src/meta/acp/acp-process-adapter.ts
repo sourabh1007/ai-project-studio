@@ -43,6 +43,7 @@ export interface AcpSpawnOptions {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   spawnImpl?: AcpSpawn;
+  resolveCommand?: (command: { command: string; args: string[] }) => { command: string; args: string[] };
 }
 
 const MAX_DIAGNOSTIC_LINES = 12;
@@ -150,7 +151,10 @@ export class AcpProcessAdapter implements AcpProcess {
       ...(options.baseArgs ?? ['--acp', '--disable-builtin-mcps']),
       ...optionalCommandArgsSchema.parse(options.extraArgs ?? []),
     ];
-    this.child = (options.spawnImpl ?? defaultSpawn)(options.executable, args, {
+    const command = options.resolveCommand
+      ? options.resolveCommand({ command: options.executable, args })
+      : { command: options.executable, args };
+    this.child = (options.spawnImpl ?? defaultSpawn)(command.command, command.args, {
       env: options.env ?? process.env,
       cwd: options.cwd,
       stdio: 'pipe',

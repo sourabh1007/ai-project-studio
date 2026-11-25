@@ -12,14 +12,15 @@ import { useIdeUsage } from './hooks/use-ide-usage.js';
 import { usePlanUsage } from './hooks/use-plan-usage.js';
 import { liveSignal } from './lib/stream.js';
 import { formatAic } from './lib/format.js';
-import { TopLoadingBar } from './components/top-loading-bar.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { BrandMark } from './components/brand-mark.js';
 import { Tooltip } from './components/tooltip.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
 import { OperationNoticeBanner } from './components/operation-notice-banner.js';
+import { FeatureDeletionStatus } from './features/workspace/feature-deletion-status.js';
 import { AgencyUpdatePopup } from './features/updates/agency-update-popup.js';
 import { OPEN_PROMPT_SETTINGS_EVENT } from './features/settings/prompts-nav.js';
+import { OPEN_PROMPT_USAGE_EVENT, type PromptUsageTarget } from './features/usage/prompt-usage.js';
 import { OPEN_TOOL_OWNER_EVENT } from './features/settings/tools-section.js';
 import { ViewSkeleton } from './components/view-skeleton.js';
 import { useMicrosoftIdentitySync } from './hooks/use-microsoft-identity.js';
@@ -124,6 +125,7 @@ const SHORTCUT_BINDINGS: ShortcutBinding[] = [
 ];
 
 export function App() {
+  const [promptUsageTarget, setPromptUsageTarget] = useState<PromptUsageTarget>();
   const api = useApi();
   useEffect(() => {
     let cancelled = false;
@@ -308,6 +310,16 @@ export function App() {
   // A prompt "Edit in Settings" deep-link can fire from any view (e.g. the
   // review board inside the workspace); switch to Settings so its own listener
   // can open the Prompts & Commands tab and scroll to the entry.
+  useEffect(() => {
+    const onPromptUsage = (event: Event) => {
+      const promptRef: unknown = (event as CustomEvent<unknown>).detail;
+      if (typeof promptRef !== 'string' || promptRef.length === 0 || promptRef.length > 200) return;
+      setPromptUsageTarget((previous) => ({ promptRef, nonce: (previous?.nonce ?? 0) + 1 }));
+      setView('usage');
+    };
+    window.addEventListener(OPEN_PROMPT_USAGE_EVENT, onPromptUsage);
+    return () => window.removeEventListener(OPEN_PROMPT_USAGE_EVENT, onPromptUsage);
+  }, [setView]);
   useEffect(() => {
     const onOpenPromptSettings = () => setView('settings');
     window.addEventListener(
@@ -610,10 +622,10 @@ export function App() {
         </nav>
 
         <div className="ide-content">
-          <TopLoadingBar />
           <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
           <UpdateBanner />
           <OperationNoticeBanner />
+          <FeatureDeletionStatus />
           {internalAgencyAvailable && <AgencyUpdatePopup />}
           <div className="view-transition" key={view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
@@ -645,7 +657,7 @@ export function App() {
                 </div>
               ) : view === 'usage' ? (
                 <div className="settings-pane">
-                  <UsageView signal={liveSignal(live)} />
+                  <UsageView signal={liveSignal(live)} promptTarget={promptUsageTarget} />
                 </div>
               ) : view === 'agents' ? (
                 <div className="settings-pane">

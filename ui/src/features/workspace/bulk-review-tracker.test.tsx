@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
 import { BulkReviewTracker, deriveCard } from './bulk-review-tracker.js';
 import { createReviewBoardRunStore, reviewBoardRunStore, type ReviewBoardRunState } from '../review-board-page/review-board-run-store.js';
 import { initialLiveState } from '../../lib/stream.js';
+import type { ApiClient } from '../../lib/api.js';
+import type { PrReview } from '../../lib/types.js';
 
-vi.mock('../../app/api-context.js', () => ({ useApi: () => ({}) }));
+const trackerApi = vi.hoisted(() => ({} as Partial<ApiClient>));
+vi.mock('../../app/api-context.js', () => ({ useApi: () => trackerApi }));
 vi.mock('../../hooks/use-agent-usage.js', () => ({
   useAgentUsage: () => ({
     aic: 12.5, operations: 1, unknownOperations: 0, running: false, snapshots: [],
@@ -31,9 +34,46 @@ function state(statuses: string[], boardStatuses?: string[]): ReviewBoardRunStat
 
 describe('bulk review completion', () => {
   beforeEach(() => {
+    delete trackerApi.getPrReview;
     vi.spyOn(reviewBoardRunStore, 'load').mockResolvedValue();
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+  it('loads deferred import metadata without queueing or reporting failure, and opens manual preparation', async () => {
+    const review = { featureId: 'deferred', analysisDeferred: true, timestamps: { updatedAt: '2026-01-01' } } as PrReview;
+    trackerApi.getPrReview = vi.fn().mockResolvedValue(review);
+    vi.spyOn(reviewBoardRunStore, 'getState').mockReturnValue({
+      ...state([]), loadError: 'The graph is not ready.',
+    });
+    const enqueue = vi.spyOn(reviewBoardRunStore, 'enqueueBulk').mockImplementation(() => {});
+    const open = vi.fn();
+    const prs = [{ featureId: 'deferred', number: 7, title: 'Imported review' }];
+    const view = render(<BulkReviewTracker prs={prs} onOpen={open} />);
+    await screen.findByText('Imported · review later');
+    expect(screen.getByText('1 review later')).toBeTruthy();
+    expect(screen.getByText('0 queued')).toBeTruthy();
+    expect(screen.getByText('Open to prepare this review. No AI has started.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Retry review/ })).toBeNull();
+    expect(reviewBoardRunStore.load).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /#7/ }));
+    expect(open).toHaveBeenCalledWith('deferred');
+    view.unmount();
+    render(<BulkReviewTracker prs={prs} />);
+    await screen.findByText('Imported · review later');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('continues reading existing reviews when import metadata fails and honors newer streamed deferral state', async () => {
+    trackerApi.getPrReview = vi.fn().mockRejectedValue(new Error('offline'));
+    const prs = [{ featureId: 'f1', number: 7, title: 'Review' }];
+    const view = render(<BulkReviewTracker prs={prs} />);
+    await waitFor(() => expect(reviewBoardRunStore.load).toHaveBeenCalledWith('f1', expect.anything()));
+    view.rerender(<BulkReviewTracker prs={prs} live={{
+      ...initialLiveState,
+      prReviews: { f1: { analysisDeferred: true, timestamps: { updatedAt: '2026-01-02' } } as PrReview },
+    }} />);
+    expect(screen.getByText('Imported · review later')).toBeTruthy();
+  });
   it.each([
     [['done', 'done'], 'done', 2],
     [['done', 'error'], 'failed', 1],

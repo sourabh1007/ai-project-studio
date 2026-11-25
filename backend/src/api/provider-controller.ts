@@ -3,12 +3,13 @@ import type { ProviderExecutionPolicy, ProviderSelectionSnapshot } from '../prov
 import { ConflictError, NotFoundError, ValidationError } from '../kernel/error-types.js';
 import { z } from 'zod';
 import type { Route } from './http-contract.js';
+import type { AutomationReadiness, ProviderFeature } from '../provider-features/provider-features.js';
 
 export interface ProviderControllerDeps {
   executionPolicy?: ProviderExecutionPolicy;
   drainProviderWork?: () => Promise<void>;
   updateInternalAgencyOptIn?: (enabled: boolean) => void;
-  /** Explicit operator availability preference, never inferred from identity or network. */
+  /** Injected availability policy, separate from identity and authorization. */
   isProviderEligible?: (id: string) => boolean;
   registry: ProviderRegistry;
   /** Reports the default provider and each provider's install state. */
@@ -32,7 +33,8 @@ export interface ProviderBootstrapInfo {
     installAvailable?: boolean;
     configNamespace?: string;
     /** Interactive availability does not imply safe automated/headless execution. */
-    automation?: { supported: boolean; reason: string | null };
+    automation?: AutomationReadiness;
+    features?: ProviderFeature[];
   }>;
   /** Legacy identity display only; never an eligibility decision. */
   microsoftSignedIn?: boolean;
@@ -82,6 +84,8 @@ export function createProviderRoutes(deps: ProviderControllerDeps): Route[] {
               installed: installState.get(provider.id)?.installed ?? false,
               ...(installState.get(provider.id)?.automation
                 ? { automation: installState.get(provider.id)!.automation } : {}),
+              ...(installState.get(provider.id)?.features
+                ? { features: installState.get(provider.id)!.features } : {}),
             })),
         };
       },

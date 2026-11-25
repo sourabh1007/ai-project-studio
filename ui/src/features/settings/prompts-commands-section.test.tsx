@@ -6,6 +6,7 @@ import type { ConfigResponse } from '../../lib/types.js';
 import { PROMPT_CATALOG } from './prompts-catalog.js';
 import { promptAnchorId } from './prompts-nav.js';
 import { PromptsCommandsSection } from './prompts-commands-section.js';
+import { OPEN_PROMPT_USAGE_EVENT } from '../usage/prompt-usage.js';
 
 afterEach(() => {
   cleanup();
@@ -40,6 +41,27 @@ it('renders the prompts heading by default', async () => {
   render(<ApiProvider value={client as unknown as ApiClient}><PromptsCommandsSection /></ApiProvider>);
   expect(screen.getByRole('heading', { name: 'Prompts & Commands' })).toBeInTheDocument();
   expect(await screen.findByText('Task Plans')).toBeInTheDocument();
+});
+
+it('adds read-only Usage links to every catalog prompt without starting AI or changing settings', async () => {
+  const client = api();
+  const navigation = vi.fn();
+  window.addEventListener(OPEN_PROMPT_USAGE_EVENT, navigation);
+  try {
+    render(<ApiProvider value={client as unknown as ApiClient}><PromptsCommandsSection /></ApiProvider>);
+    await screen.findByText('Task Plans');
+    for (const section of PROMPT_CATALOG) {
+      for (const field of section.fields) {
+        fireEvent.click(screen.getByRole('button', { name: `View ${field.label} prompt usage` }));
+        expect(navigation.mock.calls.at(-1)?.[0].detail).toBe(`${field.namespace}.${field.key}`);
+      }
+      for (const entry of section.readOnly ?? []) {
+        fireEvent.click(screen.getByRole('button', { name: `View ${entry.label} prompt usage` }));
+        expect(navigation.mock.calls.at(-1)?.[0].detail).toBe(entry.id);
+      }
+    }
+    expect(client.updateConfig).not.toHaveBeenCalled();
+  } finally { window.removeEventListener(OPEN_PROMPT_USAGE_EVENT, navigation); }
 });
 
 it('renders prompt editors without the heading when embedded and saves edits', async () => {

@@ -7,6 +7,7 @@ import {
   closeWorkspaceTabsToRight,
   emptyWorkspaceTabsState,
   featureSubtreeIds,
+  groupWorkspaceTabs,
   normalizeWorkspaceTabsState,
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
@@ -17,6 +18,22 @@ import {
   setWorkspaceSplit,
   type WorkspaceTab,
 } from './workspace-tabs.js';
+
+it('groups only matching review kinds and keeps a stable first-appearance order without mutating saved tabs', () => {
+  const item = feature({ id: 'f' });
+  const reviews: WorkspaceTab[] = [
+    { kind: 'review-board', id: 'r1', label: 'One', feature: item },
+    { kind: 'feature', id: 'f', label: 'Feature', feature: item },
+    { kind: 'agent', id: 'r2', label: 'Two', agentId: 'review-board', attachmentId: 'a', feature: item },
+    { kind: 'pr-review-tracker', id: 'b1', label: 'Batch', feature: item, prs: [] },
+    { kind: 'agent', id: 'other', label: 'Other', agentId: 'new-task', attachmentId: 'b', feature: item },
+  ];
+  expect(groupWorkspaceTabs(reviews).map((group) => [group.label, group.tabs.map((tab) => tab.id)])).toEqual([
+    ['Reviews', ['r1', 'r2']], [null, ['f']], ['Review batches', ['b1']], [null, ['other']],
+  ]);
+  expect(reviews.map((tab) => tab.id)).toEqual(['r1', 'f', 'r2', 'b1', 'other']);
+  expect(groupWorkspaceTabs([])).toEqual([]);
+});
 
 function feature(overrides: Partial<Feature> & { id: string }): Feature {
   return {

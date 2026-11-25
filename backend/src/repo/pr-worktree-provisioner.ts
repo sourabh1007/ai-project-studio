@@ -119,6 +119,10 @@ export function describeFetchFailure(
   favouriteNote?: string | null,
 ): string {
   const text = stderr.trim();
+  if (/not a git repository|cannot change to|invalid gitfile|not a gitfile/i.test(text)) {
+    return `The local repository at "${input.repoLocalPath}" is unavailable or is not a valid Git checkout. ` +
+      'Restore that checkout or correct its path in Settings, then retry. This is a local checkout problem, not an AI provider failure.';
+  }
   if (input.provider === 'azure-devops' && /couldn't find remote ref/i.test(text)) {
     const base =
       `Couldn't fetch pull request #${input.number}: its source branch ` +
@@ -274,6 +278,50 @@ export async function provisionPrWorktree(
   const tracksPullRequest = trackFetch.code === 0;
   const branch = tracksPullRequest ? input.sourceBranch : `pr-${input.number}`;
 
+  const reusableCheckout = async (path: string): Promise<boolean> => {
+    // An empty prefix proves this is the root without comparing Windows path aliases.
+    const root = await deps.git(['-C', path, 'rev-parse', '--is-inside-work-tree', '--show-prefix']);
+    if (root.code !== 0 || root.stdout.trim() !== 'true') return false;
+    const status = await deps.git(['-C', path, 'status', '--porcelain', '-z', '--untracked-files=normal']);
+    return status.code === 0 && status.stdout.length === 0;
+  };
+
+  const recoverCheckout = async (): Promise<ProvisionedWorktree> => {
+    onStatus?.({ phase: 'preparing', message:
+      'The existing review checkout cannot be safely reused. Keeping its files and preparing a separate review checkout…' });
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const suffix = `${input.number}-${headSha.slice(0, 12)}-${attempt}`;
+      const recoveredPath = join(dirname(worktreePath), `${basename(input.repoLocalPath)}-pr-r${suffix}`);
+      const recoveredBranch = `pr-recovery-${suffix}`;
+      if (deps.pathExists(recoveredPath)) {
+        if (!(await reusableCheckout(recoveredPath))) continue;
+        const head = await deps.git(['-C', recoveredPath, 'rev-parse', 'HEAD']);
+        const currentBranch = await deps.git(['-C', recoveredPath, 'symbolic-ref', '--quiet', '--short', 'HEAD']);
+        if (head.code === 0 && head.stdout.trim() === headSha && currentBranch.code === 0 &&
+            currentBranch.stdout.trim() === recoveredBranch) {
+          return { worktreePath: recoveredPath, branch: recoveredBranch, headSha, tracksPullRequest: false };
+        }
+        continue;
+      }
+      const existingBranch = await deps.git(['-C', input.repoLocalPath, 'show-ref', '--verify', '--quiet', `refs/heads/${recoveredBranch}`]);
+      if (existingBranch.code === 0) continue;
+      if (existingBranch.code !== 1) {
+        throw new ValidationError('Could not verify a safe recovery branch. ' +
+          describeFetchFailure(input, existingBranch.stderr));
+      }
+      const added = await deps.git(['-c', 'core.longpaths=true', '-c', 'checkout.workers=0',
+        '-C', input.repoLocalPath, 'worktree', 'add', '-b', recoveredBranch, recoveredPath, headSha]);
+      if (added.code !== 0) {
+        if (/already exists|already checked out|used by worktree/i.test(added.stderr)) continue;
+        throw new ValidationError(describeWorktreeFailure(added.stderr,
+          'Could not create a replacement review checkout. Existing files were preserved.'));
+      }
+      return { worktreePath: recoveredPath, branch: recoveredBranch, headSha, tracksPullRequest: false };
+    }
+    throw new ValidationError('No unused recovery checkout is available. Existing files were preserved. ' +
+      'Remove an unused managed worktree through Settings, then retry.');
+  };
+
   // When the PR's head branch is already checked out in another worktree
   // (commonly the repo's own primary working tree), git refuses to reset it
   // ("used by worktree at '<path>'"). Rather than failing, review that checkout
@@ -283,11 +331,12 @@ export async function provisionPrWorktree(
     inUsePath: string,
   ): Promise<ProvisionedWorktree> => {
     const rev = await deps.git(['-C', inUsePath, 'rev-parse', 'HEAD']);
+    if (rev.code !== 0 || !rev.stdout.trim()) return recoverCheckout();
     return {
       worktreePath: inUsePath,
       branch,
       tracksPullRequest,
-      headSha: rev.code === 0 ? rev.stdout.trim() : headSha,
+      headSha: rev.stdout.trim(),
     };
   };
 
@@ -299,6 +348,7 @@ export async function provisionPrWorktree(
   // simply ignored, so it is safe to always pass.
   onStatus?.({ phase: 'preparing', message: 'Preparing the review worktree…' });
   if (deps.pathExists(worktreePath)) {
+    if (!(await reusableCheckout(worktreePath))) return recoverCheckout();
     const checkout = await deps.git([
       '-c',
       'core.longpaths=true',
@@ -313,6 +363,7 @@ export async function provisionPrWorktree(
       headSha,
     ]);
     if (checkout.code !== 0) {
+      if (/not a git repository|cannot change to|invalid gitfile|not a gitfile/i.test(checkout.stderr)) return recoverCheckout();
       const inUse = checkedOutWorktreePath(checkout.stderr);
       if (inUse) {
         return reviewInPlace(inUse);

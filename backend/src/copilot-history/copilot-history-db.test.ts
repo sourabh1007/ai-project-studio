@@ -54,6 +54,13 @@ afterAll(() => {
 });
 
 describe('createCopilotHistoryDb', () => {
+  it('selects only the requested recent turns in ascending order, with bounded text projection', () => {
+    const source = createCopilotHistoryDb({ databasePath: dbPath });
+    expect(source.recentUserMessages!('s1', 1)).toEqual([
+      { turn_index: 1, user_message: 'Second query', assistant_response: null, timestamp: '2024-01-01T00:05:00Z' },
+    ]);
+    expect(source.recentUserMessages!('s1', 2).map((row) => row.turn_index)).toEqual([0, 1]);
+  });
   it('reports availability from the file on disk', () => {
     expect(createCopilotHistoryDb({ databasePath: dbPath }).available()).toBe(
       true,

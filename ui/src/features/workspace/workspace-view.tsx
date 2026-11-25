@@ -9,12 +9,12 @@ import { featureColor } from '../../lib/feature-color.js';
 import { PaneResizer } from '../../components/pane-resizer.js';
 import { formatDateTime } from '../../lib/format.js';
 import { ApiProvider, useApi } from '../../app/api-context.js';
+import { useStartupPending } from '../../app/desktop-lifecycle.js';
 import { usePersistentState } from '../../hooks/use-persistent-state.js';
 import { clampNumber, isFiniteNumber } from '../../lib/persisted-state.js';
-import { EmptyState } from '../../components/ui.js';
-import { AiMagicIcon, CloseIcon, CollapseRightPanelIcon, MoreIcon, PopOutIcon, SplitViewIcon } from '../../components/icons.js';
+import { EmptyState, Modal } from '../../components/ui.js';
+import { AiMagicIcon, ChevronIcon, CloseIcon, CollapseSidebarIcon, CollapseRightPanelIcon, ExpandIcon, MoreIcon, PopOutIcon, PullRequestIcon, RestoreIcon, SplitViewIcon } from '../../components/icons.js';
 import { Tooltip } from '../../components/tooltip.js';
-import { Disclosure } from '../../components/disclosure.js';
 import { useAnimatedPresence } from '../../hooks/use-motion.js';
 import { SessionHistoryPane } from './session-history-pane.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
@@ -24,6 +24,7 @@ import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
+import { featureDeletionStore } from '../../lib/feature-deletion-store.js';
 import { AutomationBoundary } from '../../app/automation-readiness.js';
 import {
   closeWorkspaceTab,
@@ -32,6 +33,7 @@ import {
   closeWorkspaceTabsToRight,
   emptyWorkspaceTabsState,
   featureSubtreeIds,
+  groupWorkspaceTabs,
   isWorkspaceTabsState,
   openWorkspaceTab,
   reconcileWorkspaceTabsState,
@@ -132,6 +134,58 @@ export function WorkspaceView({
   );
 
   const tabs = tabState.tabs;
+  const [restoring, setRestoring] = useState(true);
+  useStartupPending(restoring);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const fullscreenLayout = useRef<{ activeId: string | null; splitId: string | null } | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenLeftOpen, setFullscreenLeftOpen] = useState(false);
+  const [fullscreenRightOpen, setFullscreenRightOpen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
+  const [sessionDetailsId, setSessionDetailsId] = useState<string | null>(null);
+  const [terminalDiagnosticsId, setTerminalDiagnosticsId] = useState<string | null>(null);
+  const detailsTab = tabs.find((tab) => tab.id === sessionDetailsId);
+  const explorerOpen = fullscreen ? fullscreenLeftOpen : sidebarOpen;
+  const toggleExplorer = () => fullscreen ? setFullscreenLeftOpen((value) => !value) : onToggleSidebar();
+  useEffect(() => {
+    const changed = () => {
+      const active = document.fullscreenElement === workspaceRef.current;
+      setFullscreen(active);
+      if (!active && fullscreenLayout.current) {
+        const layout = fullscreenLayout.current;
+        fullscreenLayout.current = null;
+        setTabState((state) => {
+          const activeId = state.tabs.some((tab) => tab.id === layout.activeId) ? layout.activeId : state.activeId;
+          const splitId = layout.splitId !== activeId && state.tabs.some((tab) => tab.id === layout.splitId) ? layout.splitId : null;
+          return { ...state, activeId, splitId };
+        });
+      }
+    };
+    document.addEventListener('fullscreenchange', changed);
+    return () => document.removeEventListener('fullscreenchange', changed);
+  }, [setTabState]);
+  const toggleFullscreen = async (tabId?: string) => {
+    setFullscreenError(null);
+    setTabMenu(null);
+    try {
+      if (document.fullscreenElement === workspaceRef.current) {
+        await document.exitFullscreen();
+      } else {
+        fullscreenLayout.current = { activeId: tabState.activeId, splitId: tabState.splitId ?? null };
+        setFullscreenLeftOpen(false);
+        setFullscreenRightOpen(false);
+        if (!workspaceRef.current?.requestFullscreen) throw new Error('Fullscreen is unavailable in this window.');
+        await workspaceRef.current.requestFullscreen();
+        if (tabId) setTabState((state) => setWorkspaceSplit({ ...state, activeId: tabId }, state.splitId));
+      }
+    } catch (cause) {
+      if (document.fullscreenElement !== workspaceRef.current) fullscreenLayout.current = null;
+      setFullscreenError(cause instanceof Error ? cause.message : 'Fullscreen could not be changed. Retry from Tab actions.');
+    }
+  };
+  const [openTabGroups, setOpenTabGroups] = useState<Record<string, boolean>>({});
+  const tabGroups = groupWorkspaceTabs(tabs);
+  const orderedTabs = tabGroups.flatMap((group) => group.tabs);
   const [bootstrapProvider, setBootstrapProvider] = useState<string | null | undefined>(undefined);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const activeProvider = providerSwitch?.providerId ?? bootstrapProvider;
@@ -183,16 +237,16 @@ export function WorkspaceView({
   const tabButtons = useRef(new Map<string, HTMLButtonElement>());
   const pendingTabFocus = useRef<string | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const sidebarPresence = useAnimatedPresence(sidebarOpen, '--motion-panel-duration');
+  const sidebarPresence = useAnimatedPresence(explorerOpen, '--motion-panel-duration');
   useLayoutEffect(() => {
     const sidebar = sidebarRef.current;
     if (!sidebar) return;
-    sidebar.toggleAttribute('inert', !sidebarOpen);
-    if (!sidebarOpen && sidebar.contains(document.activeElement)) {
-      const explorerToggle = document.querySelector<HTMLButtonElement>('.activitybar [aria-label="Explorer"]');
+    sidebar.toggleAttribute('inert', !explorerOpen);
+    if (!explorerOpen && sidebar.contains(document.activeElement)) {
+      const explorerToggle = document.querySelector<HTMLButtonElement>(fullscreen ? '[aria-label="Show explorer"]' : '.activitybar [aria-label="Explorer"]');
       (explorerToggle ?? editorBodyRef.current)?.focus({ preventScroll: true });
     }
-  }, [sidebarOpen]);
+  }, [explorerOpen, fullscreen]);
   useLayoutEffect(() => {
     if (pendingTabFocus.current === null) return;
     const target = tabButtons.current.get(pendingTabFocus.current) ?? editorBodyRef.current;
@@ -201,6 +255,7 @@ export function WorkspaceView({
   }, [tabs, tabState.activeId]);
   const activeId = tabState.activeId;
   const [deletionRevision, setDeletionRevision] = useState(0);
+  useEffect(() => featureDeletionStore.subscribe(() => setDeletionRevision((revision) => revision + 1)), []);
   const knownFeatures = useRef<Feature[]>([]);
   const pendingImportedFeatures = useRef(new Map<string, Feature>());
   const knownAttachments = useRef(new Map<string, AttachedAgent['attachment']>());
@@ -261,10 +316,12 @@ export function WorkspaceView({
       sessionFeatureIds.length === 0 &&
       !hasRepoTabs
     ) {
+      setRestoring(false);
       return;
     }
 
     let active = true;
+    setRestoring(true);
     void (async () => {
       const [features, repos, sessionsByFeature, agentsByFeature] = await Promise.all([
         featureTabs.length > 0 || sessionFeatureIds.length > 0
@@ -354,7 +411,7 @@ export function WorkspaceView({
       setTabState((prev) =>
         reconcileWorkspaceTabsState(prev, { features, repos, sessionsByFeature, agentsByFeature, prReviews }),
       );
-    })();
+    })().finally(() => { if (active) setRestoring(false); });
 
     return () => {
       active = false;
@@ -490,10 +547,13 @@ export function WorkspaceView({
   }
 
   function closeTab(id: string) {
+    const close = (state: WorkspaceTabsState) => closeWorkspaceTab({
+      ...state, tabs: groupWorkspaceTabs(state.tabs).flatMap((group) => group.tabs),
+    }, id);
     if (tabButtons.current.get(id)?.closest('.tab')?.contains(document.activeElement)) {
-      pendingTabFocus.current = closeWorkspaceTab(tabState, id).activeId ?? '';
+      pendingTabFocus.current = close(tabState).activeId ?? '';
     }
-    setTabState((prev) => closeWorkspaceTab(prev, id));
+    setTabState(close);
   }
 
   // Right-click tab menu: bulk-close actions anchored at the cursor. `tabId` is
@@ -626,7 +686,7 @@ export function WorkspaceView({
 
   const active = tabs.find((t) => t.id === activeId) ?? null;
   const activeSessionId = active?.kind === 'session' ? active.session.id : null;
-  const splitId = tabState.splitId ?? null;
+  const splitId = fullscreen ? null : tabState.splitId ?? null;
   const splitTab = splitId ? tabs.find((t) => t.id === splitId) ?? null : null;
 
   function tabDisplayLabel(tab: WorkspaceTab): string {
@@ -650,23 +710,12 @@ export function WorkspaceView({
     if (tab.kind === 'session') {
       return (
         <div key={tab.session.id} className="session-editor">
-          <Disclosure className="session-record-details" summary="Session details">
-            <dl className="clarity-details-grid">
-              <dt>Session ID</dt><dd>{tab.session.id}</dd>
-              <dt>Provider</dt><dd>{tab.session.provider}</dd>
-              <dt>Recorded status</dt><dd>{tab.session.status}</dd>
-              <dt>Requested model</dt><dd>{tab.session.requestedModel || 'Provider default'}</dd>
-              <dt>Resolved model</dt><dd>{tab.session.resolvedModel || 'Not reported'}</dd>
-              <dt>Created</dt><dd>{formatDateTime(tab.session.createdAt || null)}</dd>
-              <dt>Started</dt><dd>{formatDateTime(tab.session.startedAt)}</dd>
-              <dt>Ended</dt><dd>{formatDateTime(tab.session.endedAt)}</dd>
-              <dt>Exit code</dt><dd>{tab.session.exitCode ?? 'Not reported'}</dd>
-            </dl>
-          </Disclosure>
           <Suspense fallback={<ViewSkeleton label="terminal" />}>
             {activeProvider !== undefined && tab.session.provider !== activeProvider
               ? <p>This session belongs to {tab.session.provider}. Its history is preserved. Choose that CLI to resume it.</p>
-              : <TerminalView sessionId={tab.session.id} />}
+              : <TerminalView sessionId={tab.session.id}
+                diagnosticsOpen={terminalDiagnosticsId === tab.session.id}
+                onCloseDiagnostics={() => setTerminalDiagnosticsId(null)} />}
           </Suspense>
         </div>
       );
@@ -746,21 +795,37 @@ export function WorkspaceView({
 
   return (
     <div
-      className={`workspace ${sidebarOpen ? '' : 'is-collapsed'}`.trim()}
+      ref={workspaceRef}
+      className={`workspace${explorerOpen ? '' : ' is-collapsed'}${fullscreen ? ' is-fullscreen' : ''}`}
       style={
-        sidebarOpen
+        explorerOpen
           ? ({ '--explorer-width': `${explorerWidth}px` } as CSSProperties)
           : undefined
       }
     >
       {switchError && <p role="alert">{switchError}</p>}
-      <div ref={sidebarRef} className={`workspace-explorer${sidebarOpen ? '' : ' is-exiting'}`}
-        aria-hidden={!sidebarOpen || undefined}>
+      {fullscreenError && <p role="alert" className="workspace-fullscreen-error">{fullscreenError}</p>}
+      {detailsTab?.kind === 'session' && <Modal title="Session details" onClose={() => setSessionDetailsId(null)}>
+        <dl className="clarity-details-grid">
+          <dt>Session ID</dt><dd>{detailsTab.session.id}</dd>
+          <dt>Provider</dt><dd>{detailsTab.session.provider}</dd>
+          <dt>Recorded status</dt><dd>{detailsTab.session.status}</dd>
+          <dt>Requested model</dt><dd>{detailsTab.session.requestedModel || 'Provider default'}</dd>
+          <dt>Resolved model</dt><dd>{detailsTab.session.resolvedModel || 'Not reported'}</dd>
+          <dt>Created</dt><dd>{formatDateTime(detailsTab.session.createdAt || null)}</dd>
+          <dt>Started</dt><dd>{formatDateTime(detailsTab.session.startedAt)}</dd>
+          <dt>Ended</dt><dd>{formatDateTime(detailsTab.session.endedAt)}</dd>
+          <dt>Exit code</dt><dd>{detailsTab.session.exitCode ?? 'Not reported'}</dd>
+        </dl>
+      </Modal>}
+      <div ref={sidebarRef} className={`workspace-explorer${explorerOpen ? '' : ' is-exiting'}`}
+        aria-hidden={!explorerOpen || undefined}>
       {sidebarPresence.present && (
           <ApiProvider value={explorerApi}>
             <Explorer
               live={live}
               activeSessionId={activeSessionId}
+              activeTab={tabs.find((tab) => tab.id === tabState.activeId) ?? null}
               names={names}
               onOpenSession={openSession}
               onOpenFeature={openFeature}
@@ -772,12 +837,12 @@ export function WorkspaceView({
               onRenameFeature={renameFeature}
               onDeleteFeature={deleteFeature}
               onDeleteSession={deleteSession}
-              onCollapse={onToggleSidebar}
+              onCollapse={toggleExplorer}
             />
           </ApiProvider>
       )}
       </div>
-      {sidebarOpen && (
+      {explorerOpen && (
           <PaneResizer
             className="explorer-resizer"
             label="Resize sidebar"
@@ -790,9 +855,19 @@ export function WorkspaceView({
       )}
 
       <section className="editor">
-        {tabs.length > 0 && (
-          <div className="tabs" role="tablist" aria-label="Workspace tabs">
-            {tabs.map((tab) => (
+        {(tabs.length > 0 || fullscreen) && (
+          <div className="workspace-tab-strip"><div className="tabs" role="tablist" aria-label="Workspace tabs">
+            {tabGroups.map((group) => {
+              const grouped = group.label !== null && group.tabs.length > 1;
+              const expanded = openTabGroups[group.id] ?? false;
+              return <div className={grouped ? 'tab-group' : 'tab-group-single'} key={group.id}>
+                {grouped && <button type="button" className="tab-group-toggle"
+                  aria-label={`${group.label} tabs (${group.tabs.length})`} aria-expanded={expanded}
+                  onClick={() => setOpenTabGroups((current) => ({ ...current, [group.id]: !expanded }))}>
+                  <PullRequestIcon size={14} /><span>{group.label}</span>
+                  <span className="tab-group-count">{group.tabs.length}</span><ChevronIcon size={12} open={expanded} />
+                </button>}
+                {group.tabs.filter((tab) => !grouped || expanded || tab.id === activeId || tab.id === splitId).map((tab) => (
               <div
                 key={tab.id}
                 className={`tab ${tab.id === activeId ? 'tab-active' : ''}`.trim()}
@@ -814,18 +889,20 @@ export function WorkspaceView({
                   }}
                   aria-selected={tab.id === activeId}
                   onKeyDown={(event) => {
-                    const index = tabs.findIndex((item) => item.id === tab.id);
+                    const index = orderedTabs.findIndex((item) => item.id === tab.id);
                     let next: WorkspaceTab | undefined;
-                    if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
-                    else if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
-                    else if (event.key === 'Home') next = tabs[0];
-                    else if (event.key === 'End') next = tabs[tabs.length - 1];
+                    if (event.key === 'ArrowRight') next = orderedTabs[(index + 1) % orderedTabs.length];
+                    else if (event.key === 'ArrowLeft') next = orderedTabs[(index - 1 + orderedTabs.length) % orderedTabs.length];
+                    else if (event.key === 'Home') next = orderedTabs[0];
+                    else if (event.key === 'End') next = orderedTabs[orderedTabs.length - 1];
                     else if (event.key === 'Delete') {
                       event.preventDefault();
                       closeTab(tab.id);
                     }
                     if (next) {
                       event.preventDefault();
+                      const target = tabGroups.find((item) => item.tabs.some((tab) => tab.id === next!.id))!;
+                      setOpenTabGroups((current) => ({ ...current, [target.id]: true }));
                       pendingTabFocus.current = next.id;
                       setTabState((prev) => setWorkspaceSplit({ ...prev, activeId: next.id }, prev.splitId));
                     }
@@ -899,23 +976,36 @@ export function WorkspaceView({
                   </button></Tooltip>
                 )}
               </div>
-            ))}
+            ))}</div>;
+            })}
           </div>
+          {fullscreen && <div className="workspace-fullscreen-controls" role="group" aria-label="Fullscreen controls">
+            <button type="button" className="tree-action" aria-label={explorerOpen ? 'Hide explorer' : 'Show explorer'}
+              title={explorerOpen ? 'Hide explorer' : 'Show explorer'} aria-pressed={explorerOpen} onClick={toggleExplorer}><CollapseSidebarIcon size={15} /></button>
+            <button type="button" className="tree-action" aria-label={fullscreenRightOpen ? 'Hide prompt history' : 'Show prompt history'}
+              title={fullscreenRightOpen ? 'Hide prompt history' : 'Show prompt history'} aria-pressed={fullscreenRightOpen}
+              disabled={!activeSessionId} onClick={() => setFullscreenRightOpen((value) => !value)}><CollapseRightPanelIcon size={15} /></button>
+            <button type="button" className="tree-action" aria-label="Exit fullscreen" title="Exit fullscreen (Esc)"
+              onClick={() => void toggleFullscreen()}><RestoreIcon size={15} /></button>
+          </div>}</div>
         )}
         {tabMenu &&
           (() => {
-            const index = tabs.findIndex((tab) => tab.id === tabMenu.tabId);
+            const index = orderedTabs.findIndex((tab) => tab.id === tabMenu.tabId);
             if (index < 0) {
               return null;
             }
             const hasLeft = index > 0;
-            const hasRight = index < tabs.length - 1;
+            const hasRight = index < orderedTabs.length - 1;
             const menuTabId = tabMenu.tabId;
             const runAction = (
               action: (state: WorkspaceTabsState, id: string) => WorkspaceTabsState,
             ) => {
-              pendingTabFocus.current = action(tabState, menuTabId).activeId ?? '';
-              setTabState((prev) => action(prev, menuTabId));
+              const run = (state: WorkspaceTabsState) => action({
+                ...state, tabs: groupWorkspaceTabs(state.tabs).flatMap((group) => group.tabs),
+              }, menuTabId);
+              pendingTabFocus.current = run(tabState).activeId ?? '';
+              setTabState(run);
               setTabMenu(null);
             };
             return (
@@ -939,6 +1029,24 @@ export function WorkspaceView({
                   if (next) { event.preventDefault(); next.focus(); }
                 }}
               >
+                <button type="button" role="menuitem" className="tab-context-item"
+                  onClick={() => void toggleFullscreen(menuTabId)}>
+                  <ExpandIcon size={14} />{fullscreen ? 'Exit fullscreen' : 'Fullscreen tab'}
+                </button>
+                {orderedTabs[index]?.kind === 'session' && <>
+                  <button type="button" role="menuitem" className="tab-context-item" onClick={() => {
+                    tabButtons.current.get(menuTabId)?.focus();
+                    setSessionDetailsId(menuTabId); setTabMenu(null);
+                  }}>Session details</button>
+                  <button type="button" role="menuitem" className="tab-context-item" onClick={() => {
+                    const tab = orderedTabs[index];
+                    if (tab?.kind === 'session') {
+                      setTabState((state) => ({ ...state, activeId: tab.id }));
+                      setTerminalDiagnosticsId(tab.session.id);
+                    }
+                    setTabMenu(null);
+                  }}>Terminal diagnostics</button>
+                </>}
                 <button
                   type="button"
                   role="menuitem"
@@ -1072,7 +1180,8 @@ export function WorkspaceView({
           )}
         </div>
       </section>
-      <SessionHistoryPane sessionId={activeSessionId} />
+      <SessionHistoryPane sessionId={activeSessionId} open={fullscreen ? fullscreenRightOpen : undefined}
+        onOpenChange={fullscreen ? setFullscreenRightOpen : undefined} hideCollapsed={fullscreen} />
     </div>
   );
 }

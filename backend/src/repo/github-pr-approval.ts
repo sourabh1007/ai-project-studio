@@ -60,6 +60,18 @@ export function createGithubApprovalGateway(
   }
   return {
     getHeadSha,
+    async getRevisions() {
+      const detail = await read(['api', `/repos/${target.repo}/pulls/${target.number}`]) as {
+        state?: unknown; head?: { sha?: unknown }; base?: { ref?: unknown };
+      };
+      if (detail?.state !== 'open' || typeof detail.head?.sha !== 'string' || !detail.head.sha ||
+          typeof detail.base?.ref !== 'string' || !detail.base.ref) {
+        throw new ProviderError('Cannot verify the live GitHub pull request head and target branch.');
+      }
+      const ref = await read(['api', `/repos/${target.repo}/git/ref/heads/${encodeURIComponent(detail.base.ref)}`]) as { object?: { sha?: unknown } };
+      if (typeof ref?.object?.sha !== 'string' || !ref.object.sha) throw new ProviderError('Could not verify the live GitHub target commit.');
+      return { headSha: detail.head.sha, baseSha: ref.object.sha, targetBranch: detail.base.ref };
+    },
     async approve(expectedHeadSha) {
       if (expectedHeadSha) {
         if (await getHeadSha() !== expectedHeadSha) throw new ValidationError('Pull request head changed before approval. Reset and review the latest commit.');

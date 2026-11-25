@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { describeAzureConnection } from './azure.js';
+import { azureOrganization, describeAzureConnection, parseAzureOrganizations } from './azure.js';
+
+describe('saved Azure organizations', () => {
+  it('canonicalizes supported hosted organizations and rejects ambiguous or invalid hosts', () => {
+    expect(azureOrganization(' Fabrikam ')).toBe('fabrikam');
+    expect(azureOrganization('https://dev.azure.com/Fabrikam/Project/_git/repo')).toBe('fabrikam');
+    expect(azureOrganization('FABRIKAM.visualstudio.com/Project/_git/repo')).toBe('fabrikam');
+    for (const value of ['', 'bad org', 'http://dev.azure.com/org', 'https://github.com/org/repo', 'http://', 'https://dev.azure.com']) {
+      expect(azureOrganization(value)).toBeNull();
+    }
+  });
+  it('merges legacy organization settings, removes invalid entries and deduplicates URL aliases', () => {
+    expect(parseAzureOrganizations(JSON.stringify([
+      'fabrikam', 'https://fabrikam.visualstudio.com/Project/_git/repo', 'Contoso', 42, null, 'https://github.com/org/repo',
+    ]), 'https://dev.azure.com/FABRIKAM/Project')).toEqual(['fabrikam', 'contoso']);
+    expect(parseAzureOrganizations('invalid json', 'contoso')).toEqual(['contoso']);
+    expect(parseAzureOrganizations('{}', '')).toEqual([]);
+    expect(parseAzureOrganizations('', '')).toEqual([]);
+  });
+});
 
 describe('describeAzureConnection', () => {
   it('returns empty for blank input', () => {
@@ -136,5 +155,21 @@ describe('describeAzureConnection', () => {
     const result = describeAzureConnection('https://.visualstudio.com/');
     expect(result.org).toBeNull();
     expect(result.label).toBe('');
+  });
+
+  it.each([
+    ['https://msazure.visualstudio.com/Liftr/_git/Liftr.Nginx', 'msazure', 'Liftr', 'Liftr.Nginx'],
+    ['https://msazure.visualstudio.com/DefaultCollection/Liftr/_git/Liftr.Nginx', 'msazure', 'Liftr', 'Liftr.Nginx'],
+    ['https://dev.azure.com/org/Team%20Project/_git/my%20repo', 'org', 'Team Project', 'my repo'],
+    ['https://dev.azure.com/org/Team%20Project', 'org', 'Team Project', null],
+    ['https://org.visualstudio.com/Team%20Project', 'org', 'Team Project', null],
+    ['https://org.visualstudio.com/', 'org', null, null],
+    ['https://org.visualstudio.com/_git/repo', 'org', 'repo', 'repo'],
+    ['https://org.visualstudio.com/_git', 'org', null, null],
+    ['https://dev.azure.com/org/_git/repo', 'org', 'repo', 'repo'],
+    ['https://dev.azure.com/org/_git', 'org', null, null],
+    ['https://dev.azure.com/org/%E0%A4%A/_git/repo', 'org', '%E0%A4%A', 'repo'],
+  ])('disambiguates organization, project and repository in %s', (url, org, project, repo) => {
+    expect(describeAzureConnection(url)).toMatchObject({ org, project, repo });
   });
 });

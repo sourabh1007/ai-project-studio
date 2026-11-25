@@ -16,7 +16,7 @@
  */
 
 import type { Clock } from '../kernel/clock.js';
-import type { MetaRunner } from '../meta/meta-runner.js';
+import type { MetaRunner, MetaRequest } from '../meta/meta-runner.js';
 import type { BugBashConfig } from './config.js';
 import {
   buildDecomposePrompt,
@@ -33,6 +33,7 @@ export const ANALYST_LEAD_AGENT_ID = 'analyst-lead';
 
 /** Inputs for one generation-team pass. */
 export interface BugBashGenerateRequest {
+  correlation?: MetaRequest['correlation'];
   featureId: string;
   cwd: string;
   featureInfo: string;
@@ -148,6 +149,7 @@ export function createBugBashGenerateTeam(
       );
       leadActivity(promptActivity(decomposePrompt));
       const decomposition = await deps.ai.runDetailed({
+        correlation: request.correlation,
         featureId: request.featureId,
         prompt: decomposePrompt,
         cwd: request.cwd,
@@ -217,6 +219,7 @@ export function createBugBashGenerateTeam(
           });
           try {
             const result = await deps.ai.runDetailed({
+              correlation: request.correlation,
               featureId: request.featureId,
               prompt,
               cwd: request.cwd,

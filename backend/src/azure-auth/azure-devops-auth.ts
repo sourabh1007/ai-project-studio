@@ -20,7 +20,7 @@ export interface GitRunResult {
 
 /** Runs `git-credential-manager <verb>`, feeding `input` on stdin. */
 export type GitCredentialRunner = (
-  verb: 'get' | 'erase',
+  verb: 'get' | 'store' | 'erase',
   input: string,
   opts: { interactive: boolean },
 ) => Promise<GitRunResult>;
@@ -229,7 +229,26 @@ export function createAzureDevOpsAuth(deps: {
         message: interactive ? describeAzureFailure(res.stderr) : null,
       };
     }
-    return parseCredentialOutput(res.stdout);
+    const status = parseCredentialOutput(res.stdout);
+    if (interactive && status.authenticated) {
+      // GCM get caches OAuth tokens; store also binds the account to this organization.
+      const fields = res.stdout.split(/\r?\n/).filter((line) => /^(?:username|password)=/.test(line));
+      const stored = await deps.credential('store', `${buildCredentialQuery(target).trimEnd()}\n${fields.join('\n')}\n\n`, {
+        interactive: false,
+      });
+      if (stored.code !== 0) {
+        return {
+          authenticated: false, account: null,
+          message: `Could not remember Azure DevOps sign-in for this organization. ${describeAzureFailure(stored.stderr)}`,
+        };
+      }
+      const confirmed = await check(target, false);
+      return confirmed.authenticated ? confirmed : {
+        ...confirmed,
+        message: 'The saved Azure DevOps account could not be reused silently. Please try signing in again.',
+      };
+    }
+    return status;
   };
 
   return {

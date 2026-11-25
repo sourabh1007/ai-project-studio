@@ -4,6 +4,7 @@ import { attachMcpTools, mcpRollupSource, mcpToolRollupSource, toMcpBreakdown, t
 import type {
   UsageDayRow,
   UsageRollupReader,
+  UsageWindow,
 } from '../usage-rollup/usage-rollup-contract.js';
 
 interface DayRow {
@@ -145,30 +146,58 @@ export function createUsageRollupRepo(
   const workspaceMcpToolsStmt = db.prepare(mcpToolRollupSource("scope = 'feature'"));
   const ideMcpToolsStmt = db.prepare(mcpToolRollupSource("scope = 'internal'"));
   const featureMcpToolsStmt = db.prepare(mcpToolRollupSource('feature_id = ?'));
+  const boundedMcp = (proxy: string, observed: string, proxyArgs: string[], observedArgs: string[], window: UsageWindow) => {
+    const bounds = [window.from, window.to];
+    const range = ' AND recorded_at >= ? AND recorded_at < ?';
+    const servers = (db.prepare(mcpRollupSource(`(${proxy})${range}`, `(${observed})${range}`))
+      .all(...proxyArgs, ...bounds, ...observedArgs, ...bounds) as unknown as McpRollupRow[]).map(toMcpBreakdown);
+    return attachMcpTools(servers, db.prepare(mcpToolRollupSource(`(${observed})${range}`))
+      .all(...observedArgs, ...bounds) as unknown as McpToolRollupRow[]);
+  };
 
   return {
-    workspaceDays() {
+    workspaceDays(window) {
+      if (window) return (db.prepare(grouped(
+        `${cliSource(`${visibleUsage} AND started_at >= ? AND started_at < ?`)}
+         UNION ALL ${retainedSource("source = 'cli' AND scope = 'feature' AND day >= ? AND day < ?")}`,
+      )).all(window.from, window.to, window.from, window.to) as unknown as DayRow[]).map(toDayRow);
       return (workspaceStmt.all() as unknown as DayRow[]).map(toDayRow);
     },
-    ideDays() {
+    ideDays(window) {
+      if (window) return (db.prepare(grouped(
+        `${cliSource(`kind IN (${metaKindPlaceholders}) AND started_at >= ? AND started_at < ?`)}
+         UNION ALL ${metaSource('captured_at >= ? AND captured_at < ?')}
+         UNION ALL ${retainedSource("(source = 'meta' OR scope = 'internal') AND day >= ? AND day < ?")}`,
+      )).all(...metaKinds, window.from, window.to, window.from, window.to, window.from, window.to) as unknown as DayRow[]).map(toDayRow);
       return (ideStmt.all(...metaKinds) as unknown as DayRow[]).map(toDayRow);
     },
-    featureDays(featureId) {
+    featureDays(featureId, window) {
+      if (window) return (db.prepare(grouped(
+        `${cliSource('feature_id = ? AND started_at >= ? AND started_at < ?')}
+         UNION ALL ${metaSource('feature_id = ? AND captured_at >= ? AND captured_at < ?')}
+         UNION ALL ${retainedSource('feature_id = ? AND day >= ? AND day < ?')}`,
+      )).all(featureId, window.from, window.to, featureId, window.from, window.to,
+        featureId, window.from, window.to) as unknown as DayRow[]).map(toDayRow);
       return (
         featureStmt.all(featureId, featureId, featureId) as unknown as DayRow[]
       ).map(toDayRow);
     },
-    workspaceMcpServers() {
+    workspaceMcpServers(window) {
+      if (window) return boundedMcp(`NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.id = mcp_server_usage.session_id AND sessions.scope = 'internal')`,
+        "scope = 'feature'", [], [], window);
       const servers = (workspaceMcpStmt.all() as unknown as McpRollupRow[]).map(toMcpBreakdown);
       return attachMcpTools(servers, workspaceMcpToolsStmt.all() as unknown as McpToolRollupRow[]);
     },
-    ideMcpServers() {
+    ideMcpServers(window) {
+      if (window) return boundedMcp(`EXISTS (SELECT 1 FROM usage_events WHERE usage_events.session_id = mcp_server_usage.session_id AND usage_events.kind IN (${metaKindPlaceholders}))`,
+        "scope = 'internal'", [...metaKinds], [], window);
       const servers = (ideMcpStmt.all(...metaKinds) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );
       return attachMcpTools(servers, ideMcpToolsStmt.all() as unknown as McpToolRollupRow[]);
     },
-    featureMcpServers(featureId) {
+    featureMcpServers(featureId, window) {
+      if (window) return boundedMcp('feature_id = ?', 'feature_id = ?', [featureId], [featureId], window);
       const servers = (featureMcpStmt.all(featureId, featureId) as unknown as McpRollupRow[]).map(
         toMcpBreakdown,
       );

@@ -8,6 +8,7 @@
  */
 
 import { statusForSeverity } from './review-board-builder.js';
+import { z } from 'zod';
 import { ProviderError } from '../kernel/error-types.js';
 import { isRepoRelativePath } from '../pr-review/pr-comment-location.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   ReviewFinding,
   ReviewRisk,
   ReviewStatus,
+  PerspectiveAnalysis,
 } from './review-board-contract.js';
 
 const SEVERITIES: readonly FindingSeverity[] = [
@@ -144,6 +146,8 @@ function toFinding(
   const severity = toSeverity(record.severity);
   return {
     id: `${perspectiveId}/ai-${index}`,
+    ...(Array.isArray(record.skillIds) ? { skillIds: record.skillIds as string[] } : {}),
+    ...(Array.isArray(record.requirementIds) ? { requirementIds: record.requirementIds as string[] } : {}),
     perspectiveId,
     title: record.title.trim(),
     detail: record.detail.trim(),
@@ -228,6 +232,8 @@ function parseRationale(value: unknown): RationalePoint[] {
 
 /** The parsed outcome of a single-perspective AI review. */
 export interface ParsedPerspectiveAnalysis {
+  requirements?: PerspectiveAnalysis['requirements'];
+  assessment?: 'concerns' | 'no-concerns' | 'insufficient-evidence' | 'not-applicable';
   findings: ReviewFinding[];
   skipped: boolean;
   skipReason: string | null;
@@ -320,6 +326,21 @@ export function parseValidatedPerspectiveAnalysis(
     return invalid('expected an object, not an array or primitive');
   }
   const record = raw as Record<string, unknown>;
+  if (record.assessment !== undefined &&
+      !['concerns', 'no-concerns', 'insufficient-evidence', 'not-applicable'].includes(record.assessment as string)) {
+    return invalid('unknown assessment');
+  }
+  if (record.checks !== undefined && !Array.isArray(record.checks)) return invalid('checks must be an array');
+  if (Array.isArray(record.checks) && record.checks.some((check) =>
+    !check || !CHECK_STATUSES.includes((check as { status: CheckStatus }).status))) {
+    return invalid('unknown check outcome');
+  }
+  if (Array.isArray(record.findings) && record.findings.some((finding) => {
+    const item = finding as Record<string, unknown> | null;
+    return item && ((item.severity !== undefined && !SEVERITIES.includes(item.severity as FindingSeverity)) ||
+      (item.skillIds !== undefined && (!Array.isArray(item.skillIds) || item.skillIds.some((id) => !isText(id)))) ||
+      (item.requirementIds !== undefined && (!Array.isArray(item.requirementIds) || item.requirementIds.some((id) => !isText(id)))));
+  })) return invalid('unknown severity or invalid skill references');
   if (record.skipped !== undefined && typeof record.skipped !== 'boolean') {
     return invalid('"skipped" must be a boolean');
   }
@@ -331,6 +352,40 @@ export function parseValidatedPerspectiveAnalysis(
     return invalid('a reviewed perspective requires a findings array');
   }
   const parsed = parsePerspectiveAnalysis(candidate, perspectiveId);
+  const findingAliases = new Map<string, string>();
+  for (const [index, rawFinding] of (Array.isArray(record.findings) ? record.findings : []).entries()) {
+    const alias = (rawFinding as { id?: unknown } | null)?.id;
+    if (alias === undefined) continue;
+    if (!isText(alias) || findingAliases.has(alias)) return invalid('finding IDs must be unique nonblank strings');
+    findingAliases.set(alias, `${perspectiveId}/ai-${index}`);
+  }
+  if (record.requirements !== undefined) {
+    const assessments = z.array(z.object({
+      requirementId: z.string().trim().min(1).max(200),
+      assessment: z.enum(['supported', 'violated', 'not-assessed', 'ambiguous']),
+      explanation: z.string().trim().min(1).max(2000),
+      findingIds: z.array(z.string().min(1)).max(200).default([]),
+      evidence: z.array(z.object({
+        source: z.string().trim().min(1).max(1000), reason: z.string().trim().min(1).max(2000),
+        confidence: z.number().min(0).max(1).optional(), direct: z.boolean().optional(),
+        location: z.object({ path: z.string().refine(isRepoRelativePath), line: z.number().int().positive(),
+          side: z.enum(['RIGHT', 'LEFT']) }).optional(),
+      })).max(50),
+    }).strict()).max(100).safeParse(record.requirements);
+    if (!assessments.success) return invalid('invalid requirement assessments');
+    parsed.requirements = assessments.data.map((row) => ({ ...row,
+      findingIds: row.findingIds.map((id) => findingAliases.get(id) ?? id),
+      evidence: row.evidence.map((entry) => toEvidence(entry)!) }));
+  }
+  parsed.assessment = record.assessment as ParsedPerspectiveAnalysis['assessment'];
+  if (parsed.skipped && Array.isArray(record.findings) && record.findings.length > 0) {
+    return invalid('a skipped perspective cannot contain findings');
+  }
+  if ((parsed.assessment === 'no-concerns' && parsed.findings.length > 0) ||
+      (parsed.assessment === 'not-applicable' && !parsed.skipped) ||
+      (parsed.skipped && parsed.assessment !== undefined && parsed.assessment !== 'not-applicable')) {
+    return invalid('assessment contradicts the supplied findings or applicability');
+  }
   if (!parsed.skipped) {
     if (parsed.findings.length !== (record.findings as unknown[]).length) {
       return invalid('each finding requires a title, detail, and usable evidence');

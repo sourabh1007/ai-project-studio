@@ -396,6 +396,14 @@ const CORE_TABLES: readonly TableSchema[] = [
 
 const USAGE_TABLES: readonly TableSchema[] = [
   {
+    name: 'meta_capacity_history',
+    ddl: 'CREATE TABLE IF NOT EXISTS meta_capacity_history (id INTEGER PRIMARY KEY CHECK(id = 1), snapshot TEXT NOT NULL)',
+  },
+  {
+    name: 'resource_history',
+    ddl: 'CREATE TABLE IF NOT EXISTS resource_history (id INTEGER PRIMARY KEY CHECK(id = 1), snapshot TEXT NOT NULL)',
+  },
+  {
     name: 'usage_events',
     ddl: `CREATE TABLE IF NOT EXISTS usage_events (
     session_id TEXT NOT NULL,
@@ -497,9 +505,20 @@ const USAGE_TABLES: readonly TableSchema[] = [
   )`,
   },
   {
+    name: 'prompt_context_events',
+    ddl: `CREATE TABLE IF NOT EXISTS prompt_context_events (
+      event_id TEXT PRIMARY KEY, prompt_refs_json TEXT NOT NULL,
+      session_id TEXT NOT NULL, provider_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('context-prepared', 'context-injected')),
+      recorded_at TEXT NOT NULL
+    )`,
+  },
+  {
     name: 'meta_operations',
     ddl: `CREATE TABLE IF NOT EXISTS meta_operations (
     operation_id TEXT PRIMARY KEY,
+    correlation_json TEXT,
+    prompt_refs_json TEXT,
     feature_id TEXT NOT NULL,
     automation_id TEXT,
     origin_session_id TEXT,
@@ -526,6 +545,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
       usage_state IN ('unknown', 'unsupported', 'partial', 'recorded')
     ),
     usage_json TEXT,
+    request_usage_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     started_at TEXT,
@@ -672,6 +692,23 @@ const CONTENT_TABLES: readonly TableSchema[] = [
 ];
 
 const TASK_TABLES: readonly TableSchema[] = [
+  {
+    name: 'planner_tracking_settings',
+    ddl: 'CREATE TABLE IF NOT EXISTS planner_tracking_settings (id INTEGER PRIMARY KEY CHECK(id = 1), enabled INTEGER NOT NULL)',
+  },
+  {
+    name: 'planner_tracking_cursors',
+    ddl: 'CREATE TABLE IF NOT EXISTS planner_tracking_cursors (feature_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, retry_after INTEGER NOT NULL)',
+  },
+  {
+    // Links deliberately outlive a removed task, preventing automatic resurrection.
+    name: 'planner_tracked_work',
+    ddl: `CREATE TABLE IF NOT EXISTS planner_tracked_work (
+      work_key TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, repo_id TEXT,
+      feature_id TEXT NOT NULL, generated_json TEXT NOT NULL, locked_json TEXT NOT NULL,
+      provenance_json TEXT NOT NULL, updated_at TEXT NOT NULL
+    )`,
+  },
   {
     name: 'feature_tasks',
     ddl: `CREATE TABLE IF NOT EXISTS feature_tasks (
@@ -825,6 +862,27 @@ interface IndexSchema {
  * are created only once the column exists.
  */
 const INDEXES: readonly IndexSchema[] = [
+  { schema: 'usage', ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_prompt_context_time ON prompt_context_events (recorded_at DESC, event_id DESC)' },
+  { schema: 'usage', ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_prompt_operations_time ON meta_operations (created_at DESC, operation_id DESC)' },
+  { schema: 'tasks', ddl: 'CREATE INDEX IF NOT EXISTS tasks.idx_tracked_work_scope ON planner_tracked_work (repo_id, feature_id, updated_at DESC)' },
+  { schema: 'main', ddl: 'CREATE INDEX IF NOT EXISTS main.idx_sessions_tracking ON sessions (feature_id, created_at DESC, id)' },
+  { schema: 'usage', ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_operations_tracking ON meta_operations (feature_id, updated_at DESC, operation_id)' },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_mcp_observed_history ON mcp_observed_calls (provider, server, scope, recorded_at DESC, session_id DESC, call_id DESC)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_mcp_observed_feature_history ON mcp_observed_calls (provider, server, scope, feature_id, recorded_at DESC, session_id DESC, call_id DESC)',
+  },
+  {
+    schema: 'usage',
+    ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_meta_operations_feature_time ON meta_operations (feature_id, created_at, operation_id)',
+  },
+  {
+    schema: 'usage',
+    ddl: "CREATE INDEX IF NOT EXISTS usage.idx_meta_operations_run_time ON meta_operations (json_extract(correlation_json, '$.runId'), created_at, operation_id)",
+  },
   {
     schema: 'usage',
     ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_skill_usage_scope_time ON skill_usage (scope, recorded_at DESC, event_id DESC)',
@@ -1208,6 +1266,20 @@ const ADDED_COLUMNS: readonly {
     table: 'bug_bash_runs',
     column: 'prerequisites',
     ddl: 'ALTER TABLE bug_bash_runs ADD COLUMN prerequisites TEXT',
+  },
+  {
+    table: 'meta_operations',
+    column: 'correlation_json',
+    schema: 'usage',
+    ddl: 'ALTER TABLE usage.meta_operations ADD COLUMN correlation_json TEXT',
+  },
+  {
+    table: 'meta_operations', column: 'prompt_refs_json', schema: 'usage',
+    ddl: 'ALTER TABLE usage.meta_operations ADD COLUMN prompt_refs_json TEXT',
+  },
+  {
+    table: 'meta_operations', column: 'request_usage_json', schema: 'usage',
+    ddl: 'ALTER TABLE usage.meta_operations ADD COLUMN request_usage_json TEXT',
   },
   {
     table: 'mcp_auth_observations',

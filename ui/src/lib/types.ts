@@ -1,4 +1,48 @@
 /** Shared DTO types mirroring the backend API contracts. */
+export interface PlannerWorkEvidence {
+  id: string;
+  kind: 'prompt' | 'response' | 'agent' | 'skill' | 'pr';
+  label: string;
+  text: string;
+  at: string;
+  sessionId: string | null;
+  completed: boolean;
+  truncated?: boolean;
+}
+export interface PlannerWorkProvenance {
+  featureId: string;
+  updatedAt: string;
+  completion: 'requested-or-ongoing' | 'reported-complete';
+  evidence: PlannerWorkEvidence[];
+}
+export interface PlannerTrackingJob {
+  featureId: string;
+  workspaceName: string;
+  repositoryName: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  phase: 'queued' | 'reading' | 'analyzing' | 'retry-wait';
+  retryAt: string | null;
+  evidenceCount: number | null;
+  sessionCount: number | null;
+}
+export interface PlannerTrackingResult {
+  job: PlannerTrackingJob;
+  finishedAt: string;
+  outcome: 'updated' | 'unchanged' | 'no-evidence' | 'unavailable' | 'retry-wait' | 'failed' | 'cancelled';
+  taskCount: number | null;
+}
+export interface PlannerTrackingStatus {
+  enabled: boolean;
+  running: boolean;
+  queued: number;
+  lastUpdatedAt: string | null;
+  error: string | null;
+  jobs?: PlannerTrackingJob[];
+  currentJob?: PlannerTrackingJob | null;
+  lastRun?: PlannerTrackingResult | null;
+  pollIntervalMs?: number;
+}
 
 /** Whether the bundled Microsoft `agency` CLI is installed on this machine. */
 export interface AgencyStatus {
@@ -25,6 +69,15 @@ export interface AgencyUpgradeState {
 /** Install state + default selection for the first-run provider gate. */
 export interface ProviderAutomationReadiness {
   supported: boolean;
+  reason: string | null;
+  integrationSupported?: boolean;
+  state?: 'checking' | 'ready' | 'blocked' | 'unsupported';
+}
+
+export interface ProviderFeature {
+  id: string;
+  label: string;
+  status: 'available' | 'setup-required' | 'checking' | 'integration-required' | 'unsupported';
   reason: string | null;
 }
 
@@ -453,6 +506,7 @@ export interface PrReviewPull {
 
 /** A multi-step AI review of a pull request, keyed by its review feature. */
 export interface PrReview {
+  analysisDeferred?: boolean;
   featureId: string;
   repoId: string;
   pull: PrReviewPull;
@@ -499,6 +553,13 @@ export type FindingSeverity =
 /** Whether a perspective is an always-present core lens or an evidence-derived one. */
 export type PerspectiveSource = 'core' | 'detected';
 
+export interface PerspectiveSpec {
+  id: string;
+  name: string;
+  why: string;
+  source: PerspectiveSource;
+}
+
 /** One piece of evidence backing a detection, risk marker or finding. */
 export interface ReviewEvidence {
   source: string;
@@ -516,6 +577,7 @@ export interface DetectedItem {
 
 /** The evidence-derived understanding of the project a change belongs to. */
 export interface ProjectModel {
+  perspectives?: PerspectiveSpec[];
   projectType: string;
   projectTypeConfidence: number;
   primaryLanguages: string[];
@@ -541,6 +603,154 @@ export interface ReviewFinding {
   severity: FindingSeverity;
   status: ReviewStatus;
   evidence: ReviewEvidence[];
+  skillIds?: string[];
+  requirementIds?: string[];
+}
+
+export interface ReviewRequirement {
+  id: string;
+  text: string;
+  source: string;
+  fingerprint: string;
+  priority: number;
+}
+
+export interface ReviewRequirementRow {
+  requirement: ReviewRequirement;
+  assessment: 'supported' | 'violated' | 'not-assessed' | 'ambiguous';
+  explanation: string;
+  evidence: ReviewEvidence[];
+  findingIds: string[];
+}
+
+export type ReviewFindingDisposition = 'open' | 'dismissed' | 'fix-verified';
+export type ReviewFindingAction = 'merge' | 'split' | 'disposition' | 'severity' | 'undo';
+
+export interface ReviewFindingEvent {
+  id: string;
+  action: ReviewFindingAction;
+  observationIds: string[];
+  reason: string;
+  at: string;
+  disposition?: ReviewFindingDisposition;
+  severity?: FindingSeverity;
+  targetEventId?: string;
+}
+
+export interface ReviewFindingMutation {
+  expectedRunId: string;
+  expectedAssessmentRevision: number;
+  action: ReviewFindingAction;
+  groupIds: string[];
+  reason: string;
+  disposition?: ReviewFindingDisposition;
+  severity?: FindingSeverity;
+  targetEventId?: string;
+}
+
+export interface ReviewDiscussion {
+  matches: Record<string, { id: string; status: 'active' | 'resolved'; url: string }[]>;
+  warnings: string[];
+}
+
+export interface ReviewPublication {
+  key: string;
+  status: 'pending' | 'posted' | 'uncertain';
+  input: AddPrCommentInput;
+  thread?: PrCommentThread;
+  startedAt: string;
+  error?: string;
+}
+
+export interface ReviewOptions {
+  model?: string;
+  perspectiveIds?: string[];
+  skillIds?: string[];
+  businessContext?: string;
+}
+
+export interface ReviewContextDiscovery {
+  resources?: ReviewContextResource[];
+  resourceWarnings?: string[];
+  status: 'loaded' | 'empty' | 'failed';
+  headSha: string | null;
+  graphGeneratedAt: string | null;
+  contextFingerprint: string;
+  generatedAt: string;
+  summary: string;
+  requirements: Array<{ text: string; kind: 'documented' | 'inferred'; source: string; quote: string }>;
+  questions: string[];
+  sessionId?: string;
+  requestedModel?: string;
+  resolvedModel?: string | null;
+  error?: string;
+}
+
+export interface ReviewContextResource {
+  id: string;
+  source: string;
+  content: string;
+  documented: boolean;
+}
+
+export interface ReviewImportOptions {
+  autoReview?: boolean;
+  reviewOptions?: ReviewOptions;
+}
+
+export interface ReviewRepositorySkills {
+  repoId: string;
+  repository: { name: string; remoteUrl: string } | null;
+  targetBranch: string | null;
+  baseSha?: string;
+  skills: ReviewRun['context']['skills'];
+  warnings: string[];
+}
+
+export interface ReviewRun {
+  findingEvents?: ReviewFindingEvent[];
+  id: string;
+  revision: number;
+  status: 'prepared' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  options: ReviewOptions;
+  providerId: string;
+  model: string;
+  perspectiveIds: string[];
+  context: {
+    discovery?: Pick<ReviewContextDiscovery, 'status' | 'sessionId' | 'contextFingerprint'>;
+    resources?: ReviewContextResource[];
+    fingerprint: string;
+    skills: {
+      id: string;
+      name: string;
+      source: string;
+      content: string;
+      fingerprint: string;
+      perspectiveIds: string[];
+      contentStatus?: 'not-loaded' | 'unavailable';
+    }[];
+    businessRequirements: string;
+    requirements?: ReviewRequirement[];
+    evidence: string;
+    warnings: string[];
+    baseSha?: string;
+    mergeBaseSha?: string;
+  };
+  headSha: string | null;
+  graphGeneratedAt: string | null;
+  startedAt: string;
+  finishedAt?: string;
+  failures: Record<string, string>;
+}
+
+export interface ReviewFindingGroup {
+  id: string;
+  finding: ReviewFinding;
+  observations: ReviewFinding[];
+  perspectiveIds: string[];
+  skillIds: string[];
+  disposition?: ReviewFindingDisposition;
+  dispositionReason?: string;
 }
 
 /** A rendered review lens with its rolled-up status, risk and findings. */
@@ -570,6 +780,15 @@ export type ReviewRecommendation =
 
 /** The complete Project Review Board for one change. */
 export interface ReviewBoard {
+  contextDiscovery?: ReviewContextDiscovery;
+  businessMatrix?: ReviewRequirementRow[];
+  findingHistory?: ReviewFindingEvent[];
+  possibleDuplicates?: { groupIds: string[]; reason: string }[];
+  availablePerspectives?: PerspectiveSpec[];
+  problem?: string;
+  solution?: string;
+  run?: ReviewRun;
+  uniqueFindings?: ReviewFindingGroup[];
   analyses?: Record<string, PerspectiveAnalysis>;
   featureId: string;
   repoId: string;
@@ -674,6 +893,11 @@ export interface RationalePoint {
 
 /** The AI's verdict for a single perspective: rolled-up result + skip info. */
 export interface PerspectiveAnalysis {
+  requestedModel?: string;
+  resolvedModel?: string;
+  assessment?: 'concerns' | 'no-concerns' | 'insufficient-evidence' | 'not-applicable';
+  runId?: string;
+  attemptId?: string;
   perspectiveId: string;
   perspective: ReviewPerspective;
   skipped: boolean;
@@ -984,6 +1208,9 @@ export interface PrCommentThread {
  * no precise anchor is available.
  */
 export interface AddPrCommentInput {
+  publicationKey?: string;
+  expectedRunId?: string;
+  expectedAssessmentRevision?: number;
   path?: string;
   line?: number;
   body: string;
@@ -1193,11 +1420,10 @@ export interface SessionPrompt {
   /** Wall-clock milliseconds from prompt to answer, or null when unknown. */
   durationMs: number | null;
   /**
-   * True for a synthetic live row representing an in-flight turn the CLI store
-   * has not saved yet. Such a row has no `text`/`response` and only indicates
-   * the assistant is actively responding right now.
+   * True for live prompt/response evidence the CLI store has not saved yet.
    */
   pending?: boolean;
+  queued?: boolean;
 }
 
 export interface Session {
@@ -1926,6 +2152,15 @@ export interface MetaPoolStat {
 
 /** Aggregate warm metasession pool status for the Settings page. */
 export interface MetaPoolsStatus {
+  availability?: {
+    state: 'disabled' | 'unavailable' | 'starting' | 'running' | 'failed';
+    providerId: string;
+    message: string;
+  };
+  history?: {
+    error: string | null;
+    samples: { at: number; provider: string; model: string | null; busy: number | null; idle: number | null; warming: number | null; processes: number | null; queued: number | null }[];
+  };
   processAdmission?: {
     processes: number;
     warmProcesses: number;
@@ -2123,6 +2358,7 @@ export type PlannerLaunchKind = 'session' | 'agent' | 'review';
 
 /** A standalone, dated checklist task in the Planner. */
 export interface PlannerTask {
+  automaticallyTracked?: boolean;
   id: string;
   title: string;
   notes: string;

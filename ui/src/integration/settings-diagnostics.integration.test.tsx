@@ -107,6 +107,55 @@ afterEach(() => {
 });
 
 describe('Settings renderer journeys', () => {
+  it('restores the compact live metasession dashboard before secondary model settings', async () => {
+    const sessions = Array.from({ length: 12 }, (_, index) => ({
+      id: `s${index + 1}`, state: 'idle', served: index < 6 ? 1 : 0,
+      startedAt: 1000, lastActiveAt: null, inputTokens: 0, outputTokens: 0, history: [],
+    }));
+    const current = config();
+    current.current.meta = { warmPool: { enabled: true, size: 15 } };
+    const updateConfig = vi.fn();
+    const resizeMetaPool = vi.fn();
+    const api = apiFor([], {
+      getConfig: vi.fn().mockResolvedValue(current),
+      getMetaPools: vi.fn().mockResolvedValue({
+        enabled: true, model: 'auto',
+        processAdmission: { processes: 13, warmProcesses: 12, queued: 0, closed: false,
+          maxProcesses: 16, maxWarmProcesses: 12, maxQueued: 32 },
+        pool: { size: 15, suggestedSize: 1, live: 12, idle: 12, busy: 0,
+          ready: true, served: 6, waitingForCapacity: true, sessions },
+      }),
+      getMetaSettings: vi.fn().mockResolvedValue({ providerId: 'copilot', model: 'auto', warmPoolEnabled: true }),
+      getMetaModels: vi.fn().mockResolvedValue([{ id: 'auto', name: 'Auto', enabled: true }]),
+      listMetaOperations: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+      updateConfig, resizeMetaPool,
+    });
+    renderSettings(api);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Metasession' }));
+    expect(await screen.findByRole('checkbox', { name: 'Keep metasessions warm' })).toBeChecked();
+    expect(screen.getByRole('spinbutton', { name: 'Parallel metasessions' })).toHaveValue(15);
+    expect(screen.getByText('Ready')).toBeVisible();
+    expect(screen.getByText(/Headless process budget:/)).toHaveTextContent('13/16 processes, 12/12 warm; queue 0/32');
+    expect(screen.getByText(/Waiting for shared process capacity —/)).toHaveTextContent('12 of 15 ready, 0 warming');
+    expect(await screen.findByLabelText('Metasession s1: Idle, 1 turns. View details')).toBeVisible();
+    expect(screen.getAllByLabelText(/Metasession slot .*Waiting for shared process capacity/)).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeVisible();
+    const modelSettings = screen.getByText('Provider and model', { selector: 'summary' }).closest('details')!;
+    expect(modelSettings).not.toHaveAttribute('open');
+    expect(screen.getByRole('button', { name: 'Save changes' })
+      .compareDocumentPosition(modelSettings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Metasession s1: Idle, 1 turns. View details'));
+    const dialog = screen.getByRole('dialog', { name: 'Metasession s1' });
+    expect(dialog).toHaveTextContent('Ready for a command');
+    expect(dialog).toHaveTextContent('Turns served');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByText('Provider and model', { selector: 'summary' }));
+    expect(modelSettings).toHaveAttribute('open');
+    expect(await screen.findByRole('combobox', { name: 'Model' })).toBeVisible();
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(resizeMetaPool).not.toHaveBeenCalled();
+  });
+
   it('navigates through real settings sections and persists appearance across remount', async () => {
     const retainedList = vi.fn().mockResolvedValue({
       status: 'ready',
@@ -131,6 +180,10 @@ describe('Settings renderer journeys', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
     const cli = within(await screen.findByRole('region', { name: 'CLI selection' }));
     await waitFor(() => expect(cli.getByText('Active CLI:')).toHaveTextContent('Active CLI: Copilot'));
+    expect(cli.getByRole('button', { name: 'Copilot settings' })).toHaveAttribute('aria-expanded', 'false');
+    expect(cli.queryByRole('button', { name: 'Use Copilot' })).not.toBeInTheDocument();
+    fireEvent.click(cli.getByRole('button', { name: 'Copilot settings' }));
+    fireEvent.click(cli.getByRole('button', { name: 'Claude Code settings' }));
     expect(cli.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
     expect(cli.getByRole('button', { name: 'Use Claude Code' })).toBeEnabled();
     expect(cli.queryByRole('button', { name: 'Use Agency' })).not.toBeInTheDocument();
@@ -183,6 +236,7 @@ describe('Settings renderer journeys', () => {
     await waitFor(() => expect(
       within(screen.getByRole('region', { name: 'CLI selection' })).getByText('Active CLI:'),
     ).toHaveTextContent('Active CLI: Claude Code'));
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code settings' }));
     expect(screen.getByRole('button', { name: 'Use Claude Code' })).toBeEnabled();
     fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }));
     expect(await screen.findByRole('radio', { name: 'Large' })).toHaveAttribute(
@@ -209,10 +263,13 @@ describe('Settings renderer journeys', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Tools & CLIs' }));
     const cli = within(screen.getByRole('region', { name: 'CLI selection' }));
     await waitFor(() => expect(cli.getByText('Active CLI:')).toHaveTextContent('Active CLI: Copilot'));
+    fireEvent.click(cli.getByRole('button', { name: 'Copilot settings' }));
     expect(cli.getByRole('button', { name: 'Use Copilot' })).toBeEnabled();
     if (eligible) {
+      fireEvent.click(cli.getByRole('button', { name: 'Agency settings' }));
       expect(cli.getByRole('button', { name: 'Use Agency' })).toBeEnabled();
     } else {
+      expect(cli.queryByRole('button', { name: 'Agency settings' })).not.toBeInTheDocument();
       expect(cli.queryByRole('button', { name: 'Use Agency' })).not.toBeInTheDocument();
       expect(cli.queryByRole('heading', { name: 'Agency' })).not.toBeInTheDocument();
     }

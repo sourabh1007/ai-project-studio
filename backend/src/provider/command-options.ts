@@ -13,6 +13,7 @@ const RESERVED = new Set([
   '--allowedtools', '--disallowedtools', '--deny-tool', '--allow-tool',
   '--disable-builtin-mcps', '--disable-mcp-server', '--mcp-config', '--strict-mcp-config',
   '--additional-mcp-config', '--no-tools', '--permission-mode', '--dangerously-skip-permissions',
+  '--enable-mcp-server', '--agent', '--add-dir',
   '--settings', '--setting-sources', '--config', '--config-dir', '--plugin-dir',
   '--resume-session-id', '-r', '-i', '-o', '--print', '--json-schema',
   '--mcp-server', '--auth-status', '--auth-login',

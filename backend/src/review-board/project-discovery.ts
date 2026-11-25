@@ -385,6 +385,12 @@ export function selectPerspectives(
   ];
 
   const type = model.projectType;
+  specs.push({
+    id: 'business',
+    name: 'Business',
+    why: 'Check changed behavior against documented business rules and acceptance criteria.',
+    source: 'detected',
+  });
   if (isServiceLike(type)) {
     specs.push({
       id: 'performance',

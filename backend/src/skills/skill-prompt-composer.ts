@@ -1,6 +1,16 @@
 import type { SkillsConfig } from './config.js';
 import type { Skill } from './skills-contract.js';
 
+export function instructionPromptRefs(skills: readonly Skill[]): string[] {
+  return skills.some((skill) => skill.kind === 'instruction' && skill.instructions.trim().length > 0)
+    ? ['skills.injectionHeader', 'skills.skillTemplate'] : [];
+}
+
+export function removalPromptRefs(skill: Skill): string[] {
+  return ['skills.removalHeader', ...(skill.removalInstructions.trim().length > 0 ? [] :
+    [skill.kind === 'task-plan' ? 'skills.taskPlanRemovalTemplate' : 'skills.instructionRemovalTemplate'])];
+}
+
 function renderSkill(skill: Skill, config: SkillsConfig): string {
   return config.skillTemplate
     .replaceAll('{{name}}', skill.name)

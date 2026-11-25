@@ -49,7 +49,7 @@ export type LiveScanSpawn = (
 
 /**
  * Scans a CLI `events.jsonl` backwards, one `tailBytes` chunk at a time, until
- * a window holds a visible user message, the file start is reached, or
+ * a completed preceding turn anchors the active/queued history, the file start is reached, or
  * `maxScanBytes` is exhausted. The first (possibly partial) line of each window
  * is dropped before parsing. A missing log is `null`; any other failure (e.g.
  * a transient Windows sharing violation) rejects so callers can report
@@ -89,7 +89,9 @@ export async function scanLiveLog(input: LiveScanInput): Promise<LivePromptTurn 
         text = newline >= 0 ? text.slice(newline + 1) : '';
       }
       turn = parseLatestLivePrompt(text, toVisiblePrompt);
-      if (turn !== null) {
+      const first = turn?.preceding?.[0];
+      const next = turn?.preceding?.[1] ?? turn;
+      if (first?.completedAt && Date.parse(first.completedAt) <= Date.parse(next!.at)) {
         break;
       }
     }

@@ -27,6 +27,8 @@ export type PlannerTaskKind = 'task' | 'pr';
 export type PlannerLaunchKind = 'session' | 'agent' | 'review';
 
 export interface PlannerTask {
+  /** Evidence is loaded on demand, never embedded in the task list. */
+  automaticallyTracked?: boolean;
   id: string;
   title: string;
   /** Free-form notes/description shown under the title. */

@@ -1,0 +1,141 @@
+.planner-tracking-control { position: relative; flex-shrink: 0; }
+.planner-tracking-control > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+.planner-tracking-control > summary::-webkit-details-marker { display: none; }
+.planner-tracking-control > summary:hover,
+.planner-tracking-control[open] > summary { background: var(--surface-hover); }
+.planner-tracking-control > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.planner-tracking-control > summary:is([data-state="enabled"], [data-state="running"]) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--accent) 20%, transparent), transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.planner-tracking-control > summary[data-state="error"] { color: var(--danger); }
+.planner-tracking-indicator { position: relative; display: inline-flex; }
+.planner-tracking-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--panel);
+  border-radius: 50%;
+  background: currentColor;
+}
+.planner-tracking-control > summary[data-state="running"] .planner-tracking-indicator::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: planner-tracking-pulse 1.8s ease-out infinite;
+}
+@keyframes planner-tracking-pulse {
+  from { transform: scale(0.8); opacity: 0.7; }
+  to { transform: scale(1.35); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .planner-tracking-control > summary { transition: none; }
+  .planner-tracking-control > summary[data-state="running"] .planner-tracking-indicator::before { animation: none; }
+}
+.planner-tracking-control > .planner-tracking-popover {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  top: calc(100% + 4px);
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 32px));
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow-dialog);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.planner-tracking-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 14px 12px; }
+.planner-tracking-emblem {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 10px;
+}
+.planner-tracking-heading > div { flex: 1 1 100px; min-width: 0; display: grid; gap: 1px; }
+.planner-tracking-heading > div > strong { font-size: 13px; }
+.planner-tracking-heading > div > span { color: var(--muted); font-size: 11px; }
+.planner-tracking-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 999px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+.planner-tracking-popover[data-state="error"] .planner-tracking-badge { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.planner-tracking-popover[data-state="paused"] .planner-tracking-badge { color: var(--muted); background: var(--panel-inset); border-color: var(--border); }
+.planner-tracking-status { display: grid; gap: 3px; padding: 0 14px 12px; }
+.planner-tracking-status > strong { font-weight: 600; }
+.planner-tracking-status > span { color: var(--muted); font-size: 11px; }
+.planner-tracking-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 14px 14px; padding: 10px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-inset); }
+.planner-tracking-metrics > div { padding: 0 10px; }
+.planner-tracking-metrics > div + div { border-left: 1px solid var(--border); }
+.planner-tracking-metrics dt { color: var(--muted); font-size: 10px; }
+.planner-tracking-metrics dd { margin: 2px 0 0; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.planner-tracking-metrics dd > span { color: var(--muted); font-size: 11px; font-weight: 400; }
+.planner-tracking-popover > .error-text { margin: 0 14px 12px; }
+.planner-tracking-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.planner-tracking-section-title > strong { font-size: 11px; font-weight: 600; }
+.planner-tracking-section-title > span,
+.planner-tracking-section-title > time { color: var(--muted); font-size: 10px; }
+.planner-tracking-queue { margin: 0 14px 12px; }
+.planner-tracking-empty { margin: 0; padding: 12px; border: 1px dashed var(--border); border-radius: 7px; color: var(--muted); font-size: 11px; }
+.planner-tracking-job-list { display: grid; gap: 6px; list-style: none; padding: 0; margin: 6px 0 0; }
+.planner-tracking-job { display: flex; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
+.planner-tracking-job.is-active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.planner-tracking-job-icon { color: var(--muted); flex-shrink: 0; padding-top: 2px; }
+.planner-tracking-job.is-active .planner-tracking-job-icon { color: var(--accent); }
+.planner-tracking-job-content { min-width: 0; flex: 1; }
+.planner-tracking-job-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; }
+.planner-tracking-job-title > strong { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; }
+.planner-tracking-job-title > span { color: var(--muted); font-size: 10px; }
+.planner-tracking-job.is-active .planner-tracking-job-title > span { color: var(--accent); }
+.planner-tracking-job-repo { display: block; color: var(--muted); font-size: 10px; }
+.planner-tracking-job-content > p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+.planner-tracking-last-run { margin: 0 14px 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.planner-tracking-last-run > p { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; margin: 0; font-size: 11px; }
+.planner-tracking-last-run > p > strong { font-weight: 500; color: var(--muted); }
+.planner-tracking-note { color: var(--muted); font-size: 10px; }
+.planner-tracking-popover > .planner-tracking-note { margin: 0 14px 10px; }
+.planner-tracking-last-run > .planner-tracking-note { margin-top: 5px; font-size: 10px; }
+.planner-tracking-help { padding: 0 14px 12px; font-size: 11px; color: var(--muted); }
+.planner-tracking-help > summary { cursor: pointer; color: var(--text); font-weight: 500; }
+.planner-tracking-help > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.planner-tracking-help p { margin: 8px 0 0; }
+.planner-tracking-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; background: var(--panel-inset); border-top: 1px solid var(--border); }
+.planner-tracking-footer > span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.planner-tracking-footer > button { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }

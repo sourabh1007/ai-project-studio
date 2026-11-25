@@ -344,6 +344,7 @@ export function createNewTaskService(
       });
       const result = await deps.ai.runDetailed({
         featureId: run.featureId,
+        correlation: { runId: run.id, attachmentId: run.id, agentId: 'new-task' },
         prompt,
         cwd: workspace.repoLocalPath,
         scope: 'internal',
@@ -425,6 +426,7 @@ export function createNewTaskService(
         const planLog: string[] = [];
         const result = await deps.ai.runDetailed({
           featureId: run.featureId,
+          correlation: { runId: run.id, attachmentId: run.id, agentId: 'new-task' },
           prompt: planPrompt,
           cwd: worktree.worktreePath,
           scope: 'internal',
@@ -516,6 +518,7 @@ export function createNewTaskService(
           line: '👥 Assembling a team of agents to implement the plan…',
         });
         const team = await deps.team.implement({
+          correlation: { runId: run.id, attachmentId: run.id, agentId: 'new-task' },
           featureId: run.featureId,
           worktreePath,
           problem: run.problem,

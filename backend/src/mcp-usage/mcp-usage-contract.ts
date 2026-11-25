@@ -68,6 +68,9 @@ export interface McpServerUsageRecord {
 
 /** Persistence port for proxy-measured MCP usage slices. */
 export interface McpUsageRepo {
+  observedHistory?(query: {
+    provider: string; server: string; scope: 'feature' | 'internal'; from: string; to: string; featureId?: string;
+  }): { callId: string; tool: string; at: string; durationMs: number | null }[];
   /** Appends one measured slice. */
   record(entry: McpServerUsageRecord): void;
   /** Removes every slice and observed call for a feature. */

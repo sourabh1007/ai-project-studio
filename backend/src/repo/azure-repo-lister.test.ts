@@ -95,6 +95,21 @@ describe('parseAzureRepoLocation', () => {
       repo: null,
     });
   });
+  it.each([
+      ['https://msazure.visualstudio.com/Liftr/_git/Liftr.Nginx', 'msazure', 'Liftr', 'Liftr.Nginx'],
+      ['https://msazure.visualstudio.com/DefaultCollection/Liftr/_git/Liftr.Nginx', 'msazure', 'Liftr', 'Liftr.Nginx'],
+      ['https://dev.azure.com/org/Team%20Project/_git/my%20repo', 'org', 'Team Project', 'my repo'],
+      ['https://dev.azure.com/org/Team%20Project', 'org', 'Team Project', null],
+      ['https://org.visualstudio.com/Team%20Project', 'org', 'Team Project', null],
+      ['https://org.visualstudio.com/', 'org', null, null],
+      ['https://org.visualstudio.com/_git/repo', 'org', 'repo', 'repo'],
+      ['https://org.visualstudio.com/_git', 'org', null, null],
+      ['https://dev.azure.com/org/_git/repo', 'org', 'repo', 'repo'],
+      ['https://dev.azure.com/org/_git', 'org', null, null],
+      ['https://dev.azure.com/org/%E0%A4%A/_git/repo', 'org', '%E0%A4%A', 'repo'],
+    ])('preserves the requested project/repository scope in %s', (url, org, project, repo) => {
+      expect(parseAzureRepoLocation(url)).toEqual({ org, project, repo });
+    });
 });
 
 describe('listAzureRepos', () => {
@@ -194,7 +209,7 @@ describe('listAzureRepos', () => {
     });
   });
 
-  it('accepts a full repo URL and lists repositories for its organization', async () => {
+  it('looks up a full repository URL directly without requiring organization-wide enumeration access', async () => {
     let tokenOrg = '';
     let requested = '';
     const repos = await listAzureRepos(
@@ -205,29 +220,77 @@ describe('listAzureRepos', () => {
         },
         httpGet: async (url) => {
           requested = url;
-          return okBody({ value: [] });
+          return okBody({ name: 'CosmosDB', project: { name: 'CosmosDB' } });
         },
       },
       ' https://dev.azure.com/msdata/CosmosDB/_git/CosmosDB ',
     );
-    expect(repos).toEqual([]);
+    expect(repos[0]?.name).toBe('CosmosDB/CosmosDB');
     expect(tokenOrg).toBe('msdata');
-    expect(requested).toBe(repositoriesUrl('msdata'));
+    expect(requested).toBe('https://dev.azure.com/msdata/CosmosDB/_apis/git/repositories/CosmosDB?api-version=7.1');
+  });
+
+  it.each([
+    'https://msazure.visualstudio.com/Liftr/_git/Liftr.Nginx',
+    'https://dev.azure.com/msazure/Liftr/_git/Liftr.Nginx',
+  ])('loads the requested Liftr repository from %s', async (location) => {
+    let requested = '';
+    const repos = await listAzureRepos(deps('tok', (url) => {
+      requested = url;
+      return okBody({ name: 'Liftr.Nginx', project: { name: 'Liftr' }, defaultBranch: 'refs/heads/main' });
+    }), location);
+    expect(requested).toBe('https://dev.azure.com/msazure/Liftr/_apis/git/repositories/Liftr.Nginx?api-version=7.1');
+    expect(repos).toEqual([{
+      provider: 'azure-devops', name: 'Liftr/Liftr.Nginx',
+      remoteUrl: 'https://dev.azure.com/msazure/Liftr/_git/Liftr.Nginx', defaultBranch: 'main',
+    }]);
+  });
+
+  it('lists only the named project and decodes URL segments before encoding the REST path', async () => {
+    let requested = '';
+    await listAzureRepos(deps('tok', (url) => {
+      requested = url;
+      return okBody({ value: [] });
+    }), 'https://dev.azure.com/org/Team%20Project');
+    expect(requested).toBe('https://dev.azure.com/org/Team%20Project/_apis/git/repositories?api-version=7.1');
   });
 
   it('throws an auth-required error when there is no cached token', async () => {
     await expect(
       listAzureRepos(deps(null, () => okBody({ value: [] })), 'org'),
-    ).rejects.toMatchObject({ kind: 'auth_required', provider: 'azure-devops' });
+    ).rejects.toMatchObject({
+      kind: 'auth_required', provider: 'azure-devops',
+      message: 'Studio could not obtain a usable Azure DevOps credential for organization "org". Other organizations may still be connected. Check the organization (not the project), or paste the full repository URL, then sign in for that organization.',
+    });
   });
 
-  it('throws an auth-required error when the request is 401 or 403', async () => {
+  it.each([
+    'https://dev.azure.com/fabrikam/Team%20Project/_git/my%20repo',
+    'https://fabrikam.visualstudio.com/DefaultCollection/Team%20Project/_git/my%20repo',
+  ])('keeps credential and repository scope generic for %s', async (location) => {
+    const requests: string[] = [];
+    const tokens: string[] = [];
+    const service = {
+      token: async (org: string) => { tokens.push(org); return org === 'fabrikam' ? 'tok' : null; },
+      httpGet: async (url: string) => {
+        requests.push(url);
+        return okBody({ name: 'my repo', project: { name: 'Team Project' } });
+      },
+    };
+    await expect(listAzureRepos(service, 'another-org')).rejects.toMatchObject({ kind: 'auth_required' });
+    const repos = await listAzureRepos(service, location);
+    expect(tokens).toEqual(['another-org', 'fabrikam']);
+    expect(requests).toEqual(['https://dev.azure.com/fabrikam/Team%20Project/_apis/git/repositories/my%20repo?api-version=7.1']);
+    expect(repos[0].name).toBe('Team Project/my repo');
+  });
+
+  it('prompts for sign-in only for 401, not a permission denial', async () => {
     await expect(
       listAzureRepos(deps('tok', () => ({ status: 401, body: null })), 'org'),
     ).rejects.toMatchObject({ kind: 'auth_required' });
     await expect(
       listAzureRepos(deps('tok', () => ({ status: 403, body: null })), 'org'),
-    ).rejects.toMatchObject({ kind: 'auth_required' });
+    ).rejects.toMatchObject({ kind: 'provider', message: expect.stringContaining('denied repository access') });
   });
 
   it('throws a provider error for an inaccessible org', async () => {
@@ -236,7 +299,7 @@ describe('listAzureRepos', () => {
     ).rejects.toMatchObject({
       kind: 'provider',
       message:
-        'Azure DevOps organization "badorg" was not found or you do not have access. Check the organization name and sign in again if needed.',
+        'Azure DevOps location "badorg" was not found or you do not have access. Check the organization, project and repository URL.',
     });
   });
 

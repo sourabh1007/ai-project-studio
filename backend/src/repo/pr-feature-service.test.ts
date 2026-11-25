@@ -122,6 +122,34 @@ function harness(overrides: {
 }
 
 describe('pr-feature-service', () => {
+  it('snapshots separate import presets and defaults automatic review without changing checkout', async () => {
+    const h = harness();
+    const options = { autoReview: false, reviewOptions: {
+      model: 'model-a', perspectiveIds: ['security'], skillIds: ['instruction'], businessContext: 'No data loss.',
+    } };
+    const first = h.svc.createFromPull('r1', 12, null, null, undefined, options);
+    options.reviewOptions.skillIds.push('later');
+    await first;
+    await h.svc.createFromPull('r1', 13, null, null, undefined, options);
+    const starts = h.started as Array<{ worktreePath: string; reviewBoardImport: { autoReview: boolean; options: typeof options.reviewOptions } }>;
+    expect(starts[0]).toMatchObject({
+      worktreePath: 'C:/wt/app-pr-12',
+      reviewBoardImport: { autoReview: false, options: { ...options.reviewOptions, skillIds: ['instruction'] } },
+    });
+    expect(starts[1].reviewBoardImport.options.skillIds).toEqual(['instruction', 'later']);
+    starts[0].reviewBoardImport.options.perspectiveIds.push('business');
+    expect(starts[1].reviewBoardImport.options.perspectiveIds).toEqual(['security']);
+  });
+
+  it('does not replace imported review setup when reopened with different options', async () => {
+    const h = harness({ findByPull: () => 'existing-f' });
+    const result = await h.svc.createFromPull('r1', 12, null, null, undefined, {
+      autoReview: false, reviewOptions: { model: 'other' },
+    });
+    expect(result.alreadyImported).toBe(true);
+    expect(h.started).toEqual([]);
+    expect(h.provisioned).toEqual([]);
+  });
   it('lists pull requests for a repository', async () => {
     const { svc } = harness();
     expect(await svc.listPulls('r1')).toEqual([pull]);
@@ -143,7 +171,7 @@ describe('pr-feature-service', () => {
     it('joins the running import instead of provisioning a duplicate', async () => {
       let release!: () => void;
       let emit!: (m: string) => void;
-      const { svc, created, provisioned } = harness({
+      const { svc, created, provisioned, started } = harness({
         provision: (onStatus) => {
           emit = (message) => onStatus?.({ phase: 'preparing', message });
           return new Promise((resolve) => {
@@ -153,16 +181,24 @@ describe('pr-feature-service', () => {
       });
       const first: string[] = [];
       const second: string[] = [];
-      const a = svc.createFromPull('r1', 12, null, null, (s) => first.push(s.message));
+      const a = svc.createFromPull('r1', 12, null, null, (s) => first.push(s.message), {
+        autoReview: false, reviewOptions: { model: 'first-wins' },
+      });
       await vi.waitFor(() => expect(provisioned).toHaveLength(1));
       emit('fetching');
-      const b = svc.createFromPull('r1', 12, null, null, (s) => second.push(s.message));
+      const b = svc.createFromPull('r1', 12, null, null, (s) => second.push(s.message), {
+        autoReview: true, reviewOptions: { model: 'must-not-overwrite' },
+      });
       const c = svc.createFromPull('r1', 12);
       emit('preparing');
       release();
       const [ra, rb, rc] = await Promise.all([a, b, c]);
       expect(provisioned).toHaveLength(1);
       expect(created).toHaveLength(1);
+      expect(started).toHaveLength(1);
+      expect(started[0]).toMatchObject({
+        reviewBoardImport: { autoReview: false, options: { model: 'first-wins' } },
+      });
       expect(ra.alreadyImported).toBe(false);
       expect(rb).toEqual({ feature: ra.feature, alreadyImported: true });
       expect(rc.alreadyImported).toBe(true);
@@ -230,6 +266,7 @@ describe('pr-feature-service', () => {
         worktreePath: 'C:/wt/app-pr-12',
         headSha: 'provisionedsha',
         baseBranch: 'main',
+        reviewBoardImport: { autoReview: true, options: {} },
       },
     ]);
   });
@@ -278,6 +315,7 @@ describe('pr-feature-service', () => {
         worktreePath: 'C:/wt/app-pr-12',
         headSha: 'provisionedsha',
         baseBranch: 'release/2.0',
+        reviewBoardImport: { autoReview: true, options: {} },
       },
     ]);
   });
@@ -332,6 +370,7 @@ describe('pr-feature-service', () => {
         worktreePath: 'C:/wt/app-pr-12',
         headSha: 'provisionedsha',
         baseBranch: null,
+        reviewBoardImport: { autoReview: true, options: {} },
       },
     ]);
   });

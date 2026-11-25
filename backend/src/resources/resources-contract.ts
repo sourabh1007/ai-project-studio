@@ -81,6 +81,7 @@ export interface CleanupResult {
   completedAt: number;
 }
 export interface ResourcesSnapshot {
+  history?: ResourceHistory;
   sampledAt: number;
   host: ResourceSnapshot;
   app: AppResources;
@@ -128,6 +129,7 @@ export interface ResourceCleanup {
   error: string | null;
 }
 export interface AppResourceSnapshot {
+  history?: ResourceHistory;
   measuredAt: number;
   staleAfterMs: number;
   processes: {
@@ -154,6 +156,21 @@ export interface AppResourceSnapshot {
     stale?: boolean;
   };
   cleanups: ResourceCleanup[];
+}
+
+export interface ResourceHistory {
+  startedAt: number;
+  maxGapMs: number;
+  error: string | null;
+  samples: {
+    at: number; hostCpu: number | null; freeMemory: number | null;
+    appCpu: number | null; appMemory: number | null; eventLoopDelay: number | null;
+  }[];
+  storage: { at: number; category: string; scope: string; bytes: number | null }[];
+}
+export interface ResourceHistoryStore {
+  load(): ResourceHistory | null;
+  save(history: ResourceHistory): void;
 }
 
 export interface FileInfo {

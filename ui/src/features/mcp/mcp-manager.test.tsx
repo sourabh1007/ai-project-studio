@@ -180,6 +180,21 @@ function renderManager(api: ApiClient) {
 }
 
 describe('McpManager', () => {
+  it('opens historical diagnostics without inspecting, authenticating or changing the configured server', async () => {
+    const api = client({ getMcpHistory: vi.fn().mockResolvedValue({ items: [], limited: false }) });
+    renderManager(api);
+    const summary = await screen.findByText('Observed activity (configured name)');
+    const details = summary.closest('details')!;
+    expect(api.getMcpHistory).not.toHaveBeenCalled();
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    await waitFor(() => expect(api.getMcpHistory).toHaveBeenCalledWith(expect.objectContaining({ provider: 'agency', server: 'Azure', scope: 'feature' })));
+    expect(api.inspectMcpServer).not.toHaveBeenCalled();
+    expect(api.getMcpServerStatus).not.toHaveBeenCalled();
+    expect(api.startMcpAuthentication).not.toHaveBeenCalled();
+    expect(api.setMcpServerEnabled).not.toHaveBeenCalled();
+    expect(api.putMcpServer).not.toHaveBeenCalled();
+  });
   it('gives actionable enterprise Claude profile guidance without exposing an empty config', async () => {
     const api = client({
       listMcpProviders: vi.fn().mockResolvedValue([{ id: 'claude', label: 'Claude', capabilities }]),
@@ -636,7 +651,7 @@ describe('McpManager', () => {
     expect(api.setMcpServerEnabled).toHaveBeenCalledTimes(2);
     slow.resolve(makeConfig('agency', []));
     await screen.findByRole('button', { name: 'Enable Azure' });
-    expect(screen.getAllByText('Disabled in configuration')).toHaveLength(2);
+    await waitFor(() => expect(screen.getAllByText('Disabled in configuration')).toHaveLength(2));
   });
 
   it('surfaces toggle and connection errors without disabling other category navigation', async () => {

@@ -23,6 +23,7 @@ import type {
   ReviewBoard,
   ReviewBoardPerspectiveEvent,
   ReviewBoardRatingChange,
+  ReviewOptions,
 } from '../../lib/types.js';
 import { ApiError } from '../../lib/api.js';
 import { metaConcurrency } from '../../lib/meta-concurrency.js';
@@ -72,6 +73,7 @@ const BULK_REVIEW_CONCURRENCY = 3;
 /** The subset of the API client the store drives. */
 export interface ReviewBoardRunApi {
   getReviewBoard(featureId: string): Promise<ReviewBoard>;
+  configureReviewBoard?(featureId: string, options: ReviewOptions): Promise<ReviewBoard>;
   analyzeReviewBoardPerspective(
     featureId: string,
     perspectiveId: string,
@@ -159,6 +161,8 @@ export interface ReviewBoardRunState {
   signoff: SignoffState;
   /** Human resolve/ignore decisions per finding; persisted per feature. */
   resolutions: FindingResolutionMap;
+  publications: Record<string, 'pending' | 'posted' | 'uncertain'>;
+  resolutionReasons: Record<string, string>;
 }
 
 /** Progress of the optional "take latest from remote" step before analysis. */
@@ -183,6 +187,8 @@ const EMPTY_STATE: ReviewBoardRunState = {
   prep: IDLE_PREP,
   signoff: emptySignoff(),
   resolutions: {},
+  publications: {},
+  resolutionReasons: {},
 };
 
 /** Internal per-feature record: public state plus the live run's control. */
@@ -192,6 +198,7 @@ interface FeatureRecord {
   controller: AbortController | null;
   loadToken: number;
   loadPromise: Promise<void> | null;
+  livePromise: Promise<void> | null;
   loadMode: 'refresh' | 'force' | null;
   timingToken: number;
 }
@@ -277,11 +284,13 @@ export class ReviewBoardRunStore {
           ...EMPTY_STATE,
           signoff: this.loadSignoff(featureId),
           resolutions: this.loadResolutions(featureId),
+          ...this.loadFindingMetadata(featureId),
         },
         runToken: 0,
         controller: null,
         loadToken: 0,
         loadPromise: null,
+        livePromise: null,
         loadMode: null,
         timingToken: 0,
       };
@@ -385,6 +394,7 @@ export class ReviewBoardRunStore {
     featureId: string,
     findingId: string,
     resolution: FindingResolution | null,
+    reason?: string,
   ): void {
     this.update(featureId, (prev) => {
       const resolutions = withResolution(prev.resolutions, findingId, resolution);
@@ -396,7 +406,34 @@ export class ReviewBoardRunStore {
       } catch {
         /* best-effort persistence only */
       }
-      return { ...prev, resolutions };
+      const resolutionReasons = { ...prev.resolutionReasons };
+      if (reason) resolutionReasons[findingId] = reason;
+      else if (!resolution) delete resolutionReasons[findingId];
+      this.saveFindingMetadata(featureId, prev.publications, resolutionReasons);
+      return { ...prev, resolutions, resolutionReasons };
+    });
+  }
+
+  private loadFindingMetadata(featureId: string): Pick<ReviewBoardRunState, 'publications' | 'resolutionReasons'> {
+    try {
+      const data = JSON.parse(globalThis.localStorage?.getItem(`rb-finding-metadata:${featureId}`) ?? '{}');
+      return { publications: data.publications ?? {}, resolutionReasons: data.resolutionReasons ?? {} };
+    } catch {
+      return { publications: {}, resolutionReasons: {} };
+    }
+  }
+
+  private saveFindingMetadata(featureId: string, publications: ReviewBoardRunState['publications'], resolutionReasons: Record<string, string>): void {
+    try {
+      globalThis.localStorage?.setItem(`rb-finding-metadata:${featureId}`, JSON.stringify({ publications, resolutionReasons }));
+    } catch { /* best-effort persistence only */ }
+  }
+
+  setFindingPublication(featureId: string, findingId: string, publication: 'pending' | 'posted' | 'uncertain'): void {
+    this.update(featureId, (prev) => {
+      const publications = { ...prev.publications, [findingId]: publication };
+      this.saveFindingMetadata(featureId, publications, prev.resolutionReasons);
+      return { ...prev, publications };
     });
   }
 
@@ -486,17 +523,36 @@ export class ReviewBoardRunStore {
         }
         this.update(featureId, (prev) => {
           const keepResults = !force && prev.board !== null &&
+            prev.board.run?.id === board.run?.id &&
+            prev.board.run?.revision === board.run?.revision &&
             prev.board.pull.headSha === board.pull.headSha &&
             prev.board.reviewUpdatedAt === board.reviewUpdatedAt &&
             prev.board.perspectives.length === board.perspectives.length &&
             prev.board.perspectives.every((p) => board.perspectives.some((next) => next.id === p.id));
           let refreshed = board;
           const restored: Record<string, PerspectiveProgress> = {};
+          const sameCapturedRun = prev.board?.run && board.run
+            && prev.board.run.id === board.run.id
+            && prev.board.pull.headSha === board.pull.headSha
+            && prev.board.run.graphGeneratedAt === board.run.graphGeneratedAt;
           if (!force) {
             for (const perspective of board.perspectives) {
+              const failure = board.run?.failures[perspective.id];
+              if (failure !== undefined) {
+                restored[perspective.id] = {
+                  status: 'error', skipReason: null, checked: null,
+                  rationale: [], checks: [], error: failure, attempt: 0,
+                };
+                continue;
+              }
               const analysis = board.analyses?.[perspective.id];
-              if (!analysis || analysis.perspectiveId !== perspective.id ||
-                  analysis.perspective.id !== perspective.id) continue;
+              if (!analysis || (board.run && analysis.runId !== board.run.id) || analysis.perspectiveId !== perspective.id ||
+                  analysis.perspective.id !== perspective.id) {
+                if (sameCapturedRun && prev.progress[perspective.id]?.status === 'error') {
+                  restored[perspective.id] = prev.progress[perspective.id];
+                }
+                continue;
+              }
               restored[perspective.id] = {
                 status: analysis.skipped ? 'skipped' : 'done',
                 skipReason: analysis.skipReason, checked: analysis.summary,
@@ -518,16 +574,23 @@ export class ReviewBoardRunStore {
             new Date().toISOString(),
           );
           this.saveSignoff(featureId, signoff);
+          const newRun = prev.signoff.identity !== null && board.run &&
+            prev.signoff.identity.runId !== board.run.id;
+          if (newRun) {
+            try { globalThis.localStorage?.removeItem(this.resolutionsKey(featureId)); } catch { /* best effort */ }
+            this.saveFindingMetadata(featureId, {}, {});
+          }
           return {
             ...prev,
             board: refreshed,
-            progress: keepResults ? { ...restored, ...prev.progress } : restored,
+            progress: keepResults ? (board.run ? { ...prev.progress, ...restored } : { ...restored, ...prev.progress }) : restored,
             analyzed: (keepResults && prev.analyzed) || Object.keys(restored).length > 0,
             timing: keepResults || prev.timing?.finishedAt === null ? prev.timing : null,
             preparationTiming: keepResults || prev.timing?.finishedAt === null ? prev.preparationTiming : null,
             loading: false,
             loadError: null,
             signoff,
+            ...(newRun ? { resolutions: {}, publications: {}, resolutionReasons: {} } : {}),
           };
         });
       } catch (error) {
@@ -558,6 +621,53 @@ export class ReviewBoardRunStore {
     return rec.loadPromise;
   }
 
+  /** Refresh saved explanations without resetting the locally owned stream. */
+  async refreshLive(featureId: string, api: ReviewBoardRunApi): Promise<void> {
+    if (this.removed.has(featureId)) return;
+    const rec = this.record(featureId);
+    if (!rec.state.running) return this.load(featureId, api);
+    if (rec.livePromise) return rec.livePromise;
+    const captured = rec.state.board;
+    if (!captured) return;
+    const runToken = rec.runToken;
+    const loadToken = rec.loadToken;
+    rec.livePromise = (async () => {
+      try {
+        const snapshot = await api.getReviewBoard(featureId);
+        if (this.removed.has(featureId) || rec.runToken !== runToken || rec.loadToken !== loadToken) return;
+        this.update(featureId, (prev) => {
+          const current = prev.board;
+          if (!current || !prev.running ||
+              current.run?.id !== captured.run?.id || snapshot.run?.id !== captured.run?.id ||
+              snapshot.featureId !== featureId ||
+              snapshot.pull.headSha !== current.pull.headSha ||
+              snapshot.reviewUpdatedAt !== current.reviewUpdatedAt ||
+              snapshot.run?.graphGeneratedAt !== current.run?.graphGeneratedAt ||
+              snapshot.perspectives.length !== current.perspectives.length ||
+              !current.perspectives.every((p) => snapshot.perspectives.some((next) => next.id === p.id)) ||
+              (snapshot.run?.revision ?? 0) < (current.run?.revision ?? 0)) return prev;
+          let refreshed = snapshot;
+          // A stream event can arrive after this GET began. Keep those newer results.
+          for (const [id, analysis] of Object.entries(current.analyses ?? {})) {
+            if (!snapshot.analyses?.[id] || analysis !== captured.analyses?.[id]) {
+              refreshed = {
+                ...mergeAnalyzedPerspective(refreshed, analysis.perspective),
+                analyses: { ...refreshed.analyses, [id]: analysis },
+                uniqueFindings: undefined,
+              };
+            }
+          }
+          return { ...prev, board: refreshed };
+        });
+      } catch {
+        // A missed live snapshot must not interrupt the stream; the next poll retries.
+      } finally {
+        rec.livePromise = null;
+      }
+    })();
+    return rec.livePromise;
+  }
+
   /** Abort any in-flight run and reload the clean board from scratch. */
   reset(featureId: string, api: ReviewBoardRunApi): void {
     this.autoScheduled.add(featureId);
@@ -575,6 +685,8 @@ export class ReviewBoardRunStore {
       board: rec.state.board,
       signoff: rec.state.signoff,
       resolutions: rec.state.resolutions,
+      publications: rec.state.publications,
+      resolutionReasons: rec.state.resolutionReasons,
     };
     this.emit(featureId);
     void this.load(featureId, api, true);
@@ -705,7 +817,11 @@ export class ReviewBoardRunStore {
     this.update(featureId, (prev) => ({
       ...prev, prep,
       preparationTiming: prep.active
-        ? (prev.prep.active ? prev.preparationTiming : { startedAt: Date.now(), finishedAt: null })
+        ? (prev.prep.active ? prev.preparationTiming : {
+          startedAt: prev.timing?.finishedAt === null && prev.preparationTiming
+            ? prev.preparationTiming.startedAt : Date.now(),
+          finishedAt: null,
+        })
         : (prev.preparationTiming && prev.preparationTiming.finishedAt === null
           ? { ...prev.preparationTiming, finishedAt: Date.now() } : prev.preparationTiming),
     }));
@@ -728,7 +844,7 @@ export class ReviewBoardRunStore {
   async analyze(
     featureId: string,
     api: ReviewBoardRunApi,
-    opts: { takeLatest?: boolean; waitForGraph?: boolean } = {},
+    opts: { takeLatest?: boolean; waitForGraph?: boolean; fresh?: boolean; reviewOptions?: ReviewOptions } = {},
   ): Promise<void> {
     if (this.removed.has(featureId)) return;
     this.autoScheduled.add(featureId);
@@ -756,15 +872,34 @@ export class ReviewBoardRunStore {
   private async runAnalysis(
     featureId: string,
     api: ReviewBoardRunApi,
-    opts: { takeLatest?: boolean; waitForGraph?: boolean },
+    opts: { takeLatest?: boolean; waitForGraph?: boolean; fresh?: boolean; reviewOptions?: ReviewOptions },
     timingToken: number,
   ): Promise<void> {
     if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
     if (!opts.takeLatest && opts.waitForGraph !== false && !(await this.takeLatest(featureId, api, false))) return;
     if (this.record(featureId).timingToken !== timingToken) return;
-    // Take the latest board before a full pass, so the analysis reflects the
-    // current PR state rather than a stale snapshot from a previous visit.
-    await this.load(featureId, api, true);
+    this.setPrep(featureId, {
+      active: true,
+      message: opts.fresh ? 'Preparing review context and repository guidance…' : 'Loading captured review evidence…',
+      error: null,
+    });
+    try {
+      if (opts.fresh) {
+        if (!api.configureReviewBoard) throw new Error('Review options are unavailable. Reload the app before rerunning.');
+        await api.configureReviewBoard(featureId, opts.reviewOptions ?? {});
+        if (this.record(featureId).timingToken !== timingToken) return;
+      }
+      // Keep preparation visible until the authoritative board is loaded.
+      await this.load(featureId, api, true);
+    } catch (error) {
+      if (this.record(featureId).timingToken !== timingToken) return;
+      this.setPrep(featureId, { active: false, message: '', error: messageOf(error, 'Could not prepare a fresh review.') });
+      return;
+    } finally {
+      if (this.record(featureId).timingToken === timingToken && this.record(featureId).state.prep.active) {
+        this.setPrep(featureId, IDLE_PREP);
+      }
+    }
     const rec = this.record(featureId);
     if (rec.timingToken !== timingToken) return;
     const board = rec.state.board;
@@ -817,6 +952,9 @@ export class ReviewBoardRunStore {
       }
       const eventId = event.type === 'analyzed' ? event.analysis.perspectiveId : event.perspectiveId;
       if (!ids.includes(eventId)) throw new Error(`Review stream returned an unknown perspective: ${eventId}`);
+      if (event.type === 'analyzed' && board.run && event.analysis.runId !== board.run.id) {
+        throw new Error('Review stream returned results for a different run. Reload the latest review.');
+      }
       if (event.type === 'analyzing') {
         this.setProgress(featureId, event.perspectiveId, {
           status: 'analyzing',
@@ -834,7 +972,11 @@ export class ReviewBoardRunStore {
         this.update(featureId, (prev) => ({
           ...prev,
           board: prev.board
-            ? mergeAnalyzedPerspective(prev.board, result.perspective)
+            ? {
+              ...mergeAnalyzedPerspective(prev.board, result.perspective),
+              analyses: { ...prev.board.analyses, [result.perspectiveId]: result },
+              uniqueFindings: undefined,
+            }
             : prev.board,
         }));
         this.setProgress(featureId, result.perspectiveId, {
@@ -904,6 +1046,7 @@ export class ReviewBoardRunStore {
         }
       }
       this.update(featureId, (prev) => ({ ...prev, running: false }));
+      if (!controller.signal.aborted) await this.load(featureId, api);
     }
   }
 
@@ -921,6 +1064,7 @@ export class ReviewBoardRunStore {
     opts: { takeLatest?: boolean } = {},
   ): Promise<void> {
     if (this.removed.has(featureId)) return;
+    if (this.record(featureId).state.prep.active || this.record(featureId).state.queued) return;
     if (opts.takeLatest && !(await this.takeLatest(featureId, api))) return;
     const rec = this.record(featureId);
     if (!opts.takeLatest && !rec.state.running && !(await this.takeLatest(featureId, api, false))) return;
@@ -983,7 +1127,8 @@ export class ReviewBoardRunStore {
         this.update(featureId, (prev) => ({
           ...prev,
           board: prev.board
-            ? mergeAnalyzedPerspective(prev.board, result.perspective)
+            ? { ...mergeAnalyzedPerspective(prev.board, result.perspective),
+              analyses: { ...prev.board.analyses, [result.perspectiveId]: result }, uniqueFindings: undefined }
             : prev.board,
         }));
         this.setProgress(featureId, perspectiveId, {
@@ -1016,6 +1161,7 @@ export class ReviewBoardRunStore {
         ...prev, running: Object.values(prev.progress).some((p) =>
           p.status === 'pending' || p.status === 'analyzing' || p.status === 'retrying'),
       }));
+      if (!this.record(featureId).state.running && !controller.signal.aborted) await this.load(featureId, api);
     }
   }
 
@@ -1027,6 +1173,7 @@ export class ReviewBoardRunStore {
   ): Promise<void> {
     if (this.removed.has(featureId)) return;
     const rec = this.record(featureId);
+    if (rec.state.prep.active || rec.state.queued) return;
     const failed = opts.includeIncomplete
       ? (rec.state.board?.perspectives ?? [])
         .filter((perspective) => rec.state.progress[perspective.id]?.status !== 'done')
@@ -1035,6 +1182,10 @@ export class ReviewBoardRunStore {
       .filter(([, p]) => p.status === 'error')
       .map(([id]) => id);
     if (failed.length === 0) return;
+    if (rec.state.board?.run) {
+      if (!rec.state.running) await this.analyze(featureId, api);
+      return;
+    }
     if (!rec.state.running && !(await this.takeLatest(featureId, api, false))) return;
 
     const controller = rec.controller?.signal.aborted
@@ -1101,7 +1252,8 @@ export class ReviewBoardRunStore {
         this.update(featureId, (prev) => ({
           ...prev,
           board: prev.board
-            ? mergeAnalyzedPerspective(prev.board, result.perspective)
+            ? { ...mergeAnalyzedPerspective(prev.board, result.perspective),
+              analyses: { ...prev.board.analyses, [result.perspectiveId]: result }, uniqueFindings: undefined }
             : prev.board,
         }));
         this.setProgress(featureId, id, {
@@ -1135,6 +1287,7 @@ export class ReviewBoardRunStore {
         ...prev, running: Object.values(prev.progress).some((p) =>
           p.status === 'pending' || p.status === 'analyzing' || p.status === 'retrying'),
       }));
+      if (!this.record(featureId).state.running && !controller.signal.aborted) await this.load(featureId, api);
     }
   }
 

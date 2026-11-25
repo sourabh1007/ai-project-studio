@@ -50,6 +50,16 @@ function isTerminalResultLine(line: string): boolean {
 function sessionError(line: string): string | null {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.type === 'result') {
+      const failed = event.is_error === true || event.status === 'failed'
+        || (typeof event.subtype === 'string' && event.subtype.startsWith('error'))
+        || (typeof event.exitCode === 'number' && event.exitCode !== 0);
+      if (!failed) return null;
+      for (const key of ['message', 'error', 'result']) {
+        if (typeof event[key] === 'string' && event[key].trim()) return event[key] as string;
+      }
+      return 'Provider reported a failed result';
+    }
     if (event.type !== 'session.error' || typeof event.data !== 'object' || !event.data) {
       return null;
     }
@@ -63,13 +73,16 @@ function sessionError(line: string): string | null {
   return null;
 }
 
-function providerFailure(transcript: Transcript | null, exitCode: number | null): Error {
+function providerFailure(transcript: Transcript | null, exitCode: number | null, capturedFailure: string | null): Error {
   const eventErrors = (transcript?.stdout ?? [])
     .flatMap((chunk) => chunk.split(/\r?\n/))
     .map(sessionError)
     .filter((message): message is string => message !== null);
   const stderr = (transcript?.stderr ?? []).filter((line) => line.trim().length > 0);
-  const detail = safeFailureText(eventErrors.at(-1) ?? stderr.at(-1) ?? '');
+  const lastStderr = stderr.at(-1) ?? '';
+  const stderrDetail = /^Error: Agent execution failed: launch_engine\b/.test(lastStderr)
+    ? stderr.slice(-2).join(' | ') : lastStderr;
+  const detail = safeFailureText(capturedFailure ?? eventErrors.at(-1) ?? stderrDetail);
   const code = exitCode === null ? '' : ` (exit code ${exitCode})`;
   return new Error(`Provider failed${code}${detail ? `: ${detail}` : ''}`);
 }
@@ -130,6 +143,11 @@ function metaAbortMessage(
 
 /** A single headless AI request: a prompt run against a feature's context. */
 export interface MetaRequest {
+  /** Stable catalog identities only; never prompt contents. */
+  promptRefs?: readonly string[];
+  correlation?: {
+    runId: string; attachmentId?: string; perspectiveId?: string; contextFingerprint?: string; agentId?: string;
+  };
   /**
    * Usage attribution partition. Feature work uses its feature id; internal
    * repository analysis may use a stable repository-derived id.
@@ -355,12 +373,14 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
         timedOut: () => timedOut,
       });
       const transcript = await deps.transcripts.load(ended.session.id);
+      const recordedFailure = (transcript?.stdout ?? []).some((chunk) =>
+        chunk.split(/\r?\n/).some((line) => sessionError(line) !== null));
       if (
-        !ended.completedTurn &&
+        ended.failure || recordedFailure || (!ended.completedTurn &&
         (ended.session.status === 'failed' ||
-          (ended.session.exitCode !== null && ended.session.exitCode !== 0))
+          (ended.session.exitCode !== null && ended.session.exitCode !== 0)))
       ) {
-        throw providerFailure(transcript, ended.session.exitCode);
+        throw providerFailure(transcript, ended.session.exitCode, ended.failure);
       }
       return {
         text: extractResponseText(transcript, deps.config.responseTextKeys),
@@ -391,6 +411,7 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
 interface MetaCompletion {
   session: Session;
   completedTurn: boolean;
+  failure: string | null;
 }
 
 /**
@@ -418,6 +439,7 @@ function awaitWithTimeout(
 ): Promise<MetaCompletion> {
   return new Promise<MetaCompletion>((resolve, reject) => {
     let completedTurn = false;
+    let failure: string | null = null;
     let settled = false;
     let stopRequested = false;
     let stopKind: MetaStopKind = 'aborted';
@@ -451,6 +473,7 @@ function awaitWithTimeout(
       options.signal.addEventListener('abort', stop, { once: true });
     }
     launched.running.onEvent((event) => {
+      if (event.type === 'stdout') failure = sessionError(event.line) ?? failure;
       if (
         !completedTurn &&
         event.type === 'stdout' &&
@@ -481,7 +504,7 @@ function awaitWithTimeout(
           );
           return;
         }
-        resolve({ session, completedTurn });
+        resolve({ session, completedTurn, failure });
       },
       (error: unknown) => {
         if (settled) {

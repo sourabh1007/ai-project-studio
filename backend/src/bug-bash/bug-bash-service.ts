@@ -251,6 +251,7 @@ export function createBugBashService(
       );
       const result = await deps.ai.runDetailed({
         featureId: run.featureId,
+        correlation: { runId: run.id, attachmentId: run.id, agentId: 'bug-bash' },
         prompt,
         cwd: workspace.repoLocalPath,
         scope: 'internal',
@@ -296,6 +297,7 @@ export function createBugBashService(
           line: '🔎 Assembling an analyst team to design edge-case scenarios…',
         });
         const team = await deps.generateTeam.generate({
+          correlation: { runId: run.id, attachmentId: run.id, agentId: 'bug-bash' },
           featureId: run.featureId,
           cwd: workspace.repoLocalPath,
           featureInfo: run.featureInfo,
@@ -385,6 +387,7 @@ export function createBugBashService(
       });
       const result = await deps.ai.runDetailed({
         featureId: run.featureId,
+        correlation: { runId: run.id, attachmentId: run.id, agentId: 'bug-bash' },
         prompt,
         cwd: workspace.repoLocalPath,
         scope: 'internal',
@@ -436,6 +439,7 @@ export function createBugBashService(
           line: '👥 Assembling a team of testers to run the scenarios…',
         });
         const team = await deps.team.run({
+          correlation: { runId: run.id, attachmentId: run.id, agentId: 'bug-bash' },
           featureId: run.featureId,
           cwd: workspace.repoLocalPath,
           featureInfo: run.featureInfo,

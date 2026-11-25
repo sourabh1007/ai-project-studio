@@ -38,6 +38,21 @@ const spec: SessionSpec = {
 };
 
 describe('copilot-provider', () => {
+  it('uses the injected native launcher for both interactive and headless argv without shell expansion', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner, baseEnv: {}, mcpServerNames: () => ['plugin:server'],
+      resolveCommand: ({ args }) => ({ command: 'node.exe', args: ['loader.js', ...args] }),
+    });
+    provider.startSession({ ...spec, kind: 'meta' });
+    expect(requests[0].command).toBe('node.exe');
+    expect(requests[0].args[0]).toBe('loader.js');
+    expect(requests[0].args).toContain('--disable-builtin-mcps');
+    expect(requests[0].args).toContain('plugin:server');
+    expect(provider.buildInteractiveCommand(spec)).toMatchObject({
+      command: 'node.exe', args: expect.arrayContaining(['loader.js', '--session-id']),
+    });
+  });
   it('reports its id and lists configured models', async () => {
     const { spawner } = fakeSpawner();
     const provider = createCopilotProvider(copilotDefaults, {
@@ -89,6 +104,22 @@ describe('copilot-provider', () => {
         'azure',
       ]),
     );
+  });
+
+  it('uses native MCP configuration only when explicitly configured, while preserving text-only denial', () => {
+    const { spawner, requests } = fakeSpawner();
+    const provider = createCopilotProvider(copilotDefaults, {
+      spawner, baseEnv: {}, mcpPolicy: 'native',
+      mcpServerNames: () => { throw new Error('Native mode must not require an isolated inventory'); },
+    });
+    provider.startSession({ ...spec, kind: 'meta', noTools: true });
+    expect(requests[0].input).toBe(spec.prompt);
+    expect(requests[0].args).not.toContain(spec.prompt);
+    expect(requests[0].args).not.toContain('-p');
+    expect(requests[0].args).not.toContain('--disable-builtin-mcps');
+    expect(requests[0].args.slice(requests[0].args.indexOf('--allow-all-tools'), requests[0].args.indexOf('--allow-all-tools') + 2))
+      .toEqual(['--allow-all-tools', '--available-tools']);
+    expect(requests[0].args).not.toContain('--deny-tool');
   });
 
   it('only evaluates workspace MCP policy for meta work and stamps the actual provider identity', () => {

@@ -12,6 +12,20 @@ const imported = (number: number, alreadyImported = false): Checkout => ({
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 describe('parallel bulk checkout', () => {
+  it('snapshots per-PR setup before bulk checkouts and reports deferred imports without queueing', async () => {
+    const setup = { autoReview: false, reviewOptions: { model: 'chosen', skillIds: ['guide'] } };
+    const report = vi.fn();
+    const createPrFeatureStreamed = vi.fn((_repo: string, number: number) => Promise.resolve(imported(number)));
+    const pending = checkoutPulls({ createPrFeatureStreamed }, 'repo', 'parent',
+      pulls.slice(0, 2).map((pull) => ({ ...pull, importOptions: setup })), report);
+    setup.reviewOptions.skillIds.push('changed');
+    const result = await pending;
+    expect(createPrFeatureStreamed).toHaveBeenCalledWith('repo', 1, expect.any(Function), 'parent', null, {
+      autoReview: false, reviewOptions: { model: 'chosen', skillIds: ['guide'] },
+    });
+    expect(result[0].importOptions).not.toBe(result[1].importOptions);
+    expect(report.mock.lastCall![0]).toContain('#1 — Imported · review later');
+  });
   it('notifies each imported PR immediately, even when another checkout fails later', async () => {
     const first = feature(1);
     let failSecond!: (error: Error) => void;
@@ -72,7 +86,7 @@ describe('parallel bulk checkout', () => {
     finish.get(1)!(imported(1));
     expect(await pending).toEqual(pulls.map((pull) => ({ ...pull, feature: feature(pull.number), alreadyImported: false })));
     expect(report.mock.lastCall![0]).toContain('3/3 finished');
-    expect(createPrFeatureStreamed).toHaveBeenCalledWith('repo', 1, expect.any(Function), 'parent');
+    expect(createPrFeatureStreamed).toHaveBeenCalledWith('repo', 1, expect.any(Function), 'parent', null, undefined);
   });
 
   it('drains in-flight work and continues queued PRs before reporting failures', async () => {

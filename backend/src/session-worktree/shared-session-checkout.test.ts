@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSharedCheckoutPreparer, detectDefaultBranch, isMissingRef, isNotGitRepository, type GitRunResult } from './shared-session-checkout.js';
 import { sessionWorktreeConfigSchema, sessionWorktreeDefaults, SESSION_WORKTREE_NAMESPACE } from './config.js';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const target = { repoLocalPath: 'C:\\repo', ref: 'master' };
 const ok = (stdout = ''): GitRunResult => ({ code: 0, stdout, stderr: '' });
@@ -123,7 +127,64 @@ describe('shared session checkout', () => {
       ? { code: 1, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr });
     const prepare = createSharedCheckoutPreparer({ git });
     await expect(prepare(target)).rejects.toThrow(stderr || 'Cannot switch the shared checkout to master');
-    expect(git).toHaveBeenCalledTimes(2);
+    expect(git).toHaveBeenCalledTimes(3);
+  });
+  it.each([
+    { code: 1, stdout: 'unavailable', stderr: 'cannot read index' },
+    { code: 0, stdout: '', stderr: '' },
+  ])('does not assume unresolved conflicts when the index probe returns $code with "$stdout"', async (index) => {
+    const git = vi.fn(async (args: string[]) => args.includes('symbolic-ref') ? ok('feature')
+      : args.includes('ls-files') ? index : { code: 1, stdout: '', stderr: 'you need to resolve your current index first' });
+    await expect(createSharedCheckoutPreparer({ git })(target)).rejects.toThrow('resolve your current index first');
+    expect(git).toHaveBeenLastCalledWith(['-C', target.repoLocalPath, 'ls-files', '--unmerged', '-z'], expect.any(Function));
+  });
+  it('opens a real conflicted checkout without switching branches or changing the merge, index or local files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'studio-unresolved-index-'));
+    const git = vi.fn(async (args: string[]) => {
+      const result = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8', timeout: 15000 });
+      if (result.error) throw result.error;
+      return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+    });
+    const run = async (...args: string[]) => {
+      const result = await git(args);
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    try {
+      await run('init', '-b', 'main');
+      await run('config', 'user.name', 'Studio fixture');
+      await run('config', 'user.email', 'fixture@example.invalid');
+      const file = join(root, 'conflict.txt');
+      writeFileSync(file, 'base\n');
+      await run('add', '--', 'conflict.txt');
+      await run('commit', '-m', 'base');
+      await run('checkout', '-b', 'feature');
+      writeFileSync(file, 'feature\n');
+      await run('commit', '-am', 'feature');
+      await run('checkout', 'main');
+      writeFileSync(file, 'main\n');
+      await run('commit', '-am', 'main');
+      expect((await git(['merge', 'feature'])).code).toBe(1);
+      const before = {
+        branch: await run('symbolic-ref', '--short', 'HEAD'),
+        head: await run('rev-parse', 'HEAD'),
+        index: await run('ls-files', '--stage', '-z'),
+        merge: readFileSync(join(root, '.git', 'MERGE_HEAD'), 'utf8'),
+        files: readFileSync(file, 'utf8'),
+      };
+      git.mockClear();
+      const report = vi.fn();
+      await expect(createSharedCheckoutPreparer({ git })({ repoLocalPath: root, ref: 'feature' }, report)).resolves.toBe(root);
+      expect(git.mock.calls.map(([args]) => args.includes('checkout'))).toEqual([false, true, false]);
+      expect(report).toHaveBeenLastCalledWith(expect.stringContaining('unresolved merge conflicts'));
+      expect({
+        branch: await run('symbolic-ref', '--short', 'HEAD'),
+        head: await run('rev-parse', 'HEAD'),
+        index: await run('ls-files', '--stage', '-z'),
+        merge: readFileSync(join(root, '.git', 'MERGE_HEAD'), 'utf8'),
+        files: readFileSync(file, 'utf8'),
+      }).toEqual(before);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   it('keeps an existing managed checkout without selecting a branch or invoking recovery', async () => {
     const git = vi.fn(async () => ok());

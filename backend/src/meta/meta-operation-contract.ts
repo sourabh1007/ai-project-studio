@@ -21,6 +21,10 @@ export interface MetaOperationRequest extends MetaRequest {
 }
 
 export interface MetaOperation {
+  promptRefs?: readonly string[];
+  /** Immutable per-request response metering; never replaced by session capture. */
+  requestUsage?: MetaUsageSnapshot | null;
+  correlation?: NonNullable<MetaRequest['correlation']>;
   operationId: string;
   featureId: string;
   automationId: string | null;
@@ -122,6 +126,11 @@ export interface MetaOperationPage {
 export type MetaOperationSummary = Omit<MetaOperation, 'resultText'> & { hasResult: boolean };
 
 export interface MetaOperationFilter {
+  excludeProviderId?: string;
+  agentId?: string;
+  runId?: string;
+  from?: string;
+  to?: string;
   featureId?: string;
   sessionId?: string;
   automationId?: string;

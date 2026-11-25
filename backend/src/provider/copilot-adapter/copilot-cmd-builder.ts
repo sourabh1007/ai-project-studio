@@ -1,4 +1,4 @@
-import type { SessionSpec } from '../provider-contract.js';
+import type { HeadlessMcpPolicy, SessionSpec } from '../provider-contract.js';
 import type { CopilotConfig } from './config.js';
 import { optionalCommandArgsSchema } from '../command-options.js';
 
@@ -30,10 +30,10 @@ export function buildCopilotArgs(
   spec: SessionSpec,
   config: CopilotFlagOptions,
   disabledMcpServers: readonly string[] = [],
+  mcpPolicy: HeadlessMcpPolicy = 'isolated',
 ): string[] {
   const args = [
-    '-p',
-    spec.prompt,
+    ...(spec.noTools ? [] : ['-p', spec.prompt]),
     '--model',
     spec.model,
     '--session-id',
@@ -46,20 +46,15 @@ export function buildCopilotArgs(
     args.push('--attachment', attachment);
   }
   if (spec.noTools) {
-    // Restrict the agent to zero tools: a pure prompt→text completion with no
-    // agentic tool loops (fast, and it can never wedge waiting on a tool).
-    // Takes precedence over the provider's blanket allow-all-tools default.
-    args.push('--available-tools');
+    // Prompt mode requires approval even with an empty tool allowlist.
+    // Availability filtering exposes no tools; "*" is not a permission rule.
+    args.push('--allow-all-tools', '--available-tools');
   } else if (config.allowAllTools) {
     args.push('--allow-all-tools');
   }
-  // Headless meta sessions (summaries, PR review, repo context, monitors,
-  // automations) run with no interactive TTY, so an MCP server that tries a
-  // browser/OAuth sign-in on load can never complete it — it just pops a
-  // browser (once per server, so N servers = N windows) and stalls the run.
-  // Suppress MCP entirely for these sessions: disable the built-in server and
-  // every user-configured one so the CLI never initializes an MCP connection.
-  if (spec.kind === 'meta') {
+  // Isolated turns must suppress every MCP source before authentication can
+  // start; native mode deliberately preserves the CLI's own startup policy.
+  if (spec.kind === 'meta' && mcpPolicy === 'isolated') {
     args.push('--disable-builtin-mcps');
     for (const name of disabledMcpServers) {
       args.push('--disable-mcp-server', name);
@@ -107,9 +102,10 @@ export function buildCopilotCommand(
   spec: SessionSpec,
   config: CopilotConfig,
   disabledMcpServers: readonly string[] = [],
+  mcpPolicy: HeadlessMcpPolicy = 'isolated',
 ): Command {
   return {
     command: config.executable,
-    args: buildCopilotArgs(spec, config, disabledMcpServers),
+    args: buildCopilotArgs(spec, config, disabledMcpServers, mcpPolicy),
   };
 }

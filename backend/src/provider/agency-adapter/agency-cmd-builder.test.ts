@@ -63,10 +63,15 @@ describe('agency-cmd-builder', () => {
     expect(cmd.args.every((arg) => !arg.includes(attachmentContent))).toBe(true);
   });
 
-  it('disables MCP servers in the copilot passthrough for meta sessions', () => {
+  it('preserves native MCP settings by default and supports explicitly requested isolation flags', () => {
+    const native = buildAgencyCommand({ ...spec, kind: 'meta', noTools: true }, agencyDefaults);
+    expect(native.args).not.toContain('--disable-builtin-mcps');
+    expect(native.args.slice(native.args.indexOf('--allow-all-tools'), native.args.indexOf('--allow-all-tools') + 2))
+      .toEqual(['--allow-all-tools', '--available-tools']);
+    expect(native.args).not.toContain('--deny-tool');
     const cmd = buildAgencyCommand({ ...spec, kind: 'meta' }, agencyDefaults, [
       'github',
-    ]);
+    ], 'isolated');
     expect(cmd.args.slice(0, 2)).toEqual(['copilot', '--']);
     expect(cmd.args).toContain('--disable-builtin-mcps');
     expect(cmd.args).toEqual(

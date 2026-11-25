@@ -64,6 +64,15 @@ describe('durable recording meta runner with production SQLite', () => {
     await h.runner.runDetailed({ featureId: 'f', prompt: 'go' });
     expect(states).toEqual(['running', 'running', 'completed']);
   });
+  it('preserves typed run and agent correlation through dispatch, settlement and metadata reads', async () => {
+    const h = setup();
+    const correlation = { runId: 'run', attachmentId: 'attachment', agentId: 'review-board', perspectiveId: 'business', contextFingerprint: 'fingerprint' };
+    await h.runner.runDetailed({ featureId: 'f', prompt: 'go', correlation, promptRefs: ['one', 'two', 'one'] });
+    expect(repo.get('op-1')?.promptRefs).toEqual(['one', 'two']);
+    expect(repo.get('op-1')?.correlation).toEqual(correlation);
+    expect(repo.listPage({ runId: 'run', agentId: 'review-board' }, null, 10).items[0].correlation).toEqual(correlation);
+    expect(h.base.runDetailed).toHaveBeenCalledWith(expect.objectContaining({ correlation }));
+  });
 
   it('does not retry or discard a durable result when the usage hint fails', async () => {
     const h = setup();

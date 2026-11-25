@@ -10,6 +10,60 @@ import type { ReviewFinding } from './review-board-contract.js';
 
 const IDS = ['security', 'testing'];
 
+describe('strict assessment and provenance envelope', () => {
+  const finding = { title: 'Bug', detail: 'Details', evidence: [{ source: 'a.ts', reason: 'Reason' }] };
+  it('resolves model-local finding aliases while leaving unknown references for evidence validation', () => {
+    const parsed = parseValidatedPerspectiveAnalysis(JSON.stringify({ summary: 'Checked',
+      findings: [{ ...finding, id: 'lock-order' }, finding],
+      requirements: [{ requirementId: 'r', assessment: 'violated', explanation: 'Lock ordering is reversed',
+        findingIds: ['lock-order', 'security/ai-1', 'unknown'], evidence: [] }] }), 'security');
+    expect(parsed.requirements![0].findingIds).toEqual(['security/ai-0', 'security/ai-1', 'unknown']);
+  });
+  it.each([null, '', ' ', 1, 'duplicate'])('rejects invalid or repeated model-local finding IDs: %s', (id) => {
+    expect(() => parseValidatedPerspectiveAnalysis(JSON.stringify({ summary: 'Checked',
+      findings: [{ ...finding, id: 'duplicate' }, { ...finding, id }] }), 'security')).toThrow('finding IDs must be unique');
+  });
+  it.each([
+    { assessment: 'pass' },
+    { checks: {} },
+    { assessment: 'no-concerns', findings: [finding] },
+    { assessment: 'not-applicable' },
+    { assessment: 'concerns', skipped: true, reason: 'Skip' },
+    { checks: [{ item: 'a', finding: 'b', status: 'made-up' }] },
+    { checks: [null] },
+    { findings: [{ ...finding, severity: 'made-up' }] },
+    { findings: [{ ...finding, skillIds: 'wrong' }] },
+    { findings: [{ ...finding, skillIds: [null] }] },
+    { findings: [{ ...finding, requirementIds: 'wrong' }] },
+    { findings: [{ ...finding, requirementIds: [null] }] },
+    { requirements: {} },
+    { requirements: [{ requirementId: 'r', assessment: 'pass' }] },
+    { requirements: [{ requirementId: 'r', assessment: 'supported', explanation: 'Checked',
+      evidence: [{ source: 'a.ts', reason: 'Reason', location: { path: '../a.ts', line: 1, side: 'RIGHT' } }] }] },
+    { skipped: true, reason: 'Skip', findings: [finding] },
+  ])('rejects invalid outcomes rather than certifying a pass: %j', (extra) => {
+    expect(() => parseValidatedPerspectiveAnalysis(JSON.stringify({ summary: 'Checked', findings: [], ...extra }), 'security'))
+      .toThrow('Invalid review response');
+  });
+  it('retains supplied skill references and explicit insufficiency', () => {
+    expect(parseValidatedPerspectiveAnalysis(JSON.stringify({ assessment: 'insufficient-evidence',
+      findings: [{ ...finding, severity: 'high', skillIds: ['s'] }], checks: [{ item: 'a', finding: 'b', status: 'concern' }] }), 'security'))
+      .toMatchObject({ assessment: 'insufficient-evidence', findings: [{ skillIds: ['s'] }] });
+  });
+  it('accepts explicit non-applicability only with a reasoned skip', () => {
+    expect(parseValidatedPerspectiveAnalysis('{"assessment":"not-applicable","skipped":true,"reason":"No exposed interface","findings":[]}', 'api').skipped).toBe(true);
+  });
+  it('retains explicit requirement assessments and never treats model evidence as executed verification', () => {
+    const parsed = parseValidatedPerspectiveAnalysis(JSON.stringify({ summary: 'Checked rules',
+      findings: [{ ...finding, requirementIds: ['r'] }],
+      requirements: [{ requirementId: 'r', assessment: 'violated', explanation: 'Changed key is unbounded',
+        evidence: [{ source: 'a.ts', reason: 'No bounds', direct: true, confidence: 1,
+          location: { path: 'a.ts', line: 1, side: 'RIGHT' } }] }] }), 'business');
+    expect(parsed.findings[0].requirementIds).toEqual(['r']);
+    expect(parsed.requirements![0]).toMatchObject({ requirementId: 'r', findingIds: [], evidence: [{ direct: false }] });
+  });
+});
+
 describe('evidence exact location', () => {
   function finding(location: unknown) {
     return {

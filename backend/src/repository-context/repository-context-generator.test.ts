@@ -43,6 +43,7 @@ describe('repository context generator', () => {
         repositoryId: 'repo-1',
         repositoryPath: 'C:\\repo',
         maxOutputChars: repositoryContextDefaults.maxOutputChars,
+        promptRefs: ['repositoryContext.analysisPromptTemplate'],
         prompt: expect.stringContaining('BEGIN UNTRUSTED REPOSITORY FILE'),
       }),
     );
@@ -69,6 +70,10 @@ describe('repository context generator', () => {
     ).resolves.toEqual({ content: 'final summary' });
 
     expect(execute).toHaveBeenCalledTimes(4);
+    expect(execute.mock.calls.map(([request]) => request.promptRefs)).toEqual([
+      ['repositoryContext.chunkPromptTemplate'], ['repositoryContext.chunkPromptTemplate'],
+      ['repositoryContext.chunkPromptTemplate'], ['repositoryContext.synthesisPromptTemplate'],
+    ]);
     expect(execute.mock.calls[0][0].prompt).toContain('Section: root');
     expect(execute.mock.calls[1][0].prompt).toContain('Section: backend');
     expect(execute.mock.calls[2][0].prompt).toContain('Section: ui');

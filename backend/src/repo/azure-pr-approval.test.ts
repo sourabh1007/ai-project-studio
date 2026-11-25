@@ -110,6 +110,33 @@ describe('findMyReviewer', () => {
 });
 
 describe('createAzureApprovalGateway', () => {
+  it('reads the actual target ref and excludes similarly prefixed branch names', async () => {
+    const calls: string[] = [];
+    const gateway = createAzureApprovalGateway(deps({ httpGet: async (url) => {
+      calls.push(url);
+      return url.includes('/refs?') ? resp(200, { value: [
+        { name: 'refs/heads/main-other', objectId: 'wrong' }, { name: 'refs/heads/main', objectId: 'base' },
+      ] }) : resp(200, { status: 'active', lastMergeSourceCommit: { commitId: 'head' },
+        lastMergeTargetCommit: { commitId: 'stale' }, targetRefName: 'refs/heads/main' });
+    } }), TARGET);
+    expect(await gateway.getRevisions!()).toEqual({ headSha: 'head', baseSha: 'base', targetBranch: 'main' });
+    expect(calls[1]).toContain('/refs?filter=heads%2Fmain');
+  });
+  it.each([undefined, null, '', 'main', 'refs/heads/'])('rejects unverifiable target ref %j', async (targetRefName) => {
+    const gateway = createAzureApprovalGateway(deps({ httpGet: router({ detail: resp(200, {
+      status: 'active', lastMergeSourceCommit: { commitId: 'head' }, targetRefName,
+    }) }) }), TARGET);
+    await expect(gateway.getRevisions!()).rejects.toThrow('target branch');
+  });
+  it.each([resp(500), resp(200, null), resp(200, {}), resp(200, { value: [] }),
+    resp(200, { value: [{ name: 'refs/heads/main' }] }), resp(200, { value: [{ name: 'refs/heads/main', objectId: '' }] })])(
+    'rejects unverifiable target commits %j', async (refs) => {
+      const gateway = createAzureApprovalGateway(deps({ httpGet: async (url) => url.includes('/refs?') ? refs : resp(200, {
+        status: 'active', lastMergeSourceCommit: { commitId: 'head' }, targetRefName: 'refs/heads/main',
+      }) }), TARGET);
+      await expect(gateway.getRevisions!()).rejects.toThrow('target commit');
+    },
+  );
   const live = { status: 'active', lastMergeSourceCommit: { commitId: 'head' } };
   it('reads the current head without casting any vote', async () => {
     const gw = createAzureApprovalGateway(deps({

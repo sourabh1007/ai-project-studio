@@ -1015,7 +1015,7 @@ function Charts({
       </Section>
 
       <Section icon={<McpIcon size={15} />} title="MCP servers" hint="Feature tool usage">
-        <McpUsageCharts rows={byMcpServer} />
+        <McpUsageCharts rows={byMcpServer} featureId={featureId} />
       </Section>
 
       {viewingUsage && (

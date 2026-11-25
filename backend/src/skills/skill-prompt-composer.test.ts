@@ -3,6 +3,8 @@ import {
   composeInstructions,
   composeRemoval,
   composeSessionPrompt,
+  instructionPromptRefs,
+  removalPromptRefs,
 } from './skill-prompt-composer.js';
 import { skillsDefaults } from './config.js';
 import type { Skill } from './skills-contract.js';
@@ -21,6 +23,14 @@ function skill(overrides: Partial<Skill> = {}): Skill {
 }
 
 describe('composeInstructions', () => {
+  it('attributes only templates actually rendered, including custom removal overrides', () => {
+    expect(instructionPromptRefs([])).toEqual([]);
+    expect(instructionPromptRefs([skill({ kind: 'task-plan' }), skill({ instructions: ' ' })])).toEqual([]);
+    expect(instructionPromptRefs([skill(), skill()])).toEqual(['skills.injectionHeader', 'skills.skillTemplate']);
+    expect(removalPromptRefs(skill())).toEqual(['skills.removalHeader', 'skills.instructionRemovalTemplate']);
+    expect(removalPromptRefs(skill({ kind: 'task-plan' }))).toEqual(['skills.removalHeader', 'skills.taskPlanRemovalTemplate']);
+    expect(removalPromptRefs(skill({ removalInstructions: ' Custom ' }))).toEqual(['skills.removalHeader']);
+  });
   it('returns an empty string when there are no skills', () => {
     expect(composeInstructions([], skillsDefaults)).toBe('');
   });

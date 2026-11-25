@@ -29,6 +29,7 @@ export interface UpdateSnapshot {
   releaseName?: string | null;
   error?: string | null;
   canAutoInstall?: boolean;
+  autoInstallBlockReason?: string | null;
   platform?: string;
   releasePageUrl?: string | null;
 }
@@ -45,6 +46,7 @@ export interface UpdateState {
   releaseName: string | null;
   error: string | null;
   canAutoInstall: boolean;
+  autoInstallBlockReason: string | null;
   platform: string;
   releasePageUrl: string | null;
 }
@@ -62,6 +64,7 @@ export function initialUpdateState(): UpdateState {
     releaseName: null,
     error: null,
     canAutoInstall: false,
+    autoInstallBlockReason: null,
     platform: 'unknown',
     releasePageUrl: null,
   };
@@ -87,6 +90,7 @@ export function mergeUpdateState(
     releaseName: pick(snapshot.releaseName, prev.releaseName),
     error: snapshot.status === 'error' ? snapshot.error ?? prev.error : snapshot.error ?? null,
     canAutoInstall: snapshot.canAutoInstall ?? prev.canAutoInstall,
+    autoInstallBlockReason: pick(snapshot.autoInstallBlockReason, prev.autoInstallBlockReason),
     platform: snapshot.platform ?? prev.platform,
     releasePageUrl: pick(snapshot.releasePageUrl, prev.releasePageUrl),
   };
@@ -178,7 +182,7 @@ export function deriveUpdateUi(state: UpdateState): UpdateUi {
     showActivity: status === 'checking' || status === 'installing' || status === 'restarting',
     stalled: isStalled(state),
     canCheck: status !== 'checking' && !inFlight,
-    canDownload: status === 'available',
+    canDownload: status === 'available' && state.canAutoInstall,
     canInstall: status === 'downloaded' || (status === 'available' && !state.canAutoInstall),
     autoInstall: state.canAutoInstall,
     busy,
@@ -235,7 +239,7 @@ function detailFor(state: UpdateState): string | null {
     )}`;
   }
   if ((state.status === 'available' || state.status === 'downloaded') && !state.canAutoInstall) {
-    return 'Open the release page for guided installation. The app will not install an update or quit automatically.';
+    return state.autoInstallBlockReason ?? 'Open the release page for guided installation. The app will not install an update or quit automatically.';
   }
   return state.releaseName ?? null;
 }

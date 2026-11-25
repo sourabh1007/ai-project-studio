@@ -42,13 +42,13 @@ const metaSession: Session = {
   exitCode: 0,
 };
 
-function harness(transcript: Transcript | null) {
+function harness(transcript: Transcript | null, withSession = false) {
   const requests: StartSessionRequest[] = [];
   const attached: Array<{ id: string; summary: string }> = [];
   const savedSummaries: FeatureSummary[] = [];
 
   const collector: TranscriptCollector = {
-    collect: async () => ({ feature, sessions: [] }),
+    collect: async () => ({ feature, sessions: withSession ? [{ session: metaSession, transcript }] : [] }),
   };
   const running = { sessionId: 'meta1' } as unknown as RunningSession;
   const launcher: SessionLauncher = {
@@ -120,6 +120,7 @@ describe('summary-runner', () => {
     const summary = await h.runner.summarize({ featureId: 'f1', signal });
 
     expect(h.requests[0].kind).toBe('meta');
+    expect(h.requests[0].promptRefs).toEqual(['summarizer.promptTemplate']);
     expect(h.requests[0].providerId).toBe(summarizerDefaults.providerId);
     expect(h.requests[0].prompt).toContain('Login');
     expect(h.requests[0].signal).toBe(signal);
@@ -130,8 +131,9 @@ describe('summary-runner', () => {
   });
 
   it('falls back to the empty-summary placeholder', async () => {
-    const h = harness(null);
+    const h = harness(null, true);
     const summary = await h.runner.summarize({ featureId: 'f1' });
     expect(summary.content).toBe(summarizerDefaults.emptySummaryPlaceholder);
+    expect(h.requests[0].promptRefs).toEqual(['summarizer.promptTemplate', 'summarizer.sessionTemplate']);
   });
 });

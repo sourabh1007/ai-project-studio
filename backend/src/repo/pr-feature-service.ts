@@ -10,6 +10,12 @@ import type {
 import type { ProvisionedWorktree, ProvisionStatusListener } from './pr-worktree-provisioner.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { PrReviewService } from '../pr-review/pr-review-service.js';
+import type { ReviewOptions } from '../review-board/review-run-contract.js';
+
+export interface PrImportOptions {
+  autoReview?: boolean;
+  reviewOptions?: ReviewOptions;
+}
 
 /**
  * Outcome of {@link PrFeatureService.createFromPull}. `alreadyImported` is true
@@ -66,6 +72,7 @@ export interface PrFeatureService {
     parentFeatureId?: string | null,
     parentGroupId?: string | null,
     onStatus?: ProvisionStatusListener,
+    importOptions?: PrImportOptions,
   ): Promise<CreateFromPullResult>;
   /**
    * Converts an existing (non-PR) feature into a PR feature in place: checks the
@@ -112,6 +119,7 @@ export function createPrFeatureService(
     parentFeatureId: string | null,
     parentGroupId: string | null,
     onStatus: ProvisionStatusListener,
+    importOptions: PrImportOptions,
   ): Promise<CreateFromPullResult> {
       // Opening a PR that already has a review must not create a duplicate: reuse
       // its existing review feature (and its checked-out worktree) instead. If
@@ -160,6 +168,10 @@ export function createPrFeatureService(
         // repo default alone breaks reviews of PRs that target a non-default
         // branch, and yields an empty diff when the default branch is unknown.
         baseBranch: pull.targetBranch ?? repo.defaultBranch ?? null,
+        reviewBoardImport: {
+          autoReview: importOptions.autoReview ?? true,
+          options: structuredClone(importOptions.reviewOptions ?? {}),
+        },
       });
       deps.onReviewFeatureCreated?.(feature.id);
       return { feature, alreadyImported: false };
@@ -171,7 +183,7 @@ export function createPrFeatureService(
       return deps.listPulls(repo, filter);
     },
 
-    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus) {
+    async createFromPull(repoId, number, parentFeatureId = null, parentGroupId = null, onStatus, importOptions = {}) {
       const repo = deps.repos.get(repoId);
       const key = `${repo.id}:${number}`;
       const running = inFlight.get(key);
@@ -193,7 +205,7 @@ export function createPrFeatureService(
       entry.promise = importPull(repo, number, parentFeatureId, parentGroupId, (status) => {
         entry.last = status;
         for (const listener of listeners) listener(status);
-      }).finally(() => {
+      }, structuredClone(importOptions)).finally(() => {
         inFlight.delete(key);
       });
       inFlight.set(key, entry);

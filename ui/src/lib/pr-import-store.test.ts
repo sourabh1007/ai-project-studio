@@ -8,12 +8,13 @@ import {
   type PrImportApi,
   type PrImportEvent,
 } from './pr-import-store.js';
-import type { Feature } from './types.js';
+import type { Feature, ReviewImportOptions } from './types.js';
 
 type Streamed = PrImportApi['createPrFeatureStreamed'];
 interface Call {
   number: number;
   parent: string | null | undefined;
+  importOptions?: ReviewImportOptions;
   onStatus: (s: { phase: string; message: string }) => void;
   resolve: (v: { feature: Feature; alreadyImported: boolean }) => void;
   reject: (e: unknown) => void;
@@ -29,9 +30,9 @@ function setup() {
     createFeature: createFeature as unknown as PrImportApi['createFeature'],
     listFeatures: vi.fn(async () => []) as unknown as PrImportApi['listFeatures'],
     getFeature: vi.fn(async (id: string) => feature(id)) as unknown as PrImportApi['getFeature'],
-    createPrFeatureStreamed: ((_repoId, number, onStatus, parent) =>
+    createPrFeatureStreamed: ((_repoId, number, onStatus, parent, _group, importOptions) =>
       new Promise((resolve, reject) => {
-        calls.push({ number, parent, onStatus, resolve, reject });
+        calls.push({ number, parent, onStatus, resolve, reject, importOptions });
       })) as Streamed,
   };
   let now = 1000;
@@ -56,6 +57,35 @@ describe('PrImportStore', () => {
     t = setup();
   });
 
+  it('persists independent per-PR setup, retains it on retry and reports import-only accurately', async () => {
+    const importOptions = { autoReview: false, reviewOptions: { model: 'named', skillIds: ['guide'] } };
+    let saved = '';
+    const storage = { getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; } };
+    const store = new PrImportStore(() => 1, storage, () => 'token');
+    store.enqueue(t.api, {
+      repo, batchName: 'Batch',
+      pulls: [1, 2].map((number) => ({ number, title: `PR ${number}`, importOptions })),
+    });
+    importOptions.reviewOptions.skillIds.push('changed');
+    await t.flush();
+    const first = store.getSnapshot()[0];
+    expect(first.importOptions?.reviewOptions?.skillIds).toEqual(['guide']);
+    expect(t.calls[0].importOptions).toEqual({ autoReview: false, reviewOptions: { model: 'named', skillIds: ['guide'] } });
+    expect(first.importOptions).not.toBe(store.getSnapshot()[1].importOptions);
+    const restored = new PrImportStore(() => 2, storage, () => 'new-token');
+    expect(restored.getSnapshot().map((job) => job.importOptions)).toEqual([
+      { autoReview: false, reviewOptions: { model: 'named', skillIds: ['guide'] } },
+      { autoReview: false, reviewOptions: { model: 'named', skillIds: ['guide'] } },
+    ]);
+    t.calls[0].reject(new ApiError(400, 'retry'));
+    await t.flush();
+    store.retry(first.id);
+    await t.flush();
+    expect(t.calls[2].importOptions).toEqual(first.importOptions);
+    t.calls[2].resolve({ feature: feature('imported'), alreadyImported: false });
+    await t.flush();
+    expect(store.getSnapshot()[0].message).toBe('Imported · review later');
+  });
   it('runs a single import with live status and reports it once', async () => {
     const events: PrImportEvent[] = [];
     t.store.subscribeEvents((e) => events.push(e));

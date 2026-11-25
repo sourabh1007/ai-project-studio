@@ -26,6 +26,7 @@ describe('initialUpdateState', () => {
       releaseName: null,
       error: null,
       canAutoInstall: false,
+      autoInstallBlockReason: null,
       platform: 'unknown',
       releasePageUrl: null,
     });
@@ -78,6 +79,17 @@ describe('mergeUpdateState', () => {
   it('allows explicit null to clear a field', () => {
     const prev = state({ releaseNotes: 'old' });
     expect(mergeUpdateState(prev, { releaseNotes: null }).releaseNotes).toBeNull();
+  });
+
+  it('preserves the automatic-install block reason across partial events and clears it after recovery', () => {
+    const blocked = mergeUpdateState(initialUpdateState(), {
+      status: 'available', autoInstallBlockReason: 'Unqualified release.',
+    });
+    expect(mergeUpdateState(blocked, { percent: 0 }).autoInstallBlockReason).toBe('Unqualified release.');
+    expect(deriveUpdateUi(blocked).detail).toBe('Unqualified release.');
+    expect(deriveUpdateUi(blocked).canDownload).toBe(false);
+    expect(deriveUpdateUi(blocked).canInstall).toBe(true);
+    expect(mergeUpdateState(blocked, { canAutoInstall: true, autoInstallBlockReason: null }).autoInstallBlockReason).toBeNull();
   });
 
   it('clamps percent and ignores non-finite numbers', () => {

@@ -99,6 +99,8 @@ export interface ProjectModel {
 
 /** One concrete, evidence-backed observation under a perspective. */
 export interface ReviewFinding {
+  requirementIds?: string[];
+  skillIds?: string[];
   id: string;
   perspectiveId: string;
   title: string;
@@ -151,6 +153,15 @@ export interface ReviewBoardPull {
  * existing PR review (diff + change graph) and the derived project model.
  */
 export interface ReviewBoard {
+  contextDiscovery?: import('./review-run-contract.js').ReviewContextDiscovery;
+  businessMatrix?: import('./review-run-contract.js').ReviewRequirementRow[];
+  findingHistory?: import('./review-run-contract.js').ReviewFindingEvent[];
+  possibleDuplicates?: Array<{ groupIds: string[]; reason: string }>;
+  availablePerspectives?: PerspectiveSpec[];
+  problem?: string;
+  solution?: string;
+  run?: import('./review-run-contract.js').ReviewRun;
+  uniqueFindings?: import('./review-run-contract.js').ReviewFindingGroup[];
   /** Persisted validated results for this exact reviewed graph/head. */
   analyses?: Record<string, PerspectiveAnalysis>;
   featureId: string;
@@ -276,6 +287,12 @@ export interface RationalePoint {
 
 /** The AI's per-perspective verdict: findings, or an explicit skip + reason. */
 export interface PerspectiveAnalysis {
+  requirements?: Array<Omit<import('./review-run-contract.js').ReviewRequirementRow, 'requirement'> & { requirementId: string }>;
+  assessment?: 'concerns' | 'no-concerns' | 'insufficient-evidence' | 'not-applicable';
+  attemptId?: string;
+  runId?: string;
+  requestedModel?: string;
+  resolvedModel?: string | null;
   perspectiveId: string;
   /** The fully rolled-up perspective (deterministic + AI findings merged). */
   perspective: ReviewPerspective;
@@ -344,6 +361,12 @@ export interface ReviewBoardStreamSink {
 
 /** Application service backing the Project Review Board page. */
 export interface ReviewBoardService {
+  loadContext?(featureId: string, signal?: AbortSignal): Promise<ReviewBoard>;
+  repositorySkills?(featureId: string, signal?: AbortSignal): Promise<import('./review-run-contract.js').ReviewRepositorySkills>;
+  manageFindings?(featureId: string, action: import('./review-run-contract.js').ReviewFindingAction): ReviewBoard;
+  discussion?(featureId: string): Promise<import('./review-run-contract.js').ReviewDiscussionResult>;
+  configure?(featureId: string, options: import('./review-run-contract.js').ReviewOptions, signal?: AbortSignal): Promise<ReviewBoard>;
+  cancel?(featureId: string): void;
   /** The board for a review feature, or throws when no review exists. */
   get(featureId: string): ReviewBoard;
   /**

@@ -39,3 +39,14 @@ it('delays pointer tooltips, lets the pointer reach the bubble, and dismisses on
   act(() => button.blur());
   expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
 });
+
+it('keeps tooltips inside the active fullscreen element', () => {
+  const { container } = render(<Tooltip label="Exit fullscreen"><button>Exit</button></Tooltip>);
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: container });
+  try {
+    act(() => screen.getByRole('button').focus());
+    expect(container.contains(screen.getByRole('tooltip'))).toBe(true);
+  } finally {
+    Reflect.deleteProperty(document, 'fullscreenElement');
+  }
+});

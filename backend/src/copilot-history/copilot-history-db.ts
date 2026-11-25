@@ -89,6 +89,18 @@ export function createCopilotHistoryDb(
         true,
       );
     },
+    recentUserMessages(sessionId, limit) {
+      return query<HistoryUserMessageRow>(
+        `SELECT * FROM (
+          SELECT turn_index, substr(user_message, 1, 8000) AS user_message,
+            substr(assistant_response, 1, 8000) AS assistant_response, timestamp
+          FROM turns WHERE session_id = ? AND user_message IS NOT NULL
+          ORDER BY turn_index DESC LIMIT ?
+        ) ORDER BY turn_index ASC`,
+        [sessionId, String(limit)],
+        true,
+      );
+    },
     usageEventTimes(sessionId) {
       return query<{ created_at: string }>(
         `SELECT created_at FROM assistant_usage_events

@@ -18,7 +18,7 @@ import {
   seedValue,
   type SettingField,
 } from '../../lib/settings-model.js';
-import { Button, Card, EmptyState, ErrorText, IconBadge, ConfirmDialog } from '../../components/ui.js';
+import { Button, Card, EmptyState, ErrorText, IconBadge, ConfirmDialog, Modal } from '../../components/ui.js';
 import { SettingsPage, CollapsibleCard } from './settings-page.js';
 import {
   InfoIcon,
@@ -195,6 +195,7 @@ function ConfigFieldRow({
   validationError,
   onChange,
   onExplain,
+  compactHelp = false,
 }: {
   namespace: string;
   field: SettingField;
@@ -205,7 +206,9 @@ function ConfigFieldRow({
   validationError: string | null;
   onChange: (next: string | boolean) => void;
   onExplain: () => void;
+  compactHelp?: boolean;
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   const instanceId = useId().replace(/:/g, '');
   const fieldBaseId = `${instanceId}-${sanitizeIdPart(namespace)}-${sanitizeIdPart(field.key)}`;
   const labelId = `${fieldBaseId}-label`;
@@ -220,18 +223,19 @@ function ConfigFieldRow({
         <label className="config-field-name" htmlFor={controlId} id={labelId}>
           {label}
         </label>
-        <code className="config-field-key">{field.key}</code>
-        <span className="config-field-desc" id={descriptionId}>
+        {!compactHelp && <code className="config-field-key">{field.key}</code>}
+        {!compactHelp && <span className="config-field-desc" id={descriptionId}>
           {fieldHelp(field)}
-        </span>
-        <button
+        </span>}
+        {compactHelp ? <button type="button" className="cli-info-button" aria-label={`About ${label}`}
+          aria-haspopup="dialog" onClick={() => setHelpOpen(true)}><InfoIcon size={14} /></button> : <button
           type="button"
           className="config-field-explain"
           disabled={asking}
           onClick={onExplain}
         >
           Explain
-        </button>
+        </button>}
         {overridden && (
           <span className="config-field-badge">overridden</span>
         )}
@@ -241,7 +245,7 @@ function ConfigFieldRow({
           id={controlId}
           labelledBy={labelId}
           describedBy={describeByIds(
-            descriptionId,
+            compactHelp ? null : descriptionId,
             validationError ? errorId : null,
           )}
           invalid={!!validationError}
@@ -256,6 +260,14 @@ function ConfigFieldRow({
           </p>
         )}
       </div>
+      {helpOpen && <Modal title={`${label} setting`} onClose={() => setHelpOpen(false)} size="sm" className="cli-settings-help">
+        <p>{fieldHelp(field)}</p>
+        <code>{namespace}.{field.key}</code>
+        <div className="cli-provider-actions"><Button variant="secondary" disabled={asking} onClick={() => {
+          setHelpOpen(false);
+          onExplain();
+        }}>Ask AI about this setting</Button></div>
+      </Modal>}
     </div>
   );
 }
@@ -272,6 +284,7 @@ function NamespaceEditor({
   onDraftChange,
   onDiscardConflicts,
   onSaved,
+  embedded = false,
 }: {
   namespace: string;
   values: Record<string, ConfigValue>;
@@ -283,6 +296,7 @@ function NamespaceEditor({
   onDraftChange: (key: string, next: string | boolean) => void;
   onDiscardConflicts: (keys?: readonly string[]) => void;
   onSaved: (result: ConfigUpdateResult) => void;
+  embedded?: boolean;
 }) {
   const api = useApi();
   const fields = useMemo<SettingField[]>(
@@ -321,7 +335,7 @@ function NamespaceEditor({
 
   async function askAssistant(q: string, key?: string) {
     const trimmed = q.trim();
-    if (trimmed.length === 0 || asking || automation?.supported === false) {
+    if (trimmed.length === 0 || asking || automation?.canAttempt === false) {
       return;
     }
     setAssistOpen(true);
@@ -396,12 +410,12 @@ function NamespaceEditor({
     return null;
   }
 
-  const expanded = query !== '' || open;
+  const expanded = embedded || query !== '' || open;
 
   return (
     <div className="config-module-card">
       <div className="config-module-head">
-        <button
+        {embedded ? <span className="config-module-title">Configuration</span> : <button
           type="button"
           className="config-module-toggle"
           aria-expanded={expanded}
@@ -412,17 +426,15 @@ function NamespaceEditor({
             <span>{fieldLabel(namespace)}</span>
             {overridden && <span className="config-badge">overridden</span>}
           </span>
-        </button>
+        </button>}
         <div className="config-editor-actions">
-          <Button
+          {automation?.canAttempt !== false && <Button
             variant="ghost"
             onClick={() => setAssistOpen((open) => !open)}
-            disabled={automation?.supported === false}
-            title={automation?.supported === false ? automation.reason ?? 'Automated AI is unavailable.' : undefined}
             aria-expanded={assistOpen}
           >
             ✨ Ask AI
-          </Button>
+          </Button>}
           <Button onClick={save} disabled={!dirty || busy !== null}>
             {busy === 'save' ? (
               <>
@@ -451,7 +463,7 @@ function NamespaceEditor({
         <>
           {namespace === 'processAdmission' && <p role="note">Process admission limits apply after restarting the app, not to the current process budget.</p>}
           {namespace === 'selfRecovery' && <p role="note">Enabling self-recovery does not authorize automatic resume or prompt replay. Recovery requires authoritative provider confirmation that replay is safe; current providers do not supply that confirmation.</p>}
-          {assistOpen && (
+          {assistOpen && automation?.canAttempt !== false && (
         <div className="config-assistant">
           <AutomationReadinessNotice />
           <form
@@ -468,7 +480,7 @@ function NamespaceEditor({
               onChange={(e) => setQuestion(e.target.value)}
               disabled={asking}
             />
-            <Button type="submit" disabled={asking || question.trim().length === 0 || automation?.supported === false}>
+            <Button type="submit" disabled={asking || question.trim().length === 0}>
               {asking ? (
                 <>
                   <Spinner size={13} label="Thinking" /> Thinking…
@@ -507,9 +519,10 @@ function NamespaceEditor({
             field={f}
             draft={draftValue(f)}
             disabled={busy !== null}
-            asking={asking || automation?.supported === false}
+            asking={asking || automation?.canAttempt === false}
             overridden={overrideKeys.has(f.key)}
             validationError={validationErrors[f.key] ?? null}
+            compactHelp={embedded}
             onExplain={() =>
               void askAssistant(
                 `Explain the "${fieldPathLabel(f.key)}" setting and recommend a good value.`,
@@ -582,6 +595,8 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
   const [tab, setTab] = useState<TabId>('health');
   const [promptAnchor, setPromptAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [providerNamespaces, setProviderNamespaces] = useState<string[]>([]);
   const [subTab, setSubTab] = useState<string | null>(null);
   const { data: catalog, error: catalogError, loading: catalogLoading, reload: reloadCatalog } = useAsync(
     () => api.getCommandCatalog(), [],
@@ -696,6 +711,30 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
     }
   }
 
+  function renderNamespace(namespace: string, embedded = false) {
+    const overrideKeys = new Set(Object.keys(editorData?.overrides[namespace] ?? {}));
+    return <NamespaceEditor key={namespace} namespace={namespace} embedded={embedded}
+      values={editorData?.current[namespace] ?? {}}
+      fieldsMeta={editorData?.schema?.[namespace]?.fields}
+      overrideKeys={overrideKeys} overridden={overrideKeys.size > 0}
+      query={query.trim().toLowerCase()}
+      draftState={drafts[namespace] ?? fallbackDraftState(
+        editorData?.current[namespace] ?? {}, editorData?.schema?.[namespace]?.fields,
+      )}
+      onDraftChange={(key, next) => setDrafts((prev) => ({
+        ...prev, [namespace]: updateNamespaceDraftValue(
+          prev[namespace] ?? fallbackDraftState(editorData?.current[namespace] ?? {}, editorData?.schema?.[namespace]?.fields),
+          key, next,
+        ),
+      }))}
+      onDiscardConflicts={(keys) => setDrafts((prev) => {
+        const fields = buildFields(editorData?.current[namespace] ?? {}, editorData?.schema?.[namespace]?.fields);
+        const current = prev[namespace] ?? fallbackDraftState(editorData?.current[namespace] ?? {}, editorData?.schema?.[namespace]?.fields);
+        return { ...prev, [namespace]: discardNamespaceDraftConflicts(current, fields, keys) };
+      })}
+      onSaved={onSaved} />;
+  }
+
   return (
     <>
       {confirmRestart && (
@@ -796,10 +835,23 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
         <div className="settings-panel">
           <Card>
             {tab === 'cli' && <>
-              <CliSection onConfigChanged={() => { reload(); reloadCatalog(); }} />
+              <CliSection onProviders={setProviderNamespaces} onConfigChanged={() => { reload(); reloadCatalog(); }}
+                renderProviderSettings={(provider) => {
+                  const namespace = provider.configNamespace ?? provider.id;
+                  return data && commandFields.has(namespace) ? renderNamespace(namespace, true) : null;
+                }} />
+              <div className="cli-settings-options">
+                <button type="button" className="cli-settings-toggle" aria-expanded={toolsOpen}
+                  onClick={() => setToolsOpen(!toolsOpen)}>
+                  <ChevronIcon size={14} open={toolsOpen} /> Other tools &amp; commands
+                </button>
+              </div>
+            </>}
+            {(tab === 'config' || toolsOpen) && <>
+            {tab === 'cli' && <>
               {catalogLoading && <Loader label="Loading tool inventory" />}
               <ErrorText error={catalogError} />
-              {catalog && <ToolsSection entries={catalog} query={query} />}
+              {catalog && <ToolsSection entries={catalog.filter((entry) => !entry.config || !providerNamespaces.includes(entry.config.namespace))} query={query} />}
             </>}
             <div className="page-header">
               <div className="page-header-main">
@@ -847,68 +899,10 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
                 {activeNamespaces.length === 0 && (
                   <EmptyState message="No settings to show." />
                 )}
-                {activeNamespaces.map((namespace) => {
-                  const overrideKeys = new Set(
-                    Object.keys(editorData?.overrides[namespace] ?? {}),
-                  );
-                  return (
-                    <NamespaceEditor
-                      key={namespace}
-                      namespace={namespace}
-                      values={editorData?.current[namespace] ?? {}}
-                      fieldsMeta={editorData?.schema?.[namespace]?.fields}
-                      overrideKeys={overrideKeys}
-                      overridden={overrideKeys.size > 0}
-                      query={query.trim().toLowerCase()}
-                      draftState={
-                        drafts[namespace] ??
-                        fallbackDraftState(
-                          editorData?.current[namespace] ?? {},
-                          editorData?.schema?.[namespace]?.fields,
-                        )
-                      }
-                      onDraftChange={(key, next) =>
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [namespace]: updateNamespaceDraftValue(
-                            prev[namespace] ??
-                              fallbackDraftState(
-                                editorData?.current[namespace] ?? {},
-                                editorData?.schema?.[namespace]?.fields,
-                              ),
-                            key,
-                            next,
-                          ),
-                        }))
-                      }
-                      onDiscardConflicts={(keys) =>
-                        setDrafts((prev) => {
-                          const fields = buildFields(
-                            editorData?.current[namespace] ?? {},
-                            editorData?.schema?.[namespace]?.fields,
-                          );
-                          const current =
-                            prev[namespace] ??
-                            fallbackDraftState(
-                              editorData?.current[namespace] ?? {},
-                              editorData?.schema?.[namespace]?.fields,
-                            );
-                          return {
-                            ...prev,
-                            [namespace]: discardNamespaceDraftConflicts(
-                              current,
-                              fields,
-                              keys,
-                            ),
-                          };
-                        })
-                      }
-                      onSaved={onSaved}
-                    />
-                  );
-                })}
+                {activeNamespaces.filter((namespace) => tab !== 'cli' || !providerNamespaces.includes(namespace)).map((namespace) => renderNamespace(namespace))}
               </>
             )}
+            </>}
           </Card>
         </div>
       )}

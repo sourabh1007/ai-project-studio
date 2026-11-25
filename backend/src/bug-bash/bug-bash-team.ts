@@ -16,7 +16,7 @@
  */
 
 import type { Clock } from '../kernel/clock.js';
-import type { MetaRunResult, MetaRunner } from '../meta/meta-runner.js';
+import type { MetaRunResult, MetaRunner, MetaRequest } from '../meta/meta-runner.js';
 import type { BugBashConfig } from './config.js';
 import {
   buildReportPrompt,
@@ -49,6 +49,7 @@ export interface BugBashTeamSink {
 
 /** Inputs for one tester-team run. */
 export interface BugBashTeamRequest {
+  correlation?: MetaRequest['correlation'];
   featureId: string;
   cwd: string;
   featureInfo: string;
@@ -233,6 +234,7 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
             for (const scenario of group) {
               sink.scenario({ id: scenario.id, status: 'running' });
               const result = await deps.ai.runDetailed({
+                correlation: request.correlation,
                 featureId: request.featureId,
                 prompt: buildTesterPrompt(deps.config.testerPromptTemplate, {
                   featureInfo: request.featureInfo,
@@ -380,6 +382,7 @@ export function createBugBashTeam(deps: BugBashTeamDeps): BugBashTeam {
       leadActivity('📋 Reviewing the results and compiling the report…');
       const reportStart = nowMs();
       const review = await deps.ai.runDetailed({
+        correlation: request.correlation,
         featureId: request.featureId,
         prompt: buildReportPrompt(deps.config.reportPromptTemplate, {
           featureInfo: request.featureInfo,

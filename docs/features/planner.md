@@ -36,6 +36,56 @@ create a replacement task while the original outcome is unknown. A missing or
 deleted destination is reported instead of silently opening unrelated work.
 View changes do not mean background work was cancelled.
 
+## Automatic work tracking
+
+Tracking is on by default for recent user work. It runs in the background,
+independently of the Planner view, rather than waiting for an end-of-day digest.
+Every 15 seconds it advances a bounded queue of eligible workspaces. New sessions
+and recorded session activity prioritize their workspace. AI latency and queued
+work can delay a refresh; this is not a guaranteed 15-second completion deadline.
+
+The tracker analyzes bounded recent prompts and completed responses, correlated
+agent operations, associated or explicitly mentioned PR URLs, and recorded skill
+events. It separates independent deliverables and semantically matches existing
+work before creating tasks. Stable persisted keys and source fingerprints prevent
+ordinary replay/restart duplicates. Full PR URLs, not just numbers, distinguish
+different repositories. Matching is AI-assisted, not a guarantee of perfect
+semantic deduplication.
+
+An **AI icon** beside a tracked task opens its evidence. Prompt requests,
+assistant-reported results, agent state/perspective, PR mentions, and repository,
+IDE or CLI skill activity remain distinguishable. Prepared/injected skills are
+not described as invoked. Missing native skill telemetry is not inferred.
+Completion is **reported**, not independent proof that tests passed or a PR was
+pushed. Streaming response chunks do not each trigger a new extraction.
+
+Generated titles, notes, and status update while unchanged by the user. Once an
+edit is observed, that field remains protected; dates, priority, backlog, and
+launch links are not rewritten. Existing manually authored tasks are matched
+conservatively without replacing their content. Deleting a tracked task retains
+its work-key tombstone, preventing that same work key from recreating it.
+
+Open the compact **Auto tracking** disclosure to pause/resume, inspect queue or
+refresh errors, and see the cost/privacy explanation. Pausing persists across
+restart and cancels in-flight tracking. It does not erase existing tasks.
+Tracking uses the configured background AI provider/model and its credentials,
+permissions, and credit accounting; source excerpts are sent to that provider
+and evidence is stored locally with Planner data. It never grants the extraction
+turn tools. Provider failures or malformed output leave existing tasks unchanged
+and retry with backoff.
+
+`planner-tracking` configuration owns the initial enabled default, poll/retry
+intervals, timeout, and discovery lookback (24 hours by default, up to 7 days).
+Each snapshot reads at most four sessions/four recent turns per session, four
+agent operations and twelve skill events, with a 48,000-character evidence text
+budget. Matching considers up to 50 recent task candidates and 100 tracked-work
+identities in the same repository (same feature for repo-less work). A response
+can create/update at most eight tasks; each task retains at most twenty evidence
+items. Limits/excerpts mean this is incremental assistance, not an exhaustive
+historical audit. Background/internal sessions are excluded to avoid tracking the
+tracker's own analysis. Copilot/Agency use bounded native turn projections plus
+worker-read live events; Claude uses its worker-populated bounded native cache.
+
 ## Related
 
 - [Feature categories](feature-categories.md) — where launched work lives.

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
@@ -9,6 +9,8 @@ import { Explorer } from './explorer.js';
 import { prImportStore } from '../../lib/pr-import-store.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import { AutomationReadinessProvider } from '../../app/automation-readiness.js';
+import { featureDeletionStore } from '../../lib/feature-deletion-store.js';
+import { FeatureDeletionStatus } from './feature-deletion-status.js';
 
 const repo: Repository = {
   id: 'r1',
@@ -76,7 +78,172 @@ const callbacks = {
   onCollapse: vi.fn(),
 };
 
+describe('locating the active workspace tab', () => {
+  const originalScroll = Element.prototype.scrollIntoView;
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Object.values(callbacks).forEach((callback) => callback.mockClear());
+  });
+  afterEach(() => { Element.prototype.scrollIntoView = originalScroll; });
+
+  it('reveals a session through collapsed repository, feature and nested folder ancestors without opening another tab', async () => {
+    const child = { ...feature, id: 'child', name: 'Nested feature', parentGroupId: 'g2' };
+    const session: Session = { id: 'active-session', featureId: child.id, name: 'Active session', provider: 'copilot',
+      requestedModel: 'auto', resolvedModel: null, status: 'completed', kind: 'dev', prompt: '',
+      usageFilePath: '', createdAt: feature.createdAt, startedAt: null, endedAt: null, exitCode: 0, groupId: 'h2' };
+    const folder = (id: string, featureId: string, parentGroupId: string | null) => ({
+      id, featureId, parentGroupId, kind: 'subcategory' as const, name: id, orderIndex: 0, createdAt: feature.createdAt, prNumber: null, prUrl: null,
+    });
+    const client = { ...api(context('ready', 't')), listFeatures: vi.fn().mockResolvedValue([feature, child]),
+      listGroups: vi.fn(async (id: string) => id === feature.id ? [folder('g1', id, null), folder('g2', id, 'g1')]
+        : [folder('h1', id, null), folder('h2', id, 'h1')]),
+      listSessions: vi.fn(async (id: string) => id === child.id ? [session] : []),
+      listSessionSkills: vi.fn().mockResolvedValue([]), getFeatureUsage: vi.fn().mockResolvedValue(null) };
+    for (const key of ['repo.r1', 'feature.f1', 'feature.child', 'group.g1', 'group.g2', 'group.h1', 'group.h2', 'feature.unrelated']) {
+      localStorage.setItem(`explorer.${key}.expanded`, 'false');
+    }
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={session.id} names={{}} {...callbacks}
+        activeTab={{ kind: 'session', id: session.id, label: session.name!, session }} />
+    </ApiProvider>);
+    expect(await screen.findByRole('button', { name: `Expand ${repo.name}` })).toBeVisible();
+    expect(screen.queryByRole('button', { name: session.name! })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Locate active tab in Explorer' }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-explorer-item', `session:${session.id}`));
+    expect(document.activeElement).toHaveClass('is-located');
+    expect(screen.getByText('Active tab located in Explorer.')).toHaveClass('sr-only');
+    expect(document.querySelector('.explorer-header [role="status"]')).toBeNull();
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'nearest' }));
+    expect(screen.getByRole('button', { name: 'Collapse g1' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Collapse g2' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Collapse h1' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Collapse h2' })).toBeVisible();
+    expect(localStorage.getItem('explorer.feature.unrelated.expanded')).toBe('false');
+    expect(callbacks.onOpenSession).not.toHaveBeenCalled();
+    expect(callbacks.onOpenFeature).not.toHaveBeenCalled();
+  });
+
+  it.each(['review-board', 'agent'] as const)('locates the attached %s row, not just its parent feature', async (kind) => {
+    const client = { ...api(context('ready', 't')),
+      listFeatureAgents: vi.fn().mockResolvedValue([{ attachment: { id: 'attachment' },
+        manifest: { id: kind === 'review-board' ? kind : 'custom', title: 'Active analysis', icon: 'shield' } }]),
+      listGroups: vi.fn().mockResolvedValue([]), listSessions: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null) };
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks}
+        activeTab={kind === 'review-board' ? { kind, id: 'tab', label: 'Review', feature }
+          : { kind, id: 'tab', label: 'Analysis', feature, agentId: 'custom', attachmentId: 'attachment' }} />
+    </ApiProvider>);
+    await screen.findByRole('button', { name: feature.name });
+    fireEvent.click(screen.getByRole('button', { name: 'Locate active tab in Explorer' }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-explorer-item',
+      kind === 'review-board' ? `review-board:${feature.id}` : 'agent:attachment'));
+    expect(callbacks.onOpenAgent).not.toHaveBeenCalled();
+    expect(callbacks.onOpenPrReview).not.toHaveBeenCalled();
+  });
+
+  it('disables locate without an active tab and reports removed items without opening anything', async () => {
+    const client = api(context('ready', 't'));
+    const view = (active: boolean) => <ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks}
+        activeTab={active ? { kind: 'feature', id: 'missing-tab', label: 'Removed', feature: { ...feature, id: 'missing' } } : null} />
+    </ApiProvider>;
+    const rendered = render(view(false));
+    expect(screen.getByRole('button', { name: 'Locate active tab in Explorer' })).toBeDisabled();
+    rendered.rerender(view(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Locate active tab in Explorer' }));
+    expect(await screen.findByText('The active feature is no longer available in Explorer.')).toBeVisible();
+    expect(screen.getByText('The active feature is no longer available in Explorer.').closest('.explorer-header')).toBeNull();
+    expect(callbacks.onOpenFeature).not.toHaveBeenCalled();
+  });
+});
+
+describe('Explorer background feature deletion', () => {
+  afterEach(() => {
+    cleanup();
+    act(() => featureDeletionStore.getSnapshot().forEach((job) => featureDeletionStore.dismiss(job.id)));
+    vi.restoreAllMocks();
+  });
+
+  it('closes confirmation immediately, allows navigation and reports completion outside the feature row', async () => {
+    let finish!: () => void;
+    const remove = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    let deleted = false;
+    const client = {
+      ...api(context('ready', 't')),
+      listFeatures: vi.fn(async () => deleted ? [] : [feature]),
+      previewFeatureDeletion: vi.fn().mockResolvedValue({ worktrees: [] }),
+    };
+    const open = vi.fn();
+    const view = render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks}
+        onDeleteFeature={remove} onOpenFeature={open} />
+      <FeatureDeletionStatus />
+    </ApiProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: `Actions for ${feature.name}` }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete feature' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(remove).toHaveBeenCalledOnce();
+    expect(screen.getByRole('progressbar', { name: 'Deleting features' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: feature.name }));
+    expect(open).toHaveBeenCalledWith(feature);
+    view.unmount();
+    render(<FeatureDeletionStatus />);
+    expect(screen.getByText('Working in background')).toBeVisible();
+    deleted = true;
+    await act(async () => finish());
+    expect(screen.getByText('Deleted')).toBeVisible();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps deletion errors visible after the dialog closes and leaves the feature available', async () => {
+    const client = {
+      ...api(context('ready', 't')),
+      previewFeatureDeletion: vi.fn().mockResolvedValue({ worktrees: [] }),
+    };
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks}
+        onDeleteFeature={async () => { throw new Error('Checkout is locked'); }} />
+      <FeatureDeletionStatus />
+    </ApiProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: `Actions for ${feature.name}` }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete feature' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByRole('alert')).toHaveTextContent('Checkout is locked');
+    expect(screen.getByRole('button', { name: feature.name })).toBeVisible();
+  });
+});
+
 describe('Explorer background PR imports', () => {
+  it.each([false, true])('does not start AI for import-only or reimported bulk PRs (alreadyImported=%s)', async (alreadyImported) => {
+    const client = {
+      ...api(context('ready', 't')),
+      createFeature: vi.fn().mockResolvedValue({ ...feature, id: 'parent' }),
+      createPrFeatureStreamed: vi.fn().mockResolvedValue({
+        feature: { ...feature, id: 'deferred' }, alreadyImported,
+      }),
+    };
+    const queueReview = vi.spyOn(reviewBoardRunStore, 'enqueueBulk').mockImplementation(() => {});
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+    </ApiProvider>);
+    await screen.findByRole('button', { name: feature.name });
+    await act(async () => {
+      prImportStore.enqueue(client, { repo, batchName: 'Batch', pulls: [41, 42].map((number) => ({
+        number, title: 'Keep existing review', importOptions: { autoReview: alreadyImported },
+      })) });
+    });
+    await waitFor(() => expect(client.createPrFeatureStreamed).toHaveBeenCalledTimes(2));
+    const imports = screen.getByRole('region', { name: 'Pull request imports' });
+    expect(imports.parentElement).toHaveClass('explorer-status-footer');
+    expect(imports.closest('.explorer-body')).toBeNull();
+    const tree = imports.closest('.explorer')!.querySelector('.explorer-body')!;
+    expect(tree.compareDocumentPosition(imports) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(queueReview).not.toHaveBeenCalled();
+  });
   it('does not auto-enqueue a review after an import when the selected CLI is interactive-only', async () => {
     const client = {
       ...api(context('ready', 't')),
@@ -173,6 +340,32 @@ describe('Explorer hierarchical usage', () => {
     credits: 0, cost: 0, nanoAiu: 0,
   };
 
+  it('uses icon-only usage controls while preserving exact counts and partial credits in accessible details', async () => {
+    const summary: UsageSummary = {
+      features: { f1: { featureId: 'f1', groups: {}, state: 'partial', sessionsWithoutUsage: 0,
+        totals: { ...totals, sessions: 25, inputTokens: 19_239_034, outputTokens: 231_820,
+          nanoAiu: null, credits: null, cost: null, knownNanoAiu: 1_188_339_300, unavailableCharges: 22 } } },
+      unattributed: null,
+    };
+    const client = { ...api(context('ready', 't')), getUsageSummary: vi.fn().mockResolvedValue(summary) };
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+    </ApiProvider>);
+    const badge = await screen.findByRole('button', { name: `View ${feature.name} usage` });
+    expect(badge.textContent).toBe('');
+    expect(badge.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(badge).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(badge).toHaveAttribute('aria-expanded', 'false');
+    expect(badge).toHaveAttribute('title', expect.stringContaining('19,470,854 tokens'));
+    expect(badge).toHaveAttribute('aria-description', expect.stringContaining('Partial: known lower bound'));
+    fireEvent.click(badge);
+    expect(badge).toHaveAttribute('aria-expanded', 'true');
+    const dialog = screen.getByRole('dialog', { name: `${feature.name} usage` });
+    expect(within(dialog).getByText('Input tokens').nextElementSibling).toHaveTextContent('19,239,034');
+    expect(within(dialog).getByText('Output tokens').nextElementSibling).toHaveTextContent('231,820');
+    expect(within(dialog).getByText('AI credits').nextElementSibling).toHaveTextContent('>= 1.19');
+  });
+
   it('uses one authoritative summary for feature, subcategory and nested-feature badges', async () => {
     const child = { ...feature, id: 'f2', name: 'Child feature', parentGroupId: 'g1' };
     const nestedTotals = { ...totals, nanoAiu: 4e9 };
@@ -200,12 +393,12 @@ describe('Explorer hierarchical usage', () => {
       <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
     </ApiProvider>);
     expect(await screen.findByRole('button', { name: `View ${feature.name} usage` }))
-      .toHaveTextContent(formatAic(9e9));
+      .toHaveAttribute('aria-description', expect.stringContaining(`${formatAic(9e9)} AI credits`));
     fireEvent.click(screen.getByRole('button', { name: `Expand ${feature.name}` }));
     expect(await screen.findByRole('button', { name: 'View Child group usage' }))
-      .toHaveTextContent(formatAic(4e9));
+      .toHaveAttribute('aria-description', expect.stringContaining(`${formatAic(4e9)} AI credits`));
     expect(await screen.findByRole('button', { name: 'View Child feature usage' }))
-      .toHaveTextContent(formatAic(4e9));
+      .toHaveAttribute('aria-description', expect.stringContaining(`${formatAic(4e9)} AI credits`));
     expect(client.getFeatureUsage).toHaveBeenCalledTimes(1);
     expect(client.getFeatureUsage).toHaveBeenCalledWith(feature.id);
   });
@@ -219,7 +412,7 @@ describe('Explorer hierarchical usage', () => {
     { state: 'partial', charges: { credits: null, cost: null, nanoAiu: null, knownNanoAiu: 3e9, unavailableCharges: 1 }, expected: `>= ${formatAic(3e9)}` },
     { state: 'unavailable', charges: { credits: null, cost: null, nanoAiu: null }, expected: 'n/a' },
     { state: 'empty', charges: {}, expected: 'n/a' },
-  ])('shows $state charges and tokens even while the feature is collapsed', async ({ state, charges, expected }) => {
+  ])('preserves $state charges and tokens behind a collapsed feature usage icon', async ({ state, charges, expected }) => {
     const summary: UsageSummary = {
       features: { f1: { featureId: 'f1', groups: {}, state, totals: { ...totals, ...charges }, sessionsWithoutUsage: state === 'empty' ? 1 : 0 } },
       unattributed: null,
@@ -233,13 +426,15 @@ describe('Explorer hierarchical usage', () => {
       <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
     </ApiProvider>);
     const badge = await screen.findByRole('button', { name: `View ${feature.name} usage` });
-    expect(badge).toHaveTextContent(expected);
+    expect(badge.textContent).toBe('');
+    expect(badge).toHaveAttribute('aria-description', expect.stringContaining(`${expected} AI credits`));
     expect(badge).toHaveAttribute('title', expect.stringContaining('120 tokens'));
     expect(client.getFeatureUsage).not.toHaveBeenCalled();
     fireEvent.click(badge);
     const detail = await screen.findByRole('dialog', { name: `${feature.name} usage` });
     expect(within(detail).getByText('Input tokens').nextElementSibling).toHaveTextContent('100');
     expect(within(detail).getByText('Output tokens').nextElementSibling).toHaveTextContent('20');
+    expect(within(detail).getByText('AI credits').nextElementSibling).toHaveTextContent(expected);
   });
 
   it('refreshes ancestor totals after feature reparenting without needing another usage event', async () => {
@@ -327,6 +522,46 @@ describe('Explorer repository context gating', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse files for Compact session' }));
     expect(screen.queryByText('app.ts')).toBeNull();
     expect(screen.getByText('Accounts').parentElement).not.toHaveAttribute('open');
+  });
+
+  it.each([null, 'Hotfix creation'])('renames a generated title despite stale live names and preserves it after reloading (%s)', async (liveName) => {
+    let saved: Session = {
+      id: 'rename-session', featureId: feature.id, name: null, workTitle: 'Hotfix creation',
+      provider: 'agency', requestedModel: 'auto', resolvedModel: null, status: 'completed',
+      kind: 'dev', prompt: '', usageFilePath: '', createdAt: feature.createdAt,
+      startedAt: null, endedAt: null, exitCode: 0, groupId: null,
+    };
+    const live: LiveState = {
+      ...initialLiveState,
+      sessions: { [saved.id]: { ...saved, name: liveName, status: 'running' } },
+    };
+    const client = {
+      ...api(context('ready', 't')),
+      listSessions: vi.fn(async () => [saved]),
+      listGroups: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+    };
+    const rename = vi.fn(async (_id: string, name: string) => { saved = { ...saved, name }; });
+    const view = () => <ApiProvider value={client}>
+      <Explorer live={live} activeSessionId={null} names={{}} {...callbacks} onRenameSession={rename} />
+    </ApiProvider>;
+    const rendered = render(view());
+    fireEvent.click(await screen.findByRole('button', { name: `Expand ${feature.name}` }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Actions for Hotfix creation' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'Session name' });
+    expect(input).toHaveValue('Hotfix creation');
+    expect(input).toHaveAttribute('maxlength', '120');
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: 'Hotfix: retry ownership' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const row = await screen.findByRole('button', { name: 'Hotfix: retry ownership' });
+    expect(rename).toHaveBeenCalledOnce();
+    expect(rename).toHaveBeenCalledWith(saved.id, 'Hotfix: retry ownership');
+    expect(row).toHaveAttribute('title', expect.stringContaining('Status: running'));
+    rendered.unmount();
+    render(view());
+    expect(await screen.findByRole('button', { name: 'Hotfix: retry ownership' })).toBeVisible();
   });
 
   it('renders attached agents as ordinary child rows with working open and detach actions', async () => {

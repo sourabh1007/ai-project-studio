@@ -65,7 +65,7 @@ export function Tooltip({ label, children }: {
         <div ref={bubble} id={id} role="tooltip" className="tooltip-bubble"
           style={position} onMouseEnter={clear} onMouseLeave={leave}>
           {label}
-        </div>, document.body,
+        </div>, document.fullscreenElement ?? document.body,
       )}
     </span>
   );

@@ -37,6 +37,11 @@ export interface ResourceCleanup {
 }
 
 export interface AppResourceSnapshot {
+  history?: {
+    startedAt: number; maxGapMs: number; error: string | null;
+    samples: { at: number; hostCpu: number | null; freeMemory: number | null; appCpu: number | null; appMemory: number | null; eventLoopDelay: number | null }[];
+    storage: { at: number; category: string; scope: string; bytes: number | null }[];
+  };
   measuredAt: number;
   staleAfterMs: number;
   processes: {

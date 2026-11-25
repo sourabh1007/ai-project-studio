@@ -1,5 +1,6 @@
 import type {
   IAIProvider,
+  HeadlessMcpPolicy,
   InteractiveCommand,
   McpErrorScanner,
   ModelChangeScanner,
@@ -16,6 +17,7 @@ import { COPILOT_NAMESPACE, type CopilotConfig } from './config.js';
 import {
   buildCopilotCommand,
   buildCopilotInteractiveArgs,
+  type Command,
 } from './copilot-cmd-builder.js';
 import { buildCopilotEnv } from './copilot-env-mapper.js';
 import { listCopilotModels } from './copilot-model-lister.js';
@@ -35,6 +37,8 @@ export interface CopilotAdapterDeps {
    * for the actual session cwd so config edits are reflected without a restart.
    */
   mcpServerNames?: (spec: SessionSpec) => readonly string[];
+  resolveCommand?: (command: Command) => Command;
+  mcpPolicy?: HeadlessMcpPolicy;
 }
 
 /** GitHub Copilot CLI provider. Spawns `copilot -p ...` and captures usage. */
@@ -50,22 +54,27 @@ export function createCopilotProvider(
       return listCopilotModels(config);
     },
     startSession(spec: SessionSpec) {
-      if (spec.kind === 'meta' && !deps.mcpServerNames) {
+      const isolated = (deps.mcpPolicy ?? 'isolated') === 'isolated';
+      if (spec.kind === 'meta' && isolated && !deps.mcpServerNames) {
         throw new ValidationError('Headless MCP suppression cannot be verified. Configure trusted effective MCP sources or repair the native CLI policy before starting meta tasks.');
       }
-      const { command, args } = buildCopilotCommand(
+      const built = buildCopilotCommand(
         spec,
         config,
-        spec.kind === 'meta' ? deps.mcpServerNames!(spec) : [],
+        spec.kind === 'meta' && isolated ? deps.mcpServerNames!(spec) : [],
+        deps.mcpPolicy ?? 'isolated',
       );
+      const { command, args } = deps.resolveCommand ? deps.resolveCommand(built) : built;
       const env = { ...buildCopilotEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: COPILOT_NAMESPACE };
-      const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd });
+      const handle = deps.spawner.spawn({ command, args, env, cwd: spec.cwd,
+        ...(spec.noTools ? { input: spec.prompt } : {}) });
       return toRunningSession(spec.sessionId, handle);
     },
     buildInteractiveCommand(spec: SessionSpec): InteractiveCommand {
+      const built = { command: config.executable, args: buildCopilotInteractiveArgs(spec, config) };
+      const command = deps.resolveCommand ? deps.resolveCommand(built) : built;
       return {
-        command: config.executable,
-        args: buildCopilotInteractiveArgs(spec, config),
+        ...command,
         env: { ...buildCopilotEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: COPILOT_NAMESPACE },
       };
     },

@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from 'react';
 import { useApi } from '../../app/api-context.js';
+import { Insights, ExecutionTimeline } from '../monitoring/insights.js';
+import { OperationInsights } from '../meta-operations/operation-insights.js';
 import { useDraft } from '../../hooks/use-draft.js';
 import { sessionWorkTitle } from '../../lib/session-names.js';
 import { useAgentUsage } from '../../hooks/use-agent-usage.js';
@@ -329,6 +331,10 @@ function AgentTeamPanel({
           />
         ))}
       </div>
+      <Insights title="Team execution insights">{() => <ExecutionTimeline now={nowMs}
+        items={agents.map((agent) => ({ id: agent.id, label: `${agent.title} · ${agent.role}`, status: agent.status,
+          start: agent.startedAt, end: agent.startedAt != null && agent.durationMs != null ? agent.startedAt + agent.durationMs : null,
+          durationMs: agent.durationMs, select: () => onOpen(agent.id) }))} />}</Insights>
     </section>
   );
 }
@@ -1379,6 +1385,7 @@ function NewTaskPageInner({
           </p>
         </div>
       </header>
+      <Insights title="Run history insights">{() => <OperationInsights scope={{ featureId: feature.id, runId: attachmentId }} />}</Insights>
 
       <Stepper current={step} reachable={reachable} onSelect={setStep} />
 

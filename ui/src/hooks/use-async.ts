@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useStartupPending } from '../app/desktop-lifecycle.js';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -16,6 +17,7 @@ export function useAsync<T>(
 ): AsyncState<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
+  useStartupPending(loading);
   const [error, setError] = useState<string | null>(null);
   const [cause, setCause] = useState<unknown>(null);
   const [nonce, setNonce] = useState(0);

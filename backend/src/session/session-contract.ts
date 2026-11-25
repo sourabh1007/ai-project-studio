@@ -68,6 +68,7 @@ export interface Session {
 
 /** Request to start a new session under a feature. */
 export interface StartSessionRequest {
+  promptRefs?: readonly string[];
   featureId: string;
   operationId?: string;
   providerId?: string;

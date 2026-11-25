@@ -104,7 +104,7 @@ export function Modal({
         <div className="modal-body">{children}</div>
       </div>
     </div>,
-    document.body,
+    document.fullscreenElement ?? document.body,
   );
 }
 

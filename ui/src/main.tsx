@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ApiProvider, apiClient } from './app/api-context.js';
 import { App } from './App.js';
 import { AutomationReadinessProvider } from './app/automation-readiness.js';
+import { DesktopLifecycle } from './app/desktop-lifecycle.js';
 import { ErrorBoundary } from './components/error-boundary.js';
 import { ProviderInstallGate } from './features/bootstrap/provider-install-gate.js';
 import {
@@ -27,18 +28,20 @@ const popout = readTabPopoutFromLocation(
 
 createRoot(container).render(
   <StrictMode>
-    <ErrorBoundary>
-      <ApiProvider value={apiClient}>
-        <AutomationReadinessProvider>
-        {popout ? (
-          <TabPopout tab={popout.tab} label={popout.label} />
-        ) : (
-          <ProviderInstallGate>
-            <App />
-          </ProviderInstallGate>
-        )}
-        </AutomationReadinessProvider>
-      </ApiProvider>
-    </ErrorBoundary>
+    <DesktopLifecycle>
+      <ErrorBoundary>
+        <ApiProvider value={apiClient}>
+          <AutomationReadinessProvider>
+            {popout ? (
+              <TabPopout tab={popout.tab} label={popout.label} />
+            ) : (
+              <ProviderInstallGate>
+                <App />
+              </ProviderInstallGate>
+            )}
+          </AutomationReadinessProvider>
+        </ApiProvider>
+      </ErrorBoundary>
+    </DesktopLifecycle>
   </StrictMode>,
 );

@@ -5,14 +5,17 @@ import type { MetaUsageCaptureRepo } from '../meta/meta-usage-capture.js';
 
 const fields = [
   'feature_id', 'automation_id', 'origin_session_id', 'provider_id', 'requested_model',
-  'resolved_model', 'session_id', 'provider_session_id', 'session_ids_json', 'transport',
+  'resolved_model', 'session_id', 'provider_session_id', 'session_ids_json', 'transport', 'correlation_json', 'prompt_refs_json',
   'state', 'outcome', 'purpose', 'label', 'result_text', 'error_message', 'usage_state',
-  'usage_json', 'created_at', 'updated_at', 'started_at', 'finished_at',
+  'usage_json', 'request_usage_json', 'created_at', 'updated_at', 'started_at', 'finished_at',
 ] as const;
 const metadata = ['operation_id', ...fields.filter((field) => field !== 'result_text')]
   .map((field) => `operation.${field}`).join(', ');
 
 interface Row {
+  request_usage_json: string | null;
+  prompt_refs_json: string | null;
+  correlation_json: string | null;
   operation_id: string;
   feature_id: string;
   automation_id: string | null;
@@ -40,6 +43,8 @@ interface Row {
 
 function mapMetadata(row: Omit<Row, 'result_text'>): Omit<MetaOperation, 'resultText'> {
   return {
+    ...(row.prompt_refs_json === null ? {} : { promptRefs: JSON.parse(row.prompt_refs_json) as string[] }),
+    ...(row.correlation_json === null ? {} : { correlation: JSON.parse(row.correlation_json) as MetaOperation['correlation'] }),
     operationId: row.operation_id, featureId: row.feature_id, automationId: row.automation_id,
     originSessionId: row.origin_session_id, providerId: row.provider_id, requestedModel: row.requested_model,
     resolvedModel: row.resolved_model, sessionId: row.session_id, providerSessionId: row.provider_session_id,
@@ -47,6 +52,7 @@ function mapMetadata(row: Omit<Row, 'result_text'>): Omit<MetaOperation, 'result
     state: row.state, outcome: row.outcome, purpose: row.purpose, label: row.label,
     errorMessage: row.error_message, usageState: row.usage_state,
     usage: row.usage_json === null ? null : JSON.parse(row.usage_json) as MetaOperation['usage'],
+    ...(row.request_usage_json === null ? {} : { requestUsage: JSON.parse(row.request_usage_json) as MetaOperation['usage'] }),
     createdAt: row.created_at, updatedAt: row.updated_at, startedAt: row.started_at, finishedAt: row.finished_at,
   };
 }
@@ -55,8 +61,10 @@ function values(op: MetaOperation): Array<string | null> {
   return [
     op.featureId, op.automationId, op.originSessionId, op.providerId, op.requestedModel,
     op.resolvedModel, op.sessionId, op.providerSessionId, JSON.stringify(op.sessionIds),
-    op.transport, op.state, op.outcome, op.purpose, op.label, op.resultText,
+    op.transport, op.correlation ? JSON.stringify(op.correlation) : null,
+    op.promptRefs ? JSON.stringify(op.promptRefs) : null, op.state, op.outcome, op.purpose, op.label, op.resultText,
     op.errorMessage, op.usageState, op.usage === null ? null : JSON.stringify(op.usage),
+    op.requestUsage == null ? null : JSON.stringify(op.requestUsage),
     op.createdAt, op.updatedAt, op.startedAt, op.finishedAt,
   ];
 }
@@ -173,7 +181,12 @@ export function createMetaOperationRepo(db: DatabaseSync): MetaOperationRepo & M
       const args: Array<string | number> = [];
       let from = 'meta_operations AS operation';
       let key = 'operation.operation_id';
+      if (filter.excludeProviderId !== undefined) { clauses.push('(operation.provider_id IS NULL OR operation.provider_id <> ?)'); args.push(filter.excludeProviderId); }
       if (filter.featureId !== undefined) { clauses.push('operation.feature_id = ?'); args.push(filter.featureId); }
+      if (filter.runId !== undefined) { clauses.push("json_extract(operation.correlation_json, '$.runId') = ?"); args.push(filter.runId); }
+      if (filter.agentId !== undefined) { clauses.push("json_extract(operation.correlation_json, '$.agentId') = ?"); args.push(filter.agentId); }
+      if (filter.from !== undefined) { clauses.push('operation.created_at >= ?'); args.push(filter.from); }
+      if (filter.to !== undefined) { clauses.push('operation.created_at < ?'); args.push(filter.to); }
       if (filter.automationId !== undefined) { clauses.push('operation.automation_id = ?'); args.push(filter.automationId); }
       if (filter.sessionId !== undefined) {
         from = `meta_operation_sessions AS identity CROSS JOIN meta_operations AS operation

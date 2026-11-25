@@ -4,6 +4,9 @@ import {
   buildCommonPromptVars,
   buildFindingsPrompt,
   buildSolutionDigest,
+  reviewedSolution,
+  reviewedProblem,
+  reviewContextText,
   existingDiscussionSection,
   renderExistingDiscussion,
   type ExistingCommentThread,
@@ -13,6 +16,7 @@ import type {
   ProjectModel,
   ReviewBoard,
   ReviewPerspective,
+  PerspectiveAnalysis,
 } from './review-board-contract.js';
 
 const model: ProjectModel = {
@@ -32,6 +36,52 @@ const model: ProjectModel = {
   confidence: 0.6,
   evidence: [],
 };
+
+describe('human-readable reviewed solution', () => {
+  const result = (label: string, detail: string, skipped = false) => ({
+    skipped, rationale: [{ label, detail }],
+  } as PerspectiveAnalysis);
+  it('prefers the solution analysis and falls back to a completed architecture explanation', () => {
+    const architecture = result('Flow', 'The lock resolver cancels work before taking ownership.');
+    expect(reviewedSolution({ architecture, 'problem-solution': result('Solution implemented', '  Cancel the old work first.  ') }))
+      .toBe('Cancel the old work first.');
+    expect(reviewedSolution({ architecture })).toBe(architecture.rationale[0].detail);
+    expect(reviewedSolution({ architecture, 'problem-solution': result('Implementation', 'Skipped', true) }))
+      .toBe(architecture.rationale[0].detail);
+  });
+  it('never presents a filename inventory, a blank rationale, or a proposed fix as the implemented solution', () => {
+    const cases: Record<string, PerspectiveAnalysis>[] = [{}, { architecture: result('Fix', 'Proposed fix') },
+      { 'problem-solution': result('Solution', '  ') }];
+    for (const analyses of cases) {
+      expect(reviewedSolution(analyses)).toContain('has not explained the solution yet');
+    }
+  });
+  it('uses the captured diff when a summary is only a placeholder', () => {
+    expect(buildSolutionDigest({ title: 'Retry', nodes: [{ path: 'a.ts', kind: 'changed', category: 'code',
+      module: null, changeKind: 'modified', whatChanged: 'No change summary was produced.', whatItDoes: '', diff: '-old\n+new' }] }))
+      .toContain('-old\n+new');
+  });
+  it('renders grounded problem and solution ASCII diagrams without changing their spacing', () => {
+    const analysis = result('Problem', 'A retry can charge the same purchase twice.');
+    analysis.rationale.push({ label: 'Problem diagram', detail: '[Retry] -> [Second charge]' },
+      { label: 'Solution implemented', detail: 'Keep one operation key across retries.' },
+      { label: 'Solution diagram', detail: '[Retry]\n   |\n   v\n[Same key] -> [Original receipt]' });
+    expect(reviewedProblem({ 'problem-solution': analysis }, 'Original description'))
+      .toBe('A retry can charge the same purchase twice.\n\n```text\n[Retry] -> [Second charge]\n```');
+    expect(reviewedSolution({ 'problem-solution': analysis }))
+      .toContain('```text\n[Retry]\n   |\n   v\n[Same key] -> [Original receipt]\n```');
+    analysis.rationale[1].detail = analysis.rationale[0].detail;
+    expect(reviewedProblem({ 'problem-solution': analysis }, 'Original description')).toBe(analysis.rationale[0].detail);
+    expect(reviewedProblem({}, 'Original description')).toBe('Original description');
+  });
+  it('removes generated import bookkeeping, never treats it as a problem, and preserves real requirements', () => {
+    const bookkeeping = 'Reviewing 2 pull requests from Example/Repo.\n\nImport reference: 8aa8731e-8423-4835-b4c2-c78d65050315';
+    expect(reviewContextText(bookkeeping)).toBe('');
+    expect(reviewContextText(`${bookkeeping}\r\n\r\nKeep operation keys stable.`)).toBe('Keep operation keys stable.');
+    expect(reviewContextText('Reviewing the retry flow must preserve its key.')).toBe('Reviewing the retry flow must preserve its key.');
+    expect(reviewedProblem({}, bookkeeping)).toContain('problem has not been explained yet');
+  });
+});
 
 const perspective: ReviewPerspective = {
   id: 'security',
@@ -71,7 +121,7 @@ const board: ReviewBoard = {
 describe('buildFindingsPrompt', () => {
   it('requests only known captured-diff coordinates and keeps legacy citations', () => {
     const prompt = buildFindingsPrompt({
-      board, description: null, changedPaths: [], config: { maxContextChars: 20_000 },
+      board, description: null, changedPaths: [],
     });
     expect(prompt).toContain('"location": { "path": "<repo-relative path>", "line": 1');
     expect(prompt).toContain('"side": "RIGHT" | "LEFT"');
@@ -85,7 +135,6 @@ describe('buildFindingsPrompt', () => {
       board,
       description: 'Adds a cache layer.',
       changedPaths: ['src/Cache.cs', 'src/CacheKey.cs'],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('#42');
     expect(prompt).toContain('Backend service');
@@ -102,7 +151,6 @@ describe('buildFindingsPrompt', () => {
       board,
       description: '   ',
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no description provided)');
   });
@@ -112,19 +160,17 @@ describe('buildFindingsPrompt', () => {
       board,
       description: null,
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no description provided)');
   });
 
-  it('clamps a very long description', () => {
+  it('retains a description beyond the former IDE context cap', () => {
     const prompt = buildFindingsPrompt({
       board,
-      description: 'x'.repeat(100),
+      description: 'x'.repeat(30_000),
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 10 },
     });
-    expect(prompt).toContain('…');
+    expect(prompt).toContain('x'.repeat(30_000));
   });
 
   it('notes when no changed files were resolved', () => {
@@ -132,21 +178,18 @@ describe('buildFindingsPrompt', () => {
       board,
       description: 'd',
       changedPaths: [],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('(no changed files were resolved');
   });
 
-  it('truncates a very long changed-files list', () => {
+  it('retains every captured changed file', () => {
     const many = Array.from({ length: 90 }, (_, i) => `src/f${i}.cs`);
     const prompt = buildFindingsPrompt({
       board,
       description: 'd',
       changedPaths: many,
-      config: { maxContextChars: 20_000 },
     });
-    expect(prompt).toContain('…and 10 more changed file(s)');
-    expect(prompt).not.toContain('src/f85.cs');
+    expect(prompt).toContain('src/f89.cs');
   });
 
   it('renders "none" fallbacks and unknown base branch for a bare model', () => {
@@ -162,7 +205,6 @@ describe('buildFindingsPrompt', () => {
       board: { ...board, model: bareModel, baseBranch: null },
       description: 'd',
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Languages: none detected');
     expect(prompt).toContain('Changed components (0): none');
@@ -175,7 +217,6 @@ describe('buildFindingsPrompt', () => {
       board,
       description: 'd',
       changedPaths: ['a.cs'],
-      config: { maxContextChars: 20_000 },
       existingThreads: [],
     });
     expect(prompt).not.toContain('Existing PR discussion');
@@ -197,21 +238,21 @@ describe('buildFindingsPrompt', () => {
       board,
       description: 'd',
       changedPaths: ['src/Cache.cs'],
-      config: { maxContextChars: 20_000 },
       existingThreads,
     });
     expect(prompt).toContain('## Existing PR discussion');
     expect(prompt).toContain('[active] src/Cache.cs:12');
     expect(prompt).toContain('alice: Validate the cache key here.');
     expect(prompt).toContain('bob: Good point, will fix.');
-    expect(prompt).toContain('do NOT re-raise a concern an existing thread already');
+    expect(prompt).toContain('Retain a finding');
+    expect(prompt).toContain('not proof of a code fix');
   });
 });
 
 describe('renderExistingDiscussion', () => {
   it('returns an empty string when there are no threads', () => {
-    expect(renderExistingDiscussion([], 20_000)).toBe('');
-    expect(existingDiscussionSection([], 20_000)).toBe('');
+    expect(renderExistingDiscussion([])).toBe('');
+    expect(existingDiscussionSection([])).toBe('');
   });
 
   it('labels PR-level threads and falls back to "reviewer" for blank authors', () => {
@@ -224,7 +265,6 @@ describe('renderExistingDiscussion', () => {
           comments: [{ author: '   ', body: 'General note.' }],
         },
       ],
-      20_000,
     );
     expect(rendered).toContain('[resolved] PR-level discussion');
     expect(rendered).toContain('reviewer: General note.');
@@ -240,13 +280,12 @@ describe('renderExistingDiscussion', () => {
           comments: [{ author: 'ann', body: 'Look here.' }],
         },
       ],
-      20_000,
     );
     expect(rendered).toContain('[active] src/a.cs');
     expect(rendered).not.toContain('src/a.cs:');
   });
 
-  it('clamps a very long comment body and the whole section', () => {
+  it('retains complete comment bodies', () => {
     const rendered = renderExistingDiscussion(
       [
         {
@@ -256,13 +295,11 @@ describe('renderExistingDiscussion', () => {
           comments: [{ author: 'ann', body: 'x'.repeat(1000) }],
         },
       ],
-      50,
     );
-    expect(rendered).toContain('…');
-    expect(rendered.length).toBeLessThanOrEqual(51);
+    expect(rendered).toContain('x'.repeat(1000));
   });
 
-  it('caps the number of rendered threads', () => {
+  it('retains every captured thread', () => {
     const threads: ExistingCommentThread[] = Array.from(
       { length: 55 },
       (_, i) => ({
@@ -272,9 +309,8 @@ describe('renderExistingDiscussion', () => {
         comments: [{ author: 'ann', body: `note ${i}` }],
       }),
     );
-    const rendered = renderExistingDiscussion(threads, 20_000);
-    expect(rendered).toContain('…and 5 more existing thread(s)');
-    expect(rendered).not.toContain('src/f54.cs');
+    const rendered = renderExistingDiscussion(threads);
+    expect(rendered).toContain('src/f54.cs');
   });
 });
 
@@ -285,7 +321,6 @@ describe('buildCommonPromptVars', () => {
       perspective,
       description: 'Adds a cache layer.',
       changedPaths: ['src/Cache.cs'],
-      maxContextChars: 20_000,
     });
     expect(vars.lensName).toBe('Security');
     expect(vars.lensPurpose).toBe(
@@ -306,7 +341,6 @@ describe('buildCommonPromptVars', () => {
       perspective,
       description: null,
       changedPaths: ['a.cs'],
-      maxContextChars: 20_000,
     });
     expect(vars.description).toBe('(no description provided)');
   });
@@ -317,7 +351,6 @@ describe('buildCommonPromptVars', () => {
       perspective,
       description: 'd',
       changedPaths: ['a.cs'],
-      maxContextChars: 20_000,
     });
     expect(vars.baseBranch).toBe('unknown');
   });
@@ -328,20 +361,18 @@ describe('buildCommonPromptVars', () => {
       perspective,
       description: 'd',
       changedPaths: [],
-      maxContextChars: 20_000,
     });
     expect(vars.changedFiles).toContain('(no changed files were resolved');
   });
 
-  it('clamps a very long description', () => {
+  it('retains a complete description', () => {
     const vars = buildCommonPromptVars({
       board,
       perspective,
       description: 'x'.repeat(100),
       changedPaths: ['a.cs'],
-      maxContextChars: 10,
     });
-    expect(vars.description).toContain('…');
+    expect(vars.description).toBe('x'.repeat(100));
   });
 });
 
@@ -364,7 +395,6 @@ describe('buildSolutionDigest', () => {
     const digest = buildSolutionDigest({
       title: 'PR',
       nodes: [solNode({ kind: 'boundary' })],
-      maxChars: 20_000,
     });
     expect(digest).toContain('(no changed files were resolved');
   });
@@ -376,49 +406,43 @@ describe('buildSolutionDigest', () => {
         solNode({ path: 'a.cs', whatChanged: 'Adds an LRU cache.' }),
         solNode({ path: 'a.test.cs', category: 'test' }),
       ],
-      maxChars: 20_000,
     });
     expect(digest).toContain('PR "Add caching" changes 2 file(s) — 1 code, 1 test.');
     expect(digest).toContain('- a.cs (Cache) — modified');
     expect(digest).toContain('Adds an LRU cache.');
   });
 
-  it('falls back to a bounded diff, then whatItDoes, then nothing', () => {
+  it('falls back to the captured diff, then whatItDoes, then nothing', () => {
     const diffDigest = buildSolutionDigest({
       title: 'PR',
       nodes: [solNode({ diff: 'y'.repeat(800) })],
-      maxChars: 20_000,
     });
-    expect(diffDigest).toContain('…');
+    expect(diffDigest).toContain('y'.repeat(800));
     const roleDigest = buildSolutionDigest({
       title: 'PR',
       nodes: [solNode({ whatItDoes: 'Holds cache entries.' })],
-      maxChars: 20_000,
     });
     expect(roleDigest).toContain('Existing role: Holds cache entries.');
     const bare = buildSolutionDigest({
       title: 'PR',
       nodes: [solNode({ module: null, changeKind: null })],
-      maxChars: 20_000,
     });
     expect(bare).toContain('- src/Cache.cs');
     expect(bare).not.toContain('  '); // no signal line
   });
 
-  it('caps the enumerated files and records an overflow row', () => {
+  it('includes every changed file', () => {
     const nodes = Array.from({ length: 61 }, (_, i) => solNode({ path: `f${i}.cs` }));
-    const digest = buildSolutionDigest({ title: 'PR', nodes, maxChars: 20_000 });
-    expect(digest).toContain('…and 1 more changed file(s)');
+    const digest = buildSolutionDigest({ title: 'PR', nodes });
+    expect(digest).toContain('f60.cs');
   });
 
-  it('clamps the whole digest to maxChars', () => {
+  it('retains complete solution signals', () => {
     const digest = buildSolutionDigest({
       title: 'PR',
       nodes: [solNode({ whatChanged: 'z'.repeat(500) })],
-      maxChars: 40,
     });
-    expect(digest.length).toBeLessThanOrEqual(40);
-    expect(digest).toContain('…');
+    expect(digest).toContain('z'.repeat(500));
   });
 });
 
@@ -432,7 +456,6 @@ describe('buildAgentChatPrompt', () => {
         { role: 'assistant', content: 'Because...' },
         { role: 'user', content: 'Explain more.' },
       ],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Focused perspective: Security');
     expect(prompt).toContain('Unvalidated input');
@@ -445,7 +468,6 @@ describe('buildAgentChatPrompt', () => {
       board,
       perspective,
       messages: [{ role: 'user', content: 'Hi' }],
-      config: { maxContextChars: 20_000 },
     });
     expect(focused).toContain('Changing this rating');
     expect(focused).toContain('do NOT change a rating on assertion');
@@ -453,7 +475,6 @@ describe('buildAgentChatPrompt', () => {
       board,
       perspective: null,
       messages: [{ role: 'user', content: 'Hi' }],
-      config: { maxContextChars: 20_000 },
     });
     expect(whole).not.toContain('Changing this rating');
   });
@@ -463,7 +484,6 @@ describe('buildAgentChatPrompt', () => {
       board,
       perspective: null,
       messages: [{ role: 'user', content: 'Summarize.' }],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).not.toContain('Focused perspective');
     expect(prompt).toContain('Engineering Review Agent');
@@ -474,7 +494,6 @@ describe('buildAgentChatPrompt', () => {
       board,
       perspective: { ...perspective, findings: [] },
       messages: [{ role: 'user', content: 'Hi' }],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('none recorded yet');
   });
@@ -497,20 +516,19 @@ describe('buildAgentChatPrompt', () => {
       board,
       perspective: withEvidence,
       messages: [{ role: 'user', content: 'where?' }],
-      config: { maxContextChars: 20_000 },
     });
     expect(prompt).toContain('Double materialization');
     // Blank sources are filtered out; only the real path is cited.
     expect(prompt).toContain('Evidence: svc/heartbeat.cs');
   });
 
-  it('clamps the full prompt to the context budget', () => {
+  it('retains the latest user message beyond the former context budget', () => {
     const prompt = buildAgentChatPrompt({
       board,
       perspective: null,
-      messages: [{ role: 'user', content: 'Hi' }],
-      config: { maxContextChars: 20 },
+      messages: [{ role: 'user', content: 'x'.repeat(30_000) + 'Final question?' }],
     });
-    expect(prompt.length).toBeLessThanOrEqual(20);
+    expect(prompt).toContain('x'.repeat(30_000) + 'Final question?');
+    expect(prompt.endsWith('Assistant:')).toBe(true);
   });
 });

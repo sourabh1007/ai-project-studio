@@ -61,6 +61,29 @@ class FakeChild extends EventEmitter implements AcpChildProcess {
 }
 
 describe('AcpProcessAdapter', () => {
+  it('resolves a Windows CLI shim before spawning a background ACP process without a shell', () => {
+    const args = ['--acp', '--disable-builtin-mcps', '--fixture-option', 'name with spaces'];
+    const env = { PATH: 'Q:\\.tools\\.npm-global' };
+    const native = 'Q:\\.tools\\.npm-global\\node_modules\\@github\\copilot-win32-x64\\copilot.exe';
+    const child = new FakeChild();
+    let launched = false;
+    new AcpProcessAdapter({
+      executable: 'copilot', baseArgs: args.slice(0, 2), extraArgs: args.slice(2), cwd: 'C:\\repo', env,
+      resolveCommand: (command) => {
+        expect(command).toEqual({ command: 'copilot', args });
+        return { command: native, args: command.args };
+      },
+      spawnImpl: (executable, actualArgs, options) => {
+        expect(executable).toBe(native);
+        expect(actualArgs).toEqual(args);
+        expect(options).toEqual({ env, cwd: 'C:\\repo', stdio: 'pipe', shell: false });
+        launched = true;
+        return child;
+      },
+    });
+    expect(launched).toBe(true);
+  });
+
   it('drains noisy stderr from a real child without blocking stdout and redacts diagnostics', async () => {
     const adapter = new AcpProcessAdapter({
       executable: process.execPath,

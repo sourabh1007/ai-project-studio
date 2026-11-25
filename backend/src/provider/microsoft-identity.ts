@@ -12,10 +12,11 @@ export interface MicrosoftIdentity {
   /** True when signed in with a Microsoft identity (Azure DevOps authenticated). */
   isSignedIn(): boolean;
   /**
-   * Records the latest sign-in state. Listeners registered via
-   * {@link onChange} fire only when the value actually changed.
+   * Optional sources contribute independently: any authenticated source keeps
+   * the identity signed in. Omitting source replaces all contributions (logout).
+   * Listeners fire only when the aggregate state actually changes.
    */
-  set(signedIn: boolean): void;
+  set(signedIn: boolean, source?: string): void;
   /** Registers a listener invoked with the new state after a real change. */
   onChange(listener: (signedIn: boolean) => void): void;
 }
@@ -23,10 +24,17 @@ export interface MicrosoftIdentity {
 /** Creates the runtime Microsoft-identity store (signed out until proven in). */
 export function createMicrosoftIdentity(initial = false): MicrosoftIdentity {
   let signedIn = initial;
+  const sources = new Set(initial ? ['default'] : []);
   const listeners: Array<(signedIn: boolean) => void> = [];
   return {
     isSignedIn: () => signedIn,
-    set(next) {
+    set(value, source) {
+      if (source === undefined) {
+        sources.clear();
+        if (value) sources.add('default');
+      } else if (value) sources.add(source);
+      else sources.delete(source);
+      const next = sources.size > 0;
       if (next === signedIn) {
         return;
       }

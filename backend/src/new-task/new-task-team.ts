@@ -17,7 +17,7 @@
 
 import { z } from 'zod';
 import type { Clock } from '../kernel/clock.js';
-import type { MetaRunResult, MetaRunner } from '../meta/meta-runner.js';
+import type { MetaRunResult, MetaRunner, MetaRequest } from '../meta/meta-runner.js';
 import type { NewTaskConfig } from './config.js';
 import {
   buildDecomposePrompt,
@@ -40,6 +40,7 @@ export interface NewTaskTeamSink {
 
 /** Inputs for one implementation team run. */
 export interface NewTaskTeamRequest {
+  correlation?: MetaRequest['correlation'];
   featureId: string;
   worktreePath: string;
   problem: string;
@@ -262,6 +263,7 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
       managerActivity('🧭 Planning how to split the work across the team…');
       const decomposeStart = nowMs();
       const decompose = await deps.ai.runDetailed({
+        correlation: request.correlation,
         featureId: request.featureId,
         prompt: buildDecomposePrompt(deps.config.decomposePromptTemplate, {
           problem: request.problem,
@@ -323,6 +325,7 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
           const started = worker.startedAt;
           try {
             const result = await deps.ai.runDetailed({
+              correlation: request.correlation,
               featureId: request.featureId,
               prompt: buildWorkerPrompt(deps.config.workerPromptTemplate, {
                 problem: request.problem,
@@ -377,6 +380,7 @@ export function createNewTaskTeam(deps: NewTaskTeamDeps): NewTaskTeam {
         );
         const reviewStart = nowMs();
         const review = await deps.ai.runDetailed({
+          correlation: request.correlation,
           featureId: request.featureId,
           prompt: buildReviewPrompt(deps.config.reviewPromptTemplate, {
             problem: request.problem,

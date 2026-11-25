@@ -61,6 +61,7 @@ describe('repository-analysis-executor', () => {
         repositoryId: 'r1',
         repositoryPath: 'C:\\work\\repo',
         prompt: fullPrompt,
+        promptRefs: ['repositoryContext.analysisPromptTemplate'],
         maxOutputChars: 10,
       }),
     ).resolves.toBe('repository');
@@ -73,6 +74,7 @@ describe('repository-analysis-executor', () => {
       attachments: ['C:\\Temp\\aps-a\\p.pdf'],
       cwd: 'C:\\work\\repo',
       scope: 'internal',
+      promptRefs: ['repositoryContext.analysisPromptTemplate'],
     });
     expect(h.requests[0].prompt.length).toBeLessThan(500);
     expect(h.requests[0].prompt).toContain('untrusted');

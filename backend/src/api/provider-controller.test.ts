@@ -5,6 +5,7 @@ import type { IAIProvider, ModelInfo } from '../provider/provider-contract.js';
 import type { HttpRequest, Route } from './http-contract.js';
 import { createActiveProviderPolicy } from '../provider/active-provider.js';
 import { ConflictError } from '../kernel/error-types.js';
+import { createMicrosoftNetworkDetector } from '../provider/network-environment.js';
 
 function pick(routes: Route[], method: string, path: string) {
   const route = routes.find((r) => r.method === method && r.path === path);
@@ -50,11 +51,49 @@ function harness(signedIn = true) {
 }
 
 describe('provider-controller', () => {
+  it('uses detected connectivity, not sign-in, without selecting Agency and revokes availability after network loss', async () => {
+    let reachable = false;
+    let signedIn = true;
+    const detector = createMicrosoftNetworkDetector({ probe: async () => reachable });
+    const registry = createProviderRegistry();
+    registry.register(provider('copilot', []));
+    registry.register(provider('agency', []));
+    const saveSelected = vi.fn();
+    const executionPolicy = createActiveProviderPolicy({
+      initialProviderId: 'copilot', enabledProviderIds: () => ['copilot', 'agency'],
+      isEligible: (id) => id !== 'agency' || detector.isMicrosoftNetwork(), saveSelected,
+    });
+    const routes = createProviderRoutes({
+      registry, executionPolicy, microsoftSignedIn: () => signedIn,
+      bootstrapInfo: () => ({ defaultProvider: 'copilot',
+        providers: [{ id: 'copilot', installed: true }, { id: 'agency', installed: true }],
+      }),
+    });
+    const bootstrap = () => pick(routes, 'get', '/providers/bootstrap')(req());
+    await detector.refresh();
+    expect((await bootstrap()).body).toMatchObject({ providers: [{ id: 'copilot' }] });
+    reachable = true;
+    signedIn = false;
+    await detector.refresh();
+    expect((await bootstrap()).body).toMatchObject({
+      defaultProvider: 'copilot', providers: [{ id: 'copilot' }, { id: 'agency' }],
+    });
+    expect(saveSelected).not.toHaveBeenCalled();
+    reachable = false;
+    signedIn = true;
+    await detector.refresh();
+    expect((await bootstrap()).body).toMatchObject({ providers: [{ id: 'copilot' }] });
+    expect(() => pick(routes, 'post', '/providers/selection')(req({
+      body: { providerId: 'agency' },
+    }))).toThrow('Provider is not available');
+  });
+
   it('exposes automation restrictions separately from interactive installation on catalog, setup and selection responses', async () => {
     const registry = createProviderRegistry();
     registry.register(provider('copilot', []));
     registry.register(provider('agency', []));
     const automation = { supported: false, reason: 'Interactive sessions remain available. Native MCP policy cannot safely support automated work; choose another provider.' };
+    const features = [{ id: 'future', label: 'Future feature', status: 'setup-required' as const, reason: 'Configure native CLI' }];
     const executionPolicy = createActiveProviderPolicy({
       initialProviderId: 'copilot', enabledProviderIds: () => ['copilot', 'agency'],
       isEligible: () => true, saveSelected: () => {},
@@ -64,13 +103,13 @@ describe('provider-controller', () => {
       bootstrapInfo: () => ({
         defaultProvider: 'copilot', providers: [
           { id: 'copilot', installed: true, automation: { supported: true, reason: null } },
-          { id: 'agency', installed: true, automation },
+          { id: 'agency', installed: true, automation, features },
         ],
       }),
     });
     expect((await pick(routes, 'get', '/providers')(req())).body).toEqual([
       { id: 'copilot', installed: true, automation: { supported: true, reason: null } },
-      { id: 'agency', installed: true, automation },
+      { id: 'agency', installed: true, automation, features },
     ]);
     expect((await pick(routes, 'get', '/providers/bootstrap')(req())).body).toMatchObject({
       providers: [{ id: 'copilot' }, { id: 'agency', installed: true, automation }],

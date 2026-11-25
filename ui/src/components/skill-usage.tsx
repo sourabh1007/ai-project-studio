@@ -3,25 +3,31 @@ import { useApi } from '../app/api-context.js';
 import type { SkillOrigin, SkillUsageSnapshot } from '../lib/types.js';
 import { formatAic, formatCompactNumber, formatDateTime, formatTokens } from '../lib/format.js';
 import { Button } from './ui.js';
+import { Insights, InsightMatrix } from '../features/monitoring/insights.js';
+import type { UsageWindow } from '../lib/usage-window.js';
 
 const SOURCES: Record<SkillOrigin, string> = {
   repository: 'Repository', ide: 'IDE', cli: 'CLI', unknown: 'Not identified',
 };
 
-export function SkillUsage({ scope = 'feature', featureId, signal }: {
-  scope?: 'feature' | 'internal'; featureId?: string; signal: string | number;
+export function SkillUsage({ scope = 'feature', featureId, signal, window }: {
+  scope?: 'feature' | 'internal'; featureId?: string; signal: string | number; window?: UsageWindow;
 }) {
   const api = useApi();
   const [source, setSource] = useState<SkillOrigin | 'all'>('all');
+  const [identity, setIdentity] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [state, setState] = useState<{ key: string; data: SkillUsageSnapshot | null; error: string | null }>({
     key: '', data: null, error: null,
   });
-  const key = JSON.stringify([scope, featureId]);
+  const key = JSON.stringify([scope, featureId, window]);
+  useEffect(() => { setIdentity(''); }, [key, source]);
   useEffect(() => {
     let active = true;
     setState((prev) => ({ key, data: prev.key === key ? prev.data : null, error: null }));
-    void Promise.resolve().then(() => featureId === undefined ? api.getSkillUsage(scope) : api.getFeatureSkillUsage(featureId))
+    void Promise.resolve().then(() => featureId === undefined
+      ? window ? api.getSkillUsage(scope, window) : api.getSkillUsage(scope)
+      : window ? api.getFeatureSkillUsage(featureId, window) : api.getFeatureSkillUsage(featureId))
       .then((data) => {
         if (!data || !Array.isArray(data.rows)) throw new Error('The backend returned an invalid skill usage snapshot');
         if (active) setState({ key, data, error: null });
@@ -34,14 +40,23 @@ export function SkillUsage({ scope = 'feature', featureId, signal }: {
     return () => { active = false; };
   }, [api, scope, featureId, signal, key, refresh]);
   const snapshot = state.key === key ? state.data : null;
-  const rows = snapshot?.rows.filter((row) => source === 'all' || row.source === source) ?? [];
+  const sourceRows = snapshot?.rows.filter((row) => source === 'all' || row.source === source) ?? [];
+  const rows = sourceRows.filter((row) => !identity || JSON.stringify([row.identity, row.source, row.repoId, row.provider]) === identity);
+  const identities = new Map<string, { row: SkillUsageSnapshot['rows'][number]; counts: Record<string, number> }>();
+  for (const row of sourceRows) {
+    const id = JSON.stringify([row.identity, row.source, row.repoId, row.provider]);
+    const entry = identities.get(id) ?? { row, counts: { invocation: 0, 'context-prepared': 0, 'context-injected': 0 } };
+    entry.counts[row.kind] += row.uses;
+    identities.set(id, entry);
+  }
   const measured = (value: number | null, count: number, uses: number, format: (value: number) => string) =>
     value === null ? 'Not reported' : `${format(value)}${count < uses ? ' (partial)' : ''}`;
   return <section aria-label="Skill usage">
     <h3>Skills</h3>
     <Button variant="secondary" onClick={() => setRefresh((value) => value + 1)}>Refresh skills</Button>
     <p className="field-hint">Repository, IDE and CLI skills are tracked separately. CLI invocations, IDE context preparation and live injections are distinct activities.
-      Tokens and AIC require explicit skill attribution; session totals are never divided between skills. This is a recent activity window, independent of the usage period selector.</p>
+      Tokens and AIC require explicit skill attribution; session totals are never divided between skills.
+      {window ? ` Follows the selected Usage time frame: ${window.from} to ${window.to} (UTC, end exclusive).` : ' This is a recent activity window, independent of the usage period selector.'}</p>
     <div className="usage-granularity" role="group" aria-label="Skill source">
       {(['all', 'repository', 'ide', 'cli', 'unknown'] as const).map((item) => <button key={item} type="button"
         className={`usage-seg ${source === item ? 'is-active' : ''}`} aria-pressed={source === item} onClick={() => setSource(item)}>
@@ -51,6 +66,13 @@ export function SkillUsage({ scope = 'feature', featureId, signal }: {
     {state.key === key && state.error && <p role="status">{snapshot ? 'Could not refresh skill usage; showing the previous snapshot: ' : 'Could not load skill usage: '}{state.error}</p>}
     {!snapshot && !state.error && <p role="status">Loading skill usage…</p>}
     {snapshot?.limited && <p role="status">Showing the most recent {snapshot.maxEvents.toLocaleString()} skill events. Older activity is retained but excluded from this snapshot.</p>}
+    <Insights title="Skill activity matrix">{() => <InsightMatrix title="Skill activity kinds" columns={['Invoked', 'Context prepared', 'Context injected']}
+      explanation={`${window ? 'A bounded event window within the selected Usage time frame.' : 'A recent bounded event window, not the global Usage date filter.'} Supplied or injected does not mean followed. Click a count for the corresponding source records below.`}
+      rows={[...identities].map(([id, { row, counts }]) => ({ id, label: `${row.name} · ${SOURCES[row.source]} · ${row.repoName ?? row.repoId ?? 'No repository'} · ${row.provider}`,
+        cells: (['invocation', 'context-prepared', 'context-injected'] as const).map((kind) => ({
+          value: counts[kind], select: () => setIdentity(id),
+        })) }))} />}</Insights>
+    {identity && <button type="button" className="rb-linkish" onClick={() => setIdentity('')}>Clear skill identity filter</button>}
     {snapshot && rows.length === 0 && <p className="field-hint">No recorded skill activity in this source and scope. Unavailable telemetry is not zero usage.</p>}
     {rows.length > 0 && <div className="mcp-usage-table-scroll" tabIndex={0} role="region" aria-label="Skill usage details">
       <table className="usage-table" aria-label="Per-skill usage">
