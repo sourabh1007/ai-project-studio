@@ -31,18 +31,21 @@ export function McpInsights({ provider, server, scope = 'feature', featureId, si
   }
   return <section aria-label="MCP observed diagnostics">
     <p className="field-hint">{provider} / {server} · {scope} · last 7 UTC days. Provider-observed calls only, not merged proxy transport.
-      Error outcomes are not reported by this source; missing completion is unknown, not failure.</p>
+      Outcomes use only explicit provider success flags; legacy records and missing flags remain unknown. Missing completion is not failure.</p>
     <button type="button" className="rb-linkish" onClick={() => setRefresh((value) => value + 1)}>Refresh observed calls</button>
     {state.key === key && state.error && <p role="status">{data && 'Showing previous snapshot. '}{state.error}</p>}
     {!data && !state.error && <p role="status">Loading observed calls...</p>}
     {data?.limited && <p role="status">Latest 500 calls shown; older calls are excluded from these sample statistics.</p>}
-    <InsightMatrix title="Tool activity and measured latency" intensity={false} columns={['Calls', 'Timed', 'Median ms', 'p95 ms', 'Unknown completion']}
+    <InsightMatrix title="Tool activity and measured latency" intensity={false} columns={['Calls', 'Timed', 'Median ms', 'p95 ms', 'Unknown completion', 'Succeeded', 'Failed', 'Unknown outcome']}
       explanation="Percentiles use compatible recorded per-call durations. p95 requires at least 20 measured samples. No arguments, responses or prompts are loaded."
       rows={[...groups.entries()].map(([id, calls]) => {
         const times = calls.map((call) => call.durationMs).filter((value): value is number => value != null && Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
         return { id, label: `${calls[0].tool || 'Unknown tool'} · ${calls[0].at.slice(0, 10)}`, cells: [
           { value: calls.length }, { value: times.length }, { value: times.length ? times.length % 2 ? times[Math.floor(times.length / 2)] : (times[times.length / 2 - 1] + times[times.length / 2]) / 2 : null },
           { value: times.length >= 20 ? times[Math.ceil(times.length * 0.95) - 1] : null }, { value: calls.length - times.length },
+          { value: calls.filter((call) => call.outcome === 'succeeded').length },
+          { value: calls.filter((call) => call.outcome === 'failed').length },
+          { value: calls.filter((call) => call.outcome !== 'succeeded' && call.outcome !== 'failed').length },
         ] };
       })} />
   </section>;

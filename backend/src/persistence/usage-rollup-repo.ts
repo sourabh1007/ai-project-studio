@@ -5,6 +5,7 @@ import type {
   UsageDayRow,
   UsageRollupReader,
   UsageWindow,
+  UsageSessionReader,
 } from '../usage-rollup/usage-rollup-contract.js';
 
 interface DayRow {
@@ -90,7 +91,7 @@ function grouped(union: string): string {
 export function createUsageRollupRepo(
   db: DatabaseSync,
   ideUsageConfig: IdeUsageConfig,
-): UsageRollupReader {
+): UsageRollupReader & UsageSessionReader {
   const metaKinds = ideUsageConfig.metaKinds;
   const metaKindPlaceholders = metaKinds.map(() => '?').join(', ');
 
@@ -156,6 +157,30 @@ export function createUsageRollupRepo(
   };
 
   return {
+    workspaceSessions(query) {
+      const excluded = query.excludeProviderId === undefined ? '' : ' AND u.provider <> ?';
+      const args = query.excludeProviderId === undefined ? [] : [query.excludeProviderId];
+      const rows = db.prepare(`SELECT session_id AS sessionId, MAX(feature_id) AS featureId,
+        MAX(name) AS name, MAX(available) AS available, MAX(retained) AS retained,
+        SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens,
+        CASE WHEN COUNT(*) = COUNT(nano_aiu) THEN SUM(nano_aiu) END AS nanoAiu
+        FROM (
+          SELECT u.session_id, u.feature_id, s.name, s.id IS NOT NULL AS available, 0 AS retained,
+            u.input_tokens, u.output_tokens, u.nano_aiu
+          FROM usage_events u LEFT JOIN sessions s ON s.id = u.session_id
+          WHERE u.started_at >= ? AND u.started_at < ? AND (s.id IS NULL OR s.scope <> 'internal')
+            AND u.session_id > ? ${excluded}
+          UNION ALL
+          SELECT session_id, feature_id, NULL, 0, 1, input_tokens, output_tokens, nano_aiu
+          FROM retained_usage u WHERE source = 'cli' AND scope = 'feature' AND day >= ? AND day < ?
+            AND session_id > ? ${excluded}
+        ) GROUP BY session_id ORDER BY session_id LIMIT ?`).all(
+        query.from, query.to, query.after ?? '', ...args,
+        query.from.slice(0, 10), query.to.slice(0, 10), query.after ?? '', ...args, query.limit + 1,
+      ) as unknown as (Omit<import('../usage-rollup/usage-rollup-contract.js').UsageSessionPage['items'][number], 'available' | 'retained'> & { available: number; retained: number })[];
+      const items = rows.slice(0, query.limit).map((row) => ({ ...row, available: row.available === 1, retained: row.retained === 1 }));
+      return { items, nextCursor: rows.length > query.limit ? items[items.length - 1].sessionId : null };
+    },
     workspaceDays(window) {
       if (window) return (db.prepare(grouped(
         `${cliSource(`${visibleUsage} AND started_at >= ? AND started_at < ?`)}

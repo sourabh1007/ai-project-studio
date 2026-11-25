@@ -143,6 +143,8 @@ function metaAbortMessage(
 
 /** A single headless AI request: a prompt run against a feature's context. */
 export interface MetaRequest {
+  /** One observer per app-owned attempt; provider-internal retries are not implied. */
+  beginAttempt?: (transport: MetaResultTransport) => (phase: MetaAttemptPhase) => void;
   /** Stable catalog identities only; never prompt contents. */
   promptRefs?: readonly string[];
   correlation?: {
@@ -251,6 +253,8 @@ export interface MetaRequest {
  * flow instead of duplicating the launcher/extractor plumbing. Meta sessions are
  * excluded from dev-cost rollups by the aggregation module.
  */
+export type MetaAttemptPhase = 'admission' | 'preparing' | 'dispatched' | 'returned' | 'failed';
+
 export interface MetaRunner {
   run(request: MetaRequest): Promise<string>;
   /**
@@ -320,7 +324,10 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
     }, remainingLaunchMs);
     timer.unref?.();
 
+    let phase: ((phase: MetaAttemptPhase) => void) | undefined;
+    let returned = false;
     try {
+      phase = request.beginAttempt?.('session');
       let launched: LaunchedSession;
       try {
         launched = await deps.launcher.start({
@@ -335,6 +342,7 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
           scope: request.scope,
           noTools: request.noTools,
           signal: controller.signal,
+          onExecutionPhase: phase,
         });
       } catch (error) {
         if (controller.signal.aborted) {
@@ -382,8 +390,10 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
       ) {
         throw providerFailure(transcript, ended.session.exitCode, ended.failure);
       }
+      const text = extractResponseText(transcript, deps.config.responseTextKeys);
+      returned = true;
       return {
-        text: extractResponseText(transcript, deps.config.responseTextKeys),
+        text,
         sessionId,
         transport: 'session',
         providerId,
@@ -395,6 +405,7 @@ export function createMetaRunner(deps: MetaRunnerDeps): MetaRunner {
     } finally {
       clearTimeout(timer);
       request.signal?.removeEventListener('abort', forwardAbort);
+      phase?.(returned ? 'returned' : 'failed');
     }
   };
   return {

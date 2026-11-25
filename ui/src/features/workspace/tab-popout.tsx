@@ -8,6 +8,8 @@ import { ErrorBoundary } from '../../components/error-boundary.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { desktopBridge } from '../../lib/desktop-bridge.js';
 import { useGlobalClipboard } from '../../hooks/use-global-clipboard.js';
+import { useUsageStream } from '../../hooks/use-usage-stream.js';
+import { MonitoringProvider } from '../monitoring/monitoring-host.js';
 
 const TerminalView = lazy(() =>
   import('../../components/terminal-view.js').then((m) => ({
@@ -86,6 +88,7 @@ export function TabPopout({
   label: string;
 }) {
   const title = tabTitle(tab, label);
+  const live = useUsageStream();
   // A detached window renders only this tab, not the full IDE, so it must own
   // copy itself: without this the popout falls back to Chromium's default copy
   // (no native clipboard bridge, no error surface) and copying selected text
@@ -95,7 +98,7 @@ export function TabPopout({
     void desktopBridge()?.windows?.popIn?.();
   }
   return (
-    <div className="session-popout">
+    <MonitoringProvider live={live}><div className="session-popout">
       <header className="session-popout-header">
         <span
           className={`session-popout-dot tab-dot-${tab.kind}`}
@@ -122,7 +125,7 @@ export function TabPopout({
       <div className="session-popout-body">
         <TabBody tab={tab} />
       </div>
-    </div>
+    </div></MonitoringProvider>
   );
 }
 

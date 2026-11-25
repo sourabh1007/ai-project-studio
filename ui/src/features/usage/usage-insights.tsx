@@ -6,6 +6,44 @@ import { HistoryChart, InsightMatrix, Insights, useInsightVisibility, type Matri
 import { OperationInsights } from '../meta-operations/operation-insights.js';
 import { sharedRead } from '../monitoring/shared-read.js';
 import type { UsageWindow } from '../../lib/usage-window.js';
+import { useMonitoringHost } from '../monitoring/monitoring-host.js';
+
+export function WorkspaceDaySessions({ date }: { date: string }) {
+  const api = useApi();
+  const host = useMonitoringHost();
+  const visibility = useInsightVisibility();
+  const [cursor, setCursor] = useState('');
+  const [state, setState] = useState<{ key: string; page?: Awaited<ReturnType<typeof api.listUsageSessions>>; error?: string }>({ key: '' });
+  const [ownerError, setOwnerError] = useState('');
+  const key = JSON.stringify([date, cursor]);
+  useEffect(() => {
+    if (!visibility.visible) return;
+    let active = true;
+    setState({ key });
+    void sharedRead(api, JSON.stringify(['day-sessions', key, visibility.revision]), () => api.listUsageSessions({ day: date, after: cursor, limit: '100' }))
+      .then((page) => { if (active) setState({ key, page }); })
+      .catch((cause: unknown) => { if (active) setState({ key, error: cause instanceof Error ? cause.message : 'Could not load sessions.' }); });
+    return () => { active = false; };
+  }, [api, date, cursor, key, visibility.visible, visibility.revision]);
+  const current = state.key === key ? state : null;
+  return <section aria-label="Workspace day sessions">
+    <p className="field-hint">Up to 100 sessions per page for this UTC day. Retained billing survives deleted sessions; missing billing is not zero.</p>
+    {!current?.page && !current?.error && <p role="status">Loading sessions...</p>}
+    {current?.error && <p role="alert">{current.error}</p>}
+    {ownerError && <p role="alert">{ownerError}</p>}
+    <ul>{current?.page?.items.map((item) => <li key={item.sessionId}>
+      <button type="button" className="rb-linkish" disabled={!item.available || !host?.openOwner} onClick={() => {
+        setOwnerError('');
+        void host?.openOwner?.({ featureId: item.featureId, sessionId: item.sessionId })
+          .catch((cause: unknown) => setOwnerError(cause instanceof Error ? cause.message : 'Could not open session.'));
+      }}>{item.name ?? item.sessionId}</button> · {formatAic(item.nanoAiu)} AIC · {item.inputTokens} input / {item.outputTokens} output tokens
+      {!item.available && ' · Session details unavailable'}{item.retained && ' · Retained billing'}
+    </li>)}</ul>
+    {current?.page?.items.length === 0 && <p>No session records available for this day.</p>}
+    {current?.page?.nextCursor && <button type="button" onClick={() => setCursor(current.page!.nextCursor!)}>Next session page</button>}
+    {cursor && <button type="button" onClick={() => setCursor('')}>First session page</button>}
+  </section>;
+}
 
 const day = (time: number) => new Date(time).toISOString().slice(0, 10);
 export function RecordedUsageInsights({ events }: { events: StoredUsage[] }) {
@@ -101,6 +139,7 @@ export function UsageInsights({ scope, signal, window: suppliedWindow }: {
       {scope === 'ide' && <Insights title="Source operations for this UTC day">{() => <OperationInsights scope={{
         from: new Date(selected).toISOString(), to: new Date(Date.parse(selected) + 86400000).toISOString(),
       }} />}</Insights>}
+      {scope === 'workspace' && <Insights title="Source sessions for this UTC day">{() => <WorkspaceDaySessions key={selected} date={selected} />}</Insights>}
     </div>}
   </section>;
 }

@@ -7,12 +7,13 @@ const fields = [
   'feature_id', 'automation_id', 'origin_session_id', 'provider_id', 'requested_model',
   'resolved_model', 'session_id', 'provider_session_id', 'session_ids_json', 'transport', 'correlation_json', 'prompt_refs_json',
   'state', 'outcome', 'purpose', 'label', 'result_text', 'error_message', 'usage_state',
-  'usage_json', 'request_usage_json', 'created_at', 'updated_at', 'started_at', 'finished_at',
+  'usage_json', 'request_usage_json', 'execution_json', 'created_at', 'updated_at', 'started_at', 'finished_at',
 ] as const;
 const metadata = ['operation_id', ...fields.filter((field) => field !== 'result_text')]
   .map((field) => `operation.${field}`).join(', ');
 
 interface Row {
+  execution_json: string | null;
   request_usage_json: string | null;
   prompt_refs_json: string | null;
   correlation_json: string | null;
@@ -43,6 +44,7 @@ interface Row {
 
 function mapMetadata(row: Omit<Row, 'result_text'>): Omit<MetaOperation, 'resultText'> {
   return {
+    ...(row.execution_json === null ? {} : { execution: JSON.parse(row.execution_json) as MetaOperation['execution'] }),
     ...(row.prompt_refs_json === null ? {} : { promptRefs: JSON.parse(row.prompt_refs_json) as string[] }),
     ...(row.correlation_json === null ? {} : { correlation: JSON.parse(row.correlation_json) as MetaOperation['correlation'] }),
     operationId: row.operation_id, featureId: row.feature_id, automationId: row.automation_id,
@@ -65,6 +67,7 @@ function values(op: MetaOperation): Array<string | null> {
     op.promptRefs ? JSON.stringify(op.promptRefs) : null, op.state, op.outcome, op.purpose, op.label, op.resultText,
     op.errorMessage, op.usageState, op.usage === null ? null : JSON.stringify(op.usage),
     op.requestUsage == null ? null : JSON.stringify(op.requestUsage),
+    op.execution === undefined ? null : JSON.stringify(op.execution),
     op.createdAt, op.updatedAt, op.startedAt, op.finishedAt,
   ];
 }

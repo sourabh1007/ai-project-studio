@@ -378,6 +378,7 @@ const CORE_TABLES: readonly TableSchema[] = [
     name: 'bug_bash_runs',
     ddl: `CREATE TABLE IF NOT EXISTS bug_bash_runs (
     id TEXT PRIMARY KEY,
+    history_json TEXT,
     feature_id TEXT NOT NULL,
     feature_info TEXT NOT NULL,
     setup_info TEXT NOT NULL,
@@ -444,6 +445,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     scope TEXT NOT NULL CHECK (scope IN ('feature', 'internal')),
     recorded_at TEXT NOT NULL,
     duration_ms INTEGER,
+    outcome TEXT NOT NULL DEFAULT 'unknown' CHECK (outcome IN ('succeeded', 'failed', 'unknown')),
     PRIMARY KEY (provider, session_id, call_id)
   )`,
   },
@@ -546,6 +548,7 @@ const USAGE_TABLES: readonly TableSchema[] = [
     ),
     usage_json TEXT,
     request_usage_json TEXT,
+    execution_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     started_at TEXT,
@@ -923,6 +926,7 @@ const INDEXES: readonly IndexSchema[] = [
     schema: 'usage',
     ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_usage_events_session_started_at ON usage_events (session_id, started_at)',
   },
+  { schema: 'usage', ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_usage_events_day_sessions ON usage_events (started_at, session_id)' },
   {
     schema: 'usage',
     ddl: 'CREATE INDEX IF NOT EXISTS usage.idx_meta_usage_records_feature_id ON meta_usage_records (feature_id)',
@@ -1280,6 +1284,15 @@ const ADDED_COLUMNS: readonly {
   {
     table: 'meta_operations', column: 'request_usage_json', schema: 'usage',
     ddl: 'ALTER TABLE usage.meta_operations ADD COLUMN request_usage_json TEXT',
+  },
+  {
+    table: 'meta_operations', column: 'execution_json', schema: 'usage',
+    ddl: 'ALTER TABLE usage.meta_operations ADD COLUMN execution_json TEXT',
+  },
+  { table: 'bug_bash_runs', column: 'history_json', ddl: 'ALTER TABLE bug_bash_runs ADD COLUMN history_json TEXT' },
+  {
+    table: 'mcp_observed_calls', column: 'outcome', schema: 'usage',
+    ddl: "ALTER TABLE usage.mcp_observed_calls ADD COLUMN outcome TEXT NOT NULL DEFAULT 'unknown' CHECK (outcome IN ('succeeded', 'failed', 'unknown'))",
   },
   {
     table: 'mcp_auth_observations',

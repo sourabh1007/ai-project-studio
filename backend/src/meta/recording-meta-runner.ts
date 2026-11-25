@@ -99,6 +99,33 @@ export function createRecordingMetaRunner(deps: RecordingMetaRunnerDeps): MetaRu
         lease.expectPhysicalOwnership();
         const result = await deps.base.runDetailed({
           ...request, operationId, providerId: identity.providerId, model: identity.requestedModel, signal: lease.signal,
+          beginAttempt(transport) {
+            if (finished || startFailure) return () => {};
+            const execution = operation.execution ?? { attempts: [], limited: false };
+            const attempt = { id: `${operationId}:${execution.attempts.length + 1}`, transport,
+              createdAt: deps.clock.isoNow(), phases: [] as NonNullable<MetaOperation['execution']>['attempts'][number]['phases'] };
+            const save = (): void => {
+              try {
+                operation = { ...operation, execution, updatedAt: deps.clock.isoNow() };
+                update();
+              } catch (error) {
+                startFailure = new MetaOperationPersistenceError(operationId, error);
+                lease.abort();
+              }
+            };
+            if (execution.attempts.length >= 16) {
+              execution.limited = true;
+              save();
+              return () => {};
+            }
+            execution.attempts.push(attempt);
+            save();
+            return (phase) => {
+              if (finished || startFailure || attempt.phases.some((entry) => entry.phase === 'returned' || entry.phase === 'failed' || entry.phase === phase)) return;
+              attempt.phases.push({ phase, at: deps.clock.isoNow() });
+              save();
+            };
+          },
           onStart(sessionId: string, attribution?: MetaOperationStart) {
             if (finished || startFailure) return;
             try {

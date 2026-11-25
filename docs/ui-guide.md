@@ -351,6 +351,14 @@ is no new evidence; an unchanged timestamp alone does not indicate failure.
 Updates reflect successful tracking passes, not independently verified task
 completion. Status refreshes every 15 seconds while the window is visible.
 
+Use **Export > Tracked work by period...** to download generated tracked tasks
+for a selected day, Monday-Sunday week, or calendar year as Markdown, JSON, or
+CSV, without another AI request. The reference date selects the period, using
+assigned Planner dates across all repositories. Open and completed tasks are
+included; backlogged and deleted tasks are excluded. Notes and current status
+are exported, but raw transcripts and tracking evidence are not. Reported
+completion is not independently verified. Ordinary day exports remain available.
+
 Planner suggestions support arrow keys, Enter and Escape. IME composition does
 not add or rename a task, repeated submission is guarded, and failed mutations
 leave edits available with an error. Deleting a planner entry asks for

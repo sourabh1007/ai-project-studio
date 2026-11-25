@@ -18,7 +18,7 @@ describe('bounded MCP observed history', () => {
       const query = { provider: 'copilot', server: 'tools', scope: 'feature' as const,
         from: '2026-01-01T00:00:00.000Z', to: '2026-01-03T00:00:00.000Z' };
       expect(repo.observedHistory!({ ...query, featureId: 'other' })).toEqual([
-        { callId: '0', tool: 'read', at: '2026-01-02T00:00:00.000Z', durationMs: null },
+        { callId: '0', tool: 'read', at: '2026-01-02T00:00:00.000Z', durationMs: null, outcome: 'unknown' },
       ]);
       const routes = createMcpUsageRoutes({ mcpUsage: repo, clock: createClock() });
       const handler = routes.find((route) => route.method === 'get')!.handler;

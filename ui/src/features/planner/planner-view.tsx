@@ -42,7 +42,9 @@ import { autocorrect, autoformatTitle, suggestTitles } from '../../lib/planner-t
 import { browserOperationKeyStore, KEY_RESET_WARNING, releaseAfterOutcome } from '../../lib/operation-keys.js';
 import {
   exportPlannerTasks,
+  trackedWorkForExport,
   type PlannerExportFormat,
+  type TrackedWorkExportPeriod,
 } from '../../lib/planner-export.js';
 import {
   humanizeLaunchError,
@@ -284,6 +286,9 @@ export function PlannerView({
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [trackedExportOpen, setTrackedExportOpen] = useState(false);
+  const [trackedExportPeriod, setTrackedExportPeriod] = useState<TrackedWorkExportPeriod>('day');
+  const [trackedExportDate, setTrackedExportDate] = useState(day);
   const exportRef = useRef<HTMLDivElement>(null);
 
   // Close the export menu on any outside click so it behaves like a popover.
@@ -303,6 +308,9 @@ export function PlannerView({
   const repoList = repos.data ?? [];
   const effectiveRepoId = repoId || repoList[0]?.id || null;
   const allTasks = tasks.data ?? [];
+  const trackedExport = useMemo(() => isIsoDate(trackedExportDate)
+    ? trackedWorkForExport(allTasks, trackedExportPeriod, trackedExportDate) : null,
+  [allTasks, trackedExportPeriod, trackedExportDate]);
 
   const dayTasks = useMemo(
     () => allTasks.filter((task) => task.date === day && !task.backloggedAt),
@@ -807,10 +815,10 @@ export function PlannerView({
               type="button"
               className="planner-tool-btn"
               onClick={() => setExportOpen((open) => !open)}
-              disabled={dayTasks.length === 0}
+              disabled={allTasks.length === 0}
               aria-haspopup="menu"
               aria-expanded={exportOpen}
-              title="Export this day"
+              title="Export work"
             >
               <ExportIcon size={14} /> Export
               <ChevronDownIcon size={13} />
@@ -823,6 +831,7 @@ export function PlannerView({
                     type="button"
                     role="menuitem"
                     className="planner-export-item"
+                    disabled={dayTasks.length === 0}
                     onClick={() => {
                       exportDay(format);
                       setExportOpen(false);
@@ -832,6 +841,11 @@ export function PlannerView({
                     {label}
                   </button>
                 ))}
+                <button type="button" role="menuitem" className="planner-export-item" onClick={() => {
+                  setTrackedExportDate(day);
+                  setTrackedExportOpen(true);
+                  setExportOpen(false);
+                }}>Tracked work by period...</button>
               </div>
             )}
           </div>
@@ -1084,6 +1098,34 @@ export function PlannerView({
         />
       )}
 
+      {trackedExportOpen && <Modal title="Export tracked work" onClose={() => setTrackedExportOpen(false)}>
+        <p>Download generated tracked work without another AI request. Uses the assigned Planner date across all repositories,
+          including open and completed tasks. Backlogged and deleted tasks are excluded.</p>
+        <label>Export period
+          <select className="input" value={trackedExportPeriod}
+            onChange={(event) => setTrackedExportPeriod(event.target.value as TrackedWorkExportPeriod)}>
+            <option value="day">Day</option><option value="week">Week (Monday-Sunday)</option><option value="year">Year</option>
+          </select>
+        </label>
+        <label>Reference date
+          <input className="input" type="date" value={trackedExportDate}
+            onChange={(event) => setTrackedExportDate(event.target.value)} />
+        </label>
+        {!trackedExport ? <p role="alert">Choose a valid reference date.</p> : <p role="status">
+          {trackedExport.from === trackedExport.through ? trackedExport.from : `${trackedExport.from} through ${trackedExport.through}`}
+          {' · '}{trackedExport.tasks.length} tracked task{trackedExport.tasks.length === 1 ? '' : 's'}.
+          {!trackedExport.tasks.length && ' No tracked work in this period.'}
+        </p>}
+        <p className="field-hint">Exports include task notes and current status. Reported completion is not independently verified.
+          Raw session transcripts and tracking evidence are not included.</p>
+        <div className="planner-summary-downloads">
+          {EXPORT_FORMATS.map(({ format, label }) => <button key={format} type="button" className="planner-export-btn"
+            disabled={!trackedExport?.tasks.length} onClick={() => {
+              const doc = exportPlannerTasks(trackedExport!.tasks, format, `Tracked work ${trackedExport!.label}`);
+              downloadTextFile(doc.content, doc.mime, doc.filename);
+            }}>Download {label}</button>)}
+        </div>
+      </Modal>}
       {summaryOpen && (
         <Modal title="AI task summary" size="lg" onClose={() => setSummaryOpen(false)}>
           <div className="planner-summary-head">

@@ -207,9 +207,11 @@ export function createSessionLauncher(
       throwIfAborted(request.signal);
       const admission = deps.processAdmission;
       if (admission) {
+        request.onExecutionPhase?.('admission');
         owner.processPermit = await own(owner, () => admission.acquireCold(request.signal));
         throwIfAborted(request.signal);
       }
+      request.onExecutionPhase?.('preparing');
       const kind = request.kind ?? deps.config.defaultKind;
       const scope = request.scope ?? 'feature';
       if (kind === 'dev' && scope !== 'internal') {
@@ -283,6 +285,7 @@ export function createSessionLauncher(
         deps.executionPolicy?.assertActive(selection.provider.id);
         running = selection.provider.startSession(spec);
         owner.nativeStarted = true;
+        request.onExecutionPhase?.('dispatched');
         void work.own(owner, () => owner.nativeExit);
       } catch (error) {
         try {

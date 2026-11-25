@@ -119,6 +119,22 @@ function harness(
 }
 
 describe('meta-runner', () => {
+  it.each([false, true])('forwards precise launch phases and terminal attempt state (failure=%s)', async (fail) => {
+    const phase = vi.fn();
+    const beginAttempt = vi.fn(() => phase);
+    const h = harness(null, { beforeLaunch: async (request) => {
+      request.onExecutionPhase?.('admission');
+      request.onExecutionPhase?.('preparing');
+      if (fail) throw new Error('bootstrap failed');
+      request.onExecutionPhase?.('dispatched');
+    } });
+    const run = h.runner.runDetailed({ featureId: 'f', prompt: 'go', beginAttempt });
+    if (fail) await expect(run).rejects.toThrow('bootstrap failed');
+    else await run;
+    expect(beginAttempt).toHaveBeenCalledWith('session');
+    expect(phase.mock.calls.flat()).toEqual(fail ? ['admission', 'preparing', 'failed']
+      : ['admission', 'preparing', 'dispatched', 'returned']);
+  });
   it('forwards the immutable app operation ID to cold native ownership', async () => {
     const h = harness({ sessionId: 'meta1', stdout: ['{"response":"answer"}'], stderr: [], exitCode: 0 });
     await h.runner.runDetailed({ operationId: 'app-operation', featureId: 'f', prompt: 'go' });

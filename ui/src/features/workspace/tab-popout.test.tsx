@@ -7,6 +7,8 @@ import {
   type PoppableTab,
 } from './tab-popout.js';
 import type { WorkspaceTab } from './workspace-tabs.js';
+vi.mock('../../app/api-context.js', () => ({ useApi: () => ({}) }));
+vi.mock('../../hooks/use-usage-stream.js', () => ({ useUsageStream: () => ({}) }));
 
 // Keep xterm and the real agent modules out of jsdom: the popout only needs to
 // prove it hands the right props to the right body.

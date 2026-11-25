@@ -235,7 +235,7 @@ describe('PlannerView', () => {
       .mockImplementation(() => {});
     try {
       renderView(client({}, [task()]));
-      fireEvent.click(await screen.findByTitle('Export this day'));
+      fireEvent.click(await screen.findByTitle('Export work'));
       const md = await screen.findByTitle('Export this day as Markdown');
       fireEvent.click(md);
       expect(createUrl).toHaveBeenCalledTimes(1);
@@ -244,6 +244,53 @@ describe('PlannerView', () => {
       clickSpy.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('downloads tracked work for a whole week or year even when the visible day has no tasks', async () => {
+    const blobs: Blob[] = [];
+    const filenames: string[] = [];
+    vi.stubGlobal('URL', { createObjectURL: vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:tracked'; }), revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function(this: HTMLAnchorElement) {
+      filenames.push(this.download);
+    });
+    const read = (blob: Blob) => new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(blob);
+    });
+    const api = client({}, [
+      task({ id: 'monday', date: '2023-12-25', automaticallyTracked: true }),
+      task({ id: 'sunday', date: '2023-12-31', automaticallyTracked: true, status: 'done', notes: 'Implemented and checked.' }),
+      task({ id: 'year', date: '2023-01-01', automaticallyTracked: true, repoId: 'another-repo' }),
+      task({ id: 'manual', date: '2023-12-31' }),
+      task({ id: 'backlog', date: '2023-12-31', automaticallyTracked: true, backloggedAt: '2023-12-31' }),
+      task({ id: 'next-year', date: '2024-01-01', automaticallyTracked: true }),
+    ]);
+    try {
+      renderView(api);
+      const trigger = await screen.findByTitle('Export work');
+      await waitFor(() => expect(trigger).toBeEnabled());
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Tracked work by period...' }));
+      const dialog = screen.getByRole('dialog', { name: 'Export tracked work' });
+      fireEvent.change(within(dialog).getByLabelText('Reference date'), { target: { value: '2023-12-31' } });
+      expect(within(dialog).getByRole('status')).toHaveTextContent('2023-12-31 · 1 tracked task.');
+      fireEvent.change(within(dialog).getByLabelText('Export period'), { target: { value: 'week' } });
+      expect(within(dialog).getByRole('status')).toHaveTextContent('2023-12-25 through 2023-12-31 · 2 tracked tasks.');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Download JSON' }));
+      expect(JSON.parse(await read(blobs[0])).map((entry: PlannerTask) => entry.id)).toEqual(['monday', 'sunday']);
+      expect(filenames[0]).toBe('planner-tracked-work-2023-12-25-to-2023-12-31.json');
+      fireEvent.change(within(dialog).getByLabelText('Export period'), { target: { value: 'year' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Download Markdown' }));
+      expect(await read(blobs[1])).toContain('  Implemented and checked.');
+      expect(filenames[1]).toBe('planner-tracked-work-2023.md');
+      fireEvent.change(within(dialog).getByLabelText('Reference date'), { target: { value: '1999-01-01' } });
+      expect(within(dialog).getByText(/No tracked work in this period/)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'Download CSV' })).toBeDisabled();
+      fireEvent.change(within(dialog).getByLabelText('Reference date'), { target: { value: '' } });
+      expect(within(dialog).getByRole('alert')).toHaveTextContent('Choose a valid reference date.');
+      expect(api.generatePlannerSummary).not.toHaveBeenCalled();
+    } finally { click.mockRestore(); vi.unstubAllGlobals(); }
   });
 
   it('generates and renders an AI summary for the selected scope', async () => {

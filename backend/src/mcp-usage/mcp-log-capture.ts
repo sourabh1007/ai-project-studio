@@ -67,16 +67,19 @@ export function mcpCallFromEvent(value: unknown): Pick<McpObservedCall, 'server'
 
 /**
  * The payload-free identity of a `tool.execution_complete` event: just the call
- * id and when it finished. Completion events carry no server/tool identity, so
+ * id, finish time and explicitly reported outcome. Completion events carry no server/tool identity, so
  * they only time a call already seen as a start. Arguments/results are ignored.
  */
-export function mcpCompletionFromEvent(value: unknown): Pick<McpObservedCompletion, 'callId' | 'completedAt'> | null {
+export function mcpCompletionFromEvent(value: unknown): Pick<McpObservedCompletion, 'callId' | 'completedAt' | 'outcome'> | null {
   const event = object(value);
   if (event?.type !== 'tool.execution_complete') return null;
   const data = object(event.data);
   if (!data || !identifier(data.toolCallId) || typeof event.timestamp !== 'string'
     || !Number.isFinite(Date.parse(event.timestamp))) return null;
-  return { callId: data.toolCallId, completedAt: new Date(event.timestamp).toISOString() };
+  return {
+    callId: data.toolCallId, completedAt: new Date(event.timestamp).toISOString(),
+    outcome: data.success === true ? 'succeeded' : data.success === false ? 'failed' : 'unknown',
+  };
 }
 
 export interface McpLogCaptureDeps {
@@ -143,6 +146,7 @@ export function createMcpLogCapture(deps: McpLogCaptureDeps) {
                   provider: source.provider,
                   callId: JSON.stringify([source.sessionId, completion.callId]),
                   completedAt: completion.completedAt,
+                  outcome: completion.outcome,
                 });
               }
             }

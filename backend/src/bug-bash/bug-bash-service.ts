@@ -433,6 +433,7 @@ export function createBugBashService(
       }
       const workspace = deps.workspace.resolve(run.featureId);
       run = touch(run, { status: 'running', error: null });
+      const startedAt = deps.clock.isoNow();
       try {
         sink.activity({
           phase: 'running',
@@ -464,7 +465,15 @@ export function createBugBashService(
           report: team.report,
           agents: [...analysts, ...team.agents],
         };
-        run = touch(run, { status: 'reported' });
+        const history = run.history ?? [];
+        run = touch(run, { status: 'reported', history: [...history, {
+          sequence: (history.at(-1)?.sequence ?? 0) + 1, startedAt, finishedAt: deps.clock.isoNow(),
+          limited: team.scenarios.length > deps.config.historyScenarioLimit,
+          scenarios: team.scenarios.slice(0, deps.config.historyScenarioLimit).map((scenario) => ({
+            id: scenario.id.slice(0, 128), title: scenario.title.slice(0, 200), status: scenario.status, ran: scenario.ran,
+            evidence: scenario.evidenceGaps.length ? 'missing' as const : scenario.ran ? 'recorded' as const : 'unverified' as const,
+          })),
+        }].slice(-deps.config.historyLimit) });
         emit(run, 'done', 'Bug bash complete.');
         sink.activity({ phase: 'done', line: 'Bug bash complete.' });
         sink.done(run);

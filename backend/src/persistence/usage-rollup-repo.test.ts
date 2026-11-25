@@ -32,6 +32,32 @@ function usage(overrides: Partial<StoredUsage>): StoredUsage {
   };
 }
 
+it('pages a single indexed UTC day with live, deleted and unknown-billing sessions and excludes IDE/provider records', () => {
+  const db = createDatabase({ databasePath: ':memory:' });
+  try {
+    const repo = createUsageRollupRepo(db, ideUsageDefaults);
+    createSessionRepo(db).save(session('a-live', 'feature', 'dev'));
+    createSessionRepo(db).save(session('c-ide', 'internal', 'meta'));
+    createUsageRepo(db).saveAll([
+      usage({ sessionId: 'a-live' }), usage({ sessionId: 'a-live', turnIndex: 1 }),
+      usage({ sessionId: 'c-ide' }), usage({ sessionId: 'd-agency', provider: 'agency' }),
+      usage({ sessionId: 'old', startedAt: '2025-12-31T23:59:59.999Z' }),
+      usage({ sessionId: 'new', startedAt: '2026-01-02T00:00:00.000Z' }),
+    ]);
+    insertRetained(db, { id: 'keep', session_id: 'b-gone', day: '2026-01-01', nano_aiu: null });
+    insertRetained(db, { id: 'ide', session_id: 'e-ide', day: '2026-01-01', scope: 'internal' });
+    insertRetained(db, { id: 'agency', session_id: 'f-agency', day: '2026-01-01', provider: 'agency' });
+    const query = { from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', after: null, limit: 1, excludeProviderId: 'agency' };
+    const first = repo.workspaceSessions(query);
+    expect(first).toMatchObject({ items: [{ sessionId: 'a-live', available: true, retained: false, inputTokens: 200, nanoAiu: 2000 }], nextCursor: 'a-live' });
+    const last = repo.workspaceSessions({ ...query, after: first.nextCursor });
+    expect(last).toMatchObject({ items: [{ sessionId: 'b-gone', available: false, retained: true, nanoAiu: null }], nextCursor: null });
+    expect(repo.workspaceSessions({ ...query, after: 'z' })).toEqual({ items: [], nextCursor: null });
+    expect(repo.workspaceSessions({ ...query, excludeProviderId: undefined, limit: 100 }).items.map((item) => item.sessionId))
+      .toEqual(['a-live', 'b-gone', 'd-agency', 'f-agency']);
+  } finally { db.close(); }
+});
+
 it('bounds all day sources by an exclusive UTC window and preserves retained billing', () => {
   const db = createDatabase({ databasePath: ':memory:' });
   try {

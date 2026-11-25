@@ -211,6 +211,7 @@ export interface ApiRoutesDeps {
   groupLookup: Pick<FeatureGroupsRepo, 'get'>;
   ideUsage: IdeUsageService;
   usageRollups: UsageRollupService;
+  usageSessions?: import('../usage-rollup/usage-rollup-contract.js').UsageSessionReader;
   metaUsageLookup: Pick<MetaUsageRepo, 'listRecent'>;
   usageActivityLimit: number;
   planUsage: PlanUsageService;
@@ -412,6 +413,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
     ...createIdeUsageRoutes({ ideUsage: deps.ideUsage }),
     ...createUsageRollupRoutes({
       rollups: deps.usageRollups,
+      sessions: deps.usageSessions,
       metaUsage: deps.metaUsageLookup,
       activityLimit: deps.usageActivityLimit,
       microsoftSignedIn: deps.microsoftSignedIn,

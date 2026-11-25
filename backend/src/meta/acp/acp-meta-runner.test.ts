@@ -75,6 +75,23 @@ function deps(
 }
 
 describe('createAcpMetaRunner', () => {
+  it.each([false, true])('keeps one warm observer through capacity, bootstrap and settlement (failure=%s)', async (fail) => {
+    const phase = vi.fn();
+    const beginAttempt = vi.fn(() => phase);
+    const runner = createAcpMetaRunner(deps({ run: async (request) => {
+      request.onExecutionPhase?.('admission');
+      request.onExecutionPhase?.('preparing');
+      if (fail) throw new Error('bootstrap failed');
+      request.onExecutionPhase?.('dispatched');
+      return result('answer');
+    } }));
+    const run = runner.runDetailed({ featureId: 'f', prompt: 'p', beginAttempt });
+    if (fail) await expect(run).rejects.toThrow('bootstrap failed');
+    else await run;
+    expect(beginAttempt).toHaveBeenCalledWith('warm-acp');
+    expect(phase.mock.calls.flat()).toEqual(fail ? ['admission', 'preparing', 'failed']
+      : ['admission', 'preparing', 'dispatched', 'returned']);
+  });
   it('does not publish a synthetic warm attempt if bootstrap fails before a provider session exists', async () => {
     const onStart = vi.fn();
     const runner = createAcpMetaRunner(deps({

@@ -84,6 +84,25 @@ function makeDeps(signedIn = true) {
 }
 
 describe('usage-rollup-controller', () => {
+  it('validates day-session pagination and preserves provider exposure without scanning other days', async () => {
+    const calls: unknown[] = [];
+    for (const signedIn of [true, false]) {
+      const routes = createUsageRollupRoutes({
+        rollups: {} as UsageRollupService, metaUsage: { listRecent: () => [] }, activityLimit: 25,
+        microsoftSignedIn: () => signedIn,
+        sessions: { workspaceSessions: (query) => { calls.push(query); return { items: [], nextCursor: null }; } },
+      });
+      const handler = pick(routes, 'get', '/usage/sessions');
+      expect(await handler(req({ query: { day: '2026-01-31' } }))).toEqual({ status: 200, body: { items: [], nextCursor: null } });
+      expect(calls.at(-1)).toEqual({ from: '2026-01-31T00:00:00.000Z', to: '2026-02-01T00:00:00.000Z',
+        after: null, limit: 100, excludeProviderId: signedIn ? undefined : 'agency' });
+      await handler(req({ query: { day: '2026-01-31', after: 'session', limit: '2' } }));
+      expect(calls.at(-1)).toMatchObject({ after: 'session', limit: 2 });
+      for (const query of [{ day: '2026-02-30' }, { day: '2026-01-01', limit: '101' }, { day: '2026-01-01', unknown: 'x' }])
+        expect(await handler(req({ query }))).toMatchObject({ status: 400 });
+    }
+    expect(await pick(makeDeps().routes, 'get', '/usage/sessions')(req({ query: { day: '2026-01-01' } }))).toMatchObject({ status: 503 });
+  });
   it.each([
     { from: 'invalid', to: '2026-02-01' }, { from: '2026-02-30', to: '2026-03-10' },
     { from: '2026-01-01' }, { to: '2026-02-01' }, { from: '2026-02-01', to: '2026-01-01' },

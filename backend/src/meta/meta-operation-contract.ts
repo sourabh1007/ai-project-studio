@@ -1,4 +1,4 @@
-import type { MetaRequest, MetaRunResult, MetaResultTransport, MetaUsageSnapshot } from './meta-runner.js';
+import type { MetaRequest, MetaRunResult, MetaResultTransport, MetaUsageSnapshot, MetaAttemptPhase } from './meta-runner.js';
 import type { PersistedMetaUsage } from './meta-usage-contract.js';
 
 export type MetaOperationState = 'pending' | 'running' | 'interrupted' | 'failed' | 'completed';
@@ -21,6 +21,10 @@ export interface MetaOperationRequest extends MetaRequest {
 }
 
 export interface MetaOperation {
+  execution?: {
+    limited: boolean;
+    attempts: { id: string; transport: MetaResultTransport; createdAt: string; phases: { phase: MetaAttemptPhase; at: string }[] }[];
+  };
   promptRefs?: readonly string[];
   /** Immutable per-request response metering; never replaced by session capture. */
   requestUsage?: MetaUsageSnapshot | null;

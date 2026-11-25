@@ -26,7 +26,7 @@ Review defaults remain Problem / Solution / Comments.
 | Agent and automation execution | New Task and Bug Bash show attachment-scoped operations and team timelines; selecting a team row opens its existing log. Automations show occurrences and operation history. Agent catalog details have agent-scoped operation views. |
 | Reliability | Operation insights offer recorded daily state counts, exact-page filtering to attempts, and separate interrupted/unknown outcomes. A page is not a population-wide failure rate. |
 | Bug Bash evidence | Scenario/evidence cells open the existing scenario detail. Not run, failed, unavailable and missing evidence stay distinct. |
-| MCP | Existing rankings and configured server cards expose read-only observed call/latency diagnostics. The manager entry does not open the probing/authentication tool inspector. Provider, server and scope stay separate. |
+| MCP | Existing rankings and configured server cards expose read-only observed call/latency diagnostics and explicit success/failure/unknown counts. The manager entry does not open the probing/authentication tool inspector. Provider, server and scope stay separate. |
 | Skills | Existing skill usage has an identity/source/repository/provider activity matrix. Invocations, prepared context and injected context remain separate; cell selection filters the existing source rows. |
 | Model/route observations | Usage and contextual operation panels compare captured cohorts, separating purpose, feature, provider, route, resolved model, outcome and available context fingerprint. Sample/billing counts and timing eligibility remain visible; p95 requires 20 measured samples. |
 | Resources | The existing resource panel has optional host/app CPU, RAM and backend event-loop history. It reuses the backend sampler rather than probing once per viewer. |
@@ -42,6 +42,13 @@ Review defaults remain Problem / Solution / Comments.
   result/prompt text. Typed correlation is recorded on new review/team work;
   legacy labels are not parsed to invent run identities. Hidden-provider rows
   are filtered before pagination, including operation detail reads.
+- New operations retain up to 16 distinct app-owned attempts and their observed
+  admission, preparation, dispatch and settlement boundaries. Warm acquisition
+  is separate from ACP session preparation; cold process admission is separate
+  from bootstrap. Cold dispatch means native process launch, whereas warm ACP
+  dispatch means sending the prompt. These are app-observed intervals, not
+  provider-internal latency or physical-termination proof. Selecting an operation
+  opens its phase timeline; legacy operations retain unavailable phase data.
 - Observed MCP reads require exact provider/server/scope and at most 31 days,
   returning at most 500 calls with a truncation marker. The UI requests seven
   days. Provider-observed latency is not merged with proxy transport totals.
@@ -64,25 +71,33 @@ Review defaults remain Problem / Solution / Comments.
   insight reads while preserving controls. Visibility restoration refreshes
   the current owner. Existing SSE signals are reused, including
   `pr.review.updated`; there is no chart-specific SSE connection.
-- Owner-local disclosures and existing callbacks are the implemented host
-  seam. They work without reaching into shell globals, including detached
-  agent views. A central typed cross-owner navigation/return service has not
-  been introduced.
+- A typed, injected monitoring host shares the existing live stream and one
+  visibility subscription per window. Owner links validate current session or
+  exact feature/attachment/agent identity without creating replacements.
+  Return navigation retains the originating view, controls, drafts and workspace
+  active/split tabs. Detached windows own one stream and do not advertise shell
+  navigation capabilities. The command palette opens monitoring in Usage.
 
 ### Explicit remaining work and capability gaps
 
-Precise enqueue/admission/preparation/physical-attempt boundaries, immutable
-historical scenario projections and native-internal retry histories are not
-newly instrumented. Current timelines show only supported run, operation and
-team boundaries; settled attempts with missing end times are not shown running.
-Typed MCP error outcomes and configuration-revision/origin mapping are not
-available from the observed-duration source, so no reliability rate or exact
-configured-revision match is claimed.
+Queue boundaries outside the instrumented meta execution paths and
+native-internal retry histories remain
+unavailable. Current timelines show supported run, operation, app-owned attempt
+and team boundaries; settled attempts with missing end times are not shown
+running. MCP completion events now retain only explicit boolean success flags
+as succeeded/failed; missing flags, old rows and missing completions remain
+unknown. Configuration-revision/origin mapping is not proven by a matching
+server name, so no population-wide reliability rate or exact configured-revision
+match is claimed.
 
-Workspace-day-to-session indexing, cross-owner aggregate-to-attachment
-navigation, waiting-run-to-capacity return navigation, a command-palette
-monitoring entry, and refactoring pre-existing optional streams into one
-injected window host remain follow-up work. Repository/session trends use the
+Workspace UTC-day drilldowns page indexed session usage (maximum 100 per
+request), including explicitly unavailable retained-only sessions. Operation
+details link to known owning agents, originating workspace sessions and
+Metasession capacity settings, with a return path. Bug Bash retains immutable
+completed-run scenario metadata: defaults are ten runs and 200 scenarios per
+run, with truncation disclosed. Failed/cancelled attempts remain in operation
+history; legacy scenario history cannot be reconstructed. Snapshots do not
+retain raw evidence or transcripts. Repository/session trends use the
 first 5,000 already-loaded records and explicitly exclude retained-only billing;
 they do not pretend to be a complete historical rollup.
 
@@ -92,10 +107,12 @@ extensions, not a statement that missing source capabilities have shipped.
 ### Validation and measured query behavior
 
 Run build, lint and both configured coverage gates as listed at the end.
-Verified: build and lint passed; 6,128 backend tests and 2,580 UI tests passed,
-with 100% across each configured coverage axis. The full UI run used four
-workers and an isolated session report directory to avoid shared-output
-collisions; no coverage thresholds or exclusions were changed.
+Local validation for 0.20.0: build and lint passed; 6,405 backend tests and
+2,765 UI tests passed with 100% across each configured coverage axis. A further
+App navigation/return regression passed in a targeted run. All 271 desktop
+harness tests and isolated Windows packaged synthetic startup passed. Neither
+synthetic startup nor source coverage qualifies real native/provider behavior.
+No coverage thresholds or exclusions were changed.
 Focused tests cover unique-group provenance, missing timing, UTC windows,
 bounded queries, provider visibility, corrupt persistence, scope races,
 in-flight read limits, hidden-window refresh, and read-only MCP diagnostics.
@@ -106,6 +123,13 @@ window. Measured p95 was 2.421 ms before the feature/window/order index and
 0.239 ms with it; `EXPLAIN QUERY PLAN` removed the temporary ordering B-tree.
 The selective index is included. This is a query microbenchmark, not a cold
 disk, end-to-end UI, all-routes or reference-machine performance guarantee.
+
+The new day-session query was also measured locally on Windows / Node 24.20.0
+with 55,000 in-memory events (5,000 on the requested day). Under 24 concurrent
+loopback requests, eight day reads took at most 4.31 ms each; sixteen unrelated
+health requests completed within 86.24 ms round trip. The date-range source
+used the covering `idx_usage_events_day_sessions` index. This synthetic check
+is not a cold-disk or production-load performance guarantee.
 
 ## Recommendation
 

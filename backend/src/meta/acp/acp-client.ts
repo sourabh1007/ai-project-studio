@@ -49,6 +49,7 @@ export interface AcpUsage {
 }
 
 export interface AcpTurnRequest {
+  onExecutionPhase?: (phase: 'admission' | 'preparing' | 'dispatched') => void;
   /** The full prompt text; delivered inline (ACP has no argv length limit). */
   prompt: string;
   /** Working directory for the session. */
@@ -268,6 +269,7 @@ export class AcpClient {
           allowFallbackToCold: false,
           onDispatch: (id) => {
             turn.requestId = id;
+            request.onExecutionPhase?.('dispatched');
           },
           onTimeout: () => this.disposeTurn(turn),
         },

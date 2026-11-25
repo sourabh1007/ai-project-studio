@@ -583,7 +583,7 @@ const TABS: TabDef[] = [
   { id: 'config', label: 'Configuration' },
 ];
 
-export function SettingsView({ worktreesRequest }: { worktreesRequest?: number } = {}) {
+export function SettingsView({ worktreesRequest, capacityRequest }: { worktreesRequest?: number; capacityRequest?: number } = {}) {
   const api = useApi();
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
@@ -593,6 +593,7 @@ export function SettingsView({ worktreesRequest }: { worktreesRequest?: number }
     validate: isSettingsDraftStore,
   });
   const [tab, setTab] = useState<TabId>('health');
+  useEffect(() => { if (capacityRequest !== undefined) setTab('metasession'); }, [capacityRequest]);
   const [promptAnchor, setPromptAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [toolsOpen, setToolsOpen] = useState(false);

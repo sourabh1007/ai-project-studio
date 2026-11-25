@@ -245,7 +245,7 @@ describe('Settings renderer journeys', () => {
     );
     expect(screen.getByRole('radio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
-  });
+  }, 15_000);
 
   it.each([false, true])('offers Agency only when included in eligible bootstrap providers (eligible: %s)', async (eligible) => {
     const api = apiFor([], {

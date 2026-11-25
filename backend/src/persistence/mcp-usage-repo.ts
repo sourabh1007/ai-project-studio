@@ -19,7 +19,8 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
   // duration; a non-positive gap (clock skew) and replays leave it untouched.
   // ROUND (not truncate) absorbs julianday's sub-millisecond float error.
   const stampDuration = db.prepare(`UPDATE mcp_observed_calls
-    SET duration_ms = CAST(ROUND((julianday(?) - julianday(recorded_at)) * 86400000) AS INTEGER)
+    SET duration_ms = CAST(ROUND((julianday(?) - julianday(recorded_at)) * 86400000) AS INTEGER),
+      outcome = ?
     WHERE provider = ? AND call_id = ? AND duration_ms IS NULL
       AND julianday(?) >= julianday(recorded_at)`);
   const deleteByFeature = db.prepare(
@@ -37,13 +38,13 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
 
   return {
     observedHistory(query) {
-      return db.prepare(`SELECT call_id AS callId, tool, recorded_at AS at, duration_ms AS durationMs
+      return db.prepare(`SELECT call_id AS callId, tool, recorded_at AS at, duration_ms AS durationMs, outcome
         FROM mcp_observed_calls WHERE provider = ? AND server = ? AND scope = ?
           AND recorded_at >= ? AND recorded_at < ? ${query.featureId === undefined ? '' : 'AND feature_id = ?'}
         ORDER BY recorded_at DESC, session_id DESC, call_id DESC LIMIT 501`).all(
         query.provider, query.server, query.scope, query.from, query.to,
         ...(query.featureId === undefined ? [] : [query.featureId]),
-      ) as unknown as { callId: string; tool: string; at: string; durationMs: number | null }[];
+      ) as unknown as ReturnType<NonNullable<McpUsageRepo['observedHistory']>>;
     },
     recordObserved(entry) {
       insertObserved.run(
@@ -61,6 +62,7 @@ export function createMcpUsageRepo(db: DatabaseSync): McpUsageRepo & McpObserved
     recordCompletion(entry) {
       stampDuration.run(
         entry.completedAt,
+        entry.outcome ?? 'unknown',
         entry.provider,
         entry.callId,
         entry.completedAt,

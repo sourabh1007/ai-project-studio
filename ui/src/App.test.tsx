@@ -6,9 +6,17 @@ import type { ApiClient } from './lib/api.js';
 import type { Feature, Repository, Session } from './lib/types.js';
 import { useActivity } from './hooks/use-activity.js';
 import { OPEN_PROMPT_USAGE_EVENT, type PromptUsageTarget } from './features/usage/prompt-usage.js';
+import { useState } from 'react';
+import { useMonitoringHost } from './features/monitoring/monitoring-host.js';
 
 vi.mock('./features/usage/usage-view.js', () => ({
-  UsageView: ({ promptTarget }: { promptTarget?: PromptUsageTarget }) => <div>Usage target {promptTarget?.promptRef} {promptTarget?.nonce}</div>,
+  UsageView: ({ promptTarget }: { promptTarget?: PromptUsageTarget }) => {
+    const host = useMonitoringHost();
+    const [draft, setDraft] = useState('');
+    return <><div>Usage target {promptTarget?.promptRef} {promptTarget?.nonce}</div>
+      <input aria-label="Monitoring draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
+      <button onClick={host?.openCapacity}>Capacity from usage</button></>;
+  },
 }));
 
 vi.mock('./hooks/use-usage-stream.js', () => ({
@@ -70,7 +78,7 @@ vi.mock('./components/view-skeleton.js', () => ({
   ViewSkeleton: () => <div>Loading…</div>,
 }));
 vi.mock('./features/settings/settings-view.js', () => ({
-  SettingsView: () => <div>Settings panel</div>,
+  SettingsView: ({ capacityRequest }: { capacityRequest?: number }) => <><div>Settings panel</div>{capacityRequest !== undefined && <span>Capacity settings requested</span>}</>,
 }));
 vi.mock('./features/skills/skills-manager.js', () => ({
   SkillsManager: () => <div>Skills panel</div>,
@@ -250,6 +258,19 @@ describe('App workspace tab persistence', () => {
   const findView = (text: string) => screen.findByText(text, undefined, LAZY_VIEW_TIMEOUT);
   const findControl = (name: string) =>
     screen.findByRole('button', { name }, LAZY_VIEW_TIMEOUT);
+
+  it('keeps the originating monitoring view and draft mounted across capacity navigation and return', async () => {
+    renderApp();
+    await findControl('Open session tab');
+    fireEvent.click(screen.getByRole('button', { name: 'Usage' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Monitoring draft' }), { target: { value: 'Keep my filters and draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Capacity from usage' }));
+    expect(await findView('Capacity settings requested')).toBeVisible();
+    expect(screen.getByLabelText('Monitoring draft')).not.toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to monitoring' }));
+    expect(await screen.findByRole('textbox', { name: 'Monitoring draft' })).toHaveValue('Keep my filters and draft');
+    expect(screen.queryByText('Settings panel')).not.toBeInTheDocument();
+  });
 
   it('opens unified Usage at the requested prompt, including repeated links', async () => {
     renderApp();

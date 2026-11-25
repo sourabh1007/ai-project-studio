@@ -173,6 +173,23 @@ function harness(options: {
 }
 
 describe('cold physical operation ownership', () => {
+  it('reports process admission separately from preparation and actual native dispatch', async () => {
+    const budget = createProcessAdmission({ maxProcesses: 1, maxWarmProcesses: 0, maxQueued: 1 });
+    const occupied = await budget.acquireCold();
+    const phase = vi.fn();
+    const h = harness({ processAdmission: budget });
+    try {
+      const start = h.launcher.start({ featureId: 'f', prompt: 'go', onExecutionPhase: phase });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(phase.mock.calls.flat()).toEqual(['admission']);
+      expect(h.getSpec()).toBeUndefined();
+      occupied.release();
+      const session = await start;
+      expect(phase.mock.calls.flat()).toEqual(['admission', 'preparing', 'dispatched']);
+      h.rs.finish(0);
+      await session.completion;
+    } finally { occupied.release(); h.launcher.shutdown(); budget.close(); }
+  });
   it.each([true, false])('releases a provider lease if physical registration fails (policy=%s)', async (withPolicy) => {
     const executionPolicy = createActiveProviderPolicy({
       enabledProviderIds: () => ['copilot'], isEligible: () => true,

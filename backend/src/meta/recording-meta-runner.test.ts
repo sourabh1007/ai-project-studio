@@ -64,6 +64,57 @@ describe('durable recording meta runner with production SQLite', () => {
     await h.runner.runDetailed({ featureId: 'f', prompt: 'go' });
     expect(states).toEqual(['running', 'running', 'completed']);
   });
+
+  it('durably separates warm admission and preparation from a later cold fallback attempt', async () => {
+    let late!: (phase: 'admission' | 'preparing' | 'dispatched' | 'returned' | 'failed') => void;
+    let begin!: NonNullable<MetaOperationRequest['beginAttempt']>;
+    const h = setup(async (request) => {
+      begin = request.beginAttempt!;
+      const warm = request.beginAttempt!('warm-acp');
+      warm('admission'); warm('admission'); warm('preparing'); warm('failed'); warm('returned');
+      expect(repo.get('op-1')?.execution?.attempts[0].phases.map((entry) => entry.phase)).toEqual(['admission', 'preparing', 'failed']);
+      late = request.beginAttempt!('session');
+      late('preparing'); late('dispatched'); late('returned');
+      return result({ transport: 'session' });
+    });
+    await h.runner.runDetailed({ featureId: 'f', prompt: 'go' });
+    late('failed');
+    begin('session')('admission');
+    const execution = repo.get('op-1')!.execution!;
+    expect(execution.limited).toBe(false);
+    expect(execution.attempts.map((attempt) => [attempt.id, attempt.transport, attempt.phases.map((entry) => entry.phase)])).toEqual([
+      ['op-1:1', 'warm-acp', ['admission', 'preparing', 'failed']],
+      ['op-1:2', 'session', ['preparing', 'dispatched', 'returned']],
+    ]);
+    expect(repo.listPage({}, null, 10).items[0].execution).toEqual(execution);
+  });
+
+  it('caps attempt telemetry without blocking execution or recording extra callbacks', async () => {
+    const h = setup(async (request) => {
+      for (let index = 0; index < 17; index++) request.beginAttempt!('session')('failed');
+      return result();
+    });
+    await h.runner.runDetailed({ featureId: 'f', prompt: 'go' });
+    expect(repo.get('op-1')?.execution).toMatchObject({ limited: true, attempts: expect.any(Array) });
+    expect(repo.get('op-1')?.execution?.attempts).toHaveLength(16);
+  });
+
+  it.each(['begin', 'phase'] as const)('aborts without retry when %s attempt telemetry cannot be persisted', async (when) => {
+    const update = repo.update;
+    vi.spyOn(repo, 'update').mockImplementation((operation) => {
+      const attempt = operation.execution?.attempts[0];
+      if (attempt && (when === 'begin' || attempt.phases.length)) throw new Error('disk full');
+      return update(operation);
+    });
+    const h = setup(async (request) => {
+      const phase = request.beginAttempt!('session');
+      phase('admission'); phase('preparing');
+      request.beginAttempt!('session')('failed');
+      return result();
+    });
+    await expect(h.runner.runDetailed({ featureId: 'f', prompt: 'go' })).rejects.toBeInstanceOf(MetaOperationPersistenceError);
+    expect(h.base.runDetailed).toHaveBeenCalledOnce();
+  });
   it('preserves typed run and agent correlation through dispatch, settlement and metadata reads', async () => {
     const h = setup();
     const correlation = { runId: 'run', attachmentId: 'attachment', agentId: 'review-board', perspectiveId: 'business', contextFingerprint: 'fingerprint' };

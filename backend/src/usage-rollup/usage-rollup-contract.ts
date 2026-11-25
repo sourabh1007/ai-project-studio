@@ -12,6 +12,16 @@ export type UsageGranularity = 'day' | 'week' | 'month' | 'year';
 export type UsageRollupScope = 'workspace' | 'ide' | 'feature';
 export interface UsageWindow { from: string; to: string }
 
+export interface UsageSessionPage {
+  items: { sessionId: string; featureId: string; name: string | null; available: boolean; retained: boolean;
+    inputTokens: number; outputTokens: number; nanoAiu: number | null }[];
+  nextCursor: string | null;
+}
+
+export interface UsageSessionReader {
+  workspaceSessions(query: { from: string; to: string; after: string | null; limit: number; excludeProviderId?: string }): UsageSessionPage;
+}
+
 /**
  * One normalized day-grained usage bucket, unioned across every source (live
  * CLI turns, warm-ACP meta snapshots, and retained summaries of deleted work).

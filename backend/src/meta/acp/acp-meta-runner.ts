@@ -23,6 +23,7 @@ export interface AcpTurnPool {
       onNotice?: (line: string) => void;
       onStart?: () => void;
       onSession?: (sessionId: string) => void;
+      onExecutionPhase?: (phase: 'admission' | 'preparing' | 'dispatched') => void;
       signal?: AbortSignal;
     },
     context?: { purpose?: string; label?: string; operationId?: string },
@@ -82,13 +83,17 @@ export function createAcpMetaRunner(
           }
         : undefined;
 
-      const result = await deps.pool.run(
+      const phase = request.beginAttempt?.('warm-acp');
+      let result: AcpTurnResult;
+      try {
+        result = await deps.pool.run(
         {
           prompt: request.prompt,
           cwd: request.cwd,
           deadlineAt: request.deadlineAt,
           timeoutMs: request.timeoutMs,
           onActivity,
+          onExecutionPhase: phase,
           // Discrete tool-call / thinking lines arrive already formatted, so
           // forward them verbatim (no line buffering) straight to the caller.
           onNotice: emit ? (line: string): void => emit(line) : undefined,
@@ -98,7 +103,12 @@ export function createAcpMetaRunner(
           signal: request.signal,
         },
         { purpose: request.purpose ?? deps.purpose, label: request.label, operationId: request.operationId },
-      );
+        );
+        phase?.('returned');
+      } catch (error) {
+        phase?.('failed');
+        throw error;
+      }
 
       if (emit) {
         const trailing = clip(buffer);

@@ -1,16 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import './monitoring.css';
+import { useMonitoringHost } from './monitoring-host.js';
 
 export function useInsightVisibility() {
+  const host = useMonitoringHost();
   const [state, setState] = useState({ visible: document.visibilityState !== 'hidden', revision: 0 });
   useEffect(() => {
+    if (host) return;
     const change = () => setState((previous) => ({
       visible: document.visibilityState !== 'hidden', revision: previous.revision + 1,
     }));
     document.addEventListener('visibilitychange', change);
     return () => document.removeEventListener('visibilitychange', change);
-  }, []);
-  return state;
+  }, [Boolean(host)]);
+  return host?.visibility ?? state;
 }
 
 export function Insights({ title = 'Insights', children }: { title?: string; children: ReactNode | (() => ReactNode) }) {

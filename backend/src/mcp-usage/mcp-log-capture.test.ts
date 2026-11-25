@@ -61,11 +61,16 @@ describe('MCP completion timing', () => {
   const complete = (data: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({
     type: 'tool.execution_complete', timestamp, data: { toolCallId: 'call-1', success: true, ...data }, ...extra,
   });
-  it('extracts only the call id and finish time, ignoring result payloads', () => {
+  it('captures explicit failure without retaining result payloads', () => {
     expect(mcpCompletionFromEvent(complete({ result: 'secret', success: false }))).toEqual({
-      callId: 'call-1', completedAt: timestamp,
+      callId: 'call-1', completedAt: timestamp, outcome: 'failed',
     });
   });
+  it.each([[true, 'succeeded'], [undefined, 'unknown'], ['false', 'unknown']])(
+    'does not infer outcomes from missing or nonboolean success flags: %s', (success, outcome) => {
+      expect(mcpCompletionFromEvent(complete({ success, result: { isError: false } }))?.outcome).toBe(outcome);
+    },
+  );
   it.each([
     null, [], 'text', { type: 'tool.execution_start', data: { toolCallId: 'call-1' } },
     { type: 'tool.execution_complete', data: null }, complete({ toolCallId: '' }),
@@ -104,7 +109,7 @@ describe('bounded MCP log reconciliation', () => {
     await capture.tick();
     expect(deps.usage.recordObserved).toHaveBeenCalledOnce();
     expect(deps.usage.recordCompletion).toHaveBeenCalledWith({
-      provider: 'agency', callId: '["s","call-1"]', completedAt: '2026-09-26T10:00:02.000Z',
+      provider: 'agency', callId: '["s","call-1"]', completedAt: '2026-09-26T10:00:02.000Z', outcome: 'succeeded',
     });
     // A completion is timing-only: it never counts as an unattributed owner.
     expect(deps.logger.warn).not.toHaveBeenCalled();

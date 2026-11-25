@@ -4,8 +4,36 @@
  * suggested `filename` so the caller only has to trigger the browser download.
  */
 import type { PlannerTask } from './types.js';
+import { isIsoDate } from './planner-dates.js';
 
 export type PlannerExportFormat = 'md' | 'json' | 'csv';
+export type TrackedWorkExportPeriod = 'day' | 'week' | 'year';
+
+export function trackedWorkForExport(
+  tasks: readonly PlannerTask[],
+  period: TrackedWorkExportPeriod,
+  date: string,
+): { tasks: PlannerTask[]; from: string; through: string; label: string } {
+  if (!isIsoDate(date)) throw new RangeError('Choose a valid reference date.');
+  const start = new Date(`${date}T00:00:00.000Z`);
+  const end = new Date(start);
+  if (period === 'week') {
+    start.setUTCDate(start.getUTCDate() - (start.getUTCDay() + 6) % 7);
+    end.setTime(start.getTime());
+    end.setUTCDate(end.getUTCDate() + 6);
+  } else if (period === 'year') {
+    start.setUTCMonth(0, 1);
+    end.setUTCMonth(11, 31);
+  }
+  const from = start.toISOString().split('T')[0];
+  const through = end.toISOString().split('T')[0];
+  return {
+    tasks: tasks.filter((task) => task.automaticallyTracked && !task.backloggedAt
+      && isIsoDate(task.date) && Date.parse(task.date) >= start.getTime() && Date.parse(task.date) <= end.getTime())
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    from, through, label: period === 'day' ? date : period === 'year' ? date.slice(0, 4) : `${from} to ${through}`,
+  };
+}
 
 export interface PlannerExport {
   content: string;
@@ -17,6 +45,7 @@ export interface PlannerExport {
 const CSV_COLUMNS: Array<keyof PlannerTask> = [
   'date',
   'title',
+  'notes',
   'status',
   'priority',
   'kind',
@@ -24,12 +53,14 @@ const CSV_COLUMNS: Array<keyof PlannerTask> = [
   'launchKind',
   'launchLabel',
   'backloggedAt',
+  'automaticallyTracked',
 ];
 
 /** Quotes a CSV field when it contains a comma, quote, or newline. */
 function csvCell(value: unknown): string {
-  const text = value == null ? '' : String(value);
-  if (/[",\n]/.test(text)) {
+  const raw = value == null ? '' : String(value);
+  const text = /^[\s]*[=+\-@]|^[\t\r]/.test(raw) ? `'${raw}` : raw;
+  if (/[",\r\n]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
@@ -64,6 +95,9 @@ function toMarkdown(tasks: readonly PlannerTask[], label: string): string {
         tags.push('backlog');
       }
       lines.push(`- ${checkbox(task)} ${task.title} _(${tags.join(', ')})_`);
+      if (task.notes.trim()) {
+        lines.push(...task.notes.trim().split(/\r?\n/).map((line) => `  ${line}`));
+      }
     }
     lines.push('');
   }

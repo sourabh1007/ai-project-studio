@@ -3,9 +3,12 @@ import { useApi } from '../../app/api-context.js';
 import { ExecutionTimeline, InsightMatrix, useInsightVisibility } from '../monitoring/insights.js';
 import type { MetaOperationPage, MetaOperationSummary, MetaOperationsQuery } from './meta-operation-types.js';
 import { sharedRead } from '../monitoring/shared-read.js';
+import { useMonitoringHost } from '../monitoring/monitoring-host.js';
 
 export function OperationInsights({ scope, signal = 0 }: { scope: Omit<MetaOperationsQuery, 'after' | 'limit'>; signal?: string | number }) {
   const api = useApi();
+  const host = useMonitoringHost();
+  const [ownerError, setOwnerError] = useState('');
   const visibility = useInsightVisibility();
   const [window, setWindow] = useState({ from: '', to: '' });
   const bounded = Boolean(window.from || window.to);
@@ -23,7 +26,7 @@ export function OperationInsights({ scope, signal = 0 }: { scope: Omit<MetaOpera
   const [view, setView] = useState('timeline');
   const [refresh, setRefresh] = useState(0);
   const [outcome, setOutcome] = useState<{ key: string; date: string; state: string } | null>(null);
-  useEffect(() => { setSelected(null); }, [key, cursor]);
+  useEffect(() => { setSelected(null); setOwnerError(''); }, [key, cursor]);
   useEffect(() => {
     if (!visibility.visible) return;
     let active = true;
@@ -99,9 +102,36 @@ export function OperationInsights({ scope, signal = 0 }: { scope: Omit<MetaOpera
     {data?.nextCursor && <button type="button" onClick={() => { setNavigation({ key, after: data.nextCursor }); setPage(null); }}>Next operation page</button>}
     {cursor && <button type="button" onClick={() => { setNavigation({ key, after: null }); setPage(null); }}>First operation page</button>}
     {selected && loadedKey === key && <div role="status"><h4>{selected.label ?? selected.operationId}</h4>
+      <div className="monitor-controls">
+        {host?.openOwner && selected.correlation?.attachmentId && selected.correlation.agentId && <button type="button" onClick={() => {
+          setOwnerError('');
+          void host.openOwner!({ featureId: selected.featureId, attachmentId: selected.correlation!.attachmentId!, agentId: selected.correlation!.agentId! })
+            .catch((cause: unknown) => setOwnerError(cause instanceof Error ? cause.message : 'Could not open owner.'));
+        }}>Open owning agent</button>}
+        {host?.openOwner && selected.originSessionId && <button type="button" onClick={() => {
+          setOwnerError('');
+          void host.openOwner!({ featureId: selected.featureId, sessionId: selected.originSessionId! })
+            .catch((cause: unknown) => setOwnerError(cause instanceof Error ? cause.message : 'Could not open session.'));
+        }}>Open originating session</button>}
+        {host?.openCapacity && <button type="button" onClick={host.openCapacity}>Open capacity settings</button>}
+      </div>
+      {!host?.openOwner && <p>Owner navigation is unavailable in this window. Return to the IDE to open other owners.</p>}
+      {ownerError && <p role="alert">{ownerError}</p>}
       <p>Operation {selected.operationId} · {selected.state} · {selected.outcome} · {selected.providerId ?? 'Unknown provider'} / {selected.resolvedModel ?? 'Unresolved model'}.
         Usage: {selected.usageState}. Physical termination is not implied by callback settlement.</p>
       <p>Created: {selected.createdAt} · start: {selected.startedAt ?? 'not recorded'} · finish: {selected.finishedAt ?? 'not recorded'}.</p>
+      {selected.execution ? <>
+        <p>App-owned attempts only. Admission includes acquiring process or warm-session capacity; preparation includes bootstrap.
+          Dispatch means native process launch on the session route and prompt dispatch on warm ACP. Provider-internal retries remain unavailable.</p>
+        {selected.execution.limited && <p>Only the first 16 attempts were retained.</p>}
+        <ExecutionTimeline title="App-owned attempt phases" items={selected.execution.attempts.flatMap((attempt) =>
+          attempt.phases.filter((entry) => entry.phase !== 'returned' && entry.phase !== 'failed').map((entry, index) => {
+            const next = attempt.phases[index + 1];
+            return { id: `${attempt.id}:${entry.phase}`, label: `${attempt.id} · ${attempt.transport} · ${entry.phase}`,
+              start: Date.parse(entry.at), end: next ? Date.parse(next.at) : null,
+              status: next ? 'completed' : selected.state === 'running' ? 'running' : selected.state };
+          }))} />
+      </> : <p>Attempt phases were not recorded for this operation.</p>}
     </div>}
   </section>;
 }

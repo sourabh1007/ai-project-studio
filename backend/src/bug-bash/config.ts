@@ -12,6 +12,8 @@ import { DEFAULT_REFINE_PROMPT_TEMPLATE } from '../refine-chat/refine-chat.js';
 export const BUG_BASH_NAMESPACE = 'bugBash';
 
 export const bugBashConfigSchema = z.object({
+  historyLimit: z.number().int().min(1).max(50),
+  historyScenarioLimit: z.number().int().min(1).max(500),
   /** Per-step wall-clock budget for the scenario-generation turn, in ms. */
   generateTimeoutMs: z.number().int().positive(),
   /** Per-step wall-clock budget for each tester/report turn, in ms. */
@@ -65,6 +67,8 @@ export const bugBashConfigSchema = z.object({
 export type BugBashConfig = z.infer<typeof bugBashConfigSchema>;
 
 export const bugBashDefaults: BugBashConfig = {
+  historyLimit: 10,
+  historyScenarioLimit: 200,
   // Generation and scenario execution are long agentic turns whose real
   // duration varies with repository size. A fixed budget produced spurious
   // "timed out" failures on large repos even while the agent was actively

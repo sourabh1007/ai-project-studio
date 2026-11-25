@@ -52,6 +52,16 @@ function repo() {
 }
 
 describe('bug-bash-run-repo', () => {
+  it('persists immutable scenario history through creation, update and database reload', () => {
+    const { db, repo: r } = repo();
+    const history: NonNullable<BugBashRun['history']> = [{ sequence: 1, startedAt: 'start', finishedAt: 'end', limited: false,
+      scenarios: [{ id: 's', title: 'Old title', status: 'blocked', ran: false, evidence: 'unverified' }] }];
+    r.create(run({ history }));
+    expect(createBugBashRunRepo(db).get('a1')!.history).toEqual(history);
+    r.update(run({ history, featureInfo: 'New context', scenarios: [scenario({ title: 'New scenario' })] }));
+    expect(r.get('a1')!.history).toEqual(history);
+    db.close();
+  });
   it('creates and reads back a run', () => {
     const { db, repo: r } = repo();
     r.create(run());

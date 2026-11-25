@@ -395,6 +395,7 @@ export class MetaSessionPool {
     acquireTimer?.unref?.();
     let lease: PooledClientLease;
     try {
+      request.onExecutionPhase?.('admission');
       lease = await this.acquire(controller?.signal ?? request.signal);
     } catch (error) {
       if (deadlineAt !== undefined && this.now() >= deadlineAt) {
@@ -413,6 +414,7 @@ export class MetaSessionPool {
       }
     }
     physical?.acquired(lease);
+    request.onExecutionPhase?.('preparing');
     const client = lease.client;
     if (request.signal?.aborted) {
       this.release(lease);

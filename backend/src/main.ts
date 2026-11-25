@@ -1141,9 +1141,8 @@ async function main(): Promise<void> {
   // Consolidated day/week/month/year rollups across every usage source (live
   // CLI turns, warm-ACP meta snapshots, and retained deletions) for the
   // workspace, the IDE's own metasession overhead, and each feature.
-  const usageRollupService = createUsageRollupService({
-    reader: createUsageRollupRepo(db, ideUsageConfig),
-  });
+  const usageRollupReader = createUsageRollupRepo(db, ideUsageConfig);
+  const usageRollupService = createUsageRollupService({ reader: usageRollupReader });
   // Durable retention ledger + move-time attribution keep usage correct across
   // deletions (summarize, never shrink) and drag-and-drop moves (follow the
   // session onto its new feature).
@@ -4805,6 +4804,7 @@ async function main(): Promise<void> {
       groupLookup: featureGroupsRepo,
       ideUsage: ideUsageService,
       usageRollups: usageRollupService,
+      usageSessions: usageRollupReader,
       metaUsageLookup: metaUsageRepo,
       usageActivityLimit: ideUsageConfig.activityLimit,
       planUsage: planUsageService,

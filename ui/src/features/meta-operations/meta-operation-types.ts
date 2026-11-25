@@ -1,4 +1,9 @@
 export interface MetaOperation {
+  execution?: {
+    limited: boolean;
+    attempts: { id: string; transport: 'session' | 'warm-acp'; createdAt: string;
+      phases: { phase: 'admission' | 'preparing' | 'dispatched' | 'returned' | 'failed'; at: string }[] }[];
+  };
   promptRefs?: readonly string[];
   correlation?: { runId: string; attachmentId?: string; perspectiveId?: string; contextFingerprint?: string; agentId?: string };
   operationId: string;

@@ -1092,6 +1092,10 @@ export interface BugBashAgent {
 
 /** One Bug Bash run as returned by the backend. */
 export interface BugBashRun {
+  history?: {
+    sequence: number; startedAt: string; finishedAt: string; limited: boolean;
+    scenarios: { id: string; title: string; status: BugBashScenarioStatus; ran: boolean; evidence: 'missing' | 'recorded' | 'unverified' }[];
+  }[];
   id: string;
   featureId: string;
   featureInfo: string;

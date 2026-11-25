@@ -1,6 +1,7 @@
 /** Write-side contracts for measured and observed MCP usage. */
 
 export type McpOrigin = 'built-in' | 'configured' | 'unknown';
+export type McpCallOutcome = 'succeeded' | 'failed' | 'unknown';
 
 /** Payload-free identity of a tool call observed in a provider's event stream. */
 export interface McpObservedCall {
@@ -24,6 +25,7 @@ export interface McpObservedCompletion {
   callId: string;
   /** ISO timestamp the `tool.execution_complete` event was emitted. */
   completedAt: string;
+  outcome?: McpCallOutcome;
 }
 
 /** Separate port so existing proxy-only adapters remain compatible. */
@@ -70,7 +72,7 @@ export interface McpServerUsageRecord {
 export interface McpUsageRepo {
   observedHistory?(query: {
     provider: string; server: string; scope: 'feature' | 'internal'; from: string; to: string; featureId?: string;
-  }): { callId: string; tool: string; at: string; durationMs: number | null }[];
+  }): { callId: string; tool: string; at: string; durationMs: number | null; outcome?: McpCallOutcome }[];
   /** Appends one measured slice. */
   record(entry: McpServerUsageRecord): void;
   /** Removes every slice and observed call for a feature. */

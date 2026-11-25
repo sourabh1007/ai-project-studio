@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MonitoringProvider } from './features/monitoring/monitoring-host.js';
 import { useApi } from './app/api-context.js';
 import { failActivity } from './lib/activity.js';
 import { reviewBoardRunStore } from './features/review-board-page/review-board-run-store.js';
@@ -188,6 +189,17 @@ export function App() {
     };
   }, [setView, setCliShortcut]);
   const [worktreesRequest, setWorktreesRequest] = useState<number>();
+  const [capacityRequest, setCapacityRequest] = useState<number>();
+  const monitoringRestore = useRef<() => void>(() => {});
+  const [monitoringOwnerKey, setMonitoringOwnerKey] = useState('');
+  const captureMonitoringOrigin = useCallback((restore: () => void, key: string) => {
+    monitoringRestore.current = restore;
+    setMonitoringOwnerKey(key);
+  }, []);
+  const [monitoringOrigin, setMonitoringOrigin] = useState<{ view: View; restore?: () => void } | null>(null);
+  function rememberMonitoringOrigin() {
+    setMonitoringOrigin((previous) => previous ?? { view, restore: view === 'workspace' ? monitoringRestore.current : undefined });
+  }
   // A tab returned from a detached ("popped out") window re-opens in the
   // workspace. The nonce lets the workspace treat repeated returns of the same
   // tab as distinct events.
@@ -350,6 +362,8 @@ export function App() {
       }
     };
     return [
+      { id: 'view-monitoring', title: 'Open monitoring insights', section: 'Navigation',
+        keywords: ['monitoring', 'telemetry', 'timeline', 'capacity', 'usage'], run: goto('usage') },
       {
         id: 'view-workspace',
         title: 'Open Explorer',
@@ -462,7 +476,15 @@ export function App() {
   const connection = useConnectionStatus();
 
   return (
-    <div className="ide-shell">
+    <MonitoringProvider live={live} navigationKey={JSON.stringify([view, monitoringOwnerKey])} onOpen={(tab) => {
+      rememberMonitoringOrigin();
+      setReopenTab((previous) => ({ tab, label: tab.label, nonce: (previous?.nonce ?? 0) + 1 }));
+      setView('workspace');
+    }} onCapacity={() => {
+      rememberMonitoringOrigin();
+      setCapacityRequest((previous) => (previous ?? 0) + 1);
+      setView('settings');
+    }}><div className="ide-shell">
       {clipboardError && <div className="clipboard-alert" role="alert">{clipboardError}</div>}
       <CommandPalette
         open={paletteOpen}
@@ -623,15 +645,23 @@ export function App() {
 
         <div className="ide-content">
           <ConnectionBanner status={connection} liveInterrupted={live.streamInterrupted} liveHistoryLimited={live.liveCacheTruncated} />
+          {monitoringOrigin && <div className="monitor-controls"><button type="button" className="ghost-button" onClick={() => {
+            monitoringOrigin.restore?.();
+            setView(monitoringOrigin.view);
+            setMonitoringOrigin(null);
+            setReopenTab(null);
+            setCapacityRequest(undefined);
+          }}>Return to monitoring</button></div>}
           <UpdateBanner />
           <OperationNoticeBanner />
           <FeatureDeletionStatus />
           {internalAgencyAvailable && <AgencyUpdatePopup />}
-          <div className="view-transition" key={view}>
+          {VIEW_ORDER.filter((id) => id === view || id === monitoringOrigin?.view).map((shownView) => <div className="view-transition" key={shownView} hidden={shownView !== view}>
             <Suspense fallback={<ViewSkeleton label={view} />}>
-              {view === 'workspace' ? (
+              {shownView === 'workspace' ? (
                 <WorkspaceView
                   providerSwitch={providerSwitch}
+                  onMonitoringOrigin={captureMonitoringOrigin}
                   live={live}
                   sidebarOpen={sidebarOpen}
                   onToggleSidebar={() => setSidebarOpen((v) => !v)}
@@ -639,37 +669,37 @@ export function App() {
                   launch={workspaceLaunch}
                   onLaunchConsumed={() => setWorkspaceLaunch(null)}
                 />
-              ) : view === 'planner' ? (
+              ) : shownView === 'planner' ? (
                 <div className="settings-pane">
                   <PlannerView onLaunch={launchInWorkspace} />
                 </div>
-              ) : view === 'skills' ? (
+              ) : shownView === 'skills' ? (
                 <div className="settings-pane">
                   <SkillsManager />
                 </div>
-              ) : view === 'mcp' ? (
+              ) : shownView === 'mcp' ? (
                 <div className="settings-pane">
                   <McpManager />
                 </div>
-              ) : view === 'automations' ? (
+              ) : shownView === 'automations' ? (
                 <div className="settings-pane">
                   <AutomationsView live={live} />
                 </div>
-              ) : view === 'usage' ? (
+              ) : shownView === 'usage' ? (
                 <div className="settings-pane">
                   <UsageView signal={liveSignal(live)} promptTarget={promptUsageTarget} />
                 </div>
-              ) : view === 'agents' ? (
+              ) : shownView === 'agents' ? (
                 <div className="settings-pane">
                   <AgentsView />
                 </div>
               ) : (
                 <div className="settings-pane">
-                  <SettingsView worktreesRequest={worktreesRequest} />
+                  <SettingsView worktreesRequest={worktreesRequest} capacityRequest={capacityRequest} />
                 </div>
               )}
             </Suspense>
-          </div>
+          </div>)}
         </div>
       </div>
 
@@ -724,6 +754,6 @@ export function App() {
           </span>
         </div>
       </footer>
-    </div>
+    </div></MonitoringProvider>
   );
 }

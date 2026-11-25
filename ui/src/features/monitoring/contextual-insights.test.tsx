@@ -84,15 +84,35 @@ describe('owner-bound insight reads', () => {
   });
   it('keeps tool/provider/scope identity, even-sample medians and unreported outcomes explicit', async () => {
     api.getMcpHistory.mockResolvedValue({ limited: true, items: [
-      { callId: '1', tool: 'read', at: '2026-01-01T00:00:00.000Z', durationMs: 10 },
-      { callId: '2', tool: 'read', at: '2026-01-01T00:00:00.000Z', durationMs: 30 },
+      { callId: '1', tool: 'read', at: '2026-01-01T00:00:00.000Z', durationMs: 10, outcome: 'succeeded' },
+      { callId: '2', tool: 'read', at: '2026-01-01T00:00:00.000Z', durationMs: 30, outcome: 'failed' },
       { callId: '3', tool: 'read', at: '2026-01-01T00:00:00.000Z', durationMs: null },
     ] });
     render(<McpInsights provider="copilot" server="tools" scope="internal" featureId="f" />);
     const row = (await screen.findByRole('rowheader', { name: 'read · 2026-01-01' })).parentElement!;
-    expect(within(row).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['3', '2', '20', 'Unavailable', '1']);
+    expect(within(row).getAllByRole('cell').map((cell) => cell.textContent)).toEqual(['3', '2', '20', 'Unavailable', '1', '1', '1', '1']);
     expect(api.getMcpHistory).toHaveBeenCalledWith(expect.objectContaining({ provider: 'copilot', server: 'tools', scope: 'internal', featureId: 'f' }));
     expect(screen.getByText(/Latest 500 calls shown/)).toBeInTheDocument();
+  });
+  it('shows recorded admission, preparation and dispatch phases without manufacturing legacy timings', async () => {
+    api.listMetaOperations.mockResolvedValue({ items: [operation('Phased', { execution: { limited: false, attempts: [{
+      id: 'attempt-1', transport: 'warm-acp', createdAt: '2026-01-01T00:00:00.000Z', phases: [
+        { phase: 'admission', at: '2026-01-01T00:00:00.000Z' },
+        { phase: 'preparing', at: '2026-01-01T00:00:02.000Z' },
+        { phase: 'dispatched', at: '2026-01-01T00:00:03.000Z' },
+        { phase: 'returned', at: '2026-01-01T00:00:06.000Z' },
+      ],
+    }] } })], nextCursor: null });
+    render(<OperationInsights scope={{ featureId: 'f' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Phased, State: completed' }));
+    const chart = screen.getByRole('region', { name: 'App-owned attempt phases' });
+    const rows = within(chart).getAllByRole('row').slice(1);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'attempt-1 · warm-acp · admissioncompleted2.00 s',
+      'attempt-1 · warm-acp · preparingcompleted1.00 s',
+      'attempt-1 · warm-acp · dispatchedcompleted3.00 s',
+    ]);
+    expect(screen.getByText(/Provider-internal retries remain unavailable/)).toBeInTheDocument();
   });
   it('bounds usage reads and does not request an incomplete date window', async () => {
     api.getUsageRollup.mockResolvedValue({ periods: [] } as unknown as UsageRollup);

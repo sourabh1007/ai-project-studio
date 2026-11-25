@@ -532,12 +532,14 @@ describe('MetaSessionPool', () => {
 
   it('run leases, runs a turn, and releases', async () => {
     const { pool, created } = harness();
+    const onExecutionPhase = vi.fn();
     await pool.start();
-    const result = await pool.run({ prompt: 'hello' });
+    const result = await pool.run({ prompt: 'hello', onExecutionPhase });
     expect(result.text).toBe('ok');
     expect(created[0].turns).toHaveLength(1);
     expect(created[0].turns[0]).toMatchObject({ prompt: 'hello' });
     expect(pool.idleCount).toBe(1);
+    expect(onExecutionPhase.mock.calls.flat()).toEqual(['admission', 'preparing']);
   });
 
   it('records a successful warm turn even when deadline tracking is enabled', async () => {

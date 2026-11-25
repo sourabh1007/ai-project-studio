@@ -102,6 +102,7 @@ export function WorkspaceView({
   launch = null,
   onLaunchConsumed,
   providerSwitch = null,
+  onMonitoringOrigin,
 }: {
   live: LiveState;
   sidebarOpen: boolean;
@@ -110,6 +111,7 @@ export function WorkspaceView({
   launch?: { intent: WorkspaceLaunchIntent; nonce: number } | null;
   onLaunchConsumed?: () => void;
   providerSwitch?: { providerId: string; nonce: number } | null;
+  onMonitoringOrigin?: (restore: () => void, key: string) => void;
 }) {
   const nameStore = useMemo(
     () => createSessionNameStore(window.localStorage),
@@ -134,6 +136,11 @@ export function WorkspaceView({
   );
 
   const tabs = tabState.tabs;
+  useEffect(() => {
+    onMonitoringOrigin?.(() => setTabState((state) => setWorkspaceSplit({
+      ...state, activeId: state.tabs.some((tab) => tab.id === tabState.activeId) ? tabState.activeId : state.activeId,
+    }, tabState.splitId)), JSON.stringify([tabState.activeId, tabState.splitId]));
+  }, [onMonitoringOrigin, tabState.activeId, tabState.splitId, setTabState]);
   const [restoring, setRestoring] = useState(true);
   useStartupPending(restoring);
   const workspaceRef = useRef<HTMLDivElement>(null);

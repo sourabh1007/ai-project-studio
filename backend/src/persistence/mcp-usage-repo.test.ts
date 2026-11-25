@@ -51,7 +51,7 @@ describe('mcp-usage-repo', () => {
     expect(db.prepare('SELECT * FROM mcp_observed_calls').all()).toEqual([{
       feature_id: 'f1', session_id: 's1', provider: 'copilot', server: 'filesystem',
       tool: '', call_id: 'call-1', origin: 'built-in', scope: 'feature',
-      recorded_at: '2025-01-01T00:00:00.000Z', duration_ms: null,
+      recorded_at: '2025-01-01T00:00:00.000Z', duration_ms: null, outcome: 'unknown',
     }]);
     db.close();
   });
@@ -71,6 +71,22 @@ describe('mcp-usage-repo', () => {
     repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2025-01-01T00:00:09.000Z' });
     repo.recordCompletion({ provider: 'copilot', callId: 'absent', completedAt: '2025-01-01T00:00:09.000Z' });
     expect(durationOf()).toBe(2250);
+    db.close();
+  });
+
+  it('persists only the first valid explicit outcome and leaves unmatched or legacy calls unknown', () => {
+    const db = createDatabase({ databasePath: ':memory:' });
+    const repo = createMcpUsageRepo(db);
+    repo.recordObserved(observed());
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2024-12-31T23:59:59.000Z', outcome: 'succeeded' });
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2025-01-01T00:00:01.000Z', outcome: 'failed' });
+    repo.recordCompletion({ provider: 'copilot', callId: 'call-1', completedAt: '2025-01-01T00:00:02.000Z', outcome: 'succeeded' });
+    repo.recordObserved(observed({ callId: 'legacy' }));
+    expect(db.prepare('SELECT call_id, outcome FROM mcp_observed_calls ORDER BY call_id').all()).toEqual([
+      { call_id: 'call-1', outcome: 'failed' }, { call_id: 'legacy', outcome: 'unknown' },
+    ]);
+    expect(repo.observedHistory!({ provider: 'copilot', server: 'filesystem', scope: 'feature',
+      from: '2025-01-01', to: '2025-01-02' }).find((row) => row.callId === 'call-1')?.outcome).toBe('failed');
     db.close();
   });
 

@@ -19,6 +19,13 @@ function mockFetch(response: Response): { fetchImpl: FetchLike; calls: Array<[st
 }
 
 describe('createApiClient', () => {
+  it('encodes day-session paging without fetching unbounded workspace events', async () => {
+    const { fetchImpl, calls } = mockFetch(jsonResponse({ items: [], nextCursor: null }));
+    const api = createApiClient({ fetchImpl });
+    await api.listUsageSessions({ day: '2026-01-01', after: 'one/two', limit: '100' });
+    expect(calls[0][0]).toBe('/api/usage/sessions?day=2026-01-01&after=one%2Ftwo&limit=100');
+    expect(calls[0][1]?.method).toBeUndefined();
+  });
   it('encodes prompt attribution filters and preserves cancellation on read-only usage requests', async () => {
     const { fetchImpl, calls } = mockFetch(jsonResponse({ events: [], limited: false, maxEvents: 100 }));
     const api = createApiClient({ fetchImpl });

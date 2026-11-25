@@ -105,6 +105,7 @@ function makeSink() {
 }
 
 interface Deps {
+  config?: Partial<typeof bugBashDefaults>;
   repo?: BugBashRunRepo & { map: Map<string, BugBashRun> };
   generateTeam?: BugBashGenerateTeam;
   team?: BugBashTeam;
@@ -128,7 +129,7 @@ function makeService(deps: Deps = {}) {
   const service = createBugBashService({
     repo,
     workspace: { resolve: () => ({ repoId: 'r1', repoLocalPath: '/repo' }) },
-    config: bugBashDefaults,
+    config: { ...bugBashDefaults, ...deps.config },
     clock: stepClock(),
     ai: {
       runDetailed:
@@ -150,6 +151,33 @@ function makeService(deps: Deps = {}) {
 }
 
 describe('bug-bash-service: saveInputs', () => {
+  it('marks truncated history projections and never retains full scenario text', async () => {
+    const { service, repo } = makeService({ ...seeded({ status: 'generated', scenarios: [scenario()] }),
+      config: { historyLimit: 1, historyScenarioLimit: 1 },
+      team: { run: async () => ({ agents: [], scenarios: [scenario({ title: 'x'.repeat(300), id: 'y'.repeat(200) }), scenario()], report: 'Report' }) } as unknown as BugBashTeam });
+    await service.run('a1', makeSink().sink);
+    const history = repo.get('a1')!.history!;
+    expect(history[0].limited).toBe(true);
+    expect(history[0].scenarios).toHaveLength(1);
+    expect(history[0].scenarios[0].title).toHaveLength(200);
+    expect(history[0].scenarios[0].id).toHaveLength(128);
+  });
+  it('keeps bounded immutable completed-run projections across edits, resets and reruns without retaining scenario payloads', async () => {
+    const results = [scenario({ status: 'pass', ran: true }), scenario({ id: 'second', evidenceGaps: ['output'] }), scenario({ id: 'third' })];
+    const { service, repo } = makeService({ ...seeded({ status: 'generated', scenarios: [scenario()] }),
+      team: { run: async () => ({ agents: [], scenarios: results, report: 'Report' }) } as unknown as BugBashTeam });
+    for (let count = 0; count < 12; count++) await service.run('a1', makeSink().sink);
+    const saved = structuredClone(repo.get('a1')!.history!);
+    expect(saved).toHaveLength(bugBashDefaults.historyLimit);
+    expect(saved[0].sequence).toBe(3);
+    expect(saved.at(-1)!.scenarios.map((entry) => entry.evidence)).toEqual(['recorded', 'missing', 'unverified']);
+    expect(saved.at(-1)!.scenarios[0]).not.toHaveProperty('observations');
+    expect(saved.at(-1)!.limited).toBe(false);
+    results[0].title = 'Later mutation';
+    service.reset('a1');
+    service.saveInputs('a1', 'f1', { featureInfo: 'Edited context', setupInfo: '', otherInfo: '' });
+    expect(repo.get('a1')!.history).toEqual(saved);
+  });
   it('rejects a blank feature info', () => {
     const { service } = makeService();
     expect(() =>

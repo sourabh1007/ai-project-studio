@@ -681,16 +681,16 @@ describe('McpManager', () => {
   });
 
   it('only checks a connection explicitly and labels the result as an independent probe', async () => {
-    const api = client();
+    const result = deferred<McpServerStatus>();
+    const api = client({ getMcpServerStatus: vi.fn().mockReturnValue(result.promise) });
     renderManager(api);
 
     expect(await screen.findByText('Azure')).toBeTruthy();
     expect(api.getMcpServerStatus).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Re-check Azure' }));
-    expect(await screen.findByText('Probe succeeded · 2 tools')).toBeTruthy();
-    await waitFor(() =>
-      expect(api.getMcpServerStatus).toHaveBeenCalledWith('agency', 'Azure'),
-    );
+    expect(api.getMcpServerStatus).toHaveBeenCalledWith('agency', 'Azure');
+    await act(async () => { result.resolve(makeStatus('Azure')); });
+    expect(screen.getByText('Probe succeeded · 2 tools')).toBeTruthy();
   });
 
   it('surfaces an auth-required badge and one-click sign-in', async () => {

@@ -114,6 +114,7 @@ describe('AcpClient', () => {
     const fake = new FakeProcess();
     const client = new AcpClient(fake, config);
     const chunks: string[] = [];
+    const onExecutionPhase = vi.fn();
     const onSession = vi.fn(() => {
       expect(fake.written.some((request) => request.method === 'session/prompt')).toBe(false);
     });
@@ -122,9 +123,11 @@ describe('AcpClient', () => {
       cwd: 'C:\\repo',
       onActivity: (t) => chunks.push(t),
       onSession,
+      onExecutionPhase,
     });
     await flush();
     expect(fake.last('session/new').params).toEqual({ cwd: 'C:\\repo', mcpServers: [] });
+    expect(onExecutionPhase).not.toHaveBeenCalled();
     fake.respond('session/new', { sessionId: 's1' });
     await flush();
     expect(fake.last('session/prompt').params).toEqual({
@@ -153,6 +156,7 @@ describe('AcpClient', () => {
     });
     expect(chunks).toEqual(['WA', 'RM']);
     expect(onSession).toHaveBeenCalledWith('s1');
+    expect(onExecutionPhase.mock.calls).toEqual([['dispatched']]);
   });
 
   it('surfaces thoughts and tool calls via onNotice, kept out of the result text', async () => {

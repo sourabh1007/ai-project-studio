@@ -1103,6 +1103,7 @@ function StepNav({
  * never edits code or opens a pull request.
  */
 export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
+  const [historySequence, setHistorySequence] = useState('');
   const api = useApi();
   const [run, setRun] = useState<BugBashRun | null>(null);
   const [featureInfo, setFeatureInfo] = useState('');
@@ -1502,6 +1503,7 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
     [agentList],
   );
   const scenarios = run?.scenarios ?? [];
+  const historical = run?.history?.find((entry) => String(entry.sequence) === historySequence);
   const scenariosById = useMemo(() => {
     const map: Record<string, BugBashScenario> = {};
     for (const scenario of scenarios) map[scenario.id] = scenario;
@@ -1574,12 +1576,19 @@ export function BugBashPage({ feature, attachmentId }: BugBashPageProps) {
         </div>
       </header>
       <Insights title="Run and evidence insights">{() => <>
+        <label>Scenario snapshot<select className="input" value={historySequence} onChange={(event) => setHistorySequence(event.target.value)}>
+          <option value="">Current scenarios</option>
+          {run?.history?.map((entry) => <option key={entry.sequence} value={entry.sequence}>Completed run {entry.sequence} · {entry.finishedAt}</option>)}
+        </select></label>
+        <p className="field-hint">Completed-run snapshots are immutable, bounded metadata, not full evidence archives.
+          Legacy runs cannot be reconstructed. Failed/cancelled attempts remain in operation history.
+          {historical?.limited && ' This snapshot contains only the configured maximum number of scenarios.'}</p>
         <InsightMatrix title="Scenario evidence" columns={['Verdict', 'Execution', 'Evidence']}
           explanation="A reported pass without execution or complete evidence is not a verified pass. Blockers are not product defects."
-          rows={scenarios.map((scenario) => ({ id: scenario.id, label: scenario.title, cells: [
-            { value: null, text: scenario.status, state: scenario.status, select: () => setOpenScenarioId(scenario.id) },
+          rows={(historical?.scenarios ?? scenarios).map((scenario) => ({ id: scenario.id, label: scenario.title, cells: [
+            { value: null, text: scenario.status, state: scenario.status, select: historical ? undefined : () => setOpenScenarioId(scenario.id) },
             { value: null, text: scenario.ran ? 'Ran' : 'Not run' },
-            { value: null, text: scenario.evidenceGaps.length ? `Missing: ${scenario.evidenceGaps.join(', ')}` : scenario.ran ? 'Recorded' : 'Unverified' },
+            { value: null, text: 'evidence' in scenario ? scenario.evidence : scenario.evidenceGaps.length ? `Missing: ${scenario.evidenceGaps.join(', ')}` : scenario.ran ? 'Recorded' : 'Unverified' },
           ] }))} />
         <OperationInsights scope={{ featureId: feature.id, runId: attachmentId }} />
       </>}</Insights>

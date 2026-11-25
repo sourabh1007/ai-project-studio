@@ -9,6 +9,7 @@ import type {
 } from '../bug-bash/bug-bash-contract.js';
 
 interface BugBashRunRow {
+  history_json: string | null;
   id: string;
   feature_id: string;
   feature_info: string;
@@ -63,6 +64,7 @@ function normalizePrerequisite(
 
 function mapRun(row: BugBashRunRow): BugBashRun {
   return {
+    ...(row.history_json === null ? {} : { history: parseArray<NonNullable<BugBashRun['history']>[number]>(row.history_json) }),
     id: row.id,
     featureId: row.feature_id,
     featureInfo: row.feature_info,
@@ -87,14 +89,14 @@ export function createBugBashRunRepo(db: DatabaseSync): BugBashRunRepo {
   const insert = db.prepare(
     `INSERT INTO bug_bash_runs (
       id, feature_id, feature_info, setup_info, other_info, prerequisites,
-      scenarios, report, status, error, agents, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      scenarios, report, status, error, agents, created_at, updated_at, history_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE bug_bash_runs SET
       feature_id = ?, feature_info = ?, setup_info = ?, other_info = ?,
       prerequisites = ?, scenarios = ?, report = ?, status = ?, error = ?,
-      agents = ?, updated_at = ?
+      agents = ?, updated_at = ?, history_json = ?
     WHERE id = ?`,
   );
   const deleteById = db.prepare('DELETE FROM bug_bash_runs WHERE id = ?');
@@ -122,6 +124,7 @@ export function createBugBashRunRepo(db: DatabaseSync): BugBashRunRepo {
         JSON.stringify(run.agents ?? []),
         run.createdAt,
         run.updatedAt,
+        run.history === undefined ? null : JSON.stringify(run.history),
       );
     },
     update(run) {
@@ -137,6 +140,7 @@ export function createBugBashRunRepo(db: DatabaseSync): BugBashRunRepo {
         run.error,
         JSON.stringify(run.agents ?? []),
         run.updatedAt,
+        run.history === undefined ? null : JSON.stringify(run.history),
         run.id,
       );
     },

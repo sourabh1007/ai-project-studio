@@ -139,6 +139,10 @@ export interface BugBashInputs {
 
 /** One Bug Bash run, persisted per agent attachment. */
 export interface BugBashRun {
+  history?: {
+    sequence: number; startedAt: string; finishedAt: string; limited: boolean;
+    scenarios: { id: string; title: string; status: BugBashScenarioStatus; ran: boolean; evidence: 'missing' | 'recorded' | 'unverified' }[];
+  }[];
   /** Stable run id (equals the backing agent attachment id). */
   id: string;
   featureId: string;

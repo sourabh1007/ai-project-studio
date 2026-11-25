@@ -284,6 +284,7 @@ describe('createApiRoutes', () => {
       'get /worktrees',
       'post /worktrees/remove',
       'get /usage/ide',
+      'get /usage/sessions',
       'get /usage/rollup',
       'get /usage/ide/rollup',
       'get /usage/ide/activity',

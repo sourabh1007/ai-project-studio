@@ -91,3 +91,11 @@ Every scenario, verdict, and agent snapshot is persisted per attachment
 (`bug_bash_runs`), so the page rehydrates fully on reload. See
 [backend-modules.md](../backend-modules.md) (`bug-bash/`) and
 [metasessions.md](../metasessions.md) for the internals.
+
+**Run and evidence insights** also offers immutable completed-run scenario
+snapshots. Later edits, resets and reruns do not rewrite older verdict metadata.
+By default the last ten completed runs retain up to 200 scenario identities,
+titles, reported verdicts, execution flags and evidence availability; truncation
+is disclosed. These are not full evidence archives or independently verified
+passes. Legacy snapshots cannot be reconstructed. Failed/cancelled attempts are
+visible in operation history rather than invented completed scenario snapshots.

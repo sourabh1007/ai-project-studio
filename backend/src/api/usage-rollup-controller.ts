@@ -1,12 +1,13 @@
 import type { MetaUsageRepo } from '../meta/meta-usage-contract.js';
 import type { UsageRollupService } from '../usage-rollup/usage-rollup-service.js';
 import { parseGranularity } from '../usage-rollup/usage-rollup-service.js';
-import type { UsageRollup } from '../usage-rollup/usage-rollup-contract.js';
+import type { UsageRollup, UsageSessionReader } from '../usage-rollup/usage-rollup-contract.js';
 import { isProviderExposed } from '../provider/default-provider-selection.js';
 import type { Route } from './http-contract.js';
 import { z } from 'zod';
 
 export interface UsageRollupControllerDeps {
+  sessions?: UsageSessionReader;
   rollups: UsageRollupService;
   metaUsage: Pick<MetaUsageRepo, 'listRecent'>;
   /** Upper bound on rows returned by the IDE activity feed. */
@@ -54,6 +55,21 @@ export function createUsageRollupRoutes(
     };
   };
   return [
+    {
+      method: 'get', path: '/usage/sessions',
+      handler: (req) => {
+        const parsed = z.object({ day, after: z.string().max(512).optional(),
+          limit: z.coerce.number().int().min(1).max(100).default(100) }).strict().safeParse(req.query);
+        if (!parsed.success) return { status: 400, body: { error: 'Expected one UTC day, an optional session cursor and a limit of 1-100.' } };
+        if (!deps.sessions) return { status: 503, body: { error: 'Session usage index unavailable.' } };
+        const from = `${parsed.data.day}T00:00:00.000Z`;
+        return { status: 200, body: deps.sessions.workspaceSessions({
+          from, to: new Date(Date.parse(from) + 86400000).toISOString(),
+          after: parsed.data.after ?? null, limit: parsed.data.limit,
+          excludeProviderId: deps.microsoftSignedIn() ? undefined : 'agency',
+        }) };
+      },
+    },
     {
       method: 'get',
       path: '/usage/rollup',

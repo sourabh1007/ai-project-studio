@@ -4,6 +4,7 @@ import { resolveApiBase } from '../lib/api-base.js';
 import { aggregateAgentUsage } from '../lib/agent-usage.js';
 import type { MetaOperationSummary } from '../features/meta-operations/meta-operation-types.js';
 import { liveSignal, type LiveState } from '../lib/stream.js';
+import { useMonitoringHost } from '../features/monitoring/monitoring-host.js';
 
 /** Refresh from persisted snapshots on capture, reconnect and late provider writes. */
 export function useAgentUsage(
@@ -13,6 +14,8 @@ export function useAgentUsage(
   live?: LiveState,
 ) {
   const api = useApi();
+  const host = useMonitoringHost();
+  live = live ?? host?.live;
   const featureIds = [...new Set(typeof featureId === 'string' ? [featureId] : featureId)].sort();
   const key = JSON.stringify(featureIds);
   const sharedStream = live !== undefined;

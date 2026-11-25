@@ -467,7 +467,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getPromptUsage: (query: { from: string; to: string; promptRef?: string }, signal?: AbortSignal) =>
       request<PromptUsageSnapshot>(`/prompt-usage?${new URLSearchParams(query)}`, { signal }),
     getMcpHistory: (query: { provider: string; server: string; scope: 'feature' | 'internal'; from: string; to: string; featureId?: string }) =>
-      request<{ items: { callId: string; tool: string; at: string; durationMs: number | null }[]; limited: boolean }>(
+      request<{ items: { callId: string; tool: string; at: string; durationMs: number | null; outcome?: 'succeeded' | 'failed' | 'unknown' }[]; limited: boolean }>(
         `/mcp-usage/history?${new URLSearchParams(query)}`),
     checkHealth: () => request<HealthStatus>('/health'),
     getActiveSessions: (options?: { signal?: AbortSignal }) =>
@@ -1152,6 +1152,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getIdeUsage: () => request<IdeUsage>('/usage/ide'),
     getUsageRollup: (granularity: UsageGranularity, window?: { from: string; to: string }) =>
       request<UsageRollup>(`/usage/rollup?granularity=${granularity}${window ? `&${new URLSearchParams(window)}` : ''}`),
+    listUsageSessions: (query: { day: string; after: string; limit: string }) =>
+      request<{ items: { sessionId: string; featureId: string; name: string | null; available: boolean; retained: boolean;
+        inputTokens: number; outputTokens: number; nanoAiu: number | null }[]; nextCursor: string | null }>(`/usage/sessions?${new URLSearchParams(query)}`),
     getIdeUsageRollup: (granularity: UsageGranularity, window?: { from: string; to: string }) =>
       request<UsageRollup>(`/usage/ide/rollup?granularity=${granularity}${window ? `&${new URLSearchParams(window)}` : ''}`),
     getIdeActivity: () => request<IdeActivityFeed>('/usage/ide/activity'),
