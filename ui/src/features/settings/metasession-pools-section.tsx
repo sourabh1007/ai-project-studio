@@ -1189,7 +1189,7 @@ export function MetasessionPoolsSection({ embedded }: { embedded?: boolean } = {
             <span>Keep metasessions warm</span>
           </label>
           {status.data?.availability?.state === 'unavailable' && <p className="page-subtitle">
-            The warm target is retained for compatible providers; this CLI stays unchanged.
+            On-demand CLIs do not keep idle sessions warm. The saved parallel target controls review and repository-analysis concurrency after restart, subject to shared process limits.
           </p>}
 
           <div className="metapool-rows">

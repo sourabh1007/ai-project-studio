@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BrandedLoader } from './components/loading.js';
 import { MonitoringProvider } from './features/monitoring/monitoring-host.js';
 import { useApi } from './app/api-context.js';
 import { failActivity } from './lib/activity.js';
@@ -657,7 +658,7 @@ export function App() {
           <FeatureDeletionStatus />
           {internalAgencyAvailable && <AgencyUpdatePopup />}
           {VIEW_ORDER.filter((id) => id === view || id === monitoringOrigin?.view).map((shownView) => <div className="view-transition" key={shownView} hidden={shownView !== view}>
-            <Suspense fallback={<ViewSkeleton label={view} />}>
+            <Suspense fallback={shownView === 'workspace' ? <BrandedLoader title="Loading Explorer" /> : <ViewSkeleton label={view} />}>
               {shownView === 'workspace' ? (
                 <WorkspaceView
                   providerSwitch={providerSwitch}

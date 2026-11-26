@@ -827,10 +827,11 @@ describe('createTerminalManager', () => {
       const { manager, env } = makeManager('bootstrap');
       const terminal = await manager.getOrLaunch(sampleSession(), { replaySeed: 'confirmed replay' });
       if (stage === 'after-paste') {
-        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        env.emitData('type / for commands');
         expect(env.writes).toEqual(['bootstrap']);
       }
       manager.observeInput('sess-1', '\x03');
+      if (stage === 'before-ready') env.emitData('type / for commands');
       vi.runAllTimers();
       expect(env.writes).toEqual(stage === 'after-paste' ? ['bootstrap'] : []);
       expect(terminal.inputReadiness).toBe('ready');
@@ -1890,7 +1891,7 @@ describe('createTerminalManager', () => {
     }
   });
 
-  it('seeds instructions after the ready timeout when no prompt is detected', async () => {
+  it('releases manual setup input after the ready timeout without sending the queued task into a question', async () => {
     vi.useFakeTimers();
     try {
       const { manager, env } = makeManager('Follow the rules.');
@@ -1899,6 +1900,10 @@ describe('createTerminalManager', () => {
       env.emitData('still booting, no prompt yet');
       expect(env.writes).toEqual([]);
       vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
+      expect(env.writes).toEqual([]);
+      expect(manager.get('sess-1')?.inputReadiness).toBe('awaiting-input');
+      env.emitData('? for shortcuts');
       vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs);
       expect(env.writes).toEqual([
         'Follow the rules.',
@@ -1910,6 +1915,25 @@ describe('createTerminalManager', () => {
     }
   });
 
+  it('pauses queued task injection for split setup questions until the native composer is ready', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, env } = makeManager('Follow the rules.');
+      const terminal = await manager.getOrLaunch({ ...sampleSession(), status: 'created', prompt: 'Implement the planner task.' });
+      env.emitData('Do you tr');
+      env.emitData('ust this folder? Allow commands?');
+      expect(terminal.inputReadiness).toBe('awaiting-input');
+      expect(env.writes).toEqual([]);
+      terminal.write('n\r');
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+      expect(env.writes).toEqual(['n\r']);
+      env.emitData('type / for commands');
+      expect(terminal.inputReadiness).toBe('pending');
+      vi.advanceTimersByTime(terminalDefaults.instructionSeedSubmitDelayMs * 2);
+      expect(env.writes).toEqual(['n\r', 'Follow the rules.', '\r', 'Implement the planner task.', '\r']);
+      expect(terminal.inputReadiness).toBe('ready');
+    } finally { vi.useRealTimers(); }
+  });
   it('does not seed instructions if the terminal exits before the prompt', async () => {
     vi.useFakeTimers();
     try {
@@ -2325,7 +2349,7 @@ describe('createTerminalManager', () => {
           bootstrapInstructions: w.writer,
         });
         await manager.getOrLaunch(sampleSession(), { replaySeed: 'resume this' });
-        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        env.emitData('type / for commands');
         expect(env.writes).toEqual(['resume this']);
         expect(env.writes).not.toContain('bootstrap context');
       } finally {
@@ -2358,7 +2382,7 @@ describe('createTerminalManager', () => {
         await manager.getOrLaunch(sampleSession());
         expect(w.writes).toEqual([{ sessionId: 'sess-1', content: 'bootstrap context' }]);
         expect(env.requests[0].env[CUSTOM_INSTRUCTIONS_DIRS_ENV]).toBeUndefined();
-        vi.advanceTimersByTime(terminalDefaults.instructionSeedReadyTimeoutMs);
+        env.emitData('type / for commands');
         expect(env.writes).toEqual(['bootstrap context']);
       } finally {
         vi.useRealTimers();

@@ -3,7 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useStartupPending } from '../../app/desktop-lifecycle.js';
 import { resolveApiBase } from '../../lib/api-base.js';
 import { CheckIcon, ImportIcon, ProviderIcon, RefreshIcon, SessionIcon, WarningIcon } from '../../components/icons.js';
-import { Button } from '../../components/ui.js';
+import { Button, ConfirmDialog } from '../../components/ui.js';
 import type { ProviderSelectionInfo } from '../../lib/api.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { announceProvider } from '../../lib/provider-selection.js';
@@ -34,6 +34,7 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
   const [bypassed, setBypassed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [stalled, setStalled] = useState(false);
+  const [switchTarget, setSwitchTarget] = useState<ProviderSelectionInfo['providers'][number] | null>(null);
   const installMayBeRunning = useRef(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const nextLineId = useRef(0);
@@ -111,7 +112,9 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
     setError(null);
     setTarget(provider.id);
     try {
-      const selected = await api.selectProvider(provider.id, { remember });
+      const selected = info?.blockers?.length && provider.installed
+        ? await api.switchProvider({ providerId: provider.id, remember, expectedRevision: info.revision ?? 0 })
+        : await api.selectProvider(provider.id, { remember });
       if (!mounted.current) return;
       const entry = selected.providers.find((p) => p.id === provider.id);
       if (selected.defaultProvider !== provider.id || selected.selectionRequired === true || !entry || typeof entry.installed !== 'boolean') {
@@ -308,8 +311,11 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
                   <div className="cli-provider-actions">
                     <Button
                       ariaLabel={`${provider.installed ? 'Use installed CLI' : 'Install and use'} — ${provider.label ?? providerLabel(provider.id)}`}
-                      disabled={phase === 'selecting' || (!provider.installed && provider.installAvailable === false) || Boolean(info.blockers?.length)}
-                      onClick={() => void choose(provider)}
+                      disabled={phase === 'selecting' || (!provider.installed && (provider.installAvailable === false || Boolean(info.blockers?.length)))}
+                      onClick={() => {
+                        if (provider.installed && info.blockers?.length) setSwitchTarget(provider);
+                        else void choose(provider);
+                      }}
                     >
                       {provider.installed ? <CheckIcon size={14} /> : <ImportIcon size={14} />}
                       {provider.installed ? 'Use CLI' : 'Install and use'}
@@ -322,6 +328,11 @@ export function ProviderInstallGate({ children, forceChoose = false }: { childre
               <span><input type="checkbox" aria-label="Remember me" checked={remember} disabled={phase === 'selecting'} onChange={(event) => setRemember(event.target.checked)} /> Remember me</span>
               <span className="field-hint">Use this CLI automatically next time.</span>
             </label>
+            {switchTarget && <ConfirmDialog title="Switch active CLI?"
+              confirmLabel="Stop CLI work and switch"
+              message={<p>Running CLI work will be interrupted; history is preserved. Idle startup workers will stop before the selected CLI is activated.</p>}
+              onCancel={() => setSwitchTarget(null)}
+              onConfirm={() => { const provider = switchTarget; setSwitchTarget(null); void choose(provider); }} />}
           </div>
         )}
 

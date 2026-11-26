@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const STARTUP_QUESTION_PATTERN = '[Dd]o you trust|[Tt]rust (?:this|the|folder)|[Ss]ign[ -]?in|[Ll]og[ -]?in|[Cc]hoose.*theme|[Ss]elect.*theme|[Pp]ress.*[Ee]nter.*continue|\\[[yY]/[nN]\\]|[Aa]llow.*\\?';
+
 /** Configuration schema for the interactive terminal module. */
 export const TERMINAL_NAMESPACE = 'terminal';
 
@@ -41,9 +43,11 @@ export const terminalConfigSchema = z.object({
    * boot, leaving the instructions unsent in the composer.
    */
   instructionSeedReadyPattern: z.string().min(1),
+  /** Setup questions pause task injection and allow the user to answer in the native terminal. */
+  instructionSeedQuestionPattern: z.string().min(1).default(STARTUP_QUESTION_PATTERN),
   /**
-   * Fallback (ms) after which skill instructions are seeded even if the ready
-   * pattern was never observed, so a prompt-detection miss never drops them.
+   * Deadline (ms) after which input is released for manual setup. The task
+   * remains queued until the ready pattern is observed.
    */
   instructionSeedReadyTimeoutMs: z.number().int().nonnegative(),
   /**
@@ -94,7 +98,8 @@ export const terminalDefaults: TerminalConfig = {
   launchTimeoutMs: 660_000,
   transcriptBytes: 1048576,
   instructionSeedSuffix: '\r',
-  instructionSeedReadyPattern: '\\?\\s*help|\\bcommands\\b',
+  instructionSeedReadyPattern: '\\?\\s*(?:help|for shortcuts)|\\bcommands\\b',
+  instructionSeedQuestionPattern: STARTUP_QUESTION_PATTERN,
   instructionSeedReadyTimeoutMs: 15000,
   instructionSeedSubmitDelayMs: 500,
   instructionSeedSubmitMaxWaitMs: 10000,

@@ -437,6 +437,13 @@ download, signature, installer, account or native upgrade.
 **How it flows**
 - Packaged startup and periodic checks discover eligible releases. The app
   notifies first; downloading and installing require explicit user actions.
+- Source builds also support explicit **Check for updates**, without automatic
+  background checks or installer handoff. An available update opens the release
+  page for guided installation or updating the source checkout. Connection/IPC
+  failures are reported with a retry action rather than silently ignored.
+- GitHub API rate limits fall back to the public release feed for discovery.
+  Feed-only results are guided updates, never automatic installer authorization.
+  Invalid or interrupted responses produce retryable errors.
 - **Windows:** release metadata must identify the exact expected version,
   platform, architecture, installer and SHA-256. Download bytes must pass this
   integrity gate before handoff, and OS-valid Authenticode must match a locally

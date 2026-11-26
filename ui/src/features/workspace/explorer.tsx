@@ -44,7 +44,7 @@ import { sessionWorkTitle } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { SkeletonList } from '../../components/loading.js';
+import { BrandedLoader, SkeletonList } from '../../components/loading.js';
 import {
   ChevronIcon,
   CheckIcon,
@@ -1917,6 +1917,7 @@ export function Explorer({
   const repos = useAsync(() => api.listRepos(), []);
   const automation = useAutomationReadiness();
   const features = useAsync(() => api.listFeatures(), []);
+  const loadingTree = (repos.loading && !repos.data) || (features.loading && !features.data);
   useEffect(() => featureDeletionStore.subscribe(features.reload), [features.reload]);
   const explorerRef = useRef<HTMLDivElement>(null);
   const activeTabRef = useRef(activeTab);
@@ -2624,7 +2625,7 @@ export function Explorer({
           <span>{usageSummary.data ? 'Usage is stale. ' : ''}{usageSummary.error}</span>
           <Button variant="secondary" disabled={usageSummary.loading} onClick={usageSummary.retry}>Retry usage</Button>
         </div>}
-        {(repos.loading || features.loading) && <SkeletonList rows={5} />}
+        {loadingTree && <BrandedLoader title="Loading Explorer" detail="Organizing repositories and features" />}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
         <ErrorText error={moveError} />
@@ -2642,7 +2643,7 @@ export function Explorer({
               }}
             />
           )}
-        <NodeDragStoreProvider>
+        {!loadingTree && <NodeDragStoreProvider>
         {repoList.map((repo) => (
           <RepoNode
             key={repo.id}
@@ -2717,7 +2718,7 @@ export function Explorer({
             onRemoveScratchpad={removeScratchpad}
           />
         )}
-        </NodeDragStoreProvider>
+        </NodeDragStoreProvider>}
       </div>
       <div className="explorer-status-footer">
       <PrImportStatus

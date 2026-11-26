@@ -11,7 +11,7 @@ export type ClientMessage =
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
 
-export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
+export type TerminalState = 'connecting' | 'bootstrapping' | 'awaiting-input' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
   | { type: 'worktree-selection'; requestId: number; choices: { id: string; checkoutPath: string; ref: string }[] }
@@ -64,7 +64,7 @@ export function decodeServerMessage(raw: string): ServerMessage | null {
     }
     if (parsed.type === 'state') {
       return parsed.version === 2 &&
-        ['connecting', 'bootstrapping', 'ready', 'reconnecting', 'closed', 'failed'].includes(parsed.state as string) &&
+        ['connecting', 'bootstrapping', 'awaiting-input', 'ready', 'reconnecting', 'closed', 'failed'].includes(parsed.state as string) &&
         Number.isSafeInteger(parsed.inputLimit) && (parsed.inputLimit as number) > 0 &&
         (parsed.heartbeat === undefined || typeof parsed.heartbeat === 'boolean') &&
         (parsed.detail === undefined || typeof parsed.detail === 'string')

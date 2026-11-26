@@ -65,6 +65,26 @@ afterEach(() => {
 });
 
 describe('ProviderInstallGate', () => {
+  it('keeps installed startup choices enabled and switches only after consent to drain workers', async () => {
+    const info = { ...bootstrap('copilot', true), selectionRequired: true, revision: 3,
+      blockers: [{ kind: 'warm-pool', id: 'p1', label: 'startup pool' }],
+      providers: [{ id: 'copilot', installed: true }, { id: 'agency', installed: true }] };
+    const api = createApiClient();
+    vi.spyOn(api, 'getProviderBootstrap').mockResolvedValue(info);
+    const select = vi.spyOn(api, 'selectProvider');
+    const switchCli = vi.spyOn(api, 'switchProvider').mockResolvedValue({ ...info, defaultProvider: 'agency', selectionRequired: false, blockers: [] });
+    render(<ApiProvider value={api}><ProviderInstallGate><p>Application ready</p></ProviderInstallGate></ApiProvider>);
+    await flush();
+    const choice = screen.getByRole('button', { name: 'Use installed CLI — Agency' });
+    expect(choice).toBeEnabled();
+    fireEvent.click(choice);
+    expect(switchCli).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop CLI work and switch' }));
+    await flush();
+    expect(switchCli).toHaveBeenCalledWith({ providerId: 'agency', remember: false, expectedRevision: 3 });
+    expect(select).not.toHaveBeenCalled();
+    expect(screen.getByText('Application ready')).toBeInTheDocument();
+  });
   it('does not navigate consumers away until an explicitly selected CLI finishes installing', async () => {
     const changed = vi.fn();
     window.addEventListener(PROVIDER_CHANGED, changed);

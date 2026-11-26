@@ -79,6 +79,17 @@ const callbacks = {
 };
 
 describe('locating the active workspace tab', () => {
+  it('shows an animated loader without a partial repository tree until both requests finish', async () => {
+    let finish!: (features: Feature[]) => void;
+    const client = { ...api(context('ready', 't')), listFeatures: vi.fn(() => new Promise<Feature[]>((resolve) => { finish = resolve; })) };
+    render(<ApiProvider value={client}><Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} /></ApiProvider>);
+    await waitFor(() => expect(client.listRepos).toHaveBeenCalled());
+    expect(screen.getByText('Loading Explorer')).toBeVisible();
+    expect(screen.queryByRole('button', { name: `Collapse ${repo.name}` })).not.toBeInTheDocument();
+    await act(async () => finish([feature]));
+    await screen.findByRole('button', { name: feature.name });
+    expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument();
+  });
   const originalScroll = Element.prototype.scrollIntoView;
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();

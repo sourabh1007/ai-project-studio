@@ -386,6 +386,7 @@ import {
   createConfiguredWarmRoutePolicy,
   resolveWarmProviderIdentity,
   warmPoolAvailability,
+  metaFanOutCapacity,
 } from './meta/warm-route-policy.js';
 import { createMetaUsageRepo } from './persistence/meta-usage-repo.js';
 import { createMcpUsageRepo } from './persistence/mcp-usage-repo.js';
@@ -3548,7 +3549,7 @@ async function main(): Promise<void> {
       for (const warm of allWarmPools) {
         live += warm.stats().live;
       }
-      return live;
+      return metaFanOutCapacity(providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport, live, warmPoolCfg.size);
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
@@ -3745,7 +3746,7 @@ async function main(): Promise<void> {
       for (const warm of allWarmPools) {
         live += warm.stats().live;
       }
-      return live;
+      return metaFanOutCapacity(providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport, live, warmPoolCfg.size);
     },
   });
   // The Agent platform: the Review Board expressed as the first attachable

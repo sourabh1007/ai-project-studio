@@ -30,6 +30,7 @@ it('keeps Agency dashboard visible with actual on-demand sessions and read-only 
   };
   render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection embedded /></ApiProvider>);
   expect(await screen.findByText('On demand')).toBeVisible();
+  expect(screen.getByText(/saved parallel target controls review/)).toBeVisible();
   expect(screen.getByText('Agency', { selector: '.metapool-provider' })).toBeVisible();
   expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(10);
   expect(await screen.findByLabelText('Metasession Review change: busy. View live details')).toBeVisible();

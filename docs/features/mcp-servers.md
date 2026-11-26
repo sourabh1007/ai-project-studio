@@ -41,6 +41,15 @@ and credentials are not displayed. Retry after completing native authentication.
 Inspection uses the backend-reported discovery budget plus cleanup headroom;
 a timeout is a failed inspection, not proof of an authentication failure.
 
+On Windows, the metering proxy and tool inspector resolve installed `npm` /
+`npx` shims to their verified npm JavaScript entrypoints and launch native
+Node directly. Structured arguments, including paths and quoted text, stay
+separate; no implicit batch shell is used. Other `.cmd` / `.bat` launchers
+still require an explicit trusted launcher or the underlying executable.
+Missing npm entrypoints remain a configuration error. Servers reporting
+sign-in required still need native authentication; a launcher repair does
+not grant access.
+
 ## When changes apply
 
 Ordinary configuration edits apply to **subsequent CLI launches**, not all open

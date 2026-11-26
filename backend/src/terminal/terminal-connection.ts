@@ -126,6 +126,12 @@ export function createTerminalConnection(deps: ConnectionDeps) {
       } else if (state !== 'failed') {
         resize();
         if ((state as TerminalState) === 'failed') return;
+        if (readiness === 'awaiting-input' || readiness === 'pending') {
+          rejectQueue('CLI setup changed; queued input was not replayed.');
+          setState(readiness === 'pending' ? 'bootstrapping' : 'awaiting-input',
+            readiness === 'awaiting-input' ? 'Answer the CLI setup question in the terminal. Your task is queued until the CLI is ready.' : undefined);
+          return;
+        }
         setState('ready');
         const buffered = queue;
         queue = [];
@@ -177,7 +183,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
       if (message.type === 'resize') {
         if (!current || state === 'closed' || state === 'failed' || state === 'reconnecting') return;
         geometry = message;
-        if (state === 'ready') resize();
+        if (state === 'ready' || state === 'awaiting-input') resize();
         return;
       }
       if (message.seq <= lastSeq) {
@@ -196,7 +202,7 @@ export function createTerminalConnection(deps: ConnectionDeps) {
         fail('Input limit exceeded; queued input and subsequent submit rejected.');
         return;
       }
-      if (state === 'ready') write(message);
+      if (state === 'ready' || state === 'awaiting-input') write(message);
       else {
         queue.push(message);
         bytes += Buffer.byteLength(message.data);

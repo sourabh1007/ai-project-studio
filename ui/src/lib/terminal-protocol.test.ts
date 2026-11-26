@@ -15,7 +15,7 @@ describe('terminal protocol v2', () => {
   const ack = { type: 'ack', generation: 1, seq: 1, outcome: 'written', reason: '' };
   it('decodes all server messages', () => {
     for (const frame of [
-      state, { ...state, heartbeat: true }, { type: 'pong', generation: 1, seq: 1 },
+      state, { ...state, state: 'awaiting-input' }, { ...state, heartbeat: true }, { type: 'pong', generation: 1, seq: 1 },
       { ...state, detail: 'Updating files: 50%' }, ack, { type: 'output', data: 'hi' }, { type: 'resize', cols: 80, rows: 24, phase: 'attach' }, { type: 'resize', cols: 80, rows: 24, phase: 'boundary' },
       { type: 'exit', code: 0 }, { type: 'exit', code: null },
       { type: 'checkout-recovery', requestId: 1, detail: 'Discard local files?' },

@@ -1254,7 +1254,7 @@ export function TerminalView({
         if (message.type === 'state' && message.state === 'closed') {
           sealReplayBarrier();
         }
-        if (message.type === 'state' && message.state === 'ready') {
+        if (message.type === 'state' && (message.state === 'ready' || message.state === 'awaiting-input')) {
           reconnects = 0;
           if (replayAwaitingTerminalSettle) {
             sealReplayBarrier();

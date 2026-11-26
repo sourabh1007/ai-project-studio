@@ -22,6 +22,7 @@ import { isPoppableTab, type PoppableTab } from './tab-popout.js';
 import { ErrorBoundary } from '../../components/error-boundary.js';
 import { ViewSkeleton } from '../../components/view-skeleton.js';
 import { Explorer } from './explorer.js';
+import { BrandedLoader } from '../../components/loading.js';
 import { getAgentModule } from '../../agent-host/agent-registry.js';
 import { reviewBoardRunStore } from '../review-board-page/review-board-run-store.js';
 import { featureDeletionStore } from '../../lib/feature-deletion-store.js';
@@ -254,6 +255,12 @@ export function WorkspaceView({
       (explorerToggle ?? editorBodyRef.current)?.focus({ preventScroll: true });
     }
   }, [explorerOpen, fullscreen]);
+  useLayoutEffect(() => {
+    for (const child of Array.from(workspaceRef.current?.children ?? [])) {
+      if (child.classList.contains('workspace-loading-overlay')) continue;
+      child.toggleAttribute('inert', restoring || (child === sidebarRef.current && !explorerOpen));
+    }
+  }, [restoring, explorerOpen]);
   useLayoutEffect(() => {
     if (pendingTabFocus.current === null) return;
     const target = tabButtons.current.get(pendingTabFocus.current) ?? editorBodyRef.current;
@@ -810,6 +817,9 @@ export function WorkspaceView({
           : undefined
       }
     >
+      {restoring && <div className="workspace-loading-overlay">
+        <BrandedLoader title="Loading Explorer" detail="Restoring your workspace" />
+      </div>}
       {switchError && <p role="alert">{switchError}</p>}
       {fullscreenError && <p role="alert" className="workspace-fullscreen-error">{fullscreenError}</p>}
       {detailsTab?.kind === 'session' && <Modal title="Session details" onClose={() => setSessionDetailsId(null)}>

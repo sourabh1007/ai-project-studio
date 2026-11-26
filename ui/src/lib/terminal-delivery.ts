@@ -94,7 +94,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
   // frame is always allowed out of an empty window — even a lone code point
   // wider than the window — so delivery can never stall.
   const pump = () => {
-    if (state !== 'ready') return true;
+    if (state !== 'ready' && state !== 'awaiting-input') return true;
     try {
       if (geometry) {
         const key = `${generation}:${geometry.cols}:${geometry.rows}`;
@@ -154,7 +154,7 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
       outbox.push(data);
       return pump();
     },
-    writable: () => state === 'ready' && !recovering,
+    writable: () => (state === 'ready' || state === 'awaiting-input') && !recovering,
     resize(cols: number, rows: number) {
       geometry = { cols, rows };
       pump();
@@ -165,6 +165,9 @@ export function createTerminalDelivery(deps: DeliveryDeps) {
         discard(message.type === 'checkout-recovery' ? 'Checkout recovery requires confirmation.' : 'Choose a worktree first.');
         report();
       } else if (message.type === 'state') {
+        if (message.state === 'awaiting-input' || (state === 'awaiting-input' && message.state === 'bootstrapping')) {
+          discard('CLI setup changed; queued input was not replayed.');
+        }
         if (message.state === 'ready') recovering = false;
         if (message.generation !== generation && generation !== 0) discard('Terminal generation changed.');
         generation = message.generation;

@@ -1847,7 +1847,7 @@ describe('TerminalView scrollback repaint', () => {
     expect(view.queryByRole('status')).toBeNull();
   });
 
-  it('restores pane geometry immediately for a zero-output replay once ready arrives', () => {
+  it.each(['ready', 'awaiting-input'])('restores pane geometry for a zero-output replay once %s arrives', (state) => {
     render(<TerminalView sessionId="s1" />);
     const ws = h.ws!;
     ws.readyState = MockWebSocket.OPEN;
@@ -1855,12 +1855,27 @@ describe('TerminalView scrollback repaint', () => {
 
     act(() => {
       ws.onmessage?.({ data: JSON.stringify({ type: 'resize', cols: 120, rows: 40 }) });
-      ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536 }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state, generation: 1, inputLimit: 65536 }) });
     });
 
     expect(h.fit!.fit).toHaveBeenCalledTimes(1);
   });
 
+  it('shows setup guidance and accepts answers without replaying preloaded browser input', () => {
+    const view = render(<TerminalView sessionId="s1" />);
+    const ws = h.ws!;
+    const term = h.term!;
+    act(() => term.dataHandlers[0]('stale task'));
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'awaiting-input', generation: 1,
+        inputLimit: 65536, detail: 'Answer the CLI setup question. Your task is queued.' }) });
+    });
+    expect(view.getByRole('status')).toHaveTextContent('Answer the CLI setup question');
+    act(() => term.dataHandlers[0]('n\r'));
+    const inputs = ws.send.mock.calls.map(([raw]) => JSON.parse(raw as string)).filter((frame) => frame.type === 'input');
+    expect(inputs.map((frame) => frame.data)).toEqual(['n\r']);
+  });
   it('ignores stale replay write callbacks after a generation replacement', () => {
     render(<TerminalView sessionId="s1" />);
     const ws = h.ws!;

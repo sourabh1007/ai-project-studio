@@ -17,6 +17,26 @@ function runner(outputs: (string | Buffer | Error)[]): ReviewContextCommandRunne
 }
 
 describe('pinned Git context source', () => {
+  it.each([undefined, new AbortController().signal])('fetches a missing immutable live target without updating refs or the working tree (%s)', async (signal) => {
+    const commands = runner([head, new Error('missing target object'), '', base, merge]);
+    expect(await createGitReviewContextSource(commands).pin('repo', head, base, signal))
+      .toEqual({ headSha: head, baseSha: base, mergeBaseSha: merge });
+    expect(commands.run.mock.calls[2]![1].slice(3))
+      .toEqual(['fetch', '--no-tags', '--no-write-fetch-head', 'origin', base]);
+    await expect(createGitReviewContextSource(runner([head, new Error('missing'), new Error('offline')])).pin('repo', head, base))
+      .rejects.toThrow('offline');
+    await expect(createGitReviewContextSource(runner([head, new Error('missing ref')])).pin('repo', head, 'origin/main'))
+      .rejects.toThrow('missing ref');
+    const controller = new AbortController();
+    let calls = 0;
+    const aborted: ReviewContextCommandRunner = { run: vi.fn(async () => {
+      if (++calls === 1) return { stdout: head };
+      controller.abort(new Error('cancelled'));
+      throw new Error('missing');
+    }) };
+    await expect(createGitReviewContextSource(aborted).pin('repo', head, base, controller.signal)).rejects.toThrow('cancelled');
+    expect(aborted.run).toHaveBeenCalledTimes(2);
+  });
   it('scopes large-repository discovery to literal guidance paths in bounded argument batches', async () => {
     const paths = Array.from({ length: 17 }, (_, index) => `rules/group-${index}`);
     const commands = runner([tree('rules/a.md') + tree('rules/a.md'), tree('rules/b.md')]);

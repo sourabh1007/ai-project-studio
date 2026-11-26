@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createClock } from '../kernel/clock.js';
 import type { MetaRequest, MetaRunResult } from '../meta/meta-runner.js';
 import { MetaAbortError } from '../meta/meta-runner.js';
+import { metaFanOutCapacity } from '../meta/warm-route-policy.js';
 import type { PrReview } from '../pr-review/pr-review-contract.js';
 import type { TemporaryPromptFileFactory } from '../repository-context/temporary-prompt-file-port.js';
 import { reviewBoardDefaults } from './config.js';
@@ -302,6 +303,8 @@ describe('immutable review runs', () => {
     deps.currentRevisions = async () => live;
     deps.context = { collect: async () => ({ fingerprint: 'f', skills: [], warnings: [], businessRequirements: '', evidence: '', baseSha: 'stale' }) };
     await expect(service.configure!('f9', {})).rejects.toThrow('target changed');
+    deps.context = { collect: async () => ({ fingerprint: 'f', skills: [], warnings: ['Git object unavailable'], businessRequirements: '', evidence: '' }) };
+    await expect(service.configure!('f9', {})).rejects.toThrow('Pinned repository context could not be loaded');
   });
   it('rejects a selected model that becomes unavailable before dispatch', async () => {
     const { service, deps } = harness();
@@ -1723,7 +1726,10 @@ describe('createReviewBoardService.analyzeAll', () => {
     );
   });
 
-  it('reserves one session: fans out to (live - 1) perspectives at once', async () => {
+  it.each([
+    ['acp', 3, 10, 2],
+    [undefined, 0, 10, 9],
+  ] as const)('reserves one slot using %s capacity for parallel perspectives', async (transport, live, target, expectedPeak) => {
     let active = 0;
     let peak = 0;
     const ai = {
@@ -1735,13 +1741,13 @@ describe('createReviewBoardService.analyzeAll', () => {
         return { text: cleanReview, sessionId: 's1' };
       }),
     };
-    const liveMetaSessions = vi.fn(() => 3);
+    const liveMetaSessions = vi.fn(() => metaFanOutCapacity(transport, live, target));
     const service = createReviewBoardService(
       baseDeps({ ai, inlinePrompts: true, liveMetaSessions }),
     );
     const { sink } = collect();
     await service.analyzeAll('f9', sink);
-    expect(peak).toBe(2);
+    expect(peak).toBe(expectedPeak);
     // Re-read on every scheduling decision so mid-run pool growth is picked up.
     expect(liveMetaSessions.mock.calls.length).toBeGreaterThan(1);
   });

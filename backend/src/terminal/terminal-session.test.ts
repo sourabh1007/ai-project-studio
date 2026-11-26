@@ -783,9 +783,15 @@ describe('createTerminalSession', () => {
     const states: string[] = [];
     const detach = session.onInputReadiness((state) => states.push(state));
     expect(session.inputReadiness).toBe('pending');
+    session.markAwaitingInput();
+    session.markAwaitingInput();
+    const awaiting: string[] = [];
+    session.onInputReadiness((state) => awaiting.push(state))();
+    expect(awaiting).toEqual(['awaiting-input']);
+    session.markInputPending();
     session.markInputReady();
     session.markInputReady();
-    expect(states).toEqual(['ready']);
+    expect(states).toEqual(['awaiting-input', 'pending', 'ready']);
     expect(session.inputReadiness).toBe('ready');
     detach();
 

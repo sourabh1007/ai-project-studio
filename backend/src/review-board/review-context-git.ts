@@ -72,7 +72,19 @@ export function createGitReviewContextSource(
       const base = checkedRef(baseBranch);
       const head = checkedRevision((await command(repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${headSha}^{commit}`], signal)).trim());
       if (head.toLowerCase() !== headSha.toLowerCase()) throw new Error('Git HEAD does not match review revision');
-      const target = checkedRevision((await command(repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${base}^{commit}`], signal)).trim());
+      const resolveTarget = () => command(repositoryPath, ['rev-parse', '--verify', '--end-of-options', `${base}^{commit}`], signal);
+      let targetOutput: string;
+      try {
+        targetOutput = await resolveTarget();
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!validRevision(base)) throw error;
+        // A live PR target may have advanced beyond the locally fetched objects.
+        // Fetch only that immutable commit, without changing refs or the checkout.
+        await command(repositoryPath, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', base], signal);
+        targetOutput = await resolveTarget();
+      }
+      const target = checkedRevision(targetOutput.trim());
       const mergeBase = checkedRevision((await command(repositoryPath, ['merge-base', head, target], signal)).trim());
       return { headSha: head, baseSha: target, mergeBaseSha: mergeBase };
     },

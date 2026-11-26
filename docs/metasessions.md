@@ -54,6 +54,13 @@ The warm pool is capacity-limited and demand-driven; `GET /meta/pools` and
 target changes. Saved general capacity/admission limits remain restart-gated;
 a successful save alone does not prove a running process was retired.
 
+For on-demand providers, the saved `meta.warmPool.size` also supplies the
+Review Board and repository-analysis fan-out budget after restart. These
+features reserve one slot for other IDE work (a target of 10 permits nine
+parallel analyses). Shared process admission still bounds actual running
+processes. On-demand providers do not create idle ACP hosts: one active
+session is measured work, not a reverted target of one.
+
 ## Internal scope & IDE AI
 
 Metasessions run with `scope = internal` are **hidden** from feature session

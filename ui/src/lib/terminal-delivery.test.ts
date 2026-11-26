@@ -20,6 +20,23 @@ function fixture() {
 }
 
 describe('terminal input delivery', () => {
+  it('drops pre-setup input and only delivers new explicit answers while the task stays queued on the server', () => {
+    const f = fixture();
+    f.state('bootstrapping');
+    f.delivery.offer('stale task');
+    f.state('awaiting-input');
+    expect(f.sent).toEqual([]);
+    expect(f.delivery.writable()).toBe(true);
+    f.delivery.resize(80, 24);
+    f.delivery.offer('n\r');
+    expect(f.sent.at(-1)).toMatchObject({ type: 'input', data: 'n\r' });
+    f.ack(1);
+    f.state('bootstrapping');
+    expect(f.delivery.writable()).toBe(false);
+    f.state('ready');
+    f.delivery.offer('new task');
+    expect(f.sent.at(-1)).toMatchObject({ type: 'input', data: 'new task' });
+  });
   it('encodes only bounded prefixes rather than repeatedly encoding the whole remaining payload', () => {
     const f = fixture();
     const text = 'x'.repeat(128 * 1024);

@@ -38,6 +38,7 @@ export function useAppUpdates(): UseAppUpdates {
   // needing to re-subscribe on every change.
   const stateRef = useRef(state);
   stateRef.current = state;
+  const checkRunning = useRef(false);
 
   const apply = useCallback((snapshot: UpdateSnapshot | null | undefined) => {
     setState((prev) => mergeUpdateState(prev, snapshot));
@@ -72,7 +73,16 @@ export function useAppUpdates(): UseAppUpdates {
   }, [bridge, apply]);
 
   const check = useCallback(() => {
-    bridge?.check?.()?.then((s) => apply(s ?? undefined)).catch(() => {});
+    if (!bridge || checkRunning.current) return;
+    const failed = () => apply({ status: 'error', error: 'Could not check for updates. Check your connection and retry.' });
+    const request = bridge.check?.();
+    if (!request) { failed(); return; }
+    checkRunning.current = true;
+    apply({ status: 'checking', error: null });
+    request.then((snapshot) => {
+      if (snapshot) apply(snapshot);
+      else failed();
+    }).catch(failed).finally(() => { checkRunning.current = false; });
   }, [bridge, apply]);
 
   const download = useCallback(() => {

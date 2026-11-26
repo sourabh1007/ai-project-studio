@@ -160,6 +160,19 @@ function stored(): WorkspaceTabsState {
   return JSON.parse(window.localStorage.getItem('cw-workspace-tabs')!);
 }
 
+it('covers workspace restoration and enables the terminal when authoritative sessions load', async () => {
+  const client = createClient();
+  let finish!: (sessions: Session[]) => void;
+  client.listSessions.mockImplementation(() => new Promise<Session[]>((resolve) => { finish = resolve; }));
+  const view = mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null }, client);
+  expect(screen.getByText('Loading Explorer')).toBeVisible();
+  expect(view.container.querySelector('.editor')).toHaveAttribute('inert');
+  await act(async () => finish([childSession]));
+  await waitFor(() => expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument());
+  expect(screen.getByText('Terminal session')).toBeVisible();
+  expect(view.container.querySelector('.editor')).not.toHaveAttribute('inert');
+});
+
 it('groups related reviews, reveals every review on click and preserves their individual selection and state', async () => {
   const second: WorkspaceTab = { kind: 'review-board', id: 'review:root', label: 'Review root', feature: root };
   const client = createClient();

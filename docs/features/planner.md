@@ -29,6 +29,15 @@ A task offers relevant actions: **Session**, **New Task**, or **Review Board**
 creates/links the workspace destination, then opens it; follow-up opens should
 reuse that link rather than create duplicate features, tasks, or sessions.
 
+Interactive session launches keep the task queued until the CLI composer is
+ready. If the CLI asks a setup, trust, or sign-in question, answer it in the
+native terminal; Studio does not accept permissions or collect credentials.
+After setup, the task is submitted once. A startup-detection timeout releases
+manual input without submitting the task into an unknown prompt. The
+`terminal.instructionSeedQuestionPattern` and `instructionSeedReadyPattern`
+settings customize detection; `instructionSeedReadyTimeoutMs` controls that
+manual-input deadline. Native CLI preferences remain owned by the CLI.
+
 Launch progress and failures are shown on the task. If the result is uncertain
 after a connection loss, use the offered recovery/retry action: it reconciles
 the retained operation rather than assuming creation failed. Do not repeatedly

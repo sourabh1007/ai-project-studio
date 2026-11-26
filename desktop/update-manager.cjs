@@ -13,9 +13,9 @@
  *    `canAutoInstall=false` is surfaced so the UI communicates this honestly.
  *
  * Everything here is defensive: no update failure is ever allowed to break the
- * app. Errors become a non-fatal state pushed to the renderer. The whole module
- * is a no-op unless the app is packaged (or `CW_UPDATE_SIM=1` for local dev
- * testing against the real public feed).
+ * app. Errors become a non-fatal state pushed to the renderer. Automatic checks
+ * require a packaged app (or `CW_UPDATE_SIM=1`); source builds support explicit
+ * release checks and guided installation only.
  */
 
 const { app, shell } = require('electron');
@@ -247,7 +247,7 @@ function reportError(err) {
  * the user; background checks stay quiet on the not-available path.
  */
 async function checkForUpdates(manual) {
-  if (!active() || downloading || installing) {
+  if ((!active() && !manual) || downloading || installing) {
     return getState();
   }
   if (checking) {
@@ -306,35 +306,50 @@ function newestRelease(releases) {
  * Lightweight GitHub Releases check. Never throws to the caller path beyond the
  * awaited promise; compares the newest published tag to the running version.
  */
-function checkGitHubLatest() {
+function checkGitHubLatest(useFeed = false) {
   return new Promise((resolve, reject) => {
     setState({ status: Status.CHECKING, canAutoInstall: false, autoInstallBlockReason: null, error: null });
     const req = https.request(
       {
         method: 'GET',
-        hostname: 'api.github.com',
-        path: `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=20`,
+        hostname: useFeed ? 'github.com' : 'api.github.com',
+        path: useFeed ? `/${GITHUB_OWNER}/${GITHUB_REPO}/releases.atom`
+          : `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=20`,
         headers: {
           'User-Agent': 'ai-project-studio-updater',
-          Accept: 'application/vnd.github+json',
+          Accept: useFeed ? 'application/atom+xml' : 'application/vnd.github+json',
         },
         timeout: 15000,
       },
       (res) => {
         let body = '';
+        let bytes = 0;
         res.on('data', (chunk) => {
-          body += chunk;
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > 2 * 1024 * 1024) {
+            res.destroy(new Error('GitHub release response exceeds its size limit.'));
+          } else {
+            body += chunk;
+          }
         });
+        res.on('error', reject);
+        res.on('aborted', () => reject(new Error('GitHub API response was interrupted. Retry checking for updates.')));
         res.on('end', async () => {
           try {
-            if (!res.statusCode || res.statusCode >= 400) {
-              throw new Error(`GitHub API returned ${res.statusCode}`);
+            if (!useFeed && [403, 429].includes(res.statusCode)) {
+              resolve(checkGitHubLatest(true));
+              return;
             }
-            const best = newestRelease(JSON.parse(body));
+            if (!res.statusCode || res.statusCode >= 400) {
+              throw new Error(`GitHub ${useFeed ? 'release feed' : 'API'} returned ${res.statusCode}`);
+            }
+            const best = newestRelease(useFeed ? parseReleaseFeed(body) : JSON.parse(body));
             if (best && isNewer(best.version, safeVersion())) {
               const json = best.release;
               const next = pickWindowsInstaller(json.assets, best.version, process.arch);
-              const autoInstallBlockReason = await automaticInstallBlockReason(next);
+              const autoInstallBlockReason = useFeed
+                ? 'GitHub API is rate-limited. Release discovered via the public feed; open the release page for guided installation.'
+                : await automaticInstallBlockReason(next);
               if (installerAsset?.url !== next?.url) {
                 installerPath = null;
                 installerCandidate = null;
@@ -372,6 +387,32 @@ function checkGitHubLatest() {
     req.on('error', reject);
     req.end();
   });
+}
+
+function parseReleaseFeed(body) {
+  if (!/<feed(?:\s|>)/.test(body) || !/<\/feed>/.test(body)) {
+    throw new Error('GitHub release feed is invalid. Retry checking for updates.');
+  }
+  const prefix = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/`;
+  const releases = [];
+  const entries = [...body.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/g)];
+  for (const [, entry] of entries) {
+    const link = [...entry.matchAll(/<link\b[^>]*\bhref="([^"]+)"[^>]*\/?>/g)]
+      .find((match) => match[1].startsWith(prefix));
+    if (!link) continue;
+    const tag = link[1].slice(prefix.length);
+    if (!/^v?\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(tag)) continue;
+    const title = entry.match(/<title>([\s\S]*?)<\/title>/)?.[1] || tag;
+    const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+    releases.push({
+      tag_name: tag, html_url: link[1],
+      name: title.replace(/&(amp|lt|gt|quot|apos);/g, (_, entity) => entities[entity]),
+    });
+  }
+  if (entries.length && !releases.length) {
+    throw new Error('GitHub release feed has no usable version tags. Retry checking for updates.');
+  }
+  return releases;
 }
 
 /** True when semver-ish `a` (x.y.z[-pre]) is strictly newer than `b`. */
@@ -442,6 +483,7 @@ function hasSignerPolicy() {
 }
 
 async function automaticInstallBlockReason(asset) {
+  if (!active()) return 'Source builds use guided updates. Open the release page or update your checkout; no installer will be started automatically.';
   if (!isWindows()) return 'This platform uses guided installation. Open the release page; the app will remain open.';
   if (!asset) return 'No exact installer is available for this version and architecture. Open the release page for supported downloads.';
   if (!hasSignerPolicy()) return 'Trusted Authenticode signer pins are not configured in this app. Contact the release maintainer; use the release page for guided installation.';
@@ -564,10 +606,10 @@ async function verifyInstaller(file, candidate) {
  *  - Everything else (macOS / no asset): guided install by opening the page.
  */
 async function downloadUpdate() {
-  if (!active() || checking) {
+  if ((!active() && !state?.availableVersion) || checking) {
     return getState();
   }
-  if (isWindows() && state?.canAutoInstall && installerAsset && installerAsset.url) {
+  if (active() && isWindows() && state?.canAutoInstall && installerAsset && installerAsset.url) {
     return downloadAndInstallWindows();
   }
   try {
@@ -768,10 +810,10 @@ async function performSilentInstall() {
  *    acknowledges only the page-opening request, never a forced quit.
  */
 function installNow() {
-  if (!active() || checking) {
+  if ((!active() && !state?.availableVersion) || checking) {
     return Promise.resolve(false);
   }
-  if (isWindows() && state?.canAutoInstall && installerAsset) {
+  if (active() && isWindows() && state?.canAutoInstall && installerAsset) {
     if (installerPath) {
       return runSilentInstall();
     }

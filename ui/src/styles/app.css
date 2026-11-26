@@ -1803,6 +1803,15 @@
   grid-template-columns: 0 minmax(0, 1fr) auto;
 }
 
+.workspace-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: var(--panel-editor);
+}
+
 .workspace:fullscreen {
   width: 100vw;
   height: 100vh;

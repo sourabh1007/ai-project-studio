@@ -7,6 +7,7 @@ import {
   createWarmRoutePolicy,
   resolveWarmProviderIdentity,
   warmPoolAvailability,
+  metaFanOutCapacity,
 } from './warm-route-policy.js';
 import type { MetaRequest } from './meta-runner.js';
 
@@ -14,6 +15,12 @@ const baseRequest: MetaRequest = {
   featureId: 'f1',
   prompt: 'hi',
 };
+
+it('uses configured on-demand capacity rather than the absence of reusable warm sessions', () => {
+  expect(metaFanOutCapacity(undefined, 0, 10)).toBe(10);
+  expect(metaFanOutCapacity('acp', 4, 10)).toBe(4);
+  expect(metaFanOutCapacity('acp', 0, 10)).toBe(0);
+});
 
 describe('warmPoolAvailability', () => {
   const base = { enabled: true, providerId: 'copilot', installed: true, selectionRequired: false,

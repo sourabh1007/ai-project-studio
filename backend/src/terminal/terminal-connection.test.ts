@@ -55,6 +55,23 @@ function fixture(ready = false, limit = 16, generation = 1, launchTimeoutMs?: nu
 }
 
 describe('terminal connection ownership', () => {
+  it('discards stale queued input and accepts explicit setup answers without flushing them into the task', async () => {
+    const f = fixture();
+    f.launch(); await f.started;
+    f.input('old task');
+    f.terminal.markAwaitingInput();
+    expect(f.frames.at(-1)).toMatchObject({ type: 'state', state: 'awaiting-input', detail: expect.stringContaining('Answer the CLI') });
+    expect(f.writes).toEqual([]);
+    f.connection.receive({ type: 'resize', generation: 1, cols: 80, rows: 24 });
+    f.input('n\r');
+    expect(f.writes).toEqual(['n\r']);
+    f.terminal.markInputPending();
+    expect(f.frames.at(-1)).toMatchObject({ state: 'bootstrapping' });
+    f.terminal.markInputReady();
+    f.input('new work');
+    expect(f.writes).toEqual(['n\r', 'new work']);
+    f.connection.close();
+  });
   it.each(['t2', null])('scopes worktree choice %s to its request and blocks input until launch', async (choiceId) => {
     const f = fixture();
     f.input('queued', 0);

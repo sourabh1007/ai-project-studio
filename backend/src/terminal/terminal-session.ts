@@ -72,13 +72,15 @@ export interface TerminalSession {
    * Current input readiness. Bootstrap seeding uses raw writes while browser
    * input waits for this state to become `ready`.
    */
-  readonly inputReadiness: 'pending' | 'ready' | 'closed';
+  readonly inputReadiness: 'pending' | 'awaiting-input' | 'ready' | 'closed';
   /** Observes readiness including ready → closed; current settled state fires immediately. */
   onInputReadiness(
-    listener: (state: 'ready' | 'closed') => void,
+    listener: (state: 'pending' | 'awaiting-input' | 'ready' | 'closed') => void,
   ): () => void;
   /** Allows browser input after launch-time bootstrap injection completes. */
   markInputReady(): void;
+  markAwaitingInput(): void;
+  markInputPending(): void;
   /** Resizes the terminal viewport. */
   resize(cols: number, rows: number): void;
   /**
@@ -143,14 +145,14 @@ export function createTerminalSession(
    * inner one un-hide the outer one's echo.
    */
   let suppressDepth = 0;
-  let inputReadiness: 'pending' | 'ready' | 'closed' = deps.inputReady
+  let inputReadiness: TerminalSession['inputReadiness'] = deps.inputReady
     ? 'ready'
     : 'pending';
   const readinessListeners = new Set<
-    (state: 'ready' | 'closed') => void
+    (state: TerminalSession['inputReadiness']) => void
   >();
 
-  const settleInputReadiness = (state: 'ready' | 'closed'): void => {
+  const settleInputReadiness = (state: TerminalSession['inputReadiness']): void => {
     if (inputReadiness === state || inputReadiness === 'closed') {
       return;
     }
@@ -250,6 +252,8 @@ export function createTerminalSession(
       return () => readinessListeners.delete(listener);
     },
     markInputReady: () => settleInputReadiness('ready'),
+    markAwaitingInput: () => settleInputReadiness('awaiting-input'),
+    markInputPending: () => settleInputReadiness('pending'),
     resize: (nextCols, nextRows) => {
       if (inputReadiness === 'closed') throw new Error('Terminal is closed');
       cols = nextCols;

@@ -11,7 +11,7 @@ export type ClientMessage =
   | { type: 'input'; data: string; generation: number; seq: number }
   | { type: 'resize'; cols: number; rows: number; generation: number };
 
-export type TerminalState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'closed' | 'failed';
+export type TerminalState = 'connecting' | 'bootstrapping' | 'awaiting-input' | 'ready' | 'reconnecting' | 'closed' | 'failed';
 
 export type ServerMessage =
   | { type: 'worktree-selection'; requestId: number; choices: { id: string; checkoutPath: string; ref: string }[] }

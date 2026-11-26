@@ -131,7 +131,8 @@ test('candidate trust rejects pending provenance, mismatched identities/checksum
 
 function installFixture({ manifest = candidate(), signature = { status: 'Valid', thumbprint: pins[0] },
   actualHash = 'b'.repeat(64), launchError, beforeInstall = true, downloadError, trust = policy,
-  releaseAssets, candidateError, platform, releaseError, downloadGate } = {}) {
+  releaseAssets, candidateError, platform, releaseError, downloadGate, packaged = true, responseError,
+  releaseStatus = 200, feedBody, feedStatus = 200 } = {}) {
   let downloads = 0;
   let launches = 0;
   let verifications = 0;
@@ -139,19 +140,29 @@ function installFixture({ manifest = candidate(), signature = { status: 'Valid',
   let manifestReads = 0;
   let releaseReads = 0;
   const openedPages = [];
+  const requests = [];
   const assets = releaseAssets ?? [asset(installerName), asset('candidate-win32-x64.json')];
   const https = {
-    request(_options, callback) {
+    request(options, callback) {
       releaseReads++;
+      requests.push(options);
       const request = Object.assign(new EventEmitter(), { end() {
         if (releaseError) {
           queueMicrotask(() => request.emit('error', new Error(releaseError)));
           return;
         }
-        const response = Object.assign(new EventEmitter(), { statusCode: 200 });
+        const feed = options.hostname === 'github.com';
+        const response = Object.assign(new EventEmitter(), {
+          statusCode: feed ? feedStatus : typeof releaseStatus === 'function' ? releaseStatus() : releaseStatus,
+          destroy(error) { this.emit('error', error); },
+        });
         callback(response);
         queueMicrotask(() => {
-          response.emit('data', JSON.stringify([release(`v${version}`, { assets })]));
+          if (responseError) {
+            response.emit(responseError === 'aborted' ? 'aborted' : 'error', new Error('injected response failure'));
+            return;
+          }
+          response.emit('data', feed ? feedBody : JSON.stringify([release(`v${version}`, { assets })]));
           response.emit('end');
         });
       } });
@@ -159,7 +170,7 @@ function installFixture({ manifest = candidate(), signature = { status: 'Valid',
     },
   };
   const updater = loadUpdater({
-    packaged: true, platform, modules: { 'node:https': https },
+    packaged, platform, modules: { 'node:https': https },
     openExternal: async (url) => { openedPages.push(url); },
   });
   updater.init({
@@ -184,8 +195,74 @@ function installFixture({ manifest = candidate(), signature = { status: 'Valid',
     beforeInstall: async () => { backendStops++; return beforeInstall; },
     launchInstaller: async () => { launches++; if (launchError) throw new Error('injected asynchronous spawn denial'); },
   });
-  return { updater, openedPages, counts: () => ({ downloads, launches, verifications, backendStops, manifestReads, releaseReads }) };
+  return { updater, openedPages, requests, counts: () => ({ downloads, launches, verifications, backendStops, manifestReads, releaseReads }) };
 }
+
+const releaseFeed = (entries) => `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">${entries.map(
+  ([tag, title = tag, owner = 'sourabh1007']) => `<entry><link rel="alternate" href="https://github.com/${owner}/ai-project-studio/releases/tag/${tag}"/><title>${title}</title></entry>`,
+).join('')}</feed>`;
+
+test('rate-limited update checks discover prereleases from the public feed and remain guided-only', async () => {
+  for (const releaseStatus of [403, 429]) {
+    const { updater, requests, counts, openedPages } = installFixture({
+      releaseStatus, feedBody: releaseFeed([['v0.11.6'], ['v0.12.0', 'Preview &amp; notes']]),
+    });
+    await updater.checkForUpdates(true);
+    assert.deepEqual(requests.map((request) => request.hostname), ['api.github.com', 'github.com']);
+    assert.equal(updater.getState().status, 'available');
+    assert.equal(updater.getState().availableVersion, version);
+    assert.equal(updater.getState().releaseName, 'Preview & notes');
+    assert.equal(updater.getState().canAutoInstall, false);
+    assert.match(updater.getState().autoInstallBlockReason, /rate-limited/);
+    await updater.downloadUpdate();
+    assert.equal(await updater.installNow(), true);
+    assert.ok(openedPages.every((url) => url.endsWith('/releases/tag/v0.12.0')));
+    assert.equal(counts().downloads, 0);
+    assert.equal(counts().launches, 0);
+    assert.equal(counts().backendStops, 0);
+    assert.equal(counts().manifestReads, 0);
+    updater.dispose();
+  }
+});
+
+test('feed fallback clears previous automatic readiness and ignores foreign or invalid release links', async () => {
+  let status = 200;
+  const { updater } = installFixture({
+    releaseStatus: () => status,
+    feedBody: releaseFeed([['v0.12.0'], ['v99.0.0', 'foreign', 'other'], ['not-a-version']]),
+  });
+  await updater.checkForUpdates(true);
+  assert.equal(updater.getState().canAutoInstall, true);
+  status = 403;
+  await updater.checkForUpdates(true);
+  assert.equal(updater.getState().availableVersion, version);
+  assert.equal(updater.getState().canAutoInstall, false);
+  updater.dispose();
+});
+
+test('feed fallback reports up-to-date releases but fails visibly for invalid or unavailable feeds', async () => {
+  for (const [feedBody, feedStatus, expected] of [
+    [releaseFeed([['v0.11.5']]), 200, 'not-available'],
+    [releaseFeed([]), 200, 'not-available'],
+    ['not XML', 200, 'error'],
+    [releaseFeed([['unknown']]), 200, 'error'],
+    [releaseFeed([]), 503, 'error'],
+    ['x'.repeat(2 * 1024 * 1024 + 1), 200, 'error'],
+  ]) {
+    const { updater, counts } = installFixture({ releaseStatus: 403, feedBody, feedStatus });
+    await updater.checkForUpdates(true);
+    assert.equal(updater.getState().status, expected);
+    assert.equal(updater.getState().canAutoInstall, false);
+    assert.equal(counts().releaseReads, 2);
+    if (expected === 'error') assert.match(updater.getState().error, /feed|size limit/);
+    updater.dispose();
+  }
+  const { updater, counts } = installFixture({ releaseStatus: 500 });
+  await updater.checkForUpdates(true);
+  assert.equal(updater.getState().status, 'error');
+  assert.equal(counts().releaseReads, 1, 'unrelated HTTP errors do not trigger a fallback loop');
+  updater.dispose();
+});
 
 test('guided Windows actions open the release page without downloading or stopping the backend', async () => {
   const { updater, counts, openedPages } = installFixture({
@@ -203,6 +280,33 @@ test('guided Windows actions open the release page without downloading or stoppi
   updater.dispose();
 });
 
+test('manual checks work in source builds while background checks and automatic installation stay disabled', async () => {
+  const { updater, counts, openedPages } = installFixture({ packaged: false });
+  await updater.checkForUpdates(false);
+  assert.equal(counts().releaseReads, 0);
+  await updater.checkForUpdates(true);
+  assert.equal(counts().releaseReads, 1);
+  assert.equal(updater.getState().status, 'available');
+  assert.equal(updater.getState().canAutoInstall, false);
+  assert.match(updater.getState().autoInstallBlockReason, /Source builds/);
+  await updater.downloadUpdate();
+  assert.equal(await updater.installNow(), true);
+  assert.equal(openedPages.length, 2);
+  assert.equal(counts().downloads, 0);
+  assert.equal(counts().backendStops, 0);
+  assert.equal(counts().launches, 0);
+  updater.dispose();
+});
+
+test('interrupted release responses fail visibly instead of leaving manual checks stuck', async () => {
+  for (const responseError of ['error', 'aborted']) {
+    const { updater } = installFixture({ responseError });
+    await updater.checkForUpdates(true);
+    assert.equal(updater.getState().status, 'error');
+    assert.match(updater.getState().error, /response failure|interrupted/);
+    updater.dispose();
+  }
+});
 test('coalesces overlapping release checks and prevents installation during qualification checks', async () => {
   let finish;
   const manifest = new Promise((resolve) => { finish = resolve; });

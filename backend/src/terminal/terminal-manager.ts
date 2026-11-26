@@ -959,8 +959,8 @@ export function createTerminalManager(
    * Two timing hazards make a naive `write(text + Enter)` fail:
    *  - Seeding before the TUI finishes booting lets the submit keystroke be
    *    swallowed during startup, so the text lands in the composer unsent. We
-   *    therefore wait for a ready marker in the output (with a timeout
-   *    fallback) before seeding.
+   *    therefore wait for a ready marker in the output before seeding. Setup
+   *    questions and detection timeouts release manual input, never the task.
    *  - The CLI treats a fast multi-line write as a paste and absorbs an
    *    immediately-trailing newline as a line break, so the submit keystroke
    *    is sent on its own once the paste burst settles.
@@ -972,6 +972,7 @@ export function createTerminalManager(
     epoch: number | null,
   ): void {
     const readyPattern = new RegExp(deps.config.instructionSeedReadyPattern);
+    const questionPattern = new RegExp(deps.config.instructionSeedQuestionPattern);
     let observed = '';
     let detach = (): void => {};
     let readyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -981,13 +982,17 @@ export function createTerminalManager(
       submitted = true;
       clearTimeout(readyTimer);
       detach();
+      terminal.markInputPending();
       seedNow(terminal, instructions, onComplete, epoch);
     };
 
     detach = terminal.attach({
       send: (data) => {
         observed = (observed + stripAnsi(data)).slice(-READY_SCAN_BYTES);
-        if (readyPattern.test(observed)) {
+        if (questionPattern.test(observed)) {
+          observed = '';
+          terminal.markAwaitingInput();
+        } else if (readyPattern.test(observed)) {
           submit();
         }
       },
@@ -1001,7 +1006,7 @@ export function createTerminalManager(
       detach();
     } else {
       readyTimer = setTimeout(
-        submit,
+        () => terminal.markAwaitingInput(),
         deps.config.instructionSeedReadyTimeoutMs,
       );
     }

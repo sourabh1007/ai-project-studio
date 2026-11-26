@@ -575,6 +575,9 @@ export function createReviewBoardService(
         }
         const discussion = await existingThreadsFor(featureId, context.warnings);
         if (live) {
+          if (!context.baseSha) {
+            throw new ValidationError(`Pinned repository context could not be loaded. Check Git access and retry. ${context.warnings.join(' ')}`);
+          }
           const latest = await deps.currentRevisions!(featureId);
           if (latest.headSha !== live.headSha || latest.baseSha !== live.baseSha || latest.targetBranch !== live.targetBranch ||
               context.baseSha !== live.baseSha) {

@@ -5,6 +5,10 @@ import type { MetaRequest } from './meta-runner.js';
 import type { MetaSettings } from './meta-settings.js';
 import type { MetaPoolsStatus } from './pooled-meta-runner.js';
 
+export function metaFanOutCapacity(transport: 'acp' | undefined, liveWarmSessions: number, configuredSize: number): number {
+  return transport === 'acp' ? liveWarmSessions : configuredSize;
+}
+
 export function warmPoolAvailability(input: {
   enabled: boolean;
   providerId: string;
