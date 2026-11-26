@@ -5,8 +5,9 @@ import type { MetaRequest } from './meta-runner.js';
 import type { MetaSettings } from './meta-settings.js';
 import type { MetaPoolsStatus } from './pooled-meta-runner.js';
 
-export function metaFanOutCapacity(transport: 'acp' | undefined, liveWarmSessions: number, configuredSize: number): number {
-  return transport === 'acp' ? liveWarmSessions : configuredSize;
+export function metaFanOutCapacity(transport: 'acp' | undefined, liveWarmSessions: number, configuredSize: number,
+  starting = false): number {
+  return transport === 'acp' && !starting ? liveWarmSessions : configuredSize;
 }
 
 export function warmPoolAvailability(input: {
@@ -27,15 +28,18 @@ export function warmPoolAvailability(input: {
   if (input.transport !== 'acp') return result('unavailable', 'This provider runs AI requests on demand; reusable warm sessions are not supported.');
   if (input.warmProviderId !== input.providerId) return result('unavailable', 'The warm executable does not match the selected CLI.');
   if (!input.enabled) return result('disabled', 'Warm sessions are turned off.');
+  if (input.starting) return result('starting', 'Starting the warm pool.');
   if (input.running) return result('running', 'The warm pool is running.');
   if (input.failed) return result('failed', 'Warm startup failed. Check CLI readiness and MCP settings before restarting.');
-  if (input.starting) return result('starting', 'Starting the warm pool.');
   return result('unavailable', 'No warm pool is running. Restart after checking CLI readiness.');
 }
 
 export interface WarmRoutePolicyDeps {
   settings: Pick<MetaSettings, 'get'>;
   warmProviderId: string | null;
+  /** Tool-free workers can honor strict review turns, unlike tool-enabled workers. */
+  noTools?: boolean;
+  canSetModel?: boolean;
 }
 
 export interface ConfiguredWarmRoutePolicyDeps {
@@ -43,6 +47,8 @@ export interface ConfiguredWarmRoutePolicyDeps {
   metaConfig: Pick<MetaConfig, 'warmPool'>;
   copilotConfig: Pick<CopilotConfig, 'executable'>;
   agencyConfig: Pick<AgencyConfig, 'executable'>;
+  noTools?: boolean;
+  canSetModel?: boolean;
 }
 
 export interface WarmProviderIdentityDeps {
@@ -52,29 +58,34 @@ export interface WarmProviderIdentityDeps {
 }
 
 /**
- * ACP warm sessions currently use the executable's built-in defaults: they can
- * only honor requests that stay on that provider's default model, use no
- * attachments, and remain in the internal scope. A tool-less request is also
- * served warm when the caller marked tools optional, since warm sessions cannot
- * turn tools off but a prompt that needs none simply never calls them.
+ * Match provider, scope, attachments and the worker's actual tool/model
+ * capabilities. Tool-free review workers must never accept tool-required work.
  */
 export function resolveWarmProviderIdentity(
   deps: WarmProviderIdentityDeps,
 ): string | null {
   const matchesCopilot = deps.warmExecutable === deps.copilotExecutable;
   const matchesAgency = deps.warmExecutable === deps.agencyExecutable;
-  return matchesCopilot && !matchesAgency ? 'copilot' : null;
+  if (matchesCopilot === matchesAgency) return null;
+  return matchesCopilot ? 'copilot' : 'agency';
+}
+
+export function configuredWarmExecutable(deps: ConfiguredWarmRoutePolicyDeps): string {
+  const configured = deps.metaConfig.warmPool.executable;
+  if (configured === 'copilot' || configured === 'auto') {
+    return deps.settings.get().providerId === 'agency' ? deps.agencyConfig.executable : deps.copilotConfig.executable;
+  }
+  return configured === 'agency' ? deps.agencyConfig.executable : configured;
 }
 
 export function createConfiguredWarmRoutePolicy(
   deps: ConfiguredWarmRoutePolicyDeps,
 ): (request: MetaRequest) => boolean {
-  const warmExecutable =
-    deps.metaConfig.warmPool.executable === 'copilot'
-      ? deps.copilotConfig.executable
-      : deps.metaConfig.warmPool.executable;
+  const warmExecutable = configuredWarmExecutable(deps);
   return createWarmRoutePolicy({
     settings: deps.settings,
+    noTools: deps.noTools,
+    canSetModel: deps.canSetModel,
     warmProviderId: resolveWarmProviderIdentity({
       warmExecutable,
       copilotExecutable: deps.copilotConfig.executable,
@@ -90,7 +101,7 @@ export function createWarmRoutePolicy(
     if ((request.scope ?? 'internal') !== 'internal') {
       return false;
     }
-    if ((request.noTools && !request.toolsOptional) ||
+    if ((deps.noTools ? !request.noTools && !request.toolsOptional : request.noTools && !request.toolsOptional) ||
         (request.attachments?.length ?? 0) > 0) {
       return false;
     }
@@ -103,6 +114,6 @@ export function createWarmRoutePolicy(
       return false;
     }
     const model = request.model ?? live.model;
-    return model === 'auto';
+    return deps.canSetModel === true || model === 'auto';
   };
 }

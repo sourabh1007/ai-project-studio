@@ -180,6 +180,8 @@ export interface IAIProvider {
   /** Await non-billable native readiness before an interactive command is built. */
   prepareInteractiveSession?(): Promise<void>;
   startSession(spec: SessionSpec): RunningSession;
+  /** Builds a persistent ACP worker using this provider's native configuration. */
+  buildWarmCommand?(spec: SessionSpec, extraArgs: string[], disabledMcpServers: readonly string[]): InteractiveCommand;
   /**
    * Builds the command/env to run this provider interactively in a PTY. Adding
    * a new provider only requires implementing this — the terminal module stays

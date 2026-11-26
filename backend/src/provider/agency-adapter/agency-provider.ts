@@ -19,7 +19,7 @@ import { AGENCY_NAMESPACE, type AgencyConfig } from './config.js';
 import { buildAgencyCommand } from './agency-cmd-builder.js';
 import { buildAgencyEnv } from './agency-env-mapper.js';
 import { listAgencyModels } from './agency-model-lister.js';
-import { buildCopilotInteractiveArgs } from '../copilot-adapter/copilot-cmd-builder.js';
+import { buildCopilotInteractiveArgs, buildCopilotWarmArgs } from '../copilot-adapter/copilot-cmd-builder.js';
 import { createCopilotOutputScanner } from '../copilot-adapter/copilot-output-scanner.js';
 import { createCopilotModelScanner } from '../copilot-adapter/copilot-model-scanner.js';
 import { createCopilotMcpScanner } from '../copilot-adapter/copilot-mcp-scanner.js';
@@ -43,7 +43,15 @@ export function createAgencyProvider(
 ): IAIProvider {
   return {
     id: AGENCY_NAMESPACE,
-    capabilities: { planUsage: 'aic-panel' },
+    capabilities: { warmTransport: 'acp', planUsage: 'aic-panel' },
+    buildWarmCommand(spec, extraArgs, disabledMcpServers) {
+      if (deps.mcpPolicy === 'isolated') {
+        throw new ValidationError('Agency warm workers cannot verify zero-MCP isolation. Select native MCP policy and restart; native authentication and administrator policies remain enforced.');
+      }
+      return { command: config.executable,
+        args: [config.subcommand, '--', ...buildCopilotWarmArgs(spec, config, extraArgs, disabledMcpServers, 'native')],
+        env: { ...buildAgencyEnv(spec, deps.baseEnv, deps.nativeCopilot?.()), STUDIO_PROVIDER_ID: AGENCY_NAMESPACE } };
+    },
     async listModels() {
       return listAgencyModels(config);
     },

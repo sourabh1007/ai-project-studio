@@ -81,7 +81,11 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
       timeoutMs,
       deadlineAt: request.deadlineAt ?? Date.now() + timeoutMs,
     };
-    if (deps.bypass?.() || bounded.forceCold) {
+    const bypass = deps.bypass?.() ?? false;
+    if (bounded.requireWarm && (bypass || bounded.forceCold)) {
+      throw new Error('A warm-only review cannot be routed to a cold launch.');
+    }
+    if (bypass || bounded.forceCold) {
       return deps.fallback.runDetailed(bounded);
     }
     deps.demand?.begin();
@@ -92,11 +96,15 @@ export function createPooledMetaRunner(deps: PooledMetaRunnerDeps): MetaRunner {
       // warm session instead of cold-spawning. Only spill to cold when the pool
       // has no live sessions yet (still warming from a cold start, or failed to
       // start), so the IDE always responds.
-      if ((deps.supportsWarm?.(bounded) ?? true) && deps.pool.stats().live > 0) {
+      const supported = deps.supportsWarm?.(bounded) ?? true;
+      if (bounded.requireWarm && !supported) {
+        throw new Error('The warm pool cannot honor this review provider, model or tool policy. Restart the pool with the selected review settings.');
+      }
+      if (supported && (bounded.requireWarm || deps.pool.stats().live > 0)) {
         try {
           return await deps.pool.runDetailed(bounded);
         } catch (error) {
-          if (!canFallback(error)) {
+          if (bounded.requireWarm || !canFallback(error)) {
             throw error;
           }
           deps.onFallback?.(error);

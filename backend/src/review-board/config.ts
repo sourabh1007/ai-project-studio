@@ -43,7 +43,7 @@ export const reviewBoardConfigSchema = z.object({
    * finish first.
    */
   stepTimeoutMs: z.number().int().positive(),
-  /** How many times a *transient* provider failure is retried per AI step. */
+  /** Warm attempts before one final attempt; strict warm reviews replace failed workers rather than retry cold. */
   transientRetryAttempts: z.number().int().nonnegative(),
   /** Delay before a transient-failure retry, in milliseconds. */
   transientRetryBackoffMs: z.number().int().nonnegative(),
@@ -121,7 +121,7 @@ export const reviewBoardDefaults: ReviewBoardConfig = {
   blastRadiusMediumThreshold: 3,
   blastRadiusHighThreshold: 6,
   stepTimeoutMs: 300_000,
-  transientRetryAttempts: 2,
+  transientRetryAttempts: 4,
   transientRetryBackoffMs: 2_000,
   maxFindingsPerPerspective: 6,
   coldInlineMaxChars: 30_000,

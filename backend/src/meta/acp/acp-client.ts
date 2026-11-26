@@ -34,6 +34,9 @@ export interface AcpProcess {
 }
 
 export interface AcpClientConfig {
+  noTools?: boolean;
+  /** Initialize native session/MCP state before advertising an idle worker. */
+  warmCwd?: string;
   /** Timeout (ms) for the one-time `initialize` handshake. */
   initializeTimeoutMs: number;
   /** Timeout (ms) for a single `session/new` or `session/prompt` request. */
@@ -49,6 +52,9 @@ export interface AcpUsage {
 }
 
 export interface AcpTurnRequest {
+  model?: string;
+  /** Strict review deadline includes both queueing and model execution. */
+  hardDeadlineAt?: number;
   onExecutionPhase?: (phase: 'admission' | 'preparing' | 'dispatched') => void;
   /** The full prompt text; delivered inline (ACP has no argv length limit). */
   prompt: string;
@@ -176,6 +182,7 @@ export class AcpClient {
   /** Bounded tail of stdout lines that were not ACP messages. */
   private unparsed: string[] = [];
   private unparsedCharacters = 0;
+  private prepared: { cwd: string; result: Record<string, unknown> } | null = null;
 
   constructor(
     private readonly process: AcpProcess,
@@ -213,6 +220,16 @@ export class AcpClient {
       this.config.initializeTimeoutMs,
       { allowFallbackToCold: true, onTimeout: () => this.dispose() },
     );
+    if (this.config.warmCwd !== undefined) {
+      const result = await this.newSession(this.config.warmCwd);
+      if (!result || !sessionIdOf(result)) {
+        this.dispose();
+        throw new AcpRequestError('ACP warm session/new returned no session id', {
+          method: 'session/new', allowFallbackToCold: true,
+        });
+      }
+      this.prepared = { cwd: this.config.warmCwd, result };
+    }
   }
 
   /**
@@ -231,7 +248,9 @@ export class AcpClient {
 
   /** Runs a single prompt as a fresh session and returns its response text. */
   async runTurn(request: AcpTurnRequest): Promise<AcpTurnResult> {
-    const created = await this.request(
+    const prepared = this.prepared;
+    this.prepared = null;
+    const created = prepared && prepared.cwd === request.cwd ? prepared.result : await this.request(
       'session/new',
       { cwd: request.cwd, mcpServers: [] },
       remainingTimeout(request.deadlineAt, this.config.turnTimeoutMs),
@@ -244,6 +263,11 @@ export class AcpClient {
         method: 'session/new',
         allowFallbackToCold: true,
       });
+    }
+    if (request.model && request.model !== 'auto') {
+      await this.request('session/set_model', { sessionId, modelId: request.model },
+        remainingTimeout(request.deadlineAt, this.config.turnTimeoutMs),
+        { allowFallbackToCold: true, onTimeout: () => this.dispose() });
     }
     const turn: ActiveTurn = {
       generation: ++this.turnGeneration,
@@ -385,7 +409,7 @@ export class AcpClient {
     }
     try {
       if (message.method === 'session/request_permission') {
-        const optionId = selectPermissionOption(message.params);
+        const optionId = this.config.noTools ? null : selectPermissionOption(message.params);
         const result = optionId
           ? { outcome: { outcome: 'selected', optionId } }
           : { outcome: { outcome: 'cancelled' } };

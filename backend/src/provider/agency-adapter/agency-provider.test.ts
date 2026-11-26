@@ -58,6 +58,25 @@ const spec: SessionSpec = {
 };
 
 describe('agency-provider', () => {
+  it('builds real persistent Agency ACP workers without bypassing native MCP or changing provider', () => {
+    const { spawner } = fakeSpawner();
+    const provider = createAgencyProvider(agencyDefaults, {
+      spawner, baseEnv: { PATH: 'C:\\npm' }, importStore: fakeStore(),
+      nativeCopilot: () => 'C:\\native\\copilot.exe',
+    });
+    expect(provider.capabilities?.warmTransport).toBe('acp');
+    const command = provider.buildWarmCommand!({ ...spec, noTools: true }, [], ['do-not-suppress']);
+    expect(command.args.slice(0, 3)).toEqual(['copilot', '--', '--acp']);
+    expect(command.args).toContain('--available-tools');
+    expect(command.args).not.toContain('--allow-all-tools');
+    expect(command.args).not.toContain('--disable-builtin-mcps');
+    expect(command.env.PATH).toBe('C:\\native;C:\\npm');
+    expect(command.env.STUDIO_PROVIDER_ID).toBe('agency');
+    const isolated = createAgencyProvider(agencyDefaults, { spawner, baseEnv: {}, importStore: fakeStore(), mcpPolicy: 'isolated' });
+    expect(() => isolated.buildWarmCommand!(spec, [], [])).toThrow(/isolation/);
+    const native = createAgencyProvider(agencyDefaults, { spawner, baseEnv: {}, importStore: fakeStore(), mcpPolicy: 'native' });
+    expect(native.buildWarmCommand!({ ...spec, noTools: true }, [], []).env.STUDIO_PROVIDER_ID).toBe('agency');
+  });
   it('resolves the native Copilot selection afresh for headless and interactive Agency launches', () => {
     const { spawner, requests } = fakeSpawner();
     let native = 'C:\\native-one\\copilot.exe';

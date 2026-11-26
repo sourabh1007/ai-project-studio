@@ -384,6 +384,7 @@ import { createOwnedMetaRunner } from './meta/owned-meta-runner.js';
 import { createMetaSettings } from './meta/meta-settings.js';
 import {
   createConfiguredWarmRoutePolicy,
+  configuredWarmExecutable,
   resolveWarmProviderIdentity,
   warmPoolAvailability,
   metaFanOutCapacity,
@@ -3036,12 +3037,11 @@ async function main(): Promise<void> {
   // is warming or before a warm prompt is actually dispatched, so enabling the
   // pools only adds speed without duplicating uncertain in-flight work.
   const warmPoolCfg = metaConfig.warmPool;
-  const warmExecutable =
-    warmPoolCfg.executable === 'copilot'
-      ? copilotConfig.executable
-      : warmPoolCfg.executable;
-  const warmProviderIdentity = resolveWarmProviderIdentity({
-    warmExecutable,
+  const warmExecutable = () => configuredWarmExecutable({
+    settings: exposedMetaSettings, metaConfig, copilotConfig, agencyConfig,
+  });
+  const warmProviderIdentity = () => resolveWarmProviderIdentity({
+    warmExecutable: warmExecutable(),
     copilotExecutable: copilotConfig.executable,
     agencyExecutable: agencyConfig.executable,
   });
@@ -3059,7 +3059,7 @@ async function main(): Promise<void> {
       id: model.id, name: model.label, description: '', enabled: true,
       usageMultiplier: null, usageLabel: null, priceCategory: null,
     }));
-    const probe = provider.capabilities?.warmTransport === 'acp' && providerId === warmProviderIdentity
+    const probe = provider.capabilities?.warmTransport === 'acp' && providerId === warmProviderIdentity()
       ? { fetch: async () => {
         try {
           const names = await prepareHeadlessMcpInventory({ cwd: process.cwd(), kind: 'meta' }, providerId,
@@ -3068,7 +3068,7 @@ async function main(): Promise<void> {
           if (names.length > 0) return staticCatalog();
         } catch { return staticCatalog(); }
         return createAcpModelCatalogProbe({
-      executable: warmExecutable,
+      executable: warmExecutable(),
       resolveCommand: resolveCopilotNativeCommand,
       extraArgs: warmPoolCfg.modelCatalogExtraArgs,
       // The CLI's `session/new` requires a working directory to open a session;
@@ -3108,6 +3108,7 @@ async function main(): Promise<void> {
   // restart. Empty until warm pools are enabled/built below.
   const allWarmPools = new Set<MetaSessionPool>();
   let warmPoolStarting = false;
+  let warmStartup = Promise.resolve();
   let warmPoolStartupFailed = false;
   const describeMetaPools = (status: ReturnType<typeof metaPoolsStatus>) => ({
     ...status,
@@ -3118,7 +3119,7 @@ async function main(): Promise<void> {
       selectionRequired: executionPolicy.get().selectionRequired,
       transport: providers.has(resolverConfig.defaultProvider)
         ? providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport : undefined,
-      warmProviderId: warmProviderIdentity,
+      warmProviderId: warmProviderIdentity(),
       running: status.enabled,
       starting: warmPoolStarting,
       failed: warmPoolStartupFailed,
@@ -3133,42 +3134,55 @@ async function main(): Promise<void> {
   let warmInlinePrompts = false;
   const startWarmPool = (): void => {
     if (!warmPoolCfg.enabled || executionPolicy.get().selectionRequired ||
-        warmProviderIdentity !== resolverConfig.defaultProvider ||
+        warmProviderIdentity() !== resolverConfig.defaultProvider ||
         !installedProviderIds().has(resolverConfig.defaultProvider) || allWarmPools.size > 0 || warmPoolStarting) return;
     warmPoolStarting = true;
     warmPoolStartupFailed = false;
-    void (async () => {
+    warmStartup = (async () => {
     const warmCwd = process.cwd();
-    const disabledNames = await prepareHeadlessMcpInventory({ cwd: warmCwd, kind: 'meta' }, resolverConfig.defaultProvider,
-      AbortSignal.timeout(mcpConfig.discoveryTimeoutMs), 'isolated');
+    const providerId = resolverConfig.defaultProvider;
+    const provider = providers.get(providerId);
+    if (!provider.buildWarmCommand) return;
+    const policy = headlessMcpPolicy(providerId);
+    const disabledNames = await prepareHeadlessMcpInventory({ cwd: warmCwd, kind: 'meta' }, providerId,
+      AbortSignal.timeout(mcpConfig.discoveryTimeoutMs), policy);
     if (!applicationWork.accepting || executionPolicy.get().selectionRequired ||
-        warmProviderIdentity !== resolverConfig.defaultProvider || allWarmPools.size > 0) return;
+        providerId !== resolverConfig.defaultProvider || allWarmPools.size > 0) return;
     const inventoryKey = [...disabledNames].sort().join('\0');
     const routeSupportsWarm = createConfiguredWarmRoutePolicy({
       settings: exposedMetaSettings,
       metaConfig,
       copilotConfig,
       agencyConfig,
+      noTools: true,
+      canSetModel: true,
     });
     const supportsWarm = (request: Parameters<typeof routeSupportsWarm>[0]): boolean =>
-      routeSupportsWarm(request) && (!request.cwd || pathResolve(request.cwd) === pathResolve(warmCwd));
+      routeSupportsWarm(request);
     const pool = new MetaSessionPool({
       physicalOwnership: metaPhysicalOwnership,
       processAdmission,
       size: warmPoolCfg.size,
-      createClient: () =>
-        new AcpClient(new AcpProcessAdapter({
-          executable: warmExecutable, cwd: warmCwd,
-          resolveCommand: resolveCopilotNativeCommand,
-          baseArgs: ['--acp', '--disable-builtin-mcps', ...disabledNames.flatMap((name) => ['--disable-mcp-server', name])],
-          extraArgs: warmPoolCfg.extraArgs,
+      createClient: () => {
+        const sessionId = randomUUID();
+        const command = provider.buildWarmCommand!({
+          sessionId, featureId: 'internal:warm-pool', prompt: '', model: 'auto', kind: 'meta',
+          cwd: warmCwd, noTools: true, otelFilePath: pathJoin(sessionConfig.usageDir, `${sessionId}.jsonl`),
+        }, warmPoolCfg.extraArgs ?? [], disabledNames);
+        return new AcpClient(new AcpProcessAdapter({
+          executable: command.command, cwd: warmCwd, env: command.env,
+          killTreeBeforeParent: true,
+          baseArgs: command.args,
         }), {
+          noTools: true,
+          warmCwd,
           initializeTimeoutMs: warmPoolCfg.initializeTimeoutMs,
           turnTimeoutMs: warmPoolCfg.turnTimeoutMs,
-        }),
+        });
+      },
     });
     allWarmPools.add(pool);
-    pool.start().catch((error: unknown) => {
+    const warming = pool.start().catch((error: unknown) => {
       logger.error('Warm ACP pool failed to start; using cold path', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -3177,7 +3191,7 @@ async function main(): Promise<void> {
       pool,
       newSessionId: () => `acp-${randomUUID()}`,
       purpose: GENERAL_PURPOSE,
-      providerId: warmProviderIdentity ?? COPILOT_NAMESPACE,
+      providerId,
       defaultModel: () => metaSettings.get().model,
     });
     const warmPool: WarmPool = {
@@ -3186,12 +3200,18 @@ async function main(): Promise<void> {
         let current: readonly string[];
         try {
           current = await prepareHeadlessMcpInventory({ cwd: request.cwd ?? warmCwd, kind: 'meta' },
-            warmProviderIdentity!, AbortSignal.any([
+            providerId, AbortSignal.any([
               AbortSignal.timeout(mcpConfig.discoveryTimeoutMs),
               ...(request.signal ? [request.signal] : []),
-            ]), 'isolated');
-        } catch { return coldMetaRunner.runDetailed(request); }
-        if ([...current].sort().join('\0') !== inventoryKey) return coldMetaRunner.runDetailed(request);
+            ]), policy);
+        } catch (error) {
+          if (request.requireWarm) throw error;
+          return coldMetaRunner.runDetailed(request);
+        }
+        if ([...current].sort().join('\0') !== inventoryKey) {
+          if (request.requireWarm) throw new ValidationError('Warm worker MCP policy changed. Restart the pool before reviewing.');
+          return coldMetaRunner.runDetailed(request);
+        }
         return warmRunner.runDetailed({ ...request, cwd: request.cwd ?? warmCwd });
       },
     };
@@ -3214,6 +3234,7 @@ async function main(): Promise<void> {
       pool.resize(size);
       return metaPoolsStatusFn();
     };
+    await warming;
     })().catch((error: unknown) => {
       warmPoolStartupFailed = true;
       logger.warn('Warm ACP startup blocked by unverifiable MCP sources; using guarded cold launches', {
@@ -3251,8 +3272,20 @@ async function main(): Promise<void> {
   const metaAi = createExclusiveMetaRunner(createOwnedMetaRunner(
     createRecordingMetaRunner({
       base: observeMetaRunner({
-        run: (request) => rawMetaAi.run(request),
-        runDetailed: (request) => rawMetaAi.runDetailed(request),
+        run: async (request) => {
+          if (request.requireWarm) {
+            await warmStartup;
+            if (rawMetaAi === coldMetaRunner) throw new ValidationError('The warm pool is unavailable. Check CLI authentication, MCP policy and worker capacity before retrying the review.');
+          }
+          return rawMetaAi.run(request);
+        },
+        runDetailed: async (request) => {
+          if (request.requireWarm) {
+            await warmStartup;
+            if (rawMetaAi === coldMetaRunner) throw new ValidationError('The warm pool is unavailable. Check CLI authentication, MCP policy and worker capacity before retrying the review.');
+          }
+          return rawMetaAi.runDetailed(request);
+        },
       }, metaDebugTracker),
       operations: metaOperationRepo,
       ownership: metaOperationOwnership,
@@ -3484,7 +3517,7 @@ async function main(): Promise<void> {
         }
       }
       let recycledPool = false;
-      if (warmProviderIdentity === AGENCY_NAMESPACE) {
+      if (warmProviderIdentity() === AGENCY_NAMESPACE) {
         for (const pool of allWarmPools) {
           try {
             pool.resize(0);
@@ -3549,7 +3582,7 @@ async function main(): Promise<void> {
       for (const warm of allWarmPools) {
         live += warm.stats().live;
       }
-      return metaFanOutCapacity(providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport, live, warmPoolCfg.size);
+      return metaFanOutCapacity(providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport, live, warmPoolCfg.size, warmPoolStarting);
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
@@ -3735,16 +3768,17 @@ async function main(): Promise<void> {
     clock,
     ai: metaAi,
     inlinePrompts: warmInlinePrompts,
+    requireWarm: () => warmPoolCfg.enabled && providers.get(resolverConfig.defaultProvider).buildWarmCommand !== undefined,
     temporaryPrompts: createTemporaryPromptFileFactory(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     bus: bus as unknown as EventBus<ReviewBoardEventMap>,
     // Live warm-session count across every pool, re-read on demand so the
     // server-side board fan-out (analyzeAll) scales with the pool and picks up
-    // capacity added mid-run, always reserving one session for other IDE work.
+    // capacity added mid-run, using every available warm review worker.
     liveMetaSessions: () => {
       let live = 0;
       for (const warm of allWarmPools) {
-        live += warm.stats().live;
+        live += warm.stats().sessions.filter((session) => !session.retiring && session.state !== 'warming').length;
       }
       return metaFanOutCapacity(providers.get(resolverConfig.defaultProvider).capabilities?.warmTransport, live, warmPoolCfg.size);
     },

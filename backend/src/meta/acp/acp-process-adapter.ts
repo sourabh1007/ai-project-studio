@@ -37,6 +37,8 @@ export type AcpSpawn = (
 ) => AcpChildProcess;
 
 export interface AcpSpawnOptions {
+  /** Agency wrappers must remain alive until Windows has located their descendants. */
+  killTreeBeforeParent?: boolean;
   executable: string;
   baseArgs?: string[];
   extraArgs?: string[];
@@ -145,8 +147,10 @@ export class AcpProcessAdapter implements AcpProcess {
   private droppedDiagnostics = 0;
   private exited = false;
   private terminatingForStdinFailure = false;
+  private readonly killTreeBeforeParent: boolean;
 
   constructor(options: AcpSpawnOptions) {
+    this.killTreeBeforeParent = options.killTreeBeforeParent ?? false;
     const args = [
       ...(options.baseArgs ?? ['--acp', '--disable-builtin-mcps']),
       ...optionalCommandArgsSchema.parse(options.extraArgs ?? []),
@@ -232,7 +236,7 @@ export class AcpProcessAdapter implements AcpProcess {
   }
 
   kill(): void {
-    killProcessTree(this.child.pid, () => this.child.kill());
+    killProcessTree(this.child.pid, () => this.child.kill(), undefined, this.killTreeBeforeParent);
   }
 
   private terminateAfterStdinFailure(): void {
@@ -240,7 +244,7 @@ export class AcpProcessAdapter implements AcpProcess {
       return;
     }
     this.terminatingForStdinFailure = true;
-    killProcessTree(this.child.pid, () => this.child.kill());
+    killProcessTree(this.child.pid, () => this.child.kill(), undefined, this.killTreeBeforeParent);
   }
 
   private captureDiagnosticEvents(events: DiagnosticEvent[]): void {

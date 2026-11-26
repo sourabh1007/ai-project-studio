@@ -75,6 +75,12 @@ function deps(
 }
 
 describe('createAcpMetaRunner', () => {
+  it('forwards strict review model and absolute budget to the leased worker', async () => {
+    const run = vi.fn(async () => result('reviewed'));
+    const runner = createAcpMetaRunner(deps({ run }));
+    await runner.runDetailed({ featureId: 'f', prompt: 'p', model: 'named', requireWarm: true, deadlineAt: 100 });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ model: 'named', hardDeadlineAt: 100 }), expect.anything());
+  });
   it.each([false, true])('keeps one warm observer through capacity, bootstrap and settlement (failure=%s)', async (fail) => {
     const phase = vi.fn();
     const beginAttempt = vi.fn(() => phase);

@@ -465,10 +465,9 @@ export class MetaSessionPool {
       // `timeoutMs` budget measured from now. Otherwise a request that waited in
       // the pool queue would run its turn with only the leftover time, which
       // starves serialized perspectives on a small warm pool.
-      const turnDeadlineAt =
-        request.timeoutMs === undefined
-          ? undefined
-          : this.now() + request.timeoutMs;
+      const turnDeadlineAt = request.timeoutMs === undefined
+        ? request.hardDeadlineAt
+        : Math.min(this.now() + request.timeoutMs, request.hardDeadlineAt ?? Infinity);
       const turn = client.runTurn({
         ...observed,
         deadlineAt: turnDeadlineAt,
@@ -500,7 +499,7 @@ export class MetaSessionPool {
       return result;
     } finally {
       record.live = null;
-      if (physical && dispatched && !responded) {
+      if (dispatched && !responded && record.active) {
         this.deactivate(client, true);
         this.ensureTargetSize();
       }

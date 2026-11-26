@@ -72,6 +72,22 @@ export interface Command {
   args: string[];
 }
 
+export function buildCopilotWarmArgs(
+  spec: SessionSpec,
+  config: CopilotFlagOptions,
+  extraArgs: string[],
+  disabledMcpServers: readonly string[],
+  mcpPolicy: HeadlessMcpPolicy,
+): string[] {
+  const args = ['--acp', '--model', spec.model];
+  if (spec.noTools) args.push('--available-tools');
+  else if (config.allowAllTools) args.push('--allow-all-tools');
+  if (mcpPolicy === 'isolated') {
+    args.push('--disable-builtin-mcps', ...disabledMcpServers.flatMap((name) => ['--disable-mcp-server', name]));
+  }
+  return [...args, ...optionalCommandArgsSchema.parse(extraArgs)];
+}
+
 /**
  * Builds the Copilot CLI argument vector for an *interactive* session: the
  * native chat TUI (no `-p`, no JSON output, colours kept). Usage is still

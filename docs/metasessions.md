@@ -8,10 +8,10 @@ analysis, PR reviews, monitors, and the New Task agent — runs on metasessions.
 > Not the interactive terminal (that is a live `node-pty` session the user
 > types into). A metasession has no terminal; it runs a prompt and returns text.
 
-Interactive availability does not guarantee automated execution. Agency
-metasessions are currently blocked by native tool-isolation limits; Copilot and
-Claude preflight can also refuse unsafe/uninspectable configuration. Claude
-headless runs additionally require operator-owned API/cloud credentials.
+Interactive availability does not guarantee automated execution. Agency uses
+native configuration and authentication; optional zero-MCP isolation refuses
+unverifiable Agency overlays. Copilot and Claude preflight can also refuse
+unsafe/uninspectable configuration.
 These failures do not authorize a silent provider switch or weaker safety flags.
 See [headless tool isolation](adding-a-provider.md#headless-tool-isolation).
 
@@ -49,17 +49,46 @@ feature ─▶ owned ─▶ recording ─▶ pooled ─▶ warm pool (ACP hosts)
 | **warm pool** | `meta/acp/` | Pre-warmed **ACP** (Agent Client Protocol) hosts leased per turn for near-instant starts. |
 | **cold** | `meta/meta-runner.ts` | Spawns a fresh headless CLI session on demand. |
 
-The warm pool is capacity-limited and demand-driven; `GET /meta/pools` and
+The warm pool is prefilled to its saved target, not created on demand;
+`GET /meta/pools` and
 **Settings ▸ Metasession** expose live ready/warming counts and supported pool
 target changes. Saved general capacity/admission limits remain restart-gated;
 a successful save alone does not prove a running process was retired.
 
-For on-demand providers, the saved `meta.warmPool.size` also supplies the
-Review Board and repository-analysis fan-out budget after restart. These
-features reserve one slot for other IDE work (a target of 10 permits nine
-parallel analyses). Shared process admission still bounds actual running
-processes. On-demand providers do not create idle ACP hosts: one active
-session is measured work, not a reverted target of one.
+Copilot and Agency supply provider-owned ACP commands. The default/legacy
+`copilot` warm executable setting follows the selected supported CLI; an
+explicit custom path must match its configured provider. Agency runs
+`agency copilot -- --acp` with native MCP and authentication policies, never a
+silently substituted Copilot provider. Keep Agency's headless policy `native`;
+isolated overlays still fail closed. Prewarming can initialize native MCP
+servers or require user sign-in; Studio never answers authentication for you.
+
+Workers initialize both ACP and a native session before becoming idle.
+`meta.warmPool.size = 10` maintains ten initialized workers, with unhealthy
+workers retired and replaced. Shared process admission can block filling a
+target; Settings reports that condition without rewriting the target or
+pretending fewer workers are ready. Idle/busy/warming states are measured.
+
+The shared pool's workers are tool-free so strict Review Board turns use warm
+capacity without weakening no-tools rules. Tool-required agents keep their
+native cold path. Fresh native sessions isolate review turns and working
+directories; concrete review models are applied over ACP before dispatch.
+Warm-enabled Review Board runs use all ready workers, including manifest-backed
+runs previously capped at two perspectives. Ten ready workers permit ten
+parallel perspectives; other requests share the bounded fair lease queue.
+Reviews requested during startup queue at the saved capacity and wait for
+initialization, rather than locking the entire review to the first ready worker.
+Strict warm reviews wait for startup/leases and retry on warm workers, not
+one-shot launches. The default budget is five attempts per step, including
+rejected responses, with the overall review deadline preserved. Completed
+perspectives remain saved. Exhausted retries or required sign-in are explicit
+failures, not a fabricated successful review.
+
+Closing the main desktop window asks for confirmation with the app's branded
+icon and explains that active AI work, terminals and warm workers will stop.
+**Keep open** is the safe default and does not interrupt work. **Close app**
+starts cooperative shutdown; unfinished AI work needs a deliberate retry after
+reopening. Verified update/relaunch shutdowns do not ask again.
 
 ## Internal scope & IDE AI
 

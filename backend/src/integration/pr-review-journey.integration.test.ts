@@ -511,7 +511,7 @@ describe('PR review vertical journey', () => {
   });
 
   it('analyzes multiple board perspectives and forces the final retry cold', async () => {
-    const h = createHarness({ boardFailures: 2 });
+    const h = createHarness({ boardFailures: reviewBoardDefaults.transientRetryAttempts });
     db = h.db;
     const repository = h.repo.create({
       provider: 'github',
@@ -537,14 +537,12 @@ describe('PR review vertical journey', () => {
     expect(analyzed.perspectives.length).toBeGreaterThanOrEqual(4);
     expect(analyzed.summary.open).toBeGreaterThan(0);
     expect(analyzed.recommendation).toBe('request-changes');
-    expect(h.boardRequests).toHaveLength(3);
-    expect(h.boardRequests.slice(0, 2).every((request) => !request.forceCold)).toBe(
+    expect(h.boardRequests).toHaveLength(reviewBoardDefaults.transientRetryAttempts + 1);
+    expect(h.boardRequests.slice(0, -1).every((request) => !request.forceCold)).toBe(
       true,
     );
-    expect(h.boardRequests[2]?.forceCold).toBe(true);
-    expect(h.boardSleeps).toEqual([
-      reviewBoardDefaults.transientRetryBackoffMs,
-      reviewBoardDefaults.transientRetryBackoffMs,
-    ]);
+    expect(h.boardRequests.at(-1)?.forceCold).toBe(true);
+    expect(h.boardSleeps).toEqual(Array(reviewBoardDefaults.transientRetryAttempts)
+      .fill(reviewBoardDefaults.transientRetryBackoffMs));
   });
 });

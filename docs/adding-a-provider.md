@@ -27,6 +27,7 @@ Implement `IAIProvider` (`backend/src/provider/provider-contract.ts`). The essen
 | `listModels()` | Models the tool exposes (for the model picker / resolver). |
 | `startSession(spec)` | Launch a one-shot (non-interactive) run and return a running session handle. |
 | `buildInteractiveCommand(spec)` | Return `{ command, args, env }` for the interactive TUI the terminal will spawn in a PTY. |
+| `buildWarmCommand(spec, extraArgs, disabledMcpServers)` *(optional)* | Return the provider-owned persistent ACP command/env and advertise `warmTransport: 'acp'`. |
 | `listImportableSessions()` *(optional)* | Expose past provider-native sessions for import. |
 
 Look at the three existing adapters as templates:
@@ -146,10 +147,12 @@ Adding a future feature using those execution
 requirements needs no per-CLI UI changes. Configuration never grants execution
 permission. `mcp.headlessInventoryMaxBytes` and `mcp.readinessCacheMs` bound native
 inventory output and baseline caching; launch-time checks never use the cache.
-Automatic model-catalog probes and optional warm workers retain isolated
-startup checks, even when normal prompt-mode tasks use native configuration.
-They fall back to the configured model list or cold native execution rather
-than starting custom MCP servers merely to display or prewarm the interface.
+Automatic model-catalog probes retain isolated startup checks and use the
+configured model list when native overlays cannot be verified. Enabled
+tool-free warm workers use the selected provider's headless policy. Agency
+workers preserve native MCP/sign-in and initialize their native session before
+becoming idle; explicitly enabling prewarming may start native MCP servers.
+Strict warm reviews never fall back to cold execution.
 Agency's informational Copilot passthrough skips Agency's real MCP/plugin setup,
 so its plain Copilot listing cannot certify isolated Agency launches.
 Claude's native version/sign-in checks run after explicit selection; readiness

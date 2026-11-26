@@ -38,6 +38,18 @@ const spec: SessionSpec = {
 };
 
 describe('copilot-provider', () => {
+  it('builds persistent tool-free ACP commands through the native resolver with usage identity', () => {
+    const { spawner } = fakeSpawner();
+    for (const resolveCommand of [undefined, ({ args }: { args: string[] }) => ({ command: 'native.exe', args })]) {
+      const provider = createCopilotProvider(copilotDefaults, { spawner, baseEnv: {}, resolveCommand });
+      const command = provider.buildWarmCommand!({ ...spec, noTools: true }, [], ['custom']);
+      expect(command.command).toBe(resolveCommand ? 'native.exe' : copilotDefaults.executable);
+      expect(command.args).toContain('--acp');
+      expect(command.args).toContain('--available-tools');
+      expect(command.args).toContain('--disable-mcp-server');
+      expect(command.env.STUDIO_PROVIDER_ID).toBe('copilot');
+    }
+  });
   it('uses the injected native launcher for both interactive and headless argv without shell expansion', () => {
     const { spawner, requests } = fakeSpawner();
     const provider = createCopilotProvider(copilotDefaults, {

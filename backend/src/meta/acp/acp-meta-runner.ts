@@ -16,6 +16,8 @@ export interface AcpTurnPool {
   run(
     request: {
       prompt: string;
+      model?: string;
+      hardDeadlineAt?: number;
       cwd?: string;
       deadlineAt?: number;
       timeoutMs?: number;
@@ -89,6 +91,8 @@ export function createAcpMetaRunner(
         result = await deps.pool.run(
         {
           prompt: request.prompt,
+          model: request.model ?? deps.defaultModel(),
+          hardDeadlineAt: request.requireWarm ? request.deadlineAt : undefined,
           cwd: request.cwd,
           deadlineAt: request.deadlineAt,
           timeoutMs: request.timeoutMs,

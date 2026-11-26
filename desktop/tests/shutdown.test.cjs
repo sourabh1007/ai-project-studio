@@ -41,7 +41,8 @@ function childProcess() {
   return child;
 }
 
-function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise, closeResponse = 0, env = {}, platform = 'win32' } = {}) {
+function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageError = false, makeUpdater, loadPromise, closeResponse = 0,
+  quitResponse = 1, brandedIcon = false, env = {}, platform = 'win32' } = {}) {
   const app = new EventEmitter();
   const notifications = [];
   const messages = [];
@@ -61,6 +62,8 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   let timerNow = 0;
   const pages = [];
   const closePrompts = [];
+  const quitPrompts = [];
+  const icon = { isEmpty: () => !brandedIcon };
   const startupRequests = [];
   const startupLogs = [];
   const shell = { openExternal: async (url) => {
@@ -144,13 +147,17 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
     app, dialog: {
       showErrorBox: (title, message) => notifications.push({ title, message }),
       showMessageBox: async (options) => {
+        if (options.title === 'Close AI Project Studio') {
+          quitPrompts.push(options);
+          return { response: await (typeof quitResponse === 'function' ? quitResponse() : quitResponse) };
+        }
         closePrompts.push(options);
         return { response: await closeResponse };
       },
     },
     BrowserWindow: FakeWindow, shell,
     Menu: { setApplicationMenu() {}, buildFromTemplate: (template) => template },
-    nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
+    nativeImage: { createFromPath: () => icon },
     ipcMain,
   };
   const context = {
@@ -240,7 +247,7 @@ function fixture({ stopError = false, httpAvailable = true, waitMs = 15, pageErr
   });
   return {
     app, owner: context.owner, updater, au, ipc, ipcMain, notifications, messages, exitWaitBudgets, windows, pages, shell, timers,
-    closePrompts, startupRequests, startupLogs,
+    closePrompts, quitPrompts, icon, startupRequests, startupLogs,
     advanceTimers(ms) {
       const end = timerNow + ms;
       for (;;) {
@@ -531,6 +538,7 @@ test('closing covers every window before cleanup and cancellation restores the e
   const child = f.spawn();
   const win = f.owner.createWindow('http://fixture');
   win.close();
+  await tick();
   assert.deepEqual(win.messages.at(-1), { channel: 'app:lifecycle', payload: 'closing' });
   assert.equal(win.isDestroyed(), false);
   await settle();
@@ -538,6 +546,70 @@ test('closing covers every window before cleanup and cancellation restores the e
   assert.deepEqual(win.messages.at(-1), { channel: 'app:lifecycle', payload: 'running' });
   assert.equal(win.isDestroyed(), false);
   child.finish();
+});
+
+test('branded exit confirmation explains active work and cancellation leaves the backend untouched', async () => {
+  const f = fixture({ quitResponse: 0, brandedIcon: true });
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://fixture');
+  win.close();
+  assert.equal(f.quitPrompts.length, 1);
+  assert.equal(f.quitPrompts[0].icon, f.icon);
+  assert.match(f.quitPrompts[0].detail, /reviews.*tasks.*terminals.*warmed metasessions/);
+  assert.deepEqual(Array.from(f.quitPrompts[0].buttons), ['Keep open', 'Close app']);
+  assert.equal(f.quitPrompts[0].defaultId, 0);
+  assert.equal(f.quitPrompts[0].cancelId, 0);
+  await tick();
+  assert.equal(child.shutdownRequests.length, 0);
+  assert.equal(f.counts().requests, 0);
+  assert.equal(win.isDestroyed(), false);
+  assert.equal(win.messages.length, 0);
+});
+
+test('repeated close requests share one confirmation and shutdown only begins after explicit consent', async () => {
+  let answer;
+  const response = new Promise((resolve) => { answer = resolve; });
+  const f = fixture({ quitResponse: response });
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://fixture');
+  win.close(); win.close(); f.app.quit();
+  assert.equal(f.quitPrompts.length, 1);
+  assert.equal(child.shutdownRequests.length, 0);
+  answer(1);
+  await tick();
+  assert.equal(child.shutdownRequests.length, 1);
+  child.finish();
+  await tick();
+  assert.equal(f.counts().quits, 1);
+  assert.equal(win.isDestroyed(), true);
+  assert.equal(f.quitPrompts.length, 1);
+});
+
+test('exit confirmation still protects a workspace with no running backend', async () => {
+  const f = fixture({ quitResponse: 0 });
+  const win = f.owner.createWindow('http://fixture');
+  win.close();
+  await tick();
+  assert.equal(win.isDestroyed(), false);
+  assert.match(f.quitPrompts[0].detail, /workspace.*stay saved/);
+  assert.doesNotMatch(f.quitPrompts[0].detail, /stops active/);
+});
+
+test('a failed exit dialog does not stop work and a later deliberate close can retry', async () => {
+  let failed = true;
+  const f = fixture({ quitResponse: () => failed ? Promise.reject(new Error('dialog failed')) : 1 });
+  const child = f.spawn();
+  const win = f.owner.createWindow('http://fixture');
+  win.close();
+  await tick();
+  assert.equal(child.shutdownRequests.length, 0);
+  assert.equal(win.isDestroyed(), false);
+  failed = false;
+  win.close();
+  await tick();
+  child.finish();
+  await tick();
+  assert.equal(f.counts().quits, 1);
 });
 
 test('a destroyed renderer cannot block shutdown notifications or cooperative cleanup', async () => {

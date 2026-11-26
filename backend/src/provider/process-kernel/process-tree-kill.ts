@@ -16,19 +16,26 @@ export function killProcessTree(
   pid: number | undefined,
   kill: () => void,
   spawnTaskkill: typeof nodeSpawn = nodeSpawn,
+  treeBeforeParent = false,
 ): void {
-  kill();
+  if (!treeBeforeParent) kill();
   if (process.platform !== 'win32' || typeof pid !== 'number') {
+    if (treeBeforeParent) kill();
     return;
   }
+  let finished = false;
+  const finish = () => {
+    if (!treeBeforeParent || finished) return;
+    finished = true;
+    try { kill(); } catch { /* Exit remains unconfirmed until the owner observes it. */ }
+  };
   try {
     spawnTaskkill('taskkill', ['/pid', String(pid), '/t', '/f'], {
       stdio: 'ignore',
       windowsHide: true,
-    }).on('error', () => {
-      // Best-effort cleanup; ignore failures (e.g. process already exited).
-    });
+      timeout: 10_000,
+    }).on('error', finish).on('close', finish);
   } catch {
-    // Best-effort cleanup; ignore synchronous spawn failures too.
+    finish();
   }
 }

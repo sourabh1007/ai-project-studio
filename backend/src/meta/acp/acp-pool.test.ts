@@ -71,6 +71,44 @@ class FakeClient implements PooledClient {
 const flush = () => new Promise((r) => setImmediate(r));
 
 describe('fair retryable native pool shutdown', () => {
+  it('keeps ten initialized workers idle, replaces a failed worker and dispatches the retry elsewhere', async () => {
+    const created: FakeClient[] = [];
+    const pool = new MetaSessionPool({ size: 10, createClient: () => {
+      const client: FakeClient = new FakeClient({ run: async () => {
+        if (client === created[0]) throw new Error('unhealthy worker');
+        return { text: 'reviewed', sessionId: `native-${created.indexOf(client)}`, stopReason: 'end_turn', usage: null };
+      } });
+      created.push(client);
+      return client;
+    } });
+    try {
+      await pool.start();
+      expect(created).toHaveLength(10);
+      expect(pool.stats()).toMatchObject({ size: 10, live: 10, idle: 10 });
+      await expect(pool.run({ prompt: 'review' })).rejects.toThrow('unhealthy worker');
+      await flush();
+      expect(created[0].alive).toBe(false);
+      expect(created).toHaveLength(11);
+      expect(pool.stats()).toMatchObject({ size: 10, live: 10, idle: 10 });
+      expect((await pool.run({ prompt: 'retry' })).sessionId).toBe('native-1');
+      expect(created[0].turns).toHaveLength(1);
+    } finally { pool.close(); }
+  });
+
+  it.each([undefined, 100])('keeps the strict review deadline after queueing (turn budget %s)', async (timeoutMs) => {
+    let now = 0;
+    const client = new FakeClient();
+    const pool = new MetaSessionPool({ size: 1, now: () => now, createClient: () => client });
+    try {
+      await pool.start();
+      const lease = await pool.acquire();
+      const work = pool.run({ prompt: 'review', timeoutMs, deadlineAt: 100, hardDeadlineAt: 100 });
+      now = 40;
+      pool.release(lease);
+      await work;
+      expect(client.turns[0].deadlineAt).toBe(100);
+    } finally { pool.close(); }
+  });
   it('continues a failed shrink and retries quarantined native clients on the next resize', async () => {
     const budget = createProcessAdmission({ maxProcesses: 3, maxWarmProcesses: 2, maxQueued: 2 });
     const clients = [new FakeClient({ disposeExits: false }), new FakeClient({ disposeExits: false })];

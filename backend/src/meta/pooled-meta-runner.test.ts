@@ -74,6 +74,24 @@ function demandRecorder() {
 }
 
 describe('createPooledMetaRunner', () => {
+  it.each([true, false])('rejects conflicting cold overrides on warm-only reviews (%s)', async (bypass) => {
+    const cold = coldRunner();
+    const runner = createPooledMetaRunner({ pool: pool(), fallback: cold, defaultTimeoutMs: 100, bypass: () => bypass });
+    await expect(runner.runDetailed(req({ requireWarm: true, forceCold: !bypass }))).rejects.toThrow('warm-only');
+    expect(cold.calls).toHaveLength(0);
+  });
+  it('waits for required warm capacity even from zero and never falls back on startup failures', async () => {
+    const warm = pool({ live: 0 });
+    const cold = coldRunner();
+    const runner = createPooledMetaRunner({ pool: warm, fallback: cold, defaultTimeoutMs: 100 });
+    expect((await runner.runDetailed(req({ requireWarm: true }))).text).toBe('warm');
+    const failed = createPooledMetaRunner({ pool: pool({ error: new AcpRequestError('boot failed',
+      { method: 'session/new', allowFallbackToCold: true }) }), fallback: cold, defaultTimeoutMs: 100 });
+    await expect(failed.runDetailed(req({ requireWarm: true }))).rejects.toThrow('boot failed');
+    const unsupported = createPooledMetaRunner({ pool: warm, fallback: cold, defaultTimeoutMs: 100, supportsWarm: () => false });
+    await expect(unsupported.runDetailed(req({ requireWarm: true }))).rejects.toThrow('cannot honor');
+    expect(cold.calls).toHaveLength(0);
+  });
   it('bypasses the warm pool and uses the cold path when bypass() is true', async () => {
     const warm = pool();
     const cold = coldRunner();

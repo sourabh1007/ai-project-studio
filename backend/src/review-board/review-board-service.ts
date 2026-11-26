@@ -104,10 +104,12 @@ export interface ReviewBoardServiceDeps {
   sleep: (ms: number) => Promise<void>;
   /** When true the prompt is carried inline over stdio (warm pool). */
   inlinePrompts?: boolean;
+  /** Strict reviews use initialized tool-free workers and never retry cold. */
+  requireWarm?: () => boolean;
   /**
    * Live count of booted warm metasessions (idle + busy). Sizes how many
    * perspectives {@link ReviewBoardService.analyzeAll} fans out at once: it uses
-   * all but one so a session is always reserved for other IDE work. Re-read as
+   * every ready worker for maximum review parallelism. Re-read as
    * the pass proceeds, so capacity added mid-run is picked up. Absent/zero runs
    * one perspective at a time (the safe cold-path default).
    */
@@ -339,6 +341,11 @@ export function createReviewBoardService(
     if (run && run.model !== 'auto' && deps.models && !(await deps.models()).some((item) => item.id === run.model && item.enabled)) {
       throw new ValidationError('The selected review model is no longer available. Prepare a new review.');
     }
+    const deadlineAt = run ? Date.parse(run.startedAt) + deps.config.reviewTimeoutMs : undefined;
+    const remaining = deadlineAt === undefined ? deps.config.stepTimeoutMs : deadlineAt - deps.clock.now().getTime();
+    if (remaining <= 0) {
+      throw new MetaAbortError({ kind: 'timed_out', timeoutMs: deps.config.reviewTimeoutMs, termination: 'not-started' });
+    }
     const result = await deps.ai.runDetailed({
         ...(run ? { correlation: { runId: run.id, agentId: 'review-board', contextFingerprint: run.context.fingerprint,
           ...(hooks?.perspectiveId ? { perspectiveId: hooks.perspectiveId } : {}) } } : {}),
@@ -350,9 +357,10 @@ export function createReviewBoardService(
         noTools: true,
         toolsOptional: !run,
         forceCold,
+        requireWarm: deps.requireWarm?.() ?? false,
         label: hooks?.perspectiveId ? `Review board · ${hooks.perspectiveId}` : 'Review board',
-        timeoutMs: deps.config.stepTimeoutMs,
-        ...(run ? { deadlineAt: Date.parse(run.startedAt) + deps.config.reviewTimeoutMs } : {}),
+        timeoutMs: Math.min(deps.config.stepTimeoutMs, remaining),
+        ...(deadlineAt === undefined ? {} : { deadlineAt }),
         signal,
         onStart: hooks?.onStart,
         onActivity: hooks?.onActivity,
@@ -362,7 +370,7 @@ export function createReviewBoardService(
   }
 
   /**
-   * Runs a prompt with a durable completion guarantee.
+   * Runs a prompt with bounded, persisted review retries.
    *
    * Retries used to be limited to failures a classifier recognised as
    * transient, so anything it did not recognise died on the first attempt and
@@ -372,13 +380,15 @@ export function createReviewBoardService(
    *
    * Every failure, including response validation, except a caller abort is
    * retried, and the final attempt
-   * is forced onto the cold path so it cannot land on the same broken shared
-   * session. What still fails is raised as a {@link ProviderError} carrying the
+   * is forced onto the cold path for legacy cold-capable reviews. Strict warm
+   * reviews instead lease another worker; failed native workers are retired
+   * and replaced by the pool so they cannot keep receiving retries.
+   * What still fails is raised as a {@link ProviderError} carrying the
    * real provider message, so the UI can say what actually went wrong.
    *
    * A *timeout* is the one failure that skips the intermediate warm retries: it
    * already waited out the whole step budget, so retrying it warm just burns
-   * another full budget on the same (likely stuck) session. It goes straight to
+   * another full budget on the same (likely stuck) session. Cold-capable work goes straight to
    * the single forced-cold attempt below — the escape hatch for a broken warm
    * session — instead of amplifying provider load with repeated 120s waits.
    */
@@ -402,14 +412,14 @@ export function createReviewBoardService(
         if (signal?.aborted) throw error;
         lastError = error;
         attemptPrompt = `${prompt}\n\nYour previous response was rejected: ${errorMessage(error)}\nCorrect that specific error. Return only the requested JSON object. Use exact supplied identities and captured code paths; leave unsupported requirements not-assessed.`;
-        if (error instanceof MetaAbortError && error.kind === 'timed_out') {
+        if (error instanceof MetaAbortError && error.kind === 'timed_out' && !deps.requireWarm?.()) {
           break;
         }
         await deps.sleep(deps.config.transientRetryBackoffMs);
       }
     }
     try {
-      return parse(await runPromptAttempt(review, attemptPrompt, hooks, signal, true));
+      return parse(await runPromptAttempt(review, attemptPrompt, hooks, signal, !deps.requireWarm?.()));
     } catch (error) {
       if (signal?.aborted) throw error;
       const cause = errorMessage(error) || errorMessage(lastError);
@@ -455,10 +465,10 @@ export function createReviewBoardService(
     });
   }
 
-  /** How many perspectives to review at once: all live warm sessions but one. */
+  /** Use every ready warm worker; acquisition still respects shared admission. */
   function fanOutWidth(): number {
     const live = deps.liveMetaSessions?.() ?? 0;
-    return live > 1 ? live - 1 : 1;
+    return live > 0 ? live : 1;
   }
 
   async function loadContext(featureId: string, signal?: AbortSignal, frozen?: ReviewRun): Promise<ReviewContextDiscovery> {
@@ -971,7 +981,7 @@ export function createReviewBoardService(
           };
           try {
             await runReserved(run.perspectiveIds.filter((id) => id !== 'final-decision'),
-              () => deps.config.maxConcurrentReviews, execute, controller.signal);
+              () => deps.requireWarm?.() ? fanOutWidth() : deps.config.maxConcurrentReviews, execute, controller.signal);
             if (run.perspectiveIds.includes('final-decision')) await execute('final-decision');
           } finally {
             const current = deps.reviews.get(featureId);

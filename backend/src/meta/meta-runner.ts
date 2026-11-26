@@ -143,6 +143,8 @@ function metaAbortMessage(
 
 /** A single headless AI request: a prompt run against a feature's context. */
 export interface MetaRequest {
+  /** Review turns wait for warm capacity instead of falling back to one-shot launches. */
+  requireWarm?: boolean;
   /** One observer per app-owned attempt; provider-internal retries are not implied. */
   beginAttempt?: (transport: MetaResultTransport) => (phase: MetaAttemptPhase) => void;
   /** Stable catalog identities only; never prompt contents. */

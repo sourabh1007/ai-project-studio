@@ -3,6 +3,7 @@ import {
   buildCopilotArgs,
   buildCopilotCommand,
   buildCopilotInteractiveArgs,
+  buildCopilotWarmArgs,
 } from './copilot-cmd-builder.js';
 import { copilotDefaults, type CopilotConfig } from './config.js';
 import type { SessionSpec } from '../provider-contract.js';
@@ -17,6 +18,15 @@ const spec: SessionSpec = {
 };
 
 describe('copilot-cmd-builder', () => {
+  it('keeps ACP protocol and empty tools app-owned while preserving native or isolated MCP policy', () => {
+    expect(buildCopilotWarmArgs({ ...spec, noTools: true }, copilotDefaults, [], ['custom'], 'native'))
+      .toEqual(['--acp', '--model', spec.model, '--available-tools']);
+    expect(buildCopilotWarmArgs(spec, copilotDefaults, [], ['custom'], 'isolated'))
+      .toEqual(['--acp', '--model', spec.model, '--allow-all-tools', '--disable-builtin-mcps', '--disable-mcp-server', 'custom']);
+    expect(buildCopilotWarmArgs(spec, { ...copilotDefaults, allowAllTools: false }, ['--effort', 'high'], [], 'native'))
+      .toEqual(['--acp', '--model', spec.model, '--effort', 'high']);
+    expect(() => buildCopilotWarmArgs(spec, copilotDefaults, ['--available-tools=write'], [], 'native')).toThrow();
+  });
   it('builds core args with tools + silent by default', () => {
     const args = buildCopilotArgs(spec, copilotDefaults);
     expect(args).toEqual([

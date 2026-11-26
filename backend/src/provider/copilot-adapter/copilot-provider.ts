@@ -17,6 +17,7 @@ import { COPILOT_NAMESPACE, type CopilotConfig } from './config.js';
 import {
   buildCopilotCommand,
   buildCopilotInteractiveArgs,
+  buildCopilotWarmArgs,
   type Command,
 } from './copilot-cmd-builder.js';
 import { buildCopilotEnv } from './copilot-env-mapper.js';
@@ -49,6 +50,12 @@ export function createCopilotProvider(
   return {
     id: COPILOT_NAMESPACE,
     capabilities: { warmTransport: 'acp', planUsage: 'aic-panel' },
+    buildWarmCommand(spec, extraArgs, disabledMcpServers) {
+      const built = { command: config.executable,
+        args: buildCopilotWarmArgs(spec, config, extraArgs, disabledMcpServers, deps.mcpPolicy ?? 'isolated') };
+      return { ...(deps.resolveCommand ? deps.resolveCommand(built) : built),
+        env: { ...buildCopilotEnv(spec, deps.baseEnv), STUDIO_PROVIDER_ID: COPILOT_NAMESPACE } };
+    },
     mcp: createCopilotMcpSupport(config.commandProfile?.liveReloadCommand),
     async listModels() {
       return listCopilotModels(config);

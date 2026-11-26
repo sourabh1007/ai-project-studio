@@ -8,6 +8,7 @@ import {
   resolveWarmProviderIdentity,
   warmPoolAvailability,
   metaFanOutCapacity,
+  configuredWarmExecutable,
 } from './warm-route-policy.js';
 import type { MetaRequest } from './meta-runner.js';
 
@@ -20,6 +21,11 @@ it('uses configured on-demand capacity rather than the absence of reusable warm 
   expect(metaFanOutCapacity(undefined, 0, 10)).toBe(10);
   expect(metaFanOutCapacity('acp', 4, 10)).toBe(4);
   expect(metaFanOutCapacity('acp', 0, 10)).toBe(0);
+});
+
+it('queues full configured review fan-out during warm startup instead of locking a new review to one worker', () => {
+  expect(metaFanOutCapacity('acp', 0, 10, true)).toBe(10);
+  expect(metaFanOutCapacity('acp', 1, 10, true)).toBe(10);
 });
 
 describe('warmPoolAvailability', () => {
@@ -35,6 +41,7 @@ describe('warmPoolAvailability', () => {
     [{ running: true }, 'running', 'is running'],
     [{ failed: true }, 'failed', 'startup failed'],
     [{ starting: true }, 'starting', 'Starting'],
+    [{ starting: true, running: true }, 'starting', 'Starting'],
     [{}, 'unavailable', 'No warm pool'],
   ] as const)('reports actual availability without changing provider or routing (%s)', (patch, state, message) => {
     const input = { ...base, ...patch };
@@ -59,7 +66,7 @@ describe('resolveWarmProviderIdentity', () => {
         copilotExecutable: 'copilot',
         agencyExecutable: 'agency',
       }),
-    ).toBeNull();
+    ).toBe('agency');
     expect(
       resolveWarmProviderIdentity({
         warmExecutable: 'copilot',
@@ -71,6 +78,14 @@ describe('resolveWarmProviderIdentity', () => {
 });
 
 describe('createWarmRoutePolicy', () => {
+  it('routes strict tool-free Agency reviews and concrete models only through capable workers', () => {
+    const supportsWarm = createWarmRoutePolicy({ settings: { get: () => ({ providerId: 'agency', model: 'named' }) },
+      warmProviderId: 'agency', noTools: true, canSetModel: true });
+    expect(supportsWarm({ ...baseRequest, noTools: true })).toBe(true);
+    expect(supportsWarm({ ...baseRequest, toolsOptional: true })).toBe(true);
+    expect(supportsWarm(baseRequest)).toBe(false);
+    expect(supportsWarm({ ...baseRequest, noTools: true, providerId: 'copilot' })).toBe(false);
+  });
   it('accepts only internal requests on the warm provider default model', () => {
     const supportsWarm = createWarmRoutePolicy({
       settings: { get: () => ({ providerId: 'copilot', model: 'auto' }) },
@@ -141,7 +156,17 @@ describe('createWarmRoutePolicy', () => {
 });
 
 describe('createConfiguredWarmRoutePolicy', () => {
-  it('does not route an Agency default through a Copilot warm pool', () => {
+  it('resolves provider aliases and supports strict warm review policy', () => {
+    const deps = { settings: { get: () => ({ providerId: 'agency', model: 'named' }) },
+      metaConfig: metaDefaults, copilotConfig: copilotDefaults, agencyConfig: agencyDefaults,
+      noTools: true, canSetModel: true };
+    for (const executable of ['auto', 'copilot', 'agency']) {
+      const configured = { ...deps, metaConfig: { ...metaDefaults, warmPool: { ...metaDefaults.warmPool, executable } } };
+      expect(configuredWarmExecutable(configured)).toBe(agencyDefaults.executable);
+      expect(createConfiguredWarmRoutePolicy(configured)({ ...baseRequest, noTools: true })).toBe(true);
+    }
+  });
+  it('routes the default warm executable through the selected Agency provider', () => {
     const supportsWarm = createConfiguredWarmRoutePolicy({
       settings: {
         get: () => ({
@@ -153,7 +178,7 @@ describe('createConfiguredWarmRoutePolicy', () => {
       copilotConfig: copilotDefaults,
       agencyConfig: agencyDefaults,
     });
-    expect(supportsWarm(baseRequest)).toBe(metaDefaults.providerId === 'copilot');
+    expect(supportsWarm(baseRequest)).toBe(true);
   });
 
   it('allows warm routing only after the live settings match the resolved warm executable identity', () => {

@@ -80,6 +80,86 @@ const flush = () => new Promise((r) => setImmediate(r));
 const tick = () => Promise.resolve();
 
 describe('AcpClient', () => {
+  it.each(['same', 'different', 'missing-id', 'null'] as const)('prepares a genuine idle session and isolates later working directories (%s)', async (mode) => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, { ...config, warmCwd: 'C:\\repo' });
+    const initialized = client.initialize();
+    const rejected = mode === 'missing-id' || mode === 'null' ? expect(initialized).rejects.toThrow('no session id') : undefined;
+    fake.respond('initialize', {});
+    await flush();
+    expect(fake.last('session/new').params.cwd).toBe('C:\\repo');
+    fake.respond('session/new', mode === 'null' ? null : mode === 'missing-id' ? {} : { sessionId: 'prepared' });
+    if (rejected) { await rejected; fake.exit(); return; }
+    await initialized;
+    const work = client.runTurn({ prompt: 'review', cwd: mode === 'same' ? 'C:\\repo' : 'C:\\other' });
+    await flush();
+    if (mode === 'different') { fake.respond('session/new', { sessionId: 'isolated' }); await flush(); }
+    expect(fake.last('session/prompt').params.sessionId).toBe(mode === 'same' ? 'prepared' : 'isolated');
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    await work;
+    const next = client.runTurn({ prompt: 'another review', cwd: 'C:\\repo' });
+    fake.respond('session/new', { sessionId: 'fresh' });
+    await flush();
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    await next;
+    fake.exit();
+  });
+  it('denies even an advertised allow-once permission in a tool-free review worker', () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, { ...config, noTools: true });
+    fake.emit({ jsonrpc: '2.0', id: 900, method: 'session/request_permission',
+      params: { options: [{ optionId: 'approve', kind: 'allow_once' }] } });
+    expect(fake.written.at(-1)).toMatchObject({ result: { outcome: { outcome: 'cancelled' } } });
+    client.kill(); fake.exit();
+  });
+  it.each([false, true])('sets a concrete review model before dispatch and rejects unsupported models (%s)', async (failed) => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const work = client.runTurn({ prompt: 'review', model: 'named' });
+    const rejected = failed ? expect(work).rejects.toThrow('model unavailable') : undefined;
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    expect(fake.last('session/set_model').params).toEqual({ sessionId: 's1', modelId: 'named' });
+    if (failed) {
+      fake.respondError('session/set_model', -32602, 'model unavailable');
+      await rejected;
+      expect(fake.written.some((request) => request.method === 'session/prompt')).toBe(false);
+    } else {
+      fake.respond('session/set_model', {});
+      await flush();
+      fake.respond('session/prompt', { stopReason: 'end_turn' });
+      await work;
+    }
+    fake.exit();
+  });
+
+  it('keeps auto routing without an unsupported model-switch request', async () => {
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    const work = client.runTurn({ prompt: 'review', model: 'auto' });
+    fake.respond('session/new', { sessionId: 's1' });
+    await flush();
+    expect(fake.written.some((request) => request.method === 'session/set_model')).toBe(false);
+    fake.respond('session/prompt', { stopReason: 'end_turn' });
+    await work;
+    fake.exit();
+  });
+  it('retires a worker whose model switch times out before dispatching an AI prompt', async () => {
+    vi.useFakeTimers();
+    const fake = new FakeProcess();
+    const client = new AcpClient(fake, config);
+    try {
+      const work = client.runTurn({ prompt: 'review', model: 'named' });
+      const rejected = expect(work).rejects.toMatchObject({ method: 'session/set_model' });
+      fake.respond('session/new', { sessionId: 's1' });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(config.turnTimeoutMs);
+      await rejected;
+      expect(fake.written.some((request) => request.method === 'session/prompt')).toBe(false);
+      expect(client.reusable).toBe(false);
+      expect(fake.killed).toBe(1);
+    } finally { fake.exit(); vi.useRealTimers(); }
+  });
   it('performs the initialize handshake', async () => {
     const fake = new FakeProcess();
     const client = new AcpClient(fake, config);

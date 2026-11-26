@@ -332,6 +332,35 @@ describe('immutable review runs', () => {
     const service = createReviewBoardService(deps);
     return { deps, service, current: () => current, set: (next: PrReview) => { current = next; } };
   }
+  it('completes a prepared review with ten warm workers despite the old two-perspective cold limit', async () => {
+    let active = 0;
+    let peak = 0;
+    const { service, current } = harness({
+      requireWarm: () => true, liveMetaSessions: () => 10,
+      ai: { runDetailed: async (request) => {
+        expect(request.requireWarm).toBe(true);
+        expect(request.forceCold).toBe(false);
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return { text: cleanReview, sessionId: 'warm' };
+      } },
+    });
+    const emit = vi.fn();
+    await service.analyzeAll('f9', { emit });
+    expect(peak).toBe(10);
+    expect(current().reviewBoardRun!.status).toBe('completed');
+    expect(emit.mock.calls.some(([event]) => event.type === 'failed')).toBe(false);
+  });
+
+  it('does not launch another turn after the persisted review deadline expires', async () => {
+    const { service, deps, current } = harness({ requireWarm: () => true });
+    await service.configure!('f9', {});
+    current().reviewBoardRun!.status = 'running';
+    current().reviewBoardRun!.startedAt = '2020-01-01T00:00:00Z';
+    await expect(service.analyzePerspective('f9', 'security')).rejects.toThrow('timed out');
+    expect(deps.ai.runDetailed).not.toHaveBeenCalled();
+  });
   it('recovers mistyped requirement hashes with exact corrective identities rather than accepting a near match', async () => {
     const { deps, service, current } = harness();
     await service.configure!('f9', {});
@@ -752,7 +781,7 @@ function baseDeps(
 ): ReviewBoardServiceDeps {
   return {
     reviews: { get: () => review },
-    config: reviewBoardDefaults,
+    config: { ...reviewBoardDefaults, transientRetryAttempts: 2 },
     clock: createClock(() => Date.parse('2026-02-02T00:00:00.000Z')),
     ai: { runDetailed: vi.fn(async () => ({ text: cleanReview, sessionId: 's0' })) },
     bus: { emit: vi.fn() },
@@ -1043,6 +1072,18 @@ describe('createReviewBoardService.analyze', () => {
     expect(attempts[attempts.length - 1]).toBe(true);
   });
 
+  it('retries timed-out strict reviews on warm workers through the full configured attempt budget', async () => {
+    const timeout = new MetaAbortError({ kind: 'timed_out', timeoutMs: 100, termination: 'confirmed' });
+    const runDetailed = vi.fn().mockRejectedValueOnce(timeout).mockRejectedValueOnce(timeout)
+      .mockRejectedValueOnce(timeout).mockRejectedValueOnce(timeout)
+      .mockResolvedValue({ text: cleanReview, sessionId: 'replacement' });
+    const service = createReviewBoardService(baseDeps({
+      config: reviewBoardDefaults, requireWarm: () => true, ai: { runDetailed },
+    }));
+    await service.analyzePerspective('f9', 'security');
+    expect(runDetailed).toHaveBeenCalledTimes(5);
+    expect(runDetailed.mock.calls.every(([request]) => request.requireWarm && !request.forceCold)).toBe(true);
+  });
   it('skips the warm retries on a timeout but still forces the cold attempt', async () => {
     // A timeout already waited out the whole step budget, so retrying it warm
     // just burns another full budget on the same stuck session. It should jump
@@ -1727,9 +1768,9 @@ describe('createReviewBoardService.analyzeAll', () => {
   });
 
   it.each([
-    ['acp', 3, 10, 2],
-    [undefined, 0, 10, 9],
-  ] as const)('reserves one slot using %s capacity for parallel perspectives', async (transport, live, target, expectedPeak) => {
+    ['acp', 3, 10, 3],
+    [undefined, 0, 10, 10],
+  ] as const)('uses all %s capacity for parallel perspectives', async (transport, live, target, expectedPeak) => {
     let active = 0;
     let peak = 0;
     const ai = {

@@ -144,6 +144,8 @@ let shutdownAction = null;
 let backendOwner = null;
 let exitOnlyOwner = null;
 let exitOnlyPrompt = null;
+let quitConfirmation = null;
+let userQuitConfirmed = false;
 // Null until startup has proven the backend ready. Crash supervision stays off
 // before that, because a backend that never came up is a startup failure with
 // its own diagnostics, not something a blind respawn can fix.
@@ -327,6 +329,33 @@ function canQuitDesktop() {
     (exitOnlyOwner === backendOwner && !backend && backendOwner?.outcome != null);
 }
 
+function confirmUserQuit() {
+  if (quitConfirmation) return quitConfirmation;
+  quitConfirmation = (async () => {
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: 'question', title: 'Close AI Project Studio',
+        icon: appIcon() || undefined,
+        message: 'Close AI Project Studio?',
+        detail: backend
+          ? 'Closing stops active reviews, tasks, terminals and warmed metasessions. Completed results and workspace data stay saved. Unfinished AI work will need to be retried when you reopen.'
+          : 'Your workspace and completed results stay saved. You can reopen AI Project Studio whenever you are ready.',
+        buttons: ['Keep open', 'Close app'], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (response !== 1) return false;
+      userQuitConfirmed = true;
+      app.quit();
+      return true;
+    } catch {
+      safeWrite(process.stderr, '[desktop] Exit confirmation could not be shown; keeping the app open.\n');
+      return false;
+    } finally {
+      quitConfirmation = null;
+    }
+  })();
+  return quitConfirmation;
+}
+
 function confirmQuitAfterBackendExit() {
   if (exitOnlyPrompt) return exitOnlyPrompt;
   const owner = backendOwner;
@@ -335,7 +364,7 @@ function confirmQuitAfterBackendExit() {
   exitOnlyPrompt = (async () => {
     try {
       const { response } = await dialog.showMessageBox({
-        type: 'warning', title: 'Backend has stopped',
+        type: 'warning', title: 'Backend has stopped', icon: appIcon() || undefined,
         message: 'Close AI Project Studio?',
         detail: message, buttons: ['Keep open', 'Close app'],
         defaultId: 0, cancelId: 0, noLink: true,
@@ -379,7 +408,7 @@ function confirmQuitAfterUnresponsiveBackend() {
   exitOnlyPrompt = (async () => {
     try {
       const { response } = await dialog.showMessageBox({
-        type: 'warning', title: 'Backend is not responding',
+        type: 'warning', title: 'Backend is not responding', icon: appIcon() || undefined,
         message: 'Force close AI Project Studio?',
         detail: message, buttons: ['Keep open', 'Force close'],
         defaultId: 0, cancelId: 0, noLink: true,
@@ -644,6 +673,7 @@ function runAfterBackendStop(action, proceed, terminal = true) {
       // admitted; a completed promise alone must not permit a replacement.
       if (shutdownAction === attempt && (!attempt.confirmed || !terminal)) {
         shutdownAction = null;
+        if (action === 'quit') userQuitConfirmed = false;
         notifyLifecycleState('running');
       }
     }
@@ -913,7 +943,8 @@ function createWindow(loadUrl, splash = null) {
   load();
   mainWindow = win;
   win.on('close', (event) => {
-    if (canQuitDesktop()) {
+    if (canQuitDesktop() && (userQuitConfirmed || shutdownAction?.confirmed ||
+        (exitOnlyOwner !== null && exitOnlyOwner === backendOwner))) {
       return;
     }
     event.preventDefault();
@@ -1481,6 +1512,12 @@ if (!gotLock) {
   });
 
   app.on('before-quit', (event) => {
+    if (!userQuitConfirmed && !shutdownAction && mainWindow && !mainWindow.isDestroyed() &&
+        (backend || isBackendShutdownConfirmed())) {
+      event.preventDefault();
+      void confirmUserQuit();
+      return;
+    }
     startupCancelled = true;
     startupAbort.abort();
     // A pending restart must never race a quit into spawning a replacement.
