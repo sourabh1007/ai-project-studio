@@ -6,7 +6,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider } from '../../app/api-context.js';
 import type { ApiClient } from '../../lib/api.js';
 import type {
@@ -180,6 +180,11 @@ function renderManager(api: ApiClient) {
 }
 
 describe('McpManager', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it('opens historical diagnostics without inspecting, authenticating or changing the configured server', async () => {
     const api = client({ getMcpHistory: vi.fn().mockResolvedValue({ items: [], limited: false }) });
     renderManager(api);
@@ -695,25 +700,27 @@ describe('McpManager', () => {
 
   it('surfaces an auth-required badge and one-click sign-in', async () => {
     const openExternalSpy = vi.fn();
-    (
-      globalThis as unknown as { desktop?: { openExternal: (u: string) => void } }
-    ).desktop = { openExternal: openExternalSpy };
+    vi.stubGlobal('desktop', { openExternal: openExternalSpy });
+    const result = deferred<McpServerStatus>();
     const api = client({
-      getMcpServerStatus: vi.fn().mockResolvedValue(
-        makeStatus('Azure', {
-          status: 'auth-required',
-          toolCount: 0,
-          authRequired: true,
-          authUrl: 'https://login.example.com/device',
-          message: 'Please sign in',
-        }),
-      ),
+      getMcpServerStatus: vi.fn().mockReturnValue(result.promise),
     });
     renderManager(api);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Re-check Azure' }));
-    expect(await screen.findByText('Auth required')).toBeTruthy();
-    const authButton = await screen.findByRole('button', {
+    expect(api.getMcpServerStatus).toHaveBeenCalledWith('agency', 'Azure');
+    await act(async () => {
+      result.resolve(makeStatus('Azure', {
+        status: 'auth-required',
+        toolCount: 0,
+        authRequired: true,
+        authUrl: 'https://login.example.com/device',
+        message: 'Please sign in',
+      }));
+    });
+    const card = within(screen.getByText('Azure').closest('.mcp-server-card') as HTMLElement);
+    expect(card.getByText('Auth required')).toBeTruthy();
+    const authButton = card.getByRole('button', {
       name: 'Auth Azure',
     });
     fireEvent.click(authButton);
@@ -724,7 +731,6 @@ describe('McpManager', () => {
     expect(
       await screen.findByText(/Opened the sign-in page for Azure/),
     ).toBeTruthy();
-    delete (globalThis as unknown as { desktop?: unknown }).desktop;
   });
 
   it('shows what self-healing tried when a connection fails', async () => {
