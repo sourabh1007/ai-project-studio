@@ -337,19 +337,12 @@ export function TerminalView({
       ? { windowsPty: { backend: 'conpty' as const } }
       : {};
     const term = new Terminal({
-      // The hosted CLI is a full-screen TUI that draws and blinks its own
-      // cursor via escape sequences. Letting xterm ALSO run its own blink timer
-      // fights those continuous redraws (spinners/streaming output reset the
-      // timer), which shows up as a rapid, erratic cursor flicker. Disable
-      // xterm's blink so the application owns the cursor — steady and IDE-like.
       cursorBlink: false,
-      // When the terminal loses DOM focus, xterm's default inactive style is a
-      // faint hollow "outline" that is nearly invisible on this dark theme, so
-      // the shell looks frozen even though it is fine. Keep a solid block so the
-      // cursor stays visible regardless of focus.
       cursorStyle: 'block',
-      cursorInactiveStyle: 'block',
-      altClickMovesCursor: true,
+      // Native TUIs own cursor visibility/position. Don't leave a second caret
+      // on their last redraw when unfocused or synthesize arrows on Alt-click.
+      cursorInactiveStyle: 'none',
+      altClickMovesCursor: false,
       fontFamily: appearanceRef.current.fontFamily,
       fontSize: appearanceRef.current.fontSize,
       lineHeight: 1.2,

@@ -17,12 +17,20 @@
 .pr-import-status[data-state="failed"] { --pr-import-tone: var(--danger); }
 .pr-import-status[data-state="unknown"] { --pr-import-tone: var(--warning); }
 .pr-import-status[data-state="cancelled"] { --pr-import-tone: var(--text-muted); }
-.feature-deletion-status { flex: none; max-height: 180px; overflow-y: auto; }
-.feature-deletion-jobs { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
-.feature-deletion-jobs > li { display: flex; align-items: center; gap: 8px; }
-.feature-deletion-jobs > li > svg { flex: none; }
-.feature-deletion-jobs > li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.feature-deletion-jobs > li > span > span { display: block; color: var(--text-muted); }
+.feature-deletion-status { flex: none; padding: 8px 12px; }
+.feature-deletion-status > .pr-import-head { flex-wrap: wrap; }
+.feature-deletion-status > .pr-import-bar { height: 3px; margin-bottom: 0; }
+.feature-deletion-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.feature-deletion-jobs { display: grid; gap: 6px; max-height: 128px; overflow-y: auto; margin: 8px 0 0; padding: 0; list-style: none; }
+.feature-deletion-jobs[hidden] { display: none; }
+.feature-deletion-jobs > li { display: grid; grid-template-columns: 16px minmax(0, 1fr) 24px; align-items: start; gap: 8px; padding: 4px 0; }
+.feature-deletion-icon { display: inline-flex; padding-top: 2px; color: var(--accent); }
+.feature-deletion-jobs > li[data-state="succeeded"] .feature-deletion-icon { color: var(--success); }
+.feature-deletion-jobs > li[data-state="failed"] .feature-deletion-icon { color: var(--danger); }
+.feature-deletion-text { min-width: 0; }
+.feature-deletion-text > strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.feature-deletion-text > span { display: block; color: var(--text-muted); overflow-wrap: anywhere; }
+.feature-deletion-text > [role="alert"] { color: var(--danger); }
 .explorer-status-footer { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 42%; }
 .explorer-status-footer > .explorer-footer { flex: none; }
 .pr-import-head {

@@ -32,7 +32,7 @@ it('keeps Agency dashboard visible with actual on-demand sessions and read-only 
   expect(await screen.findByText('On demand')).toBeVisible();
   expect(screen.getByText(/saved parallel target controls review/)).toBeVisible();
   expect(screen.getByText('Agency', { selector: '.metapool-provider' })).toBeVisible();
-  expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(10);
+  await waitFor(() => expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(10));
   expect(await screen.findByLabelText('Metasession Review change: busy. View live details')).toBeVisible();
   expect(debug).not.toHaveBeenCalled();
   expect(screen.queryByText('Save to start live')).toBeNull();
@@ -64,7 +64,7 @@ it('keeps stopped warm capacity visible and bounds configured placeholders witho
   };
   render(<ApiProvider value={api as ApiClient}><MetasessionPoolsSection /></ApiProvider>);
   expect(await screen.findByText('Off')).toBeVisible();
-  expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(32);
+  await waitFor(() => expect(screen.getAllByLabelText(/Metasession slot .*no live session/)).toHaveLength(32));
   expect(screen.getByText('+68 configured slots')).toBeVisible();
   expect(api.updateConfig).not.toHaveBeenCalled();
   expect(api.resizeMetaPool).not.toHaveBeenCalled();

@@ -676,14 +676,19 @@ export function WorkspaceView({
 
   async function deleteFeature(feature: Feature) {
     const features = [
+      ...tabs.flatMap((tab) => 'feature' in tab ? [tab.feature] : []),
       ...pendingImportedFeatures.current.values(),
       ...await api.listFeatures().catch(() => knownFeatures.current),
     ];
-    await api.deleteFeature(feature.id);
-    const deletedIds = featureSubtreeIds(feature.id, [
-      ...tabs.flatMap((tab) => 'feature' in tab ? [tab.feature] : []),
-      ...features,
-    ]);
+    const deletedIds = featureSubtreeIds(feature.id, features);
+    try {
+      await api.deleteFeature(feature.id);
+    } catch (error) {
+      // A lost/error response need not mean the DELETE failed. Confirm the
+      // entire subtree is absent before closing its views; never repeat it here.
+      const remaining = await api.listFeatures().catch(() => null);
+      if (remaining === null || remaining.some((entry) => deletedIds.has(entry.id))) throw error;
+    }
     for (const id of deletedIds) {
       pendingImportedFeatures.current.delete(id);
       reviewBoardRunStore.remove(id);

@@ -239,9 +239,28 @@ describe('TerminalView scrollback repaint', () => {
       .map((frame) => ({ data: frame.data, generation: frame.generation })))
       .toEqual([{ data: '\x01\x0b', generation: 1 }]);
     expect(view.container.querySelector('.terminal-host textarea')).toHaveFocus();
-    expect(term.options.altClickMovesCursor).toBe(true);
+    expect(term.options.altClickMovesCursor).toBe(false);
     act(() => ws.onmessage?.({ data: JSON.stringify({ type: 'state', version: 2, state: 'reconnecting', generation: 2 }) }));
     expect(view.getByRole('button', { name: 'Clear input line' })).toBeDisabled();
+  });
+
+  it('leaves native cursor positioning and visibility untouched across focus changes without an inactive caret', () => {
+    const view = render(<><button>Outside terminal</button><TerminalView sessionId="s1" /></>);
+    const term = h.term!;
+    const ws = h.ws!;
+    const frames = ['\x1b[?25l\x1b[4;1HWorking', '\x1b[8;3H\x1b[?25h'];
+    act(() => {
+      ws.readyState = MockWebSocket.OPEN;
+      ws.onmessage?.({ data: JSON.stringify({
+        type: 'state', version: 2, state: 'ready', generation: 1, inputLimit: 65536,
+      }) });
+      for (const data of frames) ws.onmessage?.({ data: JSON.stringify({ type: 'output', data }) });
+    });
+    view.getByRole('button', { name: 'Outside terminal' }).focus();
+    expect(term.options.cursorInactiveStyle).toBe('none');
+    expect(term.write.mock.calls.map(([data]) => data)).toEqual(frames);
+    expect(term.reset).not.toHaveBeenCalled();
+    expect(ws.send.mock.calls.map(([raw]) => JSON.parse(raw)).filter((frame) => frame.type === 'input')).toEqual([]);
   });
 
   it('opens diagnostics only on demand and returns to a full-height console when closed', () => {

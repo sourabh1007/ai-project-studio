@@ -652,6 +652,42 @@ describe('WorkspaceView deletion reconciliation', () => {
     await waitFor(() => expect(stored().tabs).toEqual([featureTab(other)]));
   });
 
+  it('confirms an ambiguous deletion read-only and closes tabs only when the whole subtree is absent', async () => {
+    const client = createClient();
+    const remove = client.deleteFeature.getMockImplementation()!;
+    client.deleteFeature.mockImplementationOnce(async () => {
+      await remove();
+      throw new Error('Response lost after deleting');
+    });
+    mount({
+      tabs: [featureTab(root), agentTab, sessionTab, featureTab(other)],
+      activeId: sessionTab.id, splitId: agentTab.id,
+    }, client);
+    await screen.findByText('Terminal session');
+    fireEvent.click(screen.getByText('Queue feature deletion'));
+    await waitFor(() => expect(stored().tabs).toEqual([featureTab(other)]));
+    expect(client.deleteFeature).toHaveBeenCalledOnce();
+    expect(featureDeletionStore.getSnapshot().find((job) => job.id === root.id)?.status).toBe('succeeded');
+  });
+
+  it.each(['descendant-remains', 'offline'] as const)(
+    'does not claim ambiguous deletion succeeded when verification is %s', async (verification) => {
+      const client = createClient();
+      client.deleteFeature.mockImplementationOnce(async () => {
+        if (verification === 'offline') client.listFeatures.mockRejectedValue(new Error('Offline'));
+        else client.listFeatures.mockResolvedValue([leaf, other]);
+        throw new Error('Deletion response failed');
+      });
+      const state = { tabs: [sessionTab, featureTab(other)], activeId: sessionTab.id, splitId: null };
+      mount(state, client);
+      await screen.findByText('Terminal session');
+      await act(async () => fireEvent.click(screen.getByText('Queue feature deletion')));
+      expect(featureDeletionStore.getSnapshot().find((job) => job.id === root.id)?.status).toBe('failed');
+      expect(stored()).toEqual(state);
+      expect(client.deleteFeature).toHaveBeenCalledOnce();
+    },
+  );
+
   it('refreshes a restored tracker with live imported PRs and authoritative titles', async () => {
     const client = createClient();
     const tracker: WorkspaceTab = {

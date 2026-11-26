@@ -202,9 +202,10 @@ describe('Explorer background feature deletion', () => {
     expect(open).toHaveBeenCalledWith(feature);
     view.unmount();
     render(<FeatureDeletionStatus />);
-    expect(screen.getByText('Working in background')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Show details' })).toHaveAttribute('aria-expanded', 'false');
     deleted = true;
     await act(async () => finish());
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
     expect(screen.getByText('Deleted')).toBeVisible();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -223,6 +224,7 @@ describe('Explorer background feature deletion', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete feature' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Checkout is locked');
     expect(screen.getByRole('button', { name: feature.name })).toBeVisible();
   });
@@ -1034,21 +1036,25 @@ describe('Explorer durable operation keys', () => {
       createFeature: vi.fn(async () => { saved.push(created); return created; }),
     };
     await renderExplorer(client as unknown as ApiClient);
-    fireEvent.click(screen.getByRole('button', { name: `Expand ${feature.name}` }));
-    fireEvent.click(await screen.findByRole('button', { name: `Expand ${sibling.name}` }));
-    await screen.findByRole('button', { name: 'Existing tasks' });
-    fireEvent.click(screen.getByRole('button', { name: 'Actions for Work' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'New feature' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: created.name } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create feature' }));
+    const owner = screen.getByRole('button', { name: feature.name }).closest('.tree-node') as HTMLElement;
+    const ownerQueries = within(owner);
+    fireEvent.click(ownerQueries.getByRole('button', { name: `Expand ${feature.name}` }));
+    const siblingExpand = await ownerQueries.findByRole('button', { name: `Expand ${sibling.name}` });
+    fireEvent.click(siblingExpand);
+    await within(siblingExpand.closest('.tree-node') as HTMLElement).findByRole('button', { name: 'Existing tasks' });
+    fireEvent.click(ownerQueries.getByRole('button', { name: 'Actions for Work' }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'New feature' }));
+    const form = within(screen.getByRole('dialog'));
+    fireEvent.change(form.getByLabelText('Name'), { target: { value: created.name } });
+    fireEvent.click(form.getByRole('button', { name: 'Create feature' }));
     const newLabel = await waitFor(() => {
-      const labels = screen.getAllByRole('button', { name: created.name });
+      const labels = ownerQueries.getAllByRole('button', { name: created.name });
       expect(labels).toHaveLength(duplicate ? 2 : 1);
       return labels[0]!;
     });
     const newNode = newLabel.closest('.tree-node') as HTMLElement;
     expect(within(newNode).queryByRole('button', { name: 'Existing tasks' })).not.toBeInTheDocument();
-    const oldLabel = screen.getAllByRole('button', { name: sibling.name })[duplicate ? 1 : 0]!;
+    const oldLabel = ownerQueries.getAllByRole('button', { name: sibling.name })[duplicate ? 1 : 0]!;
     const oldNode = oldLabel.closest('.tree-node') as HTMLElement;
     const expectOwnership = () => {
       for (const group of oldGroups) {
@@ -1057,7 +1063,7 @@ describe('Explorer durable operation keys', () => {
       }
     };
     expectOwnership();
-    fireEvent.click(screen.getByRole('button', { name: `Expand ${created.name}` }));
+    fireEvent.click(within(newNode).getByRole('button', { name: `Expand ${created.name}` }));
     await waitFor(() => expect(client.listGroups).toHaveBeenCalledWith(created.id));
     expect(within(newNode).queryByRole('button', { name: 'Existing tasks' })).not.toBeInTheDocument();
     await act(async () => failed ? fail(new Error('Folder lookup failed')) : complete([]));

@@ -30,7 +30,11 @@ describe('deletion quiescence', () => {
     await expect(requireQuiescence([
       () => { throw first; },
       async () => { requested = true; throw second; },
-    ])).rejects.toMatchObject({ errors: [first, second] });
+    ])).rejects.toMatchObject({
+      kind: 'conflict',
+      message: expect.stringContaining('active work could not be stopped'),
+      cause: { errors: [first, second] },
+    });
     expect(requested).toBe(true);
     await expect(requireQuiescence([])).resolves.toBeUndefined();
   });
