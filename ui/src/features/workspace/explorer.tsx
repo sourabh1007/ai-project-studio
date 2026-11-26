@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type DragEvent,
   type ReactNode,
@@ -44,7 +45,7 @@ import { sessionWorkTitle } from '../../lib/session-names.js';
 import { sessionDotClass } from '../../lib/session-status.js';
 import { providerLabel } from '../../lib/meta-model.js';
 import { Button, ConfirmDialog, DragHandle, EmptyState, ErrorText, Modal } from '../../components/ui.js';
-import { BrandedLoader, SkeletonList } from '../../components/loading.js';
+import { BrandedLoader, Loader, Spinner } from '../../components/loading.js';
 import {
   ChevronIcon,
   CheckIcon,
@@ -65,6 +66,7 @@ import {
   TrashIcon,
   UsageIcon,
   WarningIcon,
+  RefreshIcon,
 } from '../../components/icons.js';
 import { AgentIcon } from '../../agent-host/agent-icon.js';
 import {
@@ -98,7 +100,19 @@ import { usePrImportEvents } from '../../hooks/use-pr-imports.js';
 import { PrImportStatus } from './pr-import-status.js';
 import { GithubStatusBadge } from '../github/github-status.js';
 import { AzureStatusBadge } from '../azure/azure-status.js';
-import type { WorkspaceTab } from './workspace-tabs.js';
+import { useGithubIdentity } from '../../hooks/use-github-identity.js';
+import { Avatar } from '../../components/avatar.js';
+
+/** "Accounts" footer label with the signed-in GitHub picture when available. */
+function AccountsSummary() {
+  const identity = useGithubIdentity();
+  return <span className="explorer-accounts-summary">
+    {identity.login && <Avatar name={identity.login} avatarUrl={identity.avatarUrl} size={16} title={`Signed in as ${identity.login}`} />}
+    Accounts
+    {identity.login && <span className="explorer-accounts-login">· {identity.login}</span>}
+  </span>;
+}
+import { featureSubtreeIds, type WorkspaceTab } from './workspace-tabs.js';
 import {
   RepositoryContextBadge,
   RepositoryContextViewer,
@@ -517,7 +531,7 @@ function AddAgentModal({
   return (
     <Modal title={`Add agent to ${feature.name}`} onClose={onClose}>
       <div className="agent-catalog">
-        {loading && <SkeletonList rows={3} />}
+        {loading && <Loader label="Loading available agents" />}
         <ErrorText error={error} />
         {data && data.length === 0 && (
           <EmptyState message="No agents are installed." />
@@ -619,7 +633,7 @@ function FeatureNode({
   /** Starts the PR-review flow for this feature's repository, when it has one. */
   onStartReview?: () => void;
   treeRevision: number;
-  onMoveNode: (input: MoveNodeInput) => Promise<void>;
+  onMoveNode: (input: MoveNodeInput, sourceFeatureId?: string) => Promise<void>;
   /** PR-review features nested under this one; rendered inside its subtree. */
   childFeatures?: Feature[];
   /** Renders a nested child feature (recursive), supplied by the parent list. */
@@ -638,6 +652,9 @@ function FeatureNode({
   const nodeAutomation = useAutomationReadiness();
   const usageContext = useContext(UsageSummaryContext);
   const summary = usageContext?.snapshot?.features[feature.id];
+  const deletion = useSyncExternalStore(featureDeletionStore.subscribe, featureDeletionStore.getSnapshot)
+    .find((job) => job.id === feature.id);
+  const deleting = deletion?.status === 'queued' || deletion?.status === 'running';
   const [expanded, setExpanded] = usePersistentState(
     `explorer.feature.${feature.id}.expanded`,
     false,
@@ -743,6 +760,7 @@ function FeatureNode({
     setActionError(null);
     try {
       await onDeleteSession(session);
+      sessions.updateData((current) => current?.filter((entry) => entry.id !== session.id) ?? null);
       sessions.reload();
       usage.reload();
     } catch (error) {
@@ -782,7 +800,7 @@ function FeatureNode({
 
   function handleMove(input: MoveNodeInput) {
     setActionError(null);
-    onMoveNode(input).catch((error) =>
+    onMoveNode(input, nodeStore?.dragging?.featureId ?? feature.id).catch((error) =>
       setActionError(
         error instanceof Error ? error.message : 'Failed to move item.',
       ),
@@ -934,7 +952,8 @@ function FeatureNode({
   }
 
   return (
-    <div className="tree-node" style={{ '--feature-accent': accent } as CSSProperties}>
+    <div className="tree-node" aria-busy={deleting || undefined} style={{ '--feature-accent': accent } as CSSProperties}>
+      {deleting && <Spinner size={14} label={deletion.message} />}
       <div
         data-explorer-item={`feature:${feature.id}`}
         className={`tree-branch ${
@@ -1228,7 +1247,7 @@ function FeatureNode({
               onCancel={() => setImporting(false)}
             />
           )}
-          {sessions.loading && <SkeletonList rows={4} />}
+          {sessions.loading && !sessions.data && <Loader label="Loading sessions" />}
           <ErrorText error={sessions.error} />
           <ErrorText error={groups.error} />
           {!sessions.loading &&
@@ -1534,8 +1553,8 @@ function RepoNode({
     parentGroupId: string,
   ) => void | Promise<void>;
   onRequestMove: (feature: Feature) => void;
-  treeRevision: number;
-  onMoveNode: (input: MoveNodeInput) => Promise<void>;
+  treeRevision: Record<string, number>;
+  onMoveNode: (input: MoveNodeInput, sourceFeatureId?: string) => Promise<void>;
   onCreateFeatureInGroup: (
     repoId: string | null,
     parentGroupId: string,
@@ -1624,7 +1643,7 @@ function RepoNode({
       onStartReview={
         repo ? () => onStartReview(repo, feature.id) : undefined
       }
-      treeRevision={treeRevision}
+      treeRevision={treeRevision[feature.id] ?? 0}
       onMoveNode={onMoveNode}
       childFeatures={childrenByParent.get(feature.id) ?? []}
       renderChildFeature={renderFeatureNode}
@@ -1914,11 +1933,26 @@ export function Explorer({
   onCollapse: () => void;
 }) {
   const api = useApi();
-  const repos = useAsync(() => api.listRepos(), []);
+  const repos = useAsync(() => api.listRepos(), [], 'repos');
   const automation = useAutomationReadiness();
-  const features = useAsync(() => api.listFeatures(), []);
+  const features = useAsync(() => api.listFeatures(), [], 'features');
   const loadingTree = (repos.loading && !repos.data) || (features.loading && !features.data);
-  useEffect(() => featureDeletionStore.subscribe(features.reload), [features.reload]);
+  useEffect(() => {
+    const statuses = new Map(featureDeletionStore.getSnapshot().map((job) => [job.id, job.status]));
+    return featureDeletionStore.subscribe(() => {
+      for (const job of featureDeletionStore.getSnapshot()) {
+        if (job.status === 'succeeded' && statuses.get(job.id) !== 'succeeded') {
+          features.updateData((current) => {
+            if (!current) return current;
+            const removed = featureSubtreeIds(job.id, current);
+            return current.filter((feature) => !removed.has(feature.id));
+          });
+          features.reload();
+        }
+        statuses.set(job.id, job.status);
+      }
+    });
+  }, [features.reload, features.updateData]);
   const explorerRef = useRef<HTMLDivElement>(null);
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
@@ -2033,9 +2067,16 @@ export function Explorer({
     }
   });
   const [movingFeature, setMovingFeature] = useState<Feature | null>(null);
-  const [treeRevision, setTreeRevision] = useState(0);
+  const [treeRevision, setTreeRevision] = useState<Record<string, number>>({});
+  function refreshNodes(ids: string[]) {
+    setTreeRevision((previous) => {
+      const next = { ...previous };
+      for (const id of new Set(ids)) next[id] = (next[id] ?? 0) + 1;
+      return next;
+    });
+  }
   const usageSummary = useUsageSummary(
-    `${treeRevision}:${workspaceUsageRevision(live)}:${JSON.stringify(
+    `${JSON.stringify(treeRevision)}:${workspaceUsageRevision(live)}:${JSON.stringify(
       features.data?.map(({ id, parentFeatureId, parentGroupId }) => [id, parentFeatureId, parentGroupId]),
     )}`,
   );
@@ -2044,6 +2085,7 @@ export function Explorer({
   // the new checkout (see confirmPendingMove).
   const [pendingMove, setPendingMove] = useState<{
     input: MoveNodeInput;
+    sourceFeatureId: string;
     fromBranch: string | null;
     toBranch: string | null;
     worktrees?: { id: string; checkoutPath: string; ref: string }[];
@@ -2074,14 +2116,14 @@ export function Explorer({
     return lists.flat();
   }, [movingFeature, treeRevision]);
 
-  /** Moves a session or group (possibly to a different feature) and refreshes
-   * every expanded feature so both the source and target reflect the change.
+  /** Moves a session or group and refreshes only its source and target.
    * A session move that crosses into a feature on a different git branch is
    * routed through a consent dialog first, since it relaunches the running CLI
    * in the destination checkout. */
-  async function moveNode(input: MoveNodeInput) {
+  async function moveNode(input: MoveNodeInput, sourceFeatureId = input.targetFeatureId) {
     if (input.type === 'session') {
       const session = await api.getSession(input.id);
+      sourceFeatureId = session.featureId;
       if (session.featureId !== input.targetFeatureId) {
         const [from, to] = await Promise.all([
           api.getFeatureEnvironment(session.featureId),
@@ -2089,13 +2131,13 @@ export function Explorer({
         ]);
         if (to.worktrees?.length || session.worktreePath || (from.branch ?? null) !== (to.branch ?? null)) {
           setMoveConsentError(null);
-          setPendingMove({ input, fromBranch: session.branch ?? from.branch, toBranch: to.branch, worktrees: to.worktrees });
+          setPendingMove({ input, sourceFeatureId, fromBranch: session.branch ?? from.branch, toBranch: to.branch, worktrees: to.worktrees });
           return;
         }
       }
     }
     await api.moveNode(input);
-    setTreeRevision((v) => v + 1);
+    refreshNodes([sourceFeatureId, input.targetFeatureId]);
   }
 
   /** Applies a branch-changing session move the user consented to, then
@@ -2113,7 +2155,7 @@ export function Explorer({
     try {
       await api.moveNode(pendingMove.input);
       await api.relaunchSession(pendingMove.input.id, pendingMove.taskCheckoutId);
-      setTreeRevision((v) => v + 1);
+      refreshNodes([pendingMove.sourceFeatureId, pendingMove.input.targetFeatureId]);
       setPendingMove(null);
     } catch (error) {
       setMoveConsentError(
@@ -2185,6 +2227,8 @@ export function Explorer({
 
   async function renameFeature(feature: Feature, next: string) {
     await onRenameFeature(feature, next);
+    features.updateData((current) => current?.map((entry) =>
+      entry.id === feature.id ? { ...entry, name: next } : entry) ?? null);
     features.reload();
   }
 
@@ -2412,7 +2456,7 @@ export function Explorer({
       snapshot: usageSummary.data,
       invalidate: () => {
         features.reload();
-        setTreeRevision((revision) => revision + 1);
+        usageSummary.retry();
       },
     }}>
     <ExplorerRevealContext.Provider value={reveal}>
@@ -2623,9 +2667,10 @@ export function Explorer({
         </div>}
         {usageSummary.error && <div className="explorer-usage-error" role="status">
           <span>{usageSummary.data ? 'Usage is stale. ' : ''}{usageSummary.error}</span>
-          <Button variant="secondary" disabled={usageSummary.loading} onClick={usageSummary.retry}>Retry usage</Button>
+          <Button variant="secondary" disabled={usageSummary.loading} onClick={usageSummary.retry}><RefreshIcon size={13} /> Retry usage</Button>
         </div>}
-        {loadingTree && <BrandedLoader title="Loading Explorer" detail="Organizing repositories and features" />}
+        {loadingTree && <BrandedLoader title="Loading Explorer" detail="Reading repositories and features"
+          progress={{ completed: Number(!repos.loading) + Number(!features.loading), total: 2 }} />}
         <ErrorText error={repos.error} />
         <ErrorText error={features.error} />
         <ErrorText error={moveError} />
@@ -2738,7 +2783,7 @@ export function Explorer({
         }}
       />
       <details className="explorer-footer">
-        <summary>Accounts</summary>
+        <summary><AccountsSummary /></summary>
         <div className="explorer-accounts">
           <GithubStatusBadge />
           <AzureStatusBadge />

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { PageVisibility } from '../app/page-cache.js';
 import { useAnimatedPresence } from '../hooks/use-motion.js';
 import { createPortal } from 'react-dom';
 import {
@@ -32,6 +33,7 @@ export function Modal({
   dismissible?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const visible = useContext(PageVisibility);
   const restoreFocusRef = useRef<FocusTargetSnapshot | null>(null);
   const restoreFocusCapturedRef = useRef(false);
   const titleId = useId();
@@ -47,6 +49,7 @@ export function Modal({
   }
 
   useEffect(() => {
+    if (!visible) return;
     const dialog = dialogRef.current;
     if (!dialog) {
       return undefined;
@@ -54,9 +57,9 @@ export function Modal({
     return attachDialogFocusOwnership(dialog, {
       restoreFocus: restoreFocusRef.current,
     });
-  }, []);
+  }, [visible]);
 
-  if (!present) return null;
+  if (!present || !visible) return null;
 
   return createPortal(
     <div className={`modal-overlay${exiting ? ' is-exiting' : ''}`} onClick={dismiss}>

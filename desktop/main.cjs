@@ -1118,7 +1118,9 @@ function applyContentSecurityPolicy() {
     // inline module-preload polyfill while still blocking remote scripts.
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    // GitHub profile pictures only (github.com/<login>.png redirects to the
+    // avatar CDN). Azure DevOps pictures arrive from the backend as data: URLs.
+    "img-src 'self' data: https://github.com https://avatars.githubusercontent.com",
     "font-src 'self' data:",
     // Same-origin API + terminal WebSocket only.
     "connect-src 'self' ws: wss:",

@@ -29,7 +29,7 @@ import {
   ChevronIcon,
 } from '../../components/icons.js';
 import { ErrorState } from '../../components/error-state.js';
-import { Loader, Spinner } from '../../components/loading.js';
+import { Loader, LoadingStatus, Spinner } from '../../components/loading.js';
 import { SelfHealButton } from '../../components/self-heal-button.js';
 import { SharedContextPanel } from '../shared-context/shared-context-panel.js';
 import { AutomationReadinessNotice, useAutomationReadiness } from '../../app/automation-readiness.js';
@@ -588,6 +588,7 @@ export function SettingsView({ worktreesRequest, capacityRequest }: { worktreesR
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
     [],
+    'config',
   );
   const [drafts, setDrafts] = usePersistentState('cw-settings-drafts', {}, {
     validate: isSettingsDraftStore,
@@ -600,7 +601,7 @@ export function SettingsView({ worktreesRequest, capacityRequest }: { worktreesR
   const [providerNamespaces, setProviderNamespaces] = useState<string[]>([]);
   const [subTab, setSubTab] = useState<string | null>(null);
   const { data: catalog, error: catalogError, loading: catalogLoading, reload: reloadCatalog } = useAsync(
-    () => api.getCommandCatalog(), [],
+    () => api.getCommandCatalog(), [], 'command-catalog',
   );
   const commandFields = useMemo(() => toolFields(catalog ?? []), [catalog]);
   const editorData = useMemo(() => data ? projectToolConfig(data, commandFields) : null, [data, commandFields]);
@@ -850,7 +851,7 @@ export function SettingsView({ worktreesRequest, capacityRequest }: { worktreesR
             </>}
             {(tab === 'config' || toolsOpen) && <>
             {tab === 'cli' && <>
-              {catalogLoading && <Loader label="Loading tool inventory" />}
+              {catalogLoading && (catalog ? <LoadingStatus label="Refreshing tool inventory; showing saved snapshot" /> : <Loader label="Loading tool inventory" />)}
               <ErrorText error={catalogError} />
               {catalog && <ToolsSection entries={catalog.filter((entry) => !entry.config || !providerNamespaces.includes(entry.config.namespace))} query={query} />}
             </>}
@@ -874,7 +875,7 @@ export function SettingsView({ worktreesRequest, capacityRequest }: { worktreesR
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
-            {loading && <Loader label="Loading configuration" />}
+            {loading && (data ? <LoadingStatus label="Refreshing configuration; showing saved snapshot" /> : <Loader label="Loading configuration" />)}
             {error && <ErrorState error={cause ?? error} onRetry={reload} />}
             {data && (
               <>

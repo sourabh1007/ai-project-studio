@@ -3,6 +3,8 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { Spinner } from '../../components/loading.js';
 import { Avatar } from '../../components/avatar.js';
+import { SignInIcon, SignOutIcon } from '../../components/icons.js';
+import { GITHUB_AUTH_CHANGED_EVENT, githubAvatarUrl } from '../../hooks/use-github-identity.js';
 import type { GithubStatus } from '../../lib/types.js';
 import { GithubSignInModal } from './github-signin.js';
 
@@ -49,6 +51,7 @@ export function GithubStatusBadge() {
     } finally {
       setSigningOut(false);
       reload();
+      window.dispatchEvent(new Event(GITHUB_AUTH_CHANGED_EVENT));
     }
   };
 
@@ -79,7 +82,7 @@ export function GithubStatusBadge() {
         {authenticated && data?.login ? (
           <Avatar
             name={data.login}
-            avatarUrl={`https://github.com/${data.login}.png`}
+            avatarUrl={githubAvatarUrl(data.login)}
             size={18}
           />
         ) : (
@@ -98,7 +101,7 @@ export function GithubStatusBadge() {
           {signingOut ? (
             <Spinner size={12} label="Signing out" />
           ) : (
-            'Sign out'
+            <><SignOutIcon size={12} /> Sign out</>
           )}
         </button>
       )}
@@ -109,7 +112,7 @@ export function GithubStatusBadge() {
           onClick={() => setSignInOpen(true)}
           title="Sign in to GitHub on this device"
         >
-          Sign in
+          <SignInIcon size={12} /> Sign in
         </button>
       )}
       {signInOpen && (
@@ -118,6 +121,7 @@ export function GithubStatusBadge() {
           onAuthenticated={() => {
             setSignInOpen(false);
             reload();
+            window.dispatchEvent(new Event(GITHUB_AUTH_CHANGED_EVENT));
           }}
         />
       )}

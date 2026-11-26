@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
 import { Spinner } from '../../components/loading.js';
-import { ToolsIcon } from '../../components/icons.js';
+import { ToolsIcon, RefreshIcon } from '../../components/icons.js';
 import type { McpServerEntry } from '../../lib/types.js';
 import { useMcpAuthentication } from './use-mcp-authentication.js';
 
@@ -160,7 +160,7 @@ export function McpToolsView({ providerId, serverName, onOpenAuth, onBackgroundE
         {authentication.expired && authPending && <p role="status">This sign-in prompt has expired. Cancel this attempt, then check tools again; authentication is not confirmed.</p>}
         {authPending && <div className="row">
           <Button variant="ghost" loading={authentication.busy} onClick={() => void authentication.cancel()}>Cancel sign-in</Button>
-          {authentication.error && <Button variant="ghost" disabled={authentication.busy} onClick={authentication.retryStatus}>Retry status</Button>}
+          {authentication.error && <Button variant="ghost" disabled={authentication.busy} onClick={authentication.retryStatus}><RefreshIcon size={13} /> Retry status</Button>}
         </div>}
       </section>}
       {showAuth && (authRequired || pendingPrompt) && <>

@@ -1,6 +1,6 @@
 {
   "name": "ai-project-studio",
-  "version": "0.20.2",
+  "version": "0.20.3",
   "private": true,
   "description": "Project-centric management and observability layer over GitHub Copilot, Agency, and Claude Code.",
   "engines": {

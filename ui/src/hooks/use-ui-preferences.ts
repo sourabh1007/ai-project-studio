@@ -75,5 +75,6 @@ export function useApplyUiPreferences(theme: ResolvedTheme): void {
     }
     root.setAttribute('data-motion', prefs.motion);
     root.setAttribute('data-appearance', prefs.appearance);
+    root.setAttribute('data-palette', prefs.palette);
   }, [prefs, theme]);
 }

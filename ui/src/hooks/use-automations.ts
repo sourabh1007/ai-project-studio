@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../app/api-context.js';
+import { usePageSnapshot } from '../app/page-cache.js';
 import type { LiveState } from '../lib/stream.js';
 import type { Automation, Subagent } from '../lib/types.js';
 
@@ -19,10 +20,14 @@ export interface AutomationsLive {
  */
 export function useAutomations(live: LiveState): AutomationsLive {
   const api = useApi();
+  const [cached, saveSnapshot] = usePageSnapshot<{
+    automations: Record<string, Automation>;
+    subagents: Record<string, Subagent>;
+  }>('automations');
   const [snapshot, setSnapshot] = useState<{
     automations: Record<string, Automation>;
     subagents: Record<string, Subagent>;
-  }>({ automations: {}, subagents: {} });
+  }>(cached ?? { automations: {}, subagents: {} });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -46,6 +51,7 @@ export function useAutomations(live: LiveState): AutomationsLive {
           subagents[subagent.id] = subagent;
         }
         setSnapshot({ automations, subagents });
+        saveSnapshot({ automations, subagents });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -60,7 +66,7 @@ export function useAutomations(live: LiveState): AutomationsLive {
     return () => {
       cancelled = true;
     };
-  }, [api, nonce]);
+  }, [api, nonce, saveSnapshot]);
 
   // Merge the persisted snapshot with live events. Newest updatedAt wins so a
   // stale live event cannot mask a fresh reload after Pause/Cancel/Run now.

@@ -55,6 +55,7 @@ import type {
   AzureDevOpsStatus,
   AzureTarget,
 } from '../azure-auth/azure-devops-auth.js';
+import type { AzureAvatar } from '../azure-auth/azure-avatar.js';
 import { createAzureRoutes } from './azure-controller.js';
 import type { RepoService } from '../repo/repo-service.js';
 import type { CreateRepositoryInput } from '../repo/repo-contract.js';
@@ -271,6 +272,8 @@ export interface ApiRoutesDeps {
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Erases GCM's cached Azure DevOps credential for the target. */
   azureSignOut: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** The signed-in Microsoft account's Azure DevOps profile picture. */
+  azureAvatar: (target: AzureTarget) => Promise<AzureAvatar>;
   /** The repository layer the workspace is organized around. */
   repos: RepoService;
   repositoryContexts: RepositoryContextCoordinator;
@@ -469,6 +472,7 @@ export function createApiRoutes(deps: ApiRoutesDeps): Route[] {
       azureStatus: deps.azureStatus,
       azureSignIn: deps.azureSignIn,
       azureSignOut: deps.azureSignOut,
+      azureAvatar: deps.azureAvatar,
     }),
     ...createRepoRoutes({
       repos: deps.repos,

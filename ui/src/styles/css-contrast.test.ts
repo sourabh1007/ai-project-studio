@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ACCENT_KEYS, resolveAccent } from '../lib/accent.js';
+import { IDE_PALETTES } from '../lib/terminal-schemes.js';
 
 /*
  * Composed contrast for default palettes only: foregrounds are resolved the
@@ -52,6 +54,12 @@ const VARIANTS: Record<string, { dark: boolean; t: Record<string, string> }> = {
   'futuristic-light': { dark: false, t: { ...light, ...block(tokens, "[data-appearance='futuristic'][data-theme='light']") } },
   'futuristic-dark': { dark: true, t: { ...dark, ...block(tokens, "[data-appearance='futuristic'][data-theme='dark']") } },
 };
+const PALETTE_VARIANTS = IDE_PALETTES.filter((palette) => palette !== 'default').flatMap((palette) =>
+  (['light', 'dark'] as const).map((theme) => {
+    const t = { ...(theme === 'dark' ? dark : light), ...block(tokens, `[data-palette='${palette}'][data-theme='${theme}']`) };
+    VARIANTS[`${palette}-${theme}`] = { dark: theme === 'dark', t };
+    return { palette, theme, t };
+  }));
 const SURFACES = ['--surface', '--surface-strong', '--panel', '--panel-sidebar', '--panel-inset', '--panel-editor'];
 const planner = block(app, ':root');
 const plannerDark = block(app, "[data-theme='dark']");
@@ -116,9 +124,23 @@ onSurfaces('status text warning', token('--warning'));
 onSurfaces('status text danger', token('--danger'));
 onSurfaces('status text success', token('--success'));
 
+for (const { palette, theme, t } of PALETTE_VARIANTS) {
+  const variant = `${palette}-${theme}`;
+  for (const surface of [...SURFACES, '--panel-titlebar', '--item-hover', '--item-active']) {
+    for (const fg of ['--text', '--text-muted', '--text-faint']) {
+      record(`${fg} on ${surface}`, variant, hex(t[fg]!), hex(t[surface]!), 4.5);
+    }
+  }
+  record('activity icon on activity bar', variant, hex(t['--activity-fg']!), hex(t['--panel-activitybar']!), 4.5);
+  for (const accent of ACCENT_KEYS) {
+    record(`accent ${accent} link on --panel`, variant, hex(resolveAccent(accent, theme).color), hex(t['--panel']!), 4.5);
+  }
+}
+
 describe('composed contrast of default palettes', () => {
-  it('covers every default theme and appearance variant', () => {
-    expect(new Set(rows.map((r) => r.variant)).size).toBe(6);
+  it('covers every default theme, appearance and IDE color scheme variant', () => {
+    expect(new Set(rows.map((r) => r.variant)).size).toBe(6 + PALETTE_VARIANTS.length);
+    expect(PALETTE_VARIANTS).toHaveLength((IDE_PALETTES.length - 1) * 2);
     if (process.env.CSS_RATIOS) console.table(rows.filter((r) => r.value < r.min + 0.6));
   });
 

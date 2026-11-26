@@ -167,10 +167,34 @@ it('covers workspace restoration and enables the terminal when authoritative ses
   const view = mount({ tabs: [sessionTab], activeId: sessionTab.id, splitId: null }, client);
   expect(screen.getByText('Loading Explorer')).toBeVisible();
   expect(view.container.querySelector('.editor')).toHaveAttribute('inert');
+  expect(screen.getByRole('progressbar', { name: 'Loading Explorer' })).toHaveAttribute('aria-valuenow', '0');
+  await act(async () => {});
+  expect(screen.getByRole('progressbar', { name: 'Loading Explorer' })).toHaveAttribute('aria-valuenow', '33');
   await act(async () => finish([childSession]));
   await waitFor(() => expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument());
   expect(screen.getByText('Terminal session')).toBeVisible();
   expect(view.container.querySelector('.editor')).not.toHaveAttribute('inert');
+});
+
+it('opens a Planner launch immediately despite slow saved tabs and retains it against an older session list', async () => {
+  const client = createClient();
+  const pending: ((sessions: Session[]) => void)[] = [];
+  client.listSessions.mockImplementation(() => new Promise<Session[]>((resolve) => pending.push(resolve)));
+  const created = { ...childSession, id: 'planner-new', name: 'Planner task session' };
+  window.localStorage.setItem('cw-workspace-tabs', JSON.stringify({
+    tabs: [sessionTab], activeId: sessionTab.id, splitId: null,
+  }));
+  const view = render(<ApiProvider value={client as unknown as ApiClient}>
+    <WorkspaceView live={initialLiveState} sidebarOpen onToggleSidebar={() => {}}
+      launch={{ nonce: 1, intent: { kind: 'session', session: created, label: created.name! } }} />
+  </ApiProvider>);
+  expect(await screen.findByText('Terminal planner-new')).toBeVisible();
+  expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument();
+  expect(view.container.querySelector('.editor')).not.toHaveAttribute('inert');
+  await act(async () => pending.forEach((resolve) => resolve([childSession])));
+  expect(screen.getByText('Terminal planner-new')).toBeVisible();
+  expect(stored().activeId).toBe(created.id);
+  expect(stored().tabs.map((tab) => tab.id)).toEqual([sessionTab.id, created.id]);
 });
 
 it('groups related reviews, reveals every review on click and preserves their individual selection and state', async () => {
@@ -431,6 +455,36 @@ it('offers keyboard-accessible tab actions with menu navigation and Escape focus
 });
 
 describe('WorkspaceView deletion reconciliation', () => {
+  it('keeps unrelated editors interactive without refetching their sessions throughout a queued deletion', async () => {
+    const client = createClient();
+    const unrelated = { ...childSession, id: 'unrelated', featureId: other.id, name: 'Unrelated session' };
+    client.listSessions.mockImplementation(async (id: string) => id === other.id ? [unrelated] : [childSession]);
+    let finish!: () => void;
+    const remove = client.deleteFeature.getMockImplementation()!;
+    client.deleteFeature.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return remove();
+    });
+    const view = mount({
+      tabs: [sessionTab, { kind: 'session', id: unrelated.id, label: unrelated.name!, session: unrelated }],
+      activeId: unrelated.id, splitId: null,
+    }, client);
+    await waitFor(() => expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument());
+    client.listSessions.mockClear();
+    fireEvent.click(screen.getByText('Queue feature deletion'));
+    await waitFor(() => expect(client.deleteFeature).toHaveBeenCalledOnce());
+    expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument();
+    expect(view.container.querySelector('.editor')).not.toHaveAttribute('inert');
+    expect(screen.getByRole('tab', { name: 'Unrelated session' })).toBeEnabled();
+    expect(client.listSessions).not.toHaveBeenCalled();
+    await act(async () => finish());
+    await waitFor(() => expect(stored().tabs.map((tab) => tab.id)).toEqual([unrelated.id]));
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument();
+    act(() => featureDeletionStore.dismiss(root.id));
+    expect(client.listSessions).not.toHaveBeenCalled();
+  });
+
   it('retains each successful checkout and its new tracker against pre-import feature snapshots', async () => {
     const client = createClient();
     let resolveOldSnapshot!: (features: Feature[]) => void;
@@ -454,12 +508,12 @@ describe('WorkspaceView deletion reconciliation', () => {
     expect(screen.getByText(importedFirst.title)).toBeInTheDocument();
     expect(screen.getByText(importedSecond.title)).toBeInTheDocument();
 
-    // A later checkout can fail: the final reload confirms only the successful
-    // imports, without a final "whole batch succeeded" callback.
+    // Unrelated group deletion must not trigger workspace-wide reconciliation
+    // or discard successful imports while their list snapshot is still stale.
     client.listFeatures.mockResolvedValue([other, root, child, importedSecond.feature]);
     fireEvent.click(screen.getByText('Delete group'));
-    await waitFor(() => expect(client.listFeatures.mock.calls.length).toBeGreaterThanOrEqual(4));
-    await act(async () => {});
+    await waitFor(() => expect(client.deleteGroup).toHaveBeenCalledOnce());
+    expect(client.listFeatures).toHaveBeenCalledTimes(3);
     expect(stored().tabs.find((tab) => tab.kind === 'pr-review-tracker')).toMatchObject({
       prs: [
         { featureId: child.id, number: 41, title: importedFirst.title },

@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText, Modal } from '../../components/ui.js';
@@ -119,7 +120,7 @@ function AuthenticationStep({ providerId, server, onCompleted, onStopped, onStop
       {auth.job?.deviceCode && <p>Device code: <code>{auth.job.deviceCode}</code></p>}
       {auth.job?.authUrl && !url && <p className="field-hint">The supplied sign-in link could not be opened safely.</p>}
     </>}
-    {pending && auth.error && <Button disabled={auth.busy} onClick={auth.retryStatus}>Retry status</Button>}
+    {pending && auth.error && <Button disabled={auth.busy} onClick={auth.retryStatus}><RefreshIcon size={13} /> Retry status</Button>}
     <Button variant="ghost" disabled={auth.busy} onClick={() => {
       setStopping(true);
       onStopRequested();

@@ -45,7 +45,7 @@ import {
   StatusBadge,
   ConfirmDialog,
 } from '../../components/ui.js';
-import { SkeletonCards } from '../../components/loading.js';
+import { BrandedLoader, LoadingStatus } from '../../components/loading.js';
 import {
   AutomationIcon,
   RefreshIcon,
@@ -251,7 +251,9 @@ export function AutomationsView({ live }: { live: LiveState }) {
       <ErrorText error={actionError ?? error} />
       {error && <p role="status">Monitors could not be loaded. The list is unknown, not empty. Refresh to try again.</p>}
 
-      {loading && <SkeletonCards cards={3} />}
+      {loading && (automations.length || sortedSubagents.length
+        ? <LoadingStatus label="Refreshing monitors; showing saved snapshot" />
+        : <BrandedLoader title="Loading monitors" detail="Reading monitors and subagents" />)}
 
       {!loading && !error && automations.length === 0 && sortedSubagents.length === 0 && (
         <EmptyState

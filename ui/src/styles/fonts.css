@@ -1,0 +1,22 @@
+/* Bundled font faces for the UI and terminal font preferences. Declaring a
+   face is free: the browser fetches a woff2 file only when text actually
+   renders in that family, and variable faces split by unicode-range. */
+@import '@fontsource-variable/inter/wght.css';
+@import '@fontsource-variable/space-grotesk/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+@import '@fontsource-variable/fira-code/wght.css';
+@import '@fontsource-variable/source-code-pro/wght.css';
+@import '@fontsource-variable/victor-mono/wght.css';
+@import '@fontsource/chakra-petch/latin-400.css';
+@import '@fontsource/chakra-petch/latin-500.css';
+@import '@fontsource/chakra-petch/latin-600.css';
+@import '@fontsource/chakra-petch/latin-700.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-600.css';
+@import '@fontsource/ubuntu-mono/latin-400.css';
+@import '@fontsource/ubuntu-mono/latin-700.css';
+@import '@fontsource/space-mono/latin-400.css';
+@import '@fontsource/space-mono/latin-700.css';
+@import '@fontsource/share-tech-mono/latin-400.css';
+@import '@fontsource/vt323/latin-400.css';
+@import '@fontsource/press-start-2p/latin-400.css';

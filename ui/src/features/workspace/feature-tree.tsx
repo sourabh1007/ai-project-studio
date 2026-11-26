@@ -31,6 +31,7 @@ import { beginDragFx, endDragFx } from './drag-fx.js';
 export interface DragNode {
   type: 'session' | 'group';
   id: string;
+  featureId?: string;
 }
 
 /** Insertion index used when dropping onto a group header (append to end). */
@@ -239,7 +240,7 @@ function DraggableSession({
           event.dataTransfer.effectAllowed = 'move';
         }
         beginDragFx(event.currentTarget);
-        setDragging({ type: 'session', id: session.id });
+        setDragging({ type: 'session', id: session.id, featureId: session.featureId });
       }}
       onDragEnd={(event) => {
         endDragFx(event.currentTarget, event);
@@ -339,7 +340,7 @@ function GroupNode({ group }: { group: TreeGroup }) {
             event.dataTransfer.effectAllowed = 'move';
           }
           beginDragFx(event.currentTarget);
-          setDragging({ type: 'group', id: group.id });
+          setDragging({ type: 'group', id: group.id, featureId: group.featureId });
         }}
         onDragEnd={(event) => {
           endDragFx(event.currentTarget, event);

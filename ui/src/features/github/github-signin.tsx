@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { copyText } from '../../hooks/clipboard-write.js';
 import { useApi } from '../../app/api-context.js';
@@ -182,7 +183,7 @@ export function GithubSignInModal({
               />
             )}
             <div className="device-signin-error-actions">
-              <Button onClick={retry}>Try again</Button>
+              <Button onClick={retry}><RefreshIcon size={13} /> Try again</Button>
               <Button variant="ghost" onClick={onClose}>
                 Close
               </Button>

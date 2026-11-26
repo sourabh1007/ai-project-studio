@@ -379,7 +379,7 @@ function PromptList({
     return (
       <div className="history-pane-empty" role="alert">
         <p>Couldn’t load prompt history. {error}</p>
-        <button type="button" className="history-detail-tool" onClick={onRetry}>Retry</button>
+        <button type="button" className="history-detail-tool" onClick={onRetry}><RefreshIcon size={13} /> Retry</button>
       </div>
     );
   }
@@ -394,7 +394,7 @@ function PromptList({
       {error && (
         <div className="history-pane-empty" role="alert">
           <p>Couldn’t refresh prompt history — showing the last loaded prompts. {error}</p>
-          <button type="button" className="history-detail-tool" onClick={onRetry}>Retry</button>
+          <button type="button" className="history-detail-tool" onClick={onRetry}><RefreshIcon size={13} /> Retry</button>
         </div>
       )}
       <ol className="history-pane-list">

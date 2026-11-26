@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useEffect, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
@@ -56,7 +57,7 @@ export function DeferredReviewNotice({ featureId, error, onReady, onRetry }: {
     return () => { active = false; window.clearInterval(timer); };
   }, [api, featureId, onReady, preparing]);
   if (!review?.analysisDeferred && !preparing && !preparationError) return <>
-    <ErrorText error={error} /><Button variant="ghost" onClick={onRetry}>Retry loading board</Button>
+    <ErrorText error={error} /><Button variant="ghost" onClick={onRetry}><RefreshIcon size={13} /> Retry loading board</Button>
   </>;
   return <section aria-label="Imported review preparation">
     <h3>{preparing ? 'Preparing review evidence' : 'Imported without analysis'}</h3>

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { Button } from '../../components/ui.js';
+import { BrandedLoader, LoadingStatus } from '../../components/loading.js';
 import {
   CheckIcon,
   WarningIcon,
@@ -271,7 +272,7 @@ export function HealthSection({
       Promise.all(activeEndpoints.map((def) => pingEndpoint(api, def))),
     ]);
     return { report, liveness, endpoints };
-  }, [microsoftSignedIn]);
+  }, [microsoftSignedIn], `system-health:${microsoftSignedIn}`);
 
   // Live poll: refresh the snapshot on a cadence so latency stays current while
   // the page is open. Disabled when pollMs is 0 (tests) or the tab is hidden.
@@ -289,6 +290,9 @@ export function HealthSection({
 
   return (
     <div className={embedded ? 'health-section health-section-embedded' : 'health-section'}>
+      {loading && (data
+        ? <LoadingStatus label="Refreshing system health; showing previous results" />
+        : <BrandedLoader title="Checking system health" detail="Checking API endpoints and provider availability" />)}
       {embedded && <h2 className="sr-only">System</h2>}
 
       <div className={`health-hero health-hero-${overall}`}>

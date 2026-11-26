@@ -16,9 +16,12 @@ import {
   TERMINAL_TEXT_SIZES,
   accentColor,
   deriveCssVariables,
+  fontStack,
   isHexColor,
+  monoFontStack,
   normalizeUiPreferences,
   optionLabel,
+  primaryFontFamily,
   terminalAppearance,
 } from './ui-preferences.js';
 
@@ -412,7 +415,7 @@ describe('accentColor + optionLabel', () => {
 
   it('formats option labels, including special cases', () => {
     expect(optionLabel('x-large')).toBe('Extra large');
-    expect(optionLabel('mono-ui')).toBe('Monospace');
+    expect(optionLabel('mono-ui')).toBe('Cascadia (mono)');
     expect(optionLabel('desktop')).toBe('Compact desktop');
     expect(optionLabel('futuristic')).toBe('Futuristic');
     expect(optionLabel('compact')).toBe('Compact');
@@ -479,5 +482,55 @@ describe('terminal preferences', () => {
         expect(a.fontFamily.length).toBeGreaterThan(0);
         expect(a.fontSize).toBeGreaterThan(0);
       }
+  });
+
+  it('keeps new appearance fields and falls back for invalid ones', () => {
+    const valid = normalizeUiPreferences({
+      palette: 'tokyo-night', codeFont: 'victor-mono', terminalLineHeight: 'relaxed', terminalScheme: 'amber-crt',
+    });
+    expect(valid).toMatchObject({
+      palette: 'tokyo-night', codeFont: 'victor-mono', terminalLineHeight: 'relaxed', terminalScheme: 'amber-crt',
+    });
+    const invalid = normalizeUiPreferences({ palette: 'neon', codeFont: 1, terminalLineHeight: 'huge', terminalScheme: 'x' });
+    expect(invalid).toMatchObject({
+      palette: 'default', codeFont: 'cascadia', terminalLineHeight: 'default', terminalScheme: 'auto',
+    });
+  });
+
+  it('scales pixel fonts, applies line spacing and passes scheme/palette through', () => {
+    const vt = terminalAppearance({ ...DEFAULT_UI_PREFERENCES, terminalFont: 'vt323', terminalLineHeight: 'tight' });
+    expect(vt.fontSize).toBe(17);
+    expect(vt.lineHeight).toBe(1);
+    const arcade = terminalAppearance({ ...DEFAULT_UI_PREFERENCES, terminalFont: 'press-start', palette: 'matrix', terminalScheme: 'matrix' });
+    expect(arcade.fontSize).toBe(10);
+    expect(arcade.lineHeight).toBe(1.2);
+    expect(arcade).toMatchObject({ palette: 'matrix', scheme: 'matrix' });
+    expect(terminalAppearance({ ...DEFAULT_UI_PREFERENCES, terminalLineHeight: 'relaxed' }).lineHeight).toBe(1.4);
+  });
+
+  it('applies the code font to --font-mono and exposes preview stacks', () => {
+    for (const codeFont of TERMINAL_FONTS) {
+      const vars = deriveCssVariables({ ...DEFAULT_UI_PREFERENCES, codeFont }, 'dark');
+      expect(vars['--font-mono']).toBe(monoFontStack(codeFont));
+    }
+    for (const font of FONTS) expect(fontStack(font).length).toBeGreaterThan(0);
+    expect(primaryFontFamily(monoFontStack('jetbrains'))).toBe('JetBrains Mono Variable');
+    expect(primaryFontFamily(fontStack('system'))).toBe('Segoe UI');
+  });
+
+  it('declares a bundled face for every bundled font family it offers', () => {
+    const fontsCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'styles', 'fonts.css'), 'utf8');
+    const bundled: Record<string, string> = {
+      'Inter Variable': 'inter', 'Space Grotesk Variable': 'space-grotesk', 'Chakra Petch': 'chakra-petch',
+      'JetBrains Mono Variable': 'jetbrains-mono', 'Fira Code Variable': 'fira-code',
+      'Source Code Pro Variable': 'source-code-pro', 'IBM Plex Mono': 'ibm-plex-mono', 'Ubuntu Mono': 'ubuntu-mono',
+      'Victor Mono Variable': 'victor-mono', 'Space Mono': 'space-mono', 'Share Tech Mono': 'share-tech-mono',
+      VT323: 'vt323', 'Press Start 2P': 'press-start-2p',
+    };
+    const offered = [...FONTS.map(fontStack), ...TERMINAL_FONTS.map(monoFontStack)].map(primaryFontFamily);
+    for (const family of offered.filter((name) => name in bundled)) {
+      expect(fontsCss, family).toContain(`/${bundled[family]}/`);
+    }
+    expect(Object.keys(bundled).every((family) => offered.includes(family))).toBe(true);
   });
 });

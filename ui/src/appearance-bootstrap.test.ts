@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { IDE_PALETTES } from './lib/terminal-schemes.js';
 
 const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.html'), 'utf8');
 const bootstrap = html.match(/<script>([\s\S]*?)<\/script>/)![1];
@@ -20,4 +21,16 @@ it.each(['full', 'reduced', 'off'])('restores Clarity and %s motion before first
   expect(attributes.get('data-appearance')).toBe('clarity');
   expect(attributes.get('data-theme')).toBe('dark');
   expect(attributes.get('data-motion')).toBe(motion);
+  expect(attributes.get('data-palette')).toBe('default');
+});
+
+it.each([...IDE_PALETTES, 'unknown'])('restores the %s IDE color scheme before first paint', (palette) => {
+  const attributes = new Map<string, string>();
+  const window = {
+    localStorage: { getItem: (key: string) => key === 'cw-ui-prefs' ? JSON.stringify({ palette }) : 'light' },
+    matchMedia: () => ({ matches: false }),
+  };
+  const document = { documentElement: { setAttribute: (name: string, value: string) => attributes.set(name, value) } };
+  new Function('window', 'document', bootstrap)(window, document);
+  expect(attributes.get('data-palette')).toBe(palette === 'unknown' ? 'default' : palette);
 });

@@ -27,10 +27,10 @@ export function Avatar({
   size?: number;
   title?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const label = title ?? name ?? 'Unknown author';
   const dimension = `${size}px`;
-  if (avatarUrl && !failed) {
+  if (avatarUrl && failedUrl !== avatarUrl) {
     return (
       <img
         className="cg-avatar cg-avatar-img"
@@ -40,7 +40,7 @@ export function Avatar({
         width={size}
         height={size}
         style={{ width: dimension, height: dimension }}
-        onError={() => setFailed(true)}
+        onError={() => setFailedUrl(avatarUrl)}
       />
     );
   }

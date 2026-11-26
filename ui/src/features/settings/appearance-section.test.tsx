@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { DEFAULT_UI_PREFERENCES } from '../../lib/ui-preferences.js';
 import { AppearanceSection } from './appearance-section.js';
 
 const hooks = vi.hoisted(() => ({
   modeCalls: [] as string[],
-  prefsCalls: [] as Array<Record<string, string>>,
+  prefsCalls: [] as Array<Record<string, unknown>>,
   resetCalls: [] as boolean[],
   theme: { mode: 'system' as const, theme: 'dark' as const },
   prefs: {
@@ -28,8 +29,8 @@ vi.mock('../../hooks/use-theme.js', () => ({
 
 vi.mock('../../hooks/use-ui-preferences.js', () => ({
   useUiPreferences: () => ({
-    prefs: hooks.prefs,
-    setPrefs: (next: Record<string, string>) => hooks.prefsCalls.push(next),
+    prefs: { ...DEFAULT_UI_PREFERENCES, ...hooks.prefs },
+    setPrefs: (next: Record<string, unknown>) => hooks.prefsCalls.push(next),
     reset: () => hooks.resetCalls.push(true),
   }),
 }));
@@ -86,4 +87,27 @@ it('renders appearance controls without the heading when embedded', () => {
   expect(screen.getByText('Theme')).toBeInTheDocument();
   expect(screen.getByText(/Personalize the look and feel/)).toBeInTheDocument();
   expect(screen.getByLabelText('Custom accent color')).toBeInTheDocument();
+});
+
+it('offers previewed IDE schemes, bundled fonts and console options', () => {
+  render(<AppearanceSection />);
+  for (const group of ['Look & colors', 'Typography', 'Layout & motion', 'Console', 'Planner quick-add']) {
+    expect(screen.getByRole('region', { name: group })).toBeInTheDocument();
+  }
+  expect(screen.getByRole('radio', { name: 'IDE color scheme Studio default' })).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(screen.getByRole('radio', { name: 'IDE color scheme Dracula' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Interface font Chakra Petch (sci-fi)' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Code font Fira Code' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Console color scheme Matrix' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Terminal font VT323 (retro CRT)' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Terminal line spacing Relaxed' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Scheme default' }));
+  expect(hooks.prefsCalls).toEqual([
+    { palette: 'dracula' }, { font: 'sci-fi' }, { codeFont: 'fira-code' }, { terminalScheme: 'matrix' },
+    { terminalFont: 'vt323' }, { terminalLineHeight: 'relaxed' }, { terminalTextColor: 'theme' },
+  ]);
+  const palette = document.querySelector('.palette-preview[data-palette="nord"]');
+  expect(palette).toHaveAttribute('data-theme', 'dark');
+  const matchIde = screen.getByRole('radio', { name: 'Console color scheme Match IDE' });
+  expect(matchIde.querySelector('.scheme-preview')).toHaveStyle({ background: '#0a0f1e' });
 });

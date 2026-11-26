@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { Button, ErrorText, Modal } from '../../components/ui.js';
-import { ActivityIcon, CircleIcon, ClockIcon, LogsIcon, PlayIcon, SessionIcon, StopIcon } from '../../components/icons.js';
+import { ActivityIcon, CircleIcon, ClockIcon, LogsIcon, PlayIcon, SessionIcon, StopIcon, RefreshIcon } from '../../components/icons.js';
 import type { LiveState } from '../../lib/stream.js';
 import type { ActiveSessionEntry, ActiveSessionsApi } from '../active-sessions/active-session-types.js';
 import { useActiveSessions } from '../active-sessions/use-active-sessions.js';
@@ -77,7 +77,7 @@ export function ActiveSessionsStatus({ api, live, onOpen }: ActiveSessionsStatus
     {open && <Modal title={title} size="xl" className="active-sessions-modal" onClose={close}>
       <div className="active-sessions-panel">
         <ErrorText error={error} />
-        {error && <Button onClick={refresh}>Retry active sessions</Button>}
+        {error && <Button onClick={refresh}><RefreshIcon size={13} /> Retry active sessions</Button>}
         {!snapshot && !error && <p role="status">Loading active sessions…</p>}
         {selected ? <>
           <Button onClick={() => setSelected(null)}>Back to active sessions</Button>
@@ -93,7 +93,7 @@ export function ActiveSessionsStatus({ api, live, onOpen }: ActiveSessionsStatus
             <dt>Operation status</dt><dd>{debug?.state ?? 'Loading…'}</dd>
           </dl>
           <ErrorText error={debugError} />
-          {debugError && <Button onClick={refresh}>Retry live debug</Button>}
+          {debugError && <Button onClick={refresh}><RefreshIcon size={13} /> Retry live debug</Button>}
           <ErrorText error={debug?.error ?? null} />
           {!debug && !debugError && !error && <p role="status">Loading live activity…</p>}
           {debug && <>

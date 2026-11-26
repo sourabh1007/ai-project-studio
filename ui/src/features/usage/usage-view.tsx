@@ -23,6 +23,7 @@ import { UsageInsights } from './usage-insights.js';
 import { OperationInsights } from '../meta-operations/operation-insights.js';
 import { useMotion } from '../../hooks/use-motion.js';
 import { PromptUsage, type PromptUsageTarget } from './prompt-usage.js';
+import { BrandedLoader, LoadingStatus } from '../../components/loading.js';
 
 type Scope = 'workspace' | 'ide';
 
@@ -97,6 +98,7 @@ export function UsageView({ signal, promptTarget }: { signal: number; promptTarg
         Showing {state.window.from} to {state.window.to} (UTC, end exclusive).
         {state.loading && rollup && ' Updating the selected time frame; the previous window remains visible until it loads.'}
       </p>
+      {state.loading && rollup && <LoadingStatus label="Refreshing usage; showing previous results" />}
 
       {state.error && (
         <div className="dash-empty">
@@ -132,9 +134,8 @@ export function UsageView({ signal, promptTarget }: { signal: number; promptTarg
       )}
 
       {!rollup && !state.error && (
-        <p className="muted" role="status">
-          Loading usage…
-        </p>
+        <BrandedLoader title="Loading usage" detail="Reading workspace usage, IDE usage and activity"
+          progress={state.progress} />
       )}
     </div>
   );

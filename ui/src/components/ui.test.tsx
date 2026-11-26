@@ -2,6 +2,25 @@ import * as React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Button, Modal, StatusBadge } from './ui.js';
+import { PageVisibility } from '../app/page-cache.js';
+
+it('does not leave a cached hidden page modal or focus trap over the active screen', () => {
+  const tree = (visible: boolean) => <PageVisibility.Provider value={visible}>
+    <Modal title="Cached workspace dialog" onClose={() => {}}><input aria-label="Workspace input" /></Modal>
+  </PageVisibility.Provider>;
+  const view = render(tree(true));
+  expect(screen.getByRole('dialog')).toBeVisible();
+  view.rerender(tree(false));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  const target = document.createElement('button');
+  document.body.append(target);
+  target.focus();
+  expect(target).toHaveFocus();
+  view.rerender(tree(true));
+  expect(screen.getByRole('dialog')).toBeVisible();
+  view.unmount();
+  target.remove();
+});
 
 describe('StatusBadge', () => {
   it('renders a running state as an animated accent dot with a label', () => {

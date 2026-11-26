@@ -58,6 +58,56 @@ coordination is in `desktop/startup-splash.cjs` and `desktop/main.cjs`.
 
 ## What's actually mounted
 
+### Loading and navigation
+
+After its first visit, the workspace stays mounted when another page is open.
+Returning from Planner, monitoring or a launch action preserves Explorer
+expansion, scroll position and terminals instead of restoring every tab again.
+Hidden workspace dialogs release their focus trap and do not cover another page.
+Hidden `useAsync` readers pause and revalidate on return without clearing loaded
+rows. Feature deletion queue updates do not restart workspace restoration;
+successful changes reconcile affected tabs, and tree moves refresh only their
+source and destination features.
+
+The eight main pages share the branded orbit animation for initial loading.
+Inline and background work use its compact variant with an operation-specific
+message. Progress percentages come only from completed/total loading steps,
+not estimated time; unknown-duration work stays explicitly indeterminate.
+Longer panel loads display elapsed time. Loading indicators count as essential
+feedback: with OS reduced motion (for example Windows **Animation effects** off)
+or the app's **Reduced** motion, they keep a calm steady rotation and progress
+sweep without pulsing, so a working app never looks frozen. Only the app's
+**Motion: Off** makes them static, with a note that progress stays live.
+
+Page snapshots are memory-only, scoped to the current API client, limited to
+64 entries and expire after one minute. Cached lists and reports render
+immediately while a fresh request revalidates them; refresh messages identify
+previous results, and errors retain retry controls. MCP snapshots are also
+provider-scoped, and configuration mutations remain disabled until a fresh
+configuration succeeds. These snapshots are not an offline source of truth
+and are never persisted to disk.
+
+Page code is split per view but warmed one view at a time during idle periods
+about a second after startup, and immediately when a dock icon is hovered or
+focused. A warmed view renders on the first pass when selected, with no loader
+flash; a view whose code is still downloading shows the shared branded loader.
+Failed warm-ups are silent and retried by real navigation. View switches use a
+short opacity-only fade so the WebGL terminal never blurs mid-switch.
+
+A session console shows a decorative branded loader (**Opening console**,
+**Launching CLI** or **Re-attaching console**) only while it is connecting and
+before the CLI has written any output. It never intercepts input, disappears as
+soon as output arrives, and never appears while the CLI is waiting for an answer;
+the status line remains the accessible announcement of state and elapsed time.
+
+The dock's account button shows the signed-in GitHub profile picture (from the
+login's public GitHub avatar), falling back to initials when the picture cannot
+load and to a generic icon with a sign-in cue when signed out. It opens an
+**Accounts** dialog with the same GitHub and Azure DevOps controls as Explorer's
+**Accounts** footer, whose summary also shows the picture and login. Both share
+one identity check per API client, refreshed on focus, on in-app sign-in/out
+and once a minute. Microsoft accounts show initials; no profile photo is fetched.
+
 The Explorer header's **Locate active tab in Explorer** icon reveals the active
 workspace tab in the tree. It expands the relevant repository, parent features
 and nested folders, then scrolls to and highlights the session, feature,
@@ -501,6 +551,37 @@ light/dark contrast, distinct panel headers, visible selection and keyboard-focu
 indicators, and separated history rows. It does not change fonts, text sizes,
 line heights, or the user's density and terminal preferences.
 
+Appearance is grouped into **Look & colors**, **Typography**, **Layout &
+motion**, **Console** and **Planner quick-add**, with live preview cards:
+
+- **IDE color scheme**: Studio default, Nord, Dracula, Solarized, Gruvbox,
+  Tokyo Night, Matrix and Cyberpunk, each with light and dark variants. Schemes
+  recolor surfaces, text, status colors and the status bar via `data-palette`
+  (applied before first paint) and are declared after the appearance blocks, so
+  Clarity/Futuristic keep only their non-color treatments. Light schemes keep
+  the main canvas white and tint the chrome. Every text, status and accent preset
+  pair in every scheme is contrast-tested at 4.5:1; custom accents still adapt
+  only against the default panel.
+- **Interface font** (Segoe UI, Inter, rounded, reading serif, Space Grotesk,
+  Chakra Petch sci-fi, JetBrains Mono "hacker" and Cascadia mono) and a separate
+  **Code font** for code blocks, diffs, paths and inline code.
+- **Console color scheme**: **Match IDE** (default; follows the IDE scheme and
+  theme, falling back to the Studio palettes) or Dracula, Monokai, Nord, One Dark,
+  Tokyo Night, Catppuccin, Solarized, Gruvbox, GitHub light, Matrix, Amber CRT
+  and Cyberpunk neon. The viewport padding uses the scheme background, and the
+  text-color override still recolors only default (uncolored) output.
+- **Terminal font** adds Victor Mono, Space Mono, Share Tech Mono, Lucida
+  Console, VT323 (retro CRT) and Press Start 2P (8-bit); pixel faces are scaled
+  to a comparable cell size. **Terminal line spacing** is Tight, Default or
+  Relaxed.
+
+Inter, Space Grotesk, Chakra Petch, JetBrains Mono, Fira Code, Source Code Pro,
+IBM Plex Mono, Ubuntu Mono, Victor Mono, Space Mono, Share Tech Mono, VT323 and
+Press Start 2P are bundled (`ui/src/styles/fonts.css`), so they render the same
+offline. A face downloads only when text uses it; the terminal requests the
+chosen face explicitly and refits once it loads. Consolas, Cascadia, Lucida
+Console, Segoe UI and Georgia remain system fonts with fallbacks.
+
 The explorer, side-by-side editor split, and prompt history have persistent resize
 handles. Drag with a mouse or touch, or focus a handle and use Left/Right
 (Shift for larger steps), Home/End for limits, and Enter to reset. Double-click
@@ -524,13 +605,13 @@ Closing content stays mounted for the transition; closed panel content is
 inert, and dialogs retain focus ownership until dismissal completes.
 Terminal fitting is debounced until the layout settles. Both the operating
 system's reduced-motion preference and the app's Reduced/Off options disable
-sliding, pulsing and chart animations; loading controls show static status text
-instead. Narrow windows present the explorer and history as overlaid panels
+sliding, pulsing and chart animations; loading indicators keep only a calm
+rotation unless Motion is Off. Narrow windows present the explorer and history as overlaid panels
 rather than squeezing the terminal. Copying a recorded response announces
 success and reports clipboard failures explicitly.
-Indeterminate loading bars use a static striped treatment with reduced motion,
-not a frozen percentage. Normal loading-bar movement uses transforms rather
-than animating layout properties.
+Other indeterminate bars (top loading strip, update banner) use a static
+striped treatment with reduced motion, not a frozen percentage. Normal
+loading-bar movement uses transforms rather than animating layout properties.
 
 The shared desktop style uses compact Segoe UI/system text, flat neutral
 light/dark surfaces, thin gray pane boundaries, and blue focus accents. Explorer

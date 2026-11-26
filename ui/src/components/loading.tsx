@@ -1,12 +1,14 @@
-/**
- * Purely visual loading indicators — motion, never text. Per the product's UX
- * language, inline "waiting" states are shown with animation (a spinner or a
- * shimmering skeleton), while human-readable status ("Working…") lives in the
- * bottom status bar.
- */
 import { useEffect, useState } from 'react';
 import { BrandMark } from './brand-mark.js';
 import { useMotion } from '../hooks/use-motion.js';
+
+function LoadingMark({ size }: { size: number }) {
+  return <span className="loading-mark" style={{ width: size, height: size }} aria-hidden="true">
+    <span className="branded-loader-orbit" />
+    <span className="branded-loader-orbit branded-loader-orbit-2" />
+    <BrandMark size={size * 0.56} title="Loading indicator" />
+  </span>;
+}
 
 /** A small inline spinner, sized to the surrounding text by default. */
 export function Spinner({
@@ -20,61 +22,90 @@ export function Spinner({
 }) {
   return (
     <span className="loading-indicator">
-      <span className="spinner" style={{ width: size, height: size }} role="status" aria-label={label} />
+      <span className="spinner loading-mark-inline" style={{ width: size, height: size }} role="status" aria-label={label}>
+        <LoadingMark size={size} />
+      </span>
       {showLabel && <span className="motion-status-label" aria-hidden="true">{label}</span>}
     </span>
   );
 }
 
+/** The shared loading mark for rows that already announce their own status. */
+export function LoadingGlyph({ size = 14 }: { size?: number }) {
+  return <span className="spinner loading-mark-inline" style={{ width: size, height: size }} aria-hidden="true">
+    <LoadingMark size={size} />
+  </span>;
+}
+
 /** A centered loader for empty content areas that are still loading. */
 export function Loader({ label = 'Loading' }: { label?: string }) {
-  return (
-    <div className="loader" role="status" aria-label={label}>
-      <span className="spinner spinner-lg" aria-hidden="true" />
-      <span className="motion-status-label" aria-hidden="true">{label}</span>
-    </div>
-  );
+  return <BrandedLoader title={label} compact />;
+}
+
+export function LoadingStatus({ label }: { label: string }) {
+  return <span className="loading-status">
+    <Spinner size={14} label={label} showLabel={false} />
+    <span aria-hidden="true">{label}</span>
+  </span>;
 }
 
 /**
- * A prominent, branded loader for full-panel loading states. Unlike the bare
- * {@link Loader} spinner, this shows the animated app logo plus a visible title
- * and a rotating "what's happening behind the scenes" line, so a long-running
- * scan/analysis tells the user what it is actually doing instead of leaving a
- * mystery spinner stuck mid-screen. `hints` cycle every couple of seconds;
- * `detail` is a static secondary line shown beneath the title.
+ * Shared panel feedback. Only measured completed/total work gets a percentage;
+ * otherwise the bar is indeterminate. Hints are informational, not fake stages.
  */
 export function BrandedLoader({
   title = 'Working',
   detail,
   hints,
+  progress,
+  compact = false,
 }: {
   title?: string;
   detail?: string;
   hints?: string[];
+  progress?: { completed: number; total: number };
+  compact?: boolean;
 }) {
   const [index, setIndex] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
   const motion = useMotion();
+  const hintCount = hints?.length ?? 0;
   useEffect(() => {
-    if (motion !== 'full' || !hints || hints.length <= 1) {
+    const started = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  useEffect(() => {
+    if (motion === 'off' || hintCount <= 1) {
       return;
     }
     const id = window.setInterval(
-      () => setIndex((value) => (value + 1) % hints.length),
+      () => setIndex((value) => (value + 1) % hintCount),
       2200,
     );
     return () => window.clearInterval(id);
-  }, [hints, motion]);
+  }, [hintCount, motion]);
   const hint = hints && hints.length > 0 ? hints[index % hints.length] : null;
+  const measured = progress && Number.isFinite(progress.total) && progress.total > 0 &&
+    Number.isFinite(progress.completed);
+  const completed = measured ? Math.max(0, Math.min(progress.completed, progress.total)) : 0;
+  const percent = measured ? Math.round(completed / progress.total * 100) : undefined;
   return (
-    <div className="branded-loader" role="status" aria-live="polite">
-      <span className="branded-loader-mark" aria-hidden="true">
-        <span className="branded-loader-orbit" />
-        <span className="branded-loader-orbit branded-loader-orbit-2" />
-        <BrandMark size={40} />
-      </span>
+    <div className={`branded-loader${compact ? ' branded-loader-compact' : ''}`} role="status" aria-label={title} aria-live="polite">
+      <LoadingMark size={compact ? 40 : 72} />
       <span className="branded-loader-title">{title}</span>
       {detail && <span className="branded-loader-detail">{detail}</span>}
+      {motion === 'off' && <span className="branded-loader-detail">Animation is off: progress updates remain live</span>}
+      <div className={`branded-loader-progress${measured ? ' is-measured' : ''}`}
+        role="progressbar" aria-label={title} aria-valuemin={0} aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={measured ? `${completed} of ${progress.total} steps complete` : 'In progress'}>
+        <span style={measured ? { transform: `scaleX(${completed / progress.total})` } : undefined} />
+      </div>
+      <span className="branded-loader-detail">
+        {measured ? `${completed} of ${progress.total} steps complete (${percent}%)` : 'In progress'}
+      </span>
+      {elapsed >= 3 && <span className="branded-loader-detail" role="timer" aria-live="off">{elapsed}s elapsed</span>}
       {hint && (
         <span key={hint} className="branded-loader-hint">
           {hint}

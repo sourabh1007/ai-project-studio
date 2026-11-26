@@ -1077,7 +1077,7 @@ export function ReviewBoardPage({
           {(liveContext.publicationsError || pendingPublications) && <div className="rb-status-item">
             <strong>PR comment status</strong>
             {liveContext.publicationsError && <p role="alert">
-              Publication history unavailable. Check the PR before posting. <button type="button" className="rb-linkish" onClick={liveContext.refresh}>Retry publication history</button>
+              Publication history unavailable. Check the PR before posting. <button type="button" className="rb-linkish" onClick={liveContext.refresh}><RefreshIcon size={13} /> Retry publication history</button>
             </p>}
             {pendingPublications && <p>
               Some PR comment publications are pending or uncertain.{' '}
@@ -1844,7 +1844,7 @@ export function ReviewBoardPage({
             <div className="rb-diff-modal-body">
               {diffTarget.allFiles && graphLoading && <p role="status">Loading changed files…</p>}
               {diffTarget.allFiles && graphError && <div role="alert">
-                {graphError} <button type="button" onClick={() => setGraphAttempt((value) => value + 1)}>Retry loading files</button>
+                {graphError} <button type="button" onClick={() => setGraphAttempt((value) => value + 1)}><RefreshIcon size={13} /> Retry loading files</button>
               </div>}
               {diffTarget.allFiles && !graphLoading && !graphError && visibleDiffFiles.length !== board.changedFiles &&
                 <p role="status">Showing {visibleDiffFiles.length} of {board.changedFiles} changed files captured in the change graph.</p>}

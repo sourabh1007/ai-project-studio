@@ -236,7 +236,7 @@ export function MetaOperationsSection({ featureId, sessionId, automationId, embe
           {!detail.operation && !detail.failed && <p role="status">Loading saved result…</p>}
           {detail.failed && <>
             <p role="alert">Unable to load the saved result.</p>
-            <button type="button" onClick={() => void open(detail.id)}>Retry saved result</button>
+            <button type="button" onClick={() => void open(detail.id)}><RefreshIcon size={13} /> Retry saved result</button>
           </>}
           {detail.operation && <>
             <p>{detail.operation.state} · Outcome: {detail.operation.outcome} · {credits(detail.operation)}</p>

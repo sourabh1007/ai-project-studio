@@ -20,7 +20,8 @@ import {
   IconBadge,
   Modal,
 } from '../../components/ui.js';
-import { SkeletonCards, Spinner } from '../../components/loading.js';
+import { BrandedLoader, LoadingStatus, Spinner } from '../../components/loading.js';
+import { usePageSnapshot } from '../../app/page-cache.js';
 import {
   CheckIcon,
   McpIcon,
@@ -144,6 +145,7 @@ function useOwnedAsync<T>(
   loading: boolean;
   reload: () => void;
 } {
+  const [cached, saveSnapshot] = usePageSnapshot<T>(ownerKey ? `mcp:servers:${ownerKey}` : undefined);
   const [data, setData] = useState<{ ownerKey: string; value: T } | null>(null);
   const [error, setError] = useState<{ ownerKey: string; message: string } | null>(
     null,
@@ -168,7 +170,8 @@ function useOwnedAsync<T>(
     const epoch = ++requestEpoch.current;
     setLoading(true);
     setError(null);
-    setData((current) => (current?.ownerKey === ownerKey ? current : null));
+    setData((current) => (current?.ownerKey === ownerKey ? current
+      : cached ? { ownerKey, value: cached } : null));
 
     loader()
       .then((result) => {
@@ -176,6 +179,7 @@ function useOwnedAsync<T>(
           return;
         }
         setData({ ownerKey, value: result });
+        saveSnapshot(result);
       })
       .catch((loadError: unknown) => {
         if (requestEpoch.current !== epoch) {
@@ -191,7 +195,7 @@ function useOwnedAsync<T>(
     return () => {
       requestEpoch.current += 1;
     };
-  }, [ownerKey, loader, nonce]);
+  }, [ownerKey, loader, nonce, saveSnapshot]);
 
   return {
     data: data?.ownerKey === ownerKey ? data.value : null,
@@ -219,7 +223,7 @@ function specType(spec: Record<string, unknown>): string {
 
 export function McpManager() {
   const api = useApi();
-  const providers = useAsync(() => api.listMcpProviders(), []);
+  const providers = useAsync(() => api.listMcpProviders(), [], 'mcp:providers');
   const [providerId, setProviderId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const selectedProviderRef = useRef<string | null>(null);
@@ -316,7 +320,7 @@ export function McpManager() {
   const currentError = error?.providerId === providerId ? error.text : null;
   const currentNotice = notice?.providerId === providerId ? notice.text : null;
   const showSkeleton =
-    providers.loading || (Boolean(providerId) && config.loading && !currentConfig);
+    (providers.loading && !providers.data) || (Boolean(providerId) && config.loading && !currentConfig);
   const showProviderLoadFailure =
     !providers.loading &&
     Boolean(providers.error) &&
@@ -555,7 +559,9 @@ export function McpManager() {
         </div>
       )}
 
-      {showSkeleton && <SkeletonCards cards={3} />}
+      {showSkeleton && <BrandedLoader title="Loading MCP servers" detail="Reading provider configuration" />}
+      {!showSkeleton && (providers.loading || config.loading) &&
+        <LoadingStatus label="Refreshing MCP configuration; showing saved snapshot" />}
 
       {showProviderLoadFailure && (
         <EmptyState

@@ -1,6 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BrandedLoader } from './components/loading.js';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { preloadableView, warmViewsWhenIdle } from './app/lazy-view.js';
 import { MonitoringProvider } from './features/monitoring/monitoring-host.js';
+import { PageCacheProvider, PageVisibility } from './app/page-cache.js';
 import { useApi } from './app/api-context.js';
 import { failActivity } from './lib/activity.js';
 import { reviewBoardRunStore } from './features/review-board-page/review-board-run-store.js';
@@ -17,6 +18,7 @@ import { formatAic } from './lib/format.js';
 import { ConnectionBanner } from './components/connection-banner.js';
 import { BrandMark } from './components/brand-mark.js';
 import { Tooltip } from './components/tooltip.js';
+import { AccountButton } from './features/account/account-button.js';
 import { UpdateBanner } from './features/updates/update-banner.js';
 import { OperationNoticeBanner } from './components/operation-notice-banner.js';
 import { FeatureDeletionStatus } from './features/workspace/feature-deletion-status.js';
@@ -30,49 +32,32 @@ import { CliSelector } from './features/bootstrap/cli-selector.js';
 import { CLI_SHORTCUT_CHANGED, CLI_SHORTCUT_KEY, PROVIDER_CHANGED, PROVIDER_PREFERENCES_CHANGED, cliShortcutBinding, cliShortcutLabel, isCliShortcut, ownsCliShortcut, type CliShortcut } from './lib/provider-selection.js';
 import type { ProviderSelectionInfo } from './lib/api.js';
 
-// Heavy views are code-split so the initial bundle stays small and non-active
-// views never load until first navigated to. Each import maps a named export to
-// the default shape React.lazy expects.
-const WorkspaceView = lazy(() =>
-  import('./features/workspace/workspace-view.js').then((m) => ({
-    default: m.WorkspaceView,
-  })),
-);
-const SettingsView = lazy(() =>
-  import('./features/settings/settings-view.js').then((m) => ({
-    default: m.SettingsView,
-  })),
-);
-const SkillsManager = lazy(() =>
-  import('./features/skills/skills-manager.js').then((m) => ({
-    default: m.SkillsManager,
-  })),
-);
-const McpManager = lazy(() =>
-  import('./features/mcp/mcp-manager.js').then((m) => ({
-    default: m.McpManager,
-  })),
-);
-const AutomationsView = lazy(() =>
-  import('./features/automations/automations-view.js').then((m) => ({
-    default: m.AutomationsView,
-  })),
-);
-const UsageView = lazy(() =>
-  import('./features/usage/usage-view.js').then((m) => ({
-    default: m.UsageView,
-  })),
-);
-const AgentsView = lazy(() =>
-  import('./features/agents/agents-view.js').then((m) => ({
-    default: m.AgentsView,
-  })),
-);
-const PlannerView = lazy(() =>
-  import('./features/planner/planner-view.js').then((m) => ({
-    default: m.PlannerView,
-  })),
-);
+// Heavy views are code-split so the initial bundle stays small. Each view is
+// warmed during idle time after startup (and on hover/focus of its dock icon),
+// so switching windows renders immediately instead of waiting for a chunk.
+const VIEWS = {
+  workspace: preloadableView(() => import('./features/workspace/workspace-view.js'), (m) => m.WorkspaceView),
+  settings: preloadableView(() => import('./features/settings/settings-view.js'), (m) => m.SettingsView),
+  skills: preloadableView(() => import('./features/skills/skills-manager.js'), (m) => m.SkillsManager),
+  mcp: preloadableView(() => import('./features/mcp/mcp-manager.js'), (m) => m.McpManager),
+  automations: preloadableView(() => import('./features/automations/automations-view.js'), (m) => m.AutomationsView),
+  usage: preloadableView(() => import('./features/usage/usage-view.js'), (m) => m.UsageView),
+  agents: preloadableView(() => import('./features/agents/agents-view.js'), (m) => m.AgentsView),
+  planner: preloadableView(() => import('./features/planner/planner-view.js'), (m) => m.PlannerView),
+};
+const WorkspaceView = VIEWS.workspace.Component;
+const SettingsView = VIEWS.settings.Component;
+const SkillsManager = VIEWS.skills.Component;
+const McpManager = VIEWS.mcp.Component;
+const AutomationsView = VIEWS.automations.Component;
+const UsageView = VIEWS.usage.Component;
+const AgentsView = VIEWS.agents.Component;
+const PlannerView = VIEWS.planner.Component;
+/** Hover/focus intent on a dock icon starts loading that view's code. */
+function prefetchView(id: keyof typeof VIEWS) {
+  const preload = () => { void VIEWS[id].preload().catch(() => undefined); };
+  return { onPointerEnter: preload, onFocus: preload };
+}
 import {
   CommandPalette,
   type PaletteCommand,
@@ -161,6 +146,14 @@ export function App() {
   const [view, setView] = usePersistentState<View>('cw-active-view', 'workspace', {
     validate: isOneOf(VIEW_ORDER),
   });
+  const [workspaceVisited, setWorkspaceVisited] = useState(view === 'workspace');
+  useEffect(() => {
+    if (view === 'workspace') setWorkspaceVisited(true);
+  }, [view]);
+  useEffect(() => warmViewsWhenIdle(
+    (['workspace', 'planner', 'settings', 'skills', 'mcp', 'agents', 'usage', 'automations'] as const)
+      .map((id) => VIEWS[id].preload),
+  ), []);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dockVisible, setDockVisible] = usePersistentState('cw-dock-visible', true, {
     validate: (value): value is boolean => typeof value === 'boolean',
@@ -521,6 +514,7 @@ export function App() {
               }`.trim()}
               title="Explorer"
               aria-label="Explorer"
+              {...prefetchView('workspace')}
               aria-current={view === 'workspace' ? 'page' : undefined}
               aria-expanded={view === 'workspace' && sidebarOpen}
               onClick={() => {
@@ -541,6 +535,7 @@ export function App() {
               className={`activity-item ${view === 'planner' ? 'is-active' : ''}`.trim()}
               title="Planner"
               aria-label="Planner"
+              {...prefetchView('planner')}
               aria-current={view === 'planner' ? 'page' : undefined}
               onClick={() => setView('planner')}
             >
@@ -553,6 +548,7 @@ export function App() {
               className={`activity-item ${view === 'skills' ? 'is-active' : ''}`.trim()}
               title="Skills"
               aria-label="Skills"
+              {...prefetchView('skills')}
               aria-current={view === 'skills' ? 'page' : undefined}
               onClick={() => setView('skills')}
             >
@@ -565,6 +561,7 @@ export function App() {
               className={`activity-item ${view === 'mcp' ? 'is-active' : ''}`.trim()}
               title="MCP Servers"
               aria-label="MCP Servers"
+              {...prefetchView('mcp')}
               aria-current={view === 'mcp' ? 'page' : undefined}
               onClick={() => setView('mcp')}
             >
@@ -579,6 +576,7 @@ export function App() {
               }`.trim()}
               title="Monitors"
               aria-label="Monitors"
+              {...prefetchView('automations')}
               aria-current={view === 'automations' ? 'page' : undefined}
               onClick={() => setView('automations')}
             >
@@ -591,6 +589,7 @@ export function App() {
               className={`activity-item ${view === 'usage' ? 'is-active' : ''}`.trim()}
               title="Usage"
               aria-label="Usage"
+              {...prefetchView('usage')}
               aria-current={view === 'usage' ? 'page' : undefined}
               onClick={() => setView('usage')}
             >
@@ -603,6 +602,7 @@ export function App() {
               className={`activity-item ${view === 'agents' ? 'is-active' : ''}`.trim()}
               title="Agents"
               aria-label="Agents"
+              {...prefetchView('agents')}
               aria-current={view === 'agents' ? 'page' : undefined}
               onClick={() => setView('agents')}
             >
@@ -615,6 +615,7 @@ export function App() {
               className={`activity-item ${view === 'settings' ? 'is-active' : ''}`.trim()}
               title="Settings"
               aria-label="Settings"
+              {...prefetchView('settings')}
               aria-current={view === 'settings' ? 'page' : undefined}
               onClick={() => setView('settings')}
             >
@@ -623,6 +624,7 @@ export function App() {
             </Tooltip>
           </div>
           <div className="activitybar-group">
+            <AccountButton />
             <Tooltip label={`Choose active CLI (${cliShortcutLabel(cliShortcut, navigator.platform)})`}>
               <button type="button" className="activity-item" aria-label="Choose active CLI"
                 title={`Choose active CLI — ${cliShortcutLabel(cliShortcut, navigator.platform)}`}
@@ -657,8 +659,10 @@ export function App() {
           <OperationNoticeBanner />
           <FeatureDeletionStatus />
           {internalAgencyAvailable && <AgencyUpdatePopup />}
-          {VIEW_ORDER.filter((id) => id === view || id === monitoringOrigin?.view).map((shownView) => <div className="view-transition" key={shownView} hidden={shownView !== view}>
-            <Suspense fallback={shownView === 'workspace' ? <BrandedLoader title="Loading Explorer" /> : <ViewSkeleton label={view} />}>
+          <PageCacheProvider scope={api}>
+          {VIEW_ORDER.filter((id) => id === view || id === monitoringOrigin?.view || (id === 'workspace' && workspaceVisited)).map((shownView) => <div className="view-transition" key={shownView} hidden={shownView !== view}>
+            <PageVisibility.Provider value={shownView === view}>
+            <Suspense fallback={<ViewSkeleton label={shownView === 'workspace' ? 'Explorer' : shownView} />}>
               {shownView === 'workspace' ? (
                 <WorkspaceView
                   providerSwitch={providerSwitch}
@@ -700,7 +704,9 @@ export function App() {
                 </div>
               )}
             </Suspense>
+            </PageVisibility.Provider>
           </div>)}
+          </PageCacheProvider>
         </div>
       </div>
 

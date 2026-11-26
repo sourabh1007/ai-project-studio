@@ -4,9 +4,10 @@ import type { AzureDevOpsStatus } from '../../lib/types.js';
 import { azureOrganization as organization, parseAzureOrganizations, AZURE_ORGANIZATIONS_STORAGE_KEY as CONNECTIONS_STORAGE_KEY } from '../../lib/azure.js';
 import { Spinner } from '../../components/loading.js';
 import { Avatar } from '../../components/avatar.js';
-import { PlusIcon } from '../../components/icons.js';
+import { PlusIcon, RefreshIcon, SignInIcon, SignOutIcon } from '../../components/icons.js';
 import { Modal } from '../../components/ui.js';
 import { AZURE_AUTH_CHANGED_EVENT } from '../../hooks/use-microsoft-identity.js';
+import { useAzureAvatar } from '../../hooks/use-azure-avatar.js';
 import './azure-status.css';
 
 const ORG_STORAGE_KEY = 'azureDevOpsOrg';
@@ -36,6 +37,12 @@ interface ConnectionState {
   data: AzureDevOpsStatus | null;
   loading: boolean;
   error: string | null;
+}
+
+/** The account's Azure DevOps profile picture, falling back to initials. */
+function AzureAccountAvatar({ org, account, connected }: { org: string; account: string; connected: boolean }) {
+  const picture = useAzureAvatar(org, account, connected);
+  return <Avatar name={account} avatarUrl={picture} size={22} />;
 }
 
 /** Multiple organization targets share the native Microsoft-account credential cache. */
@@ -218,12 +225,12 @@ export function AzureStatusBadge() {
         <div className="az-connection-row">
           <button type="button" className={`gh-status gh-status-${connected ? 'on' : state?.loading ? 'checking' : 'off'}`} onClick={reload}
             disabled={Boolean(busy) || state?.loading} title={`Re-check Azure DevOps access for ${org}`}>
-            {connected && account ? <Avatar name={account} size={22} /> : <span className="gh-status-dot" aria-hidden="true" />}
+            {connected && account ? <AzureAccountAvatar org={org} account={account} connected={connected} /> : <span className="gh-status-dot" aria-hidden="true" />}
             <span className="az-connection-identity"><strong>{org}</strong><span>Azure DevOps · {connected ? account || org : state?.error ? 'Status unavailable' : !state || state.loading ? 'Checking...' : 'Sign-in required'}</span></span>
           </button>
           <div className="az-connection-actions">
             {state?.data && !connected && <button type="button" className="az-signin-btn" disabled={Boolean(busy)} onClick={() => void signIn(org)}>
-              {busy === org ? <Spinner size={12} label="Signing in" /> : 'Sign in'}
+              {busy === org ? <Spinner size={12} label="Signing in" /> : <><SignInIcon size={12} /> Sign in</>}
             </button>}
             <button type="button" className="az-signin-btn" disabled={Boolean(busy)} onClick={() => forget(org)}
               aria-label={`Forget ${org}`} title="Remove from this list only. Does not erase shared Microsoft credentials.">Forget</button>
@@ -231,7 +238,7 @@ export function AzureStatusBadge() {
         </div>
         {state?.error && <>
           <p className="az-signin-error" role="alert">{state.error}</p>
-          <button type="button" className="az-signin-btn" disabled={Boolean(busy) || state.loading} onClick={reload}>Retry account check</button>
+          <button type="button" className="az-signin-btn" disabled={Boolean(busy) || state.loading} onClick={reload}><RefreshIcon size={12} /> Retry account check</button>
         </>}
       </section>;
     })}
@@ -242,7 +249,7 @@ export function AzureStatusBadge() {
           placeholder="Organization or full repository URL" spellCheck={false} disabled={Boolean(busy)}
           aria-label="Azure DevOps organization or repository URL" />
         <button type="submit" className="az-signin-btn" disabled={Boolean(busy) || !draft.trim()}>
-          {busy && busy !== 'signout' ? <Spinner size={13} label="Signing in" /> : 'Sign in'}
+          {busy && busy !== 'signout' ? <Spinner size={13} label="Signing in" /> : <><SignInIcon size={12} /> Sign in</>}
         </button>
         {orgs.length > 0 && <button type="button" className="az-signin-btn" disabled={Boolean(busy)} onClick={() => { setAdding(false); setError(null); }}>Cancel</button>}
       </div>
@@ -254,7 +261,7 @@ export function AzureStatusBadge() {
       <button type="button" className="az-signin-btn" disabled={Boolean(busy)} onClick={() => {
         if (orgs.length > 1) setConfirmSignOut(true);
         else void signOut();
-      }}>{busy === 'signout' ? <Spinner size={12} label="Signing out" /> : orgs.length > 1 ? 'Sign out saved organizations' : 'Sign out'}</button>
+      }}>{busy === 'signout' ? <Spinner size={12} label="Signing out" /> : <><SignOutIcon size={12} /> {orgs.length > 1 ? 'Sign out saved organizations' : 'Sign out'}</>}</button>
     </div>}
     {confirmSignOut && <Modal title="Sign out Azure DevOps" onClose={() => setConfirmSignOut(false)}>
       <p>These organizations share your Microsoft account credentials. Signing out may also affect other Azure DevOps organizations and new CLI sessions on this device. Existing sessions may need restarting.</p>

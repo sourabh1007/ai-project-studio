@@ -461,13 +461,16 @@ describe('TerminalView scrollback repaint', () => {
     const removers: Array<ReturnType<typeof vi.fn>> = [];
     const matchMedia = vi.fn((media: string) => {
       const removeEventListener = vi.fn();
-      removers.push(removeEventListener);
+      const resolution = media.startsWith('(resolution');
+      if (resolution) removers.push(removeEventListener);
       return {
         media, matches: true, onchange: null,
-        addEventListener: vi.fn((_type: string, callback: () => void) => listeners.push(callback)),
+        addEventListener: vi.fn((_type: string, callback: () => void) => { if (resolution) listeners.push(callback); }),
         removeEventListener, addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
       };
     });
+    const lastResolutionQuery = () => matchMedia.mock.calls.map(([media]) => media)
+      .filter((media) => media.startsWith('(resolution')).at(-1);
     vi.stubGlobal('matchMedia', matchMedia);
     vi.stubGlobal('devicePixelRatio', 1);
     const view = render(<TerminalView sessionId="s1" />);
@@ -477,10 +480,10 @@ describe('TerminalView scrollback repaint', () => {
     h.fit!.fit.mockClear();
     h.webgl!.clearTextureAtlas.mockClear();
     h.term!.refresh.mockClear();
-    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 1dppx)');
+    expect(lastResolutionQuery()).toBe('(resolution: 1dppx)');
     vi.stubGlobal('devicePixelRatio', 1.5);
     act(() => { listeners[0](); vi.advanceTimersByTime(120); });
-    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 1.5dppx)');
+    expect(lastResolutionQuery()).toBe('(resolution: 1.5dppx)');
     expect(removers[0]).toHaveBeenCalledWith('change', listeners[0]);
     expect(h.fit!.fit).toHaveBeenCalledTimes(1);
     expect(h.webgl!.clearTextureAtlas).toHaveBeenCalled();
@@ -489,7 +492,7 @@ describe('TerminalView scrollback repaint', () => {
     expect(h.term!.options.fontSize).toBe(font);
     vi.stubGlobal('devicePixelRatio', 2);
     act(() => { listeners[1](); vi.advanceTimersByTime(120); });
-    expect(matchMedia).toHaveBeenLastCalledWith('(resolution: 2dppx)');
+    expect(lastResolutionQuery()).toBe('(resolution: 2dppx)');
     view.unmount();
     expect(removers[2]).toHaveBeenCalledWith('change', listeners[2]);
     expect(vi.getTimerCount()).toBe(0);
@@ -1629,6 +1632,46 @@ describe('TerminalView scrollback repaint', () => {
       for (const handler of term.selectionHandlers) handler();
     });
     expect(fit.fit).toHaveBeenCalled();
+  });
+
+  it('shows a decorative console loader until the CLI writes output, never over a question', () => {
+    vi.useFakeTimers();
+    const view = render(<TerminalView sessionId="s1" />);
+    const overlay = () => view.container.querySelector('.terminal-startup-overlay');
+    expect(overlay()).toHaveAttribute('aria-hidden', 'true');
+    expect(overlay()).toHaveTextContent('Opening console');
+    const state = (value: string, generation = 1) => act(() => h.ws!.onmessage?.({ data: JSON.stringify({
+      type: 'state', version: 2, generation, state: value, inputLimit: 65536,
+    }) }));
+    act(() => { h.ws!.readyState = MockWebSocket.OPEN; h.ws!.onopen?.(); });
+    state('bootstrapping');
+    expect(overlay()).toHaveTextContent('Launching CLI');
+    expect(view.getAllByRole('status')).toHaveLength(1);
+    state('awaiting-input');
+    expect(overlay()).toBeNull();
+    state('bootstrapping');
+    act(() => h.ws!.onmessage?.({ data: JSON.stringify({ type: 'output', data: 'Trust this folder? (y/n)' }) }));
+    expect(overlay()).toBeNull();
+    state('ready');
+    expect(overlay()).toBeNull();
+  });
+
+  it('applies the console scheme, line spacing and matching viewport background live', () => {
+    const preferences = { prefs: { ...DEFAULT_UI_PREFERENCES }, setPrefs: vi.fn(), reset: vi.fn() };
+    vi.spyOn(preferenceHooks, 'useUiPreferences').mockImplementation(() => preferences);
+    document.documentElement.setAttribute('data-theme', 'dark');
+    const view = render(<TerminalView sessionId="s1" />);
+    const term = h.term!;
+    expect((term.options.theme as { background: string }).background).toBe('#0a0f1e');
+    expect(term.options.lineHeight).toBe(1.2);
+    preferences.prefs = { ...preferences.prefs, terminalScheme: 'dracula', terminalLineHeight: 'relaxed', terminalTextColor: '#ff8800' };
+    view.rerender(<TerminalView sessionId="s1" />);
+    expect(term.options.theme).toMatchObject({ background: '#282a36', foreground: '#ff8800', red: '#ff5555' });
+    expect(term.options.lineHeight).toBe(1.4);
+    expect(view.container.querySelector('.terminal-viewport')).toHaveStyle({ background: '#282a36' });
+    preferences.prefs = { ...preferences.prefs, terminalScheme: 'auto', palette: 'gruvbox', terminalTextColor: 'theme' };
+    view.rerender(<TerminalView sessionId="s1" />);
+    expect(term.options.theme).toMatchObject({ background: '#282828', foreground: '#ebdbb2' });
   });
 
   it.each(['none', 'selection', 'drag', 'replay'] as const)(

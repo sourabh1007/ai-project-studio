@@ -137,7 +137,8 @@ describe('App keyboard ownership and navigation semantics', () => {
     renderApp();
     const shell = await screen.findByRole('textbox', { name: 'Terminal shell' });
     const picker = screen.getByRole('button', { name: 'Choose active CLI' });
-    expect(picker.closest('.activitybar-group')?.querySelectorAll('button')[1]).toHaveAccessibleName('Theme: Dark');
+    const groupButtons: HTMLElement[] = [...(picker.closest('.activitybar-group')?.querySelectorAll('button') ?? [])];
+    expect(groupButtons[groupButtons.indexOf(picker) + 1]).toHaveAccessibleName('Theme: Dark');
     shell.focus();
     fireEvent.keyDown(shell, { key: 'L', ctrlKey: true, shiftKey: true, isComposing: true });
     expect(screen.queryByRole('dialog', { name: 'Choose active CLI' })).toBeNull();

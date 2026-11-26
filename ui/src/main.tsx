@@ -10,6 +10,7 @@ import {
   TabPopout,
   readTabPopoutFromLocation,
 } from './features/workspace/tab-popout.js';
+import './styles/fonts.css';
 import './styles/design-tokens.css';
 import './styles/app.css';
 

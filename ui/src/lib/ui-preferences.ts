@@ -20,6 +20,14 @@ import {
   resolveAccent,
   type AccentValue,
 } from './accent.js';
+import {
+  IDE_PALETTES,
+  TERMINAL_SCHEMES,
+  type IdePalette,
+  type TerminalScheme,
+} from './terminal-schemes.js';
+
+export { IDE_PALETTES, TERMINAL_SCHEMES, type IdePalette, type TerminalScheme };
 
 export {
   ACCENT_KEYS,
@@ -44,9 +52,17 @@ export type TextSize = 'small' | 'default' | 'large' | 'x-large';
 export type Density = 'compact' | 'cozy' | 'comfortable';
 export type Radius = 'sharp' | 'soft' | 'round';
 export type Motion = 'full' | 'reduced' | 'off';
-export type FontChoice = 'system' | 'rounded' | 'reading' | 'mono-ui';
+export type FontChoice =
+  | 'system'
+  | 'inter'
+  | 'rounded'
+  | 'reading'
+  | 'grotesk'
+  | 'sci-fi'
+  | 'hacker'
+  | 'mono-ui';
 
-/** Monospace family for the embedded session terminal. */
+/** Monospace family for the embedded session terminal and IDE code text. */
 export type TerminalFont =
   | 'consolas'
   | 'jetbrains'
@@ -54,19 +70,32 @@ export type TerminalFont =
   | 'fira-code'
   | 'source-code'
   | 'ibm-plex'
-  | 'ubuntu-mono';
+  | 'ubuntu-mono'
+  | 'victor-mono'
+  | 'space-mono'
+  | 'share-tech'
+  | 'lucida'
+  | 'vt323'
+  | 'press-start';
 export type TerminalTextSize = 'small' | 'default' | 'large' | 'x-large';
+export type TerminalLineHeight = 'tight' | 'default' | 'relaxed';
 
 export interface UiPreferences {
   appearance: Appearance;
+  /** IDE surface color scheme, layered on the light/dark theme. */
+  palette: IdePalette;
   accent: AccentValue;
   textSize: TextSize;
   density: Density;
   radius: Radius;
   motion: Motion;
   font: FontChoice;
+  /** Monospace family for code, diffs and inline code across the IDE. */
+  codeFont: TerminalFont;
   terminalFont: TerminalFont;
   terminalTextSize: TerminalTextSize;
+  terminalLineHeight: TerminalLineHeight;
+  terminalScheme: TerminalScheme;
   /** Terminal foreground: the sentinel `'theme'` or a `#rrggbb` override. */
   terminalTextColor: string;
   /** Planner quick-add: fix typos/acronyms as you type. */
@@ -79,14 +108,18 @@ export interface UiPreferences {
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   appearance: 'desktop',
+  palette: 'default',
   accent: 'blue',
   textSize: 'default',
   density: 'compact',
   radius: 'sharp',
   motion: 'full',
   font: 'system',
+  codeFont: 'cascadia',
   terminalFont: 'consolas',
   terminalTextSize: 'default',
+  terminalLineHeight: 'default',
+  terminalScheme: 'auto',
   terminalTextColor: 'theme',
   plannerAutocorrect: true,
   plannerAutosuggest: true,
@@ -105,8 +138,12 @@ export const RADII: readonly Radius[] = ['sharp', 'soft', 'round'];
 export const MOTIONS: readonly Motion[] = ['full', 'reduced', 'off'];
 export const FONTS: readonly FontChoice[] = [
   'system',
+  'inter',
   'rounded',
   'reading',
+  'grotesk',
+  'sci-fi',
+  'hacker',
   'mono-ui',
 ];
 
@@ -118,12 +155,23 @@ export const TERMINAL_FONTS: readonly TerminalFont[] = [
   'source-code',
   'ibm-plex',
   'ubuntu-mono',
+  'victor-mono',
+  'space-mono',
+  'share-tech',
+  'lucida',
+  'vt323',
+  'press-start',
 ];
 export const TERMINAL_TEXT_SIZES: readonly TerminalTextSize[] = [
   'small',
   'default',
   'large',
   'x-large',
+];
+export const TERMINAL_LINE_HEIGHTS: readonly TerminalLineHeight[] = [
+  'tight',
+  'default',
+  'relaxed',
 ];
 
 /** Base type ramp (px). Multiplied by the text-size factor. */
@@ -180,21 +228,38 @@ const RADIUS_MAP: Record<Radius, { sm: number; md: number; lg: number }> = {
 
 const FONT_STACK: Record<FontChoice, string> = {
   system: "'Segoe UI', system-ui, -apple-system, sans-serif",
+  inter: "'Inter Variable', 'Inter', 'Segoe UI', system-ui, sans-serif",
   rounded:
     "'Segoe UI Variable', 'Nunito', 'Quicksand', 'Segoe UI', system-ui, sans-serif",
   reading: "'Georgia', 'Cambria', 'Iowan Old Style', 'Times New Roman', serif",
+  grotesk: "'Space Grotesk Variable', 'Space Grotesk', 'Segoe UI', sans-serif",
+  'sci-fi': "'Chakra Petch', 'Segoe UI', system-ui, sans-serif",
+  hacker: "'JetBrains Mono Variable', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
   'mono-ui': "'Cascadia Code', 'Consolas', ui-monospace, monospace",
 };
 
-/** Monospace stacks offered for the session terminal. */
+/** Monospace stacks offered for the session terminal and IDE code text. */
 const TERMINAL_FONT_STACK: Record<TerminalFont, string> = {
   consolas: "'Consolas', 'Cascadia Mono', 'Courier New', ui-monospace, monospace",
-  jetbrains: "'JetBrains Mono', SFMono-Regular, Menlo, Consolas, monospace",
+  jetbrains: "'JetBrains Mono Variable', 'JetBrains Mono', Consolas, monospace",
   cascadia: "'Cascadia Code', Consolas, ui-monospace, monospace",
-  'fira-code': "'Fira Code', Consolas, ui-monospace, monospace",
-  'source-code': "'Source Code Pro', Consolas, ui-monospace, monospace",
+  'fira-code': "'Fira Code Variable', 'Fira Code', Consolas, ui-monospace, monospace",
+  'source-code': "'Source Code Pro Variable', 'Source Code Pro', Consolas, ui-monospace, monospace",
   'ibm-plex': "'IBM Plex Mono', Consolas, ui-monospace, monospace",
   'ubuntu-mono': "'Ubuntu Mono', Consolas, ui-monospace, monospace",
+  'victor-mono': "'Victor Mono Variable', 'Victor Mono', Consolas, monospace",
+  'space-mono': "'Space Mono', Consolas, ui-monospace, monospace",
+  'share-tech': "'Share Tech Mono', Consolas, ui-monospace, monospace",
+  lucida: "'Lucida Console', 'Lucida Sans Typewriter', Consolas, monospace",
+  vt323: "'VT323', Consolas, ui-monospace, monospace",
+  'press-start': "'Press Start 2P', Consolas, ui-monospace, monospace",
+};
+
+/** Pixel fonts are drawn on unusual em-boxes; scale them to a comparable cell. */
+const TERMINAL_FONT_SCALE: Partial<Record<TerminalFont, number>> = {
+  vt323: 1.3,
+  'ubuntu-mono': 1.1,
+  'press-start': 0.75,
 };
 
 /** Terminal font size in px for each named step. */
@@ -204,6 +269,27 @@ const TERMINAL_FONT_PX: Record<TerminalTextSize, number> = {
   large: 15,
   'x-large': 17,
 };
+
+const TERMINAL_LINE_HEIGHT: Record<TerminalLineHeight, number> = {
+  tight: 1,
+  default: 1.2,
+  relaxed: 1.4,
+};
+
+/** The CSS stack for a UI font choice (used for live previews). */
+export function fontStack(font: FontChoice): string {
+  return FONT_STACK[font];
+}
+
+/** The CSS stack for a monospace choice (used for live previews). */
+export function monoFontStack(font: TerminalFont): string {
+  return TERMINAL_FONT_STACK[font];
+}
+
+/** The primary family name, for explicitly requesting a bundled face load. */
+export function primaryFontFamily(stack: string): string {
+  return stack.split(',')[0]!.trim().replace(/^'|'$/g, '');
+}
 
 /**
  * Premium motion durations/easings. `full` is the crafted default; `reduced`
@@ -271,6 +357,7 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
       APPEARANCES,
       DEFAULT_UI_PREFERENCES.appearance,
     ),
+    palette: pick(raw.palette, IDE_PALETTES, DEFAULT_UI_PREFERENCES.palette),
     accent:
       parseAccentValue(raw.accent) ?? DEFAULT_UI_PREFERENCES.accent,
     textSize: pick(raw.textSize, TEXT_SIZES, DEFAULT_UI_PREFERENCES.textSize),
@@ -278,6 +365,7 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
     radius: pick(raw.radius, RADII, DEFAULT_UI_PREFERENCES.radius),
     motion: pick(raw.motion, MOTIONS, DEFAULT_UI_PREFERENCES.motion),
     font: pick(raw.font, FONTS, DEFAULT_UI_PREFERENCES.font),
+    codeFont: pick(raw.codeFont, TERMINAL_FONTS, DEFAULT_UI_PREFERENCES.codeFont),
     terminalFont: pick(
       raw.terminalFont,
       TERMINAL_FONTS,
@@ -287,6 +375,16 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
       raw.terminalTextSize,
       TERMINAL_TEXT_SIZES,
       DEFAULT_UI_PREFERENCES.terminalTextSize,
+    ),
+    terminalLineHeight: pick(
+      raw.terminalLineHeight,
+      TERMINAL_LINE_HEIGHTS,
+      DEFAULT_UI_PREFERENCES.terminalLineHeight,
+    ),
+    terminalScheme: pick(
+      raw.terminalScheme,
+      TERMINAL_SCHEMES,
+      DEFAULT_UI_PREFERENCES.terminalScheme,
     ),
     terminalTextColor: normalizeTerminalColor(raw.terminalTextColor),
     plannerAutocorrect: pickBool(
@@ -308,17 +406,24 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
 export interface TerminalAppearance {
   fontFamily: string;
   fontSize: number;
+  lineHeight: number;
   /** A `#rrggbb` foreground override, or `null` to keep the theme default. */
   foreground: string | null;
+  scheme: TerminalScheme;
+  palette: IdePalette;
 }
 
 /** Derive the concrete terminal appearance from the user's preferences. */
 export function terminalAppearance(prefs: UiPreferences): TerminalAppearance {
+  const scale = TERMINAL_FONT_SCALE[prefs.terminalFont] ?? 1;
   return {
     fontFamily: TERMINAL_FONT_STACK[prefs.terminalFont],
-    fontSize: TERMINAL_FONT_PX[prefs.terminalTextSize],
+    fontSize: Math.round(TERMINAL_FONT_PX[prefs.terminalTextSize] * scale),
+    lineHeight: TERMINAL_LINE_HEIGHT[prefs.terminalLineHeight],
     foreground:
       prefs.terminalTextColor === 'theme' ? null : prefs.terminalTextColor,
+    scheme: prefs.terminalScheme,
+    palette: prefs.palette,
   };
 }
 
@@ -366,6 +471,7 @@ export function deriveCssVariables(
 
   // Font family.
   vars['--font-sans'] = FONT_STACK[prefs.font];
+  vars['--font-mono'] = TERMINAL_FONT_STACK[prefs.codeFont];
 
   // Motion.
   const m = MOTION_MAP[prefs.motion];
@@ -383,7 +489,11 @@ export function optionLabel(value: string): string {
     desktop: 'Compact desktop',
     futuristic: 'Futuristic',
     'x-large': 'Extra large',
-    'mono-ui': 'Monospace',
+    'mono-ui': 'Cascadia (mono)',
+    inter: 'Inter',
+    grotesk: 'Space Grotesk',
+    'sci-fi': 'Chakra Petch (sci-fi)',
+    hacker: 'JetBrains (hacker)',
     consolas: 'Consolas (Notepad style)',
     jetbrains: 'JetBrains Mono',
     cascadia: 'Cascadia Code',
@@ -391,6 +501,19 @@ export function optionLabel(value: string): string {
     'source-code': 'Source Code Pro',
     'ibm-plex': 'IBM Plex Mono',
     'ubuntu-mono': 'Ubuntu Mono',
+    'victor-mono': 'Victor Mono',
+    'space-mono': 'Space Mono',
+    'share-tech': 'Share Tech Mono',
+    lucida: 'Lucida Console',
+    vt323: 'VT323 (retro CRT)',
+    'press-start': 'Press Start 2P (8-bit)',
+    nord: 'Nord',
+    dracula: 'Dracula',
+    solarized: 'Solarized',
+    gruvbox: 'Gruvbox',
+    'tokyo-night': 'Tokyo Night',
+    matrix: 'Matrix',
+    cyberpunk: 'Cyberpunk',
   };
   return (
     map[value] ??

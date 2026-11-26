@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useMemo, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText, Modal } from '../../components/ui.js';
@@ -128,7 +129,7 @@ export function ResourcePanel({ snapshot, error, loading, now, connection, refre
     <div className="resource-panel">
       {loading && <p role="status"><Spinner size={14} /> Loading app resources…</p>}
       <ErrorText error={error} />
-      {error && <Button onClick={() => void refresh()}>Retry resource measurements</Button>}
+      {error && <Button onClick={() => void refresh()}><RefreshIcon size={13} /> Retry resource measurements</Button>}
       {stale && <p role="status" className="resource-warning">Measurements are stale. Last snapshot: {measuredTime(snapshot?.measuredAt)}.</p>}
       <Insights title="Resource trends">{() => <ResourceInsights snapshot={snapshot} />}</Insights>
       <section className="resource-section" aria-labelledby="resource-system-title">

@@ -28,6 +28,7 @@ import {
   type TerminalInputSource,
 } from '../lib/terminal-input-diagnostics.js';
 import { ActivityIcon, TrashIcon } from './icons.js';
+import { BrandedLoader, LoadingGlyph } from './loading.js';
 import { Button, Modal } from './ui.js';
 import {
   toClipboardText, decodeOsc52, createPasteGuard, attachmentPasteText, attachmentFailureMessage, copyFailureMessage,
@@ -44,9 +45,11 @@ import { hasOpenModalDialog } from '../lib/focus-ownership.js';
 import { desktopBridge as sharedDesktopBridge } from '../lib/desktop-bridge.js';
 import { useUiPreferences } from '../hooks/use-ui-preferences.js';
 import {
+  primaryFontFamily,
   terminalAppearance,
   type TerminalAppearance,
 } from '../lib/ui-preferences.js';
+import { resolveTerminalScheme, terminalTheme } from '../lib/terminal-schemes.js';
 
 type ThemeMode = 'light' | 'dark';
 interface PendingTextPaste {
@@ -65,66 +68,20 @@ function currentThemeMode(): ThemeMode {
     : 'dark';
 }
 
-/**
- * The xterm palette for each app theme. Dark keeps the original deep-navy shell;
- * light uses a white background with dark text and a VS Code Light+ ANSI palette
- * so CLI output (including bright colours) stays readable on white. An optional
- * `foreground` override lets the user recolour the default (uncoloured) text.
- */
-function xtermTheme(mode: ThemeMode, foreground?: string | null): ITheme {
-  const base = xtermPalette(mode);
-  return foreground ? { ...base, foreground } : base;
+/** The xterm palette for the chosen scheme (`auto` follows IDE palette + theme). */
+function xtermTheme(mode: ThemeMode, appearance: TerminalAppearance): ITheme {
+  return terminalTheme(
+    resolveTerminalScheme(appearance.scheme, appearance.palette, mode),
+    appearance.foreground,
+  );
 }
 
-function xtermPalette(mode: ThemeMode): ITheme {
-  if (mode === 'light') {
-    return {
-      background: '#ffffff',
-      foreground: '#0f172a',
-      cursor: '#4f46e5',
-      cursorAccent: '#ffffff',
-      selectionBackground: 'rgba(79, 70, 229, 0.20)',
-      black: '#000000',
-      red: '#cd3131',
-      green: '#00a33f',
-      yellow: '#946b00',
-      blue: '#0451a5',
-      magenta: '#a5289c',
-      cyan: '#0598a6',
-      white: '#4b5563',
-      brightBlack: '#64748b',
-      brightRed: '#cd3131',
-      brightGreen: '#14953b',
-      brightYellow: '#8a7100',
-      brightBlue: '#0451a5',
-      brightMagenta: '#a5289c',
-      brightCyan: '#0598a6',
-      brightWhite: '#1f2937',
-    };
-  }
-  return {
-    background: '#0a0f1e',
-    foreground: '#d7e2f7',
-    cursor: '#818cf8',
-    cursorAccent: '#0a0f1e',
-    selectionBackground: 'rgba(129, 140, 248, 0.3)',
-    black: '#0a0f1e',
-    red: '#ff6b6b',
-    green: '#5ff2a0',
-    yellow: '#ffd479',
-    blue: '#7aa2ff',
-    magenta: '#d78bff',
-    cyan: '#5fd7e0',
-    white: '#c9d6ef',
-    brightBlack: '#8b98c2',
-    brightRed: '#ff8787',
-    brightGreen: '#7ff5b4',
-    brightYellow: '#ffe0a3',
-    brightBlue: '#9db8ff',
-    brightMagenta: '#e3a7ff',
-    brightCyan: '#8ce7ee',
-    brightWhite: '#f4f7ff',
-  };
+/** Ask the browser for a bundled face now so xterm measures the real glyphs. */
+function requestTerminalFont(appearance: TerminalAppearance): Promise<unknown> | undefined {
+  const fonts = document.fonts;
+  if (typeof fonts?.load !== 'function') return undefined;
+  const family = primaryFontFamily(appearance.fontFamily);
+  return fonts.load(`${appearance.fontSize}px "${family}"`).catch(() => undefined);
 }
 
 /** The subset of the Electron preload bridge this component uses. */
@@ -246,6 +203,7 @@ export function TerminalView({
     respond(choiceId: string | null): void;
   } | null>(null);
   const [startupDetail, setStartupDetail] = useState('');
+  const [hasOutput, setHasOutput] = useState(false);
   const [startupSeconds, setStartupSeconds] = useState(0);
   const [health, setHealth] = useState<TerminalHealth | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -277,6 +235,7 @@ export function TerminalView({
   const [themeMode, setThemeMode] = useState<ThemeMode>(currentThemeMode);
   const themeModeRef = useRef(themeMode);
   themeModeRef.current = themeMode;
+  const schemeBackground = xtermTheme(themeMode, appearance).background;
 
   // Track the app theme (set as `data-theme` on <html>) so the terminal can
   // switch its palette live — white shell with dark text in light mode.
@@ -297,7 +256,7 @@ export function TerminalView({
     if (termRef.current) {
       termRef.current.options.theme = xtermTheme(
         themeMode,
-        appearanceRef.current.foreground,
+        appearanceRef.current,
       );
       // WebGL caches glyphs (including the cell background) in a texture atlas
       // that a bare `options.theme` assignment does NOT invalidate — without
@@ -316,11 +275,13 @@ export function TerminalView({
     }
     term.options.fontFamily = appearance.fontFamily;
     term.options.fontSize = appearance.fontSize;
-    term.options.theme = xtermTheme(themeModeRef.current, appearance.foreground);
+    term.options.lineHeight = appearance.lineHeight;
+    term.options.theme = xtermTheme(themeModeRef.current, appearanceRef.current);
     // The same guarded path must update both xterm and the PTY grid. A direct
     // FitAddon call here resized only the renderer, and bypassed replay/drag.
     appearanceFitRef.current?.();
-  }, [appearance.fontFamily, appearance.fontSize, appearance.foreground]);
+    void requestTerminalFont(appearanceRef.current)?.then(() => appearanceFitRef.current?.());
+  }, [appearance.fontFamily, appearance.fontSize, appearance.lineHeight, appearance.foreground, appearance.scheme, appearance.palette]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -345,7 +306,7 @@ export function TerminalView({
       altClickMovesCursor: false,
       fontFamily: appearanceRef.current.fontFamily,
       fontSize: appearanceRef.current.fontSize,
-      lineHeight: 1.2,
+      lineHeight: appearanceRef.current.lineHeight,
       letterSpacing: 0,
       allowProposedApi: true,
       // Keep faint (SGR-dim) and low-contrast CLI colours legible against the
@@ -357,7 +318,7 @@ export function TerminalView({
         allowNonHttpProtocols: true,
       },
       scrollback: 5000,
-      theme: xtermTheme(themeModeRef.current, appearanceRef.current.foreground),
+      theme: xtermTheme(themeModeRef.current, appearanceRef.current),
       ...windowsPtyOptions,
     });
     const fit = new FitAddon();
@@ -560,6 +521,7 @@ export function TerminalView({
       status: (state, notice) => setConnectionStatus({ state, notice }),
     });
     setConnectionStatus({ state: 'connecting', notice: '' });
+    setHasOutput(false);
     setStartupDetail('');
     setHealth(null);
     setShowDiagnostics(false);
@@ -704,6 +666,9 @@ export function TerminalView({
     const fonts = document.fonts;
     fonts?.addEventListener('loadingdone', onFontsLoaded);
     void fonts?.ready.then(() => {
+      if (!disposed) onFontsLoaded();
+    });
+    void requestTerminalFont(appearanceRef.current)?.then(() => {
       if (!disposed) onFontsLoaded();
     });
 
@@ -1256,6 +1221,7 @@ export function TerminalView({
           }
         }
         if (message.type === 'output') {
+          if (!renderedOutput) setHasOutput(true);
           renderedOutput = true;
           const onWritten = trackReplayWrite();
           if (onWritten) {
@@ -1430,7 +1396,7 @@ export function TerminalView({
       </div>
     </Modal>}
     {!statusHidden && <div role="status" aria-live="polite" className="terminal-status" style={{ flexShrink: 0, fontSize: 12 }}>
-      {preparing && <span className="spinner" aria-hidden="true" style={{ marginRight: 6 }} />}
+      {preparing && <span style={{ marginRight: 6, display: 'inline-flex', verticalAlign: 'middle' }}><LoadingGlyph size={13} /></span>}
       {startupDetail || (connectionStatus.state === 'ready' && health
         ? health.connection === 'unresponsive' ? 'Backend heartbeat missing'
           : (health.pendingInputSeconds ?? 0) >= 10 ? `Input delivery unconfirmed for ${health.pendingInputSeconds}s`
@@ -1493,14 +1459,19 @@ export function TerminalView({
         </>}
       </section>}
     {savingTextPaste && <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>
-      <span className="spinner" aria-hidden="true" /> Saving pasted text as a file. Terminal input is paused.
+      <LoadingGlyph size={13} /> Saving pasted text as a file. Terminal input is paused.
       <button type="button" onClick={() => cancelTextPasteRef.current?.()}>Cancel text paste</button>
     </div>}
     {textPasteNotice && <div role="status" aria-live="polite" style={{ flexShrink: 0, fontSize: 12 }}>{textPasteNotice}</div>}
     {attachmentError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{attachmentError}</div>}
     {copyError && <div role="alert" style={{ flexShrink: 0, fontSize: 12 }}>{copyError}</div>}
-    <div className="terminal-viewport">
-      <div className="terminal-host" style={{ position: 'relative', inset: 'auto', flex: 1, minHeight: 0 }} ref={hostRef} />
+    <div className="terminal-viewport" style={{ background: schemeBackground }}>
+      <div className="terminal-host" style={{ position: 'relative', inset: 'auto', flex: 1, minHeight: 0, background: schemeBackground }} ref={hostRef} />
+      {preparing && !hasOutput && !worktreeSelection && <div className="terminal-startup-overlay" aria-hidden="true">
+        <BrandedLoader compact
+          title={connectionStatus.state === 'bootstrapping' ? 'Launching CLI' : connectionStatus.state === 'reconnecting' ? 'Re-attaching console' : 'Opening console'}
+          hints={['Connecting to the session host', 'The CLI prompt appears here as soon as it starts', 'Questions from the CLI show here; answer them to continue']} />
+      </div>}
       <Button variant="ghost" className="terminal-clear-input" ariaLabel="Clear input line"
         title="Clear the current input line (Ctrl+A, Ctrl+K). Use at the CLI prompt; does not submit or interrupt."
         disabled={connectionStatus.state !== 'ready' || savingTextPaste}

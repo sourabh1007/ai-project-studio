@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText, Modal } from '../../components/ui.js';
@@ -96,7 +97,7 @@ export function McpBuiltinSetup({ providerId, server, onClose, onConfigured }: {
         {optionsError && <div><ErrorText error={optionsError} /><Button variant="ghost" onClick={() => {
           refreshAttempts.current = 0;
           setRevision((value) => value + 1);
-        }}>Retry options</Button></div>}
+        }}><RefreshIcon size={13} /> Retry options</Button></div>}
         {options && <>
           <McpCommandOptions options={options.options} examples={options.examples} disabled={busy || saved}
             onChoose={(fragment) => setArgs((current) => options.examples.includes(fragment)

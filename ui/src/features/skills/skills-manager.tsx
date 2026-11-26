@@ -3,7 +3,7 @@ import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import type { Skill, SkillExport, SkillKind, SkillRecommendedScope } from '../../lib/types.js';
 import { Button, Card, EmptyState, ErrorText, IconBadge, Modal } from '../../components/ui.js';
-import { SkeletonCards } from '../../components/loading.js';
+import { BrandedLoader, LoadingStatus } from '../../components/loading.js';
 import {
   ExportIcon,
   PencilIcon,
@@ -11,6 +11,7 @@ import {
   SkillsIcon,
   TrashIcon,
   UploadIcon,
+  RefreshIcon,
 } from '../../components/icons.js';
 import { SkillKindIcon, skillKindLabel, SkillScopeBadge } from './skill-kind.js';
 import { SkillForm } from './skill-form.js';
@@ -32,7 +33,7 @@ function downloadJson(name: string, data: unknown) {
 
 export function SkillsManager() {
   const api = useApi();
-  const skills = useAsync(() => api.listSkills(), []);
+  const skills = useAsync(() => api.listSkills(), [], 'skills');
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -204,8 +205,9 @@ export function SkillsManager() {
       {remaining.length > 0 && <Button disabled={uploading} onClick={() => void importRemaining(remaining)}>
         Retry {remaining.length} remaining skill(s)
       </Button>}
-      {skills.error && <p role="status">Skills could not be loaded. The list is unknown, not empty. <Button variant="ghost" onClick={skills.reload}>Retry loading skills</Button></p>}
-      {skills.loading && <SkeletonCards cards={3} />}
+      {skills.error && <p role="status">Skills could not be loaded. The list is unknown, not empty. <Button variant="ghost" onClick={skills.reload}><RefreshIcon size={13} /> Retry loading skills</Button></p>}
+      {skills.loading && !skills.data && <BrandedLoader title="Loading skills" detail="Reading your skill library" />}
+      {skills.loading && skills.data && <LoadingStatus label="Refreshing skills; showing saved snapshot" />}
       {!skills.loading && !skills.error && list.length === 0 && (
         <EmptyState
           icon={<SkillsIcon size={20} />}

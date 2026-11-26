@@ -826,6 +826,46 @@ describe('Explorer row action trail', () => {
     } as unknown as ApiClient;
   }
 
+  it('refreshes only the source and destination of a moved folder, preserving unrelated expanded branches', async () => {
+    const destination = { ...feature, id: 'f2', name: 'Destination feature' };
+    const unrelated = { ...feature, id: 'f3', name: 'Unrelated feature' };
+    let group = {
+      id: 'moving-folder', featureId: feature.id, name: 'Move this folder', parentGroupId: null,
+      kind: 'subcategory' as const, orderIndex: 0, createdAt: feature.createdAt, prNumber: null, prUrl: null,
+    };
+    const client = {
+      ...fullClient(),
+      listFeatures: vi.fn().mockResolvedValue([feature, destination, unrelated]),
+      listGroups: vi.fn(async (id: string) => group.featureId === id ? [group] : []),
+      listSessions: vi.fn().mockResolvedValue([]),
+      getFeatureUsage: vi.fn().mockResolvedValue(null),
+      moveNode: vi.fn(async () => { group = { ...group, featureId: destination.id }; return { moved: true }; }),
+    };
+    render(<ApiProvider value={client}>
+      <Explorer live={initialLiveState} activeSessionId={null} names={{}} {...callbacks} />
+    </ApiProvider>);
+    for (const entry of [feature, destination, unrelated]) {
+      fireEvent.click(await screen.findByRole('button', { name: `Expand ${entry.name}` }));
+    }
+    const folder = await screen.findByRole('button', { name: group.name });
+    const unrelatedNode = screen.getByRole('button', { name: unrelated.name }).closest('.tree-node');
+    await act(async () => {});
+    client.listGroups.mockClear();
+    client.listSessions.mockClear();
+    client.getFeatureUsage.mockClear();
+    fireEvent.dragStart(folder.closest('.tree-group-header')!);
+    fireEvent.drop(screen.getByRole('button', { name: destination.name }).closest('.tree-branch')!);
+    await waitFor(() => {
+      const owner = screen.getByRole('button', { name: destination.name }).closest('.tree-node') as HTMLElement;
+      expect(within(owner).getByRole('button', { name: group.name })).toBeVisible();
+    });
+    expect(client.listGroups.mock.calls.map(([id]) => id).sort()).toEqual([feature.id, destination.id]);
+    expect(client.listSessions).not.toHaveBeenCalledWith(unrelated.id);
+    expect(client.getFeatureUsage).not.toHaveBeenCalledWith(unrelated.id);
+    expect(screen.getByRole('button', { name: unrelated.name }).closest('.tree-node')).toBe(unrelatedNode);
+    expect(screen.queryByText('Loading Explorer')).not.toBeInTheDocument();
+  });
+
   it.each(['confirm', 'cancel'] as const)('requires an explicit destination task checkout before a cross-feature session move (%s)', async (action) => {
     const source: Session = {
       id: 's1', featureId: 'f1', name: 'Task session', provider: 'copilot', requestedModel: 'auto',

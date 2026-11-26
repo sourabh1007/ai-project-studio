@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi } from '../app/api-context.js';
+import { usePageSnapshot } from '../app/page-cache.js';
 import { calendarUsageWindow, type UsageWindow } from '../lib/usage-window.js';
 import type {
   IdeActivityFeed,
@@ -16,6 +17,7 @@ export interface UsageExplorerState {
   activity: IdeActivityFeed | null;
   loading: boolean;
   error: string | null;
+  progress?: { completed: number; total: number };
 }
 
 /**
@@ -31,7 +33,10 @@ export function useUsageExplorer(
   const api = useApi();
   const window = useMemo(() => calendarUsageWindow(granularity), [granularity, signal]);
   const grouping = granularity === 'year' ? 'month' : 'day';
-  const [state, setState] = useState<UsageExplorerState>({
+  const [cached, saveSnapshot] = usePageSnapshot<UsageExplorerState>(
+    `usage:${grouping}:${window.from}:${window.to}`,
+  );
+  const [state, setState] = useState<UsageExplorerState>(cached ? { ...cached, loading: true } : {
     granularity: grouping,
     window,
     workspace: null,
@@ -39,19 +44,26 @@ export function useUsageExplorer(
     activity: null,
     loading: true,
     error: null,
+    progress: { completed: 0, total: 3 },
   });
 
   useEffect(() => {
     let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: true, error: null, progress: { completed: 0, total: 3 } }));
+    let completed = 0;
+    const track = <T,>(work: Promise<T>) => work.then((result) => {
+      completed += 1;
+      if (!cancelled) setState((prev) => ({ ...prev, progress: { completed, total: 3 } }));
+      return result;
+    });
     void Promise.all([
-      api.getUsageRollup(grouping, window),
-      api.getIdeUsageRollup(grouping, window),
-      api.getIdeActivity(),
+      track(api.getUsageRollup(grouping, window)),
+      track(api.getIdeUsageRollup(grouping, window)),
+      track(api.getIdeActivity()),
     ])
       .then(([workspace, ide, activity]) => {
         if (!cancelled) {
-          setState({
+          const next: UsageExplorerState = {
             granularity: grouping,
             window,
             workspace,
@@ -62,7 +74,10 @@ export function useUsageExplorer(
             }) },
             loading: false,
             error: null,
-          });
+            progress: { completed: 3, total: 3 },
+          };
+          setState(next);
+          saveSnapshot(next);
         }
       })
       .catch((err: unknown) => {
@@ -77,7 +92,7 @@ export function useUsageExplorer(
     return () => {
       cancelled = true;
     };
-  }, [api, grouping, window, signal]);
+  }, [api, grouping, window, signal, saveSnapshot]);
 
   return state;
 }

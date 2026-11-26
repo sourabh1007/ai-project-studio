@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
+import { BrandedLoader, LoadingStatus } from '../../components/loading.js';
 import { useDraft } from '../../hooks/use-draft.js';
 import { useUiPreferences } from '../../hooks/use-ui-preferences.js';
 import { Button, ConfirmDialog, EmptyState, ErrorText, IconBadge, Modal } from '../../components/ui.js';
@@ -24,6 +25,7 @@ import {
   PrReviewIcon,
   SessionIcon,
   TrashIcon,
+  RefreshIcon,
 } from '../../components/icons.js';
 import { renderMarkdownComment } from '../../lib/markdown.js';
 import { PlannerImportDialog } from './planner-import-dialog.js';
@@ -214,8 +216,8 @@ export function PlannerView({
   const api = useApi();
   const automation = useAutomationReadiness();
   const { prefs } = useUiPreferences();
-  const tasks = useAsync(() => api.listPlannerTasks(), []);
-  const repos = useAsync(() => api.listRepos(), []);
+  const tasks = useAsync(() => api.listPlannerTasks(), [], 'planner:tasks');
+  const repos = useAsync(() => api.listRepos(), [], 'repos');
 
   const [mode, setMode] = useState<'planner' | 'backlog'>('planner');
   const [day, setDay] = useState(() => todayIso());
@@ -1029,10 +1031,12 @@ export function PlannerView({
       <ErrorText error={launchError} />
 
       <div className="planner-day-viewport">
+      {tasks.loading && tasks.data && <LoadingStatus label="Refreshing planner; showing saved snapshot" />}
       <div className={dayContentClass} key={day}>
         {dayTasks.length === 0 ? tasks.error ? (
-          <p role="status">Tasks could not be loaded. The list is unknown, not empty. You can still add a task above. <Button variant="ghost" onClick={tasks.reload}>Retry loading tasks</Button></p>
-        ) : tasks.loading ? null : (
+          <p role="status">Tasks could not be loaded. The list is unknown, not empty. You can still add a task above. <Button variant="ghost" onClick={tasks.reload}><RefreshIcon size={13} /> Retry loading tasks</Button></p>
+        ) : tasks.loading && !tasks.data ? <BrandedLoader title="Loading planner" detail="Reading planned tasks and repositories"
+          progress={{ completed: Number(!tasks.loading) + Number(!repos.loading), total: 2 }} /> : (
         <EmptyState
           title="Nothing planned for this day"
           description="Add a task above. Use the arrows to plan ahead or backfill a past day."

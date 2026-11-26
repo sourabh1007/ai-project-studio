@@ -9,6 +9,19 @@ function deferred<T>() {
 }
 
 describe('useAsync', () => {
+  it('keeps an item mutation when an older list request resolves afterwards', async () => {
+    const old = deferred<string[]>();
+    const loader = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue(['New item', 'Current item']);
+    const { result } = renderHook(() => useAsync(loader, []));
+    act(() => result.current.updateData(['New item']));
+    await act(async () => old.resolve(['Deleted item']));
+    expect(result.current.data).toEqual(['New item']);
+    expect(result.current.loading).toBe(false);
+    act(() => result.current.reload());
+    await act(async () => {});
+    expect(result.current.data).toEqual(['New item', 'Current item']);
+  });
+
   it('coalesces repeated reloads while one request is active into one trailing refresh', async () => {
     const first = deferred<string>();
     const second = deferred<string>();

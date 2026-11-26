@@ -35,4 +35,11 @@ describe('Avatar', () => {
     fireEvent.error(screen.getByRole('img', { name: 'Bob' }));
     expect(screen.getByText('BO')).toBeInTheDocument();
   });
+
+  it('tries a newly supplied picture after an earlier one failed', () => {
+    const view = render(<Avatar name="Bob" avatarUrl="https://example/broken.png" />);
+    fireEvent.error(screen.getByRole('img', { name: 'Bob' }));
+    view.rerender(<Avatar name="Bob" avatarUrl="data:image/png;base64,iVBORw0KGgo" />);
+    expect(screen.getByRole('img', { name: 'Bob' })).toHaveAttribute('src', 'data:image/png;base64,iVBORw0KGgo');
+  });
 });

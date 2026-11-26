@@ -4,6 +4,7 @@ import type {
   AzureTarget,
 } from '../azure-auth/azure-devops-auth.js';
 import { parseAzureTarget } from '../azure-auth/azure-devops-auth.js';
+import type { AzureAvatar } from '../azure-auth/azure-avatar.js';
 
 export interface AzureControllerDeps {
   /** Reports whether GCM already has a cached credential for the target. */
@@ -12,6 +13,8 @@ export interface AzureControllerDeps {
   azureSignIn: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
   /** Erases GCM's cached Azure DevOps credential for the target. */
   azureSignOut: (target: AzureTarget) => Promise<AzureDevOpsStatus>;
+  /** The signed-in account's profile picture as a data URL (token stays server-side). */
+  azureAvatar: (target: AzureTarget) => Promise<AzureAvatar>;
 }
 
 /**
@@ -30,6 +33,17 @@ export function createAzureRoutes(deps: AzureControllerDeps): Route[] {
         return {
           status: 200,
           body: await deps.azureStatus(parseAzureTarget(url)),
+        };
+      },
+    },
+    {
+      method: 'get',
+      path: '/azure-devops/avatar',
+      handler: async (req) => {
+        const url = typeof req.query.url === 'string' ? req.query.url : null;
+        return {
+          status: 200,
+          body: await deps.azureAvatar(parseAzureTarget(url)),
         };
       },
     },

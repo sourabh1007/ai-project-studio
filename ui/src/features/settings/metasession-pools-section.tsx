@@ -20,6 +20,7 @@ import {
 import {
   ActivityIcon,
   ChevronIcon,
+  RefreshIcon,
 } from '../../components/icons.js';
 import { Loader, Spinner } from '../../components/loading.js';
 import { ErrorState } from '../../components/error-state.js';
@@ -389,7 +390,7 @@ function InactivePoolStatus({ status, target, loading, failed }: {
         : availability?.message ?? 'No live warm pool is reported. Saving a target does not start one.'}
     </p>
     {monitor.error && <div role="status"><ErrorText error={monitor.error} /><Button variant="ghost"
-      onClick={monitor.refresh}>Retry sessions</Button></div>}
+      onClick={monitor.refresh}><RefreshIcon size={13} /> Retry sessions</Button></div>}
     {entries.length > 0 && <div className="metapool-sessions" role="list" aria-label="Live IDE metasessions">
       {entries.map((entry) => <button key={entry.id} type="button" role="listitem"
         className={`metasession-chip metasession-chip-${entry.state === 'running' ? 'busy' : entry.state}`}
@@ -422,7 +423,7 @@ function InactivePoolStatus({ status, target, loading, failed }: {
       </dl>
       <ErrorText error={monitor.debugError} />
       <ErrorText error={monitor.debug?.error ?? null} />
-      {monitor.debugError && <Button onClick={monitor.refresh}>Retry live details</Button>}
+      {monitor.debugError && <Button onClick={monitor.refresh}><RefreshIcon size={13} /> Retry live details</Button>}
       {!monitor.debug && !monitor.debugError && <Loader label="Loading live details" />}
       {monitor.debug && <>
         {monitor.debug.truncated && <p role="status">Showing the retained activity/output tail.</p>}

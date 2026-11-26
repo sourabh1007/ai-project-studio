@@ -259,6 +259,28 @@ describe('App workspace tab persistence', () => {
   const findControl = (name: string) =>
     screen.findByRole('button', { name }, LAZY_VIEW_TIMEOUT);
 
+  it('retains the Explorer DOM, scroll position and terminal when returning from another screen', async () => {
+    const client = apiClient();
+    const view = renderApp(client);
+    fireEvent.click(await findControl('Open session tab'));
+    await findView('Terminal s1');
+    await waitFor(() => expect(view.container.querySelector('.workspace-loading-overlay')).toBeNull());
+    const workspace = view.container.querySelector('.workspace')!;
+    const explorer = view.container.querySelector('.workspace-explorer')!;
+    explorer.scrollTop = 137;
+    vi.mocked(client.listSessions).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    await findView('Settings panel');
+    expect(workspace).not.toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Explorer' }));
+    expect(workspace).toBeVisible();
+    expect(view.container.querySelector('.workspace')).toBe(workspace);
+    expect(explorer.scrollTop).toBe(137);
+    expect(screen.getByText('Terminal s1')).toBeVisible();
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(view.container.querySelector('.workspace-loading-overlay')).toBeNull();
+  });
+
   it('keeps the originating monitoring view and draft mounted across capacity navigation and return', async () => {
     renderApp();
     await findControl('Open session tab');

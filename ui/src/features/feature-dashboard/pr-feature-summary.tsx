@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useApi } from '../../app/api-context.js';
 import { useAsync } from '../../hooks/use-async.js';
 import { Button, ErrorText } from '../../components/ui.js';
@@ -40,7 +41,7 @@ export function PrFeatureSummary({ featureId, url }: { featureId: string; url: s
     {review.loading && !current && <span className="field-hint" role="status">Loading PR details...</span>}
     {error && <div className="row">
       <ErrorText error={`PR details: ${error}`} />
-      <Button variant="ghost" onClick={() => { review.reload(); metadata.reload(); }}>Retry PR details</Button>
+      <Button variant="ghost" onClick={() => { review.reload(); metadata.reload(); }}><RefreshIcon size={13} /> Retry PR details</Button>
     </div>}
     {current?.worktreePath && <details>
       <summary>Checkout details</summary>

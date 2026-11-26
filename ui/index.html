@@ -35,6 +35,7 @@
             (appearance && appearance.values['cw-ui-prefs']) ||
             window.localStorage.getItem('cw-ui-prefs');
           var look = 'desktop';
+          var palette = 'default';
           if (prefsRaw) {
             var parsed = JSON.parse(prefsRaw);
             if (parsed && (parsed.appearance === 'futuristic' || parsed.appearance === 'clarity')) {
@@ -43,8 +44,13 @@
             if (parsed && (parsed.motion === 'full' || parsed.motion === 'reduced' || parsed.motion === 'off')) {
               document.documentElement.setAttribute('data-motion', parsed.motion);
             }
+            /* Mirrors IDE_PALETTES in ui/src/lib/terminal-schemes.ts. */
+            if (parsed && ['nord', 'dracula', 'solarized', 'gruvbox', 'tokyo-night', 'matrix', 'cyberpunk'].indexOf(parsed.palette) >= 0) {
+              palette = parsed.palette;
+            }
           }
           document.documentElement.setAttribute('data-appearance', look);
+          document.documentElement.setAttribute('data-palette', palette);
         } catch (_) {
           /* localStorage may be unavailable; fall back to CSS defaults. */
         }

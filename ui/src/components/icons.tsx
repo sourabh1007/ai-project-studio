@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  CircleUserRound,
   Clock,
   Code,
   Coins,
@@ -47,6 +48,8 @@ import {
   ListChecks,
   LocateFixed,
   LogIn,
+  LogOut,
+  Palette,
   Power,
   Maximize2,
   Minimize2,
@@ -83,6 +86,7 @@ import {
   Timer,
   Terminal,
   Trash2,
+  Type,
   Upload,
   WandSparkles,
   Wrench,
@@ -200,6 +204,10 @@ export const AiMagicIcon = makeIcon(WandSparkles);
 export const IntelligenceIcon = makeIcon(BrainCircuit);
 export const LaunchIcon = makeIcon(Rocket);
 export const SignInIcon = makeIcon(LogIn);
+export const SignOutIcon = makeIcon(LogOut);
+export const AccountIcon = makeIcon(CircleUserRound);
+export const PaletteIcon = makeIcon(Palette);
+export const FontIcon = makeIcon(Type);
 export const AuthKeyIcon = makeIcon(KeyRound);
 export const PowerIcon = makeIcon(Power);
 export const BugBashIcon = makeIcon(Bug);

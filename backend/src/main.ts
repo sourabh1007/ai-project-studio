@@ -281,6 +281,7 @@ import type {
   RemoteIssue,
 } from './repo/remote-import-contract.js';
 import { parseAzureTarget } from './azure-auth/azure-devops-auth.js';
+import { fetchAzureAvatar } from './azure-auth/azure-avatar.js';
 import type { AzureTarget } from './azure-auth/azure-devops-auth.js';
 import {
   AUTH_WARMER_NAMESPACE,
@@ -4938,6 +4939,7 @@ async function main(): Promise<void> {
           return await azureAuth.signOut(target);
         } finally { resume(); }
       },
+      azureAvatar: (target) => fetchAzureAvatar({ token: azureTokenFor, httpGet: azureHttpGet }, target.org ?? ''),
       repos: repoService,
       repositoryContexts: repositoryContextCoordinator,
       repoInsights: repoInsightsService,

@@ -1,3 +1,4 @@
+import { RefreshIcon } from '../../components/icons.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../../app/api-context.js';
 import { Button, ErrorText } from '../../components/ui.js';
@@ -222,7 +223,7 @@ export function SharedContextPanel({
           )}
           <ErrorText error={error} />
           <ErrorText error={persistenceError} />
-          {error && <Button variant="ghost" onClick={() => reload()}>Retry loading context</Button>}
+          {error && <Button variant="ghost" onClick={() => reload()}><RefreshIcon size={13} /> Retry loading context</Button>}
           <div className="shared-context-actions">
             <span className="shared-context-note">
               Injected into every session in this scope.

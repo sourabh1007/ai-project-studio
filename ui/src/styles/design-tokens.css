@@ -351,6 +351,419 @@
 }
 
 /*
+ * IDE color schemes (`data-palette`). Each scheme defines dark and light
+ * surface/text/status tokens and is declared after the appearance blocks, so a
+ * chosen scheme recolours surfaces while appearance keeps its non-colour
+ * treatments. Light schemes keep the main canvas white and tint the chrome, so
+ * every accent preset keeps AA contrast. css-contrast.test.ts checks every pair.
+ */
+[data-palette='nord'][data-theme='dark'] {
+  --bg: #22272f;
+  --surface: #272d38;
+  --surface-strong: #2e3440;
+  --border: #4c566a;
+  --border-strong: #6b7891;
+  --text: #eceff4;
+  --text-muted: #d8dee9;
+  --text-faint: #b8c2d3;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+  --danger: #e5959c;
+  --panel-titlebar: #2e3440;
+  --panel-activitybar: #22272f;
+  --panel-sidebar: #272d38;
+  --panel-editor: #22272f;
+  --panel: #272d38;
+  --panel-inset: #20252e;
+  --panel-hover: #343b49;
+  --statusbar-bg: #3b4f6b;
+  --statusbar-fg: #eceff4;
+  --item-hover: #343b49;
+  --item-active: #3b4252;
+  --activity-fg: #d8dee9;
+  --tree-guide: #4c566a;
+  --tree-selected: #3b4252;
+  --surface-overlay: rgba(39, 45, 56, 0.88);
+}
+
+[data-palette='nord'][data-theme='light'] {
+  --bg: #e5e9f0;
+  --surface: #ffffff;
+  --surface-strong: #f3f5f8;
+  --border: #b8c2d3;
+  --border-strong: #7b88a1;
+  --text: #1c212b;
+  --text-muted: #323947;
+  --text-faint: #3b4252;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #d8dee9;
+  --panel-activitybar: #d8dee9;
+  --panel-sidebar: #f3f5f8;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #edf0f5;
+  --panel-hover: #d8dee9;
+  --statusbar-bg: #4c566a;
+  --statusbar-fg: #eceff4;
+  --item-hover: #dde3ec;
+  --item-active: #cfd7e4;
+  --activity-fg: #434c5e;
+  --tree-guide: #b8c2d3;
+  --tree-selected: #cfd7e4;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='dracula'][data-theme='dark'] {
+  --bg: #21222c;
+  --surface: #282a36;
+  --surface-strong: #303241;
+  --border: #545873;
+  --border-strong: #6272a4;
+  --text: #f8f8f2;
+  --text-muted: #e0e0ea;
+  --text-faint: #bfc3dc;
+  --success: #50fa7b;
+  --warning: #f1fa8c;
+  --danger: #ff6e6e;
+  --panel-titlebar: #21222c;
+  --panel-activitybar: #191a21;
+  --panel-sidebar: #21222c;
+  --panel-editor: #282a36;
+  --panel: #282a36;
+  --panel-inset: #1e1f29;
+  --panel-hover: #343746;
+  --statusbar-bg: #44475a;
+  --statusbar-fg: #f8f8f2;
+  --item-hover: #343746;
+  --item-active: #44475a;
+  --activity-fg: #e0e0ea;
+  --tree-guide: #545873;
+  --tree-selected: #44475a;
+  --surface-overlay: rgba(40, 42, 54, 0.88);
+}
+
+[data-palette='dracula'][data-theme='light'] {
+  --bg: #f1eff8;
+  --surface: #ffffff;
+  --surface-strong: #f6f4fc;
+  --border: #c4bce0;
+  --border-strong: #8a80b0;
+  --text: #1f1d2b;
+  --text-muted: #463f5e;
+  --text-faint: #514a6b;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #e8e4f5;
+  --panel-activitybar: #e8e4f5;
+  --panel-sidebar: #f1eff8;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #ece8f7;
+  --panel-hover: #e2ddf2;
+  --statusbar-bg: #44475a;
+  --statusbar-fg: #f8f8f2;
+  --item-hover: #e6e1f4;
+  --item-active: #d9d2ef;
+  --activity-fg: #463f5e;
+  --tree-guide: #c4bce0;
+  --tree-selected: #d9d2ef;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='solarized'][data-theme='dark'] {
+  --bg: #00212b;
+  --surface: #002b36;
+  --surface-strong: #073642;
+  --border: #2e5964;
+  --border-strong: #586e75;
+  --text: #eee8d5;
+  --text-muted: #c4cdcd;
+  --text-faint: #a3b0b0;
+  --success: #a8c023;
+  --warning: #e0b324;
+  --danger: #ff7b72;
+  --panel-titlebar: #00212b;
+  --panel-activitybar: #001b24;
+  --panel-sidebar: #00262f;
+  --panel-editor: #002b36;
+  --panel: #002b36;
+  --panel-inset: #00212b;
+  --panel-hover: #0a3a47;
+  --statusbar-bg: #073642;
+  --statusbar-fg: #eee8d5;
+  --item-hover: #0a3a47;
+  --item-active: #124552;
+  --activity-fg: #c4cdcd;
+  --tree-guide: #2e5964;
+  --tree-selected: #124552;
+  --surface-overlay: rgba(0, 43, 54, 0.88);
+}
+
+[data-palette='solarized'][data-theme='light'] {
+  --bg: #eee8d5;
+  --surface: #ffffff;
+  --surface-strong: #fefaee;
+  --border: #d3cbb7;
+  --border-strong: #93a1a1;
+  --text: #002029;
+  --text-muted: #24434b;
+  --text-faint: #34525a;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #eee8d5;
+  --panel-activitybar: #eee8d5;
+  --panel-sidebar: #fefaee;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #faf4e3;
+  --panel-hover: #eae3cd;
+  --statusbar-bg: #073642;
+  --statusbar-fg: #fdf6e3;
+  --item-hover: #efe8d3;
+  --item-active: #e4dcc3;
+  --activity-fg: #34525a;
+  --tree-guide: #d3cbb7;
+  --tree-selected: #e4dcc3;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='gruvbox'][data-theme='dark'] {
+  --bg: #1d2021;
+  --surface: #282828;
+  --surface-strong: #32302f;
+  --border: #504945;
+  --border-strong: #7c6f64;
+  --text: #ebdbb2;
+  --text-muted: #d5c4a1;
+  --text-faint: #c9b99a;
+  --success: #b8bb26;
+  --warning: #fabd2f;
+  --danger: #ff6f5e;
+  --panel-titlebar: #1d2021;
+  --panel-activitybar: #1d2021;
+  --panel-sidebar: #282828;
+  --panel-editor: #1d2021;
+  --panel: #282828;
+  --panel-inset: #232323;
+  --panel-hover: #3c3836;
+  --statusbar-bg: #504945;
+  --statusbar-fg: #fbf1c7;
+  --item-hover: #3c3836;
+  --item-active: #45403d;
+  --activity-fg: #d5c4a1;
+  --tree-guide: #504945;
+  --tree-selected: #45403d;
+  --surface-overlay: rgba(40, 40, 40, 0.88);
+}
+
+[data-palette='gruvbox'][data-theme='light'] {
+  --bg: #ebdbb2;
+  --surface: #ffffff;
+  --surface-strong: #fbf1c7;
+  --border: #d5c4a1;
+  --border-strong: #928374;
+  --text: #1d1d1d;
+  --text-muted: #32302f;
+  --text-faint: #45403d;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #ebdbb2;
+  --panel-activitybar: #ebdbb2;
+  --panel-sidebar: #f9f5d7;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #f8f0d2;
+  --panel-hover: #ebdbb2;
+  --statusbar-bg: #504945;
+  --statusbar-fg: #fbf1c7;
+  --item-hover: #efe2bb;
+  --item-active: #e3d0a0;
+  --activity-fg: #3c3836;
+  --tree-guide: #d5c4a1;
+  --tree-selected: #e3d0a0;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='tokyo-night'][data-theme='dark'] {
+  --bg: #16161e;
+  --surface: #1f2335;
+  --surface-strong: #24283b;
+  --border: #3b4261;
+  --border-strong: #565f89;
+  --text: #c0caf5;
+  --text-muted: #a9b1d6;
+  --text-faint: #9aa5ce;
+  --success: #9ece6a;
+  --warning: #e0af68;
+  --danger: #f7768e;
+  --panel-titlebar: #16161e;
+  --panel-activitybar: #16161e;
+  --panel-sidebar: #1a1b26;
+  --panel-editor: #1a1b26;
+  --panel: #1f2335;
+  --panel-inset: #16161e;
+  --panel-hover: #292e42;
+  --statusbar-bg: #283457;
+  --statusbar-fg: #c0caf5;
+  --item-hover: #292e42;
+  --item-active: #2f3549;
+  --activity-fg: #a9b1d6;
+  --tree-guide: #3b4261;
+  --tree-selected: #2f3549;
+  --surface-overlay: rgba(26, 27, 38, 0.88);
+}
+
+[data-palette='tokyo-night'][data-theme='light'] {
+  --bg: #e1e2e7;
+  --surface: #ffffff;
+  --surface-strong: #f5f6f9;
+  --border: #b9bdcc;
+  --border-strong: #8990b3;
+  --text: #1a1e2e;
+  --text-muted: #2c3148;
+  --text-faint: #363c58;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #d5d6db;
+  --panel-activitybar: #d5d6db;
+  --panel-sidebar: #f3f3f6;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #f0f1f5;
+  --panel-hover: #dcdee6;
+  --statusbar-bg: #2e3c64;
+  --statusbar-fg: #e9e9ed;
+  --item-hover: #e0e2ea;
+  --item-active: #cfd3e3;
+  --activity-fg: #414868;
+  --tree-guide: #b9bdcc;
+  --tree-selected: #cfd3e3;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='matrix'][data-theme='dark'] {
+  --bg: #000a03;
+  --surface: #04140a;
+  --surface-strong: #082012;
+  --border: #1f5a2e;
+  --border-strong: #2f8a46;
+  --text: #c8f7d2;
+  --text-muted: #8fe3a3;
+  --text-faint: #6fcf86;
+  --success: #39ff6a;
+  --warning: #ffd75e;
+  --danger: #ff6b6b;
+  --panel-titlebar: #020d05;
+  --panel-activitybar: #000802;
+  --panel-sidebar: #031108;
+  --panel-editor: #000a03;
+  --panel: #04140a;
+  --panel-inset: #020d05;
+  --panel-hover: #0b2a15;
+  --statusbar-bg: #0b3d1a;
+  --statusbar-fg: #c8f7d2;
+  --item-hover: #0b2a15;
+  --item-active: #123b1f;
+  --activity-fg: #8fe3a3;
+  --tree-guide: #1f5a2e;
+  --tree-selected: #123b1f;
+  --surface-overlay: rgba(4, 20, 10, 0.88);
+}
+
+[data-palette='matrix'][data-theme='light'] {
+  --bg: #e3f2e6;
+  --surface: #ffffff;
+  --surface-strong: #f1faf3;
+  --border: #a8cfb2;
+  --border-strong: #5f9a6e;
+  --text: #062010;
+  --text-muted: #143d21;
+  --text-faint: #1f4b2c;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #d6ecdb;
+  --panel-activitybar: #d6ecdb;
+  --panel-sidebar: #eaf6ec;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #ebf6ed;
+  --panel-hover: #d3eadb;
+  --statusbar-bg: #0b3d1a;
+  --statusbar-fg: #e3f2e6;
+  --item-hover: #d9eedf;
+  --item-active: #c5e4cd;
+  --activity-fg: #1d4a2a;
+  --tree-guide: #a8cfb2;
+  --tree-selected: #c5e4cd;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+[data-palette='cyberpunk'][data-theme='dark'] {
+  --bg: #0b0118;
+  --surface: #120428;
+  --surface-strong: #1a0835;
+  --border: #3d1f6b;
+  --border-strong: #6b3fa0;
+  --text: #f0e9ff;
+  --text-muted: #d4c6ff;
+  --text-faint: #b9a6f0;
+  --success: #05ffa1;
+  --warning: #f9f871;
+  --danger: #ff4d8d;
+  --panel-titlebar: #0b0118;
+  --panel-activitybar: #07000f;
+  --panel-sidebar: #10031f;
+  --panel-editor: #0d0221;
+  --panel: #120428;
+  --panel-inset: #0b0118;
+  --panel-hover: #24104a;
+  --statusbar-bg: #3a0a4f;
+  --statusbar-fg: #f0e9ff;
+  --item-hover: #24104a;
+  --item-active: #34176a;
+  --activity-fg: #d4c6ff;
+  --tree-guide: #3d1f6b;
+  --tree-selected: #34176a;
+  --surface-overlay: rgba(18, 4, 40, 0.88);
+}
+
+[data-palette='cyberpunk'][data-theme='light'] {
+  --bg: #f2ecfb;
+  --surface: #ffffff;
+  --surface-strong: #f8f4fe;
+  --border: #c3b0e6;
+  --border-strong: #8a6cc0;
+  --text: #1a0b33;
+  --text-muted: #3a2563;
+  --text-faint: #4a3575;
+  --success: #03694c;
+  --warning: #a34906;
+  --danger: #b91c1c;
+  --panel-titlebar: #e9e0f8;
+  --panel-activitybar: #e9e0f8;
+  --panel-sidebar: #f5f0fc;
+  --panel-editor: #ffffff;
+  --panel: #ffffff;
+  --panel-inset: #efe8fa;
+  --panel-hover: #e4d9f6;
+  --statusbar-bg: #3a0a4f;
+  --statusbar-fg: #f8f4fe;
+  --item-hover: #e8def7;
+  --item-active: #dacbf3;
+  --activity-fg: #3a2563;
+  --tree-guide: #c3b0e6;
+  --tree-selected: #dacbf3;
+  --surface-overlay: rgba(255, 255, 255, 0.88);
+}
+
+/*
  * Translucency is reserved for floating surfaces only. Under the futuristic
  * appearance, the command palette and modal dialogs gain a subtle frosted
  * backdrop and lifted depth; the terminal and code/editor panels deliberately

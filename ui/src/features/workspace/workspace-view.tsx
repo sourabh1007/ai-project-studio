@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import type { LiveState } from '../../lib/stream.js';
 import type { Feature, Repository, Session, AttachedAgent, PrReview } from '../../lib/types.js';
 import type { WorkspaceLaunchIntent } from '../../lib/planner-launch.js';
@@ -142,7 +142,7 @@ export function WorkspaceView({
       ...state, activeId: state.tabs.some((tab) => tab.id === tabState.activeId) ? tabState.activeId : state.activeId,
     }, tabState.splitId)), JSON.stringify([tabState.activeId, tabState.splitId]));
   }, [onMonitoringOrigin, tabState.activeId, tabState.splitId, setTabState]);
-  const [restoring, setRestoring] = useState(true);
+  const [restoring, setRestoring] = useState(!launch && !reopen && !providerSwitch);
   useStartupPending(restoring);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const fullscreenLayout = useRef<{ activeId: string | null; splitId: string | null } | null>(null);
@@ -205,7 +205,7 @@ export function WorkspaceView({
     return () => { active = false; };
   }, [api]);
   const switchWork = useRef<{ nonce: number; work: Promise<Session | null> } | null>(null);
-  const pendingSwitchSessions = useRef(new Map<string, Session>());
+  const pendingSessions = useRef(new Map<string, Session>());
   useEffect(() => {
     if (!providerSwitch) return;
     let cancelled = false;
@@ -226,7 +226,7 @@ export function WorkspaceView({
     }
     void switchWork.current.work.then((session) => {
       if (cancelled || !session) return;
-      pendingSwitchSessions.current.set(session.id, session);
+      pendingSessions.current.set(session.id, session);
       pendingTabFocus.current = session.id;
       setTabState((state) => openWorkspaceTab({ ...state, splitId: null }, {
         kind: 'session', id: session.id, label: session.name ?? 'Session', session,
@@ -268,11 +268,41 @@ export function WorkspaceView({
     pendingTabFocus.current = null;
   }, [tabs, tabState.activeId]);
   const activeId = tabState.activeId;
-  const [deletionRevision, setDeletionRevision] = useState(0);
-  useEffect(() => featureDeletionStore.subscribe(() => setDeletionRevision((revision) => revision + 1)), []);
+  const [featureRevisions, setFeatureRevisions] = useState<Record<string, number>>({});
+  const refreshFeatures = useCallback((ids: Iterable<string>) => {
+    const changed = [...ids];
+    if (changed.length === 0) return;
+    setFeatureRevisions((previous) => {
+      const next = { ...previous };
+      for (const id of changed) next[id] = (next[id] ?? 0) + 1;
+      return next;
+    });
+  }, []);
   const knownFeatures = useRef<Feature[]>([]);
   const pendingImportedFeatures = useRef(new Map<string, Feature>());
   const knownAttachments = useRef(new Map<string, AttachedAgent['attachment']>());
+  const currentTabs = useRef(tabs);
+  currentTabs.current = tabs;
+  const restoredTabs = useRef(new Set<string>());
+  const reconciledRevisions = useRef<Record<string, number>>({});
+  const reconciledReviews = useRef('');
+  const initiallyRestored = useRef(Boolean(launch || reopen || providerSwitch));
+  const [restoreProgress, setRestoreProgress] = useState({ completed: 0, total: 1, detail: 'Reading saved tabs' });
+  useEffect(() => {
+    const statuses = new Map(featureDeletionStore.getSnapshot().map((job) => [job.id, job.status]));
+    return featureDeletionStore.subscribe(() => {
+      for (const job of featureDeletionStore.getSnapshot()) {
+        if (job.status === 'succeeded' && statuses.get(job.id) !== 'succeeded') {
+          refreshFeatures(featureSubtreeIds(job.id, [
+            ...knownFeatures.current,
+            ...currentTabs.current.flatMap((tab) => 'feature' in tab ? [tab.feature] : []),
+            ...pendingImportedFeatures.current.values(),
+          ]));
+        }
+        statuses.set(job.id, job.status);
+      }
+    });
+  }, [refreshFeatures]);
   const trackedReviewSignal = tabs.some((tab) => tab.kind === 'pr-review-tracker')
     ? JSON.stringify(Object.values(live.prReviews).map((review) => [
         review.featureId, review.pull.number, review.pull.title,
@@ -285,26 +315,46 @@ export function WorkspaceView({
     ...api,
     async deleteRepo(id: string) {
       const result = await api.deleteRepo(id);
-      setTabState((prev) => removeRepoWorkspaceTabs(prev, id));
-      setDeletionRevision((revision) => revision + 1);
+      knownFeatures.current = knownFeatures.current.map((feature) =>
+        feature.repoId === id ? { ...feature, repoId: null } : feature);
+      setTabState((prev) => {
+        const remaining = removeRepoWorkspaceTabs(prev, id);
+        return { ...remaining, tabs: remaining.tabs.map((tab) =>
+          'feature' in tab && tab.feature.repoId === id
+            ? { ...tab, feature: { ...tab.feature, repoId: null } } : tab) };
+      });
       return result;
     },
     async detachAgent(id: string) {
       const result = await api.detachAgent(id);
       const attachment = knownAttachments.current.get(id);
       setTabState((prev) => removeAgentWorkspaceTabs(prev, id, attachment));
-      setDeletionRevision((revision) => revision + 1);
+      refreshFeatures(attachment ? [attachment.featureId] : currentTabs.current.flatMap((tab) =>
+        tab.kind === 'agent' || tab.kind === 'review-board' ? [tab.feature.id] : []));
       return result;
     },
     async deleteGroup(id: string) {
       const result = await api.deleteGroup(id);
-      setDeletionRevision((revision) => revision + 1);
+      setTabState((prev) => ({ ...prev, tabs: prev.tabs.map((tab) =>
+        tab.kind === 'session' && tab.session.groupId === id
+          ? { ...tab, session: { ...tab.session, groupId: null } }
+          : 'feature' in tab && tab.feature.parentGroupId === id
+            ? { ...tab, feature: { ...tab.feature, parentGroupId: null } } : tab) }));
       return result;
     },
-  }), [api, setTabState]);
+  }), [api, setTabState, refreshFeatures]);
 
   useEffect(() => {
-    const featureTabs = tabs.filter(
+    const tabKey = (tab: WorkspaceTab) => tab.kind === 'session'
+      ? `${tab.kind}:${tab.id}:${tab.session.featureId}` : `${tab.kind}:${tab.id}`;
+    const keys = new Set(tabs.map(tabKey));
+    restoredTabs.current = new Set([...restoredTabs.current].filter((key) => keys.has(key)));
+    const affectedTabs = tabs.filter((tab) =>
+      !restoredTabs.current.has(tabKey(tab)) ||
+      (tab.kind !== 'repo' && (featureRevisions[tabFeatureId(tab)] ?? 0) !==
+        (reconciledRevisions.current[tabFeatureId(tab)] ?? 0)) ||
+      (tab.kind === 'pr-review-tracker' && trackedReviewSignal !== reconciledReviews.current));
+    const featureTabs = affectedTabs.filter(
       (tab) =>
         tab.kind === 'feature' ||
         tab.kind === 'review-board' ||
@@ -313,15 +363,15 @@ export function WorkspaceView({
     );
     const sessionFeatureIds = [
       ...new Set(
-        tabs
+        affectedTabs
           .filter((tab): tab is Extract<WorkspaceTab, { kind: 'session' }> =>
             tab.kind === 'session')
           .map((tab) => tab.session.featureId),
       ),
     ];
-    const hasRepoTabs = tabs.some((tab) => tab.kind === 'repo');
+    const hasRepoTabs = affectedTabs.some((tab) => tab.kind === 'repo');
     const agentFeatureIds = [...new Set(
-      tabs.flatMap((tab) =>
+      affectedTabs.flatMap((tab) =>
         tab.kind === 'agent' || tab.kind === 'review-board' ? [tab.feature.id] : [],
       ),
     )];
@@ -330,29 +380,40 @@ export function WorkspaceView({
       sessionFeatureIds.length === 0 &&
       !hasRepoTabs
     ) {
+      initiallyRestored.current = true;
+      reconciledRevisions.current = featureRevisions;
       setRestoring(false);
       return;
     }
 
     let active = true;
-    setRestoring(true);
+    const total = Number(featureTabs.length > 0 || sessionFeatureIds.length > 0) +
+      Number(hasRepoTabs) + sessionFeatureIds.length + agentFeatureIds.length + 1;
+    let completed = 0;
+    if (!initiallyRestored.current) setRestoreProgress({ completed, total, detail: 'Loading saved workspace data' });
+    const tracked = <T,>(work: Promise<T>) => work.finally(() => {
+      completed += 1;
+      if (active && !initiallyRestored.current) {
+        setRestoreProgress({ completed, total, detail: 'Loading saved workspace data' });
+      }
+    });
     void (async () => {
       const [features, repos, sessionsByFeature, agentsByFeature] = await Promise.all([
         featureTabs.length > 0 || sessionFeatureIds.length > 0
-          ? api
+          ? tracked(api
               .listFeatures()
               .then((loaded) => new Map(loaded.map((feature) => [feature.id, feature])))
-              .catch(() => null)
+              .catch(() => null))
           : Promise.resolve(null),
         hasRepoTabs
-          ? api
+          ? tracked(api
               .listRepos()
               .then((loaded) => new Map(loaded.map((repo) => [repo.id, repo])))
-              .catch(() => null)
+              .catch(() => null))
           : Promise.resolve(null),
         sessionFeatureIds.length > 0
           ? Promise.all(
-              sessionFeatureIds.map(async (featureId) => {
+              sessionFeatureIds.map((featureId) => tracked((async () => {
                 try {
                   const loaded = await api.listSessions(featureId, {
                     includeInternal: true,
@@ -364,16 +425,16 @@ export function WorkspaceView({
                 } catch {
                   return [featureId, null] as const;
                 }
-              }),
+              })())),
             ).then((entries) => new Map(entries))
           : Promise.resolve(new Map<string, Map<string, Session> | null>()),
-        Promise.all(agentFeatureIds.map(async (featureId) => {
+        Promise.all(agentFeatureIds.map((featureId) => tracked((async () => {
           try {
             return [featureId, await api.listFeatureAgents(featureId)] as const;
           } catch {
             return [featureId, null] as const;
           }
-        })).then((entries) => new Map(entries)),
+        })()))).then((entries) => new Map(entries)),
       ]);
       if (!active) return;
       // Successful checkout responses are newer than an Explorer/list request
@@ -392,6 +453,9 @@ export function WorkspaceView({
         tab.kind === 'pr-review-tracker' ? [tab.feature.id] : [],
       ));
       const prReviews = new Map<string, Pick<PrReview, 'pull'> | null>();
+      if (!initiallyRestored.current) {
+        setRestoreProgress({ completed, total, detail: 'Restoring tabs and review trackers' });
+      }
       await Promise.all([...(features?.values() ?? [])]
         .filter((feature) => feature.parentFeatureId && trackerIds.has(feature.parentFeatureId))
         .map(async (feature) => {
@@ -408,9 +472,9 @@ export function WorkspaceView({
         return;
       }
       if (features) knownFeatures.current = [...features.values()];
-      for (const [id, session] of pendingSwitchSessions.current) {
+      for (const [id, session] of pendingSessions.current) {
         const loaded = sessionsByFeature.get(session.featureId);
-        if (loaded?.has(id)) pendingSwitchSessions.current.delete(id);
+        if (loaded?.has(id)) pendingSessions.current.delete(id);
         else loaded?.set(id, session);
       }
       for (const [featureId, agents] of agentsByFeature) {
@@ -425,7 +489,15 @@ export function WorkspaceView({
       setTabState((prev) =>
         reconcileWorkspaceTabsState(prev, { features, repos, sessionsByFeature, agentsByFeature, prReviews }),
       );
-    })().finally(() => { if (active) setRestoring(false); });
+      restoredTabs.current = keys;
+      reconciledRevisions.current = featureRevisions;
+      reconciledReviews.current = trackedReviewSignal;
+    })().finally(() => {
+      if (active) {
+        initiallyRestored.current = true;
+        setRestoring(false);
+      }
+    });
 
     return () => {
       active = false;
@@ -433,7 +505,7 @@ export function WorkspaceView({
   }, [
     api,
     setTabState,
-    deletionRevision,
+    featureRevisions,
     trackedReviewSignal,
     tabs
       .map((tab) =>
@@ -650,6 +722,7 @@ export function WorkspaceView({
     }
     const { intent } = launch;
     if (intent.kind === 'session') {
+      pendingSessions.current.set(intent.session.id, intent.session);
       openSession(intent.session, intent.label);
     } else if (intent.kind === 'agent') {
       pendingImportedFeatures.current.set(intent.feature.id, intent.feature);
@@ -693,14 +766,16 @@ export function WorkspaceView({
       pendingImportedFeatures.current.delete(id);
       reviewBoardRunStore.remove(id);
     }
+    for (const [id, session] of pendingSessions.current) {
+      if (deletedIds.has(session.featureId)) pendingSessions.current.delete(id);
+    }
     setTabState((prev) => removeFeatureWorkspaceTabs(prev, feature.id, features));
-    setDeletionRevision((revision) => revision + 1);
   }
 
   async function deleteSession(session: Session) {
     await api.deleteSession(session.id);
+    pendingSessions.current.delete(session.id);
     setTabState((prev) => removeSessionWorkspaceTabs(prev, session.id));
-    setDeletionRevision((revision) => revision + 1);
   }
 
   const active = tabs.find((t) => t.id === activeId) ?? null;
@@ -823,7 +898,8 @@ export function WorkspaceView({
       }
     >
       {restoring && <div className="workspace-loading-overlay">
-        <BrandedLoader title="Loading Explorer" detail="Restoring your workspace" />
+        <BrandedLoader title="Loading Explorer" detail={restoreProgress.detail}
+          progress={restoreProgress} />
       </div>}
       {switchError && <p role="alert">{switchError}</p>}
       {fullscreenError && <p role="alert" className="workspace-fullscreen-error">{fullscreenError}</p>}

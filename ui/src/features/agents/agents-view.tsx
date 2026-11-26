@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/use-async.js';
 import type { AgentCatalogItem } from '../../lib/types.js';
 import { Card } from '../../components/ui.js';
 import { ErrorState } from '../../components/error-state.js';
-import { Loader } from '../../components/loading.js';
+import { Loader, LoadingStatus } from '../../components/loading.js';
 import { AgentIcon } from '../../agent-host/agent-icon.js';
 import { AgentPromptTree } from './agent-prompt-tree.js';
 import { Insights } from '../monitoring/insights.js';
@@ -26,6 +26,7 @@ function AgentDetail({
   const { data, loading, error, cause, reload } = useAsync(
     () => api.getConfig(),
     [],
+    'config',
   );
   const { manifest, usage } = item;
 
@@ -72,7 +73,7 @@ function AgentDetail({
         <p className="field-hint">Only operations with this agent's typed attribution are included. Legacy operations without attribution are not guessed from their labels.</p>
         <OperationInsights scope={{ agentId: manifest.id }} />
       </>}</Insights>
-      {loading && <Loader label="Loading settings…" />}
+      {loading && (data ? <LoadingStatus label="Refreshing agent settings; showing saved snapshot" /> : <Loader label="Loading settings…" />)}
       {error && <ErrorState error={cause ?? error} onRetry={reload} />}
       {data &&
         (manifest.promptFields.length === 0 ? (
@@ -104,13 +105,14 @@ export function AgentsView() {
   const { data, loading, error, cause, reload } = useAsync(
     () => api.listAgents(),
     [],
+    'agents',
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  if (loading) {
+  if (loading && !data) {
     return <Loader label="Loading agents…" />;
   }
-  if (error) {
+  if (error && !data) {
     return <ErrorState error={cause ?? error} onRetry={reload} />;
   }
 
@@ -124,6 +126,8 @@ export function AgentsView() {
 
   return (
     <div className="agents-view">
+      {loading && <LoadingStatus label="Refreshing agents; showing saved snapshot" />}
+      {error && <ErrorState error={cause ?? error} onRetry={reload} />}
       <header className="agents-view-head">
         <h1 className="agents-view-title">Agents</h1>
         <p className="muted">

@@ -1527,17 +1527,17 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  animation: view-in 260ms var(--ease-smooth);
+  /* Opacity only: a transform would blur the WebGL terminal mid-switch and
+     make the view a containing block for fixed dialogs while it animates. */
+  animation: view-in 160ms var(--ease-out);
 }
 
 @keyframes view-in {
   from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.995);
+    opacity: 0.35;
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -8505,6 +8505,25 @@ body.is-resizing .history-pane {
   background: #ffffff;
 }
 
+/* Console startup feedback. Purely visual (the status line announces state),
+   never intercepts input, and yields as soon as the CLI writes anything. The
+   short delay keeps fast attaches from flashing a loader. */
+.terminal-startup-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 2;
+  background: color-mix(in srgb, var(--panel-editor) 72%, transparent);
+  animation: terminal-overlay-in 220ms var(--ease-out) 180ms both;
+}
+
+@keyframes terminal-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .terminal-host .xterm {
   height: 100%;
   max-height: none;
@@ -11119,18 +11138,35 @@ body.is-resizing .history-pane {
   animation: fade-in 0.24s ease both;
 }
 
-.branded-loader-mark {
+.loading-mark {
   position: relative;
   display: grid;
   place-items: center;
-  width: 72px;
-  height: 72px;
-  margin-bottom: var(--space-1, 4px);
+  flex: none;
+  isolation: isolate;
 }
 
-.branded-loader-mark img {
-  border-radius: 12px;
+.loading-mark > svg {
   animation: branded-pulse 1.8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.spinner.loading-mark-inline {
+  border: 0;
+  animation: none;
+}
+
+.loading-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  max-width: 100%;
+  font-size: var(--fs-secondary, 13px);
+  color: var(--text-muted);
+}
+
+.loading-mark-inline .branded-loader-orbit {
+  border-width: 1px;
 }
 
 .branded-loader-orbit {
@@ -11140,15 +11176,58 @@ body.is-resizing .history-pane {
   border: 2px solid transparent;
   border-top-color: var(--accent);
   border-right-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  animation: spin 1.1s linear infinite;
+  animation: loading-orbit 1.1s linear infinite;
+  will-change: transform;
 }
 
 .branded-loader-orbit-2 {
-  inset: 8px;
+  inset: 11.11%;
   border-top-color: color-mix(in srgb, var(--accent) 55%, transparent);
   border-right-color: transparent;
   border-left-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  animation: spin 1.6s linear infinite reverse;
+  animation: loading-orbit 1.6s linear infinite reverse;
+}
+
+@keyframes loading-orbit {
+  from { transform: translateZ(0) rotate(0deg); }
+  to { transform: translateZ(0) rotate(360deg); }
+}
+
+.branded-loader-compact {
+  padding: var(--space-4, 16px);
+}
+
+.branded-loader-progress {
+  width: min(240px, 100%);
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.branded-loader-progress > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  animation: loading-sweep 1.5s linear infinite;
+  will-change: transform;
+}
+
+.branded-loader-progress.is-measured > span {
+  animation: none;
+  transition: transform 180ms ease;
+}
+
+@keyframes loading-sweep {
+  from { transform: translateX(-35%) scaleX(0.35); }
+  to { transform: translateX(100%) scaleX(0.35); }
+}
+
+:root[data-motion='off'] .branded-loader-progress:not(.is-measured) > span {
+  transform: scaleX(1);
+  opacity: 0.45;
 }
 
 .branded-loader-title {
@@ -11174,21 +11253,46 @@ body.is-resizing .history-pane {
 @keyframes branded-pulse {
   0%,
   100% {
-    transform: scale(1);
+    transform: translateZ(0) scale(1);
     opacity: 1;
   }
   50% {
-    transform: scale(0.92);
+    transform: translateZ(0) scale(0.92);
     opacity: 0.82;
   }
 }
 
+/* Loading indicators are essential feedback, not decoration. Under OS reduced
+   motion (e.g. Windows "Animation effects" off) or the app's Reduced setting,
+   they keep a calm, steady rotation/sweep without pulsing or scaling, so a
+   working app never looks frozen. Only the app's Motion: Off makes them static.
+   These outrank the global `animation: none !important` reset by specificity. */
 @media (prefers-reduced-motion: reduce) {
-  .branded-loader-mark img,
-  .branded-loader-orbit,
-  .branded-loader-orbit-2 {
-    animation-duration: 0s;
+  :root:not([data-motion='off']) .branded-loader-orbit {
+    animation: loading-orbit 1.6s linear infinite !important;
   }
+  :root:not([data-motion='off']) .branded-loader-orbit-2 {
+    animation: loading-orbit 2.4s linear infinite reverse !important;
+  }
+  :root:not([data-motion='off']) .branded-loader-progress:not(.is-measured) > span {
+    animation: loading-sweep 2.2s linear infinite !important;
+  }
+  :root:not([data-motion='off']) .spinner:not(.loading-mark-inline) {
+    animation: spin 1.2s linear infinite !important;
+  }
+}
+
+:root[data-motion='reduced'] .branded-loader-orbit {
+  animation: loading-orbit 1.6s linear infinite !important;
+}
+:root[data-motion='reduced'] .branded-loader-orbit-2 {
+  animation: loading-orbit 2.4s linear infinite reverse !important;
+}
+:root[data-motion='reduced'] .branded-loader-progress:not(.is-measured) > span {
+  animation: loading-sweep 2.2s linear infinite !important;
+}
+:root[data-motion='reduced'] .spinner:not(.loading-mark-inline) {
+  animation: spin 1.2s linear infinite !important;
 }
 
 .skeleton-list {
@@ -17100,6 +17204,9 @@ body.is-resizing .history-pane {
 }
 
 .appearance-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: var(--space-4);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border);
@@ -17108,6 +17215,144 @@ body.is-resizing .history-pane {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.appearance-group-heading svg {
+  color: var(--accent);
+}
+
+.appearance-row-stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: var(--space-2);
+}
+
+.preview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.preview-card:hover {
+  border-color: var(--border-strong);
+}
+
+.preview-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preview-card-label {
+  overflow: hidden;
+  font-size: var(--fs-meta);
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-card.is-active .preview-card-label {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.font-preview {
+  display: block;
+  overflow: hidden;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-inset);
+  font-size: 15px;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A miniature IDE: the data-palette/data-theme attributes resolve the scheme's
+   own tokens, so the preview can never drift from the real palette. */
+.palette-preview {
+  display: grid;
+  grid-template-columns: 10px 30% 1fr;
+  grid-template-rows: 1fr 6px;
+  height: 48px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--panel-editor);
+  border: 1px solid var(--border);
+}
+
+.palette-preview-dock {
+  grid-row: 1;
+  background: var(--panel-activitybar);
+}
+
+.palette-preview-side,
+.palette-preview-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+}
+
+.palette-preview-side {
+  background: var(--panel-sidebar);
+}
+
+.palette-preview i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0.7;
+}
+
+.palette-preview-main i:nth-child(2) {
+  width: 70%;
+}
+
+.palette-preview i.is-accent {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.palette-preview-status {
+  grid-column: 1 / -1;
+  background: var(--statusbar-bg);
+}
+
+.scheme-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.scheme-preview-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.scheme-preview-dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
 }
 
 .appearance-row-head {
@@ -22780,4 +23025,74 @@ button.planner-item-title:hover {
   .skill-card-actions button {
     min-height: 32px;
   }
+}
+
+/* --- Signed-in identity ---------------------------------------------------- */
+.account-button {
+  position: relative;
+}
+.account-button .cg-avatar {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--panel-activitybar), 0 0 0 3px color-mix(in srgb, var(--accent) 70%, transparent);
+  object-fit: cover;
+}
+.account-button-badge {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--panel-activitybar);
+}
+.account-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.account-dialog-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+.account-dialog-hero .cg-avatar {
+  border-radius: 50%;
+  object-fit: cover;
+}
+.account-dialog-hero div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.account-dialog-hero span {
+  color: var(--text-muted);
+  font-size: var(--fs-meta);
+}
+.explorer-accounts-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.explorer-accounts-summary .cg-avatar {
+  border-radius: 50%;
+  object-fit: cover;
+}
+.explorer-accounts-login {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gh-signin-btn,
+.gh-signout-btn,
+.az-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
